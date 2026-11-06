@@ -910,9 +910,10 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     let shores = named(ann.albums().await, "Both Shores");
     assert_eq!(shores.len(), 1, "one record, listed once: {shores:?}");
     let in_order: Vec<String> = copies(&shores[0]).iter().map(|c| c["library"].as_str().unwrap().to_string()).collect();
-    assert_eq!(in_order[0], path(&own.join("ann")), "her own music first, though it is an MP3");
+    assert!([path(&music), path(&second)].contains(&in_order[0]), "a FLAC first, her own MP3 being worse: {in_order:?}");
+    assert_eq!(in_order[2], path(&own.join("ann")), "her own music by its quality");
     assert_eq!(in_order[3], path(&incoming), "Incoming last");
-    assert_eq!((copies(&shores[0])[0]["plays"].as_bool(), shores[0]["format"].as_str(), shores[0]["library"].as_str()), (Some(true), Some("MP3"), Some(&*in_order[0])), "the card is what plays");
+    assert_eq!((copies(&shores[0])[0]["plays"].as_bool(), shores[0]["format"].as_str(), shores[0]["library"].as_str()), (Some(true), Some("FLAC"), Some(&*in_order[0])), "the card is what plays");
     assert_eq!(copies(&shores[0]).iter().filter(|c| c["plays"] == true).count(), 1);
     let of = |list: &[Value], p: &Path| list.iter().find(|c| c["library"].as_str() == Some(&*path(p))).cloned().unwrap();
     assert_eq!(of(&copies(&shores[0]), &music)["deletable"], true, "an administrator deletes in a main library");
@@ -931,7 +932,7 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
 
     let papers = named(bob.albums().await, "No Papers");
     assert_eq!(papers.len(), 1, "no release on either side, one record");
-    assert_eq!(copies(&papers[0])[0]["library"].as_str(), Some(&*path(&own.join("bob"))), "his own music, at a lower quality");
+    assert_eq!(copies(&papers[0])[0]["library"].as_str(), Some(&*path(&music)), "a FLAC in Music, over his own MP3");
     assert_eq!(named(ann.albums().await, "Bonus Round").len(), 2, "a bonus track makes another record");
     let pressings = named(ann.albums().await, "Two Pressings");
     assert_eq!(pressings.len(), 2, "two releases are two records");
@@ -1523,7 +1524,7 @@ async fn the_card_hears_the_incoming_copy_end_to_end() {
     std::fs::create_dir_all(&data).unwrap();
     assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
     let (music, incoming) = (library.join("music"), library.join("incoming"));
-    // No own music: the record would play from ann's copy.
+    // No own music: two copies, the record's and the one waiting.
     settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
     // A rule, so a plan has something to write in any copy of the record.
     let mut saved: Value = serde_json::from_slice(&std::fs::read(data.join("settings.json")).unwrap()).unwrap();
@@ -1659,61 +1660,64 @@ async fn a_copy_over_two_folders_lists_its_own_format_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// "Plays from", through the routes: a pick changes what plays for that account alone, and holds until its copy goes. An Undo
-/// brings the copy back, not the pick (Q13).
+/// CR17, the owner: the best copy in the kept libraries on plays, whoever's it is, and nothing is kept. Ann's own FLAC beats
+/// Music's MP3 for her. Bob has her music off, so he hears Music's, though a FLAC waits in Incoming: nobody has checked it. His own
+/// MP3 of another record loses to Music's FLAC. A stream that names a copy hears it for that one request, a library off still
+/// winning.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
-async fn a_pick_holds_for_its_account_until_its_copy_goes_end_to_end() {
-    let root = temp("pick");
+async fn the_best_copy_plays_whoever_owns_it_and_nothing_is_kept_end_to_end() {
+    let root = temp("best-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
     assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
-    let (music, incoming) = (library.join("music"), library.join("incoming"));
-    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
+    let (music, second, incoming, own) = (library.join("music"), library.join("second"), library.join("incoming"), library.join("own"));
+    let (kept, hers, waiting, aside) = (music.join(SHORES), own.join("ann").join(SHORES), incoming.join(SHORES), root.join("aside"));
+    std::fs::remove_dir_all(&waiting).unwrap();
+    std::fs::rename(second.join(SHORES), &waiting).unwrap();
+    std::fs::rename(&kept, &aside).unwrap();
+    std::fs::rename(&hers, &kept).unwrap();
+    std::fs::rename(&aside, &hers).unwrap();
+    settings(&data, &[(&music, "main"), (&second, "main"), (&incoming, "incoming")], &own);
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
     s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
     let ann = s.sign_in("ann", "ann's password").await;
     ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
     let bob = s.sign_in("bob", "bob's password").await;
-    let path = |p: &Path| p.to_string_lossy().to_string();
-    let both = |a: &Value| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 2);
-    s.until("both copies read", Duration::from_secs(120), || async { ann.albums().await.iter().any(both) }).await;
-    let shores = |list: Vec<Value>| list.into_iter().find(|a| a["title"] == "Both Shores").unwrap();
-    let id = shores(ann.albums().await)["id"].as_str().unwrap().to_string();
-    let picking = format!("/api/albums/cratarr/{id}/copy-pick");
-    let copy = |a: &Value, p: &Path| a["copies"].as_array().unwrap().iter().find(|c| c["library"].as_str() == Some(&*path(p))).cloned().unwrap();
+    let record = |list: Vec<Value>, title: &str| list.into_iter().find(|a| a["title"] == title);
+    let holds = |a: Option<Value>, copies: usize| a.is_some_and(|a| a["copies"].as_array().is_some_and(|c| c.len() == copies));
+    s.until("every copy read", Duration::from_secs(180), || async {
+        let list = bob.albums().await;
+        holds(record(list.clone(), "Both Shores"), 3) && holds(record(list, "No Papers"), 2)
+    })
+    .await;
+    let plays = |a: &Value| a["copies"].as_array().unwrap().iter().find(|c| c["plays"] == true).map(|c| c["library"].as_str().unwrap().to_string());
+    let first_song = |a: Value| a["rows"][0]["id"].as_str().unwrap().to_string();
 
-    assert_eq!(ann.send(reqwest::Method::PUT, &picking, json!({ "library": path(&root) })).await.0, 409, "no copy there");
-    assert_eq!(s.anyone().send(reqwest::Method::PUT, &picking, json!({ "library": path(&incoming) })).await.0, 401);
-    ann.ok(reqwest::Method::PUT, &picking, json!({ "library": path(&incoming) })).await;
-
-    let theirs = shores(ann.albums().await);
-    assert_eq!((copy(&theirs, &incoming)["picked"].as_bool(), copy(&theirs, &incoming)["plays"].as_bool()), (Some(true), Some(true)), "{theirs}");
-    assert_eq!((copy(&theirs, &music)["picked"].as_bool(), copy(&theirs, &music)["plays"].as_bool()), (Some(false), Some(false)));
-    assert_eq!((theirs["format"].as_str(), theirs["library"].as_str()), (Some("MP3"), Some(&*path(&incoming))), "the card is what plays for her");
-    assert_eq!(theirs["copies"][0]["library"].as_str(), Some(&*path(&incoming)), "first in her order");
-    let his = shores(bob.albums().await);
-    assert_eq!((copy(&his, &incoming)["picked"].as_bool(), copy(&his, &music)["plays"].as_bool(), his["format"].as_str()), (Some(false), Some(true), Some("FLAC")), "nothing changes for bob");
-
-    // What is heard, not only what is listed: one track id, a file of its own for each account.
-    let dir = "Salt Meridian/Both Shores (2018)";
-    let song = tracks_at(&root.join("data"), &music, dir).remove(0);
-    let (flac, mp3) = (std::fs::read(music.join(dir).join("01 Landing.flac")).unwrap(), std::fs::read(incoming.join(dir).join("01 Landing.mp3")).unwrap());
-    assert_eq!(tracks_at(&root.join("data"), &incoming, dir)[0], song, "the copies share it");
+    let (theirs, his) = (record(ann.albums().await, "Both Shores").unwrap(), record(bob.albums().await, "Both Shores").unwrap());
+    assert_eq!(plays(&theirs), Some(id_of(&own.join("ann"))), "her FLAC, the best of the libraries she has on: {theirs}");
+    assert_eq!(theirs["format"], "FLAC", "the card is what plays for her");
+    assert_eq!(plays(&his), Some(id_of(&music)), "her music is off for him, and Incoming's FLAC is nobody's yet: {his}");
+    assert_eq!(his["format"], "MP3");
+    let song = first_song(ann.get(&format!("/api/albums/cratarr/{}", theirs["id"].as_str().unwrap())).await);
     let file = format!("/api/file/cratarr/{song}");
-    assert!(ann.bytes(&file).await.1 == mp3, "her pick");
-    assert!(bob.bytes(&file).await.1 == flac, "his, the kept copy");
+    let (flac, mp3) = (std::fs::read(hers.join("01 Landing.flac")).unwrap(), std::fs::read(kept.join("01 Landing.mp3")).unwrap());
+    assert!(ann.bytes(&file).await.1 == flac, "her own FLAC, over Music's MP3");
+    assert!(bob.bytes(&file).await.1 == mp3, "Music's MP3, on one track id");
 
-    let gone = ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/delete"), json!({ "from": path(&incoming) })).await;
-    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
-    let left: i64 = user.query_row("SELECT count(*) FROM copy_picks", [], |r| r.get(0)).unwrap();
-    assert_eq!(left, 0, "that copy went");
-    assert!(ann.bytes(&file).await.1 == flac, "with her copy gone she hears the kept one");
-    ann.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
-    s.until("the copy back", Duration::from_secs(120), || async { ann.albums().await.iter().any(both) }).await;
-    let back = shores(ann.albums().await);
-    assert_eq!((copy(&back, &incoming)["picked"].as_bool(), copy(&back, &music)["plays"].as_bool()), (Some(false), Some(true)), "the copy is back, the pick is not");
+    let papers = record(bob.albums().await, "No Papers").unwrap();
+    assert_eq!(plays(&papers), Some(id_of(&music)), "a FLAC in Music over his own MP3: {papers}");
+    let unsigned = first_song(bob.get(&format!("/api/albums/cratarr/{}", papers["id"].as_str().unwrap())).await);
+    let (_, bytes) = bob.bytes(&format!("/api/file/cratarr/{unsigned}")).await;
+    assert!(bytes == std::fs::read(music.join("Salt Meridian/No Papers (2018)/01 Unsigned.flac")).unwrap(), "what plays is Music's file");
+
+    let stream = format!("/api/stream/cratarr/{song}");
+    let named = |library: &Path| format!("{stream}?from={}", id_of(library).replace('/', "%2F"));
+    assert!(is_mp3(&bob.bytes(&stream).await.1), "Music's");
+    assert!(!is_mp3(&bob.bytes(&named(&incoming)).await.1), "the copy named, though it plays for no one");
+    assert!(is_mp3(&bob.bytes(&stream).await.1), "for that one request: the next is the best again");
+    assert!(is_mp3(&bob.bytes(&named(&own.join("ann"))).await.1), "a copy in a library off never plays, named or not");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

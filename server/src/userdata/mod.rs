@@ -473,8 +473,6 @@ pub struct UserData {
     preferences: tokio::sync::broadcast::Sender<preferences::PreferenceChanged>,
     /// The libraries each account has off, as read (`hidden_libraries_kept`).
     hidden: Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<String>>>>,
-    /// Each account's copy picks as read, for every stream to ask (`copy_picks_kept`).
-    picks: Mutex<std::collections::HashMap<String, std::sync::Arc<std::collections::HashMap<String, String>>>>,
 }
 
 /// A change of favourites (stars) as `set_starred` made it, whichever way it came: a page, a Subsonic app, Home
@@ -775,7 +773,7 @@ impl UserData {
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
-        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default(), picks: Mutex::default() })
+        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default() })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -836,7 +834,7 @@ impl UserData {
     /// The highest record or artist id for life the user data names (`ids::highest_named`), 0 for none: with the JSON stores,
     /// what a fresh start of lost ids must number above. Blocking.
     pub fn top_named(&self) -> Result<i64> {
-        const COLUMNS: [(&str, &str); 20] = [
+        const COLUMNS: [(&str, &str); 19] = [
             ("annotation", "item"),
             ("added", "album"),
             ("imported", "item"),
@@ -846,7 +844,6 @@ impl UserData {
             ("album_matches", "album"),
             ("album_complete", "album"),
             ("intake_heard", "album"),
-            ("copy_picks", "record"),
             ("record_references", "album"),
             ("discogs_genres", "album"),
             ("renumber_matched", "album"),

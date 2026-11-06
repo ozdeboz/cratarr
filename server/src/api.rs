@@ -141,7 +141,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
         .route("/api/albums/{source}/{album}/rating", get(album_rating).post(set_album_rating))
-        .route("/api/albums/{source}/{album}/copy-pick", put(pick_copy))
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
         // Asked of everyone: who may is the record's own (0101 point 2).
@@ -2715,7 +2714,7 @@ struct StreamFrom {
     #[serde(default)]
     mp3_from: Option<u8>,
     /// The copy to hear, a library's id: the intake card's snippets are of the copy waiting, which plays for no one else. It
-    /// counts as a pick for this stream, so a copy in a library off still never plays.
+    /// counts for this stream alone, and a copy in a library off still never plays.
     #[serde(default)]
     from: Option<String>,
 }
@@ -3871,18 +3870,6 @@ async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(
 async fn delete_own_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
     Ok(Json(app.delete_own_album(&source, &album, b.from.as_deref()).await?))
-}
-
-#[derive(Deserialize)]
-struct CopyPick {
-    library: String,
-}
-
-/// "Plays from": the account's own choice of a record's copy, so anyone's who has an account.
-async fn pick_copy(ctx: Ctx, Path((source, album)): Path<(String, String)>, Json(b): Json<CopyPick>) -> Result<Json<serde_json::Value>, ApiError> {
-    let account = ctx.account().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
-    ctx.app.pick_copy(&source, &album, &account, &b.library).await?;
-    Ok(Json(json!({ "library": b.library })))
 }
 
 async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<MoveTo>) -> Result<Json<crate::app::KeepPreview>, ApiError> {

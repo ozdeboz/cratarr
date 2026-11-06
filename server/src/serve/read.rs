@@ -948,7 +948,7 @@ impl Library {
         };
         let mut copies = self.copies_of(&album)?;
         copies.retain(|c| held.iter().any(|h| holds(c, h)));
-        let Some(copy) = copy_for(&copies, who.viewer(&album).as_ref(), &who.off) else { return Ok(None) };
+        let Some(copy) = copy_for(&copies, who.viewer().as_ref(), &who.off) else { return Ok(None) };
         Ok(held.iter().find(|h| holds(copy, h)).map(|(_, folder, rel, _)| (*folder, rel.clone())))
     }
 

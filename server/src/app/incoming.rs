@@ -686,11 +686,6 @@ impl IncomingService {
         waiting_copy(cache.values().filter(|v| v.id == source_id).flat_map(|v| v.albums.iter()), album_id, from)
     }
 
-    /// `account`'s own music's catalogue folder (`Library::own_folder`).
-    pub fn own_folder(&self, account: &str) -> Option<i64> {
-        self.lib.own_folder(account)
-    }
-
     /// What each catalogue folder's library is (`Library::folder_kinds`).
     pub fn folder_kinds(&self) -> Vec<(i64, crate::settings::LibraryKind)> {
         self.lib.folder_kinds()
@@ -778,31 +773,10 @@ impl IncomingService {
     /// After the files went to the trash: the catalogue rows follow (their tracks keep their ids, decision 0011: Undo
     /// brings them back unchanged). Safe to repeat.
     async fn finish_reject(&self, event: &Event) {
-        let Event::AlbumRejected { source, album_id, folder, dir, token, title, .. } = event else { return };
+        let Event::AlbumRejected { folder, dir, token, title, .. } = event else { return };
         let (c, f, rel, tok) = (self.lib.catalogue(), *folder, dir.clone(), token.clone());
         if let Err(e) = tokio::task::spawn_blocking(move || c.mark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
             tracing::warn!("catalogue: could not mark {title} as trashed: {e:#}");
-        }
-        self.forget_picks(source, album_id, *folder, Some(dir)).await;
-    }
-
-    /// A copy left catalogue folder `folder`: the picks of it go with it, also where it went on to another library, and an Undo
-    /// does not bring them back (Q13). `dir`: where it lay, where another folder of that library can still hold the record.
-    async fn forget_picks(&self, source_id: &str, album_id: &str, folder: i64, dir: Option<&str>) {
-        let Some(library) = self.library_at(source_id, folder) else { return };
-        let (db, album, dir) = (self.lib.playlists_db().clone(), album_id.to_string(), dir.map(str::to_string));
-        let done = tokio::task::spawn_blocking(move || -> Result<()> {
-            let stays = dir.as_deref().zip(crate::serve::instance()).is_some_and(|(d, s)| s.library.copies_of(&album).is_ok_and(|c| c.iter().any(|c| c.folder == folder && c.dir != d)));
-            if stays {
-                return Ok(());
-            }
-            db.forget_copy_picks(&album, &library)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .and_then(|r| r);
-        if let Err(e) = done {
-            tracing::warn!("the picks of {album_id} not forgotten: {e:#}");
         }
     }
 
@@ -1407,10 +1381,7 @@ impl IncomingService {
     /// `hold_gone`: tell the servers only where the files went; where they left is told later (carry-on, when the album
     /// plays: its player must not go on with an item the server already dropped).
     async fn finish_adopt(&self, event: &Event, back: bool, hold_gone: bool) {
-        let Event::AlbumAdopted { source, album_id, from_dir, moves, title, .. } = event else { return };
-        if !back {
-            self.forget_picks(source, album_id, from_dir.0, Some(&from_dir.1)).await;
-        }
+        let Event::AlbumAdopted { moves, title, .. } = event else { return };
         let c = self.lib.catalogue();
         let pairs: Vec<((i64, String), (i64, String))> =
             moves.iter().map(|m| if back { (m.to.clone(), m.from.clone()) } else { (m.from.clone(), m.to.clone()) }).collect();

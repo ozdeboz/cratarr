@@ -313,3 +313,22 @@ handing the record's track a new file.
 
 The order: the lookups for playlists' stage 2 (`track_by_path`, `track_of_line`); the catalogue's ids as the truth;
 libraries with ids; records and copies; then the migration, rehearsed on staging (24).
+
+## Amended 2026-11-06: stored picks go (the owner's call, before the first preview)
+
+This changes "how a record's copies behave" above: "Which copy plays", "An Incoming copy" and "A copy picked by hand".
+
+- **The best quality among the kept libraries the viewer has on always plays.** The viewer's own music no longer comes first:
+  it counts as any kept library, so a FLAC in Music beats their own MP3, and their own FLAC beats Music's MP3. Others' own music
+  stays off, as it is. A tie goes as it did.
+- **An Incoming copy of a kept record never plays by itself,** even when it is the better: nobody has checked it. It plays once
+  added, or when it is the only copy.
+- **"Play from" is a one-time action on a new queue,** an entry for each other copy in a library on, Incoming too, shown only
+  where there is one. It starts a new queue of the record from that copy, and nothing is remembered: the next Play is the best
+  copy again. It rides on `from`, the stream's one-request pick, which works with no account too, so a queue's tracks carry it
+  on the page, in the app and through Play On.
+- **No stored picks:** no `copy_picks` table, no route to set one, no preference, no `picked` on a copy. No migration, as 0.16
+  never shipped them.
+
+Why: a pick had no way back to automatic, and what an account heard could differ from what Kodi did. Now Kodi hears what an
+account hears, unless their own music holds the better copy or a library is off. Downloads keep their saved file.

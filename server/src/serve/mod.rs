@@ -577,12 +577,7 @@ impl Serve {
         let Some(name) = account else { return who };
         who.account = Some(name.to_string());
         if let Some(incoming) = self.incoming() {
-            who.own = incoming.own_folder(name);
             who.off = incoming.folders_off(&self.userdata.hidden_libraries_kept(name));
-        }
-        let picks = self.userdata.copy_picks_kept(name);
-        if !picks.is_empty() {
-            who.picks = listener::picks_in(&picks, &self.library.roots());
         }
         who
     }

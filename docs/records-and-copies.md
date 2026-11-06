@@ -78,15 +78,18 @@ all moved on is retired, as one whose tracks retired is: it was had, and it keep
 
 One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own and the only place that decides:
 
-1. A copy picked by hand in the record's menu. The pick is remembered for the account (`copy_picks`: account, record,
-   library) until they pick another or that copy goes.
-2. The viewer's own music, even at a lower quality.
-3. The best quality among the kept libraries the viewer has on: lossless before lossy, then bit depth and rate, then
-   bitrate.
-4. Nothing else: an Incoming copy plays only when picked, and a copy in a library switched off never plays. A record only
-   in Incoming has nothing else: its copy plays.
+1. The best quality among the kept libraries the viewer has on: lossless before lossy, then bit depth and rate, then
+   bitrate. Their own music counts as any kept library, so a FLAC in Music beats their own MP3, and their own FLAC beats
+   Music's MP3. Someone else's own music starts off, and counts only while it is on.
+2. Nothing else: an Incoming copy of a kept record never plays by itself, even when it is the better, as nobody has checked
+   it. It plays once added, or when it is the only copy. A copy in a library switched off never plays. A record only in
+   Incoming has nothing else: its copy plays.
 
 A tie goes by the libraries' order, then the path. Lossless copies not read since bit depth was kept rank last.
+
+Nothing is remembered. A request can name a copy, `from`, a library's id: while its library is on, that copy is heard, with
+an account or without one, for that one request. "Play from" is a one-time action built on it: it starts a new queue of the
+record from that copy, and the next Play is the best copy again.
 
 The crates, the words and the taste read a track once: one `Facts`, from its row copy's file, holding the line and the folder of
 every file of it. A set kept by line finds the track through any of them.
@@ -100,19 +103,19 @@ gains, is the file that plays, so a waveform's ETag names the file.
 ## On the page
 
 - A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, bits, rate, deletable, keepable,
-  keep_to, lacks, picked, plays, added, job }]`, what the viewer may do going by the copy. They come in the order they
+  keep_to, lacks, plays, added, job }]`, what the viewer may do going by the copy. They come in the order they
   would play for that viewer, `copy_for` asked again of what is left, and a copy in a library off keeps its place, so the
   first one on is what plays and a switch thrown on the page needs no new list. The card's format and bitrate are the
   copy that plays. Dots: one per copy,
   the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on, and so
   does a track, in every list and count: `crates::on_for`, the one test. An Incoming copy counts there, though it plays only
-  when picked: with the kept library off, that is where the record is found.
+  by `from`: with the kept library off, that is where the record is found.
 - A playlist's line names a file, and an entry is its track: on any copy it has the track's id and plays, what plays being
   `copy_for`'s to say. A line written now is the row copy's. Where its copy goes, or leaves the record, the entry reads the file
   its track has left, at once, and the minute's pass writes that line.
 - An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
-- Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
-  The record stays while one copy is left.
+- Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and a "Play from …" for each
+  other copy in a library on, Incoming too, shown only where there is one. The record stays while one copy is left.
 - The quality on a card is the copy that plays.
 - A record's Move, Add to, Delete and Replace take the copy: `from`, a library's id, in the query for a preview and the body
   for the act. A record of several copies with none named is refused, and nothing moves. Of two folders of one library
@@ -120,11 +123,8 @@ gains, is the file that plays, so a waveform's ETag names the file.
 - A copy goes whole only where it is alone in its folder: every audio file under its `dir` is its own, and no other copy lies
   inside. Else it reads as not seen, as `dir` is only what its files share, and can be a parent of other records or the root.
 - An intake card is about the copy waiting, whichever plays: its tracks are that copy's files, what is heard is kept by
-  (record, folder), a fix on the "Before adding" sheet writes to that copy alone, and a snippet's stream names it by `from`, a
-  pick for that one stream. A review is kept by (record, folder) too.
-- `PUT /api/albums/{source}/{album}/copy-pick` with `{ library }` is "Plays from". It tells the account's pages as the
-  preference `copy_picks`. A pick goes with its copy at Delete, Move, Add to and Replace, and Undo brings back the copy, not
-  the pick.
+  (record, folder), a fix on the "Before adding" sheet writes to that copy alone, and a snippet's stream names it by `from`.
+  A review is kept by (record, folder) too.
 - A stream's file is named in its validator, and `If-Range` is honoured: a seek never gets another file's bytes.
 - A tag written by Cratarr is the record's or its track's, so it goes into every copy: Health's fixes, Renumber, a match with
   MusicBrainz, the tempo, the files' facts and words. Reading stays one file a track, and writing takes every file, each saying

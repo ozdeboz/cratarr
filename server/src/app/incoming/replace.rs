@@ -618,12 +618,7 @@ impl IncomingService {
     /// ids (or their own again), and the servers hear of it at once. Safe to repeat.
     /// `hold_gone`: as for Keep (`finish_adopt`).
     pub(super) async fn finish_replace(&self, event: &Event, back: bool, hold_gone: bool) {
-        let Event::AlbumReplaced { source, album_id, from_dir, to_dir, moves, replaced, token, title, .. } = event else { return };
-        // Both copies went: the one brought in, and the one it replaced, whose library now holds other files.
-        if !back {
-            self.forget_picks(source, album_id, from_dir.0, Some(&from_dir.1)).await;
-            self.forget_picks(source, album_id, to_dir.0, None).await;
-        }
+        let Event::AlbumReplaced { moves, replaced, token, title, .. } = event else { return };
         let (c, moves_, replaced_, token) = (self.lib.catalogue(), moves.clone(), replaced.clone(), token.clone());
         let done = tokio::task::spawn_blocking(move || rows_follow(&c, &moves_, &replaced_, &token, back))
         .await
