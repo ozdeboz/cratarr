@@ -4,9 +4,9 @@
 // that account is signed in (0.13, lib/account); another's wait for it, a month at most (lib/outbox's rules).
 import { ours, outlived, stamped } from './outbox';
 
-/** After a report that moved nothing, the next waits this long. Cratarr leaves out of `done` a play it cannot count yet (a
- *  followed server away, the user data failing): it would answer the same at once, and from a server already in trouble
- *  a page going straight back is a stream of requests with no end, as a play of a track gone from such a server is never done. */
+/** After a report that moved nothing, the next waits this long. Cratarr leaves out of `done` a play it cannot count yet
+ *  (a followed server away, the user data failing) and would say the same at once: going straight back is a stream of
+ *  requests with no end, at a server already in trouble. A play of a track gone from such a server is never done. */
 export const TELL_AGAIN_MS = 60_000;
 /** The latest this many are kept. */
 const KEPT = 500;

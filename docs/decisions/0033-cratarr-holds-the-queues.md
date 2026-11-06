@@ -104,7 +104,7 @@ end a little early.
   kept as they would be streamed anyway. The player reads every track from the device first. Over Wi-Fi only unless
   mobile data is allowed. The page's Downloads view (in the app) plays them without a server.
 - **Away from home** (added 2026-10-16, the owner: "work when away"): Cratarr is out of reach when the proxy refuses
-  (its 403 off the home network; Cratarr never answers 403), a stopped Cratarr gets the proxy's empty 502 to 504, or
+  (its bare 403 off the home network; Cratarr's own 403 says why in words), a stopped Cratarr gets the proxy's empty 502 to 504, or
   there is no network. The app then opens on Downloads, the pages say "Cannot reach the Cratarr server", the page asks
   every 30 s instead of every 2, and the service worker keeps the downloaded albums' covers.
 - **Plays are events**, as decided: the app counts them itself (90% through, with their own time), keeps them until

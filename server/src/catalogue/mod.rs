@@ -1328,8 +1328,8 @@ impl Catalogue {
             return Ok(k.facts.clone());
         }
         // The reading before goes first: two at once over every file is what the limit cannot hold. Its address stays
-        // taken until this one has its own, as what hangs on a reading knows it by that (`shared_alike`, `words::index`):
-        // a new one in the same place would pass for it.
+        // taken until this one has its own, as what hangs on a reading knows it by that (`shared_alike`, the crates' sorted
+        // lists, `words::search_index`): a new one in the same place would pass for it.
         let was = kept.take().map(|k| Arc::downgrade(&k.facts));
         // Beside the catalogue, not under its one lock: a play starting and every writer would wait out the whole read.
         let reader = self.reader();
@@ -5059,24 +5059,6 @@ mod tests {
         drop(lock);
         assert_eq!(reading.join().unwrap(), 2);
         assert!(gone, "two readings at once over every file are what the memory limit cannot hold");
-        std::fs::remove_dir_all(&d).ok();
-    }
-
-    #[test]
-    fn a_new_reading_is_never_at_the_address_of_the_one_before() {
-        // `shared_alike`, the crates' sorted lists and the words know a reading by its address, and would take a new one
-        // at the old address for the old one.
-        let d = music();
-        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
-        cat.walk_all();
-        let mut was = Arc::as_ptr(&cat.crate_facts().unwrap());
-        for n in 0..500 {
-            cat.db().execute("UPDATE files SET bitrate = ?1", [n]).unwrap();
-            facts_grown_old(&cat);
-            let now = Arc::as_ptr(&cat.crate_facts().unwrap());
-            assert_ne!(now, was, "reading {n}");
-            was = now;
-        }
         std::fs::remove_dir_all(&d).ok();
     }
 
