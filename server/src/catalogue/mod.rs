@@ -2124,7 +2124,8 @@ impl Catalogue {
     }
 
     /// Give these albums their records (0100, docs/records-and-copies.md), every album there is. An album is the record
-    /// more than half of its tracks hold ([`Held::vote`]); else it is held against the others as a new one is: a copy of
+    /// more than half of its tracks hold ([`Held::vote`]), where it is the same tracks as the largest album that says so;
+    /// else it is held against the others as a new one is: a copy of
     /// the record it is the same as (`identity::same_record`), or a record of its own. A new track joins its album's
     /// record. A track keeps its record for life, unless its only file now sits in another record's album, where it
     /// moves: a retired id handed to a file of a best-of must not take that album with it. A copy keeps its own track ids
@@ -2146,6 +2147,21 @@ impl Catalogue {
             }
         }
         let mut records: Vec<Option<i64>> = albums.iter().map(|a| held.vote(a)).collect();
+        // The tracklists must match, always: albums voting one record that are not the same tracks are no copies of it, as
+        // when one disc of a double album is retagged. The largest keeps it, the first on a tie, and the others are held
+        // against the rest as a new album is, so their free tracks move: two albums again, as they were.
+        let mut voting: HashMap<i64, Vec<usize>> = HashMap::new();
+        for (i, r) in records.iter().enumerate() {
+            if let Some(r) = r {
+                voting.entry(*r).or_default().push(i);
+            }
+        }
+        for list in voting.values().filter(|l| l.len() > 1) {
+            let Some(keeps) = list.iter().copied().max_by_key(|i| (albums[*i].tracks.len(), std::cmp::Reverse(*i))) else { continue };
+            for i in list.iter().copied().filter(|i| !identity::same_record(&albums[*i].facts, &albums[keeps].facts)) {
+                records[i] = None;
+            }
+        }
         for (i, a) in albums.iter().enumerate() {
             if let Some(r) = records[i] {
                 note(i, a, r, &mut by_name, &mut by_release);

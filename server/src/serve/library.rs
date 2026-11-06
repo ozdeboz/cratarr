@@ -1573,7 +1573,7 @@ fn with_records(folders: &[FolderRows], rules: &Rules) -> Vec<FolderRows> {
 /// The albums these folders make, each as the catalogue gives it a record: the library's own grouping, so a record is
 /// what a list shows. Pure.
 pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalogue::AlbumCopy> {
-    use crate::catalogue::identity::{Listed, RecordFacts, fold};
+    use crate::catalogue::identity::{Listed, RecordFacts, fold, same_record};
     let rows: Vec<(i64, &ServedRow)> = folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))).collect();
     let songs = grouped(&rows, rules);
     let mut albums: BTreeMap<&str, Vec<&Song>> = BTreeMap::new();
@@ -1581,9 +1581,14 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
         albums.entry(&s.group).or_default().push(s);
     }
     let place = |s: &Song| (s.row.first("discnumber").and_then(leading_number), s.row.first("tracknumber").and_then(leading_number));
-    albums
+    let mut holding: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    let mut copies: Vec<crate::catalogue::AlbumCopy> = albums
         .into_values()
-        .map(|mut list| {
+        .enumerate()
+        .map(|(at, mut list)| {
+            if let Some(record) = list[0].row.record {
+                holding.entry(record).or_default().push(at);
+            }
             list.sort_by(|a, b| {
                 let ((ad, an), (bd, bn)) = (place(*a), place(*b));
                 (ad.unwrap_or(1), an.unwrap_or(u32::MAX), &a.row.rel).cmp(&(bd.unwrap_or(1), bn.unwrap_or(u32::MAX), &b.row.rel))
@@ -1609,7 +1614,14 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                 split: list.iter().any(|s| s.row.record != first.row.record),
             }
         })
-        .collect()
+        .collect();
+    // Albums holding one record are its copies only if they are the same tracks. One disc of a double album retagged is an
+    // album of its own, each unanimous on the record, and of two copies only one is served: half would go from every list.
+    for albums in holding.values().filter(|a| a.len() > 1) {
+        let apart: Vec<usize> = albums.iter().copied().filter(|i| albums.iter().any(|j| !same_record(&copies[*i].facts, &copies[*j].facts))).collect();
+        apart.into_iter().for_each(|i| copies[i].split = true);
+    }
+    copies
 }
 
 /// The albums these rows make.
@@ -2276,6 +2288,41 @@ mod tests {
 
     /// Built from rows read before the records were given, a new track would have none, and its row would print otherwise
     /// at the next pass and build again.
+    #[test]
+    fn a_retag_of_one_disc_keeps_every_track() {
+        let (root, cat) = catalogue_in("one-disc");
+        let files = [("X/Album/CD1/01 One.flac", "Album", "One"), ("X/Album/CD1/02 Two.flac", "Album", "Two"), ("X/Album/CD2/01 Three.flac", "Album", "Three"), ("X/Album/CD2/02 Four.flac", "Album", "Four")];
+        add_files(&cat, &root, &files);
+        let lib = Library::open(None).unwrap();
+        build_now(&lib, &cat);
+        assert_eq!((lib.counts().unwrap().0, one_number(&lib, "SELECT count(*) FROM albums")), (4, 1), "one album over two folders");
+        for (rel, album, title) in &files[2..] {
+            cat.tag_for_tests(0, rel, &[("album", album), ("albumartist", "Artist"), ("title", title), ("date", "1999")]);
+        }
+        cat.changed_outside_pass();
+        build_now(&lib, &cat);
+        assert_eq!((lib.counts().unwrap().0, one_number(&lib, "SELECT count(*) FROM albums")), (4, 2), "two albums again, as before records, every track served");
+        assert_ne!(record_at(&cat, files[0].0), record_at(&cat, files[2].0));
+        build_now(&lib, &cat);
+        assert_eq!(lib.counts().unwrap().0, 4, "and it stays so");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The other way to come by it, with one disc moved outside Cratarr: what is left and what moved are not the same tracks.
+    #[test]
+    fn two_groups_of_one_record_that_are_other_tracks_are_two_records() {
+        use crate::catalogue::identity::same_record;
+        let rows = |first: i64, titles: [&str; 2], date: &str| -> Vec<ServedRow> {
+            titles.iter().zip(first..).map(|(title, track)| ServedRow { record: Some(7), ..row(track, &format!("X/{date}/{track} {title}.flac"), &[("title", title), ("albumartist", "Artist"), ("album", "Album"), ("date", date)]) }).collect()
+        };
+        let copies = album_copies(&[in_folder(0, rows(1, ["One", "Two"], "1998")), in_folder(1, rows(3, ["Three", "Four"], "1999"))], &Rules::default());
+        assert_eq!(copies.len(), 2);
+        assert!(!same_record(&copies[0].facts, &copies[1].facts));
+        assert!(copies.iter().all(|a| a.split), "worth the catalogue's reading, each held by one record though its tracks are unanimous");
+        let copies = album_copies(&two_copies(), &Rules::default());
+        assert!(copies.iter().all(|a| !a.split), "two copies of one record are as they should be");
+    }
+
     #[test]
     fn a_new_track_has_its_record_in_the_same_build() {
         let (root, cat) = catalogue_in("same-build");
