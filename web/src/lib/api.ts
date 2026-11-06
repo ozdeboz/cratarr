@@ -1656,7 +1656,8 @@ export const setReferences = (album: string, choice: { counting?: ReferenceSourc
 /** One copy of a record: one folder's files of it (docs/records-and-copies.md). `format` and `kbps` are as `ListedAlbum`'s,
  *  `bits` and `rate` a lossless copy's, null where one of its files is not read. `deletable`, `keepable`, `keep_to` and
  *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `plays`: the
- *  one the server would play them. `job`: the conversion at work on this copy, `Job.id`. */
+ *  one the server would play them. `size`: its files' bytes, null where not known. `job`: the conversion at work on this
+ *  copy, `Job.id`. */
 export type AlbumCopy = {
   library: string;
   format: string | null;
@@ -1669,6 +1670,7 @@ export type AlbumCopy = {
   lacks: string[];
   plays: boolean;
   added: number | null;
+  size: number | null;
   job: number | null;
 };
 

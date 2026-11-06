@@ -137,8 +137,9 @@
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
   import { away, here } from './away.svelte';
-  import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, readLibrary } from './albums.svelte';
-  import { librariesOf } from './copiesRule';
+  import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, playListedAlbum, readLibrary } from './albums.svelte';
+  import { copyLines, librariesOf, type CopyLine } from './copiesRule';
+  import { shownIn } from './sources.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
   import SimilarAlbums from './SimilarAlbums.svelte';
@@ -344,6 +345,16 @@
     return () => (off(), clearTimeout(t));
   });
   const listedHere = $derived(album ? listedAlbum(album.source, album.id) : null);
+  // A record of several copies has a line each, with its details. The lines say where it lies, so the dots before the
+  // details go with what they take from them.
+  const albumCopies = $derived(listedHere && albumHead ? copyLines(listedHere.a, listedHere.s.library_info, shownIn(listedHere.s.id)) : []);
+  const headDots = $derived(albumCopies.length ? [] : albumDots);
+  /** Another copy's line tapped: its Play from, as the record's menu does it. */
+  function playCopy(library: string) {
+    if (!listedHere) return;
+    navigator.vibrate?.(8);
+    void playListedAlbum(listedHere.s.id, listedHere.a, library);
+  }
   const filesLine = $derived(album ? stateLine(filesState ?? listedHere?.a.files_state) : null);
   // Its own Health problems (the owner, 2026-11-02: "on its page", a line each under its title; its missing tracks one
   // of them): an administrator's, as Health is; a tap opens that problem narrowed to this record, Back returns here.
@@ -1364,8 +1375,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
       return [albums, plural(rows.length, 'track'), length ? clockText(length) : null].filter(Boolean).join(' • ');
     }
     const h = album ? albumHead : null;
+    // Each copy says its own where it has a line: here it would read as the record's.
+    const heard = albumCopies.length ? [] : [h?.format, h?.kbps ? `${h.kbps} kb/s` : null];
     const parts = album
-      ? [length ? clockText(length) : null, h?.year, h?.format, h?.kbps ? `${h.kbps} kb/s` : null]
+      ? [length ? clockText(length) : null, h?.year, ...heard]
       : [plural(p?.count ?? rows.length, 'track'), length ? clockText(length) : null];
     return parts.filter((x) => x !== null && x !== undefined && x !== '').join(' • ');
   });
@@ -2434,7 +2447,26 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {:else}
             <h2>{title}</h2>
           {/if}
-          {#if details}<p class="details">{#each albumDots as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{details}</p>{/if}
+          {#if details}<p class="details">{#each headDots as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{details}</p>{/if}
+          <!-- A record's copies, a line each (lib/copiesRule): what plays marked, a tap on another its Play from. -->
+          {#if albumCopies.length}
+            <div class="details copies">
+              {#snippet line(c: CopyLine)}
+                <span class="copy-name"><i class="dot" style:background={c.colour}></i>{c.name}</span>
+                <span class="copy-quality">{c.quality}</span>
+                <span class="copy-size">{c.size}</span>
+                <span class="copy-plays">{c.plays ? 'plays' : ''}</span>
+              {/snippet}
+              {#each albumCopies as c, i (i)}
+                {#if c.playFrom}
+                  {@const from = c.playFrom.library}
+                  <button class="copy" title={c.playFrom.label} onclick={() => playCopy(from)}>{@render line(c)}</button>
+                {:else}
+                  <p class="copy">{@render line(c)}</p>
+                {/if}
+              {/each}
+            </div>
+          {/if}
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
           <!-- A record missing tracks (0.13): how many of its release's it holds, to Health's albums missing tracks. -->
           {#if album && filesLine}
@@ -3865,5 +3897,61 @@ ${r.album_artist ?? r.artist ?? ''}`;
     margin-right: 6px;
     border-radius: 50%;
     vertical-align: 1px;
+  }
+
+  /* A record's copies, a line each. The library's name gives way, never what tells them apart: those keep their room,
+     and start from their widths, so they line up from line to line as a row's cells do. No wider than the head's column
+     beside its spread, or on a wide panel they would stand far from the names. */
+  .copies {
+    width: 100%;
+    max-width: 400px;
+    min-width: 0;
+  }
+
+  .copy {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 32px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  button.copy {
+    cursor: pointer;
+  }
+
+  button.copy:hover {
+    color: var(--text);
+  }
+
+  .copy-name {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .copy-quality {
+    flex: none;
+    min-width: 4.4em;
+  }
+
+  .copy-size {
+    flex: none;
+    min-width: 3.4em;
+  }
+
+  .copy-plays {
+    flex: none;
+    min-width: 2.4em;
   }
 </style>

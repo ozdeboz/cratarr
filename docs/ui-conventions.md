@@ -134,7 +134,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   on Tracks and menu; an album's menu, the one every album has (below); a crate's favourites toggle, pencil
   and Make playlist). Scrolled up to the top the action bar stays there, and the pills float just under it, over the
   list. The pills are the panel's (not the pages'), so the player covers them once open. Under the cover the name large, one line of what it is (an album: length,
-  year, format, bitrate; otherwise how many tracks and the length), an album's artist as a chip, the genres. Over the
+  year, format, bitrate; otherwise how many tracks and the length), a line per copy of a record of several (below), an album's artist as a chip, the genres. Over the
   tracks **their order** (the subject's own, or by title, artist, album, length; a playlist's also by album artist, year,
   track number, play count, last played and when an entry was added, for entries added since 2026-10-16; a tap chooses, the arrow turns it
   round), how many, and **select mode** (the icon, decision 0058; a long-press opens the track's menu: circles to tick, and a bar floating over
@@ -228,6 +228,13 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     its name ("Delete from Music"), as Move's are, so what goes is said and a record of two copies never loses both. Each
     is asked once for them all, with one Undo, a main library's second question said in that one. No Play from: it starts
     one record's queue.
+- **A record's copies in its panel** (the owner, 2026-11-06: "What's the difference!?!"; the rules are `lib/copiesRule`'s):
+  a record of several copies has a line per copy under its details, in the order they would play: its library's dot and
+  name, its format and bitrate ("MP3 320", a lossless copy its format alone), its size, and "plays" on the one Play would
+  give. Format and bitrate leave the details line then, and the dots before it, as no line says one copy's quality as if
+  it were the record's. A tap on another copy's line is its Play from, as the menu's entry. A copy in a library off has no
+  line, and the one left on by that keeps its own; a later folder of a library has a line and no tap, as `from` takes the
+  first. A record of one copy has no lines. A long library name gives way, never what follows it.
 - **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
   with their heart, the large actions (Start radio among them, as on a track's and a playlist's), Add to playlist (all
   their tracks), Download…, Share, and their picture on this device. No Instant mix (the owner) and no rating.
