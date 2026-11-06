@@ -854,13 +854,13 @@ mod tests {
         let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
         assert_eq!(cat.track_of(1, "A/01 One.flac"), ids::track_of(&stays));
         assert_eq!(plays_of(&serve, &stays), 2);
-        // Stopped before the mark: the user data moved, the catalogue says it has not.
+        // Stopped before the mark: the user data moved, the catalogue says it has not. Nothing changed, so no build will ask.
         let moved = cat.moved_tracks().unwrap().into_iter().collect::<Vec<_>>();
         cat.not_followed_for_tests();
         assert_eq!(cat.tracks_to_follow().unwrap(), moved);
-        serve.follow_taken().unwrap();
+        assert!(!serve.refresh().unwrap(), "nothing to build");
         assert_eq!(plays_of(&serve, &stays), 2, "not a play more");
-        assert!(cat.tracks_to_follow().unwrap().is_empty());
+        assert!(cat.tracks_to_follow().unwrap().is_empty(), "the next check went over it");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 

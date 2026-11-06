@@ -1004,7 +1004,8 @@ impl Library {
         Ok(audio.iter().all(|f| held.contains(f)))
     }
 
-    /// A copy's files: (song id, its path in the catalogue folder, its length in ms). `songs` holds the copy that plays alone.
+    /// A copy's files: (song id, its path in the catalogue folder, its length in ms). `songs` holds one file a track, of whichever
+    /// copy, so it is no way to them.
     pub fn copy_songs(&self, album: &str, folder: i64, dir: &str) -> Result<Vec<(String, String, u64)>> {
         let db = self.db();
         let prefix = format!("{dir}/");

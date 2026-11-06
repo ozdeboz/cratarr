@@ -103,8 +103,8 @@ pub(crate) mod tests {
     const FLAC: &str = "A/01 One.flac";
     const MP3: &str = "B/01 One.mp3";
 
-    /// One track with a file in each of two folders, as the take will leave it: the catalogue gives both one track and
-    /// the library's `copy_files` and `copies` name one album. Folder 0 holds a FLAC, folder 1 an MP3 with its own numbers.
+    /// One track with a file in each of two folders, as the take leaves it: the catalogue gives both one track and the
+    /// library's `copy_files` and `copies` name one album. Folder 0 holds a FLAC, folder 1 an MP3 with its own numbers.
     struct Two {
         roots: [std::path::PathBuf; 2],
         cat: Catalogue,
@@ -165,6 +165,17 @@ pub(crate) mod tests {
 
     fn at(folder: i64) -> Option<(i64, String)> {
         Some((folder, if folder == 0 { FLAC } else { MP3 }.to_string()))
+    }
+
+    /// A queue can hold an id a take retired: it still names the song, and what is heard of it is what plays for the listener.
+    #[test]
+    fn an_id_a_take_retired_names_the_track_that_took_it() {
+        let t = two("taken");
+        let old = ids::song(*t.cat.moved_tracks().unwrap().keys().next().expect("one of the two was taken as the library was built"));
+        assert_ne!(old, t.song);
+        let who = t.who(Some("ann"), Some(1), &[]);
+        assert_eq!(who.song(&t.cat, KIND.id, &old).map(|s| s.id), Some(t.song.clone()));
+        assert_eq!(who.place(&t.cat, KIND.id, &old), at(1));
     }
 
     #[test]
