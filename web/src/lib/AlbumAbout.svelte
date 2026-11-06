@@ -33,8 +33,8 @@
     added?: number;
     played?: number;
     plays?: number;
-    /** The server's name, and the library's (with its dot) when known. */
-    provider: { server: string; library: string | null; colour: string | null };
+    /** The server's name, and each library holding it (with its dot) when known. */
+    provider: { server: string; libraries: Pick<import('./api').LibraryInfo, 'id' | 'name' | 'colour'>[] };
     /** What a page elsewhere says of it (a Bandcamp album's, 0.9.2): no rating then, which only a server keeps. */
     more?: Pick<import('./api').AlbumView, 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> | null;
   } = $props();
@@ -145,10 +145,17 @@
   {/if}
   <h3>Media provider</h3>
   <p class="chips">
-    <span class="chip">
-      <Icon name="server" size={16} />
-      {provider.server}{#if provider.library}<span class="sep">·</span>{#if provider.colour}<i class="dot" style:background={provider.colour}></i>{/if}{provider.library}{/if}
-    </span>
+    {#each provider.libraries as l (l.id)}
+      <span class="chip">
+        <Icon name="server" size={16} />
+        {provider.server}<span class="sep">·</span>{#if l.colour}<i class="dot" style:background={l.colour}></i>{/if}{l.name}
+      </span>
+    {:else}
+      <span class="chip">
+        <Icon name="server" size={16} />
+        {provider.server}
+      </span>
+    {/each}
   </p>
   </div>
 </section>

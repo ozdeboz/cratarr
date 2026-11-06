@@ -6,10 +6,11 @@
   // tile's tap target when `onclick` is given.
   import type { Snippet } from 'svelte';
   import type { Attachment } from 'svelte/attachments';
+  import type { Dot } from './copiesRule';
 
   let {
     title,
-    dot = null,
+    dots = [],
     sub,
     image,
     action,
@@ -22,8 +23,8 @@
     attach,
   }: {
     title: string;
-    /** Its library, as a dot in that library's colour before the title (decision 0034). */
-    dot?: { colour: string; name: string } | null;
+    /** Its libraries, as dots in their colours before the title (decision 0034, lib/copiesRule). */
+    dots?: Dot[];
     /** Under the title: muted lines. */
     sub?: string | Snippet;
     /** The square picture; it fills the tile's width. */
@@ -60,7 +61,7 @@
 
 {#snippet inside()}
   <span class="image">{@render image()}</span>
-  <span class="title">{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{title}</span>
+  <span class="title">{#each dots as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{title}</span>
   {#if typeof sub === 'string'}<span class="sub">{sub}</span>{:else if sub}<span class="sub">{@render sub()}</span>{/if}
 {/snippet}
 

@@ -55,7 +55,8 @@
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
   import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, searchNone, USE_ORDERS, explainHidden } from './pageView.svelte';
-  import { libraryShown } from './sources.svelte';
+  import { dotsOf, recordOn } from './copiesRule';
+  import { libraryShown, shownIn } from './sources.svelte';
   import Tile from './Tile.svelte';
   import type { Cell } from './Row.svelte';
   import { headCells as headCellsOf, headSort, type Order } from './columnHead';
@@ -119,14 +120,7 @@
   const minPx = $derived(table ? width : ALBUM_WIDTHS[layout][prefs.albumZoom]);
   const cols = $derived(table ? 1 : Math.max(1, Math.floor((width + GAP) / (minPx + GAP))));
   const perBlock = $derived(cols * ROWS_PER_BLOCK);
-  // An album's library as a dot in its colour (decision 0034): none for the primary (Music), and none while only one
-  // of the server's libraries shows (every album would carry the same).
-  const dotOf = (s: ShelfSource, a: ListedAlbum) => {
-    const info = s.library_info;
-    if (!info || !a.library || info.filter((l) => libraryShown(s.id, l.id)).length < 2) return null;
-    const l = info.find((x) => x.id === a.library);
-    return l?.colour ? { colour: l.colour, name: l.name } : null;
-  };
+  const dotsIn = (s: ShelfSource, a: ListedAlbum) => dotsOf(a, s.library_info, shownIn(s.id));
   const blocksOf = (albums: ListedAlbum[]) => {
     const out: ListedAlbum[][] = [];
     for (let i = 0; i < albums.length; i += perBlock) out.push(albums.slice(i, i + perBlock));
@@ -248,7 +242,7 @@
   };
   const found = $derived(
     sources.map((s) => {
-      const albums = s.albums.filter((a) => (!a.library || libraryShown(s.id, a.library)) && matches(s, a)).sort(compareIn(s.id)[order]);
+      const albums = s.albums.filter((a) => recordOn(a, shownIn(s.id)) && matches(s, a)).sort(compareIn(s.id)[order]);
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );
@@ -283,7 +277,7 @@
   let blocked = $state.raw<{ for: string; of: ListBlocked | null } | null>(null);
   const SEARCH = { kind: 'search' as const, label: 'Search' };
   let excludedOpen = $state(false);
-  const noneShown = $derived(!kept.loader && shown.length > 0 && shown.every(({ albums }) => !albums.length) && (unfiltered ?? sources).some((x) => x.albums.some((a) => !a.library || libraryShown(x.id, a.library))));
+  const noneShown = $derived(!kept.loader && shown.length > 0 && shown.every(({ albums }) => !albums.length) && (unfiltered ?? sources).some((x) => x.albums.some((a) => recordOn(a, shownIn(x.id)))));
   $effect(() => {
     if (!noneShown || (!explain && !pageView.query.trim())) return void (blocked = null);
     const asked = JSON.stringify([pageView.query, $state.snapshot(prefs.filters[kind] ?? null), prefs.hiddenLibraries]);
@@ -296,7 +290,7 @@
     return () => (gone = true);
   });
   /** A record of a library switched on (the owner, 2026-11-02: "Only what's switched on": a number never promises more). */
-  const switchedOn = (x: ShelfSource, a: ListedAlbum) => !a.library || libraryShown(x.id, a.library);
+  const switchedOn = (x: ShelfSource, a: ListedAlbum) => recordOn(a, shownIn(x.id));
   const howManyRecords = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'record' : 'records'}`;
   const attributed = $derived.by(() => {
     if (!noneShown || !blocked) return null;
@@ -621,7 +615,7 @@
             {#if layout === 'grid'}
               <Tile
                 title={a.title}
-                dot={dotOf(s, a)}
+                dots={dotsIn(s, a)}
                 tag={axisOf(s, a)}
                 label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.title}` : `View ${a.title}`}
                 active={viewed || on}
@@ -650,8 +644,7 @@
               >
                 {#snippet front()}{@render playCover(s, a)}{/snippet}
                 {#snippet badges()}
-                  {@const dot = dotOf(s, a)}
-                  {#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}
+                  {#each dotsIn(s, a) as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}
                 {/snippet}
                 {#snippet sub()}{byline(a)}{#if here}<span class="now"> · playing</span>{/if}{@render why(s, a)}{/snippet}
                 {#snippet action()}
@@ -673,8 +666,7 @@
               >
                 {#snippet front()}{@render playCover(s, a)}{/snippet}
                 {#snippet badges()}
-                  {@const dot = dotOf(s, a)}
-                  {#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}
+                  {#each dotsIn(s, a) as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}
                   {#if a.year}<span class="released">{a.year}</span>{/if}
                 {/snippet}
                 {#snippet sub()}

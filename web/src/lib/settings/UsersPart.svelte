@@ -12,6 +12,7 @@
   // than in a control panel"); once removed, it moves into a main library or goes altogether (decision 0101 point 7).
   // Acts at once; the server says why it refuses, in a line.
   import { library, readLibrary } from '../albums.svelte';
+  import { librariesOf } from '../copiesRule';
   import {
     createUser,
     deleteOwnAlbum,
@@ -153,7 +154,7 @@
     if (open?.own_library && !library.view) readLibrary(false).catch(() => {});
   });
   const ownSource = $derived(library.view?.sources.find((s) => s.id === OWN) ?? null);
-  const musicOf = (u: User) => (u.own_library ? (ownSource?.albums ?? []).filter((a) => a.library === u.own_library) : []);
+  const musicOf = (u: User) => (u.own_library ? (ownSource?.albums ?? []).filter((a) => librariesOf(a).includes(u.own_library!)) : []);
   const mains = $derived((ownSource?.library_info ?? []).filter((l) => l.kind === 'main'));
   let deleting = $state<ListedAlbum | null>(null);
   /** Delete all of a removed account's music: asked twice, as a main library's (decision 0101 point 7). */

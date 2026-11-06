@@ -1650,6 +1650,27 @@ export const setReferences = (album: string, choice: { counting?: ReferenceSourc
     body: JSON.stringify(choice),
   });
 
+/** One copy of a record: one folder's files of it (docs/records-and-copies.md). `format` and `kbps` are as `ListedAlbum`'s,
+ *  `bits` and `rate` a lossless copy's, null where one of its files is not read. `deletable`, `keepable`, `keep_to` and
+ *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `picked`:
+ *  the viewer's own choice (Plays from). `plays`: the one the server would play them. `job`: the conversion at work on
+ *  this copy, `Job.id`. */
+export type AlbumCopy = {
+  library: string;
+  format: string | null;
+  kbps: number | null;
+  bits: number | null;
+  rate: number | null;
+  deletable: boolean;
+  keepable: boolean;
+  keep_to: string | null;
+  lacks: string[];
+  picked: boolean;
+  plays: boolean;
+  added: number | null;
+  job: number | null;
+};
+
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {
   /** Not the library's (a Bandcamp album): asked for, where it stands (lib/CoverStatus). */
@@ -1670,6 +1691,10 @@ export type ListedAlbum = {
   tags: string[];
   /** The library it was listed from (the filter's library switches). */
   library?: string;
+  /** Its copies, in the order the server would play them for the viewer; `format` and `bitrate_kbps` are the one that
+   *  plays. None from a list with no libraries; from a server of another kind, `library` alone. lib/copiesRule reads
+   *  these. */
+  copies?: AlbumCopy[];
   /** Its artists one by one, when the source credits several; absent: `artist` alone. */
   artists?: string[];
   /** Its length (s), its tracks' together; null where one of them is not known (0.10; a server before it gives none). */

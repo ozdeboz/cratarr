@@ -137,7 +137,8 @@
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
   import { away, here } from './away.svelte';
-  import { addedOn, artistPictureId, goToArtist, library, libraryDot, mainArtist, readLibrary } from './albums.svelte';
+  import { addedOn, artistPictureId, goToArtist, library, libraryDots, mainArtist, readLibrary } from './albums.svelte';
+  import { librariesOf } from './copiesRule';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
   import SimilarAlbums from './SimilarAlbums.svelte';
@@ -262,8 +263,8 @@
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
   let artistHead = $state<(Pick<ArtistView, 'albums' | 'appears_on' | 'favorite' | 'mbid'> & { studio?: number | null }) | null>(null);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
-  // The album's library, as a dot before its details (0.9.3): which copy this is, beside its year.
-  const albumDot = $derived(album ? libraryDot(album.source, { id: album.id }) : null);
+  // The record's libraries, as dots before its details (0.9.3): where it lies, beside its year.
+  const albumDots = $derived(album ? libraryDots(album.source, { id: album.id }) : []);
   let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words'> & { kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
   let listGenres = $state<string[] | null>(null);
@@ -389,11 +390,11 @@
     };
   });
 
-  // Where the album comes from (its About): the server, and its library as the Library's list names it.
+  // Where the album comes from (its About): the server, and every library holding it as the Library's list names them.
   const provider = $derived.by(() => {
     const s = album ? library.view?.sources.find((x) => x.id === album.source) : undefined;
-    const l = listedHere?.a.library ? s?.library_info?.find((x) => x.id === listedHere.a.library) : undefined;
-    return { server: s?.label ?? album?.source ?? '', library: l?.name ?? null, colour: l?.colour ?? null };
+    const libraries = listedHere ? librariesOf(listedHere.a).flatMap((id) => s?.library_info?.find((x) => x.id === id) ?? []) : [];
+    return { server: s?.label ?? album?.source ?? '', libraries };
   });
 
   // The album's heart: shows the change at once, back as it was when the server refuses.
@@ -2437,7 +2438,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {:else}
             <h2>{title}</h2>
           {/if}
-          {#if details}<p class="details">{#if albumDot}<i class="dot" style:background={albumDot.colour} role="img" aria-label={albumDot.name}></i>{/if}{details}</p>{/if}
+          {#if details}<p class="details">{#each albumDots as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{details}</p>{/if}
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
           <!-- A record missing tracks (0.13): how many of its release's it holds, to Health's albums missing tracks. -->
           {#if album && filesLine}
@@ -2690,7 +2691,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           album={album.id}
           genres={listGenres ?? []}
           year={albumHead.year}
-          provider={{ server: 'Bandcamp', library: null, colour: null }}
+          provider={{ server: 'Bandcamp', libraries: [] }}
           more={albumHead}
         />
       {/if}

@@ -26,6 +26,9 @@ export function libraryShown(source: string, library: string) {
   return !off.keys.has(`${source}/${library}`);
 }
 
+/** `libraryShown` for one server, as the rules of a record's copies take it (lib/copiesRule). */
+export const shownIn = (source: string) => (library: string) => libraryShown(source, library);
+
 /** Switches a library on or off. */
 export function showLibrary(source: string, library: string, on: boolean) {
   noteChange('libraries_off');
