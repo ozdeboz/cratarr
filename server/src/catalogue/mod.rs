@@ -2642,8 +2642,11 @@ impl Catalogue {
             }
         }
         // What was taken goes for good, all its files to the track that stays, gone ones and those in a trash too. Remembered
-        // first: what it was is read from those files. The user data follows at the next `Serve::built_now`.
-        for goes in take.to.keys().copied() {
+        // first: what it was is read from those files. The user data follows at the next `Serve::built_now`. By id: of two
+        // taken by one track the first keeps its AudioMuse row, the same one every run.
+        let mut taken: Vec<i64> = take.to.keys().copied().collect();
+        taken.sort_unstable();
+        for goes in taken {
             let stays = take.now(goes);
             tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {REMEMBER} WHERE id = ?1"), params![goes, now])?;
             tx.execute("UPDATE files SET track = ?2 WHERE track = ?1", params![goes, stays])?;
@@ -5754,6 +5757,19 @@ mod tests {
         assert!(cat.assign_records(&[kept, left]).unwrap() > 0, "read with none open, what is apart is apart");
     }
 
+
+    /// What stays of two copies' analyses must not hang on a map's order.
+    #[test]
+    fn of_two_copies_taken_at_once_the_older_id_keeps_its_audiomuse_row() {
+        let cat = tracks(9);
+        let kept = lying_in(&cat, "Kept", three([1, 2, 3]));
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        let (second, third) = (lying_in(&cat, "Second", three([4, 5, 6])), lying_in(&cat, "Third", three([7, 8, 9])));
+        cat.db().execute_batch("INSERT INTO audiomuse (track, energy) VALUES (4, 0.4), (7, 0.7);").unwrap();
+        cat.assign_records(&[kept, second, third]).unwrap();
+        let energy: f64 = cat.db().query_row("SELECT energy FROM audiomuse WHERE track = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(energy, 0.4);
+    }
 
     /// Copies are held together by their ids once taken: a retag or a length fix in one is no reason to split them.
     #[test]
