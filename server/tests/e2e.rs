@@ -1516,7 +1516,8 @@ async fn a_records_fact_reaches_every_copy_and_its_undo_takes_it_out_end_to_end(
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_length_fix_stays_in_its_file_end_to_end() {
     let (s, root, music, second, _) = on_two_copies("length-copies", ["main", "main"], "second").await;
-    let rel = format!("{SHORES}/01 Landing.flac");
+    // Three seconds in both copies: a track of two is no shorter than it says at a second heard, within Health's slack.
+    let rel = format!("{SHORES}/02 Crossing.flac");
     // By quality either can play, and on the copy that plays a fix by the track would find the same file.
     let plays = s.read_in("Both Shores", &music).await["library"].as_str().unwrap().to_string();
     let (fixed, playing) = if plays == music.to_string_lossy() { (&second, &music) } else { (&music, &second) };
