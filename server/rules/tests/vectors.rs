@@ -498,7 +498,7 @@ fn crate_cases(lib: &Shared) -> Vec<CrateCase> {
         case("the favourites toggle, only", Favourites::Only.with(std::slice::from_ref(&electronic))),
         case("the favourites toggle, none", Favourites::None.with(std::slice::from_ref(&electronic))),
         case("the favourite albums toggle, only", Favourites::Only.with_albums(&[is("year", range(Some(2000.0), None))])),
-        case("left out by hand", crates::leaving_out(&lib.listener.favourites, std::slice::from_ref(&electronic))),
+        case("left out by hand", crates::leaving_out(&lib.listener.favourites.iter().map(|line| lib.song_at(line)).collect::<Vec<_>>(), std::slice::from_ref(&electronic))),
         case("an artist excluded everywhere", crates::leaving_out_artists(&HashSet::from([excluded_artists::key("Lamp Theory")]), std::slice::from_ref(&electronic))),
         case("the seed's own sound", vec![is("like", like(one, 8, Also::default()))]),
         case("like two seeds, blended", vec![is("like", like(&two, 8, Also::default()))]),
@@ -713,7 +713,7 @@ fn every_axis_is_asked_of_the_shared_library() {
     for axis in crates::list_axes(&[], &[], None, None, 0) {
         assert!(asked(axis.key), "{}", axis.key);
     }
-    assert!(asked("line") && asked("credited"), "what a crate adds unseen");
+    assert!(asked("track") && asked("credited"), "what a crate adds unseen");
 }
 
 #[test]

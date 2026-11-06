@@ -8,6 +8,7 @@
 //! changed) and link each to a file. A folder that cannot be read, or that walks to nothing where it had files, keeps its
 //! rows and reports it: an unmounted folder must never look like "everything was deleted".
 
+mod artists;
 mod id3;
 pub mod identity;
 pub mod normalise;
@@ -79,6 +80,13 @@ CREATE TABLE IF NOT EXISTS track_moved (old INTEGER PRIMARY KEY, id INTEGER NOT 
 CREATE TABLE IF NOT EXISTS records (
   id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER,
   title TEXT, artist TEXT, year INTEGER, kind TEXT, counting TEXT);
+-- 0100: an artist's id for life, served as `ar-<id>`, kept when nothing credits them any more (`catalogue::artists`).
+-- `key`, `ids::artist_key`: one name, one row, until references say two share it, so no unique index.
+CREATE TABLE IF NOT EXISTS artists (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, name TEXT NOT NULL, sort TEXT, key TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS artists_by_key ON artists (key);
+-- Where an artist's id from before 0.16 went (`ar-<hash>`): what the migration moves by, kept with what it maps, as a track's.
+CREATE TABLE IF NOT EXISTS artist_moved (old TEXT PRIMARY KEY, id INTEGER NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS analysis (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, version INTEGER NOT NULL,
   duration_secs REAL, loudness_lufs REAL, track_gain_db REAL, track_peak REAL, bpm REAL, bpm_confidence REAL,
@@ -101,9 +109,9 @@ CREATE TABLE IF NOT EXISTS beat_this (
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 ";
 
-/// The tables whose ids are for life and held in user data: what a fresh start of lost ids lifts. Artists and labels join
-/// when they have ids of their own.
-const IDS_FOR_LIFE: [&str; 2] = ["tracks", "records"];
+/// The tables whose ids are for life and held in user data: what a fresh start of lost ids lifts. Labels join when they have
+/// ids of their own.
+const IDS_FOR_LIFE: [&str; 3] = ["tracks", "records", "artists"];
 
 /// A file's beats and downbeats by Beat this! (decision 0049, amended), as heard: milliseconds from the start.
 #[derive(Debug, Clone, Default, PartialEq)]

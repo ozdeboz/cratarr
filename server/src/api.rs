@@ -4730,9 +4730,11 @@ async fn discover(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     // the filter's "Leave out favourite artists" (the owner, 2026-10-24).
     let starred: std::collections::HashSet<String> =
         serve.userdata.starred(&account, crate::userdata::Kind::Artist).map_err(|e| ToggleError::Refused(format!("{e:#}")))?.into_iter().collect();
+    let known = serve.artist_ids().map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let is_starred = |name: &str| known.get(&crate::serve::ids::artist_key(name)).is_some_and(|id| starred.contains(&crate::serve::ids::artist(*id)));
     let favourite_artists: Vec<&str> = found
         .as_ref()
-        .map(|f| f.albums.iter().filter(|s| starred.contains(&crate::serve::ids::artist(&s.artist))).map(|s| s.key.as_str()).collect())
+        .map(|f| f.albums.iter().filter(|s| is_starred(&s.artist)).map(|s| s.key.as_str()).collect())
         .unwrap_or_default();
     let mut found = json!(found);
     if let Some(cards) = found.get_mut("albums").and_then(|a| a.as_array_mut()) {

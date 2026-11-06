@@ -300,6 +300,16 @@ impl Serve {
         self.catalogue_cell.get().expect("the catalogue is attached before Cratarr serves")
     }
 
+    /// Every artist's id for life by `ids::artist_key`: none until the catalogue is attached. Blocking.
+    pub fn artist_ids(&self) -> Result<std::collections::HashMap<String, i64>> {
+        self.catalogue_cell.get().map_or_else(|| Ok(Default::default()), |c| c.artist_ids())
+    }
+
+    /// An artist's id as served, by their name as any file or service writes it: none for a name with no id. Blocking.
+    pub fn artist_id(&self, name: &str) -> Result<Option<String>> {
+        Ok(self.catalogue_cell.get().map(|c| c.artist_of(name)).transpose()?.flatten().map(ids::artist))
+    }
+
     pub fn set_playlists(&self, service: Arc<crate::app::PlaylistService>) {
         let _ = self.playlists.set(service);
     }

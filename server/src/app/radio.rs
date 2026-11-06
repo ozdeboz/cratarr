@@ -296,7 +296,7 @@ struct Elsewhere {
 }
 
 /// Discover's suggestions that play on Bandcamp (the account's last look), those whose album is queued left out.
-fn elsewhere_of(index: &Index, found: &[super::discover::Suggestion], exclude: &[String]) -> Vec<Elsewhere> {
+fn elsewhere_of(index: &Index, found: &[super::discover::Suggestion], artist_ids: &HashMap<String, i64>, exclude: &[String]) -> Vec<Elsewhere> {
     let queued: HashSet<String> = exclude.iter().filter_map(|id| crate::bandcamp::read_id(id).map(|(page, _)| page)).collect();
     found
         .iter()
@@ -305,7 +305,8 @@ fn elsewhere_of(index: &Index, found: &[super::discover::Suggestion], exclude: &
             let names = std::iter::once(s.artist.as_str())
                 .chain(s.alike.iter().map(|a| a.seed.as_str()))
                 .chain(s.why.iter().filter_map(|w| w.strip_prefix("Like ")));
-            let mut artists: Vec<u32> = names.filter_map(|n| index.artist_number(&crate::serve::ids::artist(n))).collect();
+            let number = |n: &str| index.artist_number(&crate::serve::ids::artist(*artist_ids.get(&crate::serve::ids::artist_key(n))?));
+            let mut artists: Vec<u32> = names.filter_map(number).collect();
             artists.dedup();
             let genres = s.genres.iter().filter_map(|g| index.genre_number(g)).collect();
             let year = s.year.and_then(|y| u32::try_from(y).ok()).filter(|y| *y > 0);
@@ -349,11 +350,11 @@ fn mix_elsewhere(index: &Index, req: &Ask, picks: &[usize], elsewhere: &[Elsewhe
 async fn with_elsewhere(index: &Index, req: &Ask, picks: &[usize], mut tracks: Vec<QueueTrack>, account: &str, lane: &str) -> Vec<QueueTrack> {
     let Some(served) = crate::serve::instance() else { return tracks };
     let (s, a) = (served.clone(), account.to_string());
-    let found = match tokio::task::spawn_blocking(move || super::discover::kept(&s, &a)).await {
-        Ok(Ok(Some(f))) => f.albums,
+    let (found, artist_ids) = match tokio::task::spawn_blocking(move || anyhow::Ok((super::discover::kept(&s, &a)?, s.artist_ids()?))).await {
+        Ok(Ok((Some(f), artist_ids))) => (f.albums, artist_ids),
         _ => return tracks,
     };
-    let elsewhere = elsewhere_of(index, &found, &req.exclude);
+    let elsewhere = elsewhere_of(index, &found, &artist_ids, &req.exclude);
     let mut rng = super::play::rng();
     for (place, e) in mix_elsewhere(index, req, picks, &elsewhere) {
         let page = &elsewhere[e].page;

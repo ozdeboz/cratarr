@@ -10,10 +10,27 @@ use serde::{Deserialize, Serialize};
 
 pub use cratarr_rules::crates::*;
 
-/// Each artist the files name, their library id by their name, for `Alike::of`: an id is a hash of the name, and a hash
-/// is no rule.
-pub fn artist_ids(all: &[Facts]) -> HashMap<String, String> {
-    credited_names(all).into_keys().map(|n| (n.to_string(), crate::serve::ids::artist(n))).collect()
+/// Each artist the files name, their library id by their name, for `Alike::of`, `known` being the catalogue's ids by key: the
+/// catalogue is no rule. A part of a credit no one is named by alone has no id: nothing lists them, so nothing seeds by them.
+pub fn artist_ids(all: &[Facts], known: &HashMap<String, i64>) -> HashMap<String, String> {
+    use crate::serve::ids;
+    credited_names(all).into_keys().filter_map(|n| Some((n.to_string(), ids::artist(*known.get(&ids::artist_key(n))?)))).collect()
+}
+
+/// A crate's picture's file name: its id where that is a plain name, else the id in hex.
+pub fn image_file(id: &str) -> String {
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        format!("{id}.jpg")
+    } else {
+        format!("x{}.jpg", id.bytes().map(|b| format!("{b:02x}")).collect::<String>())
+    }
+}
+
+/// The crate a picture in hex is of: `image_file` read back. None for a plain name, whose crate is one's own and keeps it.
+pub fn image_crate(file: &str) -> Option<String> {
+    let hex = file.strip_prefix('x')?.strip_suffix(".jpg")?;
+    let bytes: Option<Vec<u8>> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()).collect();
+    String::from_utf8(bytes?).ok().filter(|id| image_file(id) == file)
 }
 
 // --- Freshness of the media server's favourites (decision 0024, issue 5) ---
@@ -61,13 +78,13 @@ struct Stored {
     /// Each crate's favourite albums setting (decision 0024, amended 2026-10-19), by id; a crate not in it shows all.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     favourite_albums: BTreeMap<String, Favourites>,
-    /// Each crate's tracks left out by hand (decision 0024, amended 2026-10-19), by id: their lines, relative to Music.
+    /// Each crate's tracks left out by hand (decision 0024, amended 2026-10-19), by id: their song ids.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     left_out: BTreeMap<String, Vec<String>>,
     /// Each crate's albums left out by hand, by id: the albums' ids (a rule: an album's tracks now and later).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     left_out_albums: BTreeMap<String, Vec<String>>,
-    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19: global exclusions): their lines.
+    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19: global exclusions): their song ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     excluded: Vec<String>,
     /// Each ranked crate's fit (its rules and the learned traits dismissed), by its id without a count.
@@ -143,15 +160,15 @@ impl CrateStore {
     /// A crate's tracks and albums left out by hand (none until some are).
     pub async fn left_out(&self, id: &str) -> Result<LeftOut> {
         let s = self.stored().await?;
-        Ok(LeftOut { lines: s.left_out.get(id).cloned().unwrap_or_default(), albums: s.left_out_albums.get(id).cloned().unwrap_or_default() })
+        Ok(LeftOut { tracks: s.left_out.get(id).cloned().unwrap_or_default(), albums: s.left_out_albums.get(id).cloned().unwrap_or_default() })
     }
 
     /// Every crate's left-out list that holds any.
     pub async fn all_left_out(&self) -> Result<BTreeMap<String, LeftOut>> {
         let s = self.stored().await?;
         let mut all: BTreeMap<String, LeftOut> = BTreeMap::new();
-        for (id, lines) in s.left_out {
-            all.entry(id).or_default().lines = lines;
+        for (id, tracks) in s.left_out {
+            all.entry(id).or_default().tracks = tracks;
         }
         for (id, albums) in s.left_out_albums {
             all.entry(id).or_default().albums = albums;
@@ -161,7 +178,7 @@ impl CrateStore {
 
     pub async fn set_left_out(&self, id: &str, left: LeftOut) -> Result<()> {
         let mut s = self.stored().await?;
-        for (kept, list) in [(&mut s.left_out, left.lines), (&mut s.left_out_albums, left.albums)] {
+        for (kept, list) in [(&mut s.left_out, left.tracks), (&mut s.left_out_albums, left.albums)] {
             if list.is_empty() {
                 kept.remove(id);
             } else {
@@ -206,14 +223,14 @@ impl CrateStore {
         self.write_stored(s).await
     }
 
-    /// The tracks excluded from every automatic pick (their lines).
+    /// The tracks excluded from every automatic pick (their song ids).
     pub async fn excluded(&self) -> Result<Vec<String>> {
         Ok(self.stored().await?.excluded)
     }
 
-    pub async fn set_excluded(&self, lines: Vec<String>) -> Result<()> {
+    pub async fn set_excluded(&self, tracks: Vec<String>) -> Result<()> {
         let mut s = self.stored().await?;
-        s.excluded = lines;
+        s.excluded = tracks;
         self.write_stored(s).await
     }
 
@@ -332,11 +349,24 @@ mod tests {
     fn an_artist_seed_finds_their_songs_by_the_id_the_library_makes() {
         let (credits, credit_names) = crate::app::excluded_artists::credited(&["Air feat. Beck"]);
         let files = vec![Facts { rel: "a.flac".into(), artists: vec!["Air feat. Beck".into()], credits, credit_names, ..Facts::default() }];
-        let alike = Alike::of(&files, &HashMap::new(), &artist_ids(&files));
-        let places = |name: &str| alike.seed_places(&crate::serve::ids::artist(name));
-        assert_eq!(places("Beck"), [0], "a credit");
-        assert_eq!(places("air feat. beck"), [0], "a credit as the tags write it, any case");
-        assert!(places("Cy").is_empty());
+        use crate::serve::ids;
+        let known: HashMap<String, i64> = [(ids::artist_key("Beck"), 7), (ids::artist_key("Air feat. Beck"), 8), (ids::artist_key("Cy"), 9)].into();
+        let alike = Alike::of(&files, &HashMap::new(), &artist_ids(&files, &known));
+        let places = |id: i64| alike.seed_places(&ids::artist(id));
+        assert_eq!(places(7), [0], "a credit");
+        assert_eq!(places(8), [0], "a credit as the tags write it");
+        assert!(places(9).is_empty(), "credited on nothing here");
+        assert!(artist_ids(&files, &HashMap::new()).is_empty(), "no id is made up");
+    }
+
+    #[test]
+    fn a_pictures_name_reads_back_as_its_crate() {
+        assert_eq!(image_crate(&image_file("like:al-1")).as_deref(), Some("like:al-1"));
+        assert_eq!(image_crate(&image_file("../x")).as_deref(), Some("../x"));
+        assert_eq!(image_crate("c-12ab.jpg"), None, "one's own, by its own name");
+        assert_eq!(image_crate("xylophone.jpg"), None, "no hex");
+        assert_eq!(image_crate("xabc.jpg"), None, "half a byte");
+        assert_eq!(image_crate("x41.jpg"), None, "one's own, whose name reads as hex");
     }
 
     #[tokio::test]
@@ -364,7 +394,7 @@ mod tests {
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(CrateStore::new(dir.to_str()).favourite_albums(&id).await.unwrap(), Favourites::None, "kept, and through a change");
         // Tracks and albums left out by hand: kept per crate, through a change of it; an empty list is none.
-        let left = LeftOut { lines: vec!["x.flac".into()], albums: vec!["al-1".into()] };
+        let left = LeftOut { tracks: vec!["tr-1".into()], albums: vec!["al-1".into()] };
         again.set_left_out(&id, left.clone()).await.unwrap();
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(CrateStore::new(dir.to_str()).left_out(&id).await.unwrap(), left);

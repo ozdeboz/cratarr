@@ -198,6 +198,37 @@ impl SyncState {
         Ok(())
     }
 
+    /// The agreed lists with the tracks two copies became one of moved (`Moved::ids`, `tr-<a>` to `tr-<b>`), place by place, as
+    /// `base_ids` goes by place: a list that held both copies holds that track twice, as it can hold any. Their stamps stay, so
+    /// the next pass reads no change. Safe to repeat. Blocking.
+    #[allow(dead_code)] // the first start's (C34)
+    pub fn move_tracks(&self, moved: &crate::moved::Moved) -> Result<crate::moved::Report> {
+        use crate::serve::ids;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let rows: Vec<(String, String, String, String)> =
+            tx.prepare("SELECT source, user, name, base FROM links")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
+        let (n, mut walk) = (rows.len() as u64, crate::moved::Walk::default());
+        for (source, user, name, base) in rows {
+            let mut list: Vec<i64> = serde_json::from_str(&base)?;
+            let mut changed = false;
+            for track in &mut list {
+                if let Some(new) = moved.ids.get(&ids::song(*track)).and_then(|id| ids::track_of(id)) {
+                    *track = new;
+                    changed = true;
+                    walk.moved += 1;
+                }
+            }
+            if changed {
+                tx.execute("UPDATE links SET base = ?4 WHERE source = ?1 AND user = ?2 AND name = ?3", params![source, user, name, serde_json::to_string(&list)?])?;
+            }
+        }
+        tx.commit()?;
+        let mut report = crate::moved::Report::default();
+        report.walked("playlist-sync: links.base", n, walk);
+        Ok(report)
+    }
+
     /// Forget every link's agreed list and change stamp (its track ids belong to a catalogue that is gone): the next
     /// pass merges both sides as they are, adding what either has. Returns how many links.
     pub fn forget_baselines(&self) -> Result<usize> {
@@ -446,6 +477,24 @@ mod tests {
         assert_eq!((now.base.as_slice(), now.stamp.as_deref()), ([1, 9, 3].as_slice(), Some("e")), "in its place, nothing else moved");
         assert_eq!(now.ids, ["a", "b", "c"], "the server's item is the same");
         assert_eq!(s.follow_tracks(&std::collections::HashMap::from([(2, 9)])).unwrap(), 0, "safe to repeat");
+    }
+
+    /// Two copies' tracks became one: the list both sides agreed on says so, or the next pass reads the track as taken out on
+    /// one side and put in on the other. Place by place, as `base_ids` is.
+    #[test]
+    fn an_agreed_list_follows_its_tracks_place_by_place() {
+        let s = SyncState::open(None).unwrap();
+        let link = Link { stamp: Some("e1".into()), base: vec![3, 9, 2, 3], ids: vec!["c".into(), "i".into(), "".into(), "c".into()], ..Link::new("Chill", "r1", "Chill") };
+        s.put("jf", "u1", &link).unwrap();
+        s.put("jf", "u1", &Link { base: vec![5], ids: vec!["e".into()], ..Link::new("Other", "r2", "Other") }).unwrap();
+        let moved = crate::moved::Moved { ids: [("tr-9".to_string(), "tr-3".to_string())].into(), ..Default::default() };
+        let report = s.move_tracks(&moved).unwrap();
+        let links = s.links("jf", "u1").unwrap();
+        assert_eq!(links[0], Link { base: vec![3, 3, 2, 3], ..link }, "its stamp and server items as they were");
+        assert_eq!(links[1].base, [5]);
+        let t = report.table_named("playlist-sync: links.base").unwrap();
+        assert_eq!((t.before, t.moved), (2, 1));
+        assert_eq!(s.move_tracks(&moved).unwrap().table_named("playlist-sync: links.base").unwrap().moved, 0, "safe to repeat");
     }
 
     #[test]

@@ -828,6 +828,25 @@ mod tests {
         }
     }
 
+    /// What waits finds its album by its id when its turn comes, and a job's Undo finds the job by it.
+    #[test]
+    fn a_job_waiting_keeps_its_album_after_the_move() {
+        let d = std::env::temp_dir().join(format!("cratarr-queue-moved-job-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let album = serde_json::json!({ "id": "al-old", "title": "T", "tracks": 1, "tags": [] });
+        let job = serde_json::json!({
+            "id": 1, "source": "cratarr", "album": album, "folder": 1, "dir": "X", "action": "keep", "files": ["01.flac"], "done": 0, "state": "waiting", "to": "X - T",
+        });
+        std::fs::write(d.join("convert-queue.json"), serde_json::json!({ "next": 2, "list": [job] }).to_string()).unwrap();
+        let moved = crate::moved::Moved { ids: [("al-old".to_string(), "al-7".to_string())].into(), ..Default::default() };
+        let report = moved.stores(&d).unwrap();
+        let q = Queue::open(Some(d.join("convert-queue.json")));
+        assert_eq!(q.lock().list.iter().map(|j| j.album.id.as_str()).collect::<Vec<_>>(), ["al-7"], "read as a server reads it");
+        assert_eq!(report.table_named("convert-queue.json").unwrap().before, 1);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn the_queue_survives_a_restart_and_forgets_finished_jobs_after_a_while() {
         let d = std::env::temp_dir().join(format!("cratarr-queue-file-{}", std::process::id()));
