@@ -63,10 +63,20 @@ pub fn artist_key(name: &str) -> String {
     clear(&name.to_lowercase())
 }
 
-/// The name's hash, which was an artist's id until 0.16: what a persistent id is made of, and how the ids kept from then are
-/// told.
+/// The name's hash, which was an artist's id until 0.16: what a persistent id is made of.
 fn artist_hash(name: &str) -> String {
     hash(&[&artist_key(name)])
+}
+
+/// The id an artist went by until 0.16, from their key: what the migration moves from.
+pub fn old_artist(key: &str) -> String {
+    format!("{ARTIST}{}", hash(&[key]))
+}
+
+/// Whether an album's or an artist's id is one for life, a number: a hash from before 0.16 is 22 letters and digits.
+pub fn for_life(id: &str) -> bool {
+    let number = id.strip_prefix(ALBUM).or_else(|| id.strip_prefix(ARTIST));
+    number.is_some_and(|n| (1..=15).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The first field group of a spec with any value, its values joined by `\` (Navidrome's `computePID`).
@@ -158,6 +168,18 @@ mod tests {
         assert_eq!(base62(61), "000000000000000000000Z");
         assert_eq!(base62(62), "0000000000000000000010");
         assert_eq!(base62(u128::MAX), "7N42dgm5tFLK9N8MT7fHC7");
+    }
+
+    #[test]
+    fn an_artists_old_id_is_the_hash_of_their_key() {
+        assert_eq!(old_artist(&artist_key("Björk")), "ar-5vcUvYmuWJAgyxLXEUmaPz");
+        assert_eq!(old_artist(&artist_key("BJÖRK")), format!("{ARTIST}{}", artist_hash("björk")));
+    }
+
+    #[test]
+    fn an_id_for_life_is_a_number_and_a_hash_is_not() {
+        assert!(for_life("ar-12") && for_life("al-3000001"));
+        assert!(!for_life("ar-5vcUvYmuWJAgyxLXEUmaPz") && !for_life("al-1234567890123456789012") && !for_life("ar-") && !for_life("tr-12"));
     }
 
     #[test]

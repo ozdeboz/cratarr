@@ -14,6 +14,7 @@
 
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
+pub mod artists;
 pub mod offline;
 pub mod overrides;
 pub mod playlists;
@@ -815,7 +816,7 @@ impl UserData {
     /// The highest record or artist id for life the user data names (`ids::highest_named`), 0 for none: with the JSON stores,
     /// what a fresh start of lost ids must number above. Blocking.
     pub fn top_named(&self) -> Result<i64> {
-        const COLUMNS: [(&str, &str); 19] = [
+        const COLUMNS: [(&str, &str); 20] = [
             ("annotation", "item"),
             ("added", "album"),
             ("imported", "item"),
@@ -835,6 +836,7 @@ impl UserData {
             ("discogs_facts", "subject"),
             ("change_at", "item"),
             ("preference", "value"),
+            ("related_artists", "found"),
         ];
         let db = self.db();
         let mut top = 0;
@@ -2213,6 +2215,7 @@ mod tests {
         named("INSERT INTO words_asked (subject, source, at, ok) VALUES ('album:al-50', 's', 0, 1)", 50);
         named("INSERT INTO change_at (account, kind, item, at) VALUES ('a', 'favourite', 'album:cratarr/al-60', 0)", 60);
         named("INSERT INTO annotation (user, item, kind) VALUES ('a', 'ar-70', 'artist')", 70);
+        named(r#"INSERT INTO related_artists (artist, at, found) VALUES ('mbid', 0, '{"artists":[{"id":"ar-80"}]}')"#, 80);
     }
 
     #[test]

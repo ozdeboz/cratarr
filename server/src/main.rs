@@ -31,6 +31,7 @@ mod m3u;
 mod mcp;
 mod memwatch;
 mod mounts;
+mod moved;
 mod moves;
 mod naming;
 mod nowplaying;

@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS records (
 CREATE TABLE IF NOT EXISTS artists (
   id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, name TEXT NOT NULL, sort TEXT, key TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS artists_by_key ON artists (key);
+-- Where an artist's id from before 0.16 went (`ar-<hash>`): what the migration moves by, kept with what it maps, as a track's.
+CREATE TABLE IF NOT EXISTS artist_moved (old TEXT PRIMARY KEY, id INTEGER NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS analysis (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, version INTEGER NOT NULL,
   duration_secs REAL, loudness_lufs REAL, track_gain_db REAL, track_peak REAL, bpm REAL, bpm_confidence REAL,
