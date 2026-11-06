@@ -32,6 +32,15 @@ class PageCommandTest {
     }
 
     @Test
+    fun a_tracks_copy_reaches_the_player_with_it_whichever_call_takes_it_there() {
+        val tracks = JSONArray().put(JSONObject().put("source", "cratarr").put("id", "tr-1").put("from", "cratarr//in"))
+        for (call in listOf("queue", "add", "upcoming")) {
+            val c = PageCommand.of(op(call, "tracks" to tracks))!!
+            assertEquals(call, "cratarr//in", c.getJSONArray("tracks").getJSONObject(0).getString("from"))
+        }
+    }
+
+    @Test
     fun a_queue_not_to_play_is_loaded_paused_and_one_that_says_nothing_plays() {
         assertTrue(PageCommand.of(op("queue", "play" to false))!!.getBoolean("paused"))
         assertFalse(PageCommand.of(op("queue"))!!.getBoolean("paused"))

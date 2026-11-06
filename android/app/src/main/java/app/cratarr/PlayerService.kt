@@ -840,8 +840,11 @@ class PlayerService : MediaSessionService() {
         // Flying on past what is heard (0.9.14): heard at most at its top, on to the flight's in pieces.
         val accel = if (rise) "&accel_s=${w.doublingS}&max=${w.top}&flight_max=${Prefs.FLIGHT_TOP}&piece_ms=${w.pieceMs}" else ""
         return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=$speed" +
-            "&gain_db=$gainDb$to$fit$on$accel"
+            "&gain_db=$gainDb$to$fit$on$accel${windCopy(item)}"
     }
+
+    /** A wind's word for the copy its track is heard from (Play from). */
+    private fun windCopy(item: MediaItem) = copyOf(item)?.let { "&" + copyParam(it) }.orEmpty()
 
     /**
      * A let-go's brake stream (0.9.14-3, the server's `wind::Brake`): the queue's track [index] from [fromMs], back or
@@ -856,7 +859,7 @@ class PlayerService : MediaSessionService() {
         val w = prefs.holdWind(back)
         val on = through?.let { "&through=" + Uri.encode(it, ",/:") } ?: ""
         return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=${w.speed}" +
-            "&gain_db=${w.gainDb}&brake_v0=$v0&brake_to=$to&brake_ms=$ms&brake_at_ms=$atMs&max=${w.top}&piece_ms=${w.pieceMs}$on"
+            "&gain_db=${w.gainDb}&brake_v0=$v0&brake_to=$to&brake_ms=$ms&brake_at_ms=$atMs&max=${w.top}&piece_ms=${w.pieceMs}$on${windCopy(item)}"
     }
 
     /** The queue's tracks in a hold's way (decision 0074, through the queue): back the ones before this, forward the ones
