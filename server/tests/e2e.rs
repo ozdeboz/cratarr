@@ -29,11 +29,17 @@ struct Server {
 impl Server {
     /// The server on `data`, on a free port, once it answers: asking for a sign-in is an answer.
     async fn start(data: &Path) -> Server {
+        Self::start_with(data, &[]).await
+    }
+
+    /// `start`, with these in its environment.
+    async fn start_with(data: &Path, env: &[(&str, &str)]) -> Server {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let child = Command::new(BIN)
             .env("CRATARR_DATA_DIR", data)
             .env("CRATARR_BIND", format!("127.0.0.1:{port}"))
             .env("RUST_LOG", "warn")
+            .envs(env.iter().copied())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
@@ -2324,6 +2330,31 @@ async fn an_app_sees_every_library_whatever_the_librarys_filter_says_end_to_end(
     assert_eq!(folders().await, all, "its music folders stay");
     assert_eq!(ask(&ann, "getUser", &format!("username={}", ANN.0)).await["user"]["folder"], numbers, "and its account's");
     assert_eq!(plays(shores().await.unwrap()), id_of(other).as_str(), "the copy that plays still follows the switch");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The environment starts a server and Settings runs it: a Lidarr removed stays removed and a password changed stays changed, across
+/// restarts on the same environment.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn what_settings_say_stands_against_the_environment_end_to_end() {
+    let root = temp("environment");
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let env = [("LIDARR_URL", "http://127.0.0.1:9"), ("LIDARR_API_KEY", "key"), ("CRATARR_SUBSONIC_USER", "ann"), ("CRATARR_SUBSONIC_PASSWORD", "from-the-environment")];
+    let s = Server::start_with(&data, &env).await;
+    let ann = s.sign_in("ann", "from-the-environment").await;
+    assert_eq!(ann.get("/api/settings").await["lidarr"]["url"], "http://127.0.0.1:9", "the environment's, until Settings says");
+    ann.ok(reqwest::Method::PUT, "/api/me/password", json!({ "current": "from-the-environment", "password": "chosen-here" })).await;
+    ann.ok(reqwest::Method::PUT, "/api/settings", json!({ "sources": [], "lidarr": { "url": "", "api_key": "", "enabled": false } })).await;
+    s.stop();
+
+    let s = Server::start_with(&data, &env).await;
+    let ann = s.sign_in("ann", "chosen-here").await;
+    assert!(ann.get("/api/settings").await["lidarr"].is_null(), "removed stays removed");
+    let said = s.anyone().get("/rest/ping?u=ann&p=from-the-environment&v=1.16.1&c=e2e").await;
+    assert_eq!(said["subsonic-response"]["status"], "failed", "the environment's password is no longer the account's: {said}");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

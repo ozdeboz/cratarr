@@ -158,9 +158,9 @@ few settings Settings can change later (what Settings saves wins):
 | `CRATARR_ANALYSIS` | `keep` | The server's own analysis of the music (waveforms, tempo, loudness, the visuals' signals): `keep` analyses new music once half the library has an analysis (a first pass elsewhere, or all of it here), `all` analyses everything here, `off` none. Also in Settings → Libraries. |
 | `CRATARR_PROXIES` | local addresses | The proxies whose forwarded client address is believed, as addresses or ranges, comma-separated (`172.19.0.0/16, 192.168.1.5`). Unset: a proxy on a local address (loopback, private ranges, link-local, IPv6 unique local); one elsewhere must be named. Also in Settings → Authentication. |
 | `CRATARR_PLAYLIST_DIR` | none | The playlists' folder until a music folder is chosen in Settings. |
-| `CRATARR_SUBSONIC_USER`, `CRATARR_SUBSONIC_PASSWORD` | none | An account made (or its password set) at every start. |
+| `CRATARR_SUBSONIC_USER`, `CRATARR_SUBSONIC_PASSWORD` | none | An account made at the first start with them. Its password is then the account's: changed in Account, it stays. |
 | `JELLYFIN_URL`, `JELLYFIN_API_KEY`, `CRATARR_PLAYER_CLIENT` | none | A Jellyfin source on the first start, until one is saved in Settings. |
-| `LIDARR_URL`, `LIDARR_API_KEY` | none | Lidarr on the first start, until it is saved in Settings. |
+| `LIDARR_URL`, `LIDARR_API_KEY` | none | Lidarr until it is saved or removed in Settings. |
 | `RUST_LOG` | `info` | What the server logs. Settings → Diagnostics can log more for a while. |
 
 ### Apps

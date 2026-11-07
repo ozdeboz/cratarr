@@ -234,7 +234,7 @@
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
-      {#if !view.fetchers.length}<p class="note">Approved requests need a fetcher, Lidarr or Soulseek: <a href={viewOn('settings', 'settings:connections')}>connect one</a>.</p>{/if}
+      {#if !view.fetchers.length}<p class="note">Approved requests need a fetcher, Lidarr or Soulseek: {#if me.admin}<a href={viewOn('settings', 'settings:connections')}>connect one</a>{:else}an administrator can connect one{/if}.</p>{/if}
       <Group>
         {#each waiting as r (r.id)}{@render row(r, true, true)}{:else}{#if !view.waiting?.length}<Item name="None waiting" />{/if}{/each}
       </Group>
@@ -289,7 +289,7 @@
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetchers.includes('lidarr')}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetchers.includes('lidarr')}<PageLoading />{:else}<p class="note">Lidarr is not connected: {#if me.admin}<a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>{:else}an administrator can connect it{/if}.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}

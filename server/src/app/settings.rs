@@ -467,6 +467,7 @@ impl SettingsService {
             music_folder,
             tag_rules: tag_rules.clone(),
             lidarr: lidarr.0.clone(),
+            lidarr_removed: settings::lidarr_removed(lidarr.0.as_ref(), &|k: &str| std::env::var(k).ok()),
             trash_days,
             naming: naming.as_ref().map(|t| t.to_string()),
         };

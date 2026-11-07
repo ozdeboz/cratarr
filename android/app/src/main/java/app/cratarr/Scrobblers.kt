@@ -61,7 +61,8 @@ object Scrobblers {
         if (!tracking) Prefs.shared(context).edit().remove(Who.keyed(context, QUEUE)).remove(Who.keyed(context, HANDOVER)).apply()
         else send(context)
     }
-    private fun way(context: Context) = if (Who.current(context) == Who.NONE) "device" else Prefs.shared(context).getString(Who.keyed(context, WAY), "server")
+    /** Until the page has told it, an account's way is what a new account's is (decision 0091): the private choice. */
+    private fun way(context: Context) = if (Who.current(context) == Who.NONE) "device" else Prefs.shared(context).getString(Who.keyed(context, WAY), "device")
     private fun tracking(context: Context) = Prefs.shared(context).getBoolean(Who.keyed(context, TRACKING), true)
 
     /** What the page shows: each service signed in to here (whose, why it stopped), and how many plays wait. */

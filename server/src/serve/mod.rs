@@ -160,9 +160,12 @@ impl Serve {
                 tracing::warn!(target: "signin", "sessions.sqlite says nothing of the sign-in: required, and the keys it held are gone");
             }
         }
+        // The environment makes the account. Its password from then on is what the account says: set here at every start, one changed
+        // in Account came back.
         if let (Some(u), Some(p)) = (env("CRATARR_SUBSONIC_USER"), env("CRATARR_SUBSONIC_PASSWORD"))
             && !u.trim().is_empty()
             && !p.is_empty()
+            && users.get(u.trim()).is_none_or(|u| u.password.is_empty())
         {
             users.set(u.trim(), &p)?;
         }

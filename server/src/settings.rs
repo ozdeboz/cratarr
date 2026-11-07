@@ -298,6 +298,8 @@ struct File {
     tag_rules: crate::catalogue::Rules,
     #[serde(default)]
     lidarr: Option<LidarrConfig>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lidarr_removed: bool,
     #[serde(default = "default_trash_days")]
     trash_days: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -342,6 +344,8 @@ pub struct Saved {
     /// How tag values are split when read (decision 0008).
     pub tag_rules: crate::catalogue::Rules,
     pub lidarr: Option<LidarrConfig>,
+    /// The environment holds a Lidarr, and Settings said none: it stays out at the next start (`lidarr_at_start`).
+    pub lidarr_removed: bool,
     /// How long albums deleted from Incoming stay in the trash.
     pub trash_days: u32,
     /// How Keep and Replace name albums in Music (decision 0013), as a template string. `None`: the one the library
@@ -356,6 +360,7 @@ impl Default for Saved {
             music_folder: None,
             tag_rules: Default::default(),
             lidarr: None,
+            lidarr_removed: false,
             trash_days: default_trash_days(),
             naming: None,
         }
@@ -407,6 +412,7 @@ pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<
             music_folder: f.music_folder,
             tag_rules: f.tag_rules,
             lidarr: f.lidarr,
+            lidarr_removed: f.lidarr_removed,
             trash_days: f.trash_days,
             naming: f.naming,
         }));
@@ -475,6 +481,7 @@ pub fn save(path: &Path, saved: &Saved) -> Result<()> {
         music_folder: saved.music_folder.clone(),
         tag_rules: saved.tag_rules.clone(),
         lidarr: saved.lidarr.clone(),
+        lidarr_removed: saved.lidarr_removed,
         trash_days: saved.trash_days,
         naming: saved.naming.clone(),
     };
@@ -503,6 +510,17 @@ pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Vec<SourceConfig> {
 pub fn lidarr_from_env(env: &dyn Fn(&str) -> Option<String>) -> Option<LidarrConfig> {
     let get = |k: &str| env(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     Some(LidarrConfig { url: get("LIDARR_URL")?, api_key: get("LIDARR_API_KEY")?, enabled: true, ..Default::default() })
+}
+
+/// The Lidarr a start goes by: the one saved, else the environment's, unless Settings took that out. A blank address saves as none,
+/// so without this word the environment would undo it at every start.
+pub fn lidarr_at_start(saved: &Saved, env: &dyn Fn(&str) -> Option<String>) -> Option<LidarrConfig> {
+    saved.lidarr.clone().or_else(|| if saved.lidarr_removed { None } else { lidarr_from_env(env) })
+}
+
+/// Whether what a save leaves of Lidarr is the environment's taken out: none, where the environment holds one.
+pub fn lidarr_removed(saved: Option<&LidarrConfig>, env: &dyn Fn(&str) -> Option<String>) -> bool {
+    saved.is_none() && lidarr_from_env(env).is_some()
 }
 
 /// Check the Lidarr from the page against the saved one: a blank address removes it; a blank key keeps the saved
@@ -871,6 +889,26 @@ mod tests {
         assert!(merge(&[], vec![s]).is_err(), "own music comes from its folder");
     }
 
+    /// Settings' word stands: a Lidarr removed there stays removed at every start, however the environment reads, and one saved
+    /// afterwards counts as any other. The environment holding none says nothing of a later one.
+    #[test]
+    fn a_lidarr_removed_in_settings_stays_removed_whatever_the_environment_says() {
+        let env = env_of(&[("LIDARR_URL", "http://lidarr:8686"), ("LIDARR_API_KEY", "k")]);
+        let none = env_of(&[]);
+        let d = std::env::temp_dir().join(format!("cratarr-lidarr-removed-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let file = d.join("settings.json");
+        assert!(lidarr_at_start(&Saved::default(), &env).is_some(), "the environment's, until Settings says");
+        let removed = Saved { lidarr_removed: lidarr_removed(None, &env), ..Saved::default() };
+        save(&file, &removed).unwrap();
+        let read = load(&file, &env).unwrap().unwrap();
+        assert!(read.lidarr_removed && lidarr_at_start(&read, &env).is_none(), "taken out, across a restart");
+        let saved = LidarrConfig { url: "http://other:8686".into(), api_key: "k2".into(), enabled: true, ..Default::default() };
+        assert!(!lidarr_removed(Some(&saved), &env), "one saved takes the mark away");
+        assert!(!lidarr_removed(None, &none), "a save with nothing to take out marks nothing");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn lidarr_keeps_its_key_only_for_the_same_address() {
         let saved = LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into(), enabled: true, ..Default::default() };
@@ -918,6 +956,7 @@ mod tests {
             music_folder: Some("/music".into()),
             tag_rules: Default::default(),
             lidarr,
+            lidarr_removed: false,
             trash_days: 30,
             naming: Some(crate::naming::DEFAULT.into()),
         };

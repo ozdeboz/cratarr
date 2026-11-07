@@ -5639,7 +5639,7 @@ async fn lastfm_who(ctx: &Ctx, b: LastFmImport) -> Result<(Arc<crate::serve::Ser
         (Some((key, session, secret)), _) => crate::app::lastfm::Auth { key, signed: Some((session, secret)) },
         (None, Some(key)) => crate::app::lastfm::Auth { key, signed: None },
         (None, None) => {
-            return Err(ToggleError::Refused("Last.fm needs an API key: make one at last.fm/api/account/create, or connect Last.fm under Connections.".into()).into());
+            return Err(ToggleError::Refused("Last.fm needs an API key: make one at last.fm/api/account/create, or connect Last.fm under Tracking.".into()).into());
         }
     };
     Ok((serve, account, b.user.trim().to_string(), auth))

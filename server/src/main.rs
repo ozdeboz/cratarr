@@ -237,9 +237,7 @@ async fn main() -> Result<()> {
         settings::save(&std::path::Path::new(d).join("settings.json"), &saved)?;
     }
     let as_read = libraries_report.as_ref().map(|_| saved.clone());
-    if saved.lidarr.is_none() {
-        saved.lidarr = settings::lidarr_from_env(&env);
-    }
+    saved.lidarr = settings::lidarr_at_start(&saved, &env);
     if saved.sources.is_empty() {
         tracing::warn!("no music source is set up yet: add one on the Settings page (or set JELLYFIN_URL)");
     }

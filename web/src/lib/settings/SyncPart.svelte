@@ -31,7 +31,7 @@
     inApp
       ? [
           { name: 'Storage', now: () => appInfo.syncBudgetGb, def: 20, set: (v: number) => setDevice({ syncBudgetGb: v }), say: (v: number) => BUDGETS.find((b) => b.value === String(v))?.label ?? `${v} GB` },
-          { name: 'Quality', now: () => appInfo.downloadQuality, def: 'original', set: (v: string) => setDevice({ downloadQuality: v }), say: (v: string) => (v === 'original' ? 'Original' : v) },
+          { name: 'Quality', now: () => appInfo.downloadQuality, def: 'smaller', set: (v: string) => setDevice({ downloadQuality: v }), say: (v: string) => (v === 'original' ? 'Original' : v) },
           { name: 'Download over mobile data', now: () => !!appInfo.downloadOverMobile, def: false, set: (v: boolean) => setDevice({ downloadOverMobile: v }) },
           { name: 'Only while charging', now: () => !!appInfo.syncOnlyCharging, def: false, set: (v: boolean) => setDevice({ syncOnlyCharging: v }) },
         ]

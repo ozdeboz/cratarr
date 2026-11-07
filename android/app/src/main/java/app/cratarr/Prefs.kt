@@ -153,7 +153,7 @@ class Prefs(context: Context) {
 
     /** Downloads as the files are ([QUALITY_ORIGINAL]) or as Cratarr's smaller copies ([QUALITY_SMALLER]). */
     var downloadQuality: String
-        get() = p.getString(DOWNLOAD_QUALITY, QUALITY_ORIGINAL) ?: QUALITY_ORIGINAL
+        get() = p.getString(DOWNLOAD_QUALITY, QUALITY_SMALLER) ?: QUALITY_SMALLER
         set(value) {
             p.edit().putString(DOWNLOAD_QUALITY, if (value == QUALITY_SMALLER) QUALITY_SMALLER else QUALITY_ORIGINAL).apply()
         }
