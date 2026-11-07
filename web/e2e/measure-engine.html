@@ -177,12 +177,15 @@
       };
       route();
       headFrom(0);
-      const first = () => {
+      // Heard once the place moves on from its first reading: an output just woken says its first block and then stands
+      // for as long as its device takes (half a second on a PC's first start), which is no sound, and no gap either.
+      const first = (was) => {
         if (!running) return;
-        if (tape.heardMs() !== undefined && tape.heardMs() > 0) {
+        const now = tape.heardMs();
+        if (was > 0 && now > was) {
           log.firstSoundMs = Math.round(performance.now() - t0);
           last = { wall: performance.now(), heard: heard() };
-        } else setTimeout(first, 10);
+        } else setTimeout(() => first(now), 10);
       };
       first();
     }
