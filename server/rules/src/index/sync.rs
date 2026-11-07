@@ -1,0 +1,270 @@
+//! When a device fetches what of its index (0101's points 16 to 18, audit/FINAMP-OFFLINE.md's A2 and A3): one rule for the page and
+//! for the app's worker, so neither holds a decision of its own. A part of what a device keeps (the index, the sounds) is told how
+//! it stands, and says what to do; the fetching and the keeping are the caller's, and the time is handed in.
+//!
+//! - **Whole once, on Wi-Fi, on mobile data after asking. Then changes on any connection:** they are small, and a device's copy is
+//!   what it reads with Cratarr away.
+//! - **Not in the first seconds** (A3): a device's own first reads go first, and hours in the background count as a start.
+//! - **A lost connection is no failure** (A2): it waits and counts for nothing. Only a real answer can fail, and failing a few times
+//!   rests until the next start. Lost a few times in a row, the device may say it is paused, once.
+//! - **Another version in bytes just fetched stops:** the app and Cratarr differ, and fetching again will not mend it.
+
+/// How long after a start the first fetch waits.
+pub const FIRST_AFTER_MS: i64 = 10_000;
+/// Hidden this long, a device coming back has started again.
+pub const ANEW_AFTER_MS: i64 = 5 * 60 * 60 * 1000;
+/// A lost connection looks again after this.
+pub const LOST_AGAIN_MS: i64 = 30_000;
+/// Lost this many times in a row, it is paused.
+pub const PAUSED_AFTER: u32 = 3;
+/// A failure tries again after this, doubled each time.
+pub const FAILED_AGAIN_MS: i64 = 60_000;
+/// Failed this many times, it rests until the next start.
+pub const FAILED_MOST: u32 = 5;
+
+/// What a fetch costs the person, as the device can tell. One that cannot tell (most browsers) counts as free.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Network {
+    #[default]
+    Free,
+    Metered,
+    Off,
+}
+
+/// What the person said of a whole fetch on mobile data.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mobile {
+    #[default]
+    Unasked,
+    Yes,
+    No,
+}
+
+/// What to do now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Stopped for good on this version.
+    Stopped,
+    /// Nothing, until something changes: a start, the network, the person's answer.
+    Rest,
+    /// Nothing before this time.
+    Wait(i64),
+    /// Ask whether to fetch it whole on mobile data.
+    Ask,
+    /// Fetch it whole.
+    Whole,
+    /// Fetch what changed.
+    Changes,
+}
+
+/// How a fetch ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Taken, or nothing had changed.
+    Took,
+    /// The connection went, or Cratarr was out of reach.
+    Lost,
+    /// A real answer, and no good one.
+    Failed,
+    /// "Start again", or what was held cannot go on: only a whole fetch will do.
+    StartAgain,
+    /// Bytes just fetched whole are of another version.
+    Version,
+}
+
+/// How one part stands. Kept by the caller, as it must outlast a start.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Part {
+    /// Nothing is held, or the server said start again.
+    pub whole: bool,
+    pub stopped: bool,
+    /// Lost connections in a row.
+    pub lost: u32,
+    /// Real failures in a row.
+    pub failed: u32,
+    /// When the last fetch ended.
+    pub tried: Option<i64>,
+    /// When this start began.
+    pub started: i64,
+}
+
+impl Part {
+    /// When it may look again after what went wrong.
+    fn again(&self) -> Option<i64> {
+        let tried = self.tried?;
+        match (self.failed, self.lost) {
+            (0, 0) => None,
+            (0, _) => Some(tried + LOST_AGAIN_MS),
+            (failed, _) => Some(tried + (FAILED_AGAIN_MS << (failed - 1).min(16))),
+        }
+    }
+
+    pub fn step(&self, network: Network, mobile: Mobile, now: i64) -> Step {
+        let first = self.started + FIRST_AFTER_MS;
+        if self.stopped {
+            return Step::Stopped;
+        }
+        if network == Network::Off || self.failed >= FAILED_MOST {
+            return Step::Rest;
+        }
+        if now < first {
+            return Step::Wait(first);
+        }
+        if let Some(again) = self.again().filter(|again| now < *again) {
+            return Step::Wait(again);
+        }
+        if !self.whole {
+            return Step::Changes;
+        }
+        match (network, mobile) {
+            (Network::Metered, Mobile::Unasked) => Step::Ask,
+            (Network::Metered, Mobile::No) => Step::Rest,
+            _ => Step::Whole,
+        }
+    }
+
+    /// How it stands after a fetch.
+    pub fn after(self, outcome: Outcome, now: i64) -> Self {
+        let tried = Some(now);
+        match outcome {
+            Outcome::Took => Self { whole: false, lost: 0, failed: 0, tried, ..self },
+            Outcome::Lost => Self { lost: self.lost + 1, tried, ..self },
+            Outcome::Failed => Self { lost: 0, failed: self.failed + 1, tried, ..self },
+            Outcome::StartAgain => Self { whole: true, lost: 0, tried, ..self },
+            Outcome::Version => Self { stopped: true, whole: true, lost: 0, tried, ..self },
+        }
+    }
+
+    /// A start: what went wrong is forgotten, and a stop stands.
+    pub fn anew(self, now: i64) -> Self {
+        Self { lost: 0, failed: 0, tried: None, started: now, ..self }
+    }
+
+    /// Whether it should say it is paused: the connection keeps going.
+    pub fn paused(&self) -> bool {
+        self.lost >= PAUSED_AFTER
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const START: i64 = 1_000_000;
+    const LATER: i64 = START + FIRST_AFTER_MS;
+
+    fn whole() -> Part {
+        Part { whole: true, started: START, ..Part::default() }
+    }
+
+    fn held() -> Part {
+        Part { started: START, ..Part::default() }
+    }
+
+    #[test]
+    fn nothing_is_fetched_in_the_first_seconds_of_a_start() {
+        assert_eq!(whole().step(Network::Free, Mobile::Unasked, START), Step::Wait(LATER));
+        assert_eq!(held().step(Network::Free, Mobile::Unasked, LATER - 1), Step::Wait(LATER));
+        assert_eq!(held().step(Network::Free, Mobile::Unasked, LATER), Step::Changes);
+    }
+
+    #[test]
+    fn whole_goes_on_wifi_and_asks_first_on_mobile() {
+        assert_eq!(whole().step(Network::Free, Mobile::Unasked, LATER), Step::Whole);
+        assert_eq!(whole().step(Network::Metered, Mobile::Unasked, LATER), Step::Ask);
+        assert_eq!(whole().step(Network::Metered, Mobile::Yes, LATER), Step::Whole);
+    }
+
+    #[test]
+    fn a_no_to_mobile_data_rests_until_wifi_and_no_more_asking() {
+        assert_eq!(whole().step(Network::Metered, Mobile::No, LATER), Step::Rest);
+        assert_eq!(whole().step(Network::Free, Mobile::No, LATER), Step::Whole);
+    }
+
+    #[test]
+    fn changes_go_on_any_connection_with_nothing_asked() {
+        for mobile in [Mobile::Unasked, Mobile::Yes, Mobile::No] {
+            assert_eq!(held().step(Network::Metered, mobile, LATER), Step::Changes);
+            assert_eq!(held().step(Network::Free, mobile, LATER), Step::Changes);
+        }
+    }
+
+    #[test]
+    fn no_network_rests_until_there_is_one() {
+        assert_eq!(whole().step(Network::Off, Mobile::Yes, LATER), Step::Rest);
+        assert_eq!(held().step(Network::Off, Mobile::Yes, LATER), Step::Rest);
+    }
+
+    #[test]
+    fn a_lost_connection_is_no_failure_however_often() {
+        let mut s = held();
+        for n in 1..=(FAILED_MOST + 3) {
+            s = s.after(Outcome::Lost, LATER);
+            assert_eq!(s.failed, 0);
+            assert_eq!(s.lost, n);
+        }
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER), Step::Wait(LATER + LOST_AGAIN_MS));
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER + LOST_AGAIN_MS), Step::Changes, "it goes on looking");
+    }
+
+    #[test]
+    fn paused_is_said_after_a_few_lost_in_a_row_and_a_real_answer_ends_it() {
+        let once = held().after(Outcome::Lost, LATER);
+        assert!(!once.paused());
+        let thrice = once.after(Outcome::Lost, LATER).after(Outcome::Lost, LATER);
+        assert!(thrice.paused());
+        assert!(!thrice.after(Outcome::Took, LATER).paused());
+        assert!(!thrice.after(Outcome::Failed, LATER).paused());
+    }
+
+    #[test]
+    fn a_real_failure_counts_waits_longer_each_time_and_rests_at_the_most() {
+        let once = held().after(Outcome::Failed, LATER);
+        assert_eq!(once.step(Network::Free, Mobile::Unasked, LATER), Step::Wait(LATER + FAILED_AGAIN_MS));
+        let twice = once.after(Outcome::Failed, LATER);
+        assert_eq!(twice.step(Network::Free, Mobile::Unasked, LATER), Step::Wait(LATER + 2 * FAILED_AGAIN_MS));
+        let mut s = held();
+        for _ in 0..FAILED_MOST {
+            s = s.after(Outcome::Failed, LATER);
+        }
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER + 10 * ANEW_AFTER_MS), Step::Rest);
+    }
+
+    #[test]
+    fn a_lost_connection_leaves_the_failures_counted_as_they_were() {
+        let s = held().after(Outcome::Failed, LATER).after(Outcome::Lost, LATER);
+        assert_eq!(s.failed, 1);
+    }
+
+    #[test]
+    fn a_fetch_taken_ends_the_whole_and_what_went_wrong() {
+        let s = whole().after(Outcome::Failed, LATER).after(Outcome::Took, LATER);
+        assert_eq!(s, Part { tried: Some(LATER), started: START, ..Part::default() });
+    }
+
+    #[test]
+    fn start_again_asks_for_it_whole_at_once_and_as_any_whole_is_asked() {
+        let s = held().after(Outcome::StartAgain, LATER);
+        assert!(s.whole);
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER), Step::Whole);
+        assert_eq!(s.step(Network::Metered, Mobile::Unasked, LATER), Step::Ask);
+    }
+
+    #[test]
+    fn another_version_in_what_was_just_fetched_stops_and_a_start_does_not_undo_it() {
+        let s = whole().after(Outcome::Version, LATER);
+        assert_eq!(s.step(Network::Free, Mobile::Yes, LATER + 1), Step::Stopped);
+        assert_eq!(s.anew(LATER + ANEW_AFTER_MS).step(Network::Free, Mobile::Yes, LATER + 2 * ANEW_AFTER_MS), Step::Stopped);
+    }
+
+    #[test]
+    fn a_start_forgets_what_went_wrong_and_waits_its_first_seconds_again() {
+        let mut s = held();
+        for _ in 0..FAILED_MOST {
+            s = s.after(Outcome::Failed, LATER);
+        }
+        let again = s.anew(LATER + 1);
+        assert_eq!(again.step(Network::Free, Mobile::Unasked, LATER + 1), Step::Wait(LATER + 1 + FIRST_AFTER_MS));
+        assert_eq!(again.step(Network::Free, Mobile::Unasked, LATER + 1 + FIRST_AFTER_MS), Step::Changes);
+    }
+}

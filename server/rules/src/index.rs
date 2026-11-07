@@ -25,6 +25,9 @@ use std::sync::Arc;
 use crate::crates::Facts;
 use crate::{ids, radio, similarity};
 
+mod read;
+pub mod sync;
+
 /// What is written here, for the index and for changes to it. Raised by anything that changes a file's layout or what a row
 /// means, a column added too. A device holding another version refuses it and fetches the index whole, so a new version is
 /// this one line: there is nothing to migrate in a copy.
