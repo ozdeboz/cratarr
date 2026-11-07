@@ -239,8 +239,10 @@ impl Index {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Artist, Index, Library, Record, RecordCopy, Rows, Track};
-    use crate::crates::Facts;
+    use super::super::{Artist, Index, Library, Record, RecordCopy, Rows, Sounds, Track};
+    use crate::crates::{Alike, Facts};
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn rows() -> Rows {
         Rows {
@@ -299,6 +301,21 @@ mod tests {
         assert_eq!(read["tracks"][0]["id"], "tr-1");
         assert_eq!(read["tracks"][0]["line"], "d/1.flac");
         assert_eq!(read["tracks"][1]["seconds"], 10.5);
+    }
+
+    /// What a device must keep to (the tablet held 173 MB in rules): `facts` made once, `Alike` and Radio's index made of them, and a
+    /// sound is one vector among the three.
+    #[test]
+    fn facts_alike_and_radios_index_made_of_one_reading_hold_one_copy_of_each_sound() {
+        let index = Index::build(4, &rows()).unwrap();
+        let sounds = Sounds::build(4, &[(1, vec![0.6, 0.8]), (2, vec![1.0, 0.0])]);
+        let facts = index.facts(Some(&sounds));
+        let alike = Alike::of(&facts, &HashMap::new(), &index.artist_ids());
+        let radio = index.radio(&facts, &HashMap::new());
+        for f in &facts {
+            assert_eq!(Arc::strong_count(f.sound.as_ref().unwrap()), 3, "the facts', the crates' library's and Radio's: one vector");
+        }
+        drop((alike, radio));
     }
 
     #[test]
