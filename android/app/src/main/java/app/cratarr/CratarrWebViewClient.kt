@@ -55,6 +55,7 @@ class CratarrWebViewClient(
         // request still carries the session, so Cratarr ends it.
         if (request.isForMainFrame && url.path == Sessions.SIGN_OUT) Sessions.signOutAsked()
         if (url.path == DeviceIndex.PAGE_PATH) deviceIndex()?.let { return it }
+        if (url.path == DeviceAnswers.PAGE_PATH) return DeviceAnswers.answer(view.context, url.getQueryParameter("ask"))
         url.path?.takeIf { it.startsWith(SERVER_COVER) }?.removePrefix(SERVER_COVER)?.let { rest ->
             val parts = rest.split('/', limit = 2)
             val got = if (parts.size == 2) serverCover(Uri.decode(parts[0]), Uri.decode(parts[1]), url.getQueryParameter("size")?.toIntOrNull() ?: 600) else null

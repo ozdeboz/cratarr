@@ -19,7 +19,7 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [dependencies]
-cratarr-rules = { path = "../rules" }
+cratarr-rules = { path = "../rules", features = ["device"] }
 uniffi = { version = "0.29", features = ["cli"] }
 
 [profile.release]

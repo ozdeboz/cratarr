@@ -11,7 +11,8 @@
  *   page's word, and every few hours by WorkManager, on any connection: the rule says what each may fetch.
  * - A device holds three revs on one log, and no feed is given another's. Rows' and sounds' feeds are each a whole build on the server,
  *   so a look asks them only when the log says something moved (`/api/changes`, the page's word or its own asking). Covers' builds
- *   nothing, and asking it is what sets the maker going, so it is asked at every look.
+ *   nothing, and asking it is what sets the maker going, so it is asked at every look. An account's own has no feed: the rule says
+ *   when it has stood long enough to fetch again.
  * - Waits are kept only with the page in view. Out of view a look that must wait ends there, as asking every half minute from a car
  *   with Cratarr away would only cost the battery: the next network, start or worker looks again.
  * - The page reads the bytes through [PAGE_PATH] with its own index.wasm: one reader in a browser and here, and nothing here holds
@@ -45,6 +46,7 @@ import app.cratarr.rules.syncAnswer
 import app.cratarr.rules.syncFirstAfterMs
 import app.cratarr.rules.syncPaused
 import app.cratarr.rules.syncStep
+import app.cratarr.rules.syncStepStale
 import app.cratarr.rules.syncTakeChanges
 import app.cratarr.rules.syncTakeWhole
 import app.cratarr.rules.syncVersion
@@ -233,7 +235,7 @@ object DeviceIndex {
         val who = Who.current(app)
         val files = files(app)
         val index = files.stands(who, INDEX)
-        val known = facts.ifEmpty { INDEX_PARTS.mapNotNull { d -> files.stands(who, d.name)?.let { IndexFacts(it.part.whole, it.part.stopped, paused = false, asks = false) } } }
+        val known = facts.ifEmpty { INDEX_PARTS.filterNot { it.stale }.mapNotNull { d -> files.stands(who, d.name)?.let { IndexFacts(it.part.whole, it.part.stopped, paused = false, asks = false) } } }
         return JSONObject()
             .put("type", "device-index")
             .put("at", index?.at ?: JSONObject.NULL)
@@ -241,6 +243,19 @@ object DeviceIndex {
             .put("covers", files.stands(who, "covers")?.rev ?: JSONObject.NULL)
             .put("metered", Net.metered(app))
             .put("parts", JSONArray(known.map { JSONObject().put("whole", it.whole).put("stopped", it.stopped).put("paused", it.paused).put("asks", it.asks) }))
+    }
+
+    /** A part's bytes as kept for the account signed in, for what answers for itself. */
+    fun kept(context: Context, name: String): ByteArray? {
+        val app = context.applicationContext
+        return files(app).bytes(Who.current(app), name).takeIf { it.exists() }?.readBytes()
+    }
+
+    /** Where what it reads stands: moved, it is read anew. */
+    fun stands(context: Context): List<Long?> {
+        val app = context.applicationContext
+        val (who, files) = Who.current(app) to files(app)
+        return INDEX_PARTS.filterNot { it.frames }.flatMap { d -> files.stands(who, d.name).let { listOf(it?.rev, it?.at) } }
     }
 
     /** The index as kept for the account signed in, for the page: its bytes, and when it last stood where Cratarr does. */
@@ -266,14 +281,15 @@ class IndexWorker(context: Context, params: WorkerParameters) : Worker(context, 
     }
 }
 
-/** What a part is, to fetching it. D12's fits are one more row here, as in lib/deviceSync. [frames]: it comes a frame at a time, is kept
- *  by the frame, and its feed builds nothing, so it is asked at every look. */
-internal class IndexDef(val name: String, val kind: SyncKind, val whole: String, val feed: String, val frames: Boolean = false)
+/** What a part is, to fetching it, as in lib/deviceSync. [frames]: it comes a frame at a time, is kept by the frame, and its feed builds
+ *  nothing, so it is asked at every look. [stale]: it has no feed, and is fetched whole when it has stood a while. */
+internal class IndexDef(val name: String, val kind: SyncKind, val whole: String, val feed: String, val frames: Boolean = false, val stale: Boolean = false)
 
 internal val INDEX_PARTS = listOf(
     IndexDef("index", SyncKind.INDEX, "/api/index", "/api/index/changes"),
     IndexDef("sounds", SyncKind.SOUNDS, "/api/index/sounds", "/api/index/sounds/changes"),
     IndexDef("covers", SyncKind.COVERS, "/api/index/covers", "/api/index/covers/changes", frames = true),
+    IndexDef("own", SyncKind.OWN, "/api/index/own", "/api/index/own", stale = true),
 )
 
 /** What a fetch brought: its status (null: no answer at all), and its bytes where it had any. */
@@ -282,6 +298,7 @@ internal class IndexFetched(val status: Int?, val bytes: ByteArray?)
 /** The rule, as the rules crate says it. In the unit tests, which have no library, a stand-in: all it proves there is what is done with its answers. */
 internal interface IndexRule {
     fun step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, told: Boolean, now: Long): SyncStep
+    fun stepStale(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, took: Long?, now: Long): SyncStep
     fun after(part: SyncPart, outcome: SyncOutcome, now: Long): SyncPart
     fun anew(part: SyncPart, now: Long): SyncPart
     fun anewByAnother(part: SyncPart, now: Long): SyncPart
@@ -294,6 +311,7 @@ internal interface IndexRule {
 
 internal object RustIndexRule : IndexRule {
     override fun step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, told: Boolean, now: Long) = syncStep(part, network, mobile, told, now)
+    override fun stepStale(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, took: Long?, now: Long) = syncStepStale(part, network, mobile, took, now)
     override fun after(part: SyncPart, outcome: SyncOutcome, now: Long) = syncAfter(part, outcome, now)
     override fun anew(part: SyncPart, now: Long) = syncAnew(part, now)
     override fun anewByAnother(part: SyncPart, now: Long) = syncAnewByAnother(part, now)
@@ -441,7 +459,7 @@ internal class IndexLooks(
     }
 
     /** The parts as this look left them. */
-    fun facts(steps: Map<String, SyncStep>): List<IndexFacts> = INDEX_PARTS.mapNotNull { d ->
+    fun facts(steps: Map<String, SyncStep>): List<IndexFacts> = INDEX_PARTS.filterNot { it.stale }.mapNotNull { d ->
         parts[d.name]?.let { IndexFacts(it.whole, it.stopped, rule.paused(it), steps[d.name] == SyncStep.Ask) }
     }
 
@@ -531,7 +549,7 @@ internal class IndexLooks(
             if (whoNow() != who) return SyncStep.Rest
             val kept = files.stands(who, def.name) ?: NOTHING
             val part = partOf(def, kept)
-            val step = rule.step(part, network(), mobile(), told, now())
+            val step = if (def.stale) rule.stepStale(part, network(), mobile(), kept.at, now()) else rule.step(part, network(), mobile(), told, now())
             if ((step != SyncStep.Whole && step != SyncStep.Changes) || turn == TURNS) return step
             val got = when {
                 def.frames -> framed(def, who, step == SyncStep.Whole, kept)

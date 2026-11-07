@@ -90,6 +90,11 @@ In the app the page is the interface and the app gives it what only a device can
 bridge is the Device door. Kotlin holds no decisions. Where the app must decide alone, as Autoplay does with the page asleep,
 it asks the rules crate through UniFFI, so no second copy of the logic grows there.
 
+With Cratarr away a device answers for itself (`rules/src/index/device.rs`): a crate, a Sounds like and what comes next, from what it
+keeps, by the rules the server runs, asked in the same JSON by the page (`lib/deviceAnswers`, through the Reads door) and the app
+(`DeviceAnswers.kt`). What only the server can say stands as it last said it, in an account's own part (`index::own`). In the app the
+one copy is the app's, and the page asks it.
+
 ## Server (`server/`)
 
 - `src/main.rs`: start-up, the environment, the background passes.

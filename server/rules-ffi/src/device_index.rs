@@ -3,14 +3,16 @@
 //! UniFFI's types, and the two calls that take bytes, so an index is held in memory only while one of them runs.
 
 use cratarr_rules::index::sync::{self, COVERS_VERSION, Mobile, Network, Outcome, Part, Step, covers_rev};
-use cratarr_rules::index::{Changes, Index, Refused, SOUNDS_VERSION, SoundChanges, Sounds, VERSION};
+use cratarr_rules::index::{Changes, Index, MARKS_VERSION, Marks, Refused, SOUNDS_VERSION, SoundChanges, Sounds, VERSION};
 
-/// What a device keeps. D12's fits are one more of these.
+/// What a device keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum SyncKind {
     Index,
     Sounds,
     Covers,
+    /// An account's own (`index::Marks`): no feed, fetched whole when it has stood a while.
+    Own,
 }
 
 /// How one part stands (`index::sync::Part`). The app keeps it, as it must outlast a start.
@@ -132,6 +134,12 @@ pub fn sync_step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, told:
     Part::from(part).step(network.into(), mobile.into(), told, now).into()
 }
 
+/// What to do now with an account's own. `took`: when it was last taken.
+#[uniffi::export]
+pub fn sync_step_stale(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, took: Option<i64>, now: i64) -> SyncStep {
+    Part::from(part).step_stale(network.into(), mobile.into(), took, now).into()
+}
+
 /// How a part stands after a fetch.
 #[uniffi::export]
 pub fn sync_after(part: SyncPart, outcome: SyncOutcome, now: i64) -> SyncPart {
@@ -181,6 +189,7 @@ pub fn sync_version(kind: SyncKind) -> u32 {
         SyncKind::Index => VERSION,
         SyncKind::Sounds => SOUNDS_VERSION,
         SyncKind::Covers => COVERS_VERSION,
+        SyncKind::Own => MARKS_VERSION,
     }
 }
 
@@ -210,6 +219,7 @@ pub fn sync_take_whole(kind: SyncKind, bytes: Vec<u8>) -> SyncTaken {
         SyncKind::Index => whole(Index::load(&bytes), Index::rev),
         SyncKind::Sounds => whole(Sounds::load(&bytes), Sounds::rev),
         SyncKind::Covers => whole(covers_rev(&bytes), |rev| *rev),
+        SyncKind::Own => whole(Marks::load(&bytes), Marks::at),
     }
 }
 
@@ -229,6 +239,8 @@ pub fn sync_take_changes(kind: SyncKind, kept: Vec<u8>, feed: Vec<u8>) -> SyncTa
             let applied = Sounds::load(&kept).and_then(|mut sounds| SoundChanges::load(&feed).and_then(|c| sounds.apply(&c)).map(|()| sounds));
             changes(applied, Sounds::rev, Sounds::save)
         }
+        // It has no feed: nothing can go on from what is kept.
+        SyncKind::Own => SyncTaken { outcome: SyncOutcome::StartAgain, rev: None, bytes: None },
     }
 }
 
