@@ -17,7 +17,7 @@
   let { source, album, ongone }: { source: string; album: string; ongone: () => void } = $props();
 
   $effect(() => {
-    if (!library.view) void readLibrary(false);
+    if (!library.view) readLibrary(false).catch(() => {});
   });
   const s = $derived(library.view?.sources.find((x) => x.id === source) ?? null);
   const a = $derived(s?.albums.find((x) => x.id === album) ?? null);
@@ -59,7 +59,7 @@
       album={a}
       onclose={() => (menu = false)}
       ongone={() => {
-        void readLibrary(true);
+        readLibrary(true).catch(() => {});
         loadHealth();
         ongone();
       }}

@@ -1016,7 +1016,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const recordCells = (rec: CrateRecord): Cell[] => recordCols.map((c) => ({ ...c, text: recordCell(rec, c.id, albumTotal(rec), clockText, addedOn) }));
   // An album's own count, from the Library's list (Cratarr's own albums: a row of another source has no album id).
   $effect(() => {
-    if (recordsView && !library.view) untrack(() => void readLibrary(false));
+    if (recordsView && !library.view) untrack(() => readLibrary(false)).catch(() => {});
   });
   // As its rows say (album_tracks), else as the Library's list has the album.
   const albumTotal = (rec: { of: number | null; albumId: string | null }) =>

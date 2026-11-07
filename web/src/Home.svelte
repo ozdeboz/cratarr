@@ -89,7 +89,7 @@
   const momentKept = momentFresh(kept);
 
   onMount(() => {
-    if (!library.view) void readLibrary(false);
+    if (!library.view) readLibrary(false).catch(() => {});
   });
   const sources = $derived((library.view?.sources ?? []).filter((s) => s.id !== DEVICE));
 
