@@ -210,6 +210,19 @@ class WhoTest {
     }
 
     @Test
+    fun a_play_is_the_ones_it_was_heard_under_however_late_it_is_told() {
+        assertEquals("ann", Who.accountOf(ann))
+        assertEquals("sign-in off", "", Who.accountOf(Who.keyOf("")))
+        assertNull(Who.accountOf(Who.NONE))
+        val service = source("PlayerService.kt")
+        assertTrue("Hearing(it, System.currentTimeMillis(), queueWho)" in service)
+        assertEquals("each place it is told from", 3, Regex("Plays\\.heard\\(this@PlayerService, h\\.who,").findAll(service).count())
+        val heard = source("Plays.kt").substringAfter("fun heard(").substringBefore("\n    }\n")
+        assertTrue("val account = Who.accountOf(who)" in heard)
+        assertTrue("the queue named is the one signed in's by then", "who == Who.current(context)" in heard)
+    }
+
+    @Test
     fun the_player_takes_up_whoever_it_is_by_then() {
         assertTrue("main.post { whoCame(Who.current(this)) }" in source("PlayerService.kt"))
     }

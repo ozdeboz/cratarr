@@ -36,11 +36,12 @@ object Plays {
     @Volatile var onPlayedHere: (() -> Unit)? = null
 
     /**
-     * A track heard (as the page describes it), started at `atMs`: how it ended (`finished`, `skipped`, `stopped`),
-     * whether it counts as a play, how much of it was heard and how long it is (ms; 0 when not known).
+     * A track heard (as the page describes it) under [who], started at `atMs`: how it ended (`finished`, `skipped`,
+     * `stopped`), whether it counts as a play, how much of it was heard and how long it is (ms; 0 when not known). [who], not
+     * the one signed in now: the track being left at a change is told just after it.
      */
     @Synchronized
-    fun heard(context: Context, track: JSONObject, atMs: Long, ended: String, counts: Boolean, heardMs: Long, lengthMs: Long) {
+    fun heard(context: Context, who: String, track: JSONObject, atMs: Long, ended: String, counts: Boolean, heardMs: Long, lengthMs: Long) {
         val source = track.optString("source")
         val id = track.optString("id")
         if (source.isEmpty() || id.isEmpty()) return
@@ -63,9 +64,9 @@ object Plays {
             .put("heard_secs", heardMs / 1000.0)
             .put("player", prefs.playerName)
         if (lengthMs > 0) play.put("length_secs", lengthMs / 1000.0)
-        prefs.queueId.takeIf { it.isNotEmpty() }?.let { play.put("context", "queue:$it") }
-        // Whose it is: the account signed in now ([Who]); with nobody, the device's own count only.
-        val account = Who.account(context)
+        prefs.queueId.takeIf { it.isNotEmpty() && who == Who.current(context) }?.let { play.put("context", "queue:$it") }
+        // Whose it is; with nobody, the device's own count only.
+        val account = Who.accountOf(who)
         if (account != null) save(context, load(context).apply { add(play.put("account", account)) })
         if (source == DeviceMusic.SOURCE && counts) playedHere(context, id, atMs)
         if (account != null) tell(context)

@@ -589,7 +589,7 @@ class PlayerService : MediaSessionService() {
          * long it is, and whether it was told as counted, this time it plays. The device's own music is not told
          * (decision 0052).
          */
-        private inner class Hearing(val track: JSONObject, val atMs: Long) {
+        private inner class Hearing(val track: JSONObject, val atMs: Long, val who: String) {
             var heardMs = 0L
             /** What winding passed over (decision 0074: no wind counts as listening): the place less this is heard. */
             var offsetMs = 0L
@@ -606,14 +606,14 @@ class PlayerService : MediaSessionService() {
             val h = hearing ?: return
             hearing = null
             if (h.counted || h.heardMs < 1_000) return
-            if (now) Plays.heard(this@PlayerService, h.track, h.atMs, "stopped", true, h.heardMs, h.lengthMs)
-            else Plays.heard(this@PlayerService, h.track, h.atMs, ended, false, h.heardMs, h.lengthMs)
+            if (now) Plays.heard(this@PlayerService, h.who, h.track, h.atMs, "stopped", true, h.heardMs, h.lengthMs)
+            else Plays.heard(this@PlayerService, h.who, h.track, h.atMs, ended, false, h.heardMs, h.lengthMs)
         }
 
         private val count = object : Runnable {
             override fun run() {
                 if (hearing == null) {
-                    hearing = player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Hearing(it, System.currentTimeMillis()) }
+                    hearing = player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Hearing(it, System.currentTimeMillis(), queueWho) }
                     // A server's track (decision 0098): that server hears that it plays here.
                     hearing?.track?.let { t -> if (t.optString("source").startsWith(Servers.MODE_PREFIX)) Servers.playing(this@PlayerService, t.optString("source"), t.optString("id")) }
                     // Now playing, from this device (decision 0091).
@@ -632,7 +632,7 @@ class PlayerService : MediaSessionService() {
                     if (d > 0) h.lengthMs = d
                     if (!h.counted && d > 0 && heard >= d * Plays.PLAYED_AT) {
                         h.counted = true
-                        Plays.heard(this@PlayerService, h.track, h.atMs, "finished", true, h.heardMs, h.lengthMs)
+                        Plays.heard(this@PlayerService, h.who, h.track, h.atMs, "finished", true, h.heardMs, h.lengthMs)
                     }
                 }
                 if (player.isPlaying) main.postDelayed(this, COUNT_EVERY_MS)

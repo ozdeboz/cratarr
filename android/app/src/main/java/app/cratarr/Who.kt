@@ -33,7 +33,10 @@ object Who {
     fun current(p: SharedPreferences): String = p.getString(KEY, NONE) ?: NONE
 
     /** The account signed in now: its name, `""` with signing in off; null for nobody. */
-    fun account(context: Context): String? = current(context).takeIf { it != NONE }?.removePrefix("@")
+    fun account(context: Context): String? = accountOf(current(context))
+
+    /** The account of a key: its name, `""` with signing in off; null for nobody. */
+    fun accountOf(who: String): String? = who.takeIf { it != NONE }?.removePrefix("@")
 
     /** [who] in the page's own words (lib/account's `cratarr-who`, as JSON): the name, or null for nobody. */
     fun forPage(who: String): String = if (who == NONE) "null" else JSONObject.quote(who.removePrefix("@"))
