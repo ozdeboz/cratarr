@@ -63,7 +63,8 @@ try {
     await new Promise((r) => setTimeout(r, 250));
   }
   const files = process.argv.slice(2);
-  const tests = spawn(process.execPath, ['--test', '--test-concurrency=1', '--test-timeout=120000', ...(files.length ? files : ['e2e/*.e2e.mjs'])], {
+  // Force exit: a file's `after` that fails before it closes its browser would otherwise leave the run waiting for ever, holding the lock.
+  const tests = spawn(process.execPath, ['--test', '--test-force-exit', '--test-concurrency=1', '--test-timeout=120000', ...(files.length ? files : ['e2e/*.e2e.mjs'])], {
     cwd: web,
     env: { ...process.env, E2E_PAGE: page, E2E_ACCOUNTS: accounts, CHROMIUM: chromium },
     stdio: 'inherit',
