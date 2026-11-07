@@ -719,6 +719,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -741,6 +749,14 @@ fun uniffi_cratarr_rules_ffi_checksum_func_brake_length_ms(
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_v(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_way(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_index_bytes(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_index_bytes_back(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_index_bytes_loads(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_index_speed(
 ): Short
 fun ffi_cratarr_rules_ffi_uniffi_contract_version(
 ): Int
@@ -795,6 +811,14 @@ fun uniffi_cratarr_rules_ffi_fn_func_brake_v(`v0`: Double,`to`: Double,`length`:
 ): Double
 fun uniffi_cratarr_rules_ffi_fn_func_brake_way(`v0`: Double,`to`: Double,`length`: Double,`t`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
+fun uniffi_cratarr_rules_ffi_fn_func_index_bytes(`tracks`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_index_bytes_back(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_index_bytes_loads(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_cratarr_rules_ffi_fn_func_index_speed(`tracks`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun ffi_cratarr_rules_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun ffi_cratarr_rules_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -933,6 +957,18 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_brake_way() != 18014.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_index_bytes() != 32398.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_index_bytes_back() != 19722.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_index_bytes_loads() != 63918.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_index_speed() != 17398.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
 }
 
 /**
@@ -1015,6 +1051,29 @@ object NoPointer
 /**
  * @suppress
  */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterDouble: FfiConverter<Double, Double> {
     override fun lift(value: Double): Double {
         return value
@@ -1032,6 +1091,29 @@ public object FfiConverterDouble: FfiConverter<Double, Double> {
 
     override fun write(value: Double, buf: ByteBuffer) {
         buf.putDouble(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -1091,6 +1173,25 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         buf.put(byteBuf)
     }
 }
+
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
+    }
+}
         /**
          * How fast its speed changes `t` ms after it was let go (× a second).
          */ fun `brakeAccel`(`v0`: kotlin.Double, `to`: kotlin.Double, `length`: kotlin.Double, `t`: kotlin.Double): kotlin.Double {
@@ -1134,6 +1235,54 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_brake_way(
         FfiConverterDouble.lower(`v0`),FfiConverterDouble.lower(`to`),FfiConverterDouble.lower(`length`),FfiConverterDouble.lower(`t`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * A made-up library's index as bytes: what the app will keep in a file and hand across, which until now was only ever numbers.
+         */ fun `indexBytes`(`tracks`: kotlin.UInt): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_index_bytes(
+        FfiConverterUInt.lower(`tracks`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * `bytes` straight back: what a handover costs there and back, with nothing else in it.
+         */ fun `indexBytesBack`(`bytes`: kotlin.ByteArray): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_index_bytes_back(
+        FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Whether `bytes` read as an index: its sum says every byte arrived.
+         */ fun `indexBytesLoads`(`bytes`: kotlin.ByteArray): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_index_bytes_loads(
+        FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Every number, as JSON, over about `tracks` made-up tracks.
+         */ fun `indexSpeed`(`tracks`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_index_speed(
+        FfiConverterUInt.lower(`tracks`),_status)
 }
     )
     }

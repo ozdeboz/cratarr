@@ -173,6 +173,7 @@ name = "cratarr-rules-ffi"
 version = "0.1.0"
 dependencies = [
  "cratarr-rules",
+ "serde_json",
  "uniffi",
 ]
 

@@ -10,6 +10,12 @@ plugins {
 /** VERSION at the repository's root (the audit, 2026-10-29: one version for everything). */
 val cratarrVersion: String = rootProject.projectDir.resolve("../VERSION").readText().trim()
 
+/**
+ * The speed spike (preview 2's D03; `./gradlew -Pspike assembleDebug`): an app of its own that opens on the index's numbers. Beside
+ * the everyday app, never over it: a plain debug build is `app.cratarr.debug`, the tablet's everyday app. Gone with D04.
+ */
+val spike = project.hasProperty("spike")
+
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_11
@@ -33,8 +39,16 @@ android {
         // its own settings, that address its first.
         val previewServer = findProperty("cratarr.preview.server")?.toString().orEmpty()
         buildConfigField("String", "PREVIEW_SERVER", "\"$previewServer\"")
-        resValue("string", "app_name", if (previewServer.isEmpty()) "Cratarr" else "Cratarr preview")
+        resValue("string", "app_name", if (spike) "Cratarr spike" else if (previewServer.isEmpty()) "Cratarr" else "Cratarr preview")
         if (previewServer.isNotEmpty()) applicationIdSuffix = ".preview"
+        // Last, so nothing above can put it over another app.
+        if (spike) {
+            applicationIdSuffix = ".spike"
+            versionNameSuffix = "-spike"
+        }
+        // Which screen a debug build has (src/debug's manifest).
+        manifestPlaceholders["spike"] = spike.toString()
+        manifestPlaceholders["everyday"] = (!spike).toString()
     }
 
     signingConfigs {
@@ -192,7 +206,8 @@ androidComponents {
     }
 }
 
-base.archivesName.set("cratarr-android")
+// A name of its own, so its APK is never taken for the everyday one, nor overwritten by it.
+base.archivesName.set(if (spike) "cratarr-spike" else "cratarr-android")
 
 dependencies {
     implementation(libs.coroutines.android)

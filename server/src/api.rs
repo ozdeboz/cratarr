@@ -160,6 +160,14 @@ pub fn router(app: Arc<App>) -> Router {
         // What this install can do (0.11, decision 0085): behind the sign-in, as the open health check must not say.
         .route("/api/capabilities", get(capabilities))
         .route("/api/changes", get(changes))
+        // The library on a device (0101's point 16): bytes, as the rules crate reads them.
+        .route("/api/index", get(device_index))
+        .route("/api/index/changes", get(device_index_changes))
+        .route("/api/index/covers", get(device_covers))
+        .route("/api/index/covers/changes", get(device_cover_changes))
+        .route("/api/index/own", get(device_own))
+        .route("/api/index/sounds", get(device_sounds))
+        .route("/api/index/sounds/changes", get(device_sound_changes))
         .route("/api/incoming", get(incoming))
         .route("/api/insights", get(insights))
         // A playlist's repairs, as its edits: everyone's while playlists are (decision 0051's third stage gives them
@@ -4355,15 +4363,62 @@ async fn capabilities(ctx: Ctx) -> Result<Json<crate::app::capabilities::Capabil
     Ok(Json(crate::app::capabilities::read(&ctx.app, ctx.served.clone()).await.map_err(ToggleError::from)?))
 }
 
-/// What changed since a device last looked (decision 0087): `?since=<rev>&kinds=playlist,favourite,rating,excluded`.
+/// What changed since a device last looked (decision 0087): `?since=<rev>&kinds=playlist,favourite,rating,excluded`; `index`
+/// among the kinds with `&index=<rev>`, where the library's log stands for a device at that rev.
 #[derive(Deserialize)]
 struct ChangesQuery {
     since: Option<i64>,
     kinds: Option<String>,
+    index: Option<i64>,
 }
 
 async fn changes(ctx: Ctx, Query(q): Query<ChangesQuery>) -> Result<Json<crate::app::changes::Changes>, ApiError> {
-    Ok(Json(crate::app::changes::read(&ctx.app, ctx.serve()?, q.since, q.kinds.as_deref()).await?))
+    Ok(Json(crate::app::changes::read(&ctx.app, ctx.serve()?, q.since, q.kinds.as_deref(), q.index).await?))
+}
+
+/// The whole index for the account asking (`app::device_index`).
+async fn device_index(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{read, takes_gzip};
+    Ok(read(&ctx.app, ctx.serve()?, ctx.account(), takes_gzip(&headers)).await?.into_response())
+}
+
+#[derive(Deserialize)]
+struct IndexSince {
+    since: i64,
+}
+
+/// What a device at `since` lacks of the account's index: bytes to apply, nothing, or start again (`app::device_index`).
+async fn device_index_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    use crate::app::device_index::{changes, takes_gzip};
+    Ok(changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
+}
+
+/// Every small cover made so far, as one bundle (`app::device_covers`).
+async fn device_covers(ctx: Ctx) -> Result<Response, ApiError> {
+    Ok(crate::app::device_covers::read(ctx.serve()?).await?.into_response())
+}
+
+/// What changed of the covers after `since`: as `device_index_changes`.
+async fn device_cover_changes(ctx: Ctx, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    Ok(crate::app::device_covers::changes(ctx.serve()?, q.since).await?.into_response())
+}
+
+/// The fits and counts of the account asking (`app::device_index`).
+async fn device_own(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{own, takes_gzip};
+    Ok(own(&ctx.app, ctx.account(), takes_gzip(&headers)).await?.into_response())
+}
+
+/// Every sound the account can see, eight bits each (`app::device_index`).
+async fn device_sounds(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{sounds, takes_gzip};
+    Ok(sounds(&ctx.app, ctx.serve()?, ctx.account(), takes_gzip(&headers)).await?.into_response())
+}
+
+/// What of the sounds a device at `since` lacks: as `device_index_changes`.
+async fn device_sound_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    use crate::app::device_index::{sound_changes, takes_gzip};
+    Ok(sound_changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
 }
 
 #[derive(Deserialize)]

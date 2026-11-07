@@ -24,6 +24,8 @@ wasm-spread = []
 # Radio's modes in the page's generated types: the server's tests turn it on, as they write those. Nothing that plays
 # builds it.
 ts = ["dep:ts-rs"]
+# A library made up to the real one's size (`index::made_up`), to measure on a device. Nothing that plays builds it.
+made-up = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

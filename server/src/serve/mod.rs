@@ -12,6 +12,7 @@ pub mod files;
 pub mod guest;
 pub mod ids;
 pub mod import;
+pub mod index_rows;
 pub mod ldap;
 pub mod library;
 pub mod library_api;
@@ -119,6 +120,8 @@ pub struct Serve {
     stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
     /// The covers a build changed (`subscribe_covers`).
     covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
+    /// One device's index made at a time, and what the library's log was last brought up to (`app::device_index`).
+    device: std::sync::Mutex<crate::app::device_index::Settled>,
 }
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
@@ -192,6 +195,7 @@ impl Serve {
             play_on: Default::default(),
             stamps: Default::default(),
             covers: tokio::sync::broadcast::channel(16).0,
+            device: Default::default(),
         }))
     }
 
@@ -358,6 +362,23 @@ impl Serve {
         self.play_on.get()
     }
 
+    /// Tests elsewhere: the covers' stamps as a build's end leaves them.
+    #[cfg(test)]
+    pub fn covers_read_again_for_tests(&self) {
+        self.covers_built();
+    }
+
+    /// Tests elsewhere: the time of the last build moved on, as a build's end moves it.
+    #[cfg(test)]
+    pub fn build_passed_for_tests(&self) {
+        *self.built_at.write().unwrap() += 1;
+    }
+
+    /// A device's index being made: until this goes, another waits, as two would hold twice what one does. Blocking.
+    pub fn device_turn(&self) -> std::sync::MutexGuard<'_, crate::app::device_index::Settled> {
+        self.device.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Changes each time the library is built (to the time it was): for views kept from the built-in source.
     #[allow(dead_code)] // for Collection and Incoming to read the built-in source again (decision 0032)
     pub fn subscribe_built(&self) -> tokio::sync::watch::Receiver<i64> {
@@ -456,12 +477,19 @@ impl Serve {
         Ok(())
     }
 
+    /// When this build ended: past the build before even inside one second, as what was read between the two is kept by this, and
+    /// would pass for read after both. A reading of the crates so kept stands for five minutes, and a device's rows with it.
+    fn build_stamped(&self) -> i64 {
+        let mut at = self.built_at.write().unwrap_or_else(|p| p.into_inner());
+        *at = now().max(*at + 1);
+        *at
+    }
+
     /// After the library was built (whole, or `folders` of it): when, the plays and stars that follow songs to new ids, a
     /// line in the log; with changed songs, the catalogue links the built-in source's ids and those who keep its covers'
     /// stamps are told; and those who wait on a build. Blocking.
     fn built_now(&self, why: &str, whole: bool, folders: usize, songs_changed: bool) -> Result<()> {
-        let at = now();
-        *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = at;
+        let at = self.build_stamped();
         // Before the persistent ids: they would move what the merge means to add up. Failing, the next check goes over it.
         if let Err(e) = self.follow_taken() {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
@@ -655,6 +683,14 @@ impl Serve {
     pub async fn cover_bytes(self: &Arc<Self>, album: &str) -> Result<Option<(String, Vec<u8>)>> {
         let (me, album) = (self.clone(), album.to_string());
         Ok(tokio::task::spawn_blocking(move || me.art_of(&album)).await??.map(|(ct, bytes, _)| (ct, bytes)))
+    }
+
+    /// A record's cover made small for a device (`art::jpeg_at`), a decode at a time as `cover`'s are; none where it has none or
+    /// it cannot be read.
+    pub async fn small_cover(self: &Arc<Self>, album: &str, side: u32, quality: u8) -> Result<Option<Vec<u8>>> {
+        let Some((_, bytes)) = self.cover_bytes(album).await? else { return Ok(None) };
+        let _turn = self.resizing.acquire().await?;
+        Ok(tokio::task::spawn_blocking(move || art::jpeg_at(&bytes, side, quality)).await?.ok())
     }
 
     /// The cover of a record's copy in `library`, as `cover_bytes` has it; none where it has no copy there.
@@ -1007,6 +1043,14 @@ mod tests {
         checked_again(&serve);
         assert_eq!((plays_of(&serve, &away), plays_of(&serve, &here)), (1, 0), "on its own track, and nothing on the other");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    #[test]
+    fn two_builds_inside_a_second_are_two_stamps() {
+        let s = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        let (first, second) = (s.build_stamped(), s.build_stamped());
+        assert!(second > first, "{first} then {second}");
+        assert_eq!(s.built_at(), second);
     }
 
     #[test]
