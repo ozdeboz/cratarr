@@ -17,6 +17,7 @@
 import { untrack } from 'svelte';
 import { accountKey, perAccount, whenAccount } from './account';
 import { playback } from './deviceLog';
+import { headFile, headKey } from './tape/file';
 import * as tapeHead from './tape/tape.svelte';
 import type { Motion as TapeMotion } from './tape/tape.svelte';
 import { refusedText } from './tape/words';
@@ -4732,10 +4733,9 @@ let headTimer: ReturnType<typeof setInterval> | null = null;
 const HEAD_HEARD_AFTER_MS = 300;
 const HEAD_STEP_MS = 40;
 
-/** A track's key on the head, and the file it reads: Cratarr's own tracks only (never a preview, the device's or another
- *  server's music). */
-const headKey = (t: LocalTrack | undefined) => (t && windable(t) ? `${t.source}/${t.id}` : null);
-const headFile = (t: LocalTrack) => `/api/file/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}`;
+/** A track's key on the head (lib/tape/file): Cratarr's own tracks only (never a preview, the device's or another server's
+ *  music). */
+const onHead = (t: LocalTrack | undefined) => (t && windable(t) ? headKey(t) : null);
 
 // The playing track's file fetched for the head as it starts (the playing track only, the owner's choice). Only in a
 // browser: in the app its own player has its own head.
@@ -4743,7 +4743,7 @@ $effect.root(() => {
   $effect(() => {
     if (inApp || !audio) return;
     const t = local.queue[local.index];
-    const key = headKey(t);
+    const key = onHead(t);
     if (!key || !t) return;
     untrack(() => void headLoad(key, headFile(t)));
   });
@@ -4769,7 +4769,7 @@ const headPlace = (w: HeadWind) => (tapeHead.heardMs() ?? w.fromSecs * 1000) / 1
  */
 function headStart(fromSecs: number, motion: TapeMotion, gainDb: number, endsAtMs: number | null, then: HeadWind['then'], held: HeadWind['held'] = null): boolean {
   if (!audio || headWind || tape.rewinding) return false;
-  const key = headKey(local.queue[local.index]);
+  const key = onHead(local.queue[local.index]);
   if (!key || tapeHead.tape.ready !== key) return false;
   const w: HeadWind = { index: local.index, key, fromSecs, motion, t0: performance.now(), endsAtMs, then, held, gainDb };
   const over = (edge: boolean) => headWind === w && headFinish(w, edge);

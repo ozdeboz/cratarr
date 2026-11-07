@@ -193,3 +193,21 @@ test('a spin-up from a stand is heard done at its speed, and a tap when it lands
   assert.ok(Math.abs(r.heard - 5000) < 30, `landed 3 s on: ${r.heard}`);
   assert.equal(await stopped(), 'stopped');
 });
+
+test('Play from of a track the head holds opens the copy named, not the one it holds, and the plain track again after', async () => {
+  const r = await d.page.evaluate(async () => {
+    const { headKey, tape, wavUrl } = window.t;
+    const track = { source: 'cratarr', id: 'tr-1' };
+    const opened = async (t, seconds) => {
+      const key = headKey(t);
+      const error = await tape.load(key, wavUrl(seconds, 44100));
+      return { error, held: tape.tape.ready === key, length: Math.round(tape.tape.lengthMs) };
+    };
+    return [await opened(track, 5), await opened({ ...track, from: 'cratarr//media/Music' }, 7), await opened(track, 9)];
+  });
+  assert.deepEqual(r, [
+    { error: null, held: true, length: 5000 },
+    { error: null, held: true, length: 7000 },
+    { error: null, held: true, length: 9000 },
+  ]);
+});

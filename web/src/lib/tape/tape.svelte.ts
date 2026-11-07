@@ -10,8 +10,8 @@ import workletUrl from './head.worklet.ts?worker&url';
 
 export type { Motion };
 
-/** The track opened and ready to read (its id), the one whose file is on its way, and the opened one's length; where
- *  a reading let go will stand (ms of the track; null before a let-go). */
+/** The file opened and ready to read (the id it was asked by: a copy has its own, lib/tape/file), the one on its way, and
+ *  the opened one's length; where a reading let go will stand (ms of the track; null before a let-go). */
 export const tape = $state({ ready: null as string | null, loading: null as string | null, lengthMs: null as number | null, standsAt: null as number | null, by: null as string | null });
 
 /** A reading's let-go as the head took it (its motion's ms, the speed it brakes to, the brake's least length): carried
@@ -80,8 +80,8 @@ async function head(): Promise<{ ctx: AudioContext; node: AudioWorkletNode; out:
 export const tapeOutput = (): { context: AudioContext; node: AudioNode } | null => (ctx && out ? { context: ctx, node: out } : null);
 
 /**
- * The track `id` at `url` fetched whole and opened, the one before let go (the playing track only); asked again for
- * the same track, nothing. Its id once ready, else what went wrong.
+ * The file `id` at `url` fetched whole and opened, the one before let go (the playing track only); asked again for
+ * the same file, nothing. Null once ready, else what went wrong.
  */
 export async function load(id: string, url: string): Promise<string | null> {
   if (tape.ready === id || tape.loading === id) return null;
