@@ -175,6 +175,9 @@ export type Prefs = {
   coverColourPlayer: boolean;
   /** Opening a track's menu plays its snippet (0.12, lib/snippet): this device's own; on unless switched off. */
   snippetsInMenus: boolean;
+  /** With Cratarr out of reach, the moment's weather from Open-Meteo, for where the device roughly is (lib/momentHere): the
+   *  only way that place leaves the device, so off unless switched on. */
+  momentWeather: boolean;
   /** Shuffle (the owner, 2026-10-27): the ticked ones take turns behind the flows, in place of the one chosen. */
   flowShuffle: boolean;
   /** The ones ticked for Shuffle. */
@@ -466,6 +469,7 @@ export const DEFAULTS: Prefs = {
   coverColourMini: true,
   coverColourPlayer: true,
   snippetsInMenus: true,
+  momentWeather: false,
   flowShuffle: false,
   flowShuffled: [...FLOW_BACKDROPS.filter((b) => b !== 'own')],
   flowShuffleWhen: 'flow',
@@ -614,6 +618,7 @@ function parse(kept: string | null): Prefs {
       if (typeof saved.flowShuffle === 'boolean') p.flowShuffle = saved.flowShuffle;
       for (const k of ['coverColourGlass', 'coverColourMini', 'coverColourPlayer'] as const) if (typeof saved[k] === 'boolean') p[k] = saved[k];
       if (typeof saved.snippetsInMenus === 'boolean') p.snippetsInMenus = saved.snippetsInMenus;
+      if (typeof saved.momentWeather === 'boolean') p.momentWeather = saved.momentWeather;
       if (Array.isArray(saved.flowShuffled)) {
         const ticked = saved.flowShuffled.filter((b: unknown): b is FlowBackdrop => FLOW_BACKDROPS.includes(b as FlowBackdrop));
         if (ticked.length) p.flowShuffled = ticked;

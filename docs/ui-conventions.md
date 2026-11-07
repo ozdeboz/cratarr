@@ -184,6 +184,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   with one line, "The rest needs Cratarr." Large actions the same (`ACTIONS_NEED_SERVER`). Pages say it in one line
   where a whole thing steps aside ("Grabbing a crate needs Cratarr.", "New playlists need Cratarr."); never a refusal
   after a tap.
+- **The moment, away** (decision 0101, point 18; `lib/momentHere`): with Cratarr out of reach Home's moment keeps the albums it
+  last gave, under a name and a sky worked out here: from Open-Meteo's weather where This device's "Weather for the moment crate" is
+  on and the internet is there, else from the time and day, with "Time and day only" under the name. That switch, in its group
+  "Away from Cratarr", is the only way the device's rough place leaves it, and never to Cratarr.
 - **A menu's head and actions** (`lib/MenuSheet.svelte`, decided 2026-10-16, as Symfonium's): a small cover (64 px),
   the title large beside it and what it is under that in one muted line, on the sheet itself (no card); a track's,
   an album's heart at the end. The large actions are icons only (their words on a long-press, as every icon

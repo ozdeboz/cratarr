@@ -33,10 +33,12 @@ On the server's pages only, the app adds `window.CratarrApp` (`postMessage` and 
 | `{"type": "player", "op": …}` | `add` (`at`, `tracks`), `move` (`from`, `to`), `remove` (`index`), `jump` (`index`), `next`, `previous`, `seek` (`positionMs`), `play`, `pause`, `toggle`, `stop`. |
 | `{"type": "settings"}` | Opens the app's settings. |
 | `{"type": "open", "url"}` | Opens a link outside the app. |
+| `{"type": "location", "op"?}` | Where the device roughly is, for the moment's weather; `op: "ask"`, Android's permission for it. |
 
 | To the page | |
 |---|---|
 | `{"type": "player", "index", "positionMs", "durationMs", "paused", "error", "queue"?}` | What plays: on every change, once a second while the page is in view, with the queue when it changed (or the page said hello). |
+| `{"type": "location", "lat"?, "lon"?}` | To one decimal; none where the device cannot say. |
 
 ## Building
 

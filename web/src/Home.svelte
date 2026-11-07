@@ -59,6 +59,7 @@
   import { holdUntil } from './lib/holdPlace.svelte';
   import { toast } from './lib/toast.svelte';
   import { albumAway, away, here, rowsAway } from './lib/away.svelte';
+  import { momentHere } from './lib/momentHere.svelte';
   import { askDevicePlays, backHere, devicePlays, LOCAL_PARTS, newestHere, playHereAlbums } from './lib/localHome.svelte';
 
   const WEEK = `${LIKE}week`;
@@ -173,14 +174,24 @@
   // refill (it follows the weather).
   let moment = $state<Moment | null>(momentKept ? (kept.moment ?? null) : null);
   let momentIn = $state(momentKept);
+  const showMoment = (m: Moment) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), delete failed.moment, (momentIn = true));
+  // Cratarr out of reach (lib/momentHere): its albums as last given, under the time and weather here, never a name from before.
   const readMoment = () =>
     getMoment(prefs.source || undefined, hiddenLibraries()).then(
-      (m) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), delete failed.moment, (momentIn = true)),
-      (e) => (!moment && fail('moment', e), (momentIn = true)),
+      async (m) => showMoment(away() ? await momentHere(m.albums) : m),
+      async (e) => {
+        const albums = kept.moment?.albums;
+        if (away() && albums?.length) showMoment(await momentHere(albums));
+        else (!moment && fail('moment', e), (momentIn = true));
+      },
     );
   onMount(() => {
     if (local) return void (momentIn = true);
     readMoment();
+  });
+  // Cratarr answers again: its own moment, weather and all.
+  $effect(() => {
+    if (!away() && moment?.timeOnly) void readMoment();
   });
   const momentAlbums = $derived(
     (moment?.albums ?? []).flatMap((id) => sources.find((s) => s.id === 'cratarr')?.albums.find((x) => x.id === id) ?? []),
@@ -611,6 +622,7 @@
       {:else}
         <h2>{leadTitle}</h2>
       {/if}
+      {#if lead === 'moment' && moment?.timeOnly}<p class="for-now note">Time and day only</p>{/if}
       <div class="sky-flow">
         {#if heroReady}<CoverFlow
           enter
@@ -649,6 +661,7 @@
   {#if turn('moment') && moment && momentAlbums.length}
     <section aria-label={moment.name}>
       <SectionHead title={moment.name} onmore={() => viewLike('now')} />
+      {#if moment.timeOnly}<p class="timeOnly">Time and day only</p>{/if}
       <ul class="shelf big">
         {#each momentAlbums as a (a.id)}
           <li><AlbumCard source="cratarr" album={a} lines={[a.artist ?? '', a.year ? String(a.year) : '']} /></li>
@@ -892,6 +905,11 @@
     --veil: 0.65;
   }
 
+  .timeOnly {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
   .moment h2 {
     margin: 0;
     padding: 0 16px;
@@ -909,6 +927,11 @@
     margin: 4px 0 0;
     padding: 0 16px;
     font-size: 23px;
+  }
+
+  .moment .for-now.note {
+    font-size: 14px;
+    opacity: 0.8;
   }
 
   /* Room under the covers for their shadow (it fades over 30 px): at the flow's very foot, its clip cut the shadow off

@@ -15,6 +15,7 @@ import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.database.ContentObserver
 import android.graphics.drawable.Icon
+import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -109,6 +110,9 @@ class MainActivity : AppCompatActivity() {
 
     /** The folder turned on before Android's permission was there: on once it is given. */
     private var folderAsked: String? = null
+
+    /** The moment's weather: Android's permission for a rough place, as its switch in This device is turned on. */
+    private val locationAsk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     /** Android's index of the device's music changed: the page is told once things settle (a copy is many changes). */
     private val deviceMusicChanged = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -739,6 +743,12 @@ class MainActivity : AppCompatActivity() {
             // The Background switch (the owner, 2026-10-25): on asks Android's dialog; off opens this app's page, its
             // "App battery usage" one tap away (Android's list of every app made the user look for Cratarr in it).
             "battery" -> if (message.optString("op") == "settings") openAppSettings() else askToRunInBackground()
+            // The moment's weather (decision 0101, point 18): the permission as its switch is turned on, then the rough place.
+            "location" -> if (message.optString("op") == "ask") {
+                if (!CoarseLocation.granted(this)) locationAsk.launch(CoarseLocation.PERMISSION)
+            } else {
+                CoarseLocation.now(this, ::tellPlace)
+            }
             "address" -> askForAddress()
             "open" -> message.optString("url").takeIf { it.isNotEmpty() }?.let { openOutside(it) }
             // Share (a menu's): Android's share sheet, as the WebView has no navigator.share. `text` holds the link.
@@ -861,6 +871,13 @@ class MainActivity : AppCompatActivity() {
             downloadsTold = System.currentTimeMillis()
             page?.postMessage(list)
         }
+    }
+
+    /** Where the device roughly is, for the page to ask the weather of; none: no place in it. */
+    private fun tellPlace(place: Location?) {
+        val m = JSONObject().put("type", "location")
+        if (place != null) m.put("lat", CoarseLocation.coarse(place.latitude)).put("lon", CoarseLocation.coarse(place.longitude))
+        page?.postMessage(m.toString())
     }
 
     /** Android's own dialog: let the app run in the background (left out of battery optimisation). */

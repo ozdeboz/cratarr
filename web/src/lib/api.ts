@@ -2015,8 +2015,8 @@ export const artistPicks = (name: string, without?: string[]) =>
 /** Home's moment (the owner, 2026-10-23): named after the weather Home Assistant tells and the time of day ("Music for a Rainy
  *  Evening"), a few albums near it (Cratarr's ids); its radio plays inside the crate `like:now`. */
 /** `sky`: the canvas Home paints (sunny, clear, fewclouds, cloudy, foggy, rainy, stormy, snowy, windy, hot, plain); `dark`
- *  after sunset. */
-export type Moment = { name: string; sky: string; dark: boolean; albums: string[] };
+ *  after sunset. `timeOnly`: worked out on this device with no weather (lib/momentHere). */
+export type Moment = { name: string; sky: string; dark: boolean; albums: string[]; timeOnly?: boolean };
 export const getMoment = (source?: string, without?: string[]) =>
   quietly<Moment>(
     `/api/home/moment?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}), tz: String(-new Date().getTimezoneOffset() * 60) })}`,
