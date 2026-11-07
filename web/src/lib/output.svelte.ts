@@ -88,10 +88,7 @@ if (typeof window !== 'undefined') {
     if (!reach.away) plays.tell();
   });
   whenReached.add(plays.tell);
-  whenAccount.add(() => {
-    plays.stamp();
-    plays.tell();
-  });
+  whenAccount.add(plays.tell);
 }
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
 const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);

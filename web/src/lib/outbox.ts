@@ -3,8 +3,8 @@
 // twice (its answer lost) is made once; and the time it was made, sent as X-Cratarr-At, so a later change made
 // elsewhere wins (favourites and ratings, last change by time). The keeping and the sending are lib/later's.
 
-/** One change waiting: its request as it is sent, its op id (`key`), when it was made (`at`, epoch ms) and the account
- *  it was made under (`account`, lib/account's key; none yet: see `stamped`). */
+/** One change waiting: its request as it is sent, its op id (`key`), when it was made (`at`, epoch ms) and the account it was
+ *  made under (`account`, lib/account's key; none: made with nobody signed in, the page's to name, lib/later). */
 export type Op = { key: string; method: string; path: string; body: string | null; type: string | null; at: number; account?: string };
 
 /** A week waiting (each try turned away as though out of reach): let go, not to hold the rest back for ever. */
@@ -26,10 +26,6 @@ export const ours = (k: Kept, account: string | null) => account !== null && k.a
 
 /** Whether `k` is another account's, waited for long enough: let go unsent. */
 export const outlived = (k: Kept, account: string | null, now: number) => !ours(k, account) && now - k.at > OTHERS_MS;
-
-/** The account known: those carrying none take it. Made before any account was known here, or kept before 0.13 (the
- *  account signed in then, as was taken until now). */
-export const stamped = <T extends Kept>(list: readonly T[], account: string): T[] => list.map((k) => (k.account === undefined ? { ...k, account } : k));
 
 /** What an answer means for the change at the head of the outbox. `sent`: taken, let go. `refused`: turned down (the
  *  playlist gone meanwhile, a playlist that is not one's own), let go too: Cratarr's state is the truth. `wait`: not

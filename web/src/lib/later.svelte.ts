@@ -8,43 +8,33 @@
 // rules are lib/outbox's.
 import { accountKey, whenAccount } from './account';
 import { keep, readKept } from './keptStore';
-import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, stamped, worded, type Op } from './outbox';
+import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, worded, type Op } from './outbox';
 import { notReached, reach, whenReached } from './reach.svelte';
 
 export type Later = Op;
 
 const NAME = 'outbox';
-/** 0.9.15 to 0.11's list, in localStorage: taken over once. */
-const OLD_KEY = 'cratarr-later';
-function oldList(): Op[] {
-  try {
-    return opsFrom(JSON.parse(localStorage.getItem(OLD_KEY) ?? '[]'));
-  } catch {
-    return [];
-  }
-}
 
-export const later = $state({ list: typeof window === 'undefined' ? [] : oldList() });
+export const later = $state<{ list: Op[] }>({ list: [] });
+/** What this page made with no account known, for its first answer to name. A kept list names nothing: one of those there
+ *  is a page's that never heard, made perhaps by someone signing out, and no one's now, least of all the next to sign in's. */
+const madeHere = new Set<string>();
 /** Done once the stored outbox has been read in (until then a change waits behind it, kept in order). */
 const loaded =
   typeof window === 'undefined'
     ? Promise.resolve()
     : readKept<unknown>(NAME).then(async (v) => {
-        later.list = mergeOps(opsFrom(v), later.list);
-        stamp();
+        later.list = mergeOps(opsFrom(v).filter((c) => c.account !== undefined), later.list);
         await save();
-        try {
-          localStorage.removeItem(OLD_KEY);
-        } catch {
-          /* nothing there */
-        }
         if (later.list.length && !reach.away) void sendLater();
       });
 const save = () => keep(NAME, $state.snapshot(later.list));
-/** The account known: the changes carrying none take it (lib/outbox's `stamped`). */
+/** The account known: what this page made before it knew takes it. */
 function stamp() {
   const account = accountKey();
-  if (account !== null && later.list.some((c) => c.account === undefined)) later.list = stamped(later.list, account);
+  if (account === null || !madeHere.size) return;
+  later.list = later.list.map((c) => (madeHere.has(c.key) ? { ...c, account } : c));
+  madeHere.clear();
 }
 
 /** What waits of the account signed in: another's waits for it here, and neither its number nor what it is shows to
@@ -72,6 +62,7 @@ export async function keepAndTry<T>(op: Op, send: (headers: Record<string, strin
   // Another account's changes do not hold this one back; while the account is not known, any might be its own.
   const account = accountKey();
   const ahead = busy || later.list.some((c) => account === null || ours(c, account));
+  if (account === null) madeHere.add(op.key);
   later.list = [...later.list, account === null ? op : { ...op, account }];
   await save();
   if (ahead) {

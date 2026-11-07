@@ -1,8 +1,9 @@
 // The plays not yet told (decision 0064; 0.12, decision 0085 step 3: no play lost when the page is closed meanwhile):
 // reports Cratarr has not taken yet, kept on this device and sent again with the next one or when it answers again. Each
 // has its id: Cratarr counts a report sent twice once. Each carries the account it was heard under and is told only while
-// that account is signed in (0.13, lib/account); another's wait for it, a month at most (lib/outbox's rules).
-import { ours, outlived, stamped } from './outbox';
+// that account is signed in (0.13, lib/account); another's wait for it, a month at most (lib/outbox's rules). One heard with
+// nobody signed in is no one's, as in the app (Plays.kt), and never kept: the next to sign in would be told it as their own.
+import { ours, outlived } from './outbox';
 
 /** After a report that moved nothing, the next waits this long. Cratarr leaves out of `done` a play it cannot count yet
  *  (a followed server away, the user data failing) and would say the same at once: going straight back is a stream of
@@ -23,13 +24,6 @@ export function playsToTell<P extends { id: string; at: number; account?: string
   let telling: P[] = [];
   let restUntil = 0;
   const save = () => keep([...telling, ...unsent].slice(-KEPT));
-
-  /** The account known: the reports carrying none take it (lib/outbox's `stamped`). */
-  function stamp() {
-    const a = account();
-    if (a !== null) unsent = stamped(unsent, a);
-    save();
-  }
 
   /** Tells what waits of the account signed in, unless some is on its way or the last report moved nothing just now. */
   function tell() {
@@ -58,10 +52,10 @@ export function playsToTell<P extends { id: string; at: number; account?: string
   }
 
   return {
-    stamp,
     tell,
     /** One more heard: kept, and told. */
     add(p: P) {
+      if (p.account === undefined) return;
       unsent.push(p);
       save();
       tell();
@@ -69,8 +63,8 @@ export function playsToTell<P extends { id: string; at: number; account?: string
     /** What was kept here before this page: those not known yet taken in. */
     took(kept: P[]) {
       const have = new Set([...telling, ...unsent].map((e) => e.id));
-      unsent = [...kept.filter((e) => !have.has(e.id)), ...unsent];
-      stamp();
+      unsent = [...kept.filter((e) => !have.has(e.id) && e.account !== undefined), ...unsent];
+      save();
     },
   };
 }

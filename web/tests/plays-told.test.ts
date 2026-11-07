@@ -76,19 +76,27 @@ test('all taken, nothing waits and the next is told at once', async () => {
   assert.deepEqual(t.sent, [['a'], ['b']]);
 });
 
-test('whose: only the account signed in is told; another waits, and one with none takes the account once it is known', async () => {
+test('whose: only the account signed in is told; another waits, and one heard with nobody is no one’s, for the next as for any', async () => {
   let who: string | null = null;
   const { t, plays } = telling((ids) => ids, () => who);
   plays.add(play('bob', 'bob'));
-  plays.add(play('no-one-yet'));
+  plays.add(play('heard-as-she-signed-out'));
   await settled();
   assert.deepEqual(t.sent, [], 'not known yet: none told');
   who = 'ann';
-  plays.stamp();
   plays.tell();
   await settled();
-  assert.deepEqual(t.sent, [['no-one-yet']]);
-  assert.deepEqual(t.kept, [play('bob', 'bob')], 'kept for bob');
+  assert.deepEqual(t.sent, [], 'not hers, for coming next');
+  assert.deepEqual(t.kept, [play('bob', 'bob')], 'kept for bob, and nothing else');
+});
+
+test('one kept with no account by a page before this one is not taken in', async () => {
+  const { t, plays } = telling((ids) => ids);
+  plays.took([play('no-ones'), play('hers', 'ann')]);
+  assert.deepEqual(t.kept, [play('hers', 'ann')]);
+  plays.tell();
+  await settled();
+  assert.deepEqual(t.sent, [['hers']]);
 });
 
 test('what was kept before this page comes in once, by its id', async () => {
