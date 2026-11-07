@@ -288,6 +288,8 @@ pub struct AlbumCopy {
     pub plays: bool,
     /// When its first file came, epoch seconds.
     pub added: Option<i64>,
+    /// Its files' bytes, added up.
+    pub size: Option<u64>,
     /// The conversion at work on it, `JobView.id`.
     pub job: Option<u64>,
     /// Its catalogue folder and its folder in it: what tells it from the record's other copies here, not the page's.

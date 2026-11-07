@@ -326,7 +326,7 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             let r = app.playlists.reach(id)?;
             let entries = r.store.led_entries(&r.name).await?;
             let (source, _) = app.playlists.source_of(want)?;
-            let (sid, music) = (source.clone(), app.library.music().map(std::path::PathBuf::from));
+            let sid = source.clone();
             let count = entries.len();
             // As its view plays it: the lines whose file is there and known to the server.
             let (ids, lines): (Vec<String>, Vec<String>) = blocking(move || {
@@ -334,7 +334,7 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
                 Ok(entries
                     .into_iter()
                     .zip(found)
-                    .filter(|(l, _)| super::playlists::line_exists(&cat, music.as_deref(), l))
+                    .filter(|(l, _)| super::playlists::line_exists(&cat, l))
                     .filter_map(|(l, id)| Some((id?, l)))
                     .unzip())
             })

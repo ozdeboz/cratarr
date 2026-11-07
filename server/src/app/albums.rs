@@ -749,7 +749,7 @@ mod tests {
         let sent = serde_json::to_value(&copy).unwrap();
         let mut keys: Vec<&str> = sent.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["added", "bits", "deletable", "format", "job", "kbps", "keep_to", "keepable", "lacks", "library", "plays", "rate"]);
+        assert_eq!(keys, ["added", "bits", "deletable", "format", "job", "kbps", "keep_to", "keepable", "lacks", "library", "plays", "rate", "size"]);
         assert_eq!(sent["lacks"], serde_json::json!([]), "a list");
         assert_eq!((&sent["job"], &sent["bits"], &sent["keep_to"]), (&serde_json::Value::Null, &serde_json::Value::Null, &serde_json::Value::Null), "null, not left out");
         let other = serde_json::to_value(album("x", "jellyfin-music", "/m/x")).unwrap();

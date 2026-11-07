@@ -332,3 +332,9 @@ This changes "how a record's copies behave" above: "Which copy plays", "An Incom
 
 Why: a pick had no way back to automatic, and what an account heard could differ from what Kodi did. Now Kodi hears what an
 account hears, unless their own music holds the better copy or a library is off. Downloads keep their saved file.
+
+2026-11-06, the owner changed a card's dots, which were "In lists" above, point 1's "only while the viewer has two or more
+libraries on" and 0034's "while more than one library is switched on": one dot for each library foreign to home, the first kept
+library in the libraries' order, main or own music alike, on or off. Home has one only beside another kept library, so a
+duplicate shows both. Every other kept library has its dot, and every Incoming one, beside a kept copy too. A server of one
+library has none, and a card reached with all its libraries off names where it lies.

@@ -115,20 +115,20 @@ pub struct Repairs {
     pub review: Vec<Repair>,
 }
 
-/// Whether a playlist line's file is there: in Music, or, for a line that climbs out of it, in the folder it names
-/// (`Catalogue::path_of_line`). Blocking.
-pub(crate) fn line_exists(cat: &Catalogue, music: Option<&Path>, line: &str) -> bool {
+/// Whether a playlist line's file is there: in the folder lines are made from, or, for a line that climbs out of it, in the
+/// folder it names (`Catalogue::path_of_line`). Blocking.
+pub(crate) fn line_exists(cat: &Catalogue, line: &str) -> bool {
     if line.starts_with("../") {
         return cat.path_of_line(line).is_some_and(|p| p.is_file());
     }
-    music.is_some_and(|d| entry_exists(d, line))
+    cat.folders().first().is_some_and(|(_, first)| entry_exists(first, line))
 }
 
 /// Where an entry leads when its own file went, or no longer holds its track, as a copy that left its record takes tracks of
 /// its own: its track's line now (decision 0101 point 11: an entry is its track). None while its file is there holding it, or
 /// where its track has none. Blocking.
-fn led_to(cat: &Catalogue, music: &Path, line: &str, track: &str) -> Option<String> {
-    if line_exists(cat, Some(music), line) && cat.track_of_line(line).is_none_or(|held| held == track) {
+fn led_to(cat: &Catalogue, line: &str, track: &str) -> Option<String> {
+    if line_exists(cat, line) && cat.track_of_line(line).is_none_or(|held| held == track) {
         return None;
     }
     let now = cat.row_line(track.strip_prefix(crate::serve::ids::SONG)?.parse().ok()?)?;
@@ -142,8 +142,8 @@ pub(crate) fn entry_exists(dir: &Path, entry: &str) -> bool {
     safe && dir.join(p).is_file()
 }
 
-fn dead_count(dir: &Path, lines: &[String]) -> usize {
-    lines.iter().filter(|l| !entry_exists(dir, l)).count()
+fn dead_count(cat: &Catalogue, lines: &[String]) -> usize {
+    lines.iter().filter(|l| !line_exists(cat, l)).count()
 }
 
 const AUDIO: [&str; 8] = ["mp3", "flac", "m4a", "ogg", "opus", "wav", "wma", "aac"];
@@ -410,9 +410,9 @@ impl Store {
             .collect();
         let mut out: HashMap<String, usize> = known.iter().map(|(id, (_, n))| (id.clone(), *n)).collect();
         if !stale.is_empty() {
-            let dir = self.base.clone();
+            let cat = self.cat.clone();
             let counted = tokio::task::spawn_blocking(move || {
-                stale.into_iter().map(|(id, print, lines)| (id, print, dead_count(&dir, &lines))).collect::<Vec<_>>()
+                stale.into_iter().map(|(id, print, lines)| (id, print, dead_count(&cat, &lines))).collect::<Vec<_>>()
             })
             .await
             .unwrap_or_default();
@@ -464,9 +464,9 @@ impl Store {
     pub async fn refresh_dead(&self) {
         self.follow_tracks().await;
         let Ok(lists) = self.all().await else { return };
-        let dir = self.base.clone();
+        let cat = self.cat.clone();
         let counted = tokio::task::spawn_blocking(move || {
-            lists.into_iter().map(|(p, lines)| (p.id, fingerprint(&text_of(&lines)), dead_count(&dir, &lines))).collect::<Vec<_>>()
+            lists.into_iter().map(|(p, lines)| (p.id, fingerprint(&text_of(&lines)), dead_count(&cat, &lines))).collect::<Vec<_>>()
         })
         .await
         .unwrap_or_default();
@@ -483,12 +483,12 @@ impl Store {
     /// catalogue knows its file (written before the catalogue read it, at the import of a library not read yet).
     async fn follow_tracks(&self) {
         let _one_writer = self.write.lock().await;
-        let (db, cat, owner, base) = (self.db.clone(), self.cat.clone(), self.owner(), self.base.clone());
+        let (db, cat, owner) = (self.db.clone(), self.cat.clone(), self.owner());
         let done = tokio::task::spawn_blocking(move || -> Result<Vec<(String, Vec<String>)>> {
             let given: Vec<(String, String, String)> = db
                 .untracked_entries(&owner)?
                 .into_iter()
-                .filter(|(_, _, line)| entry_exists(&base, line))
+                .filter(|(_, _, line)| line_exists(&cat, line))
                 .filter_map(|(name, entry, line)| Some((name, entry, cat.track_of_line(&line)?)))
                 .collect();
             if !given.is_empty() {
@@ -496,7 +496,7 @@ impl Store {
             }
             let mut moves = Vec::new();
             for (name, entry, line, track) in db.tracked_entries(&owner)? {
-                if let Some(now) = led_to(&cat, &base, &line, &track) {
+                if let Some(now) = led_to(&cat, &line, &track) {
                     moves.push((name, entry, now));
                 }
             }
@@ -533,12 +533,12 @@ impl Store {
         if !valid_id(id) {
             return Err(StoreError::Unknown);
         }
-        let (name, cat, base) = (id.to_string(), self.cat.clone(), self.base.clone());
+        let (name, cat) = (id.to_string(), self.cat.clone());
         let led = self.ask(move |db, owner| {
             let Some((_, lines)) = db.playlist(owner, &name)? else { return Ok(None) };
             let tracks = db.playlist_tracks(owner, &name)?.unwrap_or_default();
             let tracks = tracks.into_iter().chain(std::iter::repeat(None));
-            Ok(Some(lines.into_iter().zip(tracks).map(|(line, track)| track.and_then(|t| led_to(&cat, &base, &line, &t)).unwrap_or(line)).collect()))
+            Ok(Some(lines.into_iter().zip(tracks).map(|(line, track)| track.and_then(|t| led_to(&cat, &line, &t)).unwrap_or(line)).collect()))
         });
         led.await?.ok_or(StoreError::Unknown)
     }
@@ -1293,6 +1293,25 @@ B/2.mp3
         assert_eq!(s.view(None).await.unwrap()[0].dead, 3);
     }
 
+    /// A line in another library plays as any other: read as dead, a list of five that all played said one track and four dead.
+    #[tokio::test]
+    async fn only_a_line_with_no_file_is_dead() {
+        let d = Dir::new();
+        d.touch("Music/A/1.mp3");
+        d.touch("own/A/2.mp3");
+        let cat = Arc::new(Catalogue::open(None, vec![d.0.join("Music"), d.0.join("own")]).unwrap());
+        let s = Store::open(Arc::new(UserData::open(None).unwrap()), cat, None, d.0.join("Music"), None);
+        s.create("Mix").await.unwrap();
+        for line in ["A/1.mp3", "../own/A/2.mp3", "../own/A/gone.mp3"] {
+            s.set_member("Mix", line, true).await.unwrap();
+        }
+        let listed = s.view(None).await.unwrap().remove(0);
+        assert_eq!((listed.count, listed.dead), (2, 1), "when it is written");
+        s.refresh_dead().await;
+        let listed = s.view(None).await.unwrap().remove(0);
+        assert_eq!((listed.count, listed.dead), (2, 1), "and at the minute's pass");
+    }
+
     #[tokio::test]
     async fn deleting_a_copy_leaves_its_lines_playing() {
         let d = Dir::new();
@@ -1317,7 +1336,7 @@ B/2.mp3
         assert_eq!(led, ["A/1.mp3"]);
         let song = crate::serve::ids::song(track);
         assert_eq!(cat.line_track_ids(crate::source::cratarr::KIND.id, &led).unwrap(), [Some(song)]);
-        assert!(line_exists(&cat, Some(d.0.join("Music").as_path()), &led[0]), "not missing");
+        assert!(line_exists(&cat, &led[0]), "not missing");
         assert_eq!(s.entries("Mix").await.unwrap(), ["../own/A/1.mp3"], "reading writes nothing");
         s.refresh_dead().await;
         assert_eq!(s.entries("Mix").await.unwrap(), ["A/1.mp3"], "the pass writes where it read");

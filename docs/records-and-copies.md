@@ -112,17 +112,20 @@ gains, is the file that plays, so a waveform's ETag names the file.
 ## On the page
 
 - A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, bits, rate, deletable, keepable,
-  keep_to, lacks, plays, added, job }]`, what the viewer may do going by the copy. They come in the order they
+  keep_to, lacks, plays, added, size, job }]`, what the viewer may do going by the copy. They come in the order they
   would play for that viewer, `copy_for` asked again of what is left, and a copy in a library off keeps its place, so the
   first one on is what plays and a switch thrown on the page needs no new list. The card's format and bitrate are the
-  copy that plays. Dots: one per copy,
-  the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on, and so
+  copy that plays. Dots: one for each library foreign to home, the first kept library in the libraries' order, main or
+  own music alike, on or off. Home has one only beside another kept library, so a duplicate shows both. Every other kept
+  library has its dot, and every Incoming one, beside a kept copy too. A server of one library has none, and a card
+  reached with all its libraries off names where it lies. A record shows when any of its copies is in a library switched on, and so
   does a track, in every list and count: `crates::on_for`, the one test. An Incoming copy counts there, though it plays only
   by `from`: with the kept library off, that is where the record is found.
 - A playlist's line names a file, and an entry is its track: on any copy it has the track's id and plays, what plays being
   `copy_for`'s to say. A line written now is the row copy's. Where its copy goes, or leaves the record, the entry reads the file
   its track has left, at once, and the minute's pass writes that line.
-- An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
+- An Incoming copy of a record already kept shows only on Incoming's list until it is added, and by its dot on the record's
+  card (the owner, 2026-11-06).
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and a "Play from …" for each
   other copy in a library on, Incoming too, shown only where there is one. The record stays while one copy is left.
 - The quality on a card is the copy that plays.

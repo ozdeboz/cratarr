@@ -38,6 +38,8 @@ pub struct ListedCopy {
     pub rate: Option<u32>,
     /// When its first file came, epoch seconds.
     pub added: Option<i64>,
+    /// Its files' bytes, added up.
+    pub size: u64,
 }
 
 /// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id (what its tags and marks are kept
@@ -1273,7 +1275,7 @@ impl Library {
         let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
         self.album_artists(&db, &mut albums)?;
         let mut st = db.prepare_cached(&format!(
-            "SELECT c.dir, c.format, c.min_kbps, {ALBUM_LENGTH}, c.bits, c.rate, c.added FROM copies c JOIN albums a ON a.id = c.album WHERE c.album = ?1 AND c.folder = ?2 ORDER BY c.dir"
+            "SELECT c.dir, c.format, c.min_kbps, {ALBUM_LENGTH}, c.bits, c.rate, c.added, c.size FROM copies c JOIN albums a ON a.id = c.album WHERE c.album = ?1 AND c.folder = ?2 ORDER BY c.dir"
         ))?;
         let mut out = Vec::with_capacity(albums.len());
         for a in albums {
@@ -1287,6 +1289,7 @@ impl Library {
                     bits: r.get(4)?,
                     rate: r.get(5)?,
                     added: r.get(6)?,
+                    size: r.get::<_, i64>(7)? as u64,
                 })
             })?;
             out.extend(copies.collect::<rusqlite::Result<Vec<_>>>()?);

@@ -298,7 +298,7 @@ impl PlayingService {
             }
         };
         self.lib.store()?;
-        let folders = self.lib.folders();
+        let folders = self.lib.catalogue().folders();
         let mut entries = Vec::new();
         let mut left_out = 0;
         for id in &ids {
@@ -482,7 +482,7 @@ impl PlayingService {
 
     async fn work_out_state(&self, want: Option<&str>) -> Result<StateView> {
         let (np, sources) = self.playing(want).await?;
-        let folders = self.lib.folders();
+        let folders = self.lib.catalogue().folders();
         let entry = np.as_ref().and_then(|(a, p)| a.line(&folders, &p.track));
         let playlists = self.playlists.view(entry.as_deref()).await?;
         let info = match &np {
@@ -528,7 +528,7 @@ impl PlayingService {
         let (np, _) = self.playing(want).await?;
         let (active, playing) = np.ok_or(ToggleError::NothingPlaying)?;
         self.lib.store()?;
-        let entry = active.line(&self.lib.folders(), &playing.track).ok_or(ToggleError::NotInLibrary)?;
+        let entry = active.line(&self.lib.catalogue().folders(), &playing.track).ok_or(ToggleError::NotInLibrary)?;
         self.playlists.set_entry(playlist_id, &entry, member).await?;
         Ok(self.fresh_state(want).await?)
     }
@@ -547,7 +547,7 @@ impl PlayingService {
     /// A given track's playlists, favourite and info chips (the local player's, decision 0022).
     pub async fn track_state(&self, source_id: &str, id: &str) -> Result<TrackStateView, ToggleError> {
         let (a, s, track) = self.find(source_id, id).await?;
-        let entry = a.line(&self.lib.folders(), &track);
+        let entry = a.line(&self.lib.catalogue().folders(), &track);
         let (favorite, info) = tokio::join!(s.favorite(id), self.info(&s, source_id, id));
         let playlists = self.playlists.view(entry.as_deref()).await?;
         Ok(TrackStateView { addable: entry.is_some(), album_id: track.album_id.clone(), favorite: favorite.unwrap_or(None), playlists, info })
@@ -560,7 +560,7 @@ impl PlayingService {
         }
         let (a, _, track) = self.find(source_id, id).await?;
         self.lib.store()?;
-        let entry = a.line(&self.lib.folders(), &track).ok_or(ToggleError::NotInLibrary)?;
+        let entry = a.line(&self.lib.catalogue().folders(), &track).ok_or(ToggleError::NotInLibrary)?;
         self.playlists.set_entry(playlist_id, &entry, member).await?;
         self.track_state(source_id, id).await
     }

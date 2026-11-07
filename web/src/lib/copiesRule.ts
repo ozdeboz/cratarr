@@ -1,10 +1,15 @@
 // A record and its copies, the page's rules, pure (docs/records-and-copies.md, "On the page"): whether a record shows,
-// the dots on its card, which copy plays, and what each copy allows. `on` says whether a library is switched on (lib/sources: `shownIn`), the
+// the dots on its card, which copy plays, the lines in its panel, and what each copy allows. `on` says whether a library is switched on (lib/sources: `shownIn`), the
 // switches being the page's: one changed reaches the server later, and the list is not read again for it.
 //
 // A list says `copies`, or until the server folds its records (and for a server of another kind) the one `library`, or
 // neither: a list with no libraries (the device's, a server's in its mode, Discover).
 import type { AlbumCopy, AlbumsSource, LibraryInfo, ListedAlbum } from './api';
+import { size } from './exportChoices';
+
+/** Whether a format loses nothing: here so a copy's line can say it, and the list's order by quality too (lib/pageView). */
+const LOSSLESS = new Set(['FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV', 'WAVPACK', 'DSF', 'DFF']);
+export const isLossless = (format: string | null | undefined) => !!format && LOSSLESS.has(format.toUpperCase());
 
 export type Held = { library?: string; copies?: AlbumCopy[] };
 export type Dot = { id: string; colour: string; name: string };
@@ -21,17 +26,20 @@ export function recordOn(a: Held, on: On): boolean {
   return librariesOf(a).some(on);
 }
 
-/** The dots on a record's card, one per library holding it, in the list's order: none while fewer than two libraries
- *  are on, as every record would carry the same. A library counts as on before its first record, own music too.
- *  Copies in libraries switched off say nothing while another is on, and a card reached with all of them off (Home's
- *  crates, a search) names where it lies. An Incoming copy gets none beside a kept one: it waits to be added. */
+/** The dots on a record's card, in the list's order: one for each library foreign to home (the owner, 2026-11-06). Home
+ *  is the first kept library in the libraries' order, main or own music alike, and a switch does not change what it
+ *  means. It goes without saying, so it has a dot only beside another kept library, and a duplicate shows both. Any other
+ *  kept library has its dot, as a record only there says where it lies, and so has every Incoming one, beside a kept copy
+ *  too. Copies in libraries switched off say nothing while another is on, and a card reached with all of them off (Home's
+ *  crates, a search) names where it lies, home too. A server of one library has none: nothing there is foreign. */
 export function dotsOf(a: Held, info: LibraryInfo[] | undefined, on: On): Dot[] {
-  if (!info || info.filter((l) => on(l.id)).length < 2) return [];
+  if (!info || info.length < 2) return [];
   const held = librariesOf(a);
-  const lit = held.some(on) ? held.filter(on) : held;
-  const shown = lit.flatMap((id) => info.find((l) => l.id === id) ?? []);
-  const kept = shown.some((l) => l.kind !== 'incoming');
-  return shown.flatMap(({ id, kind, colour, name }) => (colour && !(kept && kind === 'incoming') ? { id, colour, name } : []));
+  const allOff = !held.some(on);
+  const shown = (allOff ? held : held.filter(on)).flatMap((id) => info.find((l) => l.id === id) ?? []);
+  const home = info.find((l) => l.kind !== 'incoming')?.id;
+  const keptElsewhere = shown.some((l) => l.kind !== 'incoming' && l.id !== home);
+  return shown.flatMap(({ id, colour, name }) => (colour && (id !== home || keptElsewhere || allOff) ? { id, colour, name } : []));
 }
 
 /** The copy that plays, as the switches stand now. The server decides (`copy_for`) and lists the copies in its order
@@ -201,4 +209,48 @@ export function playFromEntries(a: Held, info: LibraryInfo[] | undefined, on: On
   if (held.size < 2) return [];
   const playing = copyPlaying(a, info, on)?.library;
   return [...held].filter((id) => on(id) && id !== playing).map((library) => ({ library, label: `Play from ${info?.find((l) => l.id === library)?.name ?? library}` }));
+}
+
+/** One copy's line in its record's panel. */
+export type CopyLine = {
+  name: string;
+  /** Its library's dot. Every line has it, whatever a card's dots leave out: a line goes by its library. */
+  colour: string | null;
+  /** "MP3 320", "FLAC". */
+  quality: string;
+  /** "92 MB"; null where the list says none. */
+  size: string | null;
+  /** It is what Play would give. */
+  plays: boolean;
+  /** A tap's Play from, the menu's own entry for this copy: null where the menu has none. */
+  playFrom: ReturnType<typeof playFromEntries>[number] | null;
+};
+
+/** A lossy copy's bitrate tells it from another; a lossless one's says nothing of it. A copy with no one format is as a
+ *  card says it. */
+const qualityOfCopy = (c: AlbumCopy) => (c.format ? [c.format, isLossless(c.format) ? null : c.kbps].filter(Boolean).join(' ') : 'Mixed formats');
+
+/** A record's copies, a line each in its panel, so that what tells them apart is said of each (the owner, 2026-11-06:
+ *  "What's the difference!?!"): in the list's order, so the order they would play. None for a record of one copy, whose
+ *  details say it, nor for a list that names no copies. A copy in a library off has no line, as it cannot be heard. The
+ *  one left on by that keeps its line: the record's own quality is the server's, which can be the copy off. Two folders
+ *  of one library are a line each, as they can differ, and the later one has no tap: `from` names the first. */
+export function copyLines(a: Held, info: LibraryInfo[] | undefined, on: On): CopyLine[] {
+  const copies = a.copies ?? [];
+  if (copies.length < 2) return [];
+  const playing = copyPlaying(a, info, on);
+  const entries = playFromEntries(a, info, on);
+  return copies.flatMap((c, i) => {
+    if (!on(c.library)) return [];
+    const library = info?.find((l) => l.id === c.library);
+    const first = copies.findIndex((x) => x.library === c.library) === i;
+    return {
+      name: library?.name ?? c.library,
+      colour: library?.colour ?? null,
+      quality: qualityOfCopy(c),
+      size: c.size ? size(c.size) : null,
+      plays: c === playing,
+      playFrom: first ? (entries.find((e) => e.library === c.library) ?? null) : null,
+    };
+  });
 }
