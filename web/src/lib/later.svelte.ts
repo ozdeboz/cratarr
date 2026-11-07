@@ -8,7 +8,7 @@
 // rules are lib/outbox's.
 import { accountKey, whenAccount } from './account';
 import { keep, readKept } from './keptStore';
-import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, worded, type Op } from './outbox';
+import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, turnedAway, worded, type Op } from './outbox';
 import { notReached, reach, whenReached } from './reach.svelte';
 
 export type Later = Op;
@@ -51,6 +51,11 @@ export const whenSent = new Set<() => void>();
 let busy = false;
 const letGo = async (key: string) => {
   later.list = later.list.filter((c) => c.key !== key);
+  await save();
+};
+/** An answer turned it away: the first says when its week began. */
+const refused = async (key: string) => {
+  later.list = later.list.map((c) => (c.key === key && c.tried === undefined ? { ...c, tried: Date.now() } : c));
   await save();
 };
 
@@ -101,11 +106,6 @@ export async function sendLater() {
     }
     let c: Op | undefined;
     while ((c = later.list.find((x) => ours(x, account)))) {
-      if (stale(c, Date.now())) {
-        console.warn('A change made away was let go, never taken', c.method, c.path);
-        await letGo(c.key);
-        continue;
-      }
       let r: Response | null = null;
       try {
         r = await fetch(c.path, { method: c.method, headers: headersOf(c), body: c.body });
@@ -113,7 +113,17 @@ export async function sendLater() {
         /* not reached */
       }
       const outcome = outcomeOf(r?.status ?? null, !!r?.headers.has('Retry-After'), notReached, r?.status === 403 && (await worded(r)));
-      if (outcome === 'wait') break;
+      if (outcome === 'wait') {
+        if (!turnedAway(r?.status ?? null)) break;
+        // Tried first: a week of refusals says nothing of today, and Cratarr may have mended.
+        if (!stale(c, Date.now())) {
+          await refused(c.key);
+          break;
+        }
+        console.warn('A change turned away for a week was let go, never taken', c.method, c.path);
+        await letGo(c.key);
+        continue;
+      }
       if (outcome === 'again') {
         await new Promise((ok) => setTimeout(ok, 1000));
         continue;

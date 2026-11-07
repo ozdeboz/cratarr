@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 (globalThis as Record<string, unknown>).$state = <T>(v: T) => v;
-const { outcomeOf, headersOf, mergeOps, opsFrom, stale, STALE_MS, ours, outlived, OTHERS_MS, worded } = await import('../src/lib/outbox.ts');
+const { outcomeOf, headersOf, mergeOps, opsFrom, stale, STALE_MS, ours, outlived, OTHERS_MS, turnedAway, worded } = await import('../src/lib/outbox.ts');
 const { readChanges, favouriteOf } = await import('../src/lib/changeLog.ts');
 const { opsFor, applyOps } = await import('../src/lib/playlistOps.ts');
 
@@ -59,9 +59,17 @@ test('a list read back: only well-formed changes', () => {
   assert.deepEqual(opsFrom([op('a', 1), { key: 2 }, null, 'x']).map((x) => x.key), ['a']);
 });
 
-test('a week waiting is let go', () => {
-  assert.equal(stale(op('a', 0), STALE_MS), false);
-  assert.equal(stale(op('a', 0), STALE_MS + 1), true);
+test('a week from its first refusal, not from when it was made: waiting is no refusal', () => {
+  assert.equal(stale({ ...op('a', 0), tried: 100 }, 100 + STALE_MS), false);
+  assert.equal(stale({ ...op('a', 0), tried: 100 }, 100 + STALE_MS + 1), true);
+  assert.equal(stale(op('a', 0), STALE_MS * 10), false, 'never turned away: only waiting');
+});
+
+test('an answer turns a change away; one not reached, or not signed in, says nothing of the change', () => {
+  assert.equal(turnedAway(503), true);
+  assert.equal(turnedAway(403), true);
+  assert.equal(turnedAway(null), false);
+  assert.equal(turnedAway(401), false);
 });
 
 test("whose (0.13): only the account signed in's are sent; another's are kept, a month at most", () => {
@@ -83,9 +91,11 @@ test("whose (0.13): only the account signed in's are sent; another's are kept, a
   assert.equal(ours(op('d', 0), 'ann'), false);
 });
 
-test('whose (0.13): a list read back keeps the account, and turns down one that is not a name', () => {
+test('whose (0.13): a list read back keeps the account and its first refusal, and turns down what is neither', () => {
   assert.deepEqual(opsFrom([{ ...op('a', 1), account: 'ann' }])[0].account, 'ann');
   assert.deepEqual(opsFrom([{ ...op('a', 1), account: 7 }]), []);
+  assert.equal(opsFrom([{ ...op('a', 1), tried: 9 }])[0].tried, 9);
+  assert.deepEqual(opsFrom([{ ...op('a', 1), tried: 'soon' }]), []);
   assert.deepEqual(headersOf({ ...op('k', 5), account: 'ann' }), { 'Idempotency-Key': 'k', 'X-Cratarr-At': '5' }, 'the account is not sent');
 });
 

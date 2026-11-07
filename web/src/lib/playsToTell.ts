@@ -9,8 +9,21 @@ import { ours, outlived } from './outbox';
  *  (a followed server away, the user data failing) and would say the same at once: going straight back is a stream of
  *  requests with no end, at a server already in trouble. A play of a track gone from such a server is never done. */
 export const TELL_AGAIN_MS = 60_000;
-/** The latest this many are kept. */
+/** The latest this many of each account's are kept. */
 const KEPT = 500;
+
+/** The latest [KEPT] of each account's, in their order: one's plays do not push out another's. */
+function latestOfEach<P extends { account?: string }>(plays: P[]): P[] {
+  const counted = new Map<string | undefined, number>();
+  return plays
+    .toReversed()
+    .filter((p) => {
+      const n = counted.get(p.account) ?? 0;
+      counted.set(p.account, n + 1);
+      return n < KEPT;
+    })
+    .reverse();
+}
 
 /** The telling: `report` sends them, `account` says who is signed in (lib/account), `keep` keeps what waits. */
 export function playsToTell<P extends { id: string; at: number; account?: string }>(
@@ -23,7 +36,7 @@ export function playsToTell<P extends { id: string; at: number; account?: string
   /** Those on their way. */
   let telling: P[] = [];
   let restUntil = 0;
-  const save = () => keep([...telling, ...unsent].slice(-KEPT));
+  const save = () => keep(latestOfEach([...telling, ...unsent]));
 
   /** Tells what waits of the account signed in, unless some is on its way or the last report moved nothing just now. */
   function tell() {

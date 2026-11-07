@@ -99,6 +99,16 @@ test('one kept with no account by a page before this one is not taken in', async
   assert.deepEqual(t.sent, [['hers']]);
 });
 
+test('each account keeps its latest apart: his plays do not push out hers', () => {
+  const { t, plays } = telling(() => [], () => null);
+  plays.add(play('hers', 'ann'));
+  for (let i = 0; i < 600; i++) plays.add(play(`his-${i}`, 'bo'));
+  assert.ok(t.kept.some((p) => p.id === 'hers'));
+  assert.equal(t.kept.length, 501);
+  assert.equal(t.kept.at(-1)?.id, 'his-599');
+  assert.deepEqual(t.kept.slice(0, 2).map((p) => p.id), ['hers', 'his-100'], 'in order, the oldest of his gone');
+});
+
 test('what was kept before this page comes in once, by its id', async () => {
   const { t, plays } = telling((ids) => ids);
   plays.took([play('a', 'ann'), play('b', 'ann')]);

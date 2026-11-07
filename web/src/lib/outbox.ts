@@ -3,13 +3,20 @@
 // twice (its answer lost) is made once; and the time it was made, sent as X-Cratarr-At, so a later change made
 // elsewhere wins (favourites and ratings, last change by time). The keeping and the sending are lib/later's.
 
-/** One change waiting: its request as it is sent, its op id (`key`), when it was made (`at`, epoch ms) and the account it was
- *  made under (`account`, lib/account's key; none: made with nobody signed in, the page's to name, lib/later). */
-export type Op = { key: string; method: string; path: string; body: string | null; type: string | null; at: number; account?: string };
+/** One change waiting: its request as it is sent, its op id (`key`), when it was made (`at`, epoch ms), the account it was
+ *  made under (`account`, lib/account's key; none: made with nobody signed in, the page's to name, lib/later) and when an
+ *  answer first turned it away (`tried`). */
+export type Op = { key: string; method: string; path: string; body: string | null; type: string | null; at: number; account?: string; tried?: number };
 
-/** A week waiting (each try turned away as though out of reach): let go, not to hold the rest back for ever. */
+/** A week of tries turned away as though out of reach: let go, not to hold the rest back for ever. From the first of them
+ *  and not from when it was made: only waiting, for its account to sign in again or Cratarr to be reached, it stays
+ *  (decision 0101, point 13). */
 export const STALE_MS = 7 * 86_400_000;
-export const stale = (op: Op, now: number) => now - op.at > STALE_MS;
+export const stale = (op: Op, now: number) => op.tried !== undefined && now - op.tried > STALE_MS;
+
+/** Whether an answer (`status`; null: none came) that leaves a change waiting says anything of the change. Not reached, or
+ *  no one signed in: nothing, and those can last. */
+export const turnedAway = (status: number | null) => status !== null && status !== 401;
 
 // Whose (the owner, 2026-11-02, a bug fixed in 0.13): the changes, and the plays not yet told (lib/output), are sent
 // only while the account they were made under is signed in. Another account's wait for it, not sent and not dropped,
@@ -81,6 +88,7 @@ export function opsFrom(v: unknown): Op[] {
       typeof (o as Op).method === 'string' &&
       typeof (o as Op).path === 'string' &&
       typeof (o as Op).at === 'number' &&
-      ((o as Op).account === undefined || typeof (o as Op).account === 'string'),
+      ((o as Op).account === undefined || typeof (o as Op).account === 'string') &&
+      ((o as Op).tried === undefined || typeof (o as Op).tried === 'number'),
   );
 }
