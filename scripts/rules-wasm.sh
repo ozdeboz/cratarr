@@ -3,8 +3,8 @@
 # server's own Rust image (no wasm-bindgen: plain exports, no imports), three times: the brake into
 # web/src/lib/wasm/rules.wasm (loaded with the page, its base64 copy in rulesWasm.ts), the matcher into
 # web/src/lib/wasm/matcher.wasm (a file the page fetches when idle), and the library on the device into
-# web/src/lib/wasm/index.wasm (a file the page fetches when it first syncs or reads it). None carries the Unicode
-# normalization tables: the page folds texts itself (matcher.rs).
+# web/src/lib/wasm/index.wasm (a file the page fetches when it first syncs or reads it). Only that last carries the Unicode
+# normalization tables, as what it searches lies in its bytes: for the others the page folds texts itself (matcher.rs).
 set -eu
 cd "$(dirname "$0")/.."
 image=$(tr -d '\r' < Dockerfile | sed -n 's/^FROM \(rust:[^ ]*\) AS source$/\1/p')

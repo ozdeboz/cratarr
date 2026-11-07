@@ -8,7 +8,7 @@ import '../harness/pageGlobals.ts';
 import { databases } from '../harness/fakeIdb.ts';
 
 const { accountForgotten, accountLearnt, whoOf } = await import('../../src/lib/account.ts');
-const { albumView, getAlbums, read, UNREACHED } = await import('../../src/lib/api.ts');
+const { albumView, artistView, getAlbums, read, search, UNREACHED } = await import('../../src/lib/api.ts');
 const { library, readLibrary } = await import('../../src/lib/albums.svelte.ts');
 const { closeReads, readsNow } = await import('../../src/lib/deviceIndex.svelte.ts');
 const { writePart } = await import('../../src/lib/indexStore.ts');
@@ -328,4 +328,62 @@ test('moved back to the server, the index open for reads is let go: the next rea
   await keepIndex(vector('after.bin'));
   noNetwork();
   assert.equal((await getAlbums()).sources[0].albums.length, 4);
+});
+
+const EVERY = ['artist', 'album', 'track', 'work', 'playlist', 'crate', 'genre', 'missing', 'spotify'] as const;
+const lookedFor = () => asked.filter((a) => a.startsWith('/api/search') || a.startsWith('/api/artists'));
+
+test('search with Cratarr away finds the library in the index, and the other tiers are left out with no notice', async () => {
+  noNetwork();
+  const found = await search('dawn', [...EVERY], 5, 0);
+  assert.deepEqual(Object.keys(found.groups).sort(), ['album', 'artist', 'track']);
+  assert.deepEqual(found.groups.track!.items.map((t) => t.title), ['Dawn']);
+  assert.equal(found.groups.track!.items[0].track, 'tr-100');
+  assert.deepEqual(found.top.map((t) => t.title), ['Dawn']);
+  assert.deepEqual(lookedFor(), []);
+});
+
+test('asked only for what an index does not hold, a search finds nothing, and that is no failure', async () => {
+  noNetwork();
+  assert.deepEqual(await search('dawn', ['genre', 'missing'], 5, 0), { q: 'dawn', groups: {}, top: [] });
+});
+
+test('a library switched off takes its records out of what is found', async () => {
+  noNetwork();
+  const found = await search('first', ['album'], 5, 0, ['cratarr//music', 'cratarr//in coming']);
+  assert.deepEqual(found.groups.album!.items, []);
+});
+
+test('Show all goes on from where it was, and knows how many there are', async () => {
+  noNetwork();
+  const [first, next] = [await search('ana', ['track'], 1, 0), await search('ana', ['track'], 1, 1)];
+  assert.equal(next.groups.track!.total, 5);
+  assert.equal(next.groups.track!.items.length, 1);
+  assert.notEqual(next.groups.track!.items[0].track, first.groups.track!.items[0].track);
+  assert.deepEqual(next.top, []);
+});
+
+test('with no index to ask, a search ends in the one line', async () => {
+  accountLearnt('someone with none');
+  noNetwork();
+  await assert.rejects(search('dawn'), { message: UNREACHED });
+});
+
+test('with Cratarr answering, search is its own, and the index is not touched', async () => {
+  await search('dawn', ['track'], 5, 0).catch(() => {});
+  assert.deepEqual(lookedFor(), ['/api/search?q=dawn&kinds=track&limit=5']);
+});
+
+test("an artist's panel with Cratarr away reads from the index", async () => {
+  noNetwork();
+  const them = await artistView('cratarr', 'Ana Bell');
+  assert.deepEqual(them.albums.map((a) => a.title), ['Second Wind', 'First Light']);
+  assert.ok(them.rows.every((r) => r.album_id));
+  assert.deepEqual(lookedFor(), []);
+});
+
+test("an artist the index does not hold, and another server's, end in the one line", async () => {
+  noNetwork();
+  await assert.rejects(artistView('cratarr', 'Nobody'), { message: UNREACHED });
+  await assert.rejects(artistView('jellyfin', 'Ana Bell'), { message: UNREACHED });
 });

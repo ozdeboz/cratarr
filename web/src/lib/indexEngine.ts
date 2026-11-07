@@ -2,7 +2,7 @@
 // device keeps is bytes, and this is what reads them. Bytes and JSON go over the module's memory, as the matcher's do. An instance
 // holds one index and one set of sounds at most, and its memory never shrinks, so whoever is done lets the whole instance go. What
 // it says of when to fetch is the same rule the app's worker asks (`index::sync`). Pure: lib/deviceIndex fetches the file.
-import type { ListRows, RecordRows } from './deviceReads';
+import type { ArtistRows, FoundRows, ListRows, RecordRows } from './deviceReads';
 
 /** Why bytes were not taken. Whatever was held stays as it was. */
 export type Refused = { why: 'version'; found: number; wants: number } | { why: 'damaged' | 'rev' | 'unknown' };
@@ -15,6 +15,8 @@ export type Mobile = 'unasked' | 'yes' | 'no';
 export type Part = { whole: boolean; stopped: boolean; lost: number; failed: number; tried: number | null; started: number };
 /** What to do now. */
 export type Step = { do: 'stopped' | 'rest' | 'ask' | 'whole' | 'changes' } | { do: 'wait'; until: number };
+/** What a search asks (`index::find::Ask`). `kinds`: the module's, none for all of them. */
+export type FindAsk = { q: string; kinds: string[]; limit: number; offset: number; without: string[] };
 /** A part of what a device keeps, as the module numbers it. */
 const KIND = { index: 0, sounds: 1, covers: 2 } as const;
 export type Kind = keyof typeof KIND;
@@ -32,6 +34,8 @@ type Exports = {
   index_tracks(): number;
   index_list(): number;
   index_record(id: number): number;
+  index_find(ptr: number, len: number): number;
+  index_artist(ptr: number, len: number): number;
   sounds_load(ptr: number, len: number): number;
   sounds_apply(ptr: number, len: number): number;
   sounds_save(): number;
@@ -57,6 +61,7 @@ const MOBILE: Mobile[] = ['unasked', 'yes', 'no'];
 const OUTCOME: Outcome[] = ['took', 'lost', 'failed', 'start-again', 'version', 'start', 'start-over-another'];
 const STEP: Record<number, 'stopped' | 'rest' | 'ask' | 'whole' | 'changes'> = { [-1]: 'stopped', [-2]: 'rest', [-3]: 'ask', [-4]: 'whole', [-5]: 'changes' };
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 export class IndexEngine {
   private readonly x: Exports;
@@ -112,6 +117,10 @@ export class IndexEngine {
   list = () => this.json<ListRows>(this.x.index_list());
   /** A record and its tracks, by the number in its id. */
   record = (id: number) => this.json<RecordRows>(this.x.index_record(id));
+  /** What the words find, read inside the module: a library's tracks never come over. Null where no index is held. */
+  find = (ask: FindAsk) => this.json<FoundRows>(this.over(encoder.encode(JSON.stringify(ask)), this.x.index_find));
+  /** An artist as their panel shows them; null where nobody goes by the name. */
+  artist = (name: string, without: string[]) => this.json<ArtistRows>(this.over(encoder.encode(JSON.stringify({ q: name, without })), this.x.index_artist));
 
   loadSounds = (bytes: Uint8Array) => this.refused(this.over(bytes, this.x.sounds_load));
   applySounds = (bytes: Uint8Array) => this.refused(this.over(bytes, this.x.sounds_apply));

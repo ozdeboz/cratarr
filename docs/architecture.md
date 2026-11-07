@@ -147,7 +147,12 @@ it asks the rules crate through UniFFI, so no second copy of the logic grows the
   (`src/lib/wasm/matcher.wasm`, built with `scripts/rules-wasm.sh`; the brake stays in `rules.wasm`, inlined): every
   text is folded first (`normalize('NFKD')`, marks dropped, lower case) as the server folds it, and the file is fetched
   at the page's first idle moment and precached for offline. `src/lib/search.ts` keeps its API over it; the server
-  runs the same crate, so both find alike (the shared cases in `server/rules/tests/vectors/matcher.json`).
+  runs the same crate, so both find alike (the shared cases in `server/rules/tests/vectors/matcher.json`). With reads
+  from the device, the global search is the index's (`index::find`, in `index.wasm`): the library's tier only, the
+  others left out with no notice (decision 0101). It reads inside the module, so a library's tracks never come over to
+  the page, and folds there too, as their names lie in its bytes: that file alone carries the NFKD tables. Each row is
+  one line of folded text and every word of the query must meet it, as the server's `typos` has it, in the server's
+  order (`matcher::rank`, which the server's search takes from the crate). What only trigrams find stays the server's.
 - Offline writes (0.12, decision 0087): `src/lib/later.svelte.ts` is the outbox: a write is kept on the device first
   (`keptStore.ts`: IndexedDB, else localStorage), then sent in order with its `Idempotency-Key` and the change's time
   (`X-Cratarr-At`); `changes.svelte.ts` reads the server's change log (`GET /api/changes?since=`) and asks again what

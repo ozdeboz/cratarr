@@ -101,3 +101,19 @@ test('Cratarr gone, what is not here is dimmed, Available offline shows what pla
   await inModule(page, '/src/lib/listFilter.svelte.ts', (m) => m.setSwitch('library', 'here', false));
   await until(() => records(page), (r) => r['First Light']?.off && r['Second Wind']?.off, 'a dropped stream reads as not here');
 });
+
+test('Cratarr gone, search finds the library in what the device keeps, says nothing of the rest, and an artist found opens', async () => {
+  const page = d.page;
+  await page.locator('button.lens').first().click();
+  await page.locator('input[type=search]').fill('dawn');
+  await page.locator('button.globe').click({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Open Dawn' }).waitFor({ timeout: 20_000 });
+  const everywhere = await page.locator('section[aria-label="Everywhere"]').innerText();
+  assert.ok(!everywhere.includes('Cannot reach'), everywhere);
+  assert.ok(!/Playlists|Crates|Genres|Requested/.test(everywhere), everywhere);
+
+  await page.locator('input[type=search]').fill('ana bell');
+  await page.getByRole('button', { name: 'Open Ana Bell' }).first().click({ timeout: 20_000 });
+  await page.getByText('2 albums • 4 tracks').first().waitFor({ timeout: 20_000 });
+  assert.deepEqual(await page.locator('[role=alert], .toast').allInnerTexts(), [], 'nothing said of what could not be asked');
+});

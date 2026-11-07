@@ -184,3 +184,68 @@ test('paused is the crate\'s to say', async () => {
   assert.equal(e.paused({ ...held, lost: 2 }), false);
   assert.equal(e.paused({ ...held, lost: 3 }), true);
 });
+
+const titles = (e: Awaited<ReturnType<typeof engine>>, q: string) => e.find({ q, kinds: ['album'], limit: 5, offset: 0, without: [] })!.records!.rows.map((r) => r.title);
+
+test('a search is answered in the module, by kind, and the kinds not asked are not read', async () => {
+  const e = await engine();
+  e.loadIndex(vector('whole.bin'));
+  const found = e.find({ q: 'dawn', kinds: ['track'], limit: 5, offset: 0, without: [] })!;
+  assert.deepEqual(found.tracks!.rows.map((t) => [t.id, t.title, t.record, t.album]), [['tr-100', 'Dawn', 'al-10', 'First Light']]);
+  assert.equal(found.records, undefined);
+  assert.equal(found.artists, undefined);
+});
+
+test('no kinds asked is every kind', async () => {
+  const e = await engine();
+  e.loadIndex(vector('whole.bin'));
+  assert.deepEqual(Object.keys(e.find({ q: 'ana', kinds: [], limit: 5, offset: 0, without: [] })!).sort(), ['artists', 'records', 'tracks']);
+});
+
+test('with no index held a search has no answer', async () => {
+  const e = await engine();
+  assert.equal(e.find({ q: 'dawn', kinds: [], limit: 5, offset: 0, without: [] }), null);
+});
+
+test('marks in a name are the module\'s own to read: the page cannot fold what lies in its bytes', async () => {
+  const e = await engine();
+  e.loadIndex(vector('whole.bin'));
+  assert.deepEqual(titles(e, 'FIRST'), ['First Light']);
+  assert.deepEqual(titles(e, 'fírst'), ['First Light']);
+  assert.deepEqual(titles(e, 'ﬁrst'), ['First Light'], 'a ligature is two letters');
+});
+
+test('a feed applied is found at the next search', async () => {
+  const e = await engine();
+  e.loadIndex(vector('whole.bin'));
+  assert.deepEqual(titles(e, 'new day'), []);
+  e.applyIndex(vector('changes.bin'));
+  assert.deepEqual(titles(e, 'new day'), ['New Day']);
+});
+
+test('another index loaded is the one searched, whatever was read of the last', async () => {
+  const e = await engine();
+  e.loadIndex(vector('whole.bin'));
+  assert.deepEqual(titles(e, 'new day'), []);
+  e.loadIndex(vector('after.bin'));
+  assert.deepEqual(titles(e, 'new day'), ['New Day']);
+});
+
+test('a whole taken by the rule is searched too, and so is a feed', async () => {
+  const e = await engine();
+  e.takeWhole('index', vector('whole.bin'));
+  assert.deepEqual(titles(e, 'new day'), []);
+  e.takeChanges('index', vector('whole.bin'), vector('changes.bin'));
+  assert.deepEqual(titles(e, 'new day'), ['New Day']);
+  e.takeWhole('index', vector('whole.bin'));
+  assert.deepEqual(titles(e, 'new day'), []);
+});
+
+test('an artist is read in the module, by any name; a name nobody goes by has no panel', async () => {
+  const e = await engine();
+  e.loadIndex(vector('whole.bin'));
+  const them = e.artist('Ana Bell', [])!;
+  assert.deepEqual(them.albums.map((r) => r.id), ['al-11', 'al-10'], 'newest first');
+  assert.deepEqual(them.tracks.slice(0, 2).map((t) => t.record), ['al-11', 'al-11']);
+  assert.equal(e.artist('Nobody', []), null);
+});

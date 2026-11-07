@@ -7,7 +7,7 @@ import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
-import { deviceAlbums, deviceRecord, readsNow } from './deviceIndex.svelte';
+import { deviceAlbums, deviceArtist, deviceRecord, deviceSearch, readsNow } from './deviceIndex.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
 import type { PlaylistOp } from './playlistOps';
@@ -2437,7 +2437,10 @@ export const search = (q: string, kinds: SearchKind[] = [], limit = 20, offset =
   if (server) return serverSearch(serverSource(server.id), q, kinds, limit);
   const u = new URLSearchParams({ q, ...(kinds.length ? { kinds: kinds.join(',') } : {}), limit: String(limit), ...(offset ? { offset: String(offset) } : {}) });
   for (const w of without ?? []) u.append('without', w);
-  return quietly<ServerSearch>(`/api/search?${u}`);
+  return read(
+    () => quietly<ServerSearch>(`/api/search?${u}`),
+    () => deviceSearch(q, kinds, limit, offset, without),
+  );
 };
 /** An album found beyond what Cratarr knows (decision 0076): MusicBrainz's and Discogs' live search, merged; where. */
 export type BeyondAlbum = {
@@ -2499,7 +2502,10 @@ export type ArtistView = {
 export const artistView = (source: string, name: string, without?: string[]) => {
   const u = new URLSearchParams({ name });
   for (const w of without ?? []) u.append('without', w);
-  return quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?${u}`);
+  return read(
+    () => quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?${u}`),
+    () => deviceArtist(source, name, without),
+  );
 };
 /** Whether an artist is a favourite (the heart on an album's artist chip); null where the server keeps none. */
 export const artistFavorite = (source: string, name: string) =>

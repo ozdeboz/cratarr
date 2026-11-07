@@ -10,7 +10,7 @@ use super::{Index, Kind, Packed, album_id, to_float, to_int, to_small};
 use crate::ids;
 
 /// `text` as JSON says it.
-fn quoted(out: &mut String, text: &str) {
+pub(super) fn quoted(out: &mut String, text: &str) {
     out.push('"');
     for c in text.chars() {
         match c {
@@ -26,13 +26,13 @@ fn quoted(out: &mut String, text: &str) {
 }
 
 /// An object's fields, each after the last.
-struct Object<'a> {
+pub(super) struct Object<'a> {
     out: &'a mut String,
     first: bool,
 }
 
 impl<'a> Object<'a> {
-    fn of(out: &'a mut String) -> Self {
+    pub(super) fn of(out: &'a mut String) -> Self {
         out.push('{');
         Self { out, first: true }
     }
@@ -47,11 +47,11 @@ impl<'a> Object<'a> {
         &mut *self.out
     }
 
-    fn text(&mut self, name: &str, value: &str) {
+    pub(super) fn text(&mut self, name: &str, value: &str) {
         quoted(self.key(name), value);
     }
 
-    fn maybe_text(&mut self, name: &str, value: Option<&str>) {
+    pub(super) fn maybe_text(&mut self, name: &str, value: Option<&str>) {
         match value {
             Some(v) => self.text(name, v),
             None => self.key(name).push_str("null"),
@@ -59,7 +59,7 @@ impl<'a> Object<'a> {
     }
 
     /// A number, or null. A length here is never anything JSON cannot say: `to_float` lets no NaN through, and nothing writes infinity.
-    fn number<T: Display>(&mut self, name: &str, value: Option<T>) {
+    pub(super) fn number<T: Display>(&mut self, name: &str, value: Option<T>) {
         let out = self.key(name);
         match value {
             Some(v) => {
@@ -81,27 +81,27 @@ impl<'a> Object<'a> {
         out.push(']');
     }
 
-    fn end(self) {
+    pub(super) fn end(self) {
         self.out.push('}');
     }
 }
 
 /// What a record's tracks come to: how many, and their length, none where one of them has none.
 #[derive(Clone, Copy)]
-struct Made {
-    tracks: u32,
-    seconds: Option<f64>,
+pub(super) struct Made {
+    pub(super) tracks: u32,
+    pub(super) seconds: Option<f64>,
 }
 
 impl Packed {
     /// Each library's key by its id, as a copy names it.
-    fn library_keys(&self) -> HashMap<i64, &str> {
+    pub(super) fn library_keys(&self) -> HashMap<i64, &str> {
         let c = &self.libraries;
         c.id.iter().enumerate().map(|(row, id)| (*id, self.words.word(c.key[row]))).collect()
     }
 
     /// What each record's tracks come to, by its id.
-    fn made(&self) -> HashMap<i64, Made> {
+    pub(super) fn made(&self) -> HashMap<i64, Made> {
         let mut out: HashMap<i64, Made> = HashMap::with_capacity(self.records.id.len());
         for row in 0..self.tracks.id.len() {
             let length = to_float(self.tracks.length[row]);
@@ -133,7 +133,7 @@ impl Packed {
     }
 
     /// A record's row as a list holds it: its artists by name, each copy's library by its key, and what its tracks come to.
-    fn say_record(&self, out: &mut String, row: usize, keys: &HashMap<i64, &str>, made: Made) {
+    pub(super) fn say_record(&self, out: &mut String, row: usize, keys: &HashMap<i64, &str>, made: Made) {
         let r = self.record_at(row);
         let mut o = Object::of(out);
         o.text("id", &album_id(r.id));
@@ -173,8 +173,13 @@ impl Packed {
     }
 
     fn say_track(&self, out: &mut String, row: usize) {
-        let c = &self.tracks;
         let mut o = Object::of(out);
+        self.track_fields(&mut o, row);
+        o.end();
+    }
+
+    pub(super) fn track_fields(&self, o: &mut Object, row: usize) {
+        let c = &self.tracks;
         o.text("id", &ids::song(c.id[row]));
         o.number("disc", to_small(c.disc[row]));
         o.number("number", to_small(c.number[row]));
@@ -185,7 +190,6 @@ impl Packed {
         o.number("year", to_float(c.year[row]));
         o.number("bpm", to_float(c.bpm[row]));
         o.number("born", to_int(c.born[row]));
-        o.end();
     }
 }
 

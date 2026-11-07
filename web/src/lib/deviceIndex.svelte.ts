@@ -8,11 +8,11 @@ import indexUrl from './wasm/index.wasm?url';
 import { accountKey, whenAccount, whoOf } from './account';
 import { inApp } from './app.svelte';
 import { lookedAgain, notReached, readsFrom, answered, type ReadsFrom, type Settle } from './deviceIndexRule';
-import { listView, OWN, recordNumber, recordView } from './deviceReads';
+import { artistPanel, FOUND_KINDS, foundView, listView, OWN, recordNumber, recordView } from './deviceReads';
 import { instantiateIndex, type IndexEngine } from './indexEngine';
 import { readBytes, readPart } from './indexStore';
 import { lookForCratarr, reach, whenAway, whenNetwork, whenReached } from './reach.svelte';
-import type { AlbumsView, AlbumView } from './api';
+import type { AlbumsView, AlbumView, ArtistView, SearchKind, ServerSearch } from './api';
 
 export { readsFrom };
 
@@ -130,6 +130,23 @@ export async function deviceAlbums(source?: string): Promise<AlbumsView | null> 
   const held = await opened();
   const rows = held?.engine.list();
   return held && rows ? listView(rows, accountKey(), held.at) : null;
+}
+
+/** What the words find in the index; null where it has none to ask. Other kinds asked are no failure: they are left out. */
+export async function deviceSearch(q: string, kinds: SearchKind[], limit: number, offset: number, without: string[] = []): Promise<ServerSearch | null> {
+  const asked = kinds.filter((k) => FOUND_KINDS.includes(k));
+  const held = await opened();
+  if (!held) return null;
+  if (kinds.length && !asked.length) return { q, groups: {}, top: [] };
+  const rows = held.engine.find({ q, kinds: asked, limit, offset, without });
+  return rows && foundView(rows, q, offset);
+}
+
+/** An artist's panel from the index; null where nobody there goes by the name. */
+export async function deviceArtist(source: string, name: string, without: string[] = []): Promise<ArtistView | null> {
+  if (source !== OWN) return null;
+  const rows = (await opened())?.engine.artist(name, without);
+  return rows ? artistPanel(rows, name) : null;
 }
 
 /** A record's view from the index; null where it does not hold it. */

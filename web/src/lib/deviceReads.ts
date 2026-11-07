@@ -2,7 +2,7 @@
 // that a page cannot tell one from the other. Pure. What Cratarr says and the index does not hold is left as a list with nothing to
 // say would leave it: what the viewer may do with a copy (nothing, with Cratarr away), a record's own tags, plays, words, verdicts.
 // The rows say which copy plays by their order (`copy_for` stays the server's); lib/copiesRule reads the rest.
-import type { AlbumCopy, AlbumsSource, AlbumsView, AlbumView, LibraryInfo, ListedAlbum, PlaylistRow } from './api';
+import type { AlbumCopy, AlbumsSource, AlbumsView, AlbumView, ArtistView, LibraryInfo, ListedAlbum, PlaylistRow, SearchKind, ServerSearch } from './api';
 
 /** Rows as the rules crate writes them (server/rules/src/index/read.rs). */
 export type LibraryRow = { id: number; key: string; name: string; kind: 'main' | 'own' | 'incoming'; order: number; colour: string | null; owner: string | null };
@@ -38,6 +38,17 @@ export type TrackRow = {
 };
 export type ListRows = { rev: number; libraries: LibraryRow[]; records: RecordRow[] };
 export type RecordRows = { record: RecordRow; tracks: TrackRow[] };
+/** A track with its record, where it is listed without it. */
+type OfRecord = TrackRow & { record: string; album: string };
+export type ArtistRows = { albums: RecordRow[]; appears_on: RecordRow[]; tracks: OfRecord[] };
+/** What found a row: its own name, or what else it goes under. */
+type FoundOn = 'name' | 'artist';
+type FoundArtist = { id: string; name: string; records: number; score: number };
+type FoundRecord = { id: string; title: string; artist: string; year: number | null; score: number; on: FoundOn };
+type FoundTrack = OfRecord & { score: number; on: FoundOn };
+type Found<T> = { total: number; rows: T[] };
+/** Only the kinds asked. */
+export type FoundRows = { artists?: Found<FoundArtist>; records?: Found<FoundRecord>; tracks?: Found<FoundTrack> };
 
 /** Cratarr's own library, the one an index holds, as the pages name it. */
 export const OWN = 'cratarr';
@@ -136,6 +147,67 @@ export function recordView({ record, tracks }: RecordRows): AlbumView {
     rows: tracks.map(rowOf(record.title)),
     ...(record.added === null ? {} : { added: record.added }),
   };
+}
+
+/** An artist as their panel shows them, by the name asked. What is theirs alone (a favourite, a photo's id) is left out, as Cratarr's. */
+export function artistPanel({ albums, appears_on, tracks }: ArtistRows, name: string): ArtistView {
+  return { source: OWN, name, albums: albums.map(listedOf), appears_on: appears_on.map(listedOf), rows: tracks.map((t) => ({ ...rowOf(t.album)(t), album_id: t.record })) };
+}
+
+/** What an index can be asked to find: the library's own kinds. Everything else search knows lies with Cratarr, and is left out (decision
+ *  0101: search offline is the library's tier only), with no notice. */
+export const FOUND_KINDS: readonly SearchKind[] = ['artist', 'album', 'track'];
+/** How much of `top` each kind has a claim to, and how long it is, as Cratarr's (app::search). */
+const WEIGHT = { artist: 1, album: 0.95, track: 0.8 };
+const TOP = 8;
+
+const line = (...parts: (string | number | null)[]) => parts.filter((p) => p !== null && p !== '').join(' · ');
+const coverOf = (record: string) => `/api/albums/${OWN}/${record}/cover`;
+
+const artistFound = (a: FoundArtist) => ({
+  kind: 'artist' as const,
+  subject: `artist:${OWN}/${a.name}`,
+  title: a.name,
+  sub: a.records === 1 ? '1 album' : `${a.records} albums`,
+  cover: `/api/artists/${a.id}/photo`,
+  id: a.id,
+  score: a.score,
+  matched: [{ on: 'name' as const, text: a.name }],
+});
+
+const recordFound = (r: FoundRecord) => ({
+  kind: 'album' as const,
+  subject: `album:${OWN}/${r.id}`,
+  title: r.title,
+  sub: line(r.artist, r.year),
+  cover: coverOf(r.id),
+  score: r.score,
+  matched: [{ on: r.on, text: r.on === 'name' ? r.title : r.artist }],
+});
+
+const trackFound = (t: FoundTrack) => ({
+  kind: 'track' as const,
+  subject: `album:${OWN}/${t.record}`,
+  title: t.title,
+  sub: line(t.artist, t.album),
+  cover: coverOf(t.record),
+  track: t.id,
+  artist: t.artist ?? undefined,
+  album: t.album || undefined,
+  album_id: t.record,
+  duration_secs: t.seconds ?? undefined,
+  score: t.score,
+  matched: [{ on: t.on, text: t.on === 'name' ? t.title : (t.artist ?? '') }],
+});
+
+/** A search's answer from what the index found. `top`, as Cratarr's, on the first page alone. */
+export function foundView(rows: FoundRows, q: string, offset: number): ServerSearch {
+  const groups: ServerSearch['groups'] = {};
+  if (rows.artists) groups.artist = { total: rows.artists.total, items: rows.artists.rows.map(artistFound) };
+  if (rows.records) groups.album = { total: rows.records.total, items: rows.records.rows.map(recordFound) };
+  if (rows.tracks) groups.track = { total: rows.tracks.total, items: rows.tracks.rows.map(trackFound) };
+  const best = offset > 0 ? [] : (['artist', 'album', 'track'] as const).flatMap((kind) => (groups[kind]?.items ?? []).slice(0, TOP).map((i) => ({ ...i, score: (i.score ?? 0) * WEIGHT[kind] })));
+  return { q, groups, top: best.sort((a, b) => b.score - a.score).slice(0, TOP) };
 }
 
 /** The number in a record's id; null for an id that is none of the index's. */

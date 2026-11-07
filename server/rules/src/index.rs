@@ -26,6 +26,7 @@ use std::sync::Arc;
 use crate::crates::Facts;
 use crate::{ids, radio, similarity};
 
+pub mod find;
 mod read;
 pub mod sync;
 

@@ -127,12 +127,16 @@ mod matcher_exports {
 // instance go to give it back. `facts`, `Alike` and Radio's index are not made here until a crate or a pick asks (D18 to D20).
 #[cfg(feature = "wasm-index")]
 mod index_exports {
+    use crate::index::find::{Ask, Finder};
     use crate::index::sync::{ANEW_AFTER_MS, COVERS_VERSION, FIRST_AFTER_MS, Mobile, Network, Outcome, Part, Step, covers_rev, ended};
     use crate::index::{Changes, Index, Refused, SOUNDS_VERSION, SoundChanges, Sounds, VERSION};
     use std::sync::{Mutex, MutexGuard};
 
     static INDEX: Mutex<Option<Index>> = Mutex::new(None);
     static SOUNDS: Mutex<Option<Sounds>> = Mutex::new(None);
+    /// What a search reads of the index held: made at the first search, let go with any change to it. Never by its rev: another
+    /// account's stands at the same one.
+    static FINDER: Mutex<Option<Finder>> = Mutex::new(None);
     /// Where the covers last taken stand: their frames are the page's, and only this is the crate's.
     static COVERS: Mutex<f64> = Mutex::new(-1.0);
     /// The version the last refusal found, and the one this module reads.
@@ -140,6 +144,12 @@ mod index_exports {
 
     fn held<T>(slot: &'static Mutex<T>) -> MutexGuard<'static, T> {
         slot.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `index` is the one held from now on.
+    fn hold(index: Index) {
+        *held(&INDEX) = Some(index);
+        *held(&FINDER) = None;
     }
 
     /// The bytes the page wrote at `ptr` (`len` of them).
@@ -214,7 +224,7 @@ mod index_exports {
     /// `ptr` holds `len` bytes.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn index_load(ptr: *const u8, len: usize) -> u32 {
-        said(Index::load(unsafe { input(ptr, len) }).map(|index| *held(&INDEX) = Some(index)))
+        said(Index::load(unsafe { input(ptr, len) }).map(hold))
     }
 
     /// The feed's bytes applied to the index held: `said`'s answer.
@@ -228,7 +238,10 @@ mod index_exports {
             Err(why) => return said(Err(why)),
         };
         match held(&INDEX).as_mut() {
-            Some(index) => said(index.apply(&changes)),
+            Some(index) => {
+                *held(&FINDER) = None;
+                said(index.apply(&changes))
+            }
             None => 3,
         }
     }
@@ -261,6 +274,37 @@ mod index_exports {
     #[unsafe(no_mangle)]
     pub extern "C" fn index_record(id: f64) -> *mut u8 {
         held(&INDEX).as_ref().and_then(|index| index.record_json(id as i64)).map_or(core::ptr::null_mut(), |json| answer(json.as_bytes()))
+    }
+
+    /// What a search finds, as JSON (`Index::found_json`), from an ask as JSON (`Ask::read`); null where no index is held, or the ask
+    /// cannot be read.
+    ///
+    /// # Safety
+    /// `ptr` holds `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn index_find(ptr: *const u8, len: usize) -> *mut u8 {
+        let Some(ask) = Ask::read(unsafe { input(ptr, len) }) else {
+            return core::ptr::null_mut();
+        };
+        let index = held(&INDEX);
+        let Some(index) = index.as_ref() else {
+            return core::ptr::null_mut();
+        };
+        let mut finder = held(&FINDER);
+        answer(index.found_json(finder.get_or_insert_with(|| index.finder()), &ask).as_bytes())
+    }
+
+    /// An artist as their panel shows them, as JSON (`Index::artist_json`), from an ask naming them as its `q`; null where nobody goes by
+    /// that name.
+    ///
+    /// # Safety
+    /// `ptr` holds `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn index_artist(ptr: *const u8, len: usize) -> *mut u8 {
+        let Some(ask) = Ask::read(unsafe { input(ptr, len) }) else {
+            return core::ptr::null_mut();
+        };
+        held(&INDEX).as_ref().and_then(|index| index.artist_json(&ask.q, &ask.without)).map_or(core::ptr::null_mut(), |json| answer(json.as_bytes()))
     }
 
     /// The sounds from their bytes: `said`'s answer.
@@ -384,7 +428,7 @@ mod index_exports {
     pub unsafe extern "C" fn sync_take_whole(kind: u32, ptr: *const u8, len: usize) -> u32 {
         let bytes = unsafe { input(ptr, len) };
         number(match kind {
-            0 => Outcome::of_whole(&Index::load(bytes).map(|index| *held(&INDEX) = Some(index))),
+            0 => Outcome::of_whole(&Index::load(bytes).map(hold)),
             1 => Outcome::of_whole(&Sounds::load(bytes).map(|sounds| *held(&SOUNDS) = Some(sounds))),
             _ => Outcome::of_whole(&head_of(bytes)),
         })
@@ -401,7 +445,7 @@ mod index_exports {
         number(match kind {
             0 => {
                 let applied = Index::load(kept).and_then(|mut index| Changes::load(feed).and_then(|c| index.apply(&c)).map(|()| index));
-                Outcome::of_changes(&applied.map(|index| *held(&INDEX) = Some(index)))
+                Outcome::of_changes(&applied.map(hold))
             }
             1 => {
                 let applied = Sounds::load(kept).and_then(|mut sounds| SoundChanges::load(feed).and_then(|c| sounds.apply(&c)).map(|()| sounds));
