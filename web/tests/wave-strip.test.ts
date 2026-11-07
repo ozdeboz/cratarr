@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { loudness, gridCover, gridBars, trackBars, planStrip, placeOf, covers, barTracks, originFor, SPAN_SLACK } = await import('../src/lib/waveStrip.ts');
+const { loudness, gridCover, gridBars, trackBars, planStrip, placeOf, covers, barTracks, originFor, steadyAt, linedUp, SPAN_SLACK } = await import('../src/lib/waveStrip.ts');
 
 /** A track's bins: a music-like envelope, its loudest `top` (its own scale). */
 function binsOf(seed: number, top = 255, n = 512): Uint8Array {
@@ -92,7 +92,7 @@ test('finer than a bin: between the two nearest bins at its middle', () => {
   assert.ok(v >= lo - 1e-6 && v <= hi + 1e-6);
 });
 
-test('n bars across at every width: a strip is drawn anew once the bars shown would drift a quarter bar from n', () => {
+test('n bars across at every width: a strip is drawn anew once the bars shown would drift from n', () => {
   const n = 130;
   let had = null as ReturnType<typeof planStrip> | null;
   let drawn = 0;
@@ -126,13 +126,52 @@ test('at one zoom the grid stands in the music: kept while it covers, drawn anew
   assert.ok(drawn > 2 && drawn < 12, `${drawn} drawn`);
 });
 
-test('the zoom scales the grid about the middle of what shows: the bar there stays, none rush past', () => {
+test('the zoom scales the grid about a place: the bar there stays, none rush past', () => {
   const had = { span: 0.5, o: 3.1 };
   const mid = 120.37;
-  const o = originFor(had, 0.6, mid, null, 130);
+  const o = originFor(had, 0.6, mid);
   // The middle's place among the bars is the same before and after.
   const phase = (x: number, sp: number, org: number) => (x - org) / sp;
   assert.ok(Math.abs(phase(mid, 0.6, o) - phase(mid, had.span, had.o)) < 1e-9);
+});
+
+test('what the zoom goes about: the place that stays where it is on the waveform, else the edge nearest it', () => {
+  const was = { from: 10, to: 20 };
+  // Twice as wide: 12 is a fifth of the way across before and after.
+  assert.equal(steadyAt(was, 8, 28), 12);
+  // Moving on more than it scales: the edge whose music moves least, wider or narrower.
+  assert.equal(steadyAt(was, 15, 25.1), 15);
+  assert.equal(steadyAt(was, 15, 24.9), 24.9);
+  // The same width: nothing stays.
+  assert.equal(steadyAt(was, 11, 21), 16);
+});
+
+test("a held zoom's bars stand still on the waveform: the music goes through them, none move sideways", () => {
+  const n = 130;
+  const phase = (s: { o: number; span: number }, from: number) => (s.o - from) / s.span;
+  let was = { from: 90, to: 110 };
+  let had = planStrip(null, tracks, was.from, was.to, n, null);
+  const stands = phase(had, was.from);
+  for (let k = 1; k <= 300; k++) {
+    // Out from a place a third of the way across, 1 % a frame.
+    const w = 20 * 1.01 ** k;
+    const shown = { from: 96.7 - w / 3, to: 96.7 + (2 * w) / 3 };
+    const s = planStrip(had, tracks, shown.from, shown.to, n, null, was);
+    const moved = phase(s, shown.from) - stands;
+    assert.ok(Math.abs(moved - Math.round(moved)) < 1e-6, `frame ${k}: ${moved}`);
+    had = s;
+    was = shown;
+  }
+});
+
+test("a track's own grid counts only at its own view: further off the bars go by the zoom alone", () => {
+  const home = { from: 1000, to: 1240 };
+  const span = 240 / 130;
+  assert.equal(linedUp(3.3, span, 0, 240, home), 3.3);
+  assert.equal(linedUp(3.3, span, 900, 1140, home), 3.3);
+  const o = linedUp(3.3, span, 1000, 1240, home);
+  const bars = (o - home.from) / span;
+  assert.ok(Math.abs(bars - Math.round(bars)) < 1e-9, 'there, the track starts on a bar edge');
 });
 
 test("zooming back out to the track's own view lands on its grid exactly: the plain waveform's bars, no step at the hand-over", () => {
