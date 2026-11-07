@@ -76,11 +76,11 @@ impl Library {
         }
         let mut copies: HashMap<String, Vec<(Copy, RecordCopy)>> = HashMap::new();
         {
-            let mut st = db.prepare("SELECT album, folder, dir, format, min_kbps, size, added, tracks, bits, rate FROM copies ORDER BY album, folder, dir")?;
+            let mut st = db.prepare("SELECT album, folder, dir, format, min_kbps, size, added, tracks, bits, rate, short FROM copies ORDER BY album, folder, dir")?;
             let rows = st.query_map([], |r| {
                 let (folder, dir, format): (i64, String, Option<String>) = (r.get(1)?, r.get(2)?, r.get(3)?);
                 let (kbps, bits, rate): (Option<i64>, Option<i64>, Option<i64>) = (r.get(4)?, r.get(8)?, r.get(9)?);
-                let copy = Copy { folder, dir: dir.clone(), kind: super::copies::Kind::Main, order: 0, format: format.clone(), min_kbps: kbps, bits, rate };
+                let copy = Copy { folder, dir: dir.clone(), kind: super::copies::Kind::Main, order: 0, format: format.clone(), min_kbps: kbps, bits, rate, short: r.get(10)?, added: r.get(6)? };
                 let row = RecordCopy {
                     library: folder,
                     dir,
