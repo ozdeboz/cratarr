@@ -902,9 +902,9 @@ impl Library {
     pub fn copies_of(&self, id: &str) -> Result<Vec<Copy>> {
         let mut copies: Vec<Copy> = {
             let db = self.db();
-            let mut st = db.prepare_cached("SELECT folder, dir, format, min_kbps, bits, rate, short FROM copies WHERE album = ?1 ORDER BY folder, dir")?;
+            let mut st = db.prepare_cached("SELECT folder, dir, format, min_kbps, bits, rate, short, added FROM copies WHERE album = ?1 ORDER BY folder, dir")?;
             st.query_map([id], |r| {
-                Ok(Copy { folder: r.get(0)?, dir: r.get(1)?, kind: Kind::Main, order: 0, format: r.get(2)?, min_kbps: r.get(3)?, bits: r.get(4)?, rate: r.get(5)?, short: r.get(6)? })
+                Ok(Copy { folder: r.get(0)?, dir: r.get(1)?, kind: Kind::Main, order: 0, format: r.get(2)?, min_kbps: r.get(3)?, bits: r.get(4)?, rate: r.get(5)?, short: r.get(6)?, added: r.get(7)? })
             })?
             .collect::<rusqlite::Result<_>>()?
         };

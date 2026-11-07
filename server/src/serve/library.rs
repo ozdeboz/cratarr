@@ -1100,11 +1100,11 @@ impl Library {
         let kinds = self.kinds();
         let db = self.db();
         let mut copies: HashMap<String, Vec<Copy>> = HashMap::new();
-        let mut st = db.prepare("SELECT album, folder, dir, format, min_kbps, bits, rate, short FROM copies")?;
+        let mut st = db.prepare("SELECT album, folder, dir, format, min_kbps, bits, rate, short, added FROM copies")?;
         let rows = st.query_map([], |r| {
             let folder: i64 = r.get(1)?;
             let (kind, order) = kind_in(&kinds, folder);
-            Ok((r.get::<_, String>(0)?, Copy { folder, dir: r.get(2)?, kind, order, format: r.get(3)?, min_kbps: r.get(4)?, bits: r.get(5)?, rate: r.get(6)?, short: r.get(7)? }))
+            Ok((r.get::<_, String>(0)?, Copy { folder, dir: r.get(2)?, kind, order, format: r.get(3)?, min_kbps: r.get(4)?, bits: r.get(5)?, rate: r.get(6)?, short: r.get(7)?, added: r.get(8)? }))
         })?;
         for row in rows {
             let (album, copy) = row?;
@@ -1579,6 +1579,7 @@ fn gather<'s, 'r>(songs: &'s [Song<'r>], kinds: &[(i64, Kind)]) -> BTreeMap<Stri
                     bits: songs.iter().map(|s| s.row.bits).min().flatten().map(i64::from),
                     rate: songs.iter().map(|s| s.row.rate).min().flatten().map(i64::from),
                     short: false,
+                    added: songs.iter().filter_map(|s| s.row.came).min(),
                 };
                 let size = songs.iter().map(|s| s.row.size).sum::<u64>() as i64;
                 Gathered { copy, songs, size }
@@ -1905,11 +1906,17 @@ fn write_albums(
         let first = songs[0];
         let copies = &records[album_id];
         let row = &copies[orders[album_id.as_str()][0]];
-        // What the record is: what the copy that plays says, and where it says nothing, any copy's. A record must not lack
-        // a year or a release because the copy that plays came without one.
-        let every = || songs.iter().copied().chain(copies.iter().flat_map(|c| c.songs.iter().copied()));
+        // What the record is: what the copy that plays for most people says, and where it says nothing, any other's, as a record must
+        // not lack a year or a release because that copy came without one. Never someone's own: what one person holds changes nothing
+        // others see (the owner, 2026-11-07), so a record in a main library goes by that, and one only in people's own music by the
+        // first copy added, which alone speaks there.
+        let only_own = copies.iter().all(|c| c.copy.kind == Kind::Own);
+        let speaks = |s: &Song| if only_own { s.folder == row.copy.folder } else { kind_in(&facts.kinds, s.folder).0 != Kind::Own };
+        let said: Vec<&Song> = songs.iter().copied().filter(|s| speaks(s)).collect();
+        let spoken: Vec<&Song> = said.iter().copied().chain(copies.iter().flat_map(|c| c.songs.iter().copied()).filter(|s| speaks(s))).collect();
+        let every = || spoken.iter().copied();
         let release = every().find_map(|s| s.row.first("musicbrainz_albumid"));
-        let mut years: Vec<u32> = songs.iter().filter_map(|s| s.row.first("date").and_then(year_of)).collect();
+        let mut years: Vec<u32> = said.iter().filter_map(|s| s.row.first("date").and_then(year_of)).collect();
         if years.is_empty() {
             years = every().filter_map(|s| s.row.first("date").and_then(year_of)).collect();
         }
@@ -1929,7 +1936,7 @@ fn write_albums(
             }
             None => original,
         };
-        let mut genres = genres_of(songs.iter().copied());
+        let mut genres = genres_of(said.iter().copied());
         if genres.is_empty() {
             genres = genres_of(every());
         }
@@ -1940,8 +1947,8 @@ fn write_albums(
             genres = g.clone();
         }
         let dir = &row.copy.dir;
-        let discs = songs.iter().filter_map(|s| s.row.first("discnumber").and_then(leading_number)).max().unwrap_or(1);
-        let compilation = songs.iter().any(|s| s.row.first("compilation").is_some_and(|c| c == "1"));
+        let discs = said.iter().filter_map(|s| s.row.first("discnumber").and_then(leading_number)).max().unwrap_or(1);
+        let compilation = said.iter().any(|s| s.row.first("compilation").is_some_and(|c| c == "1"));
         let artist_id = facts.artist(&first.album_artists[0])?;
         // The art's id: the album's, with a fingerprint of its picture (see `art`).
         let root = roots.get(&row.copy.folder).copied().unwrap_or("");
@@ -2694,6 +2701,78 @@ mod tests {
         let read = |l: &Library| l.copies_of(&album).unwrap().iter().map(|c| (c.folder, c.short)).collect::<Vec<_>>();
         assert_eq!(read(&lib), read(&whole));
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// What a record says, as every list reads it: (year, genre, release).
+    fn says(lib: &Library, album: &str) -> (Option<u32>, Option<String>, Option<String>) {
+        let a = lib.album(album).unwrap().expect("the record");
+        (a.year, a.genre, a.music_brainz_id)
+    }
+
+    /// These tags on the files of `folder`, as `add_files_to` left them but for what is added.
+    fn tagged(cat: &crate::catalogue::Catalogue, folder: i64, tags: &[(&str, &str)]) {
+        for (rel, album, title) in ONE_TWO {
+            let tags: Vec<(&str, &str)> = [("album", album), ("albumartist", "Artist"), ("title", title)].into_iter().chain(tags.iter().copied()).collect();
+            cat.tag_for_tests(folder, rel, &tags);
+        }
+    }
+
+    /// The owner, 2026-11-07: a person's own copy never changes what others see. Saying more than Music's, a year, a genre, a release,
+    /// it says none of it for the record, and the record reads as it did before that copy came.
+    #[test]
+    fn someones_own_copy_says_nothing_of_a_record_in_a_main_library() {
+        let (roots, cat, lib, album, _) = a_record_in("own-says", Kind::Own);
+        let before = says(&lib, &album);
+        assert_eq!(before, (None, None, None), "Music's says none of it");
+        tagged(&cat, 1, &[("date", "1999"), ("genre", "Own Word"), ("musicbrainz_albumid", "own-release")]);
+        build_now(&lib, &cat);
+        assert_eq!(says(&lib, &album), before);
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// What a main library says stands over anything else's.
+    #[test]
+    fn a_main_library_decides_over_every_other_copy() {
+        for second in [Kind::Own, Kind::Incoming] {
+            let (roots, cat, lib, album, _) = a_record_in("main-says", second);
+            tagged(&cat, 0, &[("date", "2001"), ("genre", "Music's Word"), ("musicbrainz_albumid", "music-release")]);
+            tagged(&cat, 1, &[("date", "1999"), ("genre", "Other Word"), ("musicbrainz_albumid", "other-release")]);
+            build_now(&lib, &cat);
+            assert_eq!(says(&lib, &album), (Some(2001), Some("Music's Word".to_string()), Some("music-release".to_string())), "{second:?}");
+            roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+        }
+    }
+
+    /// Incoming is nobody's own: where Music says nothing its copy still fills in, as a record must not lack a year for that.
+    #[test]
+    fn an_incoming_copy_still_fills_in_what_a_main_library_does_not_say() {
+        let (roots, cat, lib, album, _) = a_record_in("incoming-says", Kind::Incoming);
+        tagged(&cat, 1, &[("date", "1999"), ("genre", "Its Word"), ("musicbrainz_albumid", "its-release")]);
+        build_now(&lib, &cat);
+        assert_eq!(says(&lib, &album), (Some(1999), Some("Its Word".to_string()), Some("its-release".to_string())));
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// Only in people's own music the first copy added decides: the second person's, better or saying more, changes nothing, in the
+    /// later library or the earlier one, as the libraries' order is not when a copy came.
+    #[test]
+    fn of_a_record_only_in_peoples_own_music_the_first_copy_added_decides() {
+        for (first, second) in [(0, 1), (1, 0)] {
+            let (roots, cat, lib) = two_kept("first-says");
+            lib.set_kinds(vec![(0, Kind::Own), (1, Kind::Own)]);
+            add_files_to(&cat, first, &roots[first as usize], &ONE_TWO);
+            cat.came_for_tests(first, 100);
+            tagged(&cat, first, &[("date", "2001")]);
+            build_now(&lib, &cat);
+            let album = lib.album_in(first, "A").unwrap().expect("a record");
+            add_files_to(&cat, second, &roots[second as usize], &ONE_TWO);
+            cat.came_for_tests(second, 200);
+            tagged(&cat, second, &[("date", "1999"), ("genre", "Later Word"), ("musicbrainz_albumid", "later-release")]);
+            build_now(&lib, &cat);
+            assert_eq!(lib.album_in(second, "A").unwrap().as_deref(), Some(album.as_str()), "one record");
+            assert_eq!(says(&lib, &album), (Some(2001), None, None), "first folder {first}");
+            roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+        }
     }
 
     /// A record in the first folder, then a copy of it in the second: what the take leaves. The album's id.

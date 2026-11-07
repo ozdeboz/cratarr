@@ -211,6 +211,18 @@ export function playFromEntries(a: Held, info: LibraryInfo[] | undefined, on: On
   return [...held].filter((id) => on(id) && id !== playing).map((library) => ({ library, label: `Play from ${info?.find((l) => l.id === library)?.name ?? library}` }));
 }
 
+/** Whether the viewer may change what a record says (lib/RecordEdit): an administrator, or where it lies only in people's own
+ *  music, the owner of the copy added first, which speaks for it. The server's rule is `copies::owned_by`; this one says what to
+ *  offer. A copy of one's own of a record in a main library gives no say. */
+export function mayEdit(a: Held, info: LibraryInfo[] | undefined, admin: boolean): boolean {
+  if (admin) return true;
+  const copies = a.copies ?? [];
+  const of = (c: AlbumCopy) => info?.find((l) => l.id === c.library);
+  if (!copies.length || !copies.every((c) => of(c)?.kind === 'own')) return false;
+  const first = copies.reduce((x, y) => ((y.added ?? Infinity) < (x.added ?? Infinity) ? y : x));
+  return !!of(first)?.mine;
+}
+
 /** One copy's line in its record's panel. */
 export type CopyLine = {
   name: string;

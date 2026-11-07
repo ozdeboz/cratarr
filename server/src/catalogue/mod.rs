@@ -2238,6 +2238,12 @@ impl Catalogue {
         self.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
     }
 
+    /// Tests elsewhere: when a folder's files came.
+    #[cfg(test)]
+    pub fn came_for_tests(&self, folder: i64, at: i64) {
+        self.db().execute("UPDATE files SET came = ?2 WHERE folder = ?1", [folder, at]).unwrap();
+    }
+
     /// Tests elsewhere: every gone file gone longer than a gone file waits, for `identify` to retire it.
     #[cfg(test)]
     pub fn gone_long_ago_for_tests(&self) {

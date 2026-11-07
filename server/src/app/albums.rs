@@ -760,7 +760,7 @@ mod tests {
     /// Incoming must still say so of its copy, or a switch thrown on the page finds none.
     #[test]
     fn what_plays_is_named_even_with_it_switched_off() {
-        let copy = |folder: i64, kind: LibraryKind, format: &str, bits: Option<i64>| Copy { folder, dir: "A/Album".into(), kind, order: folder as usize, format: Some(format.into()), min_kbps: Some(900), bits, rate: Some(44_100), short: false };
+        let copy = |folder: i64, kind: LibraryKind, format: &str, bits: Option<i64>| Copy { folder, dir: "A/Album".into(), kind, order: folder as usize, format: Some(format.into()), min_kbps: Some(900), bits, rate: Some(44_100), short: false, added: None };
         let place = |f: i64| Some((f, "A/Album".to_string()));
         let only = [copy(2, LibraryKind::Incoming, "MP3", None)];
         let nobody = Viewer::default();

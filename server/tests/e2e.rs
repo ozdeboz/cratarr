@@ -2252,6 +2252,50 @@ async fn a_copy_arriving_file_by_file_is_the_record_from_its_first_file_end_to_e
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The owner, 2026-11-07: "If it's owned by administrator, then only administrator can edit." A record in a main library is the
+/// administrators', a copy of one's own beside it or not; a record only in one person's own music is theirs, and no one else's.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn who_may_set_a_records_facts_goes_by_whose_record_it_is_end_to_end() {
+    let root = temp("whose");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let all = ["Tide Tables", "No Papers", "Other Room", "Own Room", "Just Arrived"];
+    s.until("every library read", Duration::from_secs(180), || async {
+        let albums = ann.albums().await;
+        all.iter().all(|t| albums.iter().any(|a| a["title"] == *t))
+    })
+    .await;
+    let albums = ann.albums().await;
+    let id = |title: &str| albums.iter().find(|a| a["title"] == title).unwrap()["id"].clone();
+    let setting = |title: &str, year: u32| json!({ "albums": [id(title)], "set": { "year": year } });
+
+    let (status, said) = bob.send(reqwest::Method::PUT, "/api/albums/overrides", setting("Tide Tables", 1950)).await;
+    assert_eq!(status, 403, "Music's: {said}");
+    assert_eq!(bob.send(reqwest::Method::PUT, "/api/albums/overrides", setting("No Papers", 1950)).await.0, 403, "his own copy gives him no say in Music's record");
+    assert_eq!(bob.send(reqwest::Method::PUT, "/api/albums/overrides", setting("Own Room", 1950)).await.0, 403, "another's own music");
+    assert_eq!(bob.send(reqwest::Method::PUT, "/api/albums/overrides", setting("Just Arrived", 1950)).await.0, 403, "Incoming's");
+    let both = json!({ "albums": [id("Other Room"), id("Tide Tables")], "set": { "year": 1950 } });
+    assert_eq!(bob.send(reqwest::Method::PUT, "/api/albums/overrides", both).await.0, 403, "all of a selection or none");
+    let year_now = |albums: Vec<Value>, title: &str| albums.into_iter().find(|a| a["title"] == title).unwrap()["year"].clone();
+    assert_ne!(year_now(ann.albums().await, "Other Room"), 1950, "none");
+
+    bob.ok(reqwest::Method::PUT, "/api/albums/overrides", setting("Other Room", 1951)).await;
+    assert_eq!(year_now(ann.albums().await, "Other Room"), 1951, "only in his own music: his to change");
+    ann.ok(reqwest::Method::PUT, "/api/albums/overrides", setting("Tide Tables", 1952)).await;
+    ann.ok(reqwest::Method::PUT, "/api/albums/overrides", setting("Other Room", 1953)).await;
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Replace: the new files take the place and the track ids of the old, which go to Music's trash. A copy missing a track is refused
 /// and nothing moves. Its Undo gives each library its own files and each file its own id again.
 #[tokio::test(flavor = "multi_thread")]
