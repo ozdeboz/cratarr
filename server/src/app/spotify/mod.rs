@@ -365,7 +365,7 @@ pub fn state(account: &str) -> Result<State> {
 static LIBRARY: Mutex<Option<(std::time::Instant, Arc<Library>)>> = Mutex::new(None);
 
 /// The library as matching reads it, read again once a minute old. Blocking.
-pub(crate) fn library() -> Result<Arc<Library>> {
+fn library() -> Result<Arc<Library>> {
     let mut kept = LIBRARY.lock().unwrap_or_else(|p| p.into_inner());
     if let Some((at, l)) = kept.as_ref()
         && at.elapsed() < LIBRARY_FOR
