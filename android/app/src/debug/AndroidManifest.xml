@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The speed spike (preview 2's D03). `-Pspike` turns its screen on and the app's own off, so an app of its own opens on the numbers
+     with one entry in the launcher. Any other debug build keeps it off and its own screen on: a plain debug build is the tablet's
+     everyday app, which must not grow a second entry. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <activity
+            android:name=".MainActivity"
+            android:enabled="${everyday}" />
+
+        <activity
+            android:name=".SpeedActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboard|keyboardHidden|navigation|uiMode"
+            android:enabled="${spike}"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
