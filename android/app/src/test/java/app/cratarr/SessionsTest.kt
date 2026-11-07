@@ -82,6 +82,11 @@ class SessionsTest {
     }
 
     @Test
+    fun whoseThingsTheseAreDoesNotGoToAnotherPhone() {
+        assertTrue("android:allowBackup=\"false\"" in File("src/main/AndroidManifest.xml").readText())
+    }
+
+    @Test
     fun anythingElseIsNoToken() {
         assertNull(Sessions.tokenIn(null))
         assertNull(Sessions.tokenIn(""))
