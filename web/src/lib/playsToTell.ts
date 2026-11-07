@@ -55,7 +55,9 @@ export function playsToTell<P extends { id: string; at: number; account?: string
           moved = left.length < telling.length;
           unsent = [...left, ...unsent];
         },
-        () => (unsent = [...telling, ...unsent]),
+        () => {
+          unsent = [...telling, ...unsent];
+        },
       )
       .finally(() => {
         telling = [];
