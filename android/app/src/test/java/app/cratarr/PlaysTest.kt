@@ -41,11 +41,14 @@ class PlaysTest {
 
     @Test
     fun nobodySignedInIsAnAnswerNotASilence() {
-        assertTrue(Plays.signedOut(401, null))
-        assertTrue(Plays.signedOut(404, """{"error":"No one is signed in."}"""))
-        assertFalse("one user", Plays.signedOut(404, """{"error":"Signing in is off: there is one user."}"""))
-        assertFalse(Plays.signedOut(200, """{"name":"ann"}"""))
-        assertFalse("not reached", Plays.signedOut(502, null))
-        assertFalse("the proxy's refusal, away from home: the account's things stay", Plays.signedOut(403, null))
+        val cratarrs = "Cookie realm=\"Cratarr\", form-action=\"/signin\", cookie-name=\"cratarr-session\""
+        assertTrue(Plays.signedOut(401, null, cratarrs))
+        assertFalse("a bare one is something on the way's", Plays.signedOut(401, null, null))
+        assertFalse("and so is another's realm", Plays.signedOut(401, null, "Basic realm=\"proxy\""))
+        assertTrue(Plays.signedOut(404, """{"error":"No one is signed in."}""", null))
+        assertFalse("one user", Plays.signedOut(404, """{"error":"Signing in is off: there is one user."}""", null))
+        assertFalse(Plays.signedOut(200, """{"name":"ann"}""", null))
+        assertFalse("not reached", Plays.signedOut(502, null, null))
+        assertFalse("the proxy's refusal, away from home: the account's things stay", Plays.signedOut(403, null, null))
     }
 }

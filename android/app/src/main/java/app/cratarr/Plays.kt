@@ -99,7 +99,8 @@ object Plays {
         val app = context.applicationContext
         val server = Prefs(app).serverUrl?.trimEnd('/') ?: return
         if (Sessions.tokenIn(Net.cookie(server)) == null) {
-            Who.set(app, null)
+            // With sign-in off there is never one, and a move between the addresses is no sign-out.
+            if (Who.current(app) != Who.keyOf("")) Who.set(app, null)
             return
         }
         sender.execute { learn(app, server) }
@@ -160,7 +161,7 @@ object Plays {
                 c.readTimeout = 10_000
                 val code = Net.code(app, c)
                 val body = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }
-                nobody = signedOut(code, body)
+                nobody = signedOut(code, body, c.getHeaderField("WWW-Authenticate"))
                 accountOf(code, body)
             } finally {
                 c.disconnect()
@@ -190,10 +191,10 @@ object Plays {
     }
 
     /** A `/api/me` answer saying nobody is signed in (not one that only did not come). The proxy's bare 403, away from
-     *  home, says nothing of the kind: taken for it, the account's downloads and queue would go just when they are all
-     *  there is. */
-    fun signedOut(code: Int, body: String?): Boolean =
-        code == 401 || (code == 404 && body?.contains("No one is signed in") == true)
+     *  home, says nothing of the kind, nor any 401 but Cratarr's own ([challenge]: its `WWW-Authenticate`): taken for it, the
+     *  account's downloads and queue would go just when they are all there is. */
+    fun signedOut(code: Int, body: String?, challenge: String?): Boolean =
+        (code == 401 && Sessions.asksSignIn(challenge)) || (code == 404 && body?.contains("No one is signed in") == true)
 
     /** Whether a play is [account]'s: only those are told. */
     fun ours(play: JSONObject, account: String): Boolean = play.has("account") && play.optString("account") == account

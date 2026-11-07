@@ -68,6 +68,10 @@ object Sessions {
         if (secure(origin)) "$HTTPS_NAME=$token; Path=/; Max-Age=$MAX_AGE; Secure; HttpOnly; SameSite=Lax"
         else "$HTTP_NAME=$token; Path=/; Max-Age=$MAX_AGE; HttpOnly; SameSite=Lax"
 
+    /** Whether a 401's `WWW-Authenticate` is Cratarr's own (access.rs), as the page reads it (lib/reach). Any other is something
+     *  on the way, which says nothing of who is signed in. */
+    fun asksSignIn(challenge: String?): Boolean = challenge?.let { it.trim().startsWith("Cookie", ignoreCase = true) && "realm=\"Cratarr\"" in it } == true
+
     /** [origin]'s session cookie gone: expired, with the same attributes (a `__Host-` cookie is only replaced so). */
     fun clearFor(origin: String): String =
         if (secure(origin)) "$HTTPS_NAME=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"

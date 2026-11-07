@@ -87,6 +87,13 @@ class SessionsTest {
     }
 
     @Test
+    fun aMoveBetweenAddressesIsNoSignOutForTheOneUserOfAServerWithSignInOff() {
+        val signedIn = source("Plays.kt").substringAfter("fun signedIn(").substringBefore("\n    }\n")
+        assertTrue("if (Who.current(app) != Who.keyOf(\"\")) Who.set(app, null)" in signedIn)
+        assertEquals("@", Who.keyOf(""))
+    }
+
+    @Test
     fun anythingElseIsNoToken() {
         assertNull(Sessions.tokenIn(null))
         assertNull(Sessions.tokenIn(""))
