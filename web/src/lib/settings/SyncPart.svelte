@@ -6,7 +6,7 @@
   import ChoiceRow from './ChoiceRow.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import { appInfo, inApp, setDevice, toApp } from '../app.svelte';
-  import { kept } from '../kept.svelte';
+  import { kept, sharesShow } from '../kept.svelte';
   import { downloadedSize } from './editor.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -62,7 +62,7 @@
     <Item name="Download over mobile data" toggle={{ checked: appInfo.downloadOverMobile, onchange: (on) => setDevice({ downloadOverMobile: on }) }} />
     <Item name="Only while charging" toggle={{ checked: appInfo.syncOnlyCharging, onchange: (on) => setDevice({ syncOnlyCharging: on }) }} />
   </Group>
-  {#if kept.accounts.length > 1}
+  {#if sharesShow()}
     <Group title="By account">
       {#each kept.accounts as a (a.account)}
         <Item name={accountName(a.account)} line={a.here ? 'Signed in here' : null} value={downloadedSize(a.bytes)}>

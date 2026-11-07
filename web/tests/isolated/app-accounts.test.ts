@@ -43,6 +43,7 @@ const { signOut } = await import('../../src/lib/signOut.svelte.ts');
 const { loadMe, me: signedIn } = await import('../../src/lib/me.svelte.ts');
 const { prefs } = await import('../../src/lib/prefs.svelte.ts');
 const { keepDraft } = await import('../../src/lib/crates.svelte.ts');
+const { kept, sharesShow } = await import('../../src/lib/kept.svelte.ts');
 
 /** The app telling the page something. */
 const fromApp = (m: Record<string, unknown>) => bridge.onmessage!({ data: JSON.stringify(m) });
@@ -198,4 +199,17 @@ test('Cratarr out of reach, the app ends the sessions itself at its next load: n
   globalThis.fetch = reachable;
   assert.equal(signOutOwed(), false, 'owed, every read of a page signed in again later would be turned back');
   assert.equal(goneTo, '/');
+});
+
+test('each account’s share shows from the first that is not the one here: his limit is used, and the reason is hers', () => {
+  const share = (account: string, here: boolean) => ({ account, bytes: 1, here });
+  kept.accounts = [];
+  assert.equal(sharesShow(), false);
+  kept.accounts = [share('@ann', true)];
+  assert.equal(sharesShow(), false, 'hers alone, and she is here');
+  kept.accounts = [share('@ann', false)];
+  assert.equal(sharesShow(), true);
+  kept.accounts = [share('@ann', true), share('@bo', false)];
+  assert.equal(sharesShow(), true);
+  kept.accounts = [];
 });

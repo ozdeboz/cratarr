@@ -49,6 +49,10 @@ export const kept = $state({
   running: false,
 });
 
+/** Whether This device shows each account's share: more than one, or one who is not here, whose files fill this one's limit
+ *  for a reason it would not otherwise see, and whose Remove is the only way to it. */
+export const sharesShow = () => kept.accounts.length > 1 || kept.accounts.some((a) => !a.here);
+
 export const keptKey = (kind: KeptKind, source: string, id: string) => `${kind}:${source}/${id}`;
 
 /** Whether this item is kept on the device. */
