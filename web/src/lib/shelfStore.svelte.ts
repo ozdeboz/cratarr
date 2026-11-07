@@ -223,8 +223,11 @@ if (typeof window !== 'undefined' && (inApp || installed)) {
       });
     });
     whenReached.add(() => void fill());
-    whenAccount.add(() => {
+    const followAccount = () => {
       if (whoOf(accountKey()) !== shelf.who) void load();
-    });
+    };
+    whenAccount.add(followAccount);
+    // It listens only now: an /api/me that beat the read above would leave it on nobody's for the whole visit.
+    followAccount();
   })();
 }
