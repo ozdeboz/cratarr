@@ -39,6 +39,37 @@ the parts are and how they talk.
   check: crates and Radio are asked of one library there. It also builds to WebAssembly (`web/src/lib/wasm/`), which the
   page can use instead of its own code behind a switch (off by default).
 
+## How the code is shaped
+
+Seven rules, for anything new. They come from ports and adapters, functional core with an imperative shell, and
+domain-driven design, taken as far as they pay here and no further.
+
+1. **Decisions live in pure code.** What decides, which copy plays, what a crate holds, how two rows merge, goes in the
+   rules crate or a `*Rule.ts` file, with no network or disk, and the time passed in as a value. The code around it
+   gathers, calls and writes.
+2. **One door per purpose, not per service.** The doors are below. A new one needs two real sides, and a test's stand-in
+   counts as one. With one side, a plain function will do.
+3. **One writer per fact.** `copy_for` alone says which copy plays, and one way changes files (decision 0092).
+4. **Identity is an id, never a place.** A path or a place in a list can change. What other things point at needs an id
+   for life: a track, a record, an artist, a folder.
+5. **One meaning inside each area.** Library, listening, playback, intake and settings each keep their words consistent.
+   Where one word crosses areas, say how the two relate.
+6. **A rule is guarded in one place.** "Copies hold the same tracks" lives in one function, and other code asks it.
+7. **Areas are folders, not services.** One binary. `api.rs` splits along these lines when a change touches it.
+
+Left out on purpose: event sourcing, CQRS across the system, a repository for every table, layers of copied objects,
+interfaces with one implementation. The device's index reads a copy and writes through an outbox, which is as far as
+that goes.
+
+| Door | What the conversation is | Where |
+|---|---|---|
+| Music sources | What music is there? | `source::Source`: Cratarr, Jellyfin, Subsonic |
+| Data | Does a read come from the server or the device? | The page's data layer: one decision, and no page asks |
+| Fetching | Get me this record | `ports::Fetcher`, `ports::Acquisition`: Lidarr, Soulseek |
+| Metadata | What does the world know about this? | `Asked` for MusicBrainz so far: the services are mostly called one by one |
+| Files | Change what is on disk | `ports::Files`, `playlists::Store` |
+| Players and listening out | Play there, tell others what played | Play On, Snapcast's `Groups`, scrobbling |
+
 ## Server (`server/`)
 
 - `src/main.rs`: start-up, the environment, the background passes.
