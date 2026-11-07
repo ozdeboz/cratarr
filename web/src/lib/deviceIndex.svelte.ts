@@ -3,7 +3,7 @@
 //
 // Memory is the device's (the tablet held 173 MB in rules): at rest an instance of index.wasm is held by nobody, and the bytes lie in
 // IndexedDB. An index is opened for reads only while reads come from the device. `facts`, `Alike` and Radio's index are made only
-// when a crate or a pick asks, and from one reading of the sounds (D18 to D20): nothing here opens them.
+// when a crate or a pick asks, and from one reading of the sounds (lib/deviceAnswers, over the instance opened here).
 import indexUrl from './wasm/index.wasm?url';
 import { accountKey, whenAccount, whoOf } from './account';
 import { inApp } from './app.svelte';
@@ -121,6 +121,9 @@ function opened(): Promise<Open | null> {
   });
   return asked;
 }
+
+/** The instance open for reads, for what asks more of it than a list. */
+export const openReads = () => opened();
 
 /** The Library's list from the index; null where it has none to give. */
 export async function deviceAlbums(source?: string): Promise<AlbumsView | null> {

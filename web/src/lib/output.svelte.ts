@@ -19,6 +19,7 @@ import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 import { keep, readKept } from './keptStore';
 import { accountKey, pageGoing, whenAccount, whenLeaving } from './account';
+import { heldHere } from './deviceAnswers.svelte';
 import { playsToTell } from './playsToTell';
 import { reach, whenReached } from './reach.svelte';
 
@@ -81,6 +82,7 @@ const plays = playsToTell<Unsent>(
   accountKey,
   (list) => void keep(PLAYS, list),
 );
+heldHere.plays = () => plays.waiting().filter((p) => p.account === accountKey());
 if (typeof window !== 'undefined') {
   readKept<Unsent[]>(PLAYS).then((v) => {
     if (!Array.isArray(v) || !v.length) return;

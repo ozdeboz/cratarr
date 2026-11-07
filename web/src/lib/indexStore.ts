@@ -10,8 +10,8 @@ const DB = 'cratarr-index';
 const PARTS = 'parts';
 const COVERS = 'covers';
 
-/** The parts a device keeps, each with its own rev. D12's fits are one more of these. */
-export type PartName = 'index' | 'sounds' | 'covers';
+/** The parts a device keeps, each with its own rev. An account's own has none: it goes by when it was taken. */
+export type PartName = 'index' | 'sounds' | 'covers' | 'own';
 
 /** A part as it is kept. `at`: when it last stood where Cratarr does (ms); `wants`: the version the page that wrote this reads; `part`:
  *  how its fetching stands. */
