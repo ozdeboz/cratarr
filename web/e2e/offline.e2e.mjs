@@ -72,7 +72,8 @@ test('a page opened with Cratarr gone and no service worker to answer throws not
 test('Cratarr gone, what is not here is dimmed, Available offline shows what plays, and a stream the browser dropped reads as not here', async () => {
   const page = d.page;
   await signIn(page, 'ann');
-  await until(() => inModule(page, '/src/lib/deviceSync.svelte.ts', (m) => [m.indexSync.rev, m.indexSync.covers]), ([index, covers]) => index === 5 && covers === 5, 'the index', 60_000);
+  // Where the stand-in's library stands, which index.e2e moves: the index and its covers in step.
+  await until(() => inModule(page, '/src/lib/deviceSync.svelte.ts', (m) => [m.indexSync.rev, m.indexSync.covers]), ([index, covers]) => index !== null && index === covers, 'the index', 60_000);
   await keepStream(page, 'ann', 'tr-kept', 'al-10');
   await page.goto(`${PAGE}/#/library`);
   await page.reload();
@@ -83,8 +84,9 @@ test('Cratarr gone, what is not here is dimmed, Available offline shows what pla
   await until(() => coverDrawn(page, 'Second Wind'), (w) => w > 0, 'the small cover of a record not here');
 
   const was = await inModule(page, PREFS, (m) => m.prefs.albumLayout);
+  const shown = Object.keys(await records(page)).length;
   await inModule(page, PREFS, (m) => void (m.prefs.albumLayout = 'grid'));
-  await until(() => page.locator('.tile.off').count(), (n) => n === 2, 'the tiles');
+  await until(() => page.locator('.tile.off').count(), (n) => n === shown - 1, 'the tiles: all but the one with something here');
   assert.deepEqual((await records(page))['First Light'], { off: false, play: true });
   await inModule(page, PREFS, (m, was) => void (m.prefs.albumLayout = was), was);
 
@@ -105,15 +107,16 @@ test('Cratarr gone, what is not here is dimmed, Available offline shows what pla
 test('Cratarr gone, search finds the library in what the device keeps, says nothing of the rest, and an artist found opens', async () => {
   const page = d.page;
   await page.locator('button.lens').first().click();
-  await page.locator('input[type=search]').fill('dawn');
+  // A track at every rev the stand-in's library stands at.
+  await page.locator('input[type=search]').fill('noon');
   await page.locator('button.globe').click({ timeout: 20_000 });
-  await page.getByRole('button', { name: 'Open Dawn' }).waitFor({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Open Noon' }).waitFor({ timeout: 20_000 });
   const everywhere = await page.locator('section[aria-label="Everywhere"]').innerText();
   assert.ok(!everywhere.includes('Cannot reach'), everywhere);
   assert.ok(!/Playlists|Crates|Genres|Requested/.test(everywhere), everywhere);
 
   await page.locator('input[type=search]').fill('ana bell');
   await page.getByRole('button', { name: 'Open Ana Bell' }).first().click({ timeout: 20_000 });
-  await page.getByText('2 albums • 4 tracks').first().waitFor({ timeout: 20_000 });
+  await page.getByText(/^\d+ albums • \d+ tracks/).first().waitFor({ timeout: 20_000 });
   assert.deepEqual(await page.locator('[role=alert], .toast').allInnerTexts(), [], 'nothing said of what could not be asked');
 });
