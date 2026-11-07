@@ -1,0 +1,538 @@
+//! The library on a device (0101's points 16 to 18): the rules crate's `Index`, made here from what the server holds, and sent
+//! whole. Nothing of it is kept between requests: 34,000 tracks pack in about a second, a device fetches them once, and the
+//! server is held to 768 MB, so each asking builds its bytes and lets them go. One build at a time (`Serve::device_turn`), as
+//! two would hold twice what one holds.
+//!
+//! - **Rows are the served library's, facts the crates'.** A track's own fields, its record and its artists come from the
+//!   library (`Library::index_rows`), its `Facts` as `Catalogue::crate_facts` reads them, by reference: the reading the pages
+//!   share, not a copy of it.
+//! - **What an account can see** ([`can_see`]) is every library, off ones too: 0084's "every user can switch every library",
+//!   0101's point 6, no private own music. Off is a switch of theirs, which the device reads from their preferences, so that
+//!   switching one on works offline. A library that is not seen leaves every row that names it ([`within`]).
+//! - **An own library goes by its owner**, not as "Your music": one index for everyone who sees the same libraries, and the
+//!   device knows who is signed in.
+
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::Arc;
+
+use anyhow::{Result, anyhow};
+use axum::http::{HeaderMap, HeaderValue, header};
+use axum::response::{IntoResponse, Response};
+use cratarr_rules::index::{self, Artist, Builder, Index, Kind, Refused, TrackHead};
+
+use super::{App, ToggleError};
+use crate::crates::Facts;
+use crate::serve::Serve;
+use crate::serve::ids;
+use crate::settings::LibraryKind;
+
+/// A refusal of the rules crate's, as the server reports it: rows that do not add up are a fault here, not a device's.
+fn refused(what: Refused) -> anyhow::Error {
+    anyhow!("the index could not be made: {what:?}")
+}
+
+/// Whether `account` can see `library`. Every account every library, today: see the module's notes. What this says no to, the
+/// rest of this file leaves out.
+fn can_see(_library: &index::Library, _account: Option<&str>) -> bool {
+    true
+}
+
+impl super::library::Library {
+    /// Every catalogue folder as a device names it: its library where one holds it, else its path, so a server's library not
+    /// answering for now does not take its rows off every device. By its id, a folder's, `order` saying the libraries' order. Blocking.
+    pub(super) fn index_libraries(&self, serve: &Serve) -> Vec<index::Library> {
+        let (kinds, live, folders) = (self.folder_kinds(), self.live(), self.catalogue().folders());
+        let of = |path: &Path| {
+            live.iter().find_map(|a| {
+                let placed = a.placement.libraries.iter().find(|p| p.folders.iter().any(|f| Path::new(f) == path))?;
+                Some((a, placed, a.libraries().into_iter().find(|u| u.id == placed.id)))
+            })
+        };
+        let mut rows: Vec<index::Library> = folders
+            .iter()
+            .enumerate()
+            .map(|(n, (folder, path))| {
+                let at = kinds.iter().position(|(f, _)| *f == folder);
+                let order = at.unwrap_or(kinds.len() + n) as u32;
+                let kind = match at.map_or(LibraryKind::Incoming, |at| kinds[at].1) {
+                    LibraryKind::Main => Kind::Main,
+                    LibraryKind::Own => Kind::Own,
+                    LibraryKind::Incoming => Kind::Incoming,
+                };
+                let (key, name) = (path.display().to_string(), path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned()));
+                match of(path.as_path()) {
+                    Some((a, placed, used)) => {
+                        let owner = used.and_then(|u| u.owner).filter(|o| serve.users.get(o).is_some_and(|u| u.active));
+                        index::Library { id: folder, key: placed.id.clone(), name: placed.name.clone(), kind, order, colour: a.colour_of(&placed.id), owner }
+                    }
+                    None => index::Library { id: folder, key, name, kind, order, colour: None, owner: None },
+                }
+            })
+            .collect();
+        rows.sort_by_key(|l| l.id);
+        rows
+    }
+}
+
+/// A track's facts as an account sees them: what lies in a library it cannot see goes from `folders` and `lines`, or the device
+/// would refuse the row as naming what it does not hold, and would show where it lies. Its line is another's where its own lies
+/// out of sight, that folder first, as `Facts::folders` has it. None where nothing is left. The usual track, wholly in sight,
+/// costs no copy.
+fn within<'f>(f: &'f Facts, seen: &HashSet<i64>, folder_of: &dyn Fn(&str) -> Option<i64>) -> Option<Cow<'f, Facts>> {
+    if f.folders.iter().all(|x| seen.contains(x)) {
+        return Some(Cow::Borrowed(f));
+    }
+    let mut folders: Vec<i64> = f.folders.iter().copied().filter(|x| seen.contains(x)).collect();
+    let mut lines: Vec<String> = f.lines.iter().filter(|l| folder_of(l.as_str()).is_some_and(|x| seen.contains(&x))).cloned().collect();
+    let rel = if f.folders.first().is_some_and(|x| seen.contains(x)) {
+        f.rel.clone()
+    } else {
+        if lines.is_empty() {
+            return None;
+        }
+        let rel = lines.remove(0);
+        let first = folder_of(rel.as_str());
+        folders.sort_by_key(|x| Some(*x) != first);
+        rel
+    };
+    (!folders.is_empty()).then(|| Cow::Owned(Facts { rel, lines, folders, ..f.clone() }))
+}
+
+/// Every other way the files write each artist, as `crates::artist_ids` makes one artist of them: their names by id.
+fn spellings(serve: &Serve, facts: &[Facts]) -> Result<HashMap<i64, Vec<String>>> {
+    let mut out: HashMap<i64, Vec<String>> = HashMap::new();
+    for (name, id) in crate::crates::artist_ids(facts, &serve.artist_ids()?) {
+        if let Some(id) = id.strip_prefix(ids::ARTIST).and_then(|n| n.parse().ok()) {
+            out.entry(id).or_default().push(name);
+        }
+    }
+    out.values_mut().for_each(|names| names.sort_unstable());
+    Ok(out)
+}
+
+/// The index of these `libraries`, as of `rev`: every track of them the catalogue's `facts` and the served library both hold,
+/// each packed in its turn, so all that is held of a track is what the index keeps of it. A song not read yet, or read and not
+/// built yet, waits for both. Blocking.
+pub fn build(serve: &Serve, facts: &[Facts], libraries: &[index::Library], rev: i64) -> Result<Index> {
+    let mut listed = serve.library.index_rows()?;
+    let spelled = spellings(serve, facts)?;
+    let seen: HashSet<i64> = libraries.iter().map(|l| l.id).collect();
+    let mut to = Builder::new();
+    libraries.iter().for_each(|l| to.library(l));
+    listed.artists.sort_unstable_by_key(|a| a.id);
+    for a in listed.artists {
+        let spelled: Vec<String> = spelled.get(&a.id).map(|names| names.iter().filter(|n| **n != a.name).cloned().collect()).unwrap_or_default();
+        to.artist(&Artist { id: a.id, name: a.name, sort: a.sort, spelled });
+    }
+    listed.records.sort_unstable_by_key(|r| r.id);
+    for r in &mut listed.records {
+        r.copies.retain(|c| seen.contains(&c.library));
+        to.record(r);
+    }
+    let of_track: HashMap<i64, &Facts> = facts.iter().filter_map(|f| Some((f.track?, f))).collect();
+    let cat = serve.catalogue();
+    let folder_of = |line: &str| cat.place_of_line(line).map(|p| p.0);
+    listed.songs.sort_unstable_by_key(|s| s.track);
+    for s in &listed.songs {
+        if let Some(f) = of_track.get(&s.track).and_then(|f| within(f, &seen, &folder_of)) {
+            to.track(TrackHead { id: s.track, record: s.record, disc: s.disc, number: s.number, title: &s.title, artist: s.artist.as_deref(), artist_ids: &s.artists }, &f);
+        }
+    }
+    to.build(rev).map_err(refused)
+}
+
+/// The index `account` can see, as of where the log stands: the log read first, as what is written while this reads is logged
+/// past it and comes again by the feed, where the other way round it would be lost. Blocking.
+fn whole(serve: &Serve, libraries: Vec<index::Library>, account: Option<&str>) -> Result<Index> {
+    let _turn = serve.device_turn();
+    let cat = serve.catalogue();
+    let rev = cat.index_rev()?;
+    let facts = cat.crate_facts()?;
+    let seen: Vec<index::Library> = libraries.into_iter().filter(|l| can_see(l, account)).collect();
+    build(serve, &facts, &seen, rev)
+}
+
+/// Bytes as gzip: a device fetches these over whatever connection it has.
+fn gzipped(bytes: &[u8]) -> Result<Vec<u8>> {
+    use std::io::Write;
+    let mut out = flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 2), flate2::Compression::default());
+    out.write_all(bytes)?;
+    Ok(out.finish()?)
+}
+
+/// What a device is sent: bytes as the rules crate wrote them, and whether they are gzip's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bytes {
+    pub bytes: Vec<u8>,
+    pub gzip: bool,
+}
+
+impl Bytes {
+    /// `bytes`, packed where the asker `takes_gzip`.
+    fn of(bytes: Vec<u8>, takes_gzip: bool) -> Result<Self> {
+        Ok(if takes_gzip { Self { bytes: gzipped(&bytes)?, gzip: true } } else { Self { bytes, gzip: false } })
+    }
+}
+
+impl IntoResponse for Bytes {
+    fn into_response(self) -> Response {
+        let mut sent = ([(header::CONTENT_TYPE, "application/octet-stream"), (header::CACHE_CONTROL, "no-store"), (header::VARY, "accept-encoding")], self.bytes).into_response();
+        if self.gzip {
+            sent.headers_mut().insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+        sent
+    }
+}
+
+/// Whether a request takes gzip: a browser's always does, and it hands the page plain bytes.
+pub fn takes_gzip(headers: &HeaderMap) -> bool {
+    let named = |item: &str| {
+        let mut parts = item.split(';').map(str::trim);
+        parts.next().is_some_and(|name| name.eq_ignore_ascii_case("gzip")) && !parts.any(|p| p.replace(' ', "").strip_prefix("q=").and_then(|q| q.parse::<f32>().ok()) == Some(0.0))
+    };
+    headers.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(named))
+}
+
+/// `GET /api/index`: the whole index `account` can see, every library it can see in it, as `Index::save` writes it.
+pub async fn read(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+    let libraries = app.library.index_libraries(&serve);
+    let bytes = tokio::task::spawn_blocking(move || Bytes::of(whole(&serve, libraries, account.as_deref())?.save(), takes_gzip));
+    Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::catalogue::{Catalogue, Rules};
+    use crate::serve::copies::Kind as CopyKind;
+
+    /// A server over folders on the disk, for a test named `name`: what `add` puts there is read, identified and built.
+    pub(super) struct Served {
+        pub roots: Vec<PathBuf>,
+        pub cat: Arc<Catalogue>,
+        pub serve: Arc<Serve>,
+    }
+
+    impl Drop for Served {
+        fn drop(&mut self) {
+            for root in &self.roots {
+                std::fs::remove_dir_all(root).ok();
+            }
+        }
+    }
+
+    pub(super) fn served(name: &str, kinds: &[CopyKind]) -> Served {
+        let roots: Vec<PathBuf> = (0..kinds.len()).map(|n| std::env::temp_dir().join(format!("cratarr-device-{name}-{n}-{}", std::process::id()))).collect();
+        for root in &roots {
+            std::fs::remove_dir_all(root).ok();
+            std::fs::create_dir_all(root).unwrap();
+        }
+        let cat = Arc::new(Catalogue::open(None, roots.clone()).unwrap());
+        let serve = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        serve.library.set_kinds(kinds.iter().enumerate().map(|(n, k)| (n as i64, *k)).collect());
+        serve.attach_catalogue(cat.clone());
+        Served { roots, cat, serve }
+    }
+
+    impl Served {
+        /// These files in folder `folder`: (path, tags as a read would leave them).
+        pub fn add(&self, folder: i64, files: &[(&str, &[(&str, &str)])]) {
+            for (rel, _) in files {
+                let at = self.roots[folder as usize].join(rel);
+                std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                std::fs::write(at, rel).unwrap();
+            }
+            self.cat.walk_all();
+            self.cat.pretend_read_for_tests();
+            for (rel, tags) in files {
+                self.cat.tag_for_tests(folder, rel, tags);
+            }
+            self.cat.identify().unwrap();
+        }
+
+        /// The library built from what the catalogue holds now, the facts kept as read.
+        pub fn built_and_not_read(&self) {
+            let (_, print) = self.serve.library.change(&self.cat, &Rules::default()).unwrap();
+            self.serve.library.build_from(&self.cat, &Rules::default(), &print).unwrap();
+        }
+
+        /// The library built from what the catalogue holds now, and the facts read again at the next asking.
+        pub fn built(&self) {
+            self.built_and_not_read();
+            self.cat.facts_forgotten_for_tests();
+        }
+
+        /// The libraries, one to a folder, as `Library::index_libraries` would give them.
+        pub fn libraries(&self) -> Vec<index::Library> {
+            (0..self.roots.len() as i64).map(|id| index::Library { id, key: format!("library-{id}"), name: format!("Library {id}"), order: id as u32, ..index::Library::default() }).collect()
+        }
+
+        pub fn index(&self) -> Index {
+            whole(&self.serve, self.libraries(), Some("ann")).unwrap()
+        }
+    }
+
+    /// A number of /proc/self/status, in MB: what the system says this process holds.
+    fn status_mb(field: &str) -> f64 {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let line = status.lines().find(|l| l.starts_with(field)).unwrap_or("");
+        line.split_whitespace().nth(1).and_then(|kb| kb.parse::<f64>().ok()).unwrap_or(0.0) / 1024.0
+    }
+
+    /// `rows` in the served library's tables, as a build leaves them, for what reads them.
+    fn filled(s: &Served, rows: &index::Rows) {
+        let db = s.serve.library.db();
+        let tx = db.unchecked_transaction().unwrap();
+        for a in &rows.artists {
+            tx.execute("INSERT INTO artists (id, name, album_count, song_count, order_name) VALUES (?1, ?2, 1, 1, ?3)", rusqlite::params![ids::artist(a.id), a.name, a.sort]).unwrap();
+        }
+        for r in &rows.records {
+            let id = ids::record(r.id);
+            tx.execute(
+                "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genres, song_count, duration_ms, size, discs, created, compilation, order_name, record, release_type, secondary, whole_tracks)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 1, 1, 1, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                rusqlite::params![id, r.title, r.artist, ids::artist(r.artist_ids[0]), r.year, r.original_year, r.genres.join("\u{1f}"), r.added, r.compilation, r.sort, r.id, r.kind, r.secondary.join("\u{1f}"), r.whole_tracks],
+            )
+            .unwrap();
+            for (n, a) in r.artist_ids.iter().enumerate() {
+                tx.execute("INSERT INTO album_artists (album_id, artist_id, name, position) VALUES (?1, ?2, '', ?3)", rusqlite::params![id, ids::artist(*a), n as i64]).unwrap();
+            }
+            for c in &r.copies {
+                tx.execute(
+                    "INSERT INTO copies (album, folder, dir, format, min_kbps, size, added, tracks, bits, rate) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    rusqlite::params![id, c.library, c.dir, c.format, c.min_kbps, c.size.map(|x| x as i64), c.added, c.tracks, c.bits, c.rate],
+                )
+                .unwrap();
+            }
+        }
+        for t in &rows.tracks {
+            let id = ids::song(t.id);
+            tx.execute(
+                "INSERT INTO songs (id, pid, folder, rel, path, album_id, title, artist, album, track_no, disc_no, size, order_title) VALUES (?1, ?1, 0, ?2, ?2, ?3, ?4, ?5, '', ?6, ?7, 1, ?4)",
+                rusqlite::params![id, t.facts.rel, ids::record(t.record), t.title, t.artist, t.number, t.disc],
+            )
+            .unwrap();
+            // The album artist comes from the record, as the library has it: only the song's own here.
+            for (n, a) in t.artist_ids.iter().take(1).enumerate() {
+                tx.execute("INSERT INTO song_artists (song_id, artist_id, name, position) VALUES (?1, ?2, '', ?3)", rusqlite::params![id, ids::artist(*a), n as i64]).unwrap();
+            }
+        }
+        tx.commit().unwrap();
+    }
+
+    /// What a whole build costs at the real library's size, in the server's own code, with the crates' facts held as they are on a
+    /// server. The bytes and the memory are what they are; the times are an unoptimised test build's, and this test's allocator
+    /// is not the image's musl, so read them for how much there is to do. The size on the wire is made-up names', which repeat
+    /// less than real ones.
+    #[test]
+    #[ignore = "a measure: rt-side.sh test measured_a_build --ignored --nocapture --test-threads=1"]
+    fn measured_a_build_at_34_000_tracks() {
+        let s = served("measured", &[CopyKind::Main, CopyKind::Own, CopyKind::Incoming]);
+        let (rows, _) = index::made_up(34_000, 1);
+        filled(&s, &rows);
+        let libraries = rows.libraries.clone();
+        let facts: Vec<Facts> = rows.tracks.iter().map(|t| t.facts.clone()).collect();
+        let tracks = rows.tracks.len();
+        drop(rows);
+        let (before, hwm_before) = (status_mb("VmRSS"), status_mb("VmHWM"));
+        let started = std::time::Instant::now();
+        let index = build(&s.serve, &facts, &libraries, 1).unwrap();
+        let built = started.elapsed();
+        let saved_at = std::time::Instant::now();
+        let bytes = index.save();
+        let saved = saved_at.elapsed();
+        let zipped_at = std::time::Instant::now();
+        let packed = Bytes::of(bytes.clone(), true).unwrap();
+        let zipped = zipped_at.elapsed();
+        let (held, top) = (status_mb("VmRSS"), status_mb("VmHWM"));
+        println!("{tracks} tracks: build {built:?}, save {saved:?}, gzip {zipped:?}");
+        println!("bytes {}, gzip {} ({:.0}%)", bytes.len(), packed.bytes.len(), packed.bytes.len() as f64 * 100.0 / bytes.len() as f64);
+        println!("resident {before:.1} MB before, {held:.1} with the index and its bytes held, top {top:.1} (top before {hwm_before:.1}): a build costs {:.1} MB at its top", top - before);
+    }
+
+    fn album(title: &str, artist: &str, track: &str) -> Vec<(&'static str, String)> {
+        vec![("album", title.to_string()), ("albumartist", artist.to_string()), ("artist", artist.to_string()), ("title", track.to_string())]
+    }
+
+    /// One album in a folder.
+    fn with_album(s: &Served, folder: i64, dir: &str, title: &str, artist: &str, tracks: &[&str]) {
+        let tags: Vec<(String, Vec<(&'static str, String)>)> = tracks.iter().enumerate().map(|(n, t)| (format!("{dir}/{n:02} {t}.flac"), album(title, artist, t))).collect();
+        let tags: Vec<(&str, Vec<(&str, &str)>)> = tags.iter().map(|(rel, t)| (rel.as_str(), t.iter().map(|(k, v)| (*k, v.as_str())).collect())).collect();
+        let files: Vec<(&str, &[(&str, &str)])> = tags.iter().map(|(rel, t)| (*rel, t.as_slice())).collect();
+        s.add(folder, &files);
+    }
+
+    #[test]
+    fn a_tracks_row_is_what_the_library_serves_and_the_crates_read() {
+        let s = served("row", &[CopyKind::Main]);
+        with_album(&s, 0, "A/B", "Record", "Someone", &["First", "Second"]);
+        s.built();
+        let index = s.index();
+        let rows = index.rows();
+        assert_eq!((rows.tracks.len(), rows.records.len(), rows.libraries.len()), (2, 1, 1));
+        let first = rows.tracks.iter().find(|t| t.title == "First").unwrap();
+        assert_eq!(first.artist.as_deref(), Some("Someone"));
+        assert_eq!(first.facts.rel, "A/B/00 First.flac");
+        assert_eq!(first.facts.folders, [0]);
+        assert_eq!(first.facts.track, Some(first.id));
+        let record = index.record(first.record).unwrap();
+        assert_eq!((record.title.as_str(), record.artist.as_str()), ("Record", "Someone"));
+        assert_eq!(record.copies.iter().map(|c| (c.library, c.dir.as_str(), c.tracks)).collect::<Vec<_>>(), [(0, "A/B", 2)]);
+        assert_eq!(first.artist_ids.len(), 2, "the track's artist, then the album artist");
+        let artist = index.artist(first.artist_ids[0]).unwrap();
+        assert_eq!((artist.name.as_str(), record.artist_ids.as_slice()), ("Someone", &first.artist_ids[..1]));
+    }
+
+    #[test]
+    fn the_rev_is_read_before_the_rows_so_what_is_written_meanwhile_comes_again() {
+        let s = served("rev", &[CopyKind::Main]);
+        with_album(&s, 0, "A/B", "Record", "Someone", &["First"]);
+        s.built();
+        assert_eq!(s.index().rev(), s.cat.index_rev().unwrap());
+    }
+
+    #[test]
+    fn a_song_not_built_or_not_read_waits_for_both() {
+        let s = served("waits", &[CopyKind::Main]);
+        with_album(&s, 0, "A/B", "Record", "Someone", &["First"]);
+        s.built();
+        with_album(&s, 0, "C/D", "Other", "Someone", &["Second"]);
+        assert_eq!(s.index().rows().tracks.len(), 1, "read, and no song yet");
+        with_album(&s, 0, "E/F", "Third", "Someone", &["Third"]);
+        s.built_and_not_read();
+        assert_eq!(s.index().rows().tracks.len(), 2, "a song, and no facts read of it yet");
+        s.cat.facts_forgotten_for_tests();
+        assert_eq!(s.index().rows().tracks.len(), 3);
+    }
+
+    #[test]
+    fn a_compilations_album_artist_is_nobodys_artist_as_radio_has_it() {
+        let s = served("compilation", &[CopyKind::Main]);
+        let tags = [("album", "Hits"), ("albumartist", "Various Artists"), ("artist", "Someone"), ("title", "One")];
+        s.add(0, &[("Various/Hits/01.flac", &tags)]);
+        s.built();
+        let t = s.index().rows().tracks.remove(0);
+        assert_eq!(t.artist_ids.len(), 1, "{:?}", t.artist_ids);
+    }
+
+    #[test]
+    fn every_way_the_files_write_an_artist_is_kept_on_that_artist() {
+        let s = served("spelled", &[CopyKind::Main]);
+        let (plain, curly) = ("Sinead O'Connor", "Sinead O\u{2019}Connor");
+        s.add(0, &[("A/01.flac", &[("album", "One"), ("albumartist", plain), ("artist", plain), ("title", "T")]), ("A/02.flac", &[("album", "One"), ("albumartist", plain), ("artist", curly), ("title", "U")])]);
+        s.built();
+        let index = s.index();
+        let id = index.rows().tracks[0].artist_ids[0];
+        let artist = index.artist(id).unwrap();
+        assert_eq!(artist.spelled.len(), 1, "{artist:?}");
+        assert_ne!(artist.spelled[0], artist.name, "the other way, not the name again");
+        let names = index.artist_ids();
+        assert_eq!((&names[plain], &names[curly]), (&ids::artist(id), &ids::artist(id)), "an artist seed finds them by either");
+    }
+
+    /// The index refuses what names what it does not hold, and one odd row must not cost every device the whole of it.
+    #[test]
+    fn a_row_naming_what_is_not_served_loses_that_name_and_no_one_their_index() {
+        let s = served("odd", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["First"]);
+        with_album(&s, 0, "B", "Other", "Another", &["Second"]);
+        s.built();
+        s.serve.library.db().execute("DELETE FROM artists WHERE name = 'Another'", []).unwrap();
+        s.serve.library.db().execute("DELETE FROM albums WHERE name = 'Record'", []).unwrap();
+        let rows = s.index().rows();
+        assert_eq!(rows.tracks.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["Second"], "a song of no record waits for one");
+        assert!(rows.tracks[0].artist_ids.is_empty(), "{:?}", rows.tracks[0]);
+    }
+
+    #[test]
+    fn a_records_copies_lie_in_the_order_they_would_play() {
+        let s = served("order", &[CopyKind::Incoming, CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["First"]);
+        with_album(&s, 1, "A", "Record", "Someone", &["First"]);
+        s.built();
+        let t = s.index().rows();
+        assert_eq!(t.records.len(), 1, "one record");
+        assert_eq!(t.records[0].copies.iter().map(|c| c.library).collect::<Vec<_>>(), [1, 0], "Incoming last, whatever its folder's id");
+        assert_eq!(t.tracks[0].facts.folders.len(), 2);
+    }
+
+    /// What an account cannot see goes from every list of a row, and a device would refuse a row naming it.
+    #[test]
+    fn a_library_out_of_sight_leaves_a_tracks_folders_and_lines() {
+        let f = Facts { rel: "A/1.flac".into(), lines: vec!["../b/A/1.flac".into(), "../c/A/1.flac".into()], folders: vec![0, 1, 2], track: Some(1), ..Facts::default() };
+        let of = |line: &str| Some(if line.contains("../b/") { 1 } else if line.contains("../c/") { 2 } else { 0 });
+        let seen = |ids: &[i64]| ids.iter().copied().collect::<HashSet<i64>>();
+        assert!(matches!(within(&f, &seen(&[0, 1, 2]), &of), Some(Cow::Borrowed(_))), "wholly in sight: no copy");
+        let without_b = within(&f, &seen(&[0, 2]), &of).unwrap();
+        assert_eq!((without_b.rel.as_str(), without_b.lines.as_slice(), without_b.folders.as_slice()), ("A/1.flac", &["../c/A/1.flac".to_string()][..], &[0, 2][..]));
+        let without_own_line = within(&f, &seen(&[1, 2]), &of).unwrap();
+        assert_eq!(without_own_line.rel, "../b/A/1.flac", "its line is one it can see");
+        assert_eq!((without_own_line.lines.as_slice(), without_own_line.folders.as_slice()), (&["../c/A/1.flac".to_string()][..], &[1, 2][..]));
+        let turned = Facts { lines: vec!["../c/A/1.flac".into(), "../b/A/1.flac".into()], ..f.clone() };
+        let turned = within(&turned, &seen(&[1, 2]), &of).unwrap();
+        assert_eq!((turned.rel.as_str(), turned.folders.as_slice()), ("../c/A/1.flac", &[2, 1][..]), "the folder of its line first");
+        let far = within(&f, &seen(&[2]), &of).unwrap();
+        assert_eq!((far.rel.as_str(), far.folders.as_slice(), far.lines.len()), ("../c/A/1.flac", &[2][..], 0));
+        assert!(within(&f, &seen(&[5]), &of).is_none(), "nothing left: no row");
+    }
+
+    #[test]
+    fn a_library_left_out_takes_its_copies_and_what_lies_only_there() {
+        let s = served("sight", &[CopyKind::Main, CopyKind::Own]);
+        with_album(&s, 0, "A", "Both", "Someone", &["First"]);
+        with_album(&s, 1, "A", "Both", "Someone", &["First"]);
+        with_album(&s, 1, "B", "Only Theirs", "Another", &["Second"]);
+        s.built();
+        let everything = s.index();
+        assert_eq!(everything.rows().tracks.len(), 2);
+        let facts = s.cat.crate_facts().unwrap();
+        let one = vec![s.libraries().remove(0)];
+        let rows = build(&s.serve, &facts, &one, 1).unwrap().rows();
+        assert_eq!(rows.libraries.iter().map(|l| l.id).collect::<Vec<_>>(), [0]);
+        assert_eq!(rows.tracks.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["First"]);
+        assert_eq!(rows.tracks[0].facts.folders, [0]);
+        assert!(rows.tracks[0].facts.lines.is_empty(), "{:?}", rows.tracks[0].facts);
+        assert_eq!(rows.records.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(), ["Both"], "a record goes with its last track");
+        assert_eq!(rows.records[0].copies.iter().map(|c| c.library).collect::<Vec<_>>(), [0]);
+        assert_eq!(rows.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Someone"]);
+    }
+
+    /// 0084, 0101's point 6: off is the account's own switch, and it rides along so that switching on works offline.
+    #[test]
+    fn every_account_sees_every_library_whatever_it_has_off() {
+        let library = index::Library { id: 3, owner: Some("bob".into()), kind: Kind::Own, ..index::Library::default() };
+        assert!(can_see(&library, Some("ann")) && can_see(&library, Some("bob")) && can_see(&library, None));
+    }
+
+    #[test]
+    fn bytes_are_gzip_only_for_who_takes_it_and_come_back_the_same() {
+        let plain = vec![7u8; 10_000];
+        let sent = Bytes::of(plain.clone(), true).unwrap();
+        assert!(sent.gzip && sent.bytes.len() < 100, "{}", sent.bytes.len());
+        let mut back = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&sent.bytes[..]), &mut back).unwrap();
+        assert_eq!(back, plain);
+        assert_eq!(Bytes::of(plain.clone(), false).unwrap(), Bytes { bytes: plain, gzip: false });
+    }
+
+    #[test]
+    fn gzip_is_taken_where_it_is_named_and_not_refused() {
+        let asking = |said: &str| takes_gzip(&HeaderMap::from_iter([(header::ACCEPT_ENCODING, HeaderValue::from_str(said).unwrap())]));
+        assert!(asking("gzip") && asking("gzip, deflate, br") && asking("br, GZIP;q=0.5"));
+        assert!(!asking("identity") && !asking("gzip;q=0") && !asking("deflate, gzip; q=0.0"));
+        assert!(!takes_gzip(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn what_a_device_loads_is_what_was_built() {
+        let s = served("load", &[CopyKind::Main]);
+        with_album(&s, 0, "A/B", "Record", "Someone", &["First", "Second"]);
+        s.built();
+        let index = s.index();
+        assert!(Index::load(&index.save()).unwrap() == index);
+    }
+}

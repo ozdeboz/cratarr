@@ -93,6 +93,7 @@ pub mod covers;
 pub mod cover_cache;
 pub mod renumber;
 pub mod describe;
+pub mod device_index;
 pub mod musicbrainz;
 pub mod switches;
 pub mod reach;

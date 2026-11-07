@@ -157,6 +157,8 @@ pub fn router(app: Arc<App>) -> Router {
         // What this install can do (0.11, decision 0085): behind the sign-in, as the open health check must not say.
         .route("/api/capabilities", get(capabilities))
         .route("/api/changes", get(changes))
+        // The library on a device (0101's point 16): bytes, as the rules crate reads them.
+        .route("/api/index", get(device_index))
         .route("/api/incoming", get(incoming))
         .route("/api/insights", get(insights))
         // A playlist's repairs, as its edits: everyone's while playlists are (decision 0051's third stage gives them
@@ -4316,6 +4318,12 @@ struct ChangesQuery {
 
 async fn changes(ctx: Ctx, Query(q): Query<ChangesQuery>) -> Result<Json<crate::app::changes::Changes>, ApiError> {
     Ok(Json(crate::app::changes::read(&ctx.app, ctx.serve()?, q.since, q.kinds.as_deref()).await?))
+}
+
+/// The whole index for the account asking (`app::device_index`).
+async fn device_index(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{read, takes_gzip};
+    Ok(read(&ctx.app, ctx.serve()?, ctx.account(), takes_gzip(&headers)).await?.into_response())
 }
 
 #[derive(Deserialize)]

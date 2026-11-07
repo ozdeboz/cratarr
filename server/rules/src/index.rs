@@ -140,6 +140,24 @@ pub struct Track {
     pub facts: Facts,
 }
 
+impl Track {
+    fn head(&self) -> TrackHead<'_> {
+        TrackHead { id: self.id, record: self.record, disc: self.disc, number: self.number, title: &self.title, artist: self.artist.as_deref(), artist_ids: &self.artist_ids }
+    }
+}
+
+/// A track's own fields, as [`Builder::track`] takes them beside facts that stay where they are.
+#[derive(Debug, Clone, Copy)]
+pub struct TrackHead<'a> {
+    pub id: i64,
+    pub record: i64,
+    pub disc: Option<u32>,
+    pub number: Option<u32>,
+    pub title: &'a str,
+    pub artist: Option<&'a str>,
+    pub artist_ids: &'a [i64],
+}
+
 /// Rows, in any order: of two with one id the later stands.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Rows {
@@ -860,6 +878,138 @@ impl Names {
     }
 }
 
+/// Rows packed one at a time, each table's in the order of its ids: how the server makes an index, as `Rows` would hold every
+/// track's facts a second time beside the crates', and a whole library of small strings does not go back to the system whole.
+pub struct Builder {
+    names: Names,
+    packed: Packed,
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Builder {
+    pub fn new() -> Self {
+        let mut names = Names::default();
+        names.of("");
+        Self { names, packed: Packed::default() }
+    }
+
+    pub fn library(&mut self, row: &Library) {
+        let (to, names) = (&mut self.packed.libraries, &mut self.names);
+        to.id.push(row.id);
+        to.key.push(names.of(&row.key));
+        to.name.push(names.of(&row.name));
+        to.kind.push(row.kind as i64);
+        to.order.push(i64::from(row.order));
+        to.colour.push(names.maybe(row.colour.as_deref()));
+        to.owner.push(names.maybe(row.owner.as_deref()));
+    }
+
+    pub fn artist(&mut self, row: &Artist) {
+        let (to, names) = (&mut self.packed.artists, &mut self.names);
+        to.id.push(row.id);
+        to.name.push(names.of(&row.name));
+        to.sort.push(&row.sort);
+        to.spelled.push(names.all(&row.spelled));
+    }
+
+    /// A record and its copies.
+    pub fn record(&mut self, row: &Record) {
+        let (to, names) = (&mut self.packed.records, &mut self.names);
+        to.id.push(row.id);
+        to.title.push(&row.title);
+        to.sort.push(&row.sort);
+        to.artist.push(names.of(&row.artist));
+        to.artist_ids.push(row.artist_ids.iter().copied());
+        to.year.push(from_small(row.year));
+        to.original_year.push(from_small(row.original_year));
+        to.added.push(row.added.unwrap_or(NONE));
+        to.kind.push(names.maybe(row.kind.as_deref()));
+        to.secondary.push(names.all(&row.secondary));
+        to.genres.push(names.all(&row.genres));
+        to.compilation.push(i64::from(row.compilation));
+        to.whole_tracks.push(from_small(row.whole_tracks));
+        for copy in &row.copies {
+            let to = &mut self.packed.copies;
+            to.record.push(row.id);
+            to.library.push(copy.library);
+            to.dir.push(&copy.dir);
+            to.format.push(names.maybe(copy.format.as_deref()));
+            to.min_kbps.push(from_small(copy.min_kbps));
+            to.bits.push(from_small(copy.bits));
+            to.rate.push(from_small(copy.rate));
+            to.size.push(copy.size.map_or(NONE, |s| s as i64));
+            to.added.push(copy.added.unwrap_or(NONE));
+            to.tracks.push(i64::from(copy.tracks));
+        }
+    }
+
+    /// A track: `row`'s own fields, and what the crates read of it.
+    pub fn track(&mut self, row: TrackHead, f: &Facts) {
+        let (to, names) = (&mut self.packed.tracks, &mut self.names);
+        to.id.push(row.id);
+        to.record.push(row.record);
+        to.disc.push(from_small(row.disc));
+        to.number.push(from_small(row.number));
+        to.title.push(row.title);
+        to.artist.push(names.maybe(row.artist));
+        to.artist_ids.push(row.artist_ids.iter().copied());
+        to.line.push(&f.rel);
+        to.lines.push(&f.lines.join(LINES_APART));
+        to.folders.push(f.folders.iter().copied());
+        to.born.push(f.born.unwrap_or(NONE));
+        to.length.push(from_float(f.length));
+        to.year.push(from_float(f.year));
+        to.bpm.push(from_float(f.bpm));
+        to.energy.push(from_float(f.energy));
+        to.danceability.push(from_float(f.danceability));
+        to.four.push(f.four.unwrap_or(f32::NAN));
+        to.clap_moods.push(f.clap_moods.iter().flatten().copied());
+        to.genres.push(names.all(&f.genres));
+        to.styles.push(names.all(&f.styles));
+        to.moods.push(names.all(&f.moods));
+        to.tags.push(names.all(&f.tags));
+        to.labels.push(names.all(&f.labels));
+        to.release_types.push(names.all(&f.release_types));
+        to.artists.push(names.all(&f.artists));
+        to.credits.push(names.all(&f.credits));
+        to.credit_names.push(names.all(&f.credit_names));
+        to.quality.push(names.maybe(f.quality.as_deref()));
+        to.key.push(names.maybe(f.key.as_deref()));
+        to.meter.push(names.maybe(f.meter.as_deref()));
+    }
+
+    /// What was packed, its words sorted: what is left is `tidy`'s.
+    fn packed(self) -> Packed {
+        let Self { names, mut packed } = self;
+        let mut sorted: Vec<(String, u32)> = names.0.into_iter().collect();
+        sorted.sort_unstable();
+        let mut place = vec![0; sorted.len()];
+        for (at, (word, n)) in sorted.iter().enumerate() {
+            place[*n as usize] = at as u32;
+            packed.words.push(word);
+        }
+        packed.each_word(&mut |w| *w = place[*w as usize]);
+        packed
+    }
+
+    /// The index of what was packed, as of `rev`. Refused where a row names what is not here, or came out of the order of its
+    /// ids: a file of that form would be refused by whoever loads it.
+    pub fn build(self, rev: i64) -> Result<Index, Refused> {
+        let mut packed = self.packed();
+        if !packed.in_order() {
+            return Err(Refused::Damaged);
+        }
+        packed.tidy();
+        packed.check()?;
+        Ok(Index { rev, packed })
+    }
+}
+
 /// Every table, and the words they say.
 #[derive(Debug, Clone, Default)]
 struct Packed {
@@ -874,97 +1024,12 @@ struct Packed {
 impl Packed {
     /// These rows, in order, their words sorted: what is left is `tidy`'s.
     fn of(rows: &Rows) -> Self {
-        let mut names = Names::default();
-        names.of("");
-        let mut packed = Packed::default();
-        for row in by_id(&rows.libraries, |l| l.id) {
-            let to = &mut packed.libraries;
-            to.id.push(row.id);
-            to.key.push(names.of(&row.key));
-            to.name.push(names.of(&row.name));
-            to.kind.push(row.kind as i64);
-            to.order.push(i64::from(row.order));
-            to.colour.push(names.maybe(row.colour.as_deref()));
-            to.owner.push(names.maybe(row.owner.as_deref()));
-        }
-        for row in by_id(&rows.artists, |a| a.id) {
-            let to = &mut packed.artists;
-            to.id.push(row.id);
-            to.name.push(names.of(&row.name));
-            to.sort.push(&row.sort);
-            to.spelled.push(names.all(&row.spelled));
-        }
-        for row in by_id(&rows.records, |r| r.id) {
-            let to = &mut packed.records;
-            to.id.push(row.id);
-            to.title.push(&row.title);
-            to.sort.push(&row.sort);
-            to.artist.push(names.of(&row.artist));
-            to.artist_ids.push(row.artist_ids.iter().copied());
-            to.year.push(from_small(row.year));
-            to.original_year.push(from_small(row.original_year));
-            to.added.push(row.added.unwrap_or(NONE));
-            to.kind.push(names.maybe(row.kind.as_deref()));
-            to.secondary.push(names.all(&row.secondary));
-            to.genres.push(names.all(&row.genres));
-            to.compilation.push(i64::from(row.compilation));
-            to.whole_tracks.push(from_small(row.whole_tracks));
-            for copy in &row.copies {
-                let to = &mut packed.copies;
-                to.record.push(row.id);
-                to.library.push(copy.library);
-                to.dir.push(&copy.dir);
-                to.format.push(names.maybe(copy.format.as_deref()));
-                to.min_kbps.push(from_small(copy.min_kbps));
-                to.bits.push(from_small(copy.bits));
-                to.rate.push(from_small(copy.rate));
-                to.size.push(copy.size.map_or(NONE, |s| s as i64));
-                to.added.push(copy.added.unwrap_or(NONE));
-                to.tracks.push(i64::from(copy.tracks));
-            }
-        }
-        for row in by_id(&rows.tracks, |t| t.id) {
-            let (to, f) = (&mut packed.tracks, &row.facts);
-            to.id.push(row.id);
-            to.record.push(row.record);
-            to.disc.push(from_small(row.disc));
-            to.number.push(from_small(row.number));
-            to.title.push(&row.title);
-            to.artist.push(names.maybe(row.artist.as_deref()));
-            to.artist_ids.push(row.artist_ids.iter().copied());
-            to.line.push(&f.rel);
-            to.lines.push(&f.lines.join(LINES_APART));
-            to.folders.push(f.folders.iter().copied());
-            to.born.push(f.born.unwrap_or(NONE));
-            to.length.push(from_float(f.length));
-            to.year.push(from_float(f.year));
-            to.bpm.push(from_float(f.bpm));
-            to.energy.push(from_float(f.energy));
-            to.danceability.push(from_float(f.danceability));
-            to.four.push(f.four.unwrap_or(f32::NAN));
-            to.clap_moods.push(f.clap_moods.iter().flatten().copied());
-            to.genres.push(names.all(&f.genres));
-            to.styles.push(names.all(&f.styles));
-            to.moods.push(names.all(&f.moods));
-            to.tags.push(names.all(&f.tags));
-            to.labels.push(names.all(&f.labels));
-            to.release_types.push(names.all(&f.release_types));
-            to.artists.push(names.all(&f.artists));
-            to.credits.push(names.all(&f.credits));
-            to.credit_names.push(names.all(&f.credit_names));
-            to.quality.push(names.maybe(f.quality.as_deref()));
-            to.key.push(names.maybe(f.key.as_deref()));
-            to.meter.push(names.maybe(f.meter.as_deref()));
-        }
-        let mut sorted: Vec<(String, u32)> = names.0.into_iter().collect();
-        sorted.sort_unstable();
-        let mut place = vec![0; sorted.len()];
-        for (at, (word, n)) in sorted.iter().enumerate() {
-            place[*n as usize] = at as u32;
-            packed.words.push(word);
-        }
-        packed.each_word(&mut |w| *w = place[*w as usize]);
-        packed
+        let mut to = Builder::new();
+        by_id(&rows.libraries, |l| l.id).into_iter().for_each(|row| to.library(row));
+        by_id(&rows.artists, |a| a.id).into_iter().for_each(|row| to.artist(row));
+        by_id(&rows.records, |r| r.id).into_iter().for_each(|row| to.record(row));
+        by_id(&rows.tracks, |t| t.id).into_iter().for_each(|row| to.track(row.head(), &row.facts));
+        to.packed()
     }
 
     fn each_word(&mut self, each: &mut dyn FnMut(&mut u32)) {
@@ -1052,13 +1117,16 @@ impl Packed {
             copies: Copies::read(from)?,
             tracks: Tracks::read(from)?,
         };
-        let rising = |ids: &[i64]| ids.windows(2).all(|w| w[0] < w[1]);
         let sorted = rows > 0 && packed.words.get(0).is_empty() && (1..rows).all(|i| packed.words.get(i - 1) < packed.words.get(i));
-        let in_order = rising(packed.libraries.keys()) && rising(packed.artists.keys()) && rising(packed.records.keys()) && rising(packed.tracks.keys());
-        let together = packed.copies.record.windows(2).all(|w| w[0] <= w[1]);
         let mut known = true;
         packed.each_word(&mut |w| known &= (*w as usize) < rows);
-        if sorted && in_order && together && known { Ok(packed) } else { Err(Refused::Damaged) }
+        if sorted && packed.in_order() && known { Ok(packed) } else { Err(Refused::Damaged) }
+    }
+
+    /// Whether each table's rows lie in the order of their ids, a record's copies together.
+    fn in_order(&self) -> bool {
+        let rising = |ids: &[i64]| ids.windows(2).all(|w| w[0] < w[1]);
+        rising(self.libraries.keys()) && rising(self.artists.keys()) && rising(self.records.keys()) && rising(self.tracks.keys()) && self.copies.record.windows(2).all(|w| w[0] <= w[1])
     }
 
     fn library_at(&self, row: usize) -> Library {
@@ -1800,6 +1868,40 @@ mod tests {
         rows.artists.reverse();
         rows.libraries.reverse();
         assert_eq!(built(&rows).save(), first);
+    }
+
+    /// The server packs a track at a time, its facts staying where they are, and must come to the very bytes `Rows` come to.
+    #[test]
+    fn rows_packed_one_at_a_time_save_what_a_whole_build_saves() {
+        let (mut rows, _) = made_up(300, 8);
+        rows.tracks.sort_by_key(|t| t.id);
+        rows.records.sort_by_key(|r| r.id);
+        rows.artists.sort_by_key(|a| a.id);
+        // Named by nothing: gone by either way.
+        rows.artists.push(artist(1_000_000));
+        let mut to = Builder::new();
+        rows.libraries.iter().for_each(|l| to.library(l));
+        rows.artists.iter().for_each(|a| to.artist(a));
+        rows.records.iter().for_each(|r| to.record(r));
+        rows.tracks.iter().for_each(|t| to.track(t.head(), &t.facts));
+        assert_eq!(to.build(7).unwrap().save(), Index::build(7, &rows).unwrap().save());
+    }
+
+    #[test]
+    fn rows_packed_out_of_their_order_are_refused_as_any_reader_would_refuse_them() {
+        let packing = |rows: &Rows, ids: [usize; 3]| {
+            let mut to = Builder::new();
+            rows.libraries.iter().for_each(|l| to.library(l));
+            rows.artists.iter().for_each(|a| to.artist(a));
+            rows.records.iter().for_each(|r| to.record(r));
+            ids.iter().for_each(|at| to.track(rows.tracks[*at].head(), &rows.tracks[*at].facts));
+            to.build(1)
+        };
+        assert!(packing(&small(), [0, 1, 2]).is_ok());
+        assert_eq!(packing(&small(), [1, 0, 2]).err(), Some(Refused::Damaged));
+        let mut unknown = small();
+        unknown.records.remove(1);
+        assert_eq!(packing(&unknown, [0, 1, 2]).err(), Some(Refused::Unknown { what: "record", id: 20 }));
     }
 
     /// What a pass of the library might do to `rows`, and the changes the feed brings for it, read as the server reads them: the

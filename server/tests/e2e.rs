@@ -1351,6 +1351,86 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The whole index as a device fetches it: (status, its bytes, gzip's or not), `gzip` being what is asked.
+async fn index_bytes(who: &Caller<'_>, gzip: bool) -> (u16, Vec<u8>, bool) {
+    let mut asked = who.request(reqwest::Method::GET, "/api/index");
+    if gzip {
+        asked = asked.header(reqwest::header::ACCEPT_ENCODING, "gzip");
+    }
+    let r = asked.send().await.unwrap();
+    let (status, zipped) = (r.status().as_u16(), r.headers().get(reqwest::header::CONTENT_ENCODING).is_some_and(|v| v == "gzip"));
+    (status, r.bytes().await.unwrap().to_vec(), zipped)
+}
+
+async fn index_of(who: &Caller<'_>) -> cratarr_rules::index::Index {
+    let (status, bytes, _) = index_bytes(who, false).await;
+    assert_eq!(status, 200);
+    cratarr_rules::index::Index::load(&bytes).unwrap()
+}
+
+/// Each account fetches every library it can see, what it has switched off too (0101's point 16: switching one on works offline),
+/// and is told whose own music is whose, as the rest of the page is.
+#[tokio::test]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn two_accounts_fetch_every_library_they_can_see_end_to_end() {
+    let root = temp("device-index");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let own = library.join("own");
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("second"), "main"), (&library.join("incoming"), "incoming")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let titles = |albums: Vec<Value>| albums.iter().filter_map(|a| a["title"].as_str().map(str::to_string)).collect::<std::collections::BTreeSet<String>>();
+    s.until("every library read", Duration::from_secs(180), || async { titles(ann.albums().await).len() == 22 }).await;
+    s.until("the record's four copies", Duration::from_secs(120), || async {
+        ann.albums().await.iter().any(|a| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 4))
+    })
+    .await;
+
+    // Who has what switched off is no matter here: bob has ann's own music off by default, and he holds it.
+    let off = bob.get("/api/me/preferences").await;
+    let own_ann = format!("cratarr/{}", own.join("ann").display());
+    assert!(off["values"]["hidden_libraries"]["value"].as_array().is_some_and(|v| v.iter().any(|k| k.as_str() == Some(&*own_ann))), "{off}");
+    let (of_ann, of_bob) = (index_of(&ann).await.rows(), index_of(&bob).await.rows());
+    let listed = |rows: &cratarr_rules::index::Rows| rows.records.iter().map(|r| r.title.clone()).collect::<std::collections::BTreeSet<String>>();
+    assert_eq!(listed(&of_ann), titles(ann.albums().await), "every record the Library lists");
+    assert_eq!(listed(&of_bob), listed(&of_ann));
+    assert!(listed(&of_bob).contains("Own Room"), "ann's own music, off for bob and held for the day he turns it on");
+
+    // Every library, by the id the rows name them by, as the page names them.
+    let library_of = |rows: &cratarr_rules::index::Rows, key: &Path| rows.libraries.iter().find(|l| l.key == key.to_string_lossy()).cloned().unwrap();
+    assert_eq!(of_ann.libraries.len(), 5, "{:?}", of_ann.libraries);
+    let (theirs, music) = (library_of(&of_bob, &own.join("ann")), library_of(&of_bob, &library.join("music")));
+    assert_eq!((theirs.owner.as_deref(), theirs.kind), (Some("ann"), cratarr_rules::index::Kind::Own));
+    assert_eq!((music.owner.as_deref(), music.kind, music.order), (None, cratarr_rules::index::Kind::Main, 0));
+    assert_eq!(library_of(&of_ann, &library.join("incoming")).kind, cratarr_rules::index::Kind::Incoming);
+
+    // A record in every library holds a copy in each, in the order it plays.
+    let shores = of_bob.records.iter().find(|r| r.title == "Both Shores").unwrap();
+    assert_eq!(shores.copies.len(), 4);
+    assert_eq!(shores.copies.last().unwrap().library, library_of(&of_bob, &library.join("incoming")).id, "Incoming last");
+    let track = of_bob.tracks.iter().find(|t| t.record == shores.id).unwrap();
+    assert_eq!(track.facts.folders.len(), 4, "a track says where it lies");
+    assert_eq!(track.facts.lines.len(), 3, "and by which line");
+
+    // Sent packed to whoever takes it, and only to them.
+    let (_, plain, zipped) = index_bytes(&ann, false).await;
+    assert!(!zipped);
+    let (status, packed, zipped) = index_bytes(&ann, true).await;
+    assert!(status == 200 && zipped && packed.len() < plain.len(), "{} of {}", packed.len(), plain.len());
+    let mut back = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&packed[..]), &mut back).unwrap();
+    assert!(back == plain, "packed, it is the same index");
+    assert_eq!(index_bytes(&s.anyone(), false).await.0, 401, "no session, no library");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A slskd for a fetch to meet: every batch taken and complete at once, `file` in the folder its batch names under
 /// `completed`. Its address, and how many batches it was asked for.
 async fn slskd_serving(completed: PathBuf, file: PathBuf) -> (String, Arc<AtomicUsize>) {
