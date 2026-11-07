@@ -4713,6 +4713,10 @@ if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) lockScreenA
 // this is what carries its outcomes out: a motion started on the head ([headStart]), followed ([headStep]), let go,
 // handed back ([headFinish]) or dropped ([headEnd]). Until the machine is here, the server's wind streams as before.
 
+/** Normal play stays the track's own player's until 0102's gate is passed, which is the owner's call. Till then nothing calls
+ *  [headStart], so a file fetched for the head would be a whole file more for every track, for nothing. */
+const HEAD_PLAYS = false;
+
 /** A wind on the head: its track (its place in the queue and its key), where it began (s), its motion, when it began
  *  (the clock's ms, for its length only), when it is over (ms in; null: at an edge, or at its let-go's arrival), what
  *  follows it (where it was last heard, s, and whether it stopped at an edge), and its hold while held. */
@@ -4741,7 +4745,7 @@ const onHead = (t: LocalTrack | undefined) => (t && windable(t) ? headKey(t) : n
 // browser: in the app its own player has its own head.
 $effect.root(() => {
   $effect(() => {
-    if (inApp || !audio) return;
+    if (!HEAD_PLAYS || inApp || !audio) return;
     const t = local.queue[local.index];
     const key = onHead(t);
     if (!key || !t) return;
