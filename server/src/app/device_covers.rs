@@ -63,6 +63,34 @@ fn held_in(dir: &Path) -> HashMap<i64, (String, PathBuf)> {
     entries.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "jpg")).filter_map(|e| parse(e.path())).collect()
 }
 
+/// The sizes a list's cover is made at: none smaller than a row needs, none larger than a picture worth keeping small.
+pub const SIZES: std::ops::RangeInclusive<u32> = 32..=2048;
+
+/// A record's cover for a list or a grid (finding 86; the player and a panel keep the whole one): its small cover here where that
+/// is as large as asked, made already, else made at that size once, through the disk cache (`Serve::sized_cover`). None where it
+/// has no cover.
+pub async fn for_list(serve: &Arc<Serve>, album: &str, size: u32) -> Option<(String, Vec<u8>)> {
+    let size = size.clamp(*SIZES.start(), *SIZES.end());
+    if size <= SIDE
+        && let Some(small) = small_made(serve, album)
+    {
+        return Some(("image/jpeg".to_string(), small));
+    }
+    serve.sized_cover(album, size).await.unwrap_or_else(|e| {
+        tracing::warn!(target: "library", album = %album, size, reason = %format!("{e:#}"), "no cover at that size");
+        None
+    })
+}
+
+/// A record's small cover as made already: none where it is not made yet, or its picture could not be read. Nothing here makes
+/// one: what asks for a cover cannot wait for the maker.
+fn small_made(serve: &Serve, album: &str) -> Option<Vec<u8>> {
+    let stamp = serve.cover_stamps().get(album).cloned()?;
+    let record = album.strip_prefix(ids::ALBUM)?;
+    let file = folder_of(serve)?.join(format!("{record}-{stamp}.jpg"));
+    std::fs::read(file).ok().filter(|picture| !picture.is_empty())
+}
+
 /// What goes out, read before a byte does: the rev a device goes on from, and each record's picture, none where it has none now.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Bundle {
@@ -364,6 +392,229 @@ mod tests {
         assert_eq!(make(&s.serve).await.unwrap(), 1);
         assert_eq!(whole_now(&s).await.1, BTreeMap::new());
         assert_eq!(make(&s.serve).await.unwrap(), 0, "not tried again until it changes");
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// The record a test's library holds, by the cover it has.
+    fn album_of(s: &Served) -> String {
+        s.serve.cover_stamps().keys().next().cloned().unwrap()
+    }
+
+    /// Finding 86: a list's cover comes no larger than it asks, and the whole one stays whole for the player and a panel.
+    #[tokio::test]
+    async fn a_list_gets_its_cover_no_larger_than_it_asks_and_the_whole_one_stays_whole() {
+        let (s, data) = with_cover("list", &picture([200, 30, 30], 1000));
+        let album = album_of(&s);
+        let (ct, small) = for_list(&s.serve, &album, 320).await.unwrap();
+        assert_eq!(ct, "image/jpeg");
+        let shown = image::load_from_memory(&small).unwrap();
+        assert_eq!((shown.width(), shown.height()), (320, 320));
+        let (_, whole) = s.serve.cover_bytes(&album).await.unwrap().unwrap();
+        assert_eq!(image::load_from_memory(&whole).unwrap().width(), 1000);
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// Made once, a size is the disk cache's: asked again it comes with nothing of the picture read.
+    #[tokio::test]
+    async fn a_size_made_once_comes_again_with_its_picture_gone() {
+        let (s, data) = with_cover("cached", &picture([200, 30, 30], 1000));
+        let album = album_of(&s);
+        let first = for_list(&s.serve, &album, 320).await.unwrap().1;
+        std::fs::remove_file(s.roots[0].join("A/cover.jpg")).unwrap();
+        assert_eq!(for_list(&s.serve, &album, 320).await.unwrap().1, first);
+        assert_eq!(for_list(&s.serve, &album, 640).await, None, "another size is another making, and there is nothing to make it of");
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// A cover changed has another print, so a list never shows the one before.
+    #[tokio::test]
+    async fn a_cover_changed_is_made_again_at_its_size() {
+        let (s, data) = with_cover("changed", &picture([200, 30, 30], 400));
+        for_list(&s.serve, &album_of(&s), 200).await.unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        std::fs::write(s.roots[0].join("A/cover.jpg"), picture([30, 200, 30], 400)).unwrap();
+        s.cat.walk_all();
+        s.built();
+        s.serve.covers_read_again_for_tests();
+        let green = image::load_from_memory(&for_list(&s.serve, &album_of(&s), 200).await.unwrap().1).unwrap().to_rgb8();
+        assert!(green.get_pixel(5, 5)[1] > 150, "{:?}", green.get_pixel(5, 5));
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// A size no larger than the small covers made here is one of them: no second maker, no decode.
+    #[tokio::test]
+    async fn a_small_size_is_the_small_cover_made_already() {
+        let (s, data) = with_cover("small", &picture([200, 30, 30], 1000));
+        let album = album_of(&s);
+        make(&s.serve).await.unwrap();
+        let made = std::fs::read_dir(data.join(FOLDER)).unwrap().next().unwrap().unwrap().path();
+        std::fs::write(&made, b"made here").unwrap();
+        assert_eq!(for_list(&s.serve, &album, 96).await.unwrap().1, b"made here");
+        assert_eq!(for_list(&s.serve, &album, SIDE).await.unwrap().1, b"made here");
+        assert_ne!(for_list(&s.serve, &album, SIDE + 1).await.unwrap().1, b"made here", "larger than they are, made at its size");
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// A picture the maker could not read leaves an empty file: that is no cover for a list, which gets the picture as it is.
+    #[tokio::test]
+    async fn a_small_cover_that_could_not_be_made_is_no_answer() {
+        let (s, data) = with_cover("unmade", b"no picture at all");
+        make(&s.serve).await.unwrap();
+        assert_eq!(for_list(&s.serve, &album_of(&s), 96).await.unwrap().1, b"no picture at all");
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// What asks for a cover cannot wait for the maker: a small size not made yet is made at once.
+    #[tokio::test]
+    async fn a_small_size_not_made_yet_is_made_at_once() {
+        let (s, data) = with_cover("not-yet", &picture([200, 30, 30], 1000));
+        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album_of(&s), 96).await.unwrap().1).unwrap().width(), 96);
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[tokio::test]
+    async fn a_cover_smaller_than_asked_comes_as_it_is() {
+        let original = picture([200, 30, 30], 300);
+        let (s, data) = with_cover("as-is", &original);
+        assert_eq!(for_list(&s.serve, &album_of(&s), 640).await.unwrap().1, original);
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[tokio::test]
+    async fn a_size_out_of_reason_is_held_to_the_sizes_made() {
+        let (s, data) = with_cover("bounds", &picture([200, 30, 30], 2100));
+        let album = album_of(&s);
+        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album, 1).await.unwrap().1).unwrap().width(), *SIZES.start());
+        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album, 100_000).await.unwrap().1).unwrap().width(), *SIZES.end());
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    #[tokio::test]
+    async fn a_record_with_no_cover_has_none_at_any_size() {
+        let data = std::env::temp_dir().join(format!("cratarr-device-covers-none-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let s = served_in("none", &[CopyKind::Main], Some(&data));
+        s.add(0, &[("A/01.flac", &[("album", "Record"), ("albumartist", "Someone"), ("title", "One")])]);
+        s.built();
+        let album = s.serve.library.album_ids().unwrap().into_iter().next().unwrap();
+        assert_eq!(for_list(&s.serve, &album, 320).await, None);
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// A track's row asks by its song: its record's cover.
+    #[tokio::test]
+    async fn a_song_is_known_by_its_record() {
+        let (s, data) = with_cover("song", &picture([200, 30, 30], 200));
+        let song = ids::song(s.cat.track_of(0, "A/01.flac").unwrap());
+        assert_eq!(s.serve.album_of_song(&song), Some(album_of(&s)));
+        assert_eq!(s.serve.album_of_song("tr-999999"), None);
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// A Subsonic client's 304 is answered by the library's print: nothing of the picture is read (finding 87).
+    #[tokio::test]
+    async fn a_304_reads_nothing_of_the_picture() {
+        use axum::http::{HeaderMap, HeaderValue};
+        let (s, data) = with_cover("unchanged", &picture([200, 30, 30], 400));
+        let album = album_of(&s);
+        let print = s.serve.cover_stamps().get(&album).cloned().unwrap();
+        std::fs::remove_file(s.roots[0].join("A/cover.jpg")).unwrap();
+        let mut asked = HeaderMap::new();
+        asked.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&format!("\"{print}-300\"")).unwrap());
+        assert_eq!(s.serve.cover(&album, Some(300), &asked).await.unwrap().status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(s.serve.cover(&album, Some(300), &HeaderMap::new()).await.unwrap().status(), StatusCode::NOT_FOUND, "read, it is gone");
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// Subsonic's sizes come the same way: one making, kept.
+    #[tokio::test]
+    async fn a_subsonic_size_is_made_and_kept_as_a_lists() {
+        use axum::http::HeaderMap;
+        let (s, data) = with_cover("subsonic", &picture([200, 30, 30], 1000));
+        let album = album_of(&s);
+        let sent = s.serve.cover(&album, Some(300), &HeaderMap::new()).await.unwrap();
+        let body = axum::body::to_bytes(sent.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(image::load_from_memory(&body).unwrap().width(), 300);
+        std::fs::remove_file(s.roots[0].join("A/cover.jpg")).unwrap();
+        assert_eq!(for_list(&s.serve, &album, 300).await.unwrap().1, body.to_vec(), "one cache for both");
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// Finding 86's number: what the server holds for a grid of 100 records' covers, whole as lists asked them before and sized as
+    /// now, cold and warm. Its peak, from /proc after resetting it, so it reads a scenario's own; a picture as a real cover is, which
+    /// JPEG keeps large.
+    #[test]
+    #[ignore = "a measure: --ignored measured_grid_of_100 --nocapture --test-threads=1, with dependencies optimised"]
+    fn measured_grid_of_100_records() {
+        const RECORDS: usize = 100;
+        let status = |field: &str| -> u64 {
+            let text = std::fs::read_to_string("/proc/self/status").unwrap();
+            let line = text.lines().find(|l| l.starts_with(field)).unwrap();
+            line.split_whitespace().nth(1).unwrap().parse::<u64>().unwrap() / 1024
+        };
+        let reset = || std::fs::write("/proc/self/clear_refs", "5").unwrap();
+        let data = std::env::temp_dir().join(format!("cratarr-device-covers-grid-{}", std::process::id()));
+        std::fs::remove_dir_all(&data).ok();
+        std::fs::create_dir_all(&data).unwrap();
+        let s = served_in("grid", &[CopyKind::Main], Some(&data));
+        let mut r = cratarr_rules::Rng::seeded(86);
+        let picture = RgbImage::from_fn(3000, 3000, |x, y| {
+            let grain = (r.unit() * 48.0) as u32;
+            Rgb([((x / 12 + grain) % 256) as u8, ((y / 12 + grain) % 256) as u8, (((x + y) / 24 + grain) % 256) as u8])
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92).encode_image(&picture).unwrap();
+        let cover = out.into_inner();
+        drop(picture);
+        let files: Vec<(String, Vec<(String, String)>)> = (0..RECORDS)
+            .map(|n| {
+                std::fs::create_dir_all(s.roots[0].join(format!("R{n}"))).unwrap();
+                std::fs::write(s.roots[0].join(format!("R{n}/cover.jpg")), &cover).unwrap();
+                (format!("R{n}/01.flac"), vec![("album".to_string(), format!("Record {n}")), ("albumartist".to_string(), "Someone".to_string()), ("title".to_string(), "One".to_string())])
+            })
+            .collect();
+        let tags: Vec<Vec<(&str, &str)>> = files.iter().map(|(_, t)| t.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()).collect();
+        let listed: Vec<(&str, &[(&str, &str)])> = files.iter().zip(&tags).map(|((rel, _), t)| (rel.as_str(), t.as_slice())).collect();
+        s.add(0, &listed);
+        s.built();
+        let albums: Vec<String> = s.serve.cover_stamps().keys().cloned().collect();
+        assert_eq!(albums.len(), RECORDS);
+        println!("a cover: 3000 by 3000, {:.1} MB; {RECORDS} records", cover.len() as f64 / 1_048_576.0);
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+        let grid = |what: &str, at_once: usize, sized: bool| {
+            let before = status("VmRSS:");
+            reset();
+            let began = std::time::Instant::now();
+            // Each ask as a request is: in flight with its bytes until it is sent, `at_once` of them at a time.
+            let sent: usize = runtime.block_on(async {
+                let gate = Arc::new(tokio::sync::Semaphore::new(at_once));
+                let mut asks = tokio::task::JoinSet::new();
+                for album in albums.iter().cloned() {
+                    let (serve, gate) = (s.serve.clone(), gate.clone());
+                    asks.spawn(async move {
+                        let _turn = gate.acquire_owned().await.unwrap();
+                        let got = if sized { for_list(&serve, &album, 320).await } else { serve.cover_bytes(&album).await.unwrap() };
+                        got.map_or(0, |(_, bytes)| bytes.len())
+                    });
+                }
+                let mut all = 0;
+                while let Some(one) = asks.join_next().await {
+                    all += one.unwrap();
+                }
+                all
+            });
+            println!(
+                "{what:<34} {at_once:>3} at once: peak {:>4} MB over the {before} MB before, {:>5.1} s, {:.1} MB sent",
+                status("VmHWM:").saturating_sub(before),
+                began.elapsed().as_secs_f64(),
+                sent as f64 / 1_048_576.0
+            );
+        };
+        grid("whole, as lists asked before", RECORDS, false);
+        grid("whole, as lists asked before", 6, false);
+        grid("sized 320, cold", RECORDS, true);
+        grid("sized 320, warm", RECORDS, true);
+        grid("sized 320, warm", 6, true);
         std::fs::remove_dir_all(&data).ok();
     }
 

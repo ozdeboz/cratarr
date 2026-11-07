@@ -10,7 +10,8 @@ import { albumCoverUrl, albumView, ApiError } from './api';
 import { downloads, inApp } from './app.svelte';
 import { installed, offline } from './offline.svelte';
 import { reach, refusedFor, whenReached } from './reach.svelte';
-import { coverKey, coverSize, filled, plan, toFill, type Held, type ShelfTrack, type ShelfWhere } from './shelf';
+import { COVER_PX, coverKey, coverSize, filled, plan, toFill, type Held, type ShelfTrack, type ShelfWhere } from './shelf';
+import { sizedCover } from './coverSize';
 
 const DB = 'cratarr-shelf';
 const TRACKS = 'tracks';
@@ -167,7 +168,8 @@ async function fill() {
       const key = coverKey(source, album_id);
       if (!shelf.covers[key]) {
         try {
-          const blob = await smallCover(albumCoverUrl(source, album_id));
+          // Cratarr's own at the shelf's size (finding 86): the whole picture is tens of MB once decoded here.
+          const blob = await smallCover(sizedCover(albumCoverUrl(source, album_id), COVER_PX));
           if (blob && shelf.who === who) await keepCover(key, blob);
         } catch {
           /* no cover, or not now */

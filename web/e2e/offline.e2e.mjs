@@ -120,3 +120,57 @@ test('Cratarr gone, search finds the library in what the device keeps, says noth
   await page.getByText(/^\d+ albums • \d+ tracks/).first().waitFor({ timeout: 20_000 });
   assert.deepEqual(await page.locator('[role=alert], .toast').allInnerTexts(), [], 'nothing said of what could not be asked');
 });
+
+test("a list's covers are asked at the size they are drawn, never whole, and a record's panel asks its own whole", async () => {
+  // A browser of its own, so that every cover is asked as it comes, none from what an earlier test left; two device pixels to a
+  // CSS one, as a tablet's.
+  await standin(d.page, 'up');
+  const context = await d.browser.newContext({ deviceScaleFactor: 2 });
+  const page = await context.newPage();
+  await signIn(page, 'ann');
+  await until(() => inModule(page, '/src/lib/deviceSync.svelte.ts', (m) => [m.indexSync.rev, m.indexSync.covers]), ([index, covers]) => index !== null && index === covers, 'the index', 60_000);
+  await standin(page, 'down');
+  const asked = [];
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (/^\/api\/albums\/[^/]+\/[^/]+\/cover$/.test(u.pathname)) asked.push(u.pathname + u.search);
+  });
+  /** Each cover `selector` finds: the device pixels its box holds, and the size it asked. */
+  const drawn = (selector) =>
+    page.evaluate(
+      (selector) =>
+        [...document.querySelectorAll(selector)].map((img) => {
+          const box = img.getBoundingClientRect();
+          return { px: Math.max(box.width, box.height) * devicePixelRatio, size: Number(new URL(img.src).searchParams.get('size')) };
+        }),
+      selector,
+    );
+  /** The least size that fills it. */
+  const fits = (r) => r.size >= r.px && (r.size === 160 || r.size / 2 < r.px);
+  const layout = (to) => inModule(page, PREFS, (m, to) => void (m.prefs.albumLayout = to), to);
+
+  // Rows, their covers lazy.
+  await layout('rows');
+  await page.goto(`${PAGE}/#/library`);
+  await page.locator('li[data-subject] img').first().waitFor({ timeout: 45_000 });
+  for (const r of await drawn('li[data-subject] img')) assert.ok(fits(r), JSON.stringify(r));
+  // A grid's tiles, large enough that the device's pixels and CSS's ask different sizes.
+  await layout('grid');
+  await until(() => drawn('.tile img'), (rs) => rs.length > 0 && rs.every(fits), 'the tiles at the size they are drawn');
+  // The flow draws its covers at once, not lazily: nothing whole even so.
+  await layout('flow');
+  await until(() => page.evaluate(() => document.querySelectorAll('.lists img').length), (n) => n > 0, 'the flow');
+  await page.waitForTimeout(1_000);
+  assert.ok(asked.length > 0 && asked.every((a) => a.includes('size=')), `nothing whole, not even before a box is laid out: ${JSON.stringify(asked)}`);
+
+  // A record's panel: its own cover whole, beside the list, and alone in its flow in a short, wide window, as a phone on its side.
+  await layout('rows');
+  await page.getByRole('button', { name: 'View First Light' }).first().click();
+  const own = () => page.evaluate(() => [...document.querySelectorAll('.hero img')].map((img) => img.getAttribute('src')));
+  await until(own, (srcs) => srcs.length > 0 && srcs.every((src) => !src.includes('size=')), "the panel's own cover, whole");
+  await page.setViewportSize({ width: 900, height: 500 });
+  await until(() => page.evaluate(() => !!document.querySelector('.hero.flowing img')), (alone) => alone, 'its cover alone in its flow');
+  await until(own, (srcs) => srcs.length > 0 && srcs.every((src) => !src.includes('size=')), "the panel's own cover in its flow, whole");
+  await standin(page, 'up');
+  await context.close();
+});

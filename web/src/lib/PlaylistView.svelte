@@ -2307,7 +2307,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       <header class="head">
         <div class="top">
         <div class="art" class:mosaic={coversShown.length === 4}>
-          {#each coversShown as c, i (i)}<Cover src={c} />{:else}<Cover src={null} />{/each}
+          {#each coversShown as c, i (i)}<Cover src={c} whole />{:else}<Cover src={null} />{/each}
         </div>
           <div class="info fields">
             <label class="field">
@@ -2337,9 +2337,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {:else if oneWide}
           <!-- Alone, it takes the top row's middle too (the glass is at that row's far ends) and comes nearer the action
                bar (the owner, 2026-10-26: at least twice the size it had). -->
-          <CoverFlow covers={heroShown} top={8} foot={40} />
+          <CoverFlow covers={heroShown} top={8} foot={40} whole />
         {:else}
-          {#each heroShown as c, i (i)}<Cover src={c} lazy={false} />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
+          {#each heroShown as c, i (i)}<Cover src={c} lazy={false} whole />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
         {/if}
         {#if crateEditing}
           <!-- The crate's own picture, set or removed with Save. -->

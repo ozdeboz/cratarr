@@ -750,17 +750,50 @@ impl Serve {
         self.library.roots().into_iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| f)
     }
 
+    /// The record a song is in; none for a song not held. Blocking.
+    pub fn album_of_song(&self, song: &str) -> Option<String> {
+        self.library.songs_by_id(&[song.to_string()]).ok()?.pop().map(|s| s.album_id)
+    }
+
+    /// A record's cover at most `size` pixels on its longer side, for a list or a grid (finding 86; the player and a panel keep the
+    /// whole one): made once, then from the disk cache, which a Subsonic client's sizes share. Its print is the library's word, so
+    /// a size made before costs no read of the picture, and the original is read only at the resizer's turn: a grid's asks waiting
+    /// for it hold nothing (finding 87). A record with no print yet is made each time, as nothing could tell its cache entry stale.
+    pub async fn sized_cover(self: &Arc<Self>, album: &str, size: u32) -> Result<Option<(String, Vec<u8>)>> {
+        let key = self.cover_stamps().get(album).map(|print| format!("{album}:{print}:{size}"));
+        if let Some(small) = key.as_deref().and_then(|k| self.art_cache.get(k)) {
+            return Ok(Some(("image/jpeg".to_string(), small)));
+        }
+        let _turn = self.resizing.acquire().await?;
+        // Made while this one waited.
+        if let Some(small) = key.as_deref().and_then(|k| self.art_cache.get(k)) {
+            return Ok(Some(("image/jpeg".to_string(), small)));
+        }
+        let (me, album) = (self.clone(), album.to_string());
+        tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<u8>)>> {
+            let Some((ct, bytes, _)) = me.art_of(&album)? else { return Ok(None) };
+            // A picture the resizer cannot read, or one small enough already, goes as it is.
+            Ok(Some(match art::resize(&bytes, size).ok().flatten() {
+                Some(small) => {
+                    if let Some(key) = &key {
+                        me.art_cache.put(key, &small);
+                    }
+                    ("image/jpeg".to_string(), small)
+                }
+                None => (ct, bytes),
+            }))
+        })
+        .await?
+    }
+
     /// An album's (or a song's, or an artist's) cover, at most `size` pixels on its longer side when asked. An id with
     /// the current fingerprint may be kept for good; any other is to be checked again (Navidrome's rule, see `art`).
     pub async fn cover(self: &Arc<Self>, id: &str, size: Option<u32>, headers: &HeaderMap) -> Result<Response> {
         let (me, want) = (self.clone(), id.to_string());
-        let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, String, Vec<u8>, String, Option<String>)>> {
-            let (album, asked) = me.art_album(&want)?;
-            let Some(album) = album else { return Ok(None) };
-            Ok(me.art_of(&album)?.map(|(ct, bytes, print)| (album, ct, bytes, print, asked)))
-        })
-        .await??;
-        let Some((album, ct, bytes, print, asked)) = found else { return Ok(StatusCode::NOT_FOUND.into_response()) };
+        let (album, asked) = tokio::task::spawn_blocking(move || me.art_album(&want)).await??;
+        let Some(album) = album else { return Ok(StatusCode::NOT_FOUND.into_response()) };
+        // The library's word on its print: a 304 costs no read of the picture (finding 87).
+        let print = self.cover_stamps().get(&album).cloned().unwrap_or_default();
         let etag = format!("\"{print}-{}\"", size.unwrap_or(0));
         let lasting = !print.is_empty() && asked.as_deref() == Some(print.as_str());
         let cache = HeaderValue::from_static(if lasting { "public, max-age=31536000, immutable" } else { "no-cache" });
@@ -772,27 +805,15 @@ impl Serve {
             ]
         };
         if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|h| crate::covers::etag_matches(h, &etag)) {
-            return Ok((StatusCode::NOT_MODIFIED, head(&ct)).into_response());
+            return Ok((StatusCode::NOT_MODIFIED, head("image/jpeg")).into_response());
         }
-        let Some(size) = size else { return Ok((head(&ct), bytes).into_response()) };
-        let key = format!("{album}:{print}:{size}");
-        if let Some(small) = self.art_cache.get(&key) {
-            return Ok((head("image/jpeg"), small).into_response());
-        }
-        let _turn = self.resizing.acquire().await?;
-        let me = self.clone();
-        let (small, bytes) = tokio::task::spawn_blocking(move || {
-            // A picture the resizer cannot read, or one small enough already, goes as it is.
-            let small = art::resize(&bytes, size).ok().flatten();
-            if let Some(s) = &small {
-                me.art_cache.put(&key, s);
-            }
-            (small, bytes)
-        })
-        .await?;
-        Ok(match small {
-            Some(s) => (head("image/jpeg"), s).into_response(),
-            None => (head(&ct), bytes).into_response(),
+        let found = match size {
+            Some(size) => self.sized_cover(&album, size).await?,
+            None => self.cover_bytes(&album).await?,
+        };
+        Ok(match found {
+            Some((ct, bytes)) => (head(&ct), bytes).into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
         })
     }
 }

@@ -24,7 +24,8 @@
   import { library } from './albums.svelte';
   import { DOWNLOADS_LISTS, goTo, onceAlbums, WAITS, type DownloadsList, type OnceAlbum } from './downloadsLists.svelte';
   import Icon from './Icon.svelte';
-  import { kept, setKept, syncKept, type KeptItem } from './kept.svelte';
+  import { kept, setKept, startKeptAgain, syncKept, type KeptItem } from './kept.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { matchesSearch, searchNone } from './pageView.svelte';
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
@@ -52,6 +53,9 @@
   const used = $derived(kept.known ? kept.used : downloads.bytes);
   const quality = $derived(appInfo.downloadQuality === 'smaller' ? 'Smaller copies' : 'Originals');
   // Failed: a synced item's tracks are tried again by a sync; the one-time copies by asking for them again.
+  /** The kept list that cannot be read: starting it again is asked first. */
+  let startingAgain = $state(false);
+
   function retry() {
     syncKept();
     const own = failed.filter((t) => t.manual !== false);
@@ -256,6 +260,7 @@
              make clear it went there). -->
         <Item name="Sync settings" onclick={() => viewOver(`${SETTINGS}sync`)} />
         {#if waiting}<Item lead="warn" name={kept.waiting ? WAITS[kept.waiting] : `${waiting} waiting`} />{/if}
+        {@render unreadable()}
         {#if failed.length}
           <!-- Retry asks Cratarr: not offered out of its reach (decision 0085: never offer what cannot be upheld). -->
           <Item lead="bad" name={`${failed.length} failed`}>{#if !reach.away}<button class="retry" onclick={retry}>Retry</button>{/if}</Item>
@@ -279,7 +284,7 @@
             />
           {/if}
         {:else}
-          {#if !kept.items.length}<Item name="Nothing synced" line="Sync to this device from an album's, a playlist's, a crate's or an artist's menu." />{/if}
+          {#if kept.unreadable}{@render unreadable()}{:else if !kept.items.length}<Item name="Nothing synced" line="Sync to this device from an album's, a playlist's, a crate's or an artist's menu." />{/if}
         {/each}
       </Group>
     {:else}
@@ -320,6 +325,22 @@
     {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
+
+<!-- The kept list that cannot be read (the owner, 2026-11-07): said, with its way out. -->
+{#snippet unreadable()}
+  {#if kept.unreadable}<Item lead="bad" name="Kept list can't be read"><button class="retry" onclick={() => (startingAgain = true)}>Start again</button></Item>{/if}
+{/snippet}
+{#if startingAgain}
+  <ConfirmSheet
+    title="Start the kept list again?"
+    text="Downloads stay."
+    label="Start again"
+    icon="reset"
+    danger={false}
+    onconfirm={() => ((startingAgain = false), startKeptAgain())}
+    onclose={() => (startingAgain = false)}
+  />
+{/if}
 
 {#if selecting}
   <SelectBar

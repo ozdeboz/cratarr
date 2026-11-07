@@ -117,3 +117,19 @@ test('an index made before covers had a store reads as holding none', async () =
   databases.set('cratarr-index@old', new Map());
   assert.equal((await (await signedIn('old')).ask(COVER))!.type, 'error');
 });
+
+test("a list's size of a cover never takes the place of the whole one kept for the player away from home", async () => {
+  const w = await signedIn('ann', async () => new Response('a list size'));
+  await (await w.store.caches.open(`${COVERS}@ann`)).put(COVER, new Response('whole'));
+  assert.equal(await (await w.ask(`${COVER}?size=160`))!.text(), 'a list size');
+  await new Promise((go) => setTimeout(go, 10));
+  assert.equal(await (await w.store.caches.match(COVER, { cacheName: `${COVERS}@ann` }))!.text(), 'whole');
+});
+
+test('asked whole, a kept cover is kept fresh', async () => {
+  const w = await signedIn('ann', async () => new Response('whole, new'));
+  await (await w.store.caches.open(`${COVERS}@ann`)).put(COVER, new Response('whole'));
+  await w.ask(COVER);
+  await new Promise((go) => setTimeout(go, 10));
+  assert.equal(await (await w.store.caches.match(COVER, { cacheName: `${COVERS}@ann` }))!.text(), 'whole, new');
+});

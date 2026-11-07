@@ -199,7 +199,7 @@
     <div class="cover-wrap">
       <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
       {#if src || !coverSrc()}
-        {#key src}<Cover {src} lazy={false} onfail={coverFailed} />{/key}
+        {#key src}<Cover {src} lazy={false} whole onfail={coverFailed} />{/key}
       {/if}
       <button class="own play" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampInert()} onclick={playPause} use:longpress={() => (startStopOpen = true)}
         ><Icon name={shownPaused() ? 'play' : 'pause'} size={32} /></button

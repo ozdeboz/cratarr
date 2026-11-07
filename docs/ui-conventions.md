@@ -268,13 +268,17 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   in for. No other icon, also where a crate, playlist, artist or snapshot used to show its own. Every cover is
   `lib/Cover.svelte`, which shows it when there is no address or the image fails to load; a failed address is
   remembered, so the same album shows the stand-in at once everywhere. The players and the queue's card show it only
-  when there is no cover to load, not while one loads. Blurred backdrops simply leave out a cover that fails.
+  when there is no cover to load, not while one loads. Blurred backdrops simply leave out a cover that fails. A list's
+  or a grid's cover is asked at the size its box shows, in the device's pixels (`lib/coverSize`, finding 86); the
+  players and a panel's own cover ask for it whole (`whole`).
 - **Downloads** (in the app) is the Library's list of what is on this device (decided 2026-10-16: "a special case of
   the library page"): the same rows or covers, order, size, search and select, each album as the Library lists it
   (else as its download says), the count with the space they take ("3 albums · 225 MB"). A cover plays what is on the
   device, so the page plays without a connection; an album still coming shows how far ("Downloading 6 of 10"), one
   partly here "3 of 8 on this device". The select bar plays or removes; the menu is the album's one menu, with Remove
-  from this device (and Download for the rest), as everywhere an album is downloaded.
+  from this device (and Download for the rest), as everywhere an album is downloaded. A kept list that cannot be read
+  says so, "Kept list can't be read", with Start again (the owner, 2026-11-07): what was kept in step starts over and
+  the downloads stay, in the app and in the installed page alike.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as **big
   cards** (decided 2026-10-16, `lib/CrateCard`; one across a phone): its picture on the left (its own, else a mosaic of
   its albums' covers), then its name, tracks and length with the favourites setting's small heart, its top three
