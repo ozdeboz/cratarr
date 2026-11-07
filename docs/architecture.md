@@ -158,7 +158,10 @@ it asks the rules crate through UniFFI, so no second copy of the logic grows the
   (`indexEngine.ts`), its bytes in `indexStore.ts`, each account's apart; `deviceReads.ts` gives its rows the shapes Cratarr gives.
   `deviceSync.svelte.ts` keeps it up to date in a browser. In the app `DeviceIndex.kt` does, with no page open, and the page reads
   its bytes through `/__device/index` by the same module. Both go by one rule, `index::sync`: what to do, and what each answer and
-  each set of bytes came to, so neither decides anything of its own.
+  each set of bytes came to, so neither decides anything of its own. A device holds three revs on one log, the index's, the
+  sounds' and the small covers', and gives no feed another's. The first two feeds are each a whole build on the server, so they are
+  asked when `/api/changes` says something moved. The covers' builds nothing, and is asked at every sync, which sets their maker
+  going. Covers are plain frames, read as they come (`coverFrames.ts`) and kept one by one: only their head goes to the rule.
 - `src/lib/shelf.ts` and `shelfStore.svelte.ts` (0.12, decision 0085 step 2): Downloads' details and small covers in
   the page's IndexedDB, filled from the album views while Cratarr answers; it moves into the Rust core's store with
   the whole library's index (0.13).

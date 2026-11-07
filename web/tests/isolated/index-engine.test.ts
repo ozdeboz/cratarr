@@ -95,14 +95,15 @@ test('going round many times leaves the module no bigger: what it gave and took 
 
 test('the rule on what to fetch reads as the crate has it', async () => {
   const e = await engine();
-  assert.deepEqual(e.step(whole, 'free', 'unasked', 0), { do: 'wait', until: e.firstAfter() });
-  assert.deepEqual(e.step(whole, 'free', 'unasked', LATER), { do: 'whole' });
-  assert.deepEqual(e.step(whole, 'metered', 'unasked', LATER), { do: 'ask' });
-  assert.deepEqual(e.step(whole, 'metered', 'yes', LATER), { do: 'whole' });
-  assert.deepEqual(e.step(whole, 'metered', 'no', LATER), { do: 'rest' });
-  assert.deepEqual(e.step(whole, 'off', 'yes', LATER), { do: 'rest' });
-  assert.deepEqual(e.step(held, 'metered', 'no', LATER), { do: 'changes' });
-  assert.deepEqual(e.step({ ...held, stopped: true }, 'free', 'yes', LATER), { do: 'stopped' });
+  assert.deepEqual(e.step(whole, 'free', 'unasked', false, 0), { do: 'wait', until: e.firstAfter() });
+  assert.deepEqual(e.step(whole, 'free', 'unasked', false, LATER), { do: 'whole' });
+  assert.deepEqual(e.step(whole, 'metered', 'unasked', false, LATER), { do: 'ask' });
+  assert.deepEqual(e.step(whole, 'metered', 'yes', false, LATER), { do: 'whole' });
+  assert.deepEqual(e.step(whole, 'metered', 'no', false, LATER), { do: 'rest' });
+  assert.deepEqual(e.step(whole, 'off', 'yes', false, LATER), { do: 'rest' });
+  assert.deepEqual(e.step(held, 'metered', 'no', true, LATER), { do: 'changes' });
+  assert.deepEqual(e.step(held, 'metered', 'no', false, LATER), { do: 'rest' });
+  assert.deepEqual(e.step({ ...held, stopped: true }, 'free', 'yes', true, LATER), { do: 'stopped' });
 });
 
 test('how a part stands after each way a fetch can end', async () => {
@@ -161,6 +162,21 @@ test('a feed taken leaves the result held, each part its own, and one that canno
   const other = vector('whole.bin').slice();
   other[4] = 9;
   assert.equal(e.takeChanges('index', other, vector('changes.bin')), 'start-again');
+});
+
+test('covers are taken by their head, each end as the crate says, and say where they stand', async () => {
+  const e = await engine();
+  const head = (version: number, rev: number) => new Uint8Array([...new TextEncoder().encode('CRXV'), ...new Uint8Array(new Uint32Array([version]).buffer), ...new Uint8Array(new BigInt64Array([BigInt(rev)]).buffer)]);
+  assert.equal(e.coversRev(), -1);
+  assert.equal(e.takeCovers(head(e.coversVersion(), 41), true), 'took');
+  assert.equal(e.coversRev(), 41);
+  assert.equal(e.takeCovers(head(e.coversVersion(), 42), false), 'took');
+  assert.equal(e.coversRev(), 42);
+  assert.equal(e.takeCovers(head(9, 50), true), 'version');
+  assert.equal(e.takeCovers(head(9, 50), false), 'start-again');
+  assert.equal(e.takeCovers(new Uint8Array(0), true), 'failed');
+  assert.equal(e.takeCovers(new Uint8Array(0), false), 'start-again');
+  assert.equal(e.coversRev(), 42, 'what was refused moves nothing');
 });
 
 test('paused is the crate\'s to say', async () => {

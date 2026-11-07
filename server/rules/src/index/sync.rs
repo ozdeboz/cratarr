@@ -4,6 +4,8 @@
 //!
 //! - **Whole once, on Wi-Fi, on mobile data after asking. Then changes on any connection:** they are small, and a device's copy is
 //!   what it reads with Cratarr away.
+//! - **A feed is asked when told, never on a timer:** rows' and sounds' each make a whole build on the server. `/api/changes` says when
+//!   they moved. Covers' builds nothing, and asking it is what sets the maker going, so it is told at every sync.
 //! - **Not in the first seconds** (A3): a device's own first reads go first, and hours in the background count as a start.
 //! - **A lost connection is no failure** (A2): it waits and counts for nothing. Only a real answer can fail, and failing a few times
 //!   rests until the next start. Lost a few times in a row, the device may say it is paused, once.
@@ -14,6 +16,24 @@
 //!   would decide them for itself.
 
 use super::Refused;
+
+/// The form of a bundle of small covers, and of their feed: raised by anything a reader must know (the server's `device_covers`).
+pub const COVERS_VERSION: u32 = 1;
+/// How much of them says what they are: `CRXV`, the version, the rev. Their frames are plain, and a device reads them as they come.
+pub const COVERS_HEAD: usize = 16;
+
+/// Where covers stand, from the head of their bytes, refused as an index would be.
+pub fn covers_rev(head: &[u8]) -> Result<i64, Refused> {
+    let word = |at: usize| head.get(at..at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok());
+    if head.len() < COVERS_HEAD || word(0) != Some(*b"CRXV") {
+        return Err(Refused::Damaged);
+    }
+    let found = word(4).map_or(0, u32::from_le_bytes);
+    if found != COVERS_VERSION {
+        return Err(Refused::Version { found, wants: COVERS_VERSION });
+    }
+    head.get(8..16).and_then(|b| <[u8; 8]>::try_from(b).ok()).map(i64::from_le_bytes).ok_or(Refused::Damaged)
+}
 
 /// How long after a start the first fetch waits.
 pub const FIRST_AFTER_MS: i64 = 10_000;
@@ -134,7 +154,8 @@ impl Part {
         }
     }
 
-    pub fn step(&self, network: Network, mobile: Mobile, now: i64) -> Step {
+    /// What to do now. `told`: its feed may be asked, as the log said it moved, or as it builds nothing.
+    pub fn step(&self, network: Network, mobile: Mobile, told: bool, now: i64) -> Step {
         let first = self.started + FIRST_AFTER_MS;
         if self.stopped {
             return Step::Stopped;
@@ -149,7 +170,7 @@ impl Part {
             return Step::Wait(again);
         }
         if !self.whole {
-            return Step::Changes;
+            return if told { Step::Changes } else { Step::Rest };
         }
         match (network, mobile) {
             (Network::Metered, Mobile::Unasked) => Step::Ask,
@@ -203,36 +224,77 @@ mod tests {
 
     #[test]
     fn nothing_is_fetched_in_the_first_seconds_of_a_start() {
-        assert_eq!(whole().step(Network::Free, Mobile::Unasked, START), Step::Wait(LATER));
-        assert_eq!(held().step(Network::Free, Mobile::Unasked, LATER - 1), Step::Wait(LATER));
-        assert_eq!(held().step(Network::Free, Mobile::Unasked, LATER), Step::Changes);
+        assert_eq!(whole().step(Network::Free, Mobile::Unasked, true, START), Step::Wait(LATER));
+        assert_eq!(held().step(Network::Free, Mobile::Unasked, true, LATER - 1), Step::Wait(LATER));
+        assert_eq!(held().step(Network::Free, Mobile::Unasked, true, LATER), Step::Changes);
     }
 
     #[test]
     fn whole_goes_on_wifi_and_asks_first_on_mobile() {
-        assert_eq!(whole().step(Network::Free, Mobile::Unasked, LATER), Step::Whole);
-        assert_eq!(whole().step(Network::Metered, Mobile::Unasked, LATER), Step::Ask);
-        assert_eq!(whole().step(Network::Metered, Mobile::Yes, LATER), Step::Whole);
+        assert_eq!(whole().step(Network::Free, Mobile::Unasked, true, LATER), Step::Whole);
+        assert_eq!(whole().step(Network::Metered, Mobile::Unasked, true, LATER), Step::Ask);
+        assert_eq!(whole().step(Network::Metered, Mobile::Yes, true, LATER), Step::Whole);
     }
 
     #[test]
     fn a_no_to_mobile_data_rests_until_wifi_and_no_more_asking() {
-        assert_eq!(whole().step(Network::Metered, Mobile::No, LATER), Step::Rest);
-        assert_eq!(whole().step(Network::Free, Mobile::No, LATER), Step::Whole);
+        assert_eq!(whole().step(Network::Metered, Mobile::No, true, LATER), Step::Rest);
+        assert_eq!(whole().step(Network::Free, Mobile::No, true, LATER), Step::Whole);
     }
 
     #[test]
     fn changes_go_on_any_connection_with_nothing_asked() {
         for mobile in [Mobile::Unasked, Mobile::Yes, Mobile::No] {
-            assert_eq!(held().step(Network::Metered, mobile, LATER), Step::Changes);
-            assert_eq!(held().step(Network::Free, mobile, LATER), Step::Changes);
+            assert_eq!(held().step(Network::Metered, mobile, true, LATER), Step::Changes);
+            assert_eq!(held().step(Network::Free, mobile, true, LATER), Step::Changes);
         }
     }
 
     #[test]
+    fn a_feed_is_asked_only_when_told_as_it_is_a_whole_build() {
+        assert_eq!(held().step(Network::Free, Mobile::Yes, false, LATER), Step::Rest);
+        assert_eq!(held().step(Network::Free, Mobile::Yes, true, LATER), Step::Changes);
+    }
+
+    #[test]
+    fn a_whole_owed_needs_no_telling() {
+        assert_eq!(whole().step(Network::Free, Mobile::Unasked, false, LATER), Step::Whole);
+        assert_eq!(whole().step(Network::Metered, Mobile::Unasked, false, LATER), Step::Ask);
+    }
+
+    #[test]
+    fn what_stands_in_the_way_of_a_feed_stands_told_or_not() {
+        assert_eq!(held().step(Network::Free, Mobile::Yes, false, START), Step::Wait(LATER));
+        assert_eq!(held().after(Outcome::Lost, LATER).step(Network::Free, Mobile::Yes, false, LATER), Step::Wait(LATER + LOST_AGAIN_MS));
+        assert_eq!(held().step(Network::Off, Mobile::Yes, true, LATER), Step::Rest);
+    }
+
+    fn head(version: u32, rev: i64) -> Vec<u8> {
+        [&b"CRXV"[..], &version.to_le_bytes(), &rev.to_le_bytes()].concat()
+    }
+
+    #[test]
+    fn covers_say_where_they_stand_in_their_head() {
+        assert_eq!(covers_rev(&head(COVERS_VERSION, 41)), Ok(41));
+        assert_eq!(head(COVERS_VERSION, 41).len(), COVERS_HEAD);
+    }
+
+    #[test]
+    fn covers_of_another_version_are_refused_by_name() {
+        assert_eq!(covers_rev(&head(9, 41)), Err(Refused::Version { found: 9, wants: COVERS_VERSION }));
+    }
+
+    #[test]
+    fn what_is_not_covers_or_is_cut_short_is_damaged() {
+        assert_eq!(covers_rev(&[]), Err(Refused::Damaged));
+        assert_eq!(covers_rev(&head(COVERS_VERSION, 41)[..15]), Err(Refused::Damaged));
+        assert_eq!(covers_rev(&[&b"CRXI"[..], &head(COVERS_VERSION, 41)[4..]].concat()), Err(Refused::Damaged));
+    }
+
+    #[test]
     fn no_network_rests_until_there_is_one() {
-        assert_eq!(whole().step(Network::Off, Mobile::Yes, LATER), Step::Rest);
-        assert_eq!(held().step(Network::Off, Mobile::Yes, LATER), Step::Rest);
+        assert_eq!(whole().step(Network::Off, Mobile::Yes, true, LATER), Step::Rest);
+        assert_eq!(held().step(Network::Off, Mobile::Yes, true, LATER), Step::Rest);
     }
 
     #[test]
@@ -243,8 +305,8 @@ mod tests {
             assert_eq!(s.failed, 0);
             assert_eq!(s.lost, n);
         }
-        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER), Step::Wait(LATER + LOST_AGAIN_MS));
-        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER + LOST_AGAIN_MS), Step::Changes, "it goes on looking");
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, true, LATER), Step::Wait(LATER + LOST_AGAIN_MS));
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, true, LATER + LOST_AGAIN_MS), Step::Changes, "it goes on looking");
     }
 
     #[test]
@@ -260,14 +322,14 @@ mod tests {
     #[test]
     fn a_real_failure_counts_waits_longer_each_time_and_rests_at_the_most() {
         let once = held().after(Outcome::Failed, LATER);
-        assert_eq!(once.step(Network::Free, Mobile::Unasked, LATER), Step::Wait(LATER + FAILED_AGAIN_MS));
+        assert_eq!(once.step(Network::Free, Mobile::Unasked, true, LATER), Step::Wait(LATER + FAILED_AGAIN_MS));
         let twice = once.after(Outcome::Failed, LATER);
-        assert_eq!(twice.step(Network::Free, Mobile::Unasked, LATER), Step::Wait(LATER + 2 * FAILED_AGAIN_MS));
+        assert_eq!(twice.step(Network::Free, Mobile::Unasked, true, LATER), Step::Wait(LATER + 2 * FAILED_AGAIN_MS));
         let mut s = held();
         for _ in 0..FAILED_MOST {
             s = s.after(Outcome::Failed, LATER);
         }
-        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER + 10 * ANEW_AFTER_MS), Step::Rest);
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, true, LATER + 10 * ANEW_AFTER_MS), Step::Rest);
     }
 
     #[test]
@@ -286,15 +348,15 @@ mod tests {
     fn start_again_asks_for_it_whole_at_once_and_as_any_whole_is_asked() {
         let s = held().after(Outcome::StartAgain, LATER);
         assert!(s.whole);
-        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER), Step::Whole);
-        assert_eq!(s.step(Network::Metered, Mobile::Unasked, LATER), Step::Ask);
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, true, LATER), Step::Whole);
+        assert_eq!(s.step(Network::Metered, Mobile::Unasked, true, LATER), Step::Ask);
     }
 
     #[test]
     fn another_version_in_what_was_just_fetched_stops_and_a_start_does_not_undo_it() {
         let s = whole().after(Outcome::Version, LATER);
-        assert_eq!(s.step(Network::Free, Mobile::Yes, LATER + 1), Step::Stopped);
-        assert_eq!(s.anew(LATER + ANEW_AFTER_MS).step(Network::Free, Mobile::Yes, LATER + 2 * ANEW_AFTER_MS), Step::Stopped);
+        assert_eq!(s.step(Network::Free, Mobile::Yes, true, LATER + 1), Step::Stopped);
+        assert_eq!(s.anew(LATER + ANEW_AFTER_MS).step(Network::Free, Mobile::Yes, true, LATER + 2 * ANEW_AFTER_MS), Step::Stopped);
     }
 
     #[test]
@@ -344,21 +406,21 @@ mod tests {
     #[test]
     fn a_start_over_another_versions_stop_tries_again() {
         let s = whole().after(Outcome::Version, LATER).anew_by_another(LATER + 1);
-        assert_eq!(s.step(Network::Free, Mobile::Yes, LATER + 1 + FIRST_AFTER_MS), Step::Whole);
+        assert_eq!(s.step(Network::Free, Mobile::Yes, true, LATER + 1 + FIRST_AFTER_MS), Step::Whole);
     }
 
     #[test]
     fn a_start_over_another_versions_copy_comes_whole_as_any_whole_is_asked() {
         let s = held().anew_by_another(LATER + 1);
-        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER + 1 + FIRST_AFTER_MS), Step::Whole, "not by the feed");
-        assert_eq!(s.step(Network::Metered, Mobile::Unasked, LATER + 1 + FIRST_AFTER_MS), Step::Ask);
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, true, LATER + 1 + FIRST_AFTER_MS), Step::Whole, "not by the feed");
+        assert_eq!(s.step(Network::Metered, Mobile::Unasked, true, LATER + 1 + FIRST_AFTER_MS), Step::Ask);
     }
 
     #[test]
     fn a_start_over_another_versions_forgets_what_went_wrong_and_keeps_its_first_seconds() {
         let s = held().after(Outcome::Failed, LATER).after(Outcome::Lost, LATER).anew_by_another(LATER + 1);
         assert_eq!((s.failed, s.lost, s.tried), (0, 0, None));
-        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER + 1), Step::Wait(LATER + 1 + FIRST_AFTER_MS));
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, true, LATER + 1), Step::Wait(LATER + 1 + FIRST_AFTER_MS));
     }
 
     #[test]
@@ -368,7 +430,7 @@ mod tests {
             s = s.after(Outcome::Failed, LATER);
         }
         let again = s.anew(LATER + 1);
-        assert_eq!(again.step(Network::Free, Mobile::Unasked, LATER + 1), Step::Wait(LATER + 1 + FIRST_AFTER_MS));
-        assert_eq!(again.step(Network::Free, Mobile::Unasked, LATER + 1 + FIRST_AFTER_MS), Step::Changes);
+        assert_eq!(again.step(Network::Free, Mobile::Unasked, true, LATER + 1), Step::Wait(LATER + 1 + FIRST_AFTER_MS));
+        assert_eq!(again.step(Network::Free, Mobile::Unasked, true, LATER + 1 + FIRST_AFTER_MS), Step::Changes);
     }
 }

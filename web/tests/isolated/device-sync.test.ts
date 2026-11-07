@@ -14,7 +14,7 @@ const { accountForgotten, accountLearnt, whoOf } = await import('../../src/lib/a
 const { closeReads, deviceAlbums, newEngine } = await import('../../src/lib/deviceIndex.svelte.ts');
 const { indexWord } = await import('../../src/lib/deviceIndexRule.ts');
 const { ANEW_AFTER_MS, answerMobile, FIRST_LOOK_MS, indexStands, indexSync, lookDone, startAnew, stopLooking, syncNow, tryIndexAgain } = await import('../../src/lib/deviceSync.svelte.ts');
-const { readPart, writePart } = await import('../../src/lib/indexStore.ts');
+const { readBytes, readPart, writePart } = await import('../../src/lib/indexStore.ts');
 const { prefs } = await import('../../src/lib/prefs.svelte.ts');
 const { networkSaid, reached, refused, unreached } = await import('../../src/lib/reach.svelte.ts');
 const { LOOK_AGAIN_MS } = await import('../../src/lib/deviceIndexRule.ts');
@@ -30,6 +30,15 @@ const otherVersion = (bytes: Uint8Array) => {
 };
 
 const bytes = (b: Uint8Array) => new Response(b, { headers: { 'content-type': 'application/octet-stream' } });
+
+/** Small covers as the server writes them (`CRXV`): the form is plain, and the crate has no writer of it to read from. */
+const joined = (...parts: Uint8Array[]) => new Uint8Array(parts.flatMap((p) => [...p]));
+const u32 = (n: number) => new Uint8Array(new Uint32Array([n]).buffer);
+const i64 = (n: number) => new Uint8Array(new BigInt64Array([BigInt(n)]).buffer);
+const head = (rev: number, version = 1) => joined(new TextEncoder().encode('CRXV'), u32(version), i64(rev));
+const frame = (record: number, jpeg = new Uint8Array(0)) => joined(i64(record), u32(jpeg.length), jpeg);
+const picture = (n: number) => new Uint8Array(40).fill(n);
+const bundle = (rev: number, ...frames: Uint8Array[]) => joined(head(rev), ...frames);
 const none = () => new Response(null, { status: 204 });
 const startAgain = () => new Response(JSON.stringify({ rev: 9, reset: true }), { status: 410 });
 const lost = () => {
@@ -44,6 +53,7 @@ const route = (url: string) => {
   if (answers[path]) return answers[path]();
   if (path === '/api/index') return bytes(vector('whole.bin'));
   if (path === '/api/index/sounds') return bytes(vector('sounds.bin'));
+  if (path === '/api/index/covers') return bytes(bundle(5, frame(1, picture(1)), frame(2, picture(2))));
   return none();
 };
 globalThis.fetch = (async (input: string) => {
@@ -57,7 +67,10 @@ let n = 0;
 let me = '';
 /** Each test's own day: a refusal from one is long over at the next. */
 const DAY = 86_400_000;
-const kept = (name: 'index' | 'sounds') => readPart(whoOf(me), name);
+const kept = (name: 'index' | 'sounds' | 'covers') => readPart(whoOf(me), name);
+const bytesKept = (name: 'index' | 'sounds') => readBytes(whoOf(me), name);
+const coversKept = () => rowsOf(`cratarr-index${whoOf(me)}`, 'covers');
+const WHOLES = ['/api/index', '/api/index/sounds', '/api/index/covers'];
 const same = (a: Uint8Array | null | undefined, b: Uint8Array) => assert.deepEqual(a && [...a], [...b]);
 
 /** `ms` go by, and a look they bring ends. */
@@ -72,7 +85,7 @@ async function started() {
   await gone(FIRST_LOOK_MS);
 }
 
-/** `whole.bin` and `sounds.bin` kept, as a first sync leaves them. */
+/** `whole.bin`, `sounds.bin` and two covers kept, as a first sync leaves them. */
 async function held() {
   await started();
   asked = [];
@@ -81,7 +94,7 @@ async function held() {
 beforeEach(() => {
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000 + n * DAY });
   [answers, asked, persistAsked] = [{}, [], 0];
-  storage.refused = false;
+  Object.assign(storage, { refused: false, only: null });
   Object.assign(connection, { type: 'wifi', saveData: false });
   Object.assign(prefs, { indexMobile: 'unasked', storageAsked: false });
   me = `who${++n}`;
@@ -102,7 +115,7 @@ test('nothing is fetched in the first seconds of a start, and then it goes', asy
   await gone(FIRST_LOOK_MS - 1);
   assert.deepEqual(asked, []);
   await gone(1);
-  assert.deepEqual(asked, ['/api/index', '/api/index/sounds']);
+  assert.deepEqual(asked, WHOLES);
 });
 
 test('the page\'s own first seconds and hours are the rule\'s', async () => {
@@ -113,8 +126,8 @@ test('the page\'s own first seconds and hours are the rule\'s', async () => {
 
 test('whole once: the bytes kept as fetched, each part at its rev, and This device has the date', async () => {
   await started();
-  same((await kept('index'))?.bytes, vector('whole.bin'));
-  same((await kept('sounds'))?.bytes, vector('sounds.bin'));
+  same(await bytesKept('index'), vector('whole.bin'));
+  same(await bytesKept('sounds'), vector('sounds.bin'));
   assert.equal((await kept('index'))?.rev, 5);
   assert.equal((await kept('sounds'))?.rev, 5);
   assert.equal(indexSync.at, Date.now());
@@ -134,14 +147,52 @@ test('persistent storage is asked for at the first download, and once', async ()
 test('with a whole held, a look asks only for what changed', async () => {
   await held();
   mock.timers.tick(1);
-  await syncNow();
-  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
+  await syncNow(true);
+  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5', '/api/index/covers/changes?since=5']);
 });
 
-test('a new start over a copy this page\'s version kept asks only for what changed', async () => {
+test('a new start over a copy this page\'s version kept fetches nothing whole', async () => {
   await held();
   await started();
-  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
+  assert.deepEqual(asked, ['/api/index/covers/changes?since=5']);
+});
+
+test('a look not told asks no feed of rows or sounds, as each is a whole build on the server, and the covers\' at every sync', async () => {
+  await held();
+  mock.timers.tick(60_000);
+  await syncNow();
+  assert.deepEqual(asked, ['/api/index/covers/changes?since=5']);
+  assert.equal(indexSync.at, (await kept('index'))?.at, 'nothing was asked of the rows');
+  assert.equal((await kept('covers'))?.part.failed, 0, 'nothing new is no failure');
+  assert.equal((await kept('covers'))?.at, Date.now());
+});
+
+test('each feed goes from its own rev, and is never given another\'s', async () => {
+  await held();
+  mock.timers.tick(1);
+  answers['/api/index/covers/changes'] = () => bytes(bundle(12));
+  await syncNow();
+  answers['/api/index/changes'] = () => bytes(vector('changes.bin'));
+  await syncNow(true);
+  asked = [];
+  delete answers['/api/index/changes'];
+  delete answers['/api/index/covers/changes'];
+  await syncNow(true);
+  assert.deepEqual(asked, ['/api/index/changes?since=9', '/api/index/sounds/changes?since=5', '/api/index/covers/changes?since=12']);
+});
+
+test('told while a look is under way, the look after it is told too', async () => {
+  await held();
+  let told = false;
+  answers['/api/index/covers/changes'] = () => {
+    if (!told) void syncNow(true);
+    told = true;
+    return none();
+  };
+  await syncNow();
+  for (let i = 0; i < 50; i++) await new Promise((go) => setImmediate(go));
+  await lookDone();
+  assert.ok(asked.includes('/api/index/changes?since=5'), 'not lost behind the look before');
 });
 
 test('a feed applied leaves what a fresh fetch would, to the byte, and moves the date', async () => {
@@ -149,9 +200,9 @@ test('a feed applied leaves what a fresh fetch would, to the byte, and moves the
   mock.timers.tick(60_000);
   answers['/api/index/changes'] = () => bytes(vector('changes.bin'));
   answers['/api/index/sounds/changes'] = () => bytes(vector('sound-changes.bin'));
-  await syncNow();
-  same((await kept('index'))?.bytes, vector('after.bin'));
-  same((await kept('sounds'))?.bytes, vector('sounds-after.bin'));
+  await syncNow(true);
+  same(await bytesKept('index'), vector('after.bin'));
+  same(await bytesKept('sounds'), vector('sounds-after.bin'));
   assert.equal((await kept('index'))?.rev, 9);
   assert.equal(indexSync.rev, 9);
   assert.equal(indexSync.at, Date.now());
@@ -160,8 +211,8 @@ test('a feed applied leaves what a fresh fetch would, to the byte, and moves the
 test('nothing changed moves the date and leaves the bytes', async () => {
   await held();
   mock.timers.tick(60_000);
-  await syncNow();
-  same((await kept('index'))?.bytes, vector('whole.bin'));
+  await syncNow(true);
+  same(await bytesKept('index'), vector('whole.bin'));
   assert.equal(indexSync.at, Date.now());
 });
 
@@ -171,7 +222,7 @@ test('on mobile data the whole is asked first, nothing fetched till then', async
   assert.deepEqual(asked, []);
   assert.equal(indexSync.shows, 'asks');
   await answerMobile(true);
-  assert.deepEqual(asked, ['/api/index', '/api/index/sounds']);
+  assert.deepEqual(asked, WHOLES);
   assert.equal(indexSync.shows, 'idle');
 });
 
@@ -194,15 +245,15 @@ test('a no waits for Wi-Fi, asks no more, and This device can ask again', async 
   answerMobile(false);
   connection.type = 'wifi';
   await syncNow();
-  assert.deepEqual(asked, ['/api/index', '/api/index/sounds']);
+  assert.deepEqual(asked, WHOLES);
 });
 
 test('changes go on mobile data with nothing asked', async () => {
   await held();
   connection.type = 'cellular';
   mock.timers.tick(1);
-  await syncNow();
-  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
+  await syncNow(true);
+  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5', '/api/index/covers/changes?since=5']);
   assert.equal(indexSync.shows, 'idle');
 });
 
@@ -210,9 +261,9 @@ test('"start again" fetches it whole at once, on Wi-Fi', async () => {
   await held();
   answers['/api/index/changes'] = startAgain;
   answers['/api/index'] = () => bytes(vector('after.bin'));
-  await syncNow();
+  await syncNow(true);
   assert.deepEqual(asked.slice(0, 2), ['/api/index/changes?since=5', '/api/index']);
-  same((await kept('index'))?.bytes, vector('after.bin'));
+  same(await bytesKept('index'), vector('after.bin'));
   assert.equal(indexSync.rev, 9);
 });
 
@@ -220,28 +271,29 @@ test('"start again" on mobile data is a whole like any: asked, and what is held 
   await held();
   connection.type = 'cellular';
   answers['/api/index/changes'] = startAgain;
-  await syncNow();
+  await syncNow(true);
   assert.equal(indexSync.shows, 'asks');
-  same((await kept('index'))?.bytes, vector('whole.bin'));
+  same(await bytesKept('index'), vector('whole.bin'));
 });
 
 test('a lost connection is no failure: it waits, says nothing, and looks again', async () => {
   await held();
   answers['/api/index/changes'] = lost;
-  await syncNow();
+  await syncNow(true);
   const part = (await kept('index'))?.part;
   assert.equal(part?.lost, 1);
   assert.equal(part?.failed, 0);
   assert.equal(indexSync.shows, 'idle');
-  const before = asked.length;
-  await syncNow();
-  assert.equal(asked.filter((a) => a.startsWith('/api/index/changes')).length, before - 1, 'not before its wait');
+  const feeds = () => asked.filter((a) => a.startsWith('/api/index/changes')).length;
+  const before = feeds();
+  await syncNow(true);
+  assert.equal(feeds(), before, 'not before its wait');
 });
 
 test('a proxy\'s answer for a stopped Cratarr is a lost connection, not a failure', async () => {
   await held();
   answers['/api/index/changes'] = () => new Response('', { status: 502 });
-  await syncNow();
+  await syncNow(true);
   assert.equal((await kept('index'))?.part.lost, 1);
   assert.equal((await kept('index'))?.part.failed, 0);
 });
@@ -249,7 +301,7 @@ test('a proxy\'s answer for a stopped Cratarr is a lost connection, not a failur
 test('lost a few times in a row it says paused, and Cratarr back ends that', async () => {
   await held();
   answers['/api/index/changes'] = lost;
-  await syncNow();
+  await syncNow(true);
   await gone(30_000);
   assert.equal(indexSync.shows, 'idle', 'twice is not yet');
   await gone(30_000);
@@ -263,7 +315,7 @@ test('lost a few times in a row it says paused, and Cratarr back ends that', asy
 test('a real failure counts, waits longer, and a start forgets it', async () => {
   await held();
   answers['/api/index/changes'] = () => new Response('', { status: 500 });
-  await syncNow();
+  await syncNow(true);
   assert.equal((await kept('index'))?.part.failed, 1);
   const calls = () => asked.filter((a) => a.startsWith('/api/index/changes')).length;
   const once = calls();
@@ -274,6 +326,7 @@ test('a real failure counts, waits longer, and a start forgets it', async () => 
   assert.equal((await kept('index'))?.part.failed, 2);
   delete answers['/api/index/changes'];
   await started();
+  await syncNow(true);
   assert.equal((await kept('index'))?.part.failed, 0);
 });
 
@@ -281,7 +334,7 @@ test('bytes cut short count as a failure, and nothing of them is kept', async ()
   answers['/api/index'] = () => bytes(vector('whole.bin').slice(0, 100));
   await started();
   const part = await kept('index');
-  assert.equal(part?.bytes, null);
+  assert.equal(await bytesKept('index'), undefined);
   assert.equal(part?.part.failed, 1);
   assert.equal(indexSync.at, null);
 });
@@ -307,7 +360,7 @@ test('a stop is this page\'s: one that reads another version tries again', async
   await writePart(whoOf(me), 'index', { ...stopped, wants: 0 });
   delete answers['/api/index'];
   await started();
-  same((await kept('index'))?.bytes, vector('whole.bin'));
+  same(await bytesKept('index'), vector('whole.bin'));
   assert.equal(indexSync.shows, 'idle');
 });
 
@@ -316,27 +369,27 @@ test('a tap on what stopped tries again', async () => {
   await started();
   delete answers['/api/index'];
   await tryIndexAgain();
-  same((await kept('index'))?.bytes, vector('whole.bin'));
+  same(await bytesKept('index'), vector('whole.bin'));
 });
 
 test('bytes held of another version are not a stop: they are fetched whole', async () => {
   await held();
   const stands = (await kept('index'))!;
-  await writePart(whoOf(me), 'index', { ...stands, bytes: otherVersion(vector('whole.bin')) });
+  await writePart(whoOf(me), 'index', stands, otherVersion(vector('whole.bin')));
   answers['/api/index/changes'] = () => bytes(vector('changes.bin'));
   answers['/api/index'] = () => bytes(vector('after.bin'));
-  await syncNow();
-  same((await kept('index'))?.bytes, vector('after.bin'));
+  await syncNow(true);
+  same(await bytesKept('index'), vector('after.bin'));
   assert.equal(indexSync.shows, 'idle');
 });
 
 test('a copy a page of another version kept is fetched whole, though the feed has nothing to say', async () => {
   await held();
   const stands = (await kept('index'))!;
-  await writePart(whoOf(me), 'index', { ...stands, bytes: otherVersion(vector('whole.bin')), wants: 0 });
+  await writePart(whoOf(me), 'index', { ...stands, wants: 0 }, otherVersion(vector('whole.bin')));
   answers['/api/index'] = () => bytes(vector('after.bin'));
   await started();
-  same((await kept('index'))?.bytes, vector('after.bin'));
+  same(await bytesKept('index'), vector('after.bin'));
   assert.equal(indexSync.rev, 9);
   assert.equal(indexSync.shows, 'idle');
 });
@@ -345,15 +398,15 @@ test('a feed that does not fit is no failure either: it is fetched whole', async
   await held();
   answers['/api/index/changes'] = () => bytes(vector('changes.bin').slice(0, 50));
   answers['/api/index'] = () => bytes(vector('after.bin'));
-  await syncNow();
-  same((await kept('index'))?.bytes, vector('after.bin'));
+  await syncNow(true);
+  same(await bytesKept('index'), vector('after.bin'));
   assert.equal((await kept('index'))?.part.failed, 0);
 });
 
 test('a feed with another version in it asks for the whole, and only that can stop it', async () => {
   await held();
   answers['/api/index/changes'] = () => bytes(otherVersion(vector('changes.bin')));
-  await syncNow();
+  await syncNow(true);
   assert.ok(asked.includes('/api/index'));
   assert.equal(indexSync.shows, 'idle');
 });
@@ -371,7 +424,7 @@ test('storage refusing what was fetched shows no date, waits as a failure does, 
   storage.refused = false;
   await gone(60_000);
   assert.equal(fetches(), 2);
-  same((await kept('index'))?.bytes, vector('whole.bin'));
+  same(await bytesKept('index'), vector('whole.bin'));
   assert.equal(indexSync.at, Date.now());
 });
 
@@ -384,8 +437,8 @@ test('each account\'s lies apart, and what was fetched for one is not kept for a
   const ann = me;
   openDoor = () => accountLearnt('someone-else');
   await started();
-  assert.equal((await readPart(whoOf('someone-else'), 'index'))?.bytes ?? null, null);
-  assert.equal((await readPart(whoOf(ann), 'index'))?.bytes ?? null, null);
+  assert.equal(await readBytes(whoOf('someone-else'), 'index'), undefined);
+  assert.equal(await readBytes(whoOf(ann), 'index'), undefined);
 });
 
 test('stores are named for their account', async () => {
@@ -408,7 +461,7 @@ test('a refusal holding the requests back holds this too', async () => {
 test('with reads on the device nothing is fetched, and nothing counts as lost', async () => {
   await held();
   networkSaid(false);
-  await syncNow();
+  await syncNow(true);
   assert.deepEqual(asked, []);
   assert.equal((await kept('index'))?.part.lost, 0);
 });
@@ -418,7 +471,7 @@ test('Cratarr settled out of reach is the same: no knocking at what will not ans
   answers['/api/health'] = lost;
   unreached();
   await gone(LOOK_AGAIN_MS);
-  await syncNow();
+  await syncNow(true);
   assert.deepEqual(asked.filter((a) => a.startsWith('/api/index')), []);
   assert.equal((await kept('index'))?.part.lost, 0);
 });
@@ -426,7 +479,7 @@ test('Cratarr settled out of reach is the same: no knocking at what will not ans
 test('a session over is no failure, and a page gone to its sign-in will say so', async () => {
   await held();
   answers['/api/index/changes'] = () => new Response('', { status: 401 });
-  await syncNow();
+  await syncNow(true);
   assert.equal((await kept('index'))?.part.lost, 1);
   assert.equal((await kept('index'))?.part.failed, 0);
 });
@@ -460,11 +513,163 @@ test('This device says each state, and the date when nothing stands in the way',
 
 test('what /api/changes says of the library starts a look; nothing moved starts none', async () => {
   await held();
-  await indexStands({ changed: false });
+  await indexStands({ rev: 5, changed: false });
   await indexStands(undefined);
   assert.deepEqual(asked, []);
-  await indexStands({ changed: true });
+  await indexStands({ rev: 5, changed: true });
   assert.ok(asked.includes('/api/index/changes?since=5'));
+});
+
+test('the log gone past the covers and nothing said of rows is a cover: only its feed is asked', async () => {
+  await held();
+  await indexStands({ rev: 6, changed: false });
+  assert.deepEqual(asked, ['/api/index/covers/changes?since=5']);
+});
+
+test('"start again" from the log asks the feeds, whose own 410 says it for each', async () => {
+  await held();
+  answers['/api/index/changes'] = startAgain;
+  await indexStands({ rev: 5, changed: true, reset: true });
+  assert.ok(asked.includes('/api/index/changes?since=5'));
+  assert.ok(asked.includes('/api/index'));
+  assert.ok(!asked.includes('/api/index/sounds'), 'a 410 on rows says nothing of the others');
+});
+
+test('whole, covers lie a row each by record, at the rev in their own head', async () => {
+  await held();
+  assert.deepEqual([...coversKept().keys()].sort(), [1, 2]);
+  same(coversKept().get(2) as Uint8Array, picture(2));
+  assert.equal((await kept('covers'))?.rev, 5);
+  assert.equal(indexSync.covers, 5);
+});
+
+test('a feed of covers brings what was made, drops what has none now, and goes on from its own rev', async () => {
+  await held();
+  mock.timers.tick(1);
+  answers['/api/index/covers/changes'] = () => bytes(bundle(7, frame(3, picture(3)), frame(1), frame(2, picture(9))));
+  await syncNow();
+  assert.deepEqual([...coversKept().keys()].sort(), [2, 3]);
+  same(coversKept().get(2) as Uint8Array, picture(9));
+  assert.equal((await kept('covers'))?.rev, 7);
+  assert.equal((await kept('covers'))?.at, Date.now());
+  assert.equal((await kept('index'))?.rev, 5, 'a cover moves no other part');
+});
+
+test('a feed of covers with nothing in it moves their rev, and nothing else', async () => {
+  await held();
+  mock.timers.tick(1);
+  answers['/api/index/covers/changes'] = () => bytes(bundle(8));
+  await syncNow();
+  assert.equal((await kept('covers'))?.rev, 8);
+  assert.equal(coversKept().size, 2);
+});
+
+test('"start again" on covers fetches them whole, the rev inside them, and what is gone goes', async () => {
+  await held();
+  answers['/api/index/covers/changes'] = () => new Response(JSON.stringify({ rev: 99, reset: true }), { status: 410 });
+  answers['/api/index/covers'] = () => bytes(bundle(20, frame(2, picture(2))));
+  await syncNow();
+  assert.deepEqual([...coversKept().keys()], [2]);
+  assert.equal((await kept('covers'))?.rev, 20, 'not the rev in the answer');
+});
+
+test('covers of another version in a whole stop, and what was held stays', async () => {
+  await held();
+  answers['/api/index/covers/changes'] = startAgain;
+  answers['/api/index/covers'] = () => bytes(joined(head(20, 9), frame(9, picture(9))));
+  await syncNow();
+  assert.equal(indexSync.shows, 'stopped');
+  assert.equal(coversKept().size, 2);
+});
+
+test('a feed of covers of another version asks for the whole, and only that can stop it', async () => {
+  await held();
+  answers['/api/index/covers/changes'] = () => bytes(head(20, 9));
+  await syncNow();
+  assert.ok(asked.includes('/api/index/covers'));
+  assert.equal(indexSync.shows, 'idle');
+});
+
+test('covers cut short count as the rule says: a whole failed, a feed starts again, and the rev stays', async () => {
+  await held();
+  answers['/api/index/covers/changes'] = () => bytes(bundle(7, frame(3, picture(3))).slice(0, -5));
+  answers['/api/index/covers'] = () => bytes(bundle(7, frame(3, picture(3))).slice(0, -5));
+  await syncNow();
+  assert.equal((await kept('covers'))?.rev, 5);
+  assert.equal((await kept('covers'))?.part.failed, 1);
+  assert.equal((await kept('covers'))?.part.whole, true);
+});
+
+test('a body of nothing is no covers', async () => {
+  answers['/api/index/covers'] = () => bytes(new Uint8Array(0));
+  await started();
+  assert.equal((await kept('covers'))?.part.failed, 1);
+  assert.equal((await kept('covers'))?.rev, null);
+});
+
+test('storage refusing covers is a failure, and their rev stays', async () => {
+  await held();
+  mock.timers.tick(1);
+  storage.refused = true;
+  answers['/api/index/covers/changes'] = () => bytes(bundle(7, frame(3, picture(3))));
+  await syncNow();
+  storage.refused = false;
+  assert.equal((await kept('covers'))?.rev, 5);
+});
+
+/** What of the parts' bytes a look read. */
+async function bytesRead(told: boolean) {
+  const rows = rowsOf(`cratarr-index${whoOf(me)}`, 'parts');
+  const get = rows.get.bind(rows);
+  const read: unknown[] = [];
+  rows.get = (key) => (read.push(key), get(key));
+  await syncNow(told);
+  rows.get = get;
+  return read.filter((k) => String(k).includes('bytes'));
+}
+
+test('covers the storage will not take leave their rev where it stood, though how they stand can be written', async () => {
+  await held();
+  mock.timers.tick(1);
+  Object.assign(storage, { refused: true, only: 'covers' });
+  answers['/api/index/covers/changes'] = () => bytes(bundle(7, frame(3, picture(3))));
+  await syncNow();
+  Object.assign(storage, { refused: false, only: null });
+  assert.equal((await kept('covers'))?.rev, 5, 'or what was not kept would never come again');
+  assert.equal((await kept('covers'))?.part.failed, 1);
+});
+
+test('a whole of covers the storage will not clear for is no whole, though it brings none of its own', async () => {
+  await held();
+  answers['/api/index/covers/changes'] = () => new Response(JSON.stringify({ rev: 20, reset: true }), { status: 410 });
+  answers['/api/index/covers'] = () => bytes(bundle(20));
+  Object.assign(storage, { refused: true, only: 'covers' });
+  await syncNow();
+  Object.assign(storage, { refused: false, only: null });
+  assert.equal((await kept('covers'))?.rev, 5);
+  assert.equal(coversKept().size, 2);
+});
+
+test('a look with nothing due reads no bytes', async () => {
+  await held();
+  mock.timers.tick(1);
+  assert.deepEqual(await bytesRead(false), []);
+});
+
+test('told, and nothing changed after all, it reads no bytes either', async () => {
+  await held();
+  mock.timers.tick(1);
+  assert.deepEqual(await bytesRead(true), []);
+});
+
+test('a part held with its bytes gone is fetched whole', async () => {
+  await held();
+  rowsOf(`cratarr-index${whoOf(me)}`, 'parts').delete('index:bytes');
+  answers['/api/index/changes'] = () => bytes(vector('changes.bin'));
+  answers['/api/index'] = () => bytes(vector('after.bin'));
+  await syncNow(true);
+  same(await bytesKept('index'), vector('after.bin'));
+  assert.equal((await kept('index'))?.part.failed, 0);
 });
 
 test('a sync keeps nothing open: a read away opens what is kept now, and the sounds stay in their bytes', async () => {
@@ -474,7 +679,7 @@ test('a sync keeps nothing open: a read away opens what is kept now, and the sou
   assert.equal((await deviceAlbums())?.sources[0].albums.length, 3);
   reached();
   answers['/api/index/changes'] = () => bytes(vector('changes.bin'));
-  await syncNow();
+  await syncNow(true);
   networkSaid(false);
   assert.equal((await deviceAlbums())?.sources[0].albums.length, 4);
   reached();

@@ -17,8 +17,12 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
  * The app's sync of the library (IndexLooks, IndexFiles), on real files, with stand-ins for Cratarr and for the rule. The rule is the
@@ -35,20 +39,32 @@ class DeviceIndexTest {
     private val otherVersion = "other version".toByteArray()
     private val badFeed = "bad feed".toByteArray()
 
+    /** Small covers as the server writes them. */
+    private fun head(rev: Long, version: Int = 1): ByteArray =
+        ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN).put("CRXV".toByteArray()).putInt(version).putLong(rev).array()
+
+    private fun frame(record: Long, jpeg: ByteArray = ByteArray(0)): ByteArray =
+        ByteBuffer.allocate(12 + jpeg.size).order(ByteOrder.LITTLE_ENDIAN).putLong(record).putInt(jpeg.size).put(jpeg).array()
+
+    private fun picture(n: Int) = ByteArray(40) { n.toByte() }
+
+    private fun bundle(rev: Long, vararg frames: ByteArray) = frames.fold(head(rev)) { all, f -> all + f }
+
     private inner class StandIn : IndexRule {
         var says: ((SyncPart) -> SyncStep)? = null
         val starts = mutableListOf<String>()
         var network: SyncNetwork? = null
         var mobile: SyncMobile? = null
 
-        override fun step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, now: Long): SyncStep {
+        override fun step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, told: Boolean, now: Long): SyncStep {
             this.network = network
             this.mobile = mobile
             return says?.invoke(part) ?: when {
                 part.stopped -> SyncStep.Stopped
                 part.lost > 0u || part.failed > 0u -> SyncStep.Wait(now + 1)
                 part.whole -> SyncStep.Whole
-                else -> SyncStep.Changes
+                told -> SyncStep.Changes
+                else -> SyncStep.Rest
             }
         }
 
@@ -82,15 +98,34 @@ class DeviceIndexTest {
 
         override fun version(kind: SyncKind) = 3
 
-        override fun takeWhole(kind: SyncKind, bytes: ByteArray) =
-            if (bytes.contentEquals(otherVersion)) SyncTaken(SyncOutcome.VERSION, null, null) else SyncTaken(SyncOutcome.TOOK, 5L, null)
+        /** What the head of covers says: `null` where it is not whole. */
+        private fun headRev(head: ByteArray) = head.takeIf { it.size == 16 }?.let { ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).getLong(8) }
 
-        override fun takeChanges(kind: SyncKind, kept: ByteArray, feed: ByteArray) =
-            if (feed.contentEquals(badFeed)) SyncTaken(SyncOutcome.START_AGAIN, null, null) else SyncTaken(SyncOutcome.TOOK, 9L, kept + feed)
+        private fun headVersion(head: ByteArray) = ByteBuffer.wrap(head).order(ByteOrder.LITTLE_ENDIAN).getInt(4)
+
+        override fun takeWhole(kind: SyncKind, bytes: ByteArray) = when {
+            kind == SyncKind.COVERS -> when {
+                headRev(bytes) == null -> SyncTaken(SyncOutcome.FAILED, null, null)
+                headVersion(bytes) != 1 -> SyncTaken(SyncOutcome.VERSION, null, null)
+                else -> SyncTaken(SyncOutcome.TOOK, headRev(bytes), null)
+            }
+            bytes.contentEquals(otherVersion) -> SyncTaken(SyncOutcome.VERSION, null, null)
+            else -> SyncTaken(SyncOutcome.TOOK, 5L, null)
+        }
+
+        override fun takeChanges(kind: SyncKind, kept: ByteArray, feed: ByteArray) = when {
+            kind == SyncKind.COVERS ->
+                if (headRev(feed) == null || headVersion(feed) != 1) SyncTaken(SyncOutcome.START_AGAIN, null, null) else SyncTaken(SyncOutcome.TOOK, headRev(feed), null)
+            feed.contentEquals(badFeed) -> SyncTaken(SyncOutcome.START_AGAIN, null, null)
+            else -> SyncTaken(SyncOutcome.TOOK, 9L, kept + feed)
+        }
     }
 
     private val rule = StandIn()
     private val asked = mutableListOf<String>()
+    /** What the log was asked, apart from the rest, and what it says of the rows. */
+    private val askedLog = mutableListOf<String>()
+    private var moved = true
     /** How Cratarr answers each address, by its path without `?`. */
     private val answers = mutableMapOf<String, () -> IndexFetched>()
     private var who = "@ann"
@@ -101,18 +136,36 @@ class DeviceIndexTest {
     @Before
     fun made() {
         files = IndexFiles(folder.root)
-        looks = IndexLooks(rule, files, ::fetch, { who }, { SyncNetwork.METERED }, { SyncMobile.YES }, { clock })
+        looks = IndexLooks(rule, files, ::opened, { who }, { SyncNetwork.METERED }, { SyncMobile.YES }, { clock })
     }
 
+    private fun opened(path: String, read: (Int?, InputStream?) -> Unit) {
+        val got = fetch(path)
+        read(got.status, broken ?: got.bytes?.let { ByteArrayInputStream(it) })
+    }
+
+    /** A body that goes as it is read, for one test. */
+    private var broken: InputStream? = null
+
     private fun fetch(path: String): IndexFetched {
+        val p = path.substringBefore('?')
+        if (p == "/api/changes") {
+            askedLog.add(path)
+            return answers[p]?.invoke() ?: IndexFetched(200, """{"rev":1,"changes":[],"more":false,"index":{"rev":9,"changed":$moved}}""".toByteArray())
+        }
         asked.add(path)
-        answers[path.substringBefore('?')]?.let { return it() }
-        return when (path.substringBefore('?')) {
+        answers[p]?.let { return it() }
+        return when (p) {
             "/api/index" -> IndexFetched(200, whole)
             "/api/index/sounds" -> IndexFetched(200, sounds)
+            "/api/index/covers" -> IndexFetched(200, bundle(5, frame(1, picture(1)), frame(2, picture(2))))
             else -> IndexFetched(204, null)
         }
     }
+
+    private val wholes = listOf("/api/index", "/api/index/sounds", "/api/index/covers")
+    private val coverFeed = "/api/index/covers/changes?since=5"
+    private fun coverFiles() = File(files.bytes(who, "index").parentFile, "covers").list()?.sorted() ?: emptyList()
 
     private fun bytes(name: String, of: String = who) = files.bytes(of, name).readBytes()
 
@@ -128,7 +181,7 @@ class DeviceIndexTest {
     fun whole_keeps_the_bytes_as_fetched_each_part_at_its_rev_and_dated() {
         clock = 2_000
         looks.look(who)
-        assertEquals(listOf("/api/index", "/api/index/sounds"), asked)
+        assertEquals(wholes, asked)
         assertArrayEquals(whole, bytes("index"))
         assertArrayEquals(sounds, bytes("sounds"))
         val stands = files.stands(who, "index")!!
@@ -149,7 +202,153 @@ class DeviceIndexTest {
     fun with_bytes_held_a_look_asks_for_what_changed_since_where_each_part_stands() {
         held()
         looks.look(who)
-        assertEquals(listOf("/api/index/changes?since=5", "/api/index/sounds/changes?since=5"), asked)
+        assertEquals(listOf("/api/index/changes?since=5", "/api/index/sounds/changes?since=5", coverFeed), asked)
+    }
+
+    @Test
+    fun a_look_asks_the_log_and_no_feed_of_rows_or_sounds_when_nothing_moved_as_each_is_a_whole_build() {
+        held()
+        moved = false
+        looks.look(who)
+        assertEquals(listOf("/api/changes?since=0&kinds=index&index=5"), askedLog)
+        assertEquals(listOf(coverFeed), asked)
+    }
+
+    @Test
+    fun nothing_new_of_covers_moves_their_date_and_counts_as_no_failure() {
+        held()
+        clock = 9_000
+        moved = false
+        looks.look(who)
+        assertEquals(9_000L, files.stands(who, "covers")?.at)
+        assertEquals(0u, files.stands(who, "covers")?.part?.failed)
+    }
+
+    @Test
+    fun told_by_the_page_a_look_goes_to_the_feeds_with_no_asking() {
+        held()
+        moved = false
+        looks.look(who, told = true)
+        assertEquals(emptyList<String>(), askedLog)
+        assertEquals(listOf("/api/index/changes?since=5", "/api/index/sounds/changes?since=5", coverFeed), asked)
+    }
+
+    @Test
+    fun nothing_held_asks_the_log_nothing() {
+        looks.look(who)
+        assertEquals(emptyList<String>(), askedLog)
+    }
+
+    @Test
+    fun a_log_that_answers_nothing_it_can_read_says_nothing_moved() {
+        held()
+        for (answer in listOf(IndexFetched(null, null), IndexFetched(200, "{ cut".toByteArray()), IndexFetched(200, "{}".toByteArray()))) {
+            answers["/api/changes"] = { answer }
+            asked.clear()
+            looks.look(who)
+            assertEquals(listOf(coverFeed), asked)
+        }
+    }
+
+    @Test
+    fun each_feed_goes_from_its_own_rev() {
+        held()
+        answers["/api/index/changes"] = { IndexFetched(200, feed) }
+        answers["/api/index/covers/changes"] = { IndexFetched(200, bundle(12)) }
+        looks.look(who)
+        asked.clear()
+        answers.clear()
+        looks.look(who)
+        assertEquals(listOf("/api/index/changes?since=9", "/api/index/sounds/changes?since=5", "/api/index/covers/changes?since=12"), asked)
+    }
+
+    @Test
+    fun whole_covers_lie_a_file_each_at_the_rev_in_their_own_head() {
+        looks.look(who)
+        assertEquals(listOf("1.jpg", "2.jpg"), coverFiles())
+        assertArrayEquals(picture(2), files.cover(who, 2).readBytes())
+        assertEquals(5L, files.stands(who, "covers")?.rev)
+    }
+
+    @Test
+    fun a_feed_of_covers_brings_what_was_made_and_drops_what_has_none_now() {
+        held()
+        answers["/api/index/covers/changes"] = { IndexFetched(200, bundle(7, frame(3, picture(3)), frame(1), frame(2, picture(9)))) }
+        looks.look(who)
+        assertEquals(listOf("2.jpg", "3.jpg"), coverFiles())
+        assertArrayEquals(picture(9), files.cover(who, 2).readBytes())
+        assertEquals(7L, files.stands(who, "covers")?.rev)
+        assertEquals("a cover moves no other part", 5L, files.stands(who, "index")?.rev)
+    }
+
+    @Test
+    fun start_again_on_covers_fetches_them_whole_goes_on_from_the_rev_inside_and_what_is_gone_goes() {
+        held()
+        answers["/api/index/covers/changes"] = { IndexFetched(410, "{\"rev\":99,\"reset\":true}".toByteArray()) }
+        answers["/api/index/covers"] = { IndexFetched(200, bundle(20, frame(2, picture(2)))) }
+        looks.look(who)
+        assertEquals(listOf("2.jpg"), coverFiles())
+        assertEquals(20L, files.stands(who, "covers")?.rev)
+    }
+
+    @Test
+    fun covers_of_another_version_in_a_whole_stop_and_what_was_held_stays() {
+        held()
+        answers["/api/index/covers/changes"] = { IndexFetched(410, null) }
+        answers["/api/index/covers"] = { IndexFetched(200, head(20, version = 9) + frame(9, picture(9))) }
+        looks.look(who)
+        assertTrue(files.stands(who, "covers")!!.part.stopped)
+        assertEquals(listOf("1.jpg", "2.jpg"), coverFiles())
+    }
+
+    @Test
+    fun a_feed_of_covers_of_another_version_asks_for_the_whole() {
+        held()
+        answers["/api/index/covers/changes"] = { IndexFetched(200, head(20, version = 9)) }
+        looks.look(who)
+        assertTrue(asked.contains("/api/index/covers"))
+        assertFalse(files.stands(who, "covers")!!.part.stopped)
+    }
+
+    @Test
+    fun covers_cut_short_count_as_the_rule_says_and_their_rev_stays() {
+        held()
+        val cut = bundle(7, frame(3, picture(3)))
+        answers["/api/index/covers/changes"] = { IndexFetched(200, cut.copyOf(cut.size - 5)) }
+        answers["/api/index/covers"] = { IndexFetched(200, cut.copyOf(cut.size - 5)) }
+        looks.look(who)
+        val stands = files.stands(who, "covers")!!
+        assertEquals(5L, stands.rev)
+        assertTrue("the feed started again", stands.part.whole)
+        assertEquals("and the whole after it failed", 1u, stands.part.failed)
+    }
+
+    @Test
+    fun a_frame_cut_in_its_own_head_is_cut_short_too() {
+        answers["/api/index/covers"] = { IndexFetched(200, head(7) + ByteArray(5)) }
+        looks.look(who)
+        assertEquals(1u, files.stands(who, "covers")?.part?.failed)
+    }
+
+    @Test
+    fun a_body_of_nothing_is_no_covers() {
+        answers["/api/index/covers"] = { IndexFetched(200, ByteArray(0)) }
+        looks.look(who)
+        assertEquals(1u, files.stands(who, "covers")?.part?.failed)
+        assertNull(files.stands(who, "covers")?.rev)
+    }
+
+    @Test
+    fun a_connection_going_during_covers_is_lost_and_counts_for_nothing() {
+        held()
+        answers["/api/index/covers/changes"] = { IndexFetched(200, ByteArray(0)) }
+        broken = object : InputStream() {
+            override fun read(): Int = throw IOException("gone")
+        }
+        looks.look(who)
+        broken = null
+        assertEquals(1u, files.stands(who, "covers")?.part?.lost)
+        assertEquals(0u, files.stands(who, "covers")?.part?.failed)
     }
 
     @Test
@@ -178,7 +377,7 @@ class DeviceIndexTest {
         held()
         answers["/api/index/changes"] = { IndexFetched(410, null) }
         looks.look(who)
-        assertEquals(listOf("/api/index/changes?since=5", "/api/index", "/api/index/sounds/changes?since=5"), asked)
+        assertEquals(listOf("/api/index/changes?since=5", "/api/index", "/api/index/sounds/changes?since=5", coverFeed), asked)
         assertFalse(files.stands(who, "index")!!.part.whole)
     }
 
@@ -240,7 +439,7 @@ class DeviceIndexTest {
         held()
         rule.starts.clear()
         looks.look(who)
-        assertEquals(listOf("plain", "plain"), rule.starts)
+        assertEquals(listOf("plain", "plain", "plain"), rule.starts)
     }
 
     @Test
@@ -250,8 +449,8 @@ class DeviceIndexTest {
         val stands = files.stands(who, "index")!!
         files.keep(who, "index", IndexStands(stands.rev, stands.at, 2, stands.part), null)
         looks.look(who)
-        assertEquals(listOf("by another", "plain"), rule.starts)
-        assertEquals(listOf("/api/index", "/api/index/sounds/changes?since=5"), asked)
+        assertEquals(listOf("by another", "plain", "plain"), rule.starts)
+        assertEquals(listOf("/api/index", "/api/index/sounds/changes?since=5", coverFeed), asked)
     }
 
     @Test
@@ -260,7 +459,7 @@ class DeviceIndexTest {
         rule.starts.clear()
         looks.look(who)
         looks.look(who)
-        assertEquals(2, rule.starts.size)
+        assertEquals(3, rule.starts.size)
     }
 
     @Test
@@ -270,7 +469,7 @@ class DeviceIndexTest {
         rule.starts.clear()
         looks.startAnew()
         looks.look(who)
-        assertEquals(2, rule.starts.size)
+        assertEquals(3, rule.starts.size)
     }
 
     @Test
@@ -317,7 +516,7 @@ class DeviceIndexTest {
         // A file where the account's folder would go: nothing can be written there.
         File(folder.root, java.net.URLEncoder.encode(who, "UTF-8")).writeText("in the way")
         val steps = looks.look(who)
-        assertEquals(listOf("/api/index", "/api/index/sounds"), asked)
+        assertEquals(wholes, asked)
         assertTrue("it waits as any failure does", steps["index"] is SyncStep.Wait)
         assertNull(files.stands(who, "index"))
     }
@@ -327,8 +526,9 @@ class DeviceIndexTest {
         rule.says = { SyncStep.Whole }
         answers["/api/index"] = { IndexFetched(500, null) }
         answers["/api/index/sounds"] = { IndexFetched(500, null) }
+        answers["/api/index/covers"] = { IndexFetched(500, null) }
         looks.look(who)
-        assertEquals(6, asked.size)
+        assertEquals(9, asked.size)
     }
 
     @Test
@@ -345,16 +545,16 @@ class DeviceIndexTest {
         assertEquals(SyncStep.Ask, steps["index"])
         assertEquals(emptyList<String>(), asked)
         val facts = looks.facts(steps)
-        assertEquals(listOf(true, true), facts.map { it.asks })
-        assertEquals(listOf(true, true), facts.map { it.whole })
+        assertEquals(listOf(true, true, true), facts.map { it.asks })
+        assertEquals(listOf(true, true, true), facts.map { it.whole })
     }
 
     @Test
     fun the_page_is_told_each_part_as_the_look_left_it() {
         answers["/api/index"] = { IndexFetched(200, otherVersion) }
         val facts = looks.facts(looks.look(who))
-        assertEquals(listOf(true, false), facts.map { it.stopped })
-        assertEquals(listOf(false, false), facts.map { it.asks })
+        assertEquals(listOf(true, false, false), facts.map { it.stopped })
+        assertEquals(listOf(false, false, false), facts.map { it.asks })
     }
 
     @Test
@@ -363,7 +563,7 @@ class DeviceIndexTest {
         answers["/api/index/changes"] = { IndexFetched(null, null) }
         rule.says = { if (it.lost < 3u) SyncStep.Changes else SyncStep.Wait(0) }
         val facts = looks.facts(looks.look(who))
-        assertEquals(listOf(true, false), facts.map { it.paused })
+        assertEquals(listOf(true, false, false), facts.map { it.paused })
     }
 
     @Test
@@ -478,9 +678,15 @@ class DeviceIndexTest {
         val activity = source("MainActivity.kt")
         val sync = page("deviceSync.svelte.ts")
         for (type in listOf("index-look", "index-again")) {
-            assertTrue(type, sync.contains("tellApp('$type')"))
+            assertTrue(type, sync.contains("tellApp('$type'"))
             assertTrue(type, activity.contains("\"$type\" -> "))
         }
+    }
+
+    @Test
+    fun the_page_says_whether_it_was_told_and_the_app_hears_it() {
+        assertTrue(page("deviceSync.svelte.ts").contains("toApp({ type, told })"))
+        assertTrue(source("MainActivity.kt").contains("DeviceIndex.look(this, message.optBoolean(\"told\"))"))
     }
 
     @Test
@@ -489,7 +695,7 @@ class DeviceIndexTest {
         val told = source("DeviceIndex.kt").substringAfter("fun report(").substringBefore("fun answer(")
         assertTrue(sync.contains("onApp('device-index',"))
         assertTrue(told.contains(".put(\"type\", \"device-index\")"))
-        for (field in listOf("at", "rev", "metered", "parts")) assertTrue(field, told.contains(".put(\"$field\","))
+        for (field in listOf("at", "rev", "covers", "metered", "parts")) assertTrue(field, told.contains(".put(\"$field\","))
         for (field in listOf("whole", "stopped", "paused", "asks")) assertTrue(field, told.contains(".put(\"$field\", it.$field)"))
     }
 

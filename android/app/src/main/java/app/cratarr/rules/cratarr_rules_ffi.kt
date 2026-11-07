@@ -853,7 +853,7 @@ fun uniffi_cratarr_rules_ffi_fn_func_sync_first_after_ms(uniffi_out_err: UniffiR
 ): Long
 fun uniffi_cratarr_rules_ffi_fn_func_sync_paused(`part`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
-fun uniffi_cratarr_rules_ffi_fn_func_sync_step(`part`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`mobile`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_cratarr_rules_ffi_fn_func_sync_step(`part`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`mobile`: RustBuffer.ByValue,`told`: Byte,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_cratarr_rules_ffi_fn_func_sync_take_changes(`kind`: RustBuffer.ByValue,`kept`: RustBuffer.ByValue,`feed`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1020,13 +1020,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_paused() != 64662.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_step() != 364.toShort()) {
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_step() != 45828.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_take_changes() != 14038.toShort()) {
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_take_changes() != 27574.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_take_whole() != 62779.toShort()) {
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_take_whole() != 45991.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_version() != 31718.toShort()) {
@@ -1398,13 +1398,14 @@ public object FfiConverterTypeSyncTaken: FfiConverterRustBuffer<SyncTaken> {
 
 
 /**
- * What a device keeps. D12's fits and D13's small covers are more of these.
+ * What a device keeps. D12's fits are one more of these.
  */
 
 enum class SyncKind {
     
     INDEX,
-    SOUNDS;
+    SOUNDS,
+    COVERS;
     companion object
 }
 
@@ -1903,19 +1904,19 @@ public object FfiConverterOptionalTypeSyncOutcome: FfiConverterRustBuffer<SyncOu
     
 
         /**
-         * What to do now with a part.
-         */ fun `syncStep`(`part`: SyncPart, `network`: SyncNetwork, `mobile`: SyncMobile, `now`: kotlin.Long): SyncStep {
+         * What to do now with a part. `told`: its feed may be asked.
+         */ fun `syncStep`(`part`: SyncPart, `network`: SyncNetwork, `mobile`: SyncMobile, `told`: kotlin.Boolean, `now`: kotlin.Long): SyncStep {
             return FfiConverterTypeSyncStep.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_step(
-        FfiConverterTypeSyncPart.lower(`part`),FfiConverterTypeSyncNetwork.lower(`network`),FfiConverterTypeSyncMobile.lower(`mobile`),FfiConverterLong.lower(`now`),_status)
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterTypeSyncNetwork.lower(`network`),FfiConverterTypeSyncMobile.lower(`mobile`),FfiConverterBoolean.lower(`told`),FfiConverterLong.lower(`now`),_status)
 }
     )
     }
     
 
         /**
-         * A feed applied to what is kept.
+         * A feed applied to what is kept. Of the covers `feed` is the feed's head, and nothing comes back to keep.
          */ fun `syncTakeChanges`(`kind`: SyncKind, `kept`: kotlin.ByteArray, `feed`: kotlin.ByteArray): SyncTaken {
             return FfiConverterTypeSyncTaken.lift(
     uniffiRustCall() { _status ->
@@ -1927,7 +1928,7 @@ public object FfiConverterOptionalTypeSyncOutcome: FfiConverterRustBuffer<SyncOu
     
 
         /**
-         * Bytes just fetched whole, read through.
+         * Bytes just fetched whole, read through. Of the covers only their head: their frames are the app's to read as they come.
          */ fun `syncTakeWhole`(`kind`: SyncKind, `bytes`: kotlin.ByteArray): SyncTaken {
             return FfiConverterTypeSyncTaken.lift(
     uniffiRustCall() { _status ->

@@ -5,9 +5,13 @@
  * keeps and tells.
  * - What is kept is bytes (the owner's Q1), each account's apart ([Who]), hidden while another is signed in and there at its next
  *   sign-in: for each part a file of bytes and a small one of how it stands. Bytes first: a stop between the two leaves bytes ahead
- *   of their word, which a feed refuses, and a whole mends.
+ *   of their word, which a feed refuses, and a whole mends. Small covers are a file each, and come a frame at a time: a bundle can be
+ *   tens of MB.
  * - Looked at a few seconds into a start (the app or its service opening, another account, hours away), on a new network, at the
  *   page's word, and every few hours by WorkManager, on any connection: the rule says what each may fetch.
+ * - A device holds three revs on one log, and no feed is given another's. Rows' and sounds' feeds are each a whole build on the server,
+ *   so a look asks them only when the log says something moved (`/api/changes`, the page's word or its own asking). Covers' builds
+ *   nothing, and asking it is what sets the maker going, so it is asked at every look.
  * - Waits are kept only with the page in view. Out of view a look that must wait ends there, as asking every half minute from a car
  *   with Cratarr away would only cost the battery: the next network, start or worker looks again.
  * - The page reads the bytes through [PAGE_PATH] with its own index.wasm: one reader in a browser and here, and nothing here holds
@@ -52,7 +56,10 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.URLEncoder
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.Executors
@@ -86,7 +93,7 @@ object DeviceIndex {
     private fun looks(app: Context) = looks ?: IndexLooks(
         RustIndexRule,
         files(app),
-        { fetched(app, it) },
+        { path, read -> opened(app, path, read) },
         { Who.current(app) },
         { networkNow(app) },
         { mobileNow(app) },
@@ -119,20 +126,21 @@ object DeviceIndex {
         SyncMobile.UNASKED
     }
 
-    private fun fetched(app: Context, path: String): IndexFetched {
-        val server = Prefs(app).serverUrl?.trimEnd('/') ?: return IndexFetched(null, null)
-        return try {
+    /** Asks Cratarr for [path]: [read] has its status (null: no answer at all), and its body where it has one, open only meanwhile. */
+    private fun opened(app: Context, path: String, read: (Int?, InputStream?) -> Unit) {
+        val server = Prefs(app).serverUrl?.trimEnd('/') ?: return read(null, null)
+        try {
             val c = Net.open(app, server + path)
             try {
                 c.connectTimeout = 10_000
                 c.readTimeout = 60_000
                 val code = Net.code(app, c)
-                IndexFetched(code, if (code in 200..299 && code != 204) c.inputStream.use { it.readBytes() } else null)
+                read(code, if (code in 200..299 && code != 204) c.inputStream else null)
             } finally {
                 c.disconnect()
             }
         } catch (e: IOException) {
-            IndexFetched(null, null)
+            read(null, null)
         }
     }
 
@@ -143,9 +151,9 @@ object DeviceIndex {
         WorkManager.getInstance(context.applicationContext).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, request)
     }
 
-    private fun lookAt(app: Context, at: Long) {
+    private fun lookAt(app: Context, at: Long, told: Boolean = false) {
         due?.cancel(false)
-        due = worker.schedule({ lookHere(app) }, maxOf(0L, at - System.currentTimeMillis()), TimeUnit.MILLISECONDS)
+        due = worker.schedule({ lookHere(app, told) }, maxOf(0L, at - System.currentTimeMillis()), TimeUnit.MILLISECONDS)
     }
 
     private fun startHere(app: Context) {
@@ -155,15 +163,15 @@ object DeviceIndex {
         lookAt(app, System.currentTimeMillis() + syncFirstAfterMs())
     }
 
-    private fun lookHere(app: Context) {
+    private fun lookHere(app: Context, told: Boolean = false) {
         guarded {
             val server = Prefs(app).serverUrl
             val who = Who.current(app)
             if (server != null && who != Who.NONE && !Net.refused(app, server)) {
                 val looks = looks(app)
-                val steps = looks.look(who)
+                val steps = looks.look(who, told)
                 facts = looks.facts(steps)
-                if (inView) steps.values.filterIsInstance<SyncStep.Wait>().minOfOrNull { it.until }?.let { lookAt(app, it) }
+                if (inView) steps.values.filterIsInstance<SyncStep.Wait>().minOfOrNull { it.until }?.let { lookAt(app, it, told) }
                 onChange?.invoke()
             }
         }
@@ -175,10 +183,10 @@ object DeviceIndex {
         worker.execute { guarded { startHere(app) } }
     }
 
-    /** Looks now: the page's word that the library moved, or a new network. */
-    fun look(context: Context) {
+    /** Looks now: the page's word, or a new network. [told]: the log said rows or sounds moved, and need not be asked. */
+    fun look(context: Context, told: Boolean = false) {
         val app = context.applicationContext
-        worker.execute { lookHere(app) }
+        worker.execute { lookHere(app, told) }
     }
 
     /** The row tapped: what stopped tries again. */
@@ -230,6 +238,7 @@ object DeviceIndex {
             .put("type", "device-index")
             .put("at", index?.at ?: JSONObject.NULL)
             .put("rev", index?.rev ?: JSONObject.NULL)
+            .put("covers", files.stands(who, "covers")?.rev ?: JSONObject.NULL)
             .put("metered", Net.metered(app))
             .put("parts", JSONArray(known.map { JSONObject().put("whole", it.whole).put("stopped", it.stopped).put("paused", it.paused).put("asks", it.asks) }))
     }
@@ -257,12 +266,14 @@ class IndexWorker(context: Context, params: WorkerParameters) : Worker(context, 
     }
 }
 
-/** What a part is, to fetching it. D12's fits and D13's small covers are more rows here, as in lib/deviceSync. */
-internal class IndexDef(val name: String, val kind: SyncKind, val whole: String, val feed: String)
+/** What a part is, to fetching it. D12's fits are one more row here, as in lib/deviceSync. [frames]: it comes a frame at a time, is kept
+ *  by the frame, and its feed builds nothing, so it is asked at every look. */
+internal class IndexDef(val name: String, val kind: SyncKind, val whole: String, val feed: String, val frames: Boolean = false)
 
 internal val INDEX_PARTS = listOf(
     IndexDef("index", SyncKind.INDEX, "/api/index", "/api/index/changes"),
     IndexDef("sounds", SyncKind.SOUNDS, "/api/index/sounds", "/api/index/sounds/changes"),
+    IndexDef("covers", SyncKind.COVERS, "/api/index/covers", "/api/index/covers/changes", frames = true),
 )
 
 /** What a fetch brought: its status (null: no answer at all), and its bytes where it had any. */
@@ -270,7 +281,7 @@ internal class IndexFetched(val status: Int?, val bytes: ByteArray?)
 
 /** The rule, as the rules crate says it. In the unit tests, which have no library, a stand-in: all it proves there is what is done with its answers. */
 internal interface IndexRule {
-    fun step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, now: Long): SyncStep
+    fun step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, told: Boolean, now: Long): SyncStep
     fun after(part: SyncPart, outcome: SyncOutcome, now: Long): SyncPart
     fun anew(part: SyncPart, now: Long): SyncPart
     fun anewByAnother(part: SyncPart, now: Long): SyncPart
@@ -282,7 +293,7 @@ internal interface IndexRule {
 }
 
 internal object RustIndexRule : IndexRule {
-    override fun step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, now: Long) = syncStep(part, network, mobile, now)
+    override fun step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, told: Boolean, now: Long) = syncStep(part, network, mobile, told, now)
     override fun after(part: SyncPart, outcome: SyncOutcome, now: Long) = syncAfter(part, outcome, now)
     override fun anew(part: SyncPart, now: Long) = syncAnew(part, now)
     override fun anewByAnother(part: SyncPart, now: Long) = syncAnewByAnother(part, now)
@@ -305,6 +316,28 @@ internal class IndexFiles(private val root: File) {
     private fun folder(who: String) = File(root, URLEncoder.encode(who, "UTF-8"))
 
     fun bytes(who: String, name: String) = File(folder(who), "$name.bin")
+
+    private fun covers(who: String) = File(folder(who), "covers")
+
+    /** A record's small cover. */
+    fun cover(who: String, record: Long) = File(covers(who), "$record.jpg")
+
+    /** Takes a record's small cover, or lets it go where it has none now. Not to the disk itself as [onDisk] is: a next whole mends one
+     *  a power cut took, and a library is thousands. */
+    fun putCover(who: String, record: Long, jpeg: ByteArray?) {
+        val file = cover(who, record)
+        if (jpeg == null) {
+            file.delete()
+            return
+        }
+        covers(who).mkdirs()
+        replace(file, jpeg) { to, bytes -> to.writeBytes(bytes) }
+    }
+
+    /** Every small cover of [who]'s gone, for a whole to take their place. */
+    fun clearCovers(who: String) {
+        covers(who).deleteRecursively()
+    }
 
     private fun standing(who: String, name: String) = File(folder(who), "$name.json")
 
@@ -354,7 +387,7 @@ internal class IndexFiles(private val root: File) {
 internal class IndexLooks(
     private val rule: IndexRule,
     private val files: IndexFiles,
-    private val fetch: (String) -> IndexFetched,
+    private val open: (String, (Int?, InputStream?) -> Unit) -> Unit,
     private val whoNow: () -> String,
     private val network: () -> SyncNetwork,
     private val mobile: () -> SyncMobile,
@@ -378,8 +411,34 @@ internal class IndexLooks(
         for ((name, part) in parts.toMap()) if (part.stopped) parts[name] = part.copy(stopped = false)
     }
 
-    /** Each part as far as it goes now, for [who]: what it was last told to do. */
-    fun look(who: String): Map<String, SyncStep> = INDEX_PARTS.associate { it.name to bringUp(it, who) }
+    /** Each part as far as it goes now, for [who]: what it was last told to do. [told]: the log has said rows or sounds moved. */
+    fun look(who: String, told: Boolean = false): Map<String, SyncStep> {
+        val moved = told || moved(who)
+        return INDEX_PARTS.associate { it.name to bringUp(it, who, moved || it.frames) }
+    }
+
+    /** What the log says of the rows held: one small answer, where their feeds are each a whole build. Nothing held: nothing to ask. */
+    private fun moved(who: String): Boolean {
+        val rev = files.stands(who, INDEX_PARTS[0].name)?.rev ?: return false
+        val bytes = fetched("/api/changes?since=0&kinds=index&index=$rev").bytes ?: return false
+        return try {
+            JSONObject(String(bytes)).optJSONObject("index")?.optBoolean("changed") == true
+        } catch (e: JSONException) {
+            false
+        }
+    }
+
+    private fun fetched(path: String): IndexFetched {
+        var got = IndexFetched(null, null)
+        open(path) { status, body ->
+            got = try {
+                IndexFetched(status, body?.readBytes())
+            } catch (e: IOException) {
+                IndexFetched(null, null)
+            }
+        }
+        return got
+    }
 
     /** The parts as this look left them. */
     fun facts(steps: Map<String, SyncStep>): List<IndexFacts> = INDEX_PARTS.mapNotNull { d ->
@@ -393,7 +452,7 @@ internal class IndexLooks(
     }
 
     private fun whole(def: IndexDef): Got {
-        val got = fetch(def.whole)
+        val got = fetched(def.whole)
         rule.answer(got.status, true)?.let { return Got(it) }
         val bytes = got.bytes ?: return Got(SyncOutcome.LOST)
         val taken = rule.takeWhole(def.kind, bytes)
@@ -403,23 +462,82 @@ internal class IndexLooks(
     private fun changes(def: IndexDef, who: String, kept: IndexStands): Got {
         val file = files.bytes(who, def.name)
         if (kept.rev == null || !file.exists()) return Got(SyncOutcome.START_AGAIN)
-        val got = fetch("${def.feed}?since=${kept.rev}")
+        val got = fetched("${def.feed}?since=${kept.rev}")
         rule.answer(got.status, false)?.let { return if (it == SyncOutcome.TOOK) Got(it, at = now()) else Got(it) }
         val feed = got.bytes ?: return Got(SyncOutcome.LOST)
         val taken = rule.takeChanges(def.kind, file.readBytes(), feed)
         return if (taken.outcome == SyncOutcome.TOOK) Got(SyncOutcome.TOOK, taken.bytes, taken.rev, now()) else Got(taken.outcome)
     }
 
+    /** Covers' head to the rule. Empty, it says they were cut short. */
+    private fun taken(def: IndexDef, head: ByteArray, whole: Boolean) = if (whole) rule.takeWhole(def.kind, head) else rule.takeChanges(def.kind, ByteArray(0), head)
+
+    /** As much of [into] as [body] has; how much that was. */
+    private fun fill(body: InputStream, into: ByteArray): Int {
+        var n = 0
+        while (n < into.size) {
+            val read = body.read(into, n, into.size - n)
+            if (read < 0) break
+            n += read
+        }
+        return n
+    }
+
+    /** Covers as they come, each to its file: the form is plain, little-endian, read to the end of the body (the server's device_covers). */
+    private fun framesOf(def: IndexDef, who: String, whole: Boolean, body: InputStream): Got {
+        val head = ByteArray(COVERS_HEAD)
+        val taken = taken(def, head.copyOf(fill(body, head)), whole)
+        if (taken.outcome != SyncOutcome.TOOK) return Got(taken.outcome)
+        if (whole) files.clearCovers(who)
+        val frame = ByteArray(COVER_FRAME)
+        while (true) {
+            val read = fill(body, frame)
+            if (read == 0) return Got(SyncOutcome.TOOK, rev = taken.rev, at = now())
+            if (read < COVER_FRAME) break
+            val fields = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN)
+            val record = fields.getLong()
+            val length = fields.getInt()
+            if (length < 0) break
+            val jpeg = ByteArray(length)
+            if (fill(body, jpeg) < length) break
+            files.putCover(who, record, jpeg.takeIf { length > 0 })
+        }
+        return Got(taken(def, ByteArray(0), whole).outcome)
+    }
+
+    private fun framed(def: IndexDef, who: String, whole: Boolean, kept: IndexStands): Got {
+        if (!whole && kept.rev == null) return Got(SyncOutcome.START_AGAIN)
+        var got = Got(SyncOutcome.LOST)
+        open(if (whole) def.whole else "${def.feed}?since=${kept.rev}") { status, body ->
+            val ended = rule.answer(status, whole)
+            got = when {
+                ended == SyncOutcome.TOOK -> Got(ended, at = now())
+                ended != null -> Got(ended)
+                body == null -> Got(SyncOutcome.LOST)
+                else -> try {
+                    framesOf(def, who, whole, body)
+                } catch (e: IOException) {
+                    Got(SyncOutcome.LOST)
+                }
+            }
+        }
+        return got
+    }
+
     /** One part as far as it goes now: what it was last told to do. */
-    private fun bringUp(def: IndexDef, who: String): SyncStep {
+    private fun bringUp(def: IndexDef, who: String, told: Boolean): SyncStep {
         var turn = 0
         while (true) {
             if (whoNow() != who) return SyncStep.Rest
             val kept = files.stands(who, def.name) ?: NOTHING
             val part = partOf(def, kept)
-            val step = rule.step(part, network(), mobile(), now())
+            val step = rule.step(part, network(), mobile(), told, now())
             if ((step != SyncStep.Whole && step != SyncStep.Changes) || turn == TURNS) return step
-            val got = if (step == SyncStep.Whole) whole(def) else changes(def, who, kept)
+            val got = when {
+                def.frames -> framed(def, who, step == SyncStep.Whole, kept)
+                step == SyncStep.Whole -> whole(def)
+                else -> changes(def, who, kept)
+            }
             // Another account came meanwhile: what was fetched is the one before's.
             if (whoNow() != who) return SyncStep.Rest
             val after = rule.after(part, got.outcome, now())
@@ -441,6 +559,9 @@ internal class IndexLooks(
     private companion object {
         /** Fetches for one part at one look: "start again", then its whole. */
         const val TURNS = 3
+        /** Covers' head, and a frame before its picture: the record, the picture's length. */
+        const val COVERS_HEAD = 16
+        const val COVER_FRAME = 12
         val NOTHING = IndexStands(null, null, null, SyncPart(whole = true, stopped = false, lost = 0u, failed = 0u, tried = null, started = 0L))
     }
 }

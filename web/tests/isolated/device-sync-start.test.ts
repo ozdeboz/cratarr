@@ -16,6 +16,12 @@ localStorage.setItem('cratarr-who', '"ann"');
 const vector = (name: string) => new Uint8Array(readFileSync(new URL(`../../../server/rules/tests/vectors/index/${name}`, import.meta.url)));
 const wasm = readFileSync(new URL('../../src/lib/wasm/index.wasm', import.meta.url));
 
+/** A bundle of no covers yet, at rev 5, as a fresh server gives. */
+const COVERS = new Uint8Array([...new TextEncoder().encode('CRXV'), ...new Uint8Array(new Uint32Array([1]).buffer), ...new Uint8Array(new BigInt64Array([5n]).buffer)]);
+const WHOLES = ['/api/index', '/api/index/sounds', '/api/index/covers'];
+/** What an untold look asks of a device holding all three: only the feed that builds nothing. */
+const UNTOLD = ['/api/index/covers/changes?since=5'];
+
 /** What Cratarr was asked of the library, and what it says at the log to a device that says where it stands. Whether the module came. */
 let asked: string[] = [];
 let moduleFetched = false;
@@ -31,6 +37,7 @@ globalThis.fetch = (async (input: string) => {
   if (url.startsWith('/api/index')) asked.push(url);
   if (url === '/api/index') return new Response(vector('whole.bin'));
   if (url === '/api/index/sounds') return new Response(vector('sounds.bin'));
+  if (url === '/api/index/covers') return new Response(COVERS);
   if (url.startsWith('/api/index')) return new Response(null, { status: 204 });
   if (url.startsWith('/api/changes')) return new Response(JSON.stringify({ rev: 1, changes: [], more: false, ...(url.includes('index=5') ? log : {}) }));
   if (url.startsWith('/api/capabilities')) return new Response(JSON.stringify({ capabilities: ['changes'], version: '1' }));
@@ -72,7 +79,7 @@ test('the first look comes by itself once a start\'s first seconds are over, and
   assert.deepEqual(asked, []);
   assert.equal(moduleFetched, false, 'not the module either: the page\'s own first reads go first');
   await gone(1);
-  assert.deepEqual(asked, ['/api/index', '/api/index/sounds']);
+  assert.deepEqual(asked, WHOLES);
   assert.equal(indexSync.rev, 5);
 });
 
@@ -91,13 +98,13 @@ test('hidden for hours and back is a start: its first seconds, then a look', asy
   await gone(FIRST_LOOK_MS - 1);
   assert.deepEqual(asked, []);
   await gone(1);
-  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
+  assert.deepEqual(asked, UNTOLD);
 });
 
 test('the connection changing starts a look', async () => {
   connection.dispatchEvent(new Event('change'));
   await settle();
-  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
+  assert.deepEqual(asked, UNTOLD);
 });
 
 test('reads moving back to the server start a look, and moving away does not', async () => {
@@ -106,7 +113,7 @@ test('reads moving back to the server start a look, and moving away does not', a
   assert.deepEqual(asked, []);
   reached();
   await settle();
-  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
+  assert.deepEqual(asked, UNTOLD);
 });
 
 test('the log\'s word on the library: it is told where the index stands, and moved it starts a look', async () => {
@@ -115,7 +122,7 @@ test('the log\'s word on the library: it is told where the index stands, and mov
   log = { index: { rev: 9, changed: true } };
   await readChangesNow();
   await settle();
-  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
+  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5', ...UNTOLD]);
 });
 
 test('the log saying nothing moved starts none', async () => {
@@ -133,19 +140,20 @@ test('another account: its own date, its own first seconds, and its own whole', 
   await gone(FIRST_LOOK_MS - 1);
   assert.deepEqual(asked, []);
   await gone(1);
-  assert.deepEqual(asked, ['/api/index', '/api/index/sounds']);
+  assert.deepEqual(asked, WHOLES);
 });
 
 test('back to the first, its date is there again', async () => {
   accountLearnt('ann');
   await settle();
   assert.equal(indexSync.rev, 5);
+  assert.equal(indexSync.covers, 5);
   assert.notEqual(indexSync.at, null);
   stopLooking();
 });
 
 test('a page opening on what stopped says so from the start', async () => {
-  await writePart(whoOf('dan'), 'index', { bytes: null, rev: null, at: null, wants: 1, part: { whole: true, stopped: true, lost: 0, failed: 0, tried: null } });
+  await writePart(whoOf('dan'), 'index', { rev: null, at: null, wants: 1, part: { whole: true, stopped: true, lost: 0, failed: 0, tried: null } });
   accountLearnt('dan');
   await settle();
   assert.equal(indexSync.shows, 'stopped');

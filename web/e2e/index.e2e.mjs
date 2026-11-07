@@ -28,7 +28,23 @@ after(async () => {
   await d.browser.close();
 });
 
-test('a start leaves its first seconds alone, then the index and the sounds are in this browser, under the account', async () => {
+/** How many small covers this browser holds of `who`'s. */
+const coversHeld = (page, who) =>
+  page.evaluate(async (who) => {
+    const db = await new Promise((done, failed) => {
+      const r = indexedDB.open(`cratarr-index@${who}`);
+      r.onsuccess = () => done(r.result);
+      r.onerror = () => failed(r.error);
+    });
+    const n = await new Promise((done) => {
+      const r = db.transaction('covers').objectStore('covers').count();
+      r.onsuccess = () => done(r.result);
+    });
+    db.close();
+    return n;
+  }, who);
+
+test('a start leaves its first seconds alone, then the index, the sounds and the covers are in this browser, under the account', async () => {
   await signIn(d.page, 'ann');
   const opened = Date.now();
   assert.equal((await stands(d.page)).rev, null);
@@ -45,11 +61,13 @@ test('a start leaves its first seconds alone, then the index and the sounds are 
         const r = db.transaction('parts').objectStore('parts').get(name);
         r.onsuccess = () => done(r.result);
       });
-    const [index, sounds] = [await read('index'), await read('sounds')];
+    const [index, sounds, covers] = [await read('index'), await read('sounds'), await read('covers')];
+    const [indexBytes, soundsBytes] = [await read('index:bytes'), await read('sounds:bytes')];
     db.close();
-    return { index: index.bytes.length, indexRev: index.rev, sounds: sounds.bytes.length, soundsRev: sounds.rev };
+    return { index: indexBytes.length, indexRev: index.rev, sounds: soundsBytes.length, soundsRev: sounds.rev, coversRev: covers.rev };
   });
-  assert.deepEqual(kept, { index: 921, indexRev: 5, sounds: 45, soundsRev: 5 });
+  assert.deepEqual(kept, { index: 921, indexRev: 5, sounds: 45, soundsRev: 5, coversRev: 5 });
+  assert.equal(await coversHeld(d.page, 'ann'), 2);
 });
 
 test('This device shows the date', async () => {
@@ -72,6 +90,7 @@ test('Cratarr gone: once it was looked for twice the Library lists what the devi
 test('Cratarr back: reads are its own again, and what it changed meanwhile comes by the feed, to the rev', async () => {
   await standin(d.page, 'index-moves');
   await standin(d.page, 'up');
+  await until(() => coversHeld(d.page, 'ann'), (n) => n === 3, 'the cover made meanwhile');
   await until(() => stands(d.page), (s) => s.rev === 9 && s.shows === 'idle', 'the feed', 60_000);
 });
 

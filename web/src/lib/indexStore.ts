@@ -1,18 +1,23 @@
 // What this device keeps of the library, each account's apart (decision 0101: `cratarr-index@name`, hidden while another is signed in
 // and there at its next sign-in), in this browser's IndexedDB. Only bytes, as the rules crate saves them (the owner, 2026-11-06: one
 // packed format, the store only bytes), and how each part stands. A part's bytes and its standing are written in one transaction, so
-// a page killed halfway keeps the old pair and fetches again, never bytes that say one rev under a word that says another.
+// a page killed halfway keeps the old pair and fetches again, never bytes that say one rev under a word that says another. They lie
+// in rows of their own, as a look reads how a part stands far more often than it reads megabytes. Small covers are a row each.
+import type { CoverFrame } from './coverFrames';
 import type { Part } from './indexEngine';
 
 const DB = 'cratarr-index';
 const PARTS = 'parts';
+const COVERS = 'covers';
 
-/** The parts a device keeps. D12's fits and D13's small covers are more of these, each with its own rev, as the sounds are. */
-export type PartName = 'index' | 'sounds';
+/** The parts a device keeps, each with its own rev. D12's fits are one more of these. */
+export type PartName = 'index' | 'sounds' | 'covers';
 
 /** A part as it is kept. `at`: when it last stood where Cratarr does (ms); `wants`: the version the page that wrote this reads; `part`:
  *  how its fetching stands. */
-export type Kept = { bytes: Uint8Array | null; rev: number | null; at: number | null; wants: number | null; part: Omit<Part, 'started'> };
+export type Kept = { rev: number | null; at: number | null; wants: number | null; part: Omit<Part, 'started'> };
+
+const bytesOf = (name: PartName) => `${name}:bytes`;
 
 const open = new Map<string, Promise<IDBDatabase | null>>();
 
@@ -22,8 +27,10 @@ function db(who: string): Promise<IDBDatabase | null> {
     d = new Promise((done) => {
       try {
         if (typeof indexedDB === 'undefined') return done(null);
-        const r = indexedDB.open(DB + who, 1);
-        r.onupgradeneeded = () => r.result.createObjectStore(PARTS);
+        const r = indexedDB.open(DB + who, 2);
+        r.onupgradeneeded = () => {
+          for (const store of [PARTS, COVERS]) if (!r.result.objectStoreNames.contains(store)) r.result.createObjectStore(store);
+        };
         r.onsuccess = () => done(r.result);
         r.onerror = () => done(null);
         r.onblocked = () => done(null);
@@ -36,14 +43,13 @@ function db(who: string): Promise<IDBDatabase | null> {
   return d;
 }
 
-/** A part as kept for `who` (lib/account's whoOf); undefined where nothing is, or it cannot be read. */
-export async function readPart(who: string, name: PartName): Promise<Kept | undefined> {
+async function get<T>(who: string, key: string): Promise<T | undefined> {
   const d = await db(who);
   if (!d) return undefined;
   return new Promise((done) => {
     try {
-      const r = d.transaction(PARTS, 'readonly').objectStore(PARTS).get(name);
-      r.onsuccess = () => done(r.result as Kept | undefined);
+      const r = d.transaction(PARTS, 'readonly').objectStore(PARTS).get(key);
+      r.onsuccess = () => done(r.result as T | undefined);
       r.onerror = () => done(undefined);
     } catch {
       done(undefined);
@@ -51,15 +57,15 @@ export async function readPart(who: string, name: PartName): Promise<Kept | unde
   });
 }
 
-/** Keeps a part for `who`; whether it was written. A private window or storage refused keeps nothing, and the page says so by
- *  having no date to show. */
-export async function writePart(who: string, name: PartName, kept: Kept): Promise<boolean> {
+/** `work` in one transaction of `store`; whether it was written. A private window or storage refused keeps nothing, and the page says
+ *  so by having no date to show. */
+async function written(who: string, store: string, work: (s: IDBObjectStore) => void): Promise<boolean> {
   const d = await db(who);
   if (!d) return false;
   return new Promise((done) => {
     try {
-      const t = d.transaction(PARTS, 'readwrite');
-      t.objectStore(PARTS).put(kept, name);
+      const t = d.transaction(store, 'readwrite');
+      work(t.objectStore(store));
       t.oncomplete = () => done(true);
       t.onerror = () => done(false);
       t.onabort = () => done(false);
@@ -68,3 +74,30 @@ export async function writePart(who: string, name: PartName, kept: Kept): Promis
     }
   });
 }
+
+/** How a part stands for `who` (lib/account's whoOf); undefined where nothing is, or it cannot be read. */
+export const readPart = (who: string, name: PartName) => get<Kept>(who, name);
+
+/** A part's bytes. */
+export const readBytes = (who: string, name: PartName) => get<Uint8Array>(who, bytesOf(name));
+
+/** Keeps how a part stands for `who`, and new `bytes` if it has any; whether it was written. */
+export const writePart = (who: string, name: PartName, kept: Kept, bytes?: Uint8Array) =>
+  written(who, PARTS, (s) => {
+    s.put(kept, name);
+    if (bytes) s.put(bytes, bytesOf(name));
+  });
+
+/** Small covers for `who`: each record's taken, or let go where it has none now. */
+export const putCovers = (who: string, frames: CoverFrame[]) =>
+  frames.length === 0
+    ? Promise.resolve(true)
+    : written(who, COVERS, (s) => {
+        for (const f of frames) {
+          if (f.jpeg) s.put(f.jpeg, f.record);
+          else s.delete(f.record);
+        }
+      });
+
+/** Every small cover of `who`'s gone, for a whole to take their place. */
+export const clearCovers = (who: string) => written(who, COVERS, (s) => s.clear());

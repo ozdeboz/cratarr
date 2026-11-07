@@ -486,7 +486,7 @@ class MainActivity : AppCompatActivity() {
             }
             "network" -> reply.postMessage(NetState.now(this).toString())
             // The library on this device: the page's word that it moved, or that the person answered; its row tapped.
-            "index-look" -> DeviceIndex.look(this)
+            "index-look" -> DeviceIndex.look(this, message.optBoolean("told"))
             "index-again" -> DeviceIndex.tryAgain(this)
             // Whose this device's things are (decision 0101): the account the page learnt from `/api/me` (`""` with
             // signing in off), at once rather than at the app's own next ask.

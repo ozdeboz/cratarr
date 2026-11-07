@@ -16,7 +16,7 @@ export type Part = { whole: boolean; stopped: boolean; lost: number; failed: num
 /** What to do now. */
 export type Step = { do: 'stopped' | 'rest' | 'ask' | 'whole' | 'changes' } | { do: 'wait'; until: number };
 /** A part of what a device keeps, as the module numbers it. */
-const KIND = { index: 0, sounds: 1 } as const;
+const KIND = { index: 0, sounds: 1, covers: 2 } as const;
 export type Kind = keyof typeof KIND;
 /** How a fetch ended, or a new start: `start-over-another` where another version than this one's kept what is there. */
 export type Outcome = 'took' | 'lost' | 'failed' | 'start-again' | 'version' | 'start' | 'start-over-another';
@@ -43,7 +43,9 @@ type Exports = {
   sync_answer(status: number, whole: number): number;
   sync_take_whole(kind: number, ptr: number, len: number): number;
   sync_take_changes(kind: number, kept: number, keptLen: number, feed: number, feedLen: number): number;
-  sync_step(whole: number, stopped: number, lost: number, failed: number, tried: number, started: number, network: number, mobile: number, now: number): number;
+  covers_version(): number;
+  covers_rev_taken(): number;
+  sync_step(whole: number, stopped: number, lost: number, failed: number, tried: number, started: number, network: number, mobile: number, told: number, now: number): number;
   sync_after(whole: number, stopped: number, lost: number, failed: number, outcome: number): number;
   sync_paused(lost: number): number;
   sync_first_after(): number;
@@ -132,9 +134,17 @@ export class IndexEngine {
     return OUTCOME[this.over(kept, (k, kLen) => this.over(feed, (f, fLen) => this.x.sync_take_changes(KIND[kind], k, kLen, f, fLen)))];
   }
 
-  /** What to do now with a part. */
-  step(p: Part, network: Network, mobile: Mobile, now: number): Step {
-    const said = this.x.sync_step(+p.whole, +p.stopped, p.lost, p.failed, p.tried ?? -1, p.started, NETWORK.indexOf(network), MOBILE.indexOf(mobile), now);
+  /** Covers' head taken: how that ended. Empty, it says they were cut short. */
+  takeCovers(head: Uint8Array, whole: boolean): Outcome {
+    return whole ? this.takeWhole('covers', head) : this.takeChanges('covers', new Uint8Array(0), head);
+  }
+
+  /** Where the covers last taken stand. */
+  coversRev = () => this.x.covers_rev_taken();
+
+  /** What to do now with a part. `told`: its feed may be asked. */
+  step(p: Part, network: Network, mobile: Mobile, told: boolean, now: number): Step {
+    const said = this.x.sync_step(+p.whole, +p.stopped, p.lost, p.failed, p.tried ?? -1, p.started, NETWORK.indexOf(network), MOBILE.indexOf(mobile), +told, now);
     return said >= 0 ? { do: 'wait', until: said } : { do: STEP[said] };
   }
 
@@ -155,6 +165,7 @@ export class IndexEngine {
   /** The versions this module reads. */
   indexVersion = () => this.x.index_version();
   soundsVersion = () => this.x.sounds_version();
+  coversVersion = () => this.x.covers_version();
 }
 
 /** The module's instance: one to let go when done. */

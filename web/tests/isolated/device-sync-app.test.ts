@@ -29,7 +29,7 @@ const { answerMobile, FIRST_LOOK_MS, indexStands, indexSync, syncNow, tryIndexAg
 const { prefs } = await import('../../src/lib/prefs.svelte.ts');
 const { indexWord } = await import('../../src/lib/deviceIndexRule.ts');
 
-const told = (at: number | null, parts: object[], metered = false) => port.onmessage!({ data: JSON.stringify({ type: 'device-index', at, rev: at && 5, metered, parts }) });
+const told = (at: number | null, parts: object[], metered = false) => port.onmessage!({ data: JSON.stringify({ type: 'device-index', at, rev: at && 5, covers: at && 5, metered, parts }) });
 const said = () => sent.map((m) => m.type).filter((t) => String(t).startsWith('index-'));
 const part = { whole: false, stopped: false, paused: false, asks: false };
 const word = () => indexWord(indexSync.shows, indexSync.at, () => 'the date');
@@ -48,23 +48,29 @@ test('the page in the app fetches none of the library, nor the module to read it
 test('a look asked for is the app\'s', async () => {
   await syncNow();
   assert.deepEqual(said(), ['index-look']);
+  assert.equal(sent.at(-1)?.told, false);
 });
 
-test('what /api/changes says of the library goes to the app, once it holds some', async () => {
+test('what /api/changes says of the library goes to the app, once it holds some, and whether it told', async () => {
   told(null, []);
-  await indexStands({ changed: true });
+  await indexStands({ rev: 5, changed: true });
   assert.deepEqual(said(), [], 'nothing held: nothing to bring up to date');
   told(1, [part]);
-  await indexStands({ changed: false });
+  await indexStands({ rev: 5, changed: false });
   assert.deepEqual(said(), []);
-  await indexStands({ changed: true });
+  await indexStands({ rev: 5, changed: true });
   assert.deepEqual(said(), ['index-look']);
+  assert.equal(sent.at(-1)?.told, true);
+  await indexStands({ rev: 6, changed: false });
+  assert.deepEqual(said(), ['index-look', 'index-look'], 'a cover');
+  assert.equal(sent.at(-1)?.told, false);
 });
 
 test('This device says what the app tells, with its date and where it stands', () => {
   told(1_000, [part, part]);
   assert.equal(indexSync.at, 1_000);
   assert.equal(indexSync.rev, 5);
+  assert.equal(indexSync.covers, 5);
   assert.equal(word(), 'the date');
   told(null, []);
   assert.equal(indexSync.at, null);

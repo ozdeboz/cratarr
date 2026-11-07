@@ -22,7 +22,7 @@ const INCOMING = 'cratarr//in coming';
 const OWN = 'own/ann';
 
 /** One copy, as a list says it. */
-const copy = (library: string, format: string, kbps: number, bits: number | null, size: number, added: number, plays: boolean) => ({
+const copy = (library: string, format: string, kbps: number, bits: number | null, size: number, added: number, plays: boolean, tracks: number) => ({
   library,
   format,
   kbps,
@@ -35,6 +35,7 @@ const copy = (library: string, format: string, kbps: number, bits: number | null
   plays,
   added,
   size,
+  tracks,
   job: null,
 });
 
@@ -72,7 +73,7 @@ const albums = () => ({
           bitrate_kbps: 900,
           duration_secs: 380.5,
           tags: [],
-          copies: [copy(MUSIC, 'FLAC', 900, 16, 5000, 1001, true), copy(INCOMING, 'MP3', 320, null, 2000, 1002, false)],
+          copies: [copy(MUSIC, 'FLAC', 900, 16, 5000, 1001, true, 2), copy(INCOMING, 'MP3', 320, null, 2000, 1002, false, 2)],
           type: 'album',
           secondary: ['live'],
         },
@@ -88,7 +89,7 @@ const albums = () => ({
           bitrate_kbps: 700,
           duration_secs: null,
           tags: [],
-          copies: [copy(MUSIC, 'FLAC', 700, 24, 3000, 1001, true)],
+          copies: [copy(MUSIC, 'FLAC', 700, 24, 3000, 1001, true, 2)],
           artists: ['Ana Bell', 'The Quiet'],
           type: 'ep',
           secondary: [],
@@ -106,7 +107,7 @@ const albums = () => ({
           bitrate_kbps: 128,
           duration_secs: 60,
           tags: [],
-          copies: [copy(OWN, 'OPUS', 128, null, 900, 1003, true)],
+          copies: [copy(OWN, 'OPUS', 128, null, 900, 1003, true, 1)],
           type: null,
           secondary: [],
         },
@@ -169,7 +170,7 @@ const noNetwork = () => {
 };
 
 const keepIndex = (bytes: Uint8Array, who = 'ann') =>
-  writePart(whoOf(who), 'index', { bytes, rev: 5, at: 1_234_000, wants: null, part: { whole: false, stopped: false, lost: 0, failed: 0, tried: null } });
+  writePart(whoOf(who), 'index', { rev: 5, at: 1_234_000, wants: null, part: { whole: false, stopped: false, lost: 0, failed: 0, tried: null } }, bytes);
 
 beforeEach(async () => {
   reached();

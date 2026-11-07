@@ -2,14 +2,15 @@
 //! answer and each set of bytes came to, are the rules crate's (`index::sync`, the rule the page asks too). This is that rule in
 //! UniFFI's types, and the two calls that take bytes, so an index is held in memory only while one of them runs.
 
-use cratarr_rules::index::sync::{self, Mobile, Network, Outcome, Part, Step};
+use cratarr_rules::index::sync::{self, COVERS_VERSION, Mobile, Network, Outcome, Part, Step, covers_rev};
 use cratarr_rules::index::{Changes, Index, Refused, SOUNDS_VERSION, SoundChanges, Sounds, VERSION};
 
-/// What a device keeps. D12's fits and D13's small covers are more of these.
+/// What a device keeps. D12's fits are one more of these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum SyncKind {
     Index,
     Sounds,
+    Covers,
 }
 
 /// How one part stands (`index::sync::Part`). The app keeps it, as it must outlast a start.
@@ -125,10 +126,10 @@ impl From<Outcome> for SyncOutcome {
     }
 }
 
-/// What to do now with a part.
+/// What to do now with a part. `told`: its feed may be asked.
 #[uniffi::export]
-pub fn sync_step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, now: i64) -> SyncStep {
-    Part::from(part).step(network.into(), mobile.into(), now).into()
+pub fn sync_step(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, told: bool, now: i64) -> SyncStep {
+    Part::from(part).step(network.into(), mobile.into(), told, now).into()
 }
 
 /// How a part stands after a fetch.
@@ -179,6 +180,7 @@ pub fn sync_version(kind: SyncKind) -> u32 {
     match kind {
         SyncKind::Index => VERSION,
         SyncKind::Sounds => SOUNDS_VERSION,
+        SyncKind::Covers => COVERS_VERSION,
     }
 }
 
@@ -201,19 +203,24 @@ fn changes<T>(applied: Result<T, Refused>, rev: fn(&T) -> i64, save: fn(&T) -> V
     SyncTaken { outcome, rev, bytes }
 }
 
-/// Bytes just fetched whole, read through.
+/// Bytes just fetched whole, read through. Of the covers only their head: their frames are the app's to read as they come.
 #[uniffi::export]
 pub fn sync_take_whole(kind: SyncKind, bytes: Vec<u8>) -> SyncTaken {
     match kind {
         SyncKind::Index => whole(Index::load(&bytes), Index::rev),
         SyncKind::Sounds => whole(Sounds::load(&bytes), Sounds::rev),
+        SyncKind::Covers => whole(covers_rev(&bytes), |rev| *rev),
     }
 }
 
-/// A feed applied to what is kept.
+/// A feed applied to what is kept. Of the covers `feed` is the feed's head, and nothing comes back to keep.
 #[uniffi::export]
 pub fn sync_take_changes(kind: SyncKind, kept: Vec<u8>, feed: Vec<u8>) -> SyncTaken {
     match kind {
+        SyncKind::Covers => {
+            let head = covers_rev(&feed);
+            SyncTaken { outcome: Outcome::of_changes(&head).into(), rev: head.ok(), bytes: None }
+        }
         SyncKind::Index => {
             let applied = Index::load(&kept).and_then(|mut index| Changes::load(&feed).and_then(|c| index.apply(&c)).map(|()| index));
             changes(applied, Index::rev, Index::save)
@@ -251,21 +258,22 @@ mod tests {
     fn each_way_of_a_part_reads_as_the_crate_has_it() {
         let held = SyncPart { whole: false, ..nothing() };
         let later = sync_first_after_ms();
-        assert_eq!(sync_step(nothing(), SyncNetwork::Free, SyncMobile::Unasked, 0), SyncStep::Wait { until: later });
-        assert_eq!(sync_step(nothing(), SyncNetwork::Free, SyncMobile::Unasked, later), SyncStep::Whole);
-        assert_eq!(sync_step(nothing(), SyncNetwork::Metered, SyncMobile::Unasked, later), SyncStep::Ask);
-        assert_eq!(sync_step(nothing(), SyncNetwork::Metered, SyncMobile::Yes, later), SyncStep::Whole);
-        assert_eq!(sync_step(nothing(), SyncNetwork::Metered, SyncMobile::No, later), SyncStep::Rest);
-        assert_eq!(sync_step(nothing(), SyncNetwork::Off, SyncMobile::Yes, later), SyncStep::Rest);
-        assert_eq!(sync_step(held, SyncNetwork::Metered, SyncMobile::No, later), SyncStep::Changes);
-        assert_eq!(sync_step(SyncPart { stopped: true, ..held }, SyncNetwork::Free, SyncMobile::Yes, later), SyncStep::Stopped);
+        assert_eq!(sync_step(nothing(), SyncNetwork::Free, SyncMobile::Unasked, false, 0), SyncStep::Wait { until: later });
+        assert_eq!(sync_step(nothing(), SyncNetwork::Free, SyncMobile::Unasked, false, later), SyncStep::Whole);
+        assert_eq!(sync_step(nothing(), SyncNetwork::Metered, SyncMobile::Unasked, false, later), SyncStep::Ask);
+        assert_eq!(sync_step(nothing(), SyncNetwork::Metered, SyncMobile::Yes, false, later), SyncStep::Whole);
+        assert_eq!(sync_step(nothing(), SyncNetwork::Metered, SyncMobile::No, false, later), SyncStep::Rest);
+        assert_eq!(sync_step(nothing(), SyncNetwork::Off, SyncMobile::Yes, false, later), SyncStep::Rest);
+        assert_eq!(sync_step(held, SyncNetwork::Metered, SyncMobile::No, true, later), SyncStep::Changes);
+        assert_eq!(sync_step(held, SyncNetwork::Metered, SyncMobile::No, false, later), SyncStep::Rest, "not told");
+        assert_eq!(sync_step(SyncPart { stopped: true, ..held }, SyncNetwork::Free, SyncMobile::Yes, true, later), SyncStep::Stopped);
     }
 
     #[test]
     fn a_part_goes_in_with_all_it_knows() {
         let held = SyncPart { whole: false, ..nothing() };
         let at = 100_000;
-        let step = |part| sync_step(part, SyncNetwork::Free, SyncMobile::Unasked, at);
+        let step = |part| sync_step(part, SyncNetwork::Free, SyncMobile::Unasked, true, at);
         assert_eq!(step(SyncPart { lost: 1, tried: Some(at), ..held }), SyncStep::Wait { until: at + sync::LOST_AGAIN_MS });
         assert_eq!(step(SyncPart { failed: 1, tried: Some(at), ..held }), SyncStep::Wait { until: at + sync::FAILED_AGAIN_MS });
         assert_eq!(step(SyncPart { started: at, ..held }), SyncStep::Wait { until: at + sync::FIRST_AFTER_MS });
@@ -307,6 +315,7 @@ mod tests {
     fn each_part_says_its_own_version() {
         assert_eq!(sync_version(SyncKind::Index), VERSION);
         assert_eq!(sync_version(SyncKind::Sounds), SOUNDS_VERSION);
+        assert_eq!(sync_version(SyncKind::Covers), COVERS_VERSION);
     }
 
     #[test]
@@ -321,6 +330,21 @@ mod tests {
         assert_eq!(sync_take_whole(SyncKind::Sounds, another_version(SOUNDS)).outcome, SyncOutcome::Version);
         assert_eq!(sync_take_whole(SyncKind::Index, WHOLE[..100].to_vec()).outcome, SyncOutcome::Failed);
         assert_eq!(sync_take_whole(SyncKind::Index, SOUNDS.to_vec()).outcome, SyncOutcome::Failed, "the sounds are not an index");
+    }
+
+    fn covers_head(version: u32, rev: i64) -> Vec<u8> {
+        [&b"CRXV"[..], &version.to_le_bytes(), &rev.to_le_bytes()].concat()
+    }
+
+    #[test]
+    fn covers_are_taken_by_their_head_and_only_a_whole_can_stop() {
+        let at = |rev| SyncTaken { outcome: SyncOutcome::Took, rev: Some(rev), bytes: None };
+        assert_eq!(sync_take_whole(SyncKind::Covers, covers_head(COVERS_VERSION, 41)), at(41));
+        assert_eq!(sync_take_changes(SyncKind::Covers, Vec::new(), covers_head(COVERS_VERSION, 42)), at(42));
+        assert_eq!(sync_take_whole(SyncKind::Covers, covers_head(9, 41)).outcome, SyncOutcome::Version);
+        assert_eq!(sync_take_changes(SyncKind::Covers, Vec::new(), covers_head(9, 41)).outcome, SyncOutcome::StartAgain);
+        assert_eq!(sync_take_whole(SyncKind::Covers, Vec::new()).outcome, SyncOutcome::Failed, "cut short");
+        assert_eq!(sync_take_changes(SyncKind::Covers, Vec::new(), Vec::new()).outcome, SyncOutcome::StartAgain);
     }
 
     #[test]

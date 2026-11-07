@@ -62,6 +62,7 @@ const copyOf = (c: CopyRow, at: number): AlbumCopy => ({
   plays: at === 0,
   added: c.added,
   size: c.size,
+  tracks: c.tracks,
   job: null,
 });
 

@@ -10,7 +10,7 @@ import { inApp } from './app.svelte';
 import { lookedAgain, notReached, readsFrom, answered, type ReadsFrom, type Settle } from './deviceIndexRule';
 import { listView, OWN, recordNumber, recordView } from './deviceReads';
 import { instantiateIndex, type IndexEngine } from './indexEngine';
-import { readPart } from './indexStore';
+import { readBytes, readPart } from './indexStore';
 import { lookForCratarr, reach, whenAway, whenNetwork, whenReached } from './reach.svelte';
 import type { AlbumsView, AlbumView } from './api';
 
@@ -96,8 +96,8 @@ const APP_INDEX = '/__device/index';
 /** What is kept of an account's index: in a browser its own, in the app the app's, read here by the same module. */
 async function keptIndex(account: string): Promise<{ bytes: Uint8Array; at: number } | null> {
   if (!inApp) {
-    const kept = await readPart(whoOf(account), 'index');
-    return kept?.bytes ? { bytes: kept.bytes, at: kept.at ?? 0 } : null;
+    const [kept, bytes] = await Promise.all([readPart(whoOf(account), 'index'), readBytes(whoOf(account), 'index')]);
+    return bytes ? { bytes, at: kept?.at ?? 0 } : null;
   }
   const res = await fetch(APP_INDEX, { cache: 'no-store' });
   return res.ok ? { bytes: new Uint8Array(await res.arrayBuffer()), at: Number(res.headers.get('X-Cratarr-At')) } : null;

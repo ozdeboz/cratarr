@@ -127,12 +127,14 @@ mod matcher_exports {
 // instance go to give it back. `facts`, `Alike` and Radio's index are not made here until a crate or a pick asks (D18 to D20).
 #[cfg(feature = "wasm-index")]
 mod index_exports {
-    use crate::index::sync::{ANEW_AFTER_MS, FIRST_AFTER_MS, Mobile, Network, Outcome, Part, Step, ended};
+    use crate::index::sync::{ANEW_AFTER_MS, COVERS_VERSION, FIRST_AFTER_MS, Mobile, Network, Outcome, Part, Step, covers_rev, ended};
     use crate::index::{Changes, Index, Refused, SOUNDS_VERSION, SoundChanges, Sounds, VERSION};
     use std::sync::{Mutex, MutexGuard};
 
     static INDEX: Mutex<Option<Index>> = Mutex::new(None);
     static SOUNDS: Mutex<Option<Sounds>> = Mutex::new(None);
+    /// Where the covers last taken stand: their frames are the page's, and only this is the crate's.
+    static COVERS: Mutex<f64> = Mutex::new(-1.0);
     /// The version the last refusal found, and the one this module reads.
     static VERSIONS: Mutex<(u32, u32)> = Mutex::new((0, 0));
 
@@ -303,14 +305,14 @@ mod index_exports {
         Part { whole: whole != 0, stopped: stopped != 0, lost, failed, tried: (tried >= 0.0).then_some(tried as i64), started: started as i64 }
     }
 
-    /// What to do now (`Part::step`). `network`: 0 free, 1 metered, 2 off; `mobile`: 0 unasked, 1 yes, 2 no. Its answer: a time to wait
+    /// What to do now (`Part::step`). `network`: 0 free, 1 metered, 2 off; `mobile`: 0 unasked, 1 yes, 2 no; `told`: 1 when its feed may be asked. Its answer: a time to wait
     /// for (ms), or below zero: -1 stopped, -2 rest, -3 ask, -4 whole, -5 changes.
     #[unsafe(no_mangle)]
     #[allow(clippy::too_many_arguments)]
-    pub extern "C" fn sync_step(whole: u32, stopped: u32, lost: u32, failed: u32, tried: f64, started: f64, network: u32, mobile: u32, now: f64) -> f64 {
+    pub extern "C" fn sync_step(whole: u32, stopped: u32, lost: u32, failed: u32, tried: f64, started: f64, network: u32, mobile: u32, told: u32, now: f64) -> f64 {
         let network = [Network::Free, Network::Metered][..].get(network as usize).copied().unwrap_or(Network::Off);
         let mobile = [Mobile::Unasked, Mobile::Yes][..].get(mobile as usize).copied().unwrap_or(Mobile::No);
-        match state(whole, stopped, lost, failed, tried, started).step(network, mobile, now as i64) {
+        match state(whole, stopped, lost, failed, tried, started).step(network, mobile, told != 0, now as i64) {
             Step::Wait(until) => until as f64,
             Step::Stopped => -1.0,
             Step::Rest => -2.0,
@@ -356,35 +358,56 @@ mod index_exports {
         ended(u16::try_from(status).ok(), whole != 0).map_or(5, number)
     }
 
+    /// The version of covers this module reads.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn covers_version() -> u32 {
+        COVERS_VERSION
+    }
+
+    /// Where the covers last taken stand; -1 where none were.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn covers_rev_taken() -> f64 {
+        *held(&COVERS)
+    }
+
+    /// Covers' head, taken if it reads.
+    fn head_of(bytes: &[u8]) -> Result<(), Refused> {
+        covers_rev(bytes).map(|rev| *held(&COVERS) = rev as f64)
+    }
+
     /// Bytes just fetched whole, held if they can be: how that ended (`Outcome::of_whole`), as `sync_after` numbers it. `kind`: 0 the
-    /// index, 1 the sounds.
+    /// index, 1 the sounds, 2 the covers, by their head alone.
     ///
     /// # Safety
     /// `ptr` holds `len` bytes.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sync_take_whole(kind: u32, ptr: *const u8, len: usize) -> u32 {
         let bytes = unsafe { input(ptr, len) };
-        number(if kind == 0 {
-            Outcome::of_whole(&Index::load(bytes).map(|index| *held(&INDEX) = Some(index)))
-        } else {
-            Outcome::of_whole(&Sounds::load(bytes).map(|sounds| *held(&SOUNDS) = Some(sounds)))
+        number(match kind {
+            0 => Outcome::of_whole(&Index::load(bytes).map(|index| *held(&INDEX) = Some(index))),
+            1 => Outcome::of_whole(&Sounds::load(bytes).map(|sounds| *held(&SOUNDS) = Some(sounds))),
+            _ => Outcome::of_whole(&head_of(bytes)),
         })
     }
 
     /// A feed applied to what is kept, the result held if it can be: how that ended (`Outcome::of_changes`), as `sync_after` numbers
-    /// it. `kind` as `sync_take_whole`'s.
+    /// it. `kind` as `sync_take_whole`'s: for the covers `feed` is the feed's head, and nothing is kept.
     ///
     /// # Safety
     /// `kept` holds `kept_len` bytes, and `feed` `feed_len`.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sync_take_changes(kind: u32, kept: *const u8, kept_len: usize, feed: *const u8, feed_len: usize) -> u32 {
         let (kept, feed) = unsafe { (input(kept, kept_len), input(feed, feed_len)) };
-        number(if kind == 0 {
-            let applied = Index::load(kept).and_then(|mut index| Changes::load(feed).and_then(|c| index.apply(&c)).map(|()| index));
-            Outcome::of_changes(&applied.map(|index| *held(&INDEX) = Some(index)))
-        } else {
-            let applied = Sounds::load(kept).and_then(|mut sounds| SoundChanges::load(feed).and_then(|c| sounds.apply(&c)).map(|()| sounds));
-            Outcome::of_changes(&applied.map(|sounds| *held(&SOUNDS) = Some(sounds)))
+        number(match kind {
+            0 => {
+                let applied = Index::load(kept).and_then(|mut index| Changes::load(feed).and_then(|c| index.apply(&c)).map(|()| index));
+                Outcome::of_changes(&applied.map(|index| *held(&INDEX) = Some(index)))
+            }
+            1 => {
+                let applied = Sounds::load(kept).and_then(|mut sounds| SoundChanges::load(feed).and_then(|c| sounds.apply(&c)).map(|()| sounds));
+                Outcome::of_changes(&applied.map(|sounds| *held(&SOUNDS) = Some(sounds)))
+            }
+            _ => Outcome::of_changes(&head_of(feed)),
         })
     }
 

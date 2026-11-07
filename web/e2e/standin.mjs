@@ -1,8 +1,9 @@
 // A stand-in for Cratarr, for the browser tests with no built server (`pnpm run e2e:standin`, e2e/standin-run.mjs; the real
 // one is scripts/browser-e2e.sh): sign-in and its session as server/src/serve/signin.rs makes them, the 401 of access.rs,
 // /api/me, preferences, an account's few reads, a player's connection and reports, kept for a test to read at
-// /api/standin/reports, and the library's index and its feed, the rules crate's own bytes (server/rules/tests/vectors/index): it
-// stands at rev 5 until a test moves it to 9 by /api/standin/index-moves. Everything else is not here, which the page takes as it
+// /api/standin/reports, and the library's index and its feed, the rules crate's own bytes (server/rules/tests/vectors/index), with
+// small covers in their plain form: it stands at rev 5 until a test moves it to 9 by /api/standin/index-moves, which adds one cover.
+// Everything else is not here, which the page takes as it
 // takes a server without it. The sign-in page's
 // own script is read from signin.rs: what it does to the page's stores is the server's line, not a copy of it. A test takes it
 // down and up again by /api/standin/down and /up: down, it answers as its proxy would with Cratarr stopped.
@@ -19,6 +20,20 @@ const script = readFileSync(new URL('../../server/src/serve/signin.rs', import.m
 
 /** What the rules crate wrote of its small library, a file of it. */
 const vector = (name) => readFileSync(new URL(`../../server/rules/tests/vectors/index/${name}`, import.meta.url));
+
+/** Small covers as the server's `device_covers` writes them. */
+const u32 = (n) => {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(n);
+  return b;
+};
+const i64 = (n) => {
+  const b = Buffer.alloc(8);
+  b.writeBigInt64LE(BigInt(n));
+  return b;
+};
+const coverFrame = (record) => Buffer.concat([i64(record), u32(4), Buffer.from([0xff, 0xd8, record, 0xd9])]);
+const coverBundle = (rev, ...records) => Buffer.concat([Buffer.from('CRXV'), u32(1), i64(rev), ...records.map(coverFrame)]);
 
 const escaped = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const page = (next) =>
@@ -120,6 +135,14 @@ export function standIn(port, accounts) {
     };
     if (path === '/api/index') return bytes(vector(indexRev === 5 ? 'whole.bin' : 'after.bin'));
     if (path === '/api/index/sounds') return bytes(vector(indexRev === 5 ? 'sounds.bin' : 'sounds-after.bin'));
+    if (path === '/api/index/covers') return bytes(indexRev === 5 ? coverBundle(5, 1, 2) : coverBundle(9, 1, 2, 3));
+    if (path === '/api/index/covers/changes') {
+      if (Number(url.searchParams.get('since')) === indexRev) {
+        res.writeHead(204);
+        return res.end();
+      }
+      return bytes(coverBundle(indexRev, 3));
+    }
     if (path === '/api/index/changes' || path === '/api/index/sounds/changes') {
       if (Number(url.searchParams.get('since')) === indexRev) {
         res.writeHead(204);
