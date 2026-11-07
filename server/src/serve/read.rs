@@ -40,6 +40,8 @@ pub struct ListedCopy {
     pub added: Option<i64>,
     /// Its files' bytes, added up.
     pub size: u64,
+    /// How many of the record's tracks it holds.
+    pub tracks: u32,
 }
 
 /// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id (what its tags and marks are kept
@@ -900,9 +902,9 @@ impl Library {
     pub fn copies_of(&self, id: &str) -> Result<Vec<Copy>> {
         let mut copies: Vec<Copy> = {
             let db = self.db();
-            let mut st = db.prepare_cached("SELECT folder, dir, format, min_kbps, bits, rate FROM copies WHERE album = ?1 ORDER BY folder, dir")?;
+            let mut st = db.prepare_cached("SELECT folder, dir, format, min_kbps, bits, rate, short FROM copies WHERE album = ?1 ORDER BY folder, dir")?;
             st.query_map([id], |r| {
-                Ok(Copy { folder: r.get(0)?, dir: r.get(1)?, kind: Kind::Main, order: 0, format: r.get(2)?, min_kbps: r.get(3)?, bits: r.get(4)?, rate: r.get(5)? })
+                Ok(Copy { folder: r.get(0)?, dir: r.get(1)?, kind: Kind::Main, order: 0, format: r.get(2)?, min_kbps: r.get(3)?, bits: r.get(4)?, rate: r.get(5)?, short: r.get(6)? })
             })?
             .collect::<rusqlite::Result<_>>()?
         };
@@ -1275,7 +1277,7 @@ impl Library {
         let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
         self.album_artists(&db, &mut albums)?;
         let mut st = db.prepare_cached(&format!(
-            "SELECT c.dir, c.format, c.min_kbps, {ALBUM_LENGTH}, c.bits, c.rate, c.added, c.size FROM copies c JOIN albums a ON a.id = c.album WHERE c.album = ?1 AND c.folder = ?2 ORDER BY c.dir"
+            "SELECT c.dir, c.format, c.min_kbps, {ALBUM_LENGTH}, c.bits, c.rate, c.added, c.size, c.tracks FROM copies c JOIN albums a ON a.id = c.album WHERE c.album = ?1 AND c.folder = ?2 ORDER BY c.dir"
         ))?;
         let mut out = Vec::with_capacity(albums.len());
         for a in albums {
@@ -1290,6 +1292,7 @@ impl Library {
                     rate: r.get(5)?,
                     added: r.get(6)?,
                     size: r.get::<_, i64>(7)? as u64,
+                    tracks: r.get::<_, i64>(8)?.max(0) as u32,
                 })
             })?;
             out.extend(copies.collect::<rusqlite::Result<Vec<_>>>()?);

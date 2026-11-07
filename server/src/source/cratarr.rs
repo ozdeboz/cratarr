@@ -503,7 +503,7 @@ impl Source for CratarrSource {
                     let (a, dir) = (c.album, c.dir);
                     let stamp = format!("{} {} {}", a.song_count, a.created.as_deref().unwrap_or(""), dir);
                     // This library's copy: `App::albums` says what the viewer may do with it, and folds a record's together.
-                    let copy = AlbumCopy { library: library.clone(), bits: c.bits, rate: c.rate, added: c.added, size: Some(c.size), folder, dir: dir.clone(), ..AlbumCopy::default() };
+                    let copy = AlbumCopy { library: library.clone(), bits: c.bits, rate: c.rate, added: c.added, size: Some(c.size), tracks: c.tracks, folder, dir: dir.clone(), ..AlbumCopy::default() };
                     out.push(Listed {
                         album: Album {
                             added: a.created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),

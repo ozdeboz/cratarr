@@ -900,7 +900,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     // The catalogue: the main library's tracks stand, the other two copies on them, and nothing new, nothing else moved.
     let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
     let taken: std::collections::HashMap<i64, i64> = db.prepare("SELECT old, id FROM track_moved").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
-    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46)].into(), "Music's ids survive, each track by its place");
+    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46), (15, 41), (14, 40), (13, 39)].into(), "Music's ids survive, each track by its place");
     let followed: Vec<(i64, String, i64)> = left.iter().map(|(folder, rel, track)| (*folder, rel.clone(), *taken.get(track).unwrap_or(track))).collect();
     assert_eq!(tracks_of_files(&db), followed, "nothing new, and nothing moved but what the merge moved");
     assert_eq!(db.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), left.len() as i64 + 1, "a taken id keeps its row, and the retired one stands");
@@ -909,8 +909,8 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     // The report, and each table's rows told over: what met another is counted, and a row goes nowhere else.
     let report = ann.get("/api/admin/migration").await;
     let part = report["parts"]["records"].clone();
-    assert_eq!((part["tracks_merged"].as_u64(), part["bases_on_two_records"].as_u64()), (Some(6), Some(3)), "{part}");
-    assert_eq!(part["copies"].as_u64().unwrap(), part["records"].as_u64().unwrap() + 2, "Both Shores' three copies are one record: {part}");
+    assert_eq!((part["tracks_merged"].as_u64(), part["bases_on_two_records"].as_u64()), (Some(9), Some(2)), "{part}");
+    assert_eq!(part["copies"].as_u64().unwrap(), part["records"].as_u64().unwrap() + 3, "Both Shores' three copies are one record, and Short Measure's two: {part}");
     assert!(part["artists"].as_u64().unwrap() >= 4, "{part}");
     for row in part["tables"].as_array().unwrap() {
         let (name, before, after, merged) = (&row["name"], row["before"].as_u64().unwrap(), row["after"].as_u64().unwrap(), row["merged"].as_u64().unwrap());
@@ -969,7 +969,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let picture = format!("x{}.jpg", format!("like:{}", now("al-4Jx9dQszNKgnbo4mZtic7y")).bytes().map(|b| format!("{b:02x}")).collect::<String>());
     assert!(data.join("crate-images").join(picture).is_file(), "a crate's picture follows its seed");
     assert_eq!(every_text(&data.join("journal.sqlite")).iter().flat_map(|(_, text)| hashes_in(text)).collect::<Vec<_>>(), Vec::<String>::new());
-    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6"];
+    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6", "tr-15", "tr-14", "tr-13"];
     let names_one = |text: &str| gone.iter().any(|id| text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|word| word == *id));
     // A device told of a heart hears it went, by the id it knew, and a play keeps the event it was told by.
     let kept = |table: &str, text: &str| table == "migration_report" || table == "change_log" || text.starts_with("backfill:");
@@ -1123,7 +1123,7 @@ async fn a_first_start_stopped_at_any_step_finishes_on_restart_end_to_end() {
         let (file, kept) = (data.join(file), std::fs::read(data.join(file)).unwrap());
         std::fs::write(&file, b"nothing a server could read").unwrap();
         let said = start_refused(&data);
-        assert_eq!((done(&data), merged(&data)), (false, 6), "{}: {said}", file.display());
+        assert_eq!((done(&data), merged(&data)), (false, 9), "{}: {said}", file.display());
         std::fs::write(&file, kept).unwrap();
     };
     unreadable("journal.sqlite");
@@ -2169,6 +2169,89 @@ async fn a_copy_named_is_heard_on_every_address_and_through_a_signed_link_end_to
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The owner, 2026-11-07: a folder of the very same release is the record from its first file. On real files through passes, its last
+/// track first: one card, each file on the track it is, what plays as it was, the copy heard by `from` for what it holds and passed over
+/// for what it does not, Replace refused as it would take tracks it lacks, a Delete taking its files alone, and its last file in, a copy
+/// like any other.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_arriving_file_by_file_is_the_record_from_its_first_file_end_to_end() {
+    let root = temp("arriving");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (music, incoming, aside) = (library.join("music"), library.join("incoming"), root.join("aside"));
+    std::fs::rename(incoming.join(SHORES), &aside).unwrap();
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    let entries = || async { ann.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect::<Vec<Value>>() };
+    s.until("Music's copy read", Duration::from_secs(120), || async { !entries().await.is_empty() }).await;
+    let id = entries().await[0]["id"].as_str().unwrap().to_string();
+    let songs: Vec<String> = ann.get(&format!("/api/albums/cratarr/{id}")).await["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(songs.len(), 3);
+    let (kept, waiting) = (audio_under(&music.join(SHORES)), audio_under(&aside));
+    let arrives = |file: &str| {
+        std::fs::create_dir_all(incoming.join(SHORES)).unwrap();
+        std::fs::copy(aside.join(file), incoming.join(SHORES).join(file)).unwrap();
+    };
+    let copies_held = |n: u64| {
+        let (ann, entries, there) = (&ann, &entries, id_of(&incoming));
+        async move {
+            ask(ann, "startScan", "").await;
+            built(ann).await;
+            entries().await.first().is_some_and(|a| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"] == there.as_str() && c["tracks"] == n)))
+        }
+    };
+
+    arrives(&waiting[2]);
+    s.until("its first file", Duration::from_secs(120), || copies_held(1)).await;
+    let listed = entries().await;
+    assert_eq!((listed.len(), listed[0]["id"].as_str()), (1, Some(id.as_str())), "the record you hold, one card: {listed:?}");
+    assert_eq!(listed[0]["tracks"], 3, "listing what it lists");
+    assert_eq!(tracks_at(&data, &incoming, SHORES), songs[2..], "the track it is");
+    let plays: Vec<&Value> = listed[0]["copies"].as_array().unwrap().iter().filter(|c| c["plays"] == true).map(|c| &c["library"]).collect();
+    assert_eq!(plays, [&json!(id_of(&music))], "what played plays on");
+
+    // Play: Music's, and an Incoming copy only by `from`, which a track it does not hold passes over.
+    let (kept_last, waiting_last) = (std::fs::read(music.join(SHORES).join(&kept[2])).unwrap(), std::fs::read(aside.join(&waiting[2])).unwrap());
+    let from = format!("from={}", id_of(&incoming).replace('/', "%2F"));
+    assert!(ann.bytes(&format!("/api/file/cratarr/{}", songs[2])).await.1 == kept_last, "Music's, as ever");
+    assert!(ann.bytes(&format!("/api/file/cratarr/{}?{from}", songs[2])).await.1 == waiting_last, "the copy named, for the track it holds");
+    let first = std::fs::read(music.join(SHORES).join(&kept[0])).unwrap();
+    assert!(ann.bytes(&format!("/api/file/cratarr/{}?{from}", songs[0])).await.1 == first, "passed over for one it does not");
+
+    // Replace would put three tracks' place in the hands of one: refused, and nothing moves.
+    let (old, new) = (as_it_lies(&music.join(SHORES)), as_it_lies(&incoming.join(SHORES)));
+    let replacing = format!("/api/incoming/replace/cratarr/{id}?{from}");
+    let preview = ann.get(&replacing).await;
+    assert!(!preview["refused"].is_null(), "two tracks of Music's have no match: {preview}");
+    assert_eq!(ann.send(reqwest::Method::POST, &replacing, json!({ "from": id_of(&incoming) })).await.0, 409);
+    assert!(as_it_lies(&music.join(SHORES)) == old && as_it_lies(&incoming.join(SHORES)) == new, "a refusal moves nothing");
+
+    // A Delete takes its one file. The record goes on, and an Undo brings it back on the track it was.
+    let gone = ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/delete"), json!({ "from": id_of(&incoming) })).await;
+    assert!(!incoming.join(SHORES).exists(), "the copy named went");
+    assert!(as_it_lies(&music.join(SHORES)) == old, "and no other");
+    s.until("the copy to go", Duration::from_secs(120), || async { entries().await.first().is_some_and(|a| a["copies"].as_array().is_some_and(|c| c.len() == 1)) }).await;
+    assert_eq!(entries().await[0]["id"].as_str(), Some(id.as_str()));
+    ann.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
+    s.until("its Undo", Duration::from_secs(120), || copies_held(1)).await;
+    assert_eq!(tracks_at(&data, &incoming, SHORES), songs[2..]);
+
+    // The rest come in, in no order, and it is a copy like any other, on the record's tracks.
+    arrives(&waiting[0]);
+    s.until("its next file", Duration::from_secs(120), || copies_held(2)).await;
+    arrives(&waiting[1]);
+    s.until("its last file", Duration::from_secs(120), || copies_held(3)).await;
+    assert_eq!(tracks_at(&data, &incoming, SHORES), songs, "each on the track it is");
+    assert_eq!(entries().await.len(), 1);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Replace: the new files take the place and the track ids of the old, which go to Music's trash. A copy missing a track is refused
 /// and nothing moves. Its Undo gives each library its own files and each file its own id again.
 #[tokio::test(flavor = "multi_thread")]
@@ -3106,10 +3189,10 @@ fn from_at_once(want: &Value) -> impl Fn(&Value) -> Vec<String> {
 
 /// What must stand while a library is away: every row of the account's, what each album left has by its id, each list's lines and the
 /// crate's own. Not what a door makes of it, as a record gone from every list has nothing to show its play on. `gone`: the albums lying
-/// only there.
-fn kept_while_away(held: &Value, gone: &[String]) -> Value {
+/// only there. `lacking`: the tracks lying only there of a record that stays, by a copy short of them.
+fn kept_while_away(held: &Value, gone: &[String], lacking: &[String]) -> Value {
     let album = |a: &Value| {
-        let songs: serde_json::Map<String, Value> = a["songs"].as_object().unwrap().iter().map(|(id, s)| (id.clone(), s["owned"].clone())).collect();
+        let songs: serde_json::Map<String, Value> = a["songs"].as_object().unwrap().iter().filter(|(id, _)| !lacking.contains(id)).map(|(id, s)| (id.clone(), s["owned"].clone())).collect();
         json!({ "owned": a["owned"], "songs": songs })
     };
     let albums: serde_json::Map<String, Value> = held["albums"].as_object().unwrap().iter().filter(|(id, _)| !gone.contains(id)).map(|(id, a)| (id.clone(), album(a))).collect();
@@ -3126,11 +3209,11 @@ fn lying_only_in(want: &Value, library: &str) -> Vec<String> {
 }
 
 /// What differs from `want` while `library` is away, by `kept_while_away`, and a line of a record gone that does not say it is missing.
-fn from_while_away<'a>(want: &'a Value, library: &'a str) -> impl Fn(&Value) -> Vec<String> + 'a {
+fn from_while_away<'a>(want: &'a Value, library: &'a str, lacking: &'a [String]) -> impl Fn(&Value) -> Vec<String> + 'a {
     move |got| {
         let gone = lying_only_in(want, library);
         let mut out = Vec::new();
-        differences("", &kept_while_away(want, &gone), &kept_while_away(got, &[]), &mut out);
+        differences("", &kept_while_away(want, &gone, lacking), &kept_while_away(got, &[], &[]), &mut out);
         for (id, list) in want["playlists"].as_object().unwrap() {
             for (n, row) in list["rows"].as_array().unwrap().iter().enumerate() {
                 let is_gone = gone.iter().any(|a| row["album_id"] == a.as_str());
@@ -3311,16 +3394,21 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     say(&mut findings, "second renamed rack, then told, its switch", switched_otherwise(&s, &shelves, &bos).await);
 
     // 3. A library removed, the server restarted, and the library added back. While it is away what lies only there is off every list and
-    // its lines read as missing, as nobody could hear it; nothing it holds is touched. Each kind of library, and the first of all.
+    // its lines read as missing, as nobody could hear it; nothing it holds is touched. Each kind of library, and the first of all. Incoming's
+    // copy of Short Measure is short of its last track: with Music away the record stays by that copy, and that track goes with its file.
+    let (whole, short) = (tracks_at(&shelves.data, shelves.at("music"), MEASURE), tracks_at(&shelves.data, shelves.at("incoming"), MEASURE));
+    let only_in_music: Vec<String> = whole.into_iter().filter(|t| !short.contains(t)).collect();
+    assert_eq!(only_in_music.len(), 1, "{short:?}");
     for name in ["second", "incoming", "music"] {
+        let lacking: &[String] = if name == "music" { &only_in_music } else { &[] };
         let at = shelves.list.iter().position(|l| l.name == name).unwrap();
         let shelf = shelves.list.remove(at);
         s = shelves.saved(s).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
-        say(&mut findings, &format!("{name} removed"), settled(&ann, &shelves, &mine, from_while_away(&want, name)).await);
+        say(&mut findings, &format!("{name} removed"), settled(&ann, &shelves, &mine, from_while_away(&want, name, lacking)).await);
         s = restarted(s, &shelves.data).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
-        say(&mut findings, &format!("{name} removed, started again"), settled(&ann, &shelves, &mine, from_while_away(&want, name)).await);
+        say(&mut findings, &format!("{name} removed, started again"), settled(&ann, &shelves, &mine, from_while_away(&want, name, lacking)).await);
         shelves.list.insert(at, shelf);
         s = shelves.saved(s).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;

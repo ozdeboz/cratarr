@@ -26,6 +26,7 @@ const copy = (id: string, more: Partial<AlbumCopy> = {}): AlbumCopy => ({
   plays: false,
   added: null,
   size: null,
+  tracks: 3,
   job: null,
   ...more,
 });
@@ -213,6 +214,11 @@ const marked = (lines: { name: string; plays: boolean }[]) => lines.filter((l) =
 
 test('a record of two copies has a line each, saying what each is, which plays, and what a tap on the other does', () => {
   assert.deepEqual(copyLines(MP3_AND_FLAC, INFO, without()), [{ name: 'MUSIC', colour: '#music', quality: 'MP3 320', size: '92 MB', plays: true, playFrom: null }, FLAC_LINE]);
+});
+
+test('a copy short of the record\'s tracks says how much of it is there, where a whole one says its size', () => {
+  const a = { tracks: 10, copies: [copy('music', { plays: true, tracks: 10, size: 92_000_000 }), copy('in', { tracks: 3, size: 30_000_000 })] };
+  assert.deepEqual(copyLines(a, INFO, without()).map((l) => l.size), ['92 MB', '3 of 10']);
 });
 
 test('lines keep the list\'s order, which is the order the copies would play, wherever the marked one stands in it', () => {

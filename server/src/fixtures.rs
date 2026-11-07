@@ -285,7 +285,7 @@ fn layout_albums() -> Vec<(Place, Album)> {
         // The same tracks on two MusicBrainz releases: two records.
         (Main, case("Two Pressings", Flac, &pressings, &[2, 2], Some("00000000-0000-4000-8000-000000000202"))),
         (Second, case("Two Pressings", Flac, &pressings, &[2, 2], Some("00000000-0000-4000-8000-000000000203"))),
-        // A folder missing a track is no copy, the same release or not.
+        // A folder short of a track of its very release is a copy of it, as one still arriving is (the owner, 2026-11-07).
         (Main, case("Short Measure", Flac, &measure, &[2, 2, 2, 2], MEASURE)),
         (Incoming, case("Short Measure", Mp3, &measure[..3], &[2, 2, 2], MEASURE)),
         // No release on either side: the album artist and title, and the tracks, make it one record.
@@ -521,7 +521,9 @@ mod tests {
         assert_eq!((libraries, one.len()), (4, 1), "one record in four libraries, a second apart, FLAC and MP3");
         let (libraries, one) = records("No Papers");
         assert_eq!((libraries, one.len()), (2, 1), "no release on either side: artist, title and tracks");
-        for two in ["Bonus Round", "Two Pressings", "Short Measure", "Long Cut"] {
+        let (libraries, one) = records("Short Measure");
+        assert_eq!((libraries, one.len()), (2, 1), "a folder short of a track of its very release");
+        for two in ["Bonus Round", "Two Pressings", "Long Cut"] {
             assert_eq!(records(two).1.len(), 2, "{two}: not one record");
         }
         let long_take = |root: &Path| folders.iter().find(|f| f.root == root.display().to_string()).unwrap().rows.iter().find(|r| r.rel.ends_with("Long Take.flac")).unwrap().duration_ms.unwrap();

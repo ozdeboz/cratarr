@@ -11,7 +11,7 @@ import { size } from './exportChoices';
 const LOSSLESS = new Set(['FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV', 'WAVPACK', 'DSF', 'DFF']);
 export const isLossless = (format: string | null | undefined) => !!format && LOSSLESS.has(format.toUpperCase());
 
-export type Held = { library?: string; copies?: AlbumCopy[] };
+export type Held = { library?: string; copies?: AlbumCopy[]; tracks?: number };
 export type Dot = { id: string; colour: string; name: string };
 type On = (library: string) => boolean;
 
@@ -218,7 +218,8 @@ export type CopyLine = {
   colour: string | null;
   /** "MP3 320", "FLAC". */
   quality: string;
-  /** "92 MB"; null where the list says none. */
+  /** "92 MB"; null where the list says none. A copy short of the record's tracks, still arriving or for good: "3 of 10", as how
+   *  much of it is there says more than its bytes. */
   size: string | null;
   /** It is what Play would give. */
   plays: boolean;
@@ -248,7 +249,7 @@ export function copyLines(a: Held, info: LibraryInfo[] | undefined, on: On): Cop
       name: library?.name ?? c.library,
       colour: library?.colour ?? null,
       quality: qualityOfCopy(c),
-      size: c.size ? size(c.size) : null,
+      size: a.tracks && c.tracks < a.tracks ? `${c.tracks} of ${a.tracks}` : c.size ? size(c.size) : null,
       plays: c === playing,
       playFrom: first ? (entries.find((e) => e.library === c.library) ?? null) : null,
     };

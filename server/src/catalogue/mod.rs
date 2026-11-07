@@ -2530,6 +2530,8 @@ impl Catalogue {
         // Each album's tracks as this pass leaves them.
         let mut tracks: Vec<Vec<i64>> = albums.iter().map(|a| a.tracks.iter().map(|t| t.0).collect()).collect();
         let mut take = Take::default();
+        // Those told here to leave: what they join below is a record they are the same as, never one they are short of.
+        let mut leaving: HashSet<usize> = HashSet::new();
         // The tracklists must match, always, so albums voting one record hold one set of tracks. Where the ids alone differ, a
         // file replaced outside Cratarr, the track is taken. Where the tracks do, a track added to one or one disc of a double
         // album retagged, the first by kind keeps the record, then the largest, then the first met (CR18: nobody has checked an
@@ -2555,10 +2557,16 @@ impl Catalogue {
                 named.by_name(&held, *record, (&tracks[i], &albums[i].facts.tracks), (&tracks[keeps], &albums[keeps].facts.tracks));
                 let (mine, theirs) = (named.all(&tracks[i]), named.all(&tracks[keeps]));
                 let (lacking, more): (Vec<i64>, Vec<i64>) = (theirs.difference(&mine).copied().collect(), mine.difference(&theirs).copied().collect());
-                if held.lacks_for_now(&albums[i], &lacking) && held.lacks_for_now(&albums[keeps], &more) {
+                // Of the very same release a copy can be short of what the record has (the owner, 2026-11-07), arriving or for good,
+                // and its ids hold it there whatever the tags say since. A track new to the record is no such thing: there the
+                // other copy grew, and the one that holds all the record ever had leaves as any other, by Q8.
+                let of_the_record = |list: &[i64]| list.iter().any(|t| held.record.get(t) == Some(record));
+                let short = identity::same_release(&albums[i].facts, &albums[keeps].facts) && ((more.is_empty() && of_the_record(&lacking)) || (lacking.is_empty() && of_the_record(&more)));
+                if short || (held.lacks_for_now(&albums[i], &lacking) && held.lacks_for_now(&albums[keeps], &more)) {
                     take = named;
                 } else if !moving {
                     records[i] = None;
+                    leaving.insert(i);
                 }
             }
         }
@@ -2611,6 +2619,14 @@ impl Catalogue {
                         let named = by_name.get(&(a.facts.artist.clone(), a.facts.title.clone())).into_iter().flatten();
                         let released = a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten();
                         let same: Option<(usize, i64)> = named.chain(released).find(|(j, _)| identity::same_record(&a.facts, &albums[*j].facts)).copied();
+                        // A folder of the very same release joins at once, short of the record or not yet held by it and more than
+                        // it has (the owner, 2026-11-07). Held by it already and longer, it is a copy that grew, which is Q8's. Held against
+                        // the longest there is, as a copy short of it says less of what its tracks are.
+                        let arrives = |(j, r): &&(usize, i64)| {
+                            let other = &albums[*j];
+                            !leaving.contains(&i) && identity::short_of(&a.facts, &other.facts) && (a.tracks.len() < other.tracks.len() || !a.tracks.iter().any(|t| held.record.get(&t.0) == Some(r)))
+                        };
+                        let same = same.or_else(|| a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten().filter(arrives).max_by_key(|(j, _)| albums[*j].tracks.len()).copied());
                         // Nothing here can take a record: every track stays with a file elsewhere, gone a while or in a trash.
                         // One with no record has nowhere to stay, and a row with no record is not served.
                         let stays = |t: &i64| {
@@ -2654,8 +2670,13 @@ impl Catalogue {
                             }
                         }
                         let r = match same {
-                            Some((j, r)) => {
+                            Some((j, r)) if identity::same_record(&a.facts, &albums[j].facts) => {
                                 take.place_by_place(&held, r, &tracks[i], &tracks[j]);
+                                r
+                            }
+                            // By name and length, as place by place a file would take a track it is not.
+                            Some((j, r)) => {
+                                take.by_name(&held, r, (&tracks[i], &a.facts.tracks), (&tracks[j], &albums[j].facts.tracks));
                                 r
                             }
                             None => {
@@ -5709,6 +5730,197 @@ mod tests {
         assert_eq!(cat.assign_records(&[kept, as_it_stands(&cat, &arriving(3))]).unwrap(), 0, "settled");
         let young = cat.db().query_row("SELECT count(*) FROM records WHERE retired_at IS NULL", [], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!(young, 1, "the record it was for a while went with its tracks");
+    }
+
+    /// These tracks by name as a folder of the very same release holds them so far.
+    fn of_the_release(list: &[(i64, &str)]) -> AlbumCopy {
+        let tracks: Vec<(i64, &str, i64)> = list.iter().map(|(t, name)| (*t, *name, 200_000)).collect();
+        copy(Some("release"), "A", "Three", &tracks)
+    }
+
+    /// Three tracks of the release in `Kept`, on tracks 1, 2 and 3, as the record stands: the copy, and the record.
+    fn kept_of_the_release(cat: &Catalogue) -> (AlbumCopy, Option<i64>) {
+        let kept = lying_in(cat, "Kept", of_the_release(&[(1, "One"), (2, "Two"), (3, "Three")]));
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        let record = record_of(cat, 1);
+        (kept, record)
+    }
+
+    /// One folder of the release as a pass reads it: these files, by name, on the tracks they hold now.
+    fn as_read(cat: &Catalogue, dir: &str, names: &[&str]) -> AlbumCopy {
+        let places: Vec<(i64, String)> = names.iter().map(|name| (0, format!("{dir}/{name}.flac"))).collect();
+        let list: Vec<(i64, &str)> = places.iter().zip(names).map(|((folder, rel), name)| (cat.track_of(*folder, rel).unwrap(), *name)).collect();
+        AlbumCopy { files: places, ..of_the_release(&list) }
+    }
+
+    /// The owner, 2026-11-07: a folder of the very same release is the record from its first file, and each file takes the track it
+    /// is: the last track first here, which place by place would take the record's first. No record is born for it on the way.
+    #[test]
+    fn a_folder_of_the_very_same_release_joins_at_its_first_file() {
+        let cat = tracks(6);
+        let (kept, record) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Copy/Three.flac", 6);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["Three"])]).unwrap();
+        assert_eq!(cat.track_of(0, "Copy/Three.flac"), Some(3), "the track it is");
+        assert_eq!(cat.files_of(1).len(), 1, "and no track it does not hold");
+        assert_eq!(records_made(&cat), 1, "no record of its own");
+        file_of_track(&cat, "Copy/One.flac", 4);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Three"])]).unwrap();
+        assert_eq!(cat.track_of(0, "Copy/One.flac"), Some(1));
+        file_of_track(&cat, "Copy/Two.flac", 5);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(4, 1), (5, 2), (6, 3)]));
+        assert_eq!((record_of(&cat, 1), records_made(&cat)), (record, 1));
+        assert_eq!(cat.assign_records(&[kept, as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap(), 0, "settled");
+    }
+
+    /// While it is short it is settled too: nothing moves at the next build, and nothing of it leaves.
+    #[test]
+    fn a_folder_short_of_its_release_stays_as_it_is_between_files() {
+        let cat = tracks(5);
+        let (kept, record) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Copy/One.flac", 4);
+        file_of_track(&cat, "Copy/Two.flac", 5);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two"])]).unwrap();
+        assert_eq!(cat.assign_records(&[kept, as_read(&cat, "Copy", &["One", "Two"])]).unwrap(), 0);
+        assert_eq!((cat.track_of(0, "Copy/Two.flac"), record_of(&cat, 2)), (Some(2), record));
+    }
+
+    /// Short of it, the tags no longer say what they did, and what the ids hold together stays together, as with a whole copy.
+    #[test]
+    fn a_copy_short_of_its_release_stays_whatever_the_tags_say_since() {
+        let cat = tracks(4);
+        let (kept, _) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Copy/One.flac", 4);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One"])]).unwrap();
+        let mut retagged = as_read(&cat, "Copy", &["One"]);
+        retagged.facts.tracks[0] = identity::Listed::of("Uno", 200_000);
+        assert_eq!(cat.assign_records(&[kept, retagged]).unwrap(), 0);
+        assert_eq!(cat.track_of(0, "Copy/One.flac"), Some(1));
+    }
+
+    /// Without that very release nothing changes: a folder short of a record is a record of its own until its last file (CR19).
+    #[test]
+    fn a_folder_with_no_release_or_another_waits_for_its_last_file() {
+        for release in [None, Some("another")] {
+            let cat = tracks(4);
+            let (kept, record) = kept_of_the_release(&cat);
+            file_of_track(&cat, "Copy/One.flac", 4);
+            let first = AlbumCopy { files: vec![(0, "Copy/One.flac".to_string())], ..copy(release, "A", "Three", &[(4, "One", 200_000)]) };
+            cat.assign_records(&[kept, first]).unwrap();
+            assert!(cat.moved_tracks().unwrap().is_empty(), "{release:?}");
+            assert_ne!(record_of(&cat, 4), record, "{release:?}");
+        }
+    }
+
+    /// A track the record does not list is no track of that release, whatever the folder says: nothing here joins.
+    #[test]
+    fn a_folder_with_a_track_the_record_does_not_list_stays_out() {
+        let cat = tracks(5);
+        let (kept, record) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Copy/One.flac", 4);
+        file_of_track(&cat, "Copy/Bonus.flac", 5);
+        let mine = AlbumCopy { files: vec![(0, "Copy/One.flac".to_string()), (0, "Copy/Bonus.flac".to_string())], ..of_the_release(&[(4, "One"), (5, "Bonus")]) };
+        cat.assign_records(&[kept, mine]).unwrap();
+        assert!(cat.moved_tracks().unwrap().is_empty());
+        assert_ne!(record_of(&cat, 4), record);
+    }
+
+    /// The other way round: the record is short of the folder, a whole copy landing beside a few tracks you hold. It is that record,
+    /// and what it brings are tracks of it. Who keeps the record goes by kind still: Music's stays what it was.
+    #[test]
+    fn a_whole_folder_joins_a_record_short_of_it() {
+        let cat = tracks(5);
+        let kept = AlbumCopy { rank: 2, ..lying_in(&cat, "Kept", of_the_release(&[(1, "One"), (2, "Two")])) };
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        cat.db().execute("UPDATE records SET born = born - ?1", [GONE_KEEP_SECS + 1]).unwrap();
+        let record = record_of(&cat, 1);
+        for (rel, track) in [("Copy/One.flac", 3), ("Copy/Two.flac", 4), ("Copy/Three.flac", 5)] {
+            file_of_track(&cat, rel, track);
+        }
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(3, 1), (4, 2)]));
+        assert_eq!(record_of(&cat, 5), record, "a track of the record now");
+        assert_eq!(cat.assign_records(&[kept, as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap(), 0, "settled, the shorter staying");
+    }
+
+    /// Q8 stands where it is a copy that grew: a track new to the record parts two whole copies, of one release too, and the one that
+    /// left does not come back as a folder short of it.
+    #[test]
+    fn a_track_new_to_the_record_parts_whole_copies_of_one_release() {
+        let cat = tracks(7);
+        let (kept, record) = kept_of_the_release(&cat);
+        for (rel, track) in [("Copy/One.flac", 4), ("Copy/Two.flac", 5), ("Copy/Three.flac", 6)] {
+            file_of_track(&cat, rel, track);
+        }
+        let second = as_read(&cat, "Copy", &["One", "Two", "Three"]);
+        cat.assign_records(&[kept.clone(), second.clone()]).unwrap();
+        file_of_track(&cat, "Kept/Four.flac", 7);
+        let list = [(1, "One"), (2, "Two"), (3, "Three"), (7, "Four")];
+        let grown = AlbumCopy { files: [kept.files.clone(), vec![(0, "Kept/Four.flac".to_string())]].concat(), ..of_the_release(&list) };
+        cat.assign_records(&[grown.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        let left = as_read(&cat, "Copy", &["One", "Two", "Three"]);
+        assert_eq!(record_of(&cat, 1), record, "the copy with more keeps it");
+        assert_eq!(record_of(&cat, 7), record);
+        assert_ne!(record_of(&cat, left.tracks[0].0), record, "the other leaves");
+        assert_eq!(cat.assign_records(&[grown, left.clone()]).unwrap(), 0, "and stays out");
+        assert_ne!(record_of(&cat, left.tracks[0].0), record);
+    }
+
+    /// A copy of the release that lost a file for good is short of it, as one arriving is: it stays, and its track stays the record's.
+    #[test]
+    fn a_copy_of_one_release_that_lost_a_file_for_good_stays_short_of_it() {
+        let cat = tracks(6);
+        let (kept, record) = kept_of_the_release(&cat);
+        for (rel, track) in [("Copy/One.flac", 4), ("Copy/Two.flac", 5), ("Copy/Three.flac", 6)] {
+            file_of_track(&cat, rel, track);
+        }
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        cat.db().execute("DELETE FROM files WHERE rel = 'Copy/Two.flac'", []).unwrap();
+        assert_eq!(cat.assign_records(&[kept, as_read(&cat, "Copy", &["One", "Three"])]).unwrap(), 0);
+        assert_eq!((cat.track_of(0, "Copy/One.flac"), record_of(&cat, 2)), (Some(1), record));
+    }
+
+    /// Two folders arriving at once, the release in neither yet: the first met is the record, the other joins it file by file.
+    #[test]
+    fn two_folders_of_one_release_arriving_at_once_are_one_record() {
+        let cat = tracks(3);
+        let a = lying_in(&cat, "A", of_the_release(&[(1, "One"), (2, "Two")]));
+        let b = lying_in(&cat, "B", of_the_release(&[(3, "Two")]));
+        cat.assign_records(&[a, b]).unwrap();
+        assert_eq!((cat.track_of(0, "B/3.flac"), records_made(&cat)), (Some(2), 1));
+    }
+
+    /// Gaining more than it held takes a copy past any vote, and it is held against the others as a new folder is. It is no new folder:
+    /// the record holds it already, and it grew, so it leaves as Q8 and m5 say, the record staying with the copy that is still it.
+    #[test]
+    fn a_copy_of_one_release_that_gained_more_than_it_held_still_leaves() {
+        let cat = tracks(14);
+        let (kept, record) = kept_of_the_release(&cat);
+        for (rel, track) in [("Copy/One.flac", 4), ("Copy/Two.flac", 5), ("Copy/Three.flac", 6)] {
+            file_of_track(&cat, rel, track);
+        }
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        (7..=14).for_each(|t| file_of_track(&cat, &format!("Kept/{t}.flac"), t));
+        let names: Vec<String> = (7..=14).map(|t| format!("New {t}")).collect();
+        let list: Vec<(i64, &str)> = [(1, "One"), (2, "Two"), (3, "Three")].into_iter().chain((7..=14).zip(names.iter().map(String::as_str))).collect();
+        let grown = AlbumCopy { files: kept.files.iter().cloned().chain((7..=14).map(|t| (0, format!("Kept/{t}.flac")))).collect(), ..of_the_release(&list) };
+        cat.assign_records(&[grown, as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        assert_eq!(cat.track_of(0, "Copy/One.flac"), Some(1), "the copy that is still the record");
+        assert_ne!(record_of(&cat, 14), record, "what grew left with what it brought");
+    }
+
+    /// A folder held against a copy short of the record would keep tracks of its own for what the other copy has: it goes by the longest.
+    #[test]
+    fn a_folder_of_one_release_is_held_against_the_longest_copy_of_it() {
+        let cat = tracks(6);
+        let (kept, _) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Short/One.flac", 4);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Short", &["One"])]).unwrap();
+        file_of_track(&cat, "Copy/One.flac", 5);
+        file_of_track(&cat, "Copy/Two.flac", 6);
+        cat.assign_records(&[as_read(&cat, "Short", &["One"]), kept, as_read(&cat, "Copy", &["One", "Two"])]).unwrap();
+        assert_eq!((cat.track_of(0, "Copy/One.flac"), cat.track_of(0, "Copy/Two.flac")), (Some(1), Some(2)), "each on the record's own");
     }
 
     /// CR19: only the young. Past a day a record has what names it, and nothing merges two records.

@@ -749,7 +749,7 @@ mod tests {
         let sent = serde_json::to_value(&copy).unwrap();
         let mut keys: Vec<&str> = sent.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["added", "bits", "deletable", "format", "job", "kbps", "keep_to", "keepable", "lacks", "library", "plays", "rate", "size"]);
+        assert_eq!(keys, ["added", "bits", "deletable", "format", "job", "kbps", "keep_to", "keepable", "lacks", "library", "plays", "rate", "size", "tracks"]);
         assert_eq!(sent["lacks"], serde_json::json!([]), "a list");
         assert_eq!((&sent["job"], &sent["bits"], &sent["keep_to"]), (&serde_json::Value::Null, &serde_json::Value::Null, &serde_json::Value::Null), "null, not left out");
         let other = serde_json::to_value(album("x", "jellyfin-music", "/m/x")).unwrap();
@@ -760,7 +760,7 @@ mod tests {
     /// Incoming must still say so of its copy, or a switch thrown on the page finds none.
     #[test]
     fn what_plays_is_named_even_with_it_switched_off() {
-        let copy = |folder: i64, kind: LibraryKind, format: &str, bits: Option<i64>| Copy { folder, dir: "A/Album".into(), kind, order: folder as usize, format: Some(format.into()), min_kbps: Some(900), bits, rate: Some(44_100) };
+        let copy = |folder: i64, kind: LibraryKind, format: &str, bits: Option<i64>| Copy { folder, dir: "A/Album".into(), kind, order: folder as usize, format: Some(format.into()), min_kbps: Some(900), bits, rate: Some(44_100), short: false };
         let place = |f: i64| Some((f, "A/Album".to_string()));
         let only = [copy(2, LibraryKind::Incoming, "MP3", None)];
         let nobody = Viewer::default();

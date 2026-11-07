@@ -256,9 +256,29 @@ pub struct RecordFacts {
     pub tracks: Vec<Listed>,
 }
 
+/// Whether two folders say the very same MusicBrainz release.
+pub fn same_release(a: &RecordFacts, b: &RecordFacts) -> bool {
+    matches!((&a.release, &b.release), (Some(x), Some(y)) if x == y)
+}
+
+/// Whether of two folders of the very same release one is the other with tracks still to come (the owner, 2026-11-07): the one
+/// case the tracklists need not match. Every track of the shorter must be one of the longer's, that one alone, or a file would
+/// take a track it is not: a track the other does not list makes it something else, and of two tracks alike a file cannot say
+/// which it is.
+pub fn short_of(a: &RecordFacts, b: &RecordFacts) -> bool {
+    let (short, long) = if a.tracks.len() < b.tracks.len() { (&a.tracks, &b.tracks) } else { (&b.tracks, &a.tracks) };
+    let at_most_one = |these: &[Listed], those: &[Listed]| these.iter().all(|t| those.iter().filter(|o| t.same_track(o)).count() <= 1);
+    same_release(a, b)
+        && !short.is_empty()
+        && short.len() < long.len()
+        && short.iter().all(|t| long.iter().any(|o| t.same_track(o)))
+        && at_most_one(short, long)
+        && at_most_one(long, short)
+}
+
 /// Whether two folders are copies of one record (docs/records-and-copies.md): the tracks must match, always; with that,
 /// two MusicBrainz releases decide, and without one on either side the album artist and title do. What cannot be told
-/// apart stays two (0100).
+/// apart stays two (0100). A folder short of its release is not this: [`short_of`].
 pub fn same_record(a: &RecordFacts, b: &RecordFacts) -> bool {
     if !same_tracks(&a.tracks, &b.tracks) {
         return false;
@@ -303,6 +323,40 @@ mod tests {
         assert!(!same_record(&tagged, &rec(Some("r1"), "A", "B", &[("One", 200_000)])), "a folder missing a track is no copy");
         assert!(same_record(&tagged, &rec(None, "A", "B", &two)), "one side without a release: artist and title");
         assert!(!same_record(&rec(None, "", "", &[]), &rec(None, "", "", &[])), "nothing is no record");
+    }
+
+    /// The owner, 2026-11-07: a folder of the very same release is that record with tracks still to come, whichever came first.
+    #[test]
+    fn a_folder_of_the_very_same_release_can_be_short_of_it() {
+        let whole = rec(Some("r1"), "A", "B", &[("One", 200_000), ("Two", 180_000), ("Three", 150_000)]);
+        let (first, gap) = (rec(Some("r1"), "A", "B", &[("Three", 150_000)]), rec(Some("r1"), "A", "B", &[("One", 200_000), ("Three", 150_000)]));
+        assert!(short_of(&first, &whole) && short_of(&gap, &whole), "whichever are missing");
+        assert!(short_of(&whole, &gap), "either way round");
+        assert!(short_of(&rec(Some("r1"), "Tagged Otherwise", "So Is This", &[("One", 200_000)]), &whole), "the release says, not the names");
+        assert!(!same_record(&gap, &whole), "`same_record` stays as it is");
+        assert!(!short_of(&whole, &whole), "the same tracks are `same_record`'s");
+    }
+
+    #[test]
+    fn nothing_but_the_very_same_release_with_its_own_tracks_is_short_of_it() {
+        let whole = rec(Some("r1"), "A", "B", &[("One", 200_000), ("Two", 180_000), ("Three", 150_000)]);
+        assert!(!short_of(&rec(None, "A", "B", &[("One", 200_000)]), &whole), "no release on one side");
+        assert!(!short_of(&rec(None, "A", "B", &[("One", 200_000)]), &rec(None, "A", "B", &[("One", 200_000), ("Two", 180_000)])), "nor on either");
+        assert!(!short_of(&rec(Some("r2"), "A", "B", &[("One", 200_000)]), &whole), "another release");
+        assert!(!short_of(&rec(Some("r1"), "A", "B", &[("Bonus", 200_000)]), &whole), "a track the record does not list");
+        assert!(!short_of(&rec(Some("r1"), "A", "B", &[("One", 200_000), ("Bonus", 90_000)]), &whole), "one among its own");
+        assert!(!short_of(&rec(Some("r1"), "A", "B", &[("One", 230_000)]), &whole), "a length still decides");
+        assert!(!short_of(&rec(Some("r1"), "A", "B", &[]), &whole), "nothing is no part of it");
+    }
+
+    /// A take cannot be undone: a file that could be either of two tracks is neither.
+    #[test]
+    fn of_two_tracks_alike_a_file_cannot_say_which_it_is() {
+        let twice = rec(Some("r1"), "A", "B", &[("Interlude", 60_000), ("One", 200_000), ("Interlude", 60_000)]);
+        assert!(!short_of(&rec(Some("r1"), "A", "B", &[("Interlude", 60_000)]), &twice));
+        assert!(short_of(&rec(Some("r1"), "A", "B", &[("One", 200_000)]), &twice), "a track of its own name is no question");
+        let two_files = rec(Some("r1"), "A", "B", &[("One", 200_000), ("One", 200_000)]);
+        assert!(!short_of(&two_files, &rec(Some("r1"), "A", "B", &[("One", 200_000), ("Two", 180_000), ("Three", 150_000)])), "two files, one track");
     }
 
     #[test]
