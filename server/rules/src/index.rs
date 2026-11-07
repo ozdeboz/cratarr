@@ -197,6 +197,7 @@ const HEADER: usize = 24;
 const INDEX: [u8; 4] = *b"CRXI";
 const CHANGES: [u8; 4] = *b"CRXC";
 const SOUNDS: [u8; 4] = *b"CRXS";
+const SOUND_CHANGES: [u8; 4] = *b"CRXD";
 
 /// What a body adds up to: a torn write or a changed byte is refused, not read as a library. Every step can be undone, so one
 /// word changed always changes the sum.
@@ -1345,6 +1346,11 @@ impl Index {
         self.packed.tracks.id.len()
     }
 
+    /// Whether a track is held.
+    pub fn holds(&self, track: i64) -> bool {
+        self.packed.tracks.id.binary_search(&track).is_ok()
+    }
+
     pub fn prints(&self) -> Prints {
         let (p, none) = (&self.packed, |_: i64, _: &mut Vec<u8>| {});
         let copies = |record: i64, out: &mut Vec<u8>| {
@@ -1588,8 +1594,14 @@ fn eight_bits(sound: &[f32]) -> Option<Vec<i8>> {
 impl Sounds {
     /// These tracks' sounds as of `rev`.
     pub fn build(rev: i64, heard: &[(i64, Vec<f32>)]) -> Self {
+        Self::from_sorted(rev, by_id(heard, |h| h.0).into_iter().map(|(track, sound)| (*track, sound.as_slice())))
+    }
+
+    /// The same a sound at a time, in the order of the tracks' ids: the server's stay where they are, and only eight bits of each
+    /// are held here.
+    pub fn from_sorted<'a>(rev: i64, heard: impl IntoIterator<Item = (i64, &'a [f32])>) -> Self {
         let mut out = Heard::default();
-        for (track, sound) in by_id(heard, |h| h.0).into_iter().filter_map(|(track, sound)| Some((*track, eight_bits(sound)?))) {
+        for (track, sound) in heard.into_iter().filter_map(|(track, sound)| Some((track, eight_bits(sound)?))) {
             out.track.push(track);
             out.sound.push(sound);
         }
@@ -1598,6 +1610,41 @@ impl Sounds {
 
     pub fn rev(&self) -> i64 {
         self.rev
+    }
+
+    /// These as of `rev`, as [`Index::at`].
+    pub fn at(mut self, rev: i64) -> Self {
+        self.rev = rev;
+        self
+    }
+
+    /// How many tracks are heard.
+    pub fn len(&self) -> usize {
+        self.heard.track.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.heard.track.is_empty()
+    }
+
+    /// What each track's sound says, as [`Index::prints`] has it of a row.
+    pub fn prints(&self) -> Vec<(i64, u64)> {
+        printed(&self.heard, &Text::default(), |_, _| {})
+    }
+
+    /// `tracks` as they stand here, whole, from `from`: a device's feed. One not heard has left.
+    pub fn changes(&self, from: i64, tracks: &[i64]) -> SoundChanges {
+        let (mut set, mut gone) = (Heard::default(), Vec::new());
+        let mut tracks = tracks.to_vec();
+        tracks.sort_unstable();
+        tracks.dedup();
+        for track in tracks {
+            match self.heard.track.binary_search(&track) {
+                Ok(row) => set.take(&self.heard, row, &[]),
+                Err(_) => gone.push(track),
+            }
+        }
+        SoundChanges { from, to: self.rev, set, gone }
     }
 
     /// A track's sound, of unit length; none where it was not heard.
@@ -1622,16 +1669,57 @@ impl Sounds {
         if heard.track.windows(2).all(|w| w[0] < w[1]) { Ok(Self { rev, heard }) } else { Err(Refused::Damaged) }
     }
 
-    /// `changed`, a `Sounds` of what changed since `from`, up to its own rev, and the tracks no longer heard.
-    pub fn apply(&mut self, from: i64, changed: &Sounds, gone: &[i64]) -> Result<(), Refused> {
-        if from != self.rev || changed.rev < from {
-            return Err(Refused::Rev { at: self.rev, from });
+    /// The feed's next changes. Refused, what is held left as it was, if they do not start here.
+    pub fn apply(&mut self, changes: &SoundChanges) -> Result<(), Refused> {
+        if changes.from != self.rev || changes.to < changes.from {
+            return Err(Refused::Rev { at: self.rev, from: changes.from });
         }
-        let mut gone = gone.to_vec();
-        gone.sort_unstable();
-        self.heard = merged(&self.heard, &changed.heard, &gone, &[], &[]);
-        self.rev = changed.rev;
+        self.heard = merged(&self.heard, &changes.set, &changes.gone, &[], &[]);
+        self.rev = changes.to;
         Ok(())
+    }
+}
+
+/// What the feed brings of the sounds from one rev to the next: as [`Changes`] of rows, on their own, as a device on a mobile
+/// connection may leave them for later.
+#[derive(Debug, Clone)]
+pub struct SoundChanges {
+    from: i64,
+    to: i64,
+    set: Heard,
+    gone: Vec<i64>,
+}
+
+impl SoundChanges {
+    /// Where they leave what is held.
+    pub fn to(&self) -> i64 {
+        self.to
+    }
+
+    /// How many sounds they bring, and how many they take away.
+    pub fn counts(&self) -> (usize, usize) {
+        (self.set.track.len(), self.gone.len())
+    }
+
+    pub fn save(&self) -> Vec<u8> {
+        let mut out = vec![0; HEADER];
+        varint(&mut out, zigzag(self.from));
+        varint(&mut out, zigzag(self.to));
+        self.set.write(&mut out);
+        varint(&mut out, self.gone.len() as u64);
+        self.gone.write(&mut out);
+        sealed(out, SOUND_CHANGES, SOUNDS_VERSION)
+    }
+
+    pub fn load(bytes: &[u8]) -> Result<Self, Refused> {
+        let mut from = opened(bytes, SOUND_CHANGES, SOUNDS_VERSION)?;
+        let (start, to) = (from.int()?, from.int()?);
+        let set = Heard::read(&mut from)?;
+        let rows = from.rows()?;
+        let mut gone: Vec<i64> = Column::read(&mut from, rows)?;
+        gone.sort_unstable();
+        from.done()?;
+        if set.track.windows(2).all(|w| w[0] < w[1]) { Ok(Self { from: start, to, set, gone }) } else { Err(Refused::Damaged) }
     }
 }
 
@@ -1831,7 +1919,7 @@ mod tests {
     use crate::Rng;
     use crate::crates::{Alike, Condition, Value, View, World};
     use crate::radio::{Ask, Mode, choose};
-    use crate::similarity::Weights;
+    use crate::similarity::{Signal, Weights};
 
     fn library(id: i64) -> Library {
         Library { id, key: format!("library-{id}"), name: format!("Library {id}"), order: id as u32, ..Library::default() }
@@ -2524,11 +2612,158 @@ mod tests {
         let mut sounds = Sounds::build(1, &heard);
         let gone: Vec<i64> = heard.drain(..10).map(|(t, _)| t).collect();
         heard[0].1[0] += 1.0;
-        let changed = Sounds::build(2, &[heard[0].clone(), (9_999, vec![0.5; 200])]);
+        let first = heard[0].0;
         heard.push((9_999, vec![0.5; 200]));
-        assert_eq!(sounds.apply(0, &changed, &gone), Err(Refused::Rev { at: 1, from: 0 }));
-        sounds.apply(1, &changed, &gone).unwrap();
-        assert!(sounds == Sounds::build(2, &heard));
+        let fresh = Sounds::build(2, &heard);
+        let moved: Vec<i64> = gone.iter().copied().chain([first, 9_999]).collect();
+        let changes = SoundChanges::load(&fresh.changes(1, &moved).save()).unwrap();
+        assert_eq!((changes.counts(), changes.to()), ((2, 10), 2));
+        assert_eq!(sounds.apply(&fresh.changes(0, &moved)), Err(Refused::Rev { at: 1, from: 0 }));
+        assert!(sounds.rev() == 1, "held as it was");
+        sounds.apply(&changes).unwrap();
+        assert_eq!(sounds.save(), fresh.save());
+    }
+
+    #[test]
+    fn sound_changes_of_another_kind_or_version_or_cut_short_are_refused() {
+        let sounds = Sounds::build(2, &[(1, vec![1.0, 0.0])]);
+        let bytes = sounds.changes(1, &[1, 2]).save();
+        assert!(SoundChanges::load(&bytes).is_ok());
+        assert_eq!(SoundChanges::load(&bytes[..bytes.len() - 1]).err(), Some(Refused::Damaged));
+        assert_eq!(SoundChanges::load(&sounds.save()).err(), Some(Refused::Damaged), "whole sounds are no changes");
+        assert_eq!(SoundChanges::load(&another_version(bytes, SOUNDS_VERSION + 1)).err(), Some(Refused::Version { found: SOUNDS_VERSION + 1, wants: SOUNDS_VERSION }));
+    }
+
+    #[test]
+    fn sounds_print_what_they_say_as_a_device_holds_it() {
+        let two = |x: f32| Sounds::build(1, &[(1, vec![1.0, 0.5]), (2, vec![x, 0.25])]);
+        let (a, b) = (two(1.0).prints(), two(0.5).prints());
+        assert_eq!((a[0], a.len()), (b[0], 2), "the other's did not move");
+        assert_ne!(a[1], b[1]);
+        let kept = two(1.0 + 1e-6).prints();
+        assert_eq!(a, kept, "what eight bits cannot hold moves nothing a device has");
+    }
+
+    /// The sounds as a server holds them: of unit length, made so twice as `read_crate_facts` makes them.
+    fn as_read(heard: &[(i64, Vec<f32>)]) -> HashMap<i64, Arc<[f32]>> {
+        heard.iter().filter_map(|(t, s)| Some((*t, Arc::from(similarity::mean_sound(&[&similarity::mean_sound(&[s])?])?)))).collect()
+    }
+
+    /// How close a device's Sounds like comes to the server's for one seed: of the server's list, how many are on the device's; of
+    /// its first 20 how many are among the device's first 20; and the worst place on the device's list, from 1, of its first 10.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Closeness {
+        of_list: usize,
+        of_first: usize,
+        worst_of_ten: usize,
+    }
+
+    /// What "close" is, said before anything was measured (PREVIEW2's D11). A device shows a Sounds like of 200 tracks: at most one
+    /// in twenty of them another track than the server's, at most two of its first twenty, and nothing the server puts in the first
+    /// ten past the twentieth. A listener can tell a list with another first track from the server's, and not one that swaps
+    /// the 150th for the 210th. The order within is not held: two tracks about as close swap places on rounding alone.
+    const CLOSE: Closeness = Closeness { of_list: 190, of_first: 18, worst_of_ten: 20 };
+
+    impl Closeness {
+        fn of(server: &[String], device: &[String]) -> Self {
+            let on = |list: &[String], line: &String| list.iter().position(|l| l == line);
+            let first = &server[..20.min(server.len())];
+            Closeness {
+                of_list: server.iter().filter(|l| on(device, l).is_some()).count(),
+                of_first: first.iter().filter(|l| on(&device[..20.min(device.len())], l).is_some()).count(),
+                worst_of_ten: server.iter().take(10).map(|l| on(device, l).map_or(usize::MAX, |at| at + 1)).max().unwrap_or(0),
+            }
+        }
+
+        fn holds(self) -> bool {
+            self.of_list >= CLOSE.of_list && self.of_first >= CLOSE.of_first && self.worst_of_ten <= CLOSE.worst_of_ten
+        }
+    }
+
+    /// A Sounds like of each of `seeds` from the sounds as the server holds them and as a device does, by a listener's Similar by.
+    fn compared(index: &Index, heard: &[(i64, Vec<f32>)], seeds: &[i64], by: &Weights) -> Vec<Closeness> {
+        let exact = as_read(heard);
+        let mut server = index.facts(None);
+        server.iter_mut().for_each(|f| f.sound = f.track.and_then(|t| exact.get(&t).cloned()));
+        let device = index.facts(Some(&Sounds::load(&Sounds::build(1, heard).save()).unwrap()));
+        let (membership, off, names) = (HashMap::new(), HashSet::new(), index.artist_ids());
+        let (on_server, on_device) = (Alike::of(&server, &membership, &names), Alike::of(&device, &membership, &names));
+        let world = || World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 1_800_000_000, fits: None };
+        let (a, b) = (
+            View { files: &server, switched_off: &off, world: world(), by, alike: || &on_server },
+            View { files: &device, switched_off: &off, world: world(), by, alike: || &on_device },
+        );
+        let list = |seed: i64| crate::crates::like_crate("like:x", "Like", vec![ids::song(seed)], crate::crates::LIKE_COUNT).conditions;
+        seeds.iter().map(|seed| Closeness::of(&a.select(&list(*seed), false), &b.select(&list(*seed), false))).collect()
+    }
+
+    /// Sounds far closer together than `made_up`'s, as a library of few styles has them: a few centres, a record close to its centre
+    /// and a track close to its record, so that the 200 closest of a seed lie within a hair of each other.
+    fn crowded(rows: &Rows, heard: &[(i64, Vec<f32>)], centres: usize, r: &mut Rng) -> Vec<(i64, Vec<f32>)> {
+        let dims = heard[0].1.len();
+        let noise = |r: &mut Rng, by: f32| (0..dims).map(|_| by * (r.unit() as f32 - 0.5)).collect::<Vec<f32>>();
+        let centres: Vec<Vec<f32>> = (0..centres).map(|_| noise(r, 1.0)).collect();
+        let records: HashMap<i64, Vec<f32>> = rows
+            .records
+            .iter()
+            .map(|record| {
+                let (centre, by) = (&centres[r.below(centres.len())], noise(r, 0.3));
+                (record.id, centre.iter().zip(by).map(|(a, b)| a + b).collect())
+            })
+            .collect();
+        let record_of: HashMap<i64, i64> = rows.tracks.iter().map(|t| (t.id, t.record)).collect();
+        heard.iter().map(|(track, _)| (*track, records[&record_of[track]].iter().zip(noise(r, 0.2)).map(|(a, b)| a + b).collect())).collect()
+    }
+
+    fn every_nth(heard: &[(i64, Vec<f32>)], seeds: usize) -> Vec<i64> {
+        heard.iter().step_by((heard.len() / seeds).max(1)).take(seeds).map(|h| h.0).collect()
+    }
+
+    #[test]
+    fn a_sounds_like_from_eight_bits_stays_close_to_the_servers() {
+        let (rows, heard) = made_up(3_000, 31);
+        let index = built(&rows);
+        for (what, sounds) in [("far apart", heard.clone()), ("crowded", crowded(&rows, &heard, 12, &mut Rng::seeded(5)))] {
+            for by in [Weights::EQUAL, Weights::ranked(&[Signal::Sound])] {
+                for close in compared(&index, &sounds, &every_nth(&sounds, 12), &by) {
+                    assert!(close.holds(), "{what}, by {by:?}: {close:?}");
+                }
+            }
+        }
+    }
+
+    /// `seeds` compared, as the worst of each number and their mean.
+    fn reported(what: &str, closeness: &[Closeness]) {
+        let n = closeness.len() as f64;
+        let mean = |f: fn(&Closeness) -> usize| closeness.iter().map(|c| f(c) as f64).sum::<f64>() / n;
+        let held = closeness.iter().filter(|c| c.holds()).count();
+        println!(
+            "{what}: close for {held} of {} seeds; of 200 mean {:.1} worst {}; of the first 20 mean {:.1} worst {}; the first 10's last place mean {:.1} worst {}",
+            closeness.len(),
+            mean(|c| c.of_list),
+            closeness.iter().map(|c| c.of_list).min().unwrap_or(0),
+            mean(|c| c.of_first),
+            closeness.iter().map(|c| c.of_first).min().unwrap_or(0),
+            mean(|c| c.worst_of_ten),
+            closeness.iter().map(|c| c.worst_of_ten).max().unwrap_or(0),
+        );
+    }
+
+    /// D11's measure, on made-up vectors. Their centres are random, so what this says of a real library's closest tracks is how
+    /// much eight bits move a score, not whether a real seed's neighbours lie as near: D22 reads that off real ones.
+    #[test]
+    #[ignore = "measures: --ignored --nocapture"]
+    fn measured_sounds_like_from_eight_bits_at_34_000_tracks() {
+        let (rows, heard) = made_up(34_000, 37);
+        let index = built(&rows);
+        let (every_signal, sound_alone) = (Weights::EQUAL, Weights::ranked(&[Signal::Sound]));
+        reported("far apart, every signal", &compared(&index, &heard, &every_nth(&heard, 40), &every_signal));
+        reported("far apart, sound alone", &compared(&index, &heard, &every_nth(&heard, 40), &sound_alone));
+        for centres in [40, 12, 3] {
+            let sounds = crowded(&rows, &heard, centres, &mut Rng::seeded(centres as u64));
+            reported(&format!("crowded, {centres} centres, every signal"), &compared(&index, &sounds, &every_nth(&sounds, 40), &every_signal));
+            reported(&format!("crowded, {centres} centres, sound alone"), &compared(&index, &sounds, &every_nth(&sounds, 40), &sound_alone));
+        }
     }
 
     /// Counts what is held, so a measure can say what a thing weighs in memory.

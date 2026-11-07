@@ -7,7 +7,7 @@ import type { IndexStands } from "./IndexStands";
  * while `more`; or `{rev, reset: true}`: not known from `since` (none sent, older than what is kept, ahead of this
  * server), so read everything again and go on from `rev`.
  */
-export type Changes = { rev: number, changes?: Array<Change>, more?: boolean, reset?: boolean,
+export type Changes = { rev: number, changes?: Array<Change>, more?: boolean, reset?: boolean, 
 /**
  * `index` among `kinds`: the library's log.
  */

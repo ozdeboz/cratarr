@@ -160,6 +160,8 @@ pub fn router(app: Arc<App>) -> Router {
         // The library on a device (0101's point 16): bytes, as the rules crate reads them.
         .route("/api/index", get(device_index))
         .route("/api/index/changes", get(device_index_changes))
+        .route("/api/index/sounds", get(device_sounds))
+        .route("/api/index/sounds/changes", get(device_sound_changes))
         .route("/api/incoming", get(incoming))
         .route("/api/insights", get(insights))
         // A playlist's repairs, as its edits: everyone's while playlists are (decision 0051's third stage gives them
@@ -4338,6 +4340,18 @@ struct IndexSince {
 async fn device_index_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
     use crate::app::device_index::{changes, takes_gzip};
     Ok(changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
+}
+
+/// Every sound the account can see, eight bits each (`app::device_index`).
+async fn device_sounds(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{sounds, takes_gzip};
+    Ok(sounds(&ctx.app, ctx.serve()?, ctx.account(), takes_gzip(&headers)).await?.into_response())
+}
+
+/// What of the sounds a device at `since` lacks: as `device_index_changes`.
+async fn device_sound_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    use crate::app::device_index::{sound_changes, takes_gzip};
+    Ok(sound_changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
 }
 
 #[derive(Deserialize)]

@@ -1428,6 +1428,14 @@ async fn two_accounts_fetch_every_library_they_can_see_end_to_end() {
     assert!(back == plain, "packed, it is the same index");
     assert_eq!(index_bytes(&s.anyone(), false).await.0, 401, "no session, no library");
 
+    // The sounds apart, by a route of their own: AudioMuse has heard nothing here, so they say that.
+    let (status, sounds) = ann.bytes("/api/index/sounds").await;
+    assert_eq!(status, 200);
+    let sounds = cratarr_rules::index::Sounds::load(&sounds).unwrap();
+    assert!(sounds.is_empty());
+    assert_eq!(s.anyone().bytes("/api/index/sounds").await.0, 401);
+    assert_eq!(ann.bytes(&format!("/api/index/sounds/changes?since={}", i64::MAX)).await.0, 410);
+
     // Beside the user data's changes, a word on the library's log, by a rev of its own.
     let at = |rev: i64| format!("/api/changes?since=0&kinds=favourite,index&index={rev}");
     s.until("the library still", Duration::from_secs(60), || async {

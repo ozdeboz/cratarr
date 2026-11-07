@@ -18,6 +18,8 @@
 //! - **Rows, not base64:** the changes have a route of their own, `/api/index/changes`, in the bytes `Changes::save` writes, gzip
 //!   over them. As text in `/api/changes` they would be a third larger, and a retag of a library would pass through the
 //!   page's heap as one string. `/api/changes` says where the log stands, and whether there is anything to fetch.
+//! - **The sounds go apart** (0101's point 16): eight bits each, from what the crates hold, and only for what a device asks for
+//!   them, as they weigh more than all the rest and change rarely. Their rev is the log's, and their feed its `sound` rows.
 //! - **"Start again":** a rev from before what is kept or ahead of it, or more changed than rows are worth (a library in front of
 //!   the others moves every line): 410 with `{rev, reset: true}`, as `/api/changes` says it, and the device fetches whole.
 
@@ -30,7 +32,7 @@ use anyhow::{Result, anyhow};
 use axum::Json;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use cratarr_rules::index::{self, Artist, Builder, Gone, Index, Kind, Refused, Rows, TrackHead};
+use cratarr_rules::index::{self, Artist, Builder, Gone, Index, Kind, Refused, Rows, Sounds, TrackHead};
 
 use super::changes::IndexStands;
 use super::{App, ToggleError};
@@ -171,14 +173,21 @@ impl Settled {
     }
 }
 
+/// The sounds of `index`'s tracks, as of its rev: a track's taken from the reading in its turn, and held in eight bits.
+fn sounds_of(facts: &[Facts], index: &Index) -> Sounds {
+    let mut heard: Vec<(i64, &[f32])> = facts.iter().filter_map(|f| Some((f.track?, f.sound.as_deref()?))).filter(|(track, _)| index.holds(*track)).collect();
+    heard.sort_unstable_by_key(|h| h.0);
+    Sounds::from_sorted(index.rev(), heard)
+}
+
 /// The index of every library, and the log brought up to it (`Catalogue::index_settle`): as of where the log was read (`read_at`),
 /// before any row was, as what is written while this reads is logged past that and comes again by the feed, where the other way
 /// round it would be lost. Blocking.
 fn settle(serve: &Serve, turn: &mut Settled, facts: &Arc<Vec<Facts>>, read_at: i64, libraries: &[index::Library]) -> Result<Index> {
     let built = serve.built_at();
     let index = build(serve, facts, libraries, read_at)?;
-    let prints = index.prints();
-    let rev = serve.catalogue().index_settle(read_at, &[("library", &prints.libraries[..]), ("artist", &prints.artists[..]), ("record", &prints.records[..]), ("track", &prints.tracks[..])])?;
+    let (prints, sounds) = (index.prints(), sounds_of(facts, &index).prints());
+    let rev = serve.catalogue().index_settle(read_at, &[("library", &prints.libraries[..]), ("artist", &prints.artists[..]), ("record", &prints.records[..]), ("track", &prints.tracks[..]), ("sound", &sounds[..])])?;
     *turn = Settled { facts: Arc::downgrade(facts), built, rev, libraries: libraries.to_vec() };
     Ok(index.at(rev))
 }
@@ -194,14 +203,19 @@ fn seen_by(serve: &Serve, facts: &[Facts], index: Index, libraries: &[index::Lib
     build(serve, facts, &seen, rev)
 }
 
-/// The index `account` can see, as it stands. Blocking.
-fn whole(serve: &Serve, libraries: Vec<index::Library>, account: Option<&str>) -> Result<Index> {
+/// The index `account` can see, as it stands, and the reading it was made of. Blocking.
+fn whole_of(serve: &Serve, libraries: &[index::Library], account: Option<&str>) -> Result<(Index, Arc<Vec<Facts>>)> {
     let mut turn = serve.device_turn();
     let cat = serve.catalogue();
     let read_at = cat.index_rev()?;
     let facts = cat.crate_facts()?;
-    let index = settle(serve, &mut turn, &facts, read_at, &libraries)?;
-    seen_by(serve, &facts, index, &libraries, account)
+    let index = settle(serve, &mut turn, &facts, read_at, libraries)?;
+    Ok((seen_by(serve, &facts, index, libraries, account)?, facts))
+}
+
+/// `whole_of`, the index alone. Blocking.
+fn whole(serve: &Serve, libraries: Vec<index::Library>, account: Option<&str>) -> Result<Index> {
+    Ok(whole_of(serve, &libraries, account)?.0)
 }
 
 /// A batch of what `logged` names, as `index` has it, whole: a row left out of it has left. Each row brings what it names, as a
@@ -250,37 +264,78 @@ impl IntoResponse for Feed {
     }
 }
 
-/// `feed`, on this reading of the facts. Blocking.
-#[allow(clippy::too_many_arguments)]
-fn feed_on(serve: &Serve, turn: &mut Settled, facts: &Arc<Vec<Facts>>, read_at: i64, libraries: &[index::Library], account: Option<&str>, since: i64, takes_gzip: bool) -> Result<Feed> {
-    if since == read_at && turn.holds(facts, serve.built_at(), read_at, libraries) {
-        return Ok(Feed::Same);
-    }
-    let index = settle(serve, turn, facts, read_at, libraries)?;
-    let (rev, cat) = (index.rev(), serve.catalogue());
-    if since < cat.index_floor()? || since > rev {
-        return Ok(Feed::Whole { rev });
-    }
-    if since == rev {
-        return Ok(Feed::Same);
-    }
-    let logged = cat.index_logged(since, rev)?;
-    let index = seen_by(serve, facts, index, libraries, account)?;
-    let (rows, gone) = batch(&index, &logged);
-    // Past this, rows cost as much as the whole and say less: a library in front of the others moves every line.
-    if (rows.tracks.len() + gone.tracks.len()) * 2 > index.tracks() {
-        return Ok(Feed::Whole { rev });
-    }
-    Ok(Feed::Changes(Bytes::of(index::Changes::new(since, rev, &rows, gone).save(), takes_gzip)?))
+/// Who asks the feed from where, on which reading.
+struct Asked<'a> {
+    facts: &'a Arc<Vec<Facts>>,
+    read_at: i64,
+    libraries: &'a [index::Library],
+    account: Option<&'a str>,
+    since: i64,
+    takes_gzip: bool,
 }
 
-/// What `account` lacks at `since`. Blocking.
-fn feed(serve: &Serve, libraries: &[index::Library], account: Option<&str>, since: i64, takes_gzip: bool) -> Result<Feed> {
+/// Past this, rows cost as much as the whole and say less: a library in front of the others moves every line.
+fn more_than_rows_are_worth(moved: usize, of: usize) -> bool {
+    moved * 2 > of
+}
+
+/// The log brought up to now, and what it holds for a device at `since`: `made` makes that of the index it can see, and what the
+/// log names, into an answer. Blocking.
+fn from_log(serve: &Serve, turn: &mut Settled, asked: &Asked, made: impl FnOnce(Index, &BTreeMap<String, Vec<i64>>) -> Result<Feed>) -> Result<Feed> {
+    if asked.since == asked.read_at && turn.holds(asked.facts, serve.built_at(), asked.read_at, asked.libraries) {
+        return Ok(Feed::Same);
+    }
+    let index = settle(serve, turn, asked.facts, asked.read_at, asked.libraries)?;
+    let (rev, cat) = (index.rev(), serve.catalogue());
+    if asked.since < cat.index_floor()? || asked.since > rev {
+        return Ok(Feed::Whole { rev });
+    }
+    if asked.since == rev {
+        return Ok(Feed::Same);
+    }
+    let logged = cat.index_logged(asked.since, rev)?;
+    made(seen_by(serve, asked.facts, index, asked.libraries, asked.account)?, &logged)
+}
+
+/// `feed`, on this reading of the facts. Blocking.
+fn feed_on(serve: &Serve, turn: &mut Settled, asked: &Asked) -> Result<Feed> {
+    from_log(serve, turn, asked, |index, logged| {
+        let (rows, gone) = batch(&index, logged);
+        if more_than_rows_are_worth(rows.tracks.len() + gone.tracks.len(), index.tracks()) {
+            return Ok(Feed::Whole { rev: index.rev() });
+        }
+        Ok(Feed::Changes(Bytes::of(index::Changes::new(asked.since, index.rev(), &rows, gone).save(), asked.takes_gzip)?))
+    })
+}
+
+/// `sounds_feed`, on this reading of the facts. Blocking.
+fn sounds_feed_on(serve: &Serve, turn: &mut Settled, asked: &Asked) -> Result<Feed> {
+    from_log(serve, turn, asked, |index, logged| {
+        let (sounds, moved) = (sounds_of(asked.facts, &index), logged.get("sound").map_or(&[][..], Vec::as_slice));
+        if more_than_rows_are_worth(moved.len(), sounds.len()) {
+            return Ok(Feed::Whole { rev: index.rev() });
+        }
+        Ok(Feed::Changes(Bytes::of(sounds.changes(asked.since, moved).save(), asked.takes_gzip)?))
+    })
+}
+
+/// `on`, as `account` asks it at `since` with the log and the facts as they stand. Blocking.
+fn asking(serve: &Serve, libraries: &[index::Library], account: Option<&str>, since: i64, takes_gzip: bool, on: fn(&Serve, &mut Settled, &Asked) -> Result<Feed>) -> Result<Feed> {
     let mut turn = serve.device_turn();
     let cat = serve.catalogue();
     let read_at = cat.index_rev()?;
     let facts = cat.crate_facts()?;
-    feed_on(serve, &mut turn, &facts, read_at, libraries, account, since, takes_gzip)
+    on(serve, &mut turn, &Asked { facts: &facts, read_at, libraries, account, since, takes_gzip })
+}
+
+/// What `account` lacks at `since`. Blocking.
+fn feed(serve: &Serve, libraries: &[index::Library], account: Option<&str>, since: i64, takes_gzip: bool) -> Result<Feed> {
+    asking(serve, libraries, account, since, takes_gzip, feed_on)
+}
+
+/// What of the sounds `account` lacks at `since`. Blocking.
+fn sounds_feed(serve: &Serve, libraries: &[index::Library], account: Option<&str>, since: i64, takes_gzip: bool) -> Result<Feed> {
+    asking(serve, libraries, account, since, takes_gzip, sounds_feed_on)
 }
 
 /// Where the log stands for a device at `since`, nothing built: whether it has anything to ask for. Blocking.
@@ -345,6 +400,23 @@ pub async fn read(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, ta
 pub async fn changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
     let libraries = app.library.index_libraries(&serve);
     let found = tokio::task::spawn_blocking(move || feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
+    Ok(found.await.map_err(|e| anyhow!("{e}"))??)
+}
+
+/// `GET /api/index/sounds`: the sounds of every track `account` can see, as `Sounds::save` writes them.
+pub async fn sounds(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+    let libraries = app.library.index_libraries(&serve);
+    let bytes = tokio::task::spawn_blocking(move || {
+        let (index, facts) = whole_of(&serve, &libraries, account.as_deref())?;
+        Bytes::of(sounds_of(&facts, &index).save(), takes_gzip)
+    });
+    Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
+}
+
+/// `GET /api/index/sounds/changes?since=<rev>`: what of the sounds `account` lacks at `since`.
+pub async fn sound_changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
+    let libraries = app.library.index_libraries(&serve);
+    let found = tokio::task::spawn_blocking(move || sounds_feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
@@ -486,10 +558,12 @@ mod tests {
     #[ignore = "a measure: rt-side.sh test measured_a_build --ignored --nocapture --test-threads=1"]
     fn measured_a_build_at_34_000_tracks() {
         let s = served("measured", &[CopyKind::Main, CopyKind::Own, CopyKind::Incoming]);
-        let (rows, _) = index::made_up(34_000, 1);
+        let (rows, heard) = index::made_up(34_000, 1);
         filled(&s, &rows);
         let libraries = rows.libraries.clone();
-        let facts: Vec<Facts> = rows.tracks.iter().map(|t| t.facts.clone()).collect();
+        let sounds: HashMap<i64, Arc<[f32]>> = heard.iter().filter_map(|(t, v)| Some((*t, Arc::from(cratarr_rules::similarity::mean_sound(&[v.as_slice()])?)))).collect();
+        drop(heard);
+        let facts: Vec<Facts> = rows.tracks.iter().map(|t| Facts { sound: sounds.get(&t.id).cloned(), ..t.facts.clone() }).collect();
         let tracks = rows.tracks.len();
         drop(rows);
         let (before, hwm_before) = (status_mb("VmRSS"), status_mb("VmHWM"));
@@ -503,6 +577,13 @@ mod tests {
         let packed = Bytes::of(bytes.clone(), true).unwrap();
         let zipped = zipped_at.elapsed();
         let (held, top) = (status_mb("VmRSS"), status_mb("VmHWM"));
+        let sounds_at = std::time::Instant::now();
+        let sound_bytes = sounds_of(&facts, &index).save();
+        let sounds_took = sounds_at.elapsed();
+        let zipped_at = std::time::Instant::now();
+        let sounds_packed = Bytes::of(sound_bytes.clone(), true).unwrap();
+        let sounds_zipped = zipped_at.elapsed();
+        println!("sounds: made and saved {sounds_took:?}, gzip {sounds_zipped:?}; bytes {}, gzip {} ({:.0}%); resident top now {:.1}", sound_bytes.len(), sounds_packed.bytes.len(), sounds_packed.bytes.len() as f64 * 100.0 / sound_bytes.len() as f64, status_mb("VmHWM"));
         println!("{tracks} tracks: build {built:?}, save {saved:?}, gzip {zipped:?}");
         println!("bytes {}, gzip {} ({:.0}%)", bytes.len(), packed.bytes.len(), packed.bytes.len() as f64 * 100.0 / bytes.len() as f64);
         println!("resident {before:.1} MB before, {held:.1} with the index and its bytes held, top {top:.1} (top before {hwm_before:.1}): a build costs {:.1} MB at its top", top - before);
@@ -686,12 +767,61 @@ mod tests {
             let read = Arc::new(read);
             let mut turn = s.serve.device_turn();
             let head = s.cat.index_rev().unwrap();
-            let Feed::Changes(sent) = feed_on(&s.serve, &mut turn, &read, head, &libraries, Some("ann"), device.rev(), false).unwrap() else { panic!("{what}: no changes") };
+            let asked = Asked { facts: &read, read_at: head, libraries: &libraries, account: Some("ann"), since: device.rev(), takes_gzip: false };
+            let Feed::Changes(sent) = feed_on(&s.serve, &mut turn, &asked).unwrap() else { panic!("{what}: no changes") };
             device.apply(&index::Changes::load(&sent.bytes).unwrap()).unwrap();
             let fresh = build(&s.serve, &read, &libraries, device.rev()).unwrap();
             assert!(device.save() == fresh.save(), "{what}");
         }
         assert!(device.rev() > at);
+    }
+
+    /// A reading of `s`'s facts with these tracks heard, for the sounds' feed.
+    fn with_sounds(s: &Served, heard: &[(i64, &[f32])]) -> Arc<Vec<Facts>> {
+        let mut read: Vec<Facts> = s.cat.crate_facts().unwrap().to_vec();
+        for f in &mut read {
+            f.sound = heard.iter().find(|h| Some(h.0) == f.track).map(|h| Arc::from(h.1));
+        }
+        Arc::new(read)
+    }
+
+    fn sounds_at(s: &Served, read: &Arc<Vec<Facts>>, since: i64) -> Feed {
+        let (libraries, mut turn) = (s.libraries(), s.serve.device_turn());
+        let read_at = s.cat.index_rev().unwrap();
+        sounds_feed_on(&s.serve, &mut turn, &Asked { facts: read, read_at, libraries: &libraries, account: Some("ann"), since, takes_gzip: false }).unwrap()
+    }
+
+    /// The sounds' own proof: what comes by their feed is what a fresh fetch says, to the byte.
+    #[test]
+    fn a_sound_comes_by_its_own_feed_as_a_fresh_fetch_says_it() {
+        let s = served("sounds", &[CopyKind::Main]);
+        let names = ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+        with_album(&s, 0, "A", "Record", "Someone", &names);
+        s.built();
+        let tracks: Vec<i64> = names.iter().enumerate().map(|(n, t)| s.cat.track_of(0, &format!("A/{n:02} {t}.flac")).unwrap()).collect();
+        let (near, far) = (vec![1.0f32, 0.0, 0.0], vec![0.0f32, 1.0, 0.0]);
+        let heard = |first: &[f32], last: usize| -> Vec<(i64, Vec<f32>)> { (0..8).map(|n| (tracks[if n == 7 { last } else { n }], if n == 0 { first.to_vec() } else { near.clone() })).collect() };
+        let reading = |rows: &[(i64, Vec<f32>)]| with_sounds(&s, &rows.iter().map(|(t, v)| (*t, v.as_slice())).collect::<Vec<_>>());
+        let read = reading(&heard(&near, 7));
+        // The first prints, as a device's first fetch makes them.
+        let libraries = s.libraries();
+        let index = {
+            let mut turn = s.serve.device_turn();
+            let read_at = s.cat.index_rev().unwrap();
+            settle(&s.serve, &mut turn, &read, read_at, &libraries).unwrap()
+        };
+        let mut held = Sounds::load(&sounds_of(&read, &index).save()).unwrap();
+        assert_eq!((held.len(), held.rev()), (8, index.rev()));
+        assert_eq!(sounds_at(&s, &read, held.rev()), Feed::Same);
+
+        let read = reading(&heard(&far, 8));
+        let Feed::Changes(sent) = sounds_at(&s, &read, held.rev()) else { panic!("no changes") };
+        let changes = index::SoundChanges::load(&sent.bytes).unwrap();
+        assert_eq!(changes.counts(), (2, 1), "one changed, one new, one gone");
+        held.apply(&changes).unwrap();
+        let fresh = build(&s.serve, &read, &libraries, changes.to()).unwrap();
+        assert!(held.save() == sounds_of(&read, &fresh).save(), "as a fresh fetch says");
+        assert_eq!(sounds_at(&s, &read, held.rev()), Feed::Same);
     }
 
     #[test]
