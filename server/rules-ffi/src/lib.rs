@@ -1,8 +1,10 @@
 //! Cratarr's rules for the Android app (Spike B, 0.11; the owner, 2026-10-30): the rules crate as the app's Kotlin calls
 //! it, through UniFFI, so the app, the page (WebAssembly) and the server share one implementation. In every build of the
-//! app (`rulesLibrary` in its Gradle build). Only the brake so far, as the page's first WebAssembly step.
+//! app (`rulesLibrary` in its Gradle build). The brake, and what the app's sync of the library asks.
 
 uniffi::setup_scaffolding!();
+
+mod device_index;
 
 /// How long a brake from `v0` to `to` lasts (ms), never shorter than `brake_ms`.
 #[uniffi::export]

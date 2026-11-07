@@ -719,6 +719,28 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -741,6 +763,28 @@ fun uniffi_cratarr_rules_ffi_checksum_func_brake_length_ms(
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_v(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_way(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_after(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_anew(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_anew_after_ms(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_anew_by_another(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_answer(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_first_after_ms(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_paused(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_step(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_take_changes(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_take_whole(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_version(
 ): Short
 fun ffi_cratarr_rules_ffi_uniffi_contract_version(
 ): Int
@@ -795,6 +839,28 @@ fun uniffi_cratarr_rules_ffi_fn_func_brake_v(`v0`: Double,`to`: Double,`length`:
 ): Double
 fun uniffi_cratarr_rules_ffi_fn_func_brake_way(`v0`: Double,`to`: Double,`length`: Double,`t`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
+fun uniffi_cratarr_rules_ffi_fn_func_sync_after(`part`: RustBuffer.ByValue,`outcome`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_anew(`part`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_anew_after_ms(uniffi_out_err: UniffiRustCallStatus, 
+): Long
+fun uniffi_cratarr_rules_ffi_fn_func_sync_anew_by_another(`part`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_answer(`status`: RustBuffer.ByValue,`whole`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_first_after_ms(uniffi_out_err: UniffiRustCallStatus, 
+): Long
+fun uniffi_cratarr_rules_ffi_fn_func_sync_paused(`part`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_cratarr_rules_ffi_fn_func_sync_step(`part`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`mobile`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_take_changes(`kind`: RustBuffer.ByValue,`kept`: RustBuffer.ByValue,`feed`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_take_whole(`kind`: RustBuffer.ByValue,`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_version(`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Int
 fun ffi_cratarr_rules_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun ffi_cratarr_rules_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -933,6 +999,39 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_brake_way() != 18014.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_after() != 38437.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_anew() != 44383.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_anew_after_ms() != 38501.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_anew_by_another() != 27644.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_answer() != 41326.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_first_after_ms() != 47277.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_paused() != 64662.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_step() != 364.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_take_changes() != 14038.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_take_whole() != 62779.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_version() != 31718.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
 }
 
 /**
@@ -1015,6 +1114,75 @@ object NoPointer
 /**
  * @suppress
  */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterDouble: FfiConverter<Double, Double> {
     override fun lift(value: Double): Double {
         return value
@@ -1032,6 +1200,29 @@ public object FfiConverterDouble: FfiConverter<Double, Double> {
 
     override fun write(value: Double, buf: ByteBuffer) {
         buf.putDouble(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -1091,6 +1282,494 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         buf.put(byteBuf)
     }
 }
+
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
+    }
+}
+
+
+
+/**
+ * How one part stands (`index::sync::Part`). The app keeps it, as it must outlast a start.
+ */
+data class SyncPart (
+    var `whole`: kotlin.Boolean, 
+    var `stopped`: kotlin.Boolean, 
+    var `lost`: kotlin.UInt, 
+    var `failed`: kotlin.UInt, 
+    var `tried`: kotlin.Long?, 
+    var `started`: kotlin.Long
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncPart: FfiConverterRustBuffer<SyncPart> {
+    override fun read(buf: ByteBuffer): SyncPart {
+        return SyncPart(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncPart) = (
+            FfiConverterBoolean.allocationSize(value.`whole`) +
+            FfiConverterBoolean.allocationSize(value.`stopped`) +
+            FfiConverterUInt.allocationSize(value.`lost`) +
+            FfiConverterUInt.allocationSize(value.`failed`) +
+            FfiConverterOptionalLong.allocationSize(value.`tried`) +
+            FfiConverterLong.allocationSize(value.`started`)
+    )
+
+    override fun write(value: SyncPart, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`whole`, buf)
+            FfiConverterBoolean.write(value.`stopped`, buf)
+            FfiConverterUInt.write(value.`lost`, buf)
+            FfiConverterUInt.write(value.`failed`, buf)
+            FfiConverterOptionalLong.write(value.`tried`, buf)
+            FfiConverterLong.write(value.`started`, buf)
+    }
+}
+
+
+
+/**
+ * What bytes came to, and where they leave the part.
+ */
+data class SyncTaken (
+    var `outcome`: SyncOutcome, 
+    var `rev`: kotlin.Long?, 
+    /**
+     * What to keep now, after a feed. Bytes fetched whole are kept as they came.
+     */
+    var `bytes`: kotlin.ByteArray?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncTaken: FfiConverterRustBuffer<SyncTaken> {
+    override fun read(buf: ByteBuffer): SyncTaken {
+        return SyncTaken(
+            FfiConverterTypeSyncOutcome.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncTaken) = (
+            FfiConverterTypeSyncOutcome.allocationSize(value.`outcome`) +
+            FfiConverterOptionalLong.allocationSize(value.`rev`) +
+            FfiConverterOptionalByteArray.allocationSize(value.`bytes`)
+    )
+
+    override fun write(value: SyncTaken, buf: ByteBuffer) {
+            FfiConverterTypeSyncOutcome.write(value.`outcome`, buf)
+            FfiConverterOptionalLong.write(value.`rev`, buf)
+            FfiConverterOptionalByteArray.write(value.`bytes`, buf)
+    }
+}
+
+
+
+/**
+ * What a device keeps. D12's fits and D13's small covers are more of these.
+ */
+
+enum class SyncKind {
+    
+    INDEX,
+    SOUNDS;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncKind: FfiConverterRustBuffer<SyncKind> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncKind.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncKind) = 4UL
+
+    override fun write(value: SyncKind, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SyncMobile {
+    
+    UNASKED,
+    YES,
+    NO;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncMobile: FfiConverterRustBuffer<SyncMobile> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncMobile.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncMobile) = 4UL
+
+    override fun write(value: SyncMobile, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SyncNetwork {
+    
+    FREE,
+    METERED,
+    OFF;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncNetwork: FfiConverterRustBuffer<SyncNetwork> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncNetwork.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncNetwork) = 4UL
+
+    override fun write(value: SyncNetwork, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SyncOutcome {
+    
+    TOOK,
+    LOST,
+    FAILED,
+    START_AGAIN,
+    VERSION;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncOutcome: FfiConverterRustBuffer<SyncOutcome> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncOutcome.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncOutcome) = 4UL
+
+    override fun write(value: SyncOutcome, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+sealed class SyncStep {
+    
+    object Stopped : SyncStep()
+    
+    
+    object Rest : SyncStep()
+    
+    
+    data class Wait(
+        val `until`: kotlin.Long) : SyncStep() {
+        companion object
+    }
+    
+    object Ask : SyncStep()
+    
+    
+    object Whole : SyncStep()
+    
+    
+    object Changes : SyncStep()
+    
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncStep : FfiConverterRustBuffer<SyncStep>{
+    override fun read(buf: ByteBuffer): SyncStep {
+        return when(buf.getInt()) {
+            1 -> SyncStep.Stopped
+            2 -> SyncStep.Rest
+            3 -> SyncStep.Wait(
+                FfiConverterLong.read(buf),
+                )
+            4 -> SyncStep.Ask
+            5 -> SyncStep.Whole
+            6 -> SyncStep.Changes
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: SyncStep) = when(value) {
+        is SyncStep.Stopped -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SyncStep.Rest -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SyncStep.Wait -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterLong.allocationSize(value.`until`)
+            )
+        }
+        is SyncStep.Ask -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SyncStep.Whole -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SyncStep.Changes -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: SyncStep, buf: ByteBuffer) {
+        when(value) {
+            is SyncStep.Stopped -> {
+                buf.putInt(1)
+                Unit
+            }
+            is SyncStep.Rest -> {
+                buf.putInt(2)
+                Unit
+            }
+            is SyncStep.Wait -> {
+                buf.putInt(3)
+                FfiConverterLong.write(value.`until`, buf)
+                Unit
+            }
+            is SyncStep.Ask -> {
+                buf.putInt(4)
+                Unit
+            }
+            is SyncStep.Whole -> {
+                buf.putInt(5)
+                Unit
+            }
+            is SyncStep.Changes -> {
+                buf.putInt(6)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalUShort: FfiConverterRustBuffer<kotlin.UShort?> {
+    override fun read(buf: ByteBuffer): kotlin.UShort? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUShort.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UShort?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUShort.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UShort?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUShort.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
+    override fun read(buf: ByteBuffer): kotlin.Long? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterLong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Long?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterLong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Long?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterLong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteArray?> {
+    override fun read(buf: ByteBuffer): kotlin.ByteArray? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterByteArray.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ByteArray?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterByteArray.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ByteArray?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterByteArray.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeSyncOutcome: FfiConverterRustBuffer<SyncOutcome?> {
+    override fun read(buf: ByteBuffer): SyncOutcome? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeSyncOutcome.read(buf)
+    }
+
+    override fun allocationSize(value: SyncOutcome?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeSyncOutcome.allocationSize(value)
+        }
+    }
+
+    override fun write(value: SyncOutcome?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeSyncOutcome.write(value, buf)
+        }
+    }
+}
         /**
          * How fast its speed changes `t` ms after it was let go (× a second).
          */ fun `brakeAccel`(`v0`: kotlin.Double, `to`: kotlin.Double, `length`: kotlin.Double, `t`: kotlin.Double): kotlin.Double {
@@ -1134,6 +1813,138 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_brake_way(
         FfiConverterDouble.lower(`v0`),FfiConverterDouble.lower(`to`),FfiConverterDouble.lower(`length`),FfiConverterDouble.lower(`t`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * How a part stands after a fetch.
+         */ fun `syncAfter`(`part`: SyncPart, `outcome`: SyncOutcome, `now`: kotlin.Long): SyncPart {
+            return FfiConverterTypeSyncPart.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_after(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterTypeSyncOutcome.lower(`outcome`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * A start over what this version kept.
+         */ fun `syncAnew`(`part`: SyncPart, `now`: kotlin.Long): SyncPart {
+            return FfiConverterTypeSyncPart.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_anew(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Hidden this long, a device coming back has started again (ms).
+         */ fun `syncAnewAfterMs`(): kotlin.Long {
+            return FfiConverterLong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_anew_after_ms(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * A start over what another version kept.
+         */ fun `syncAnewByAnother`(`part`: SyncPart, `now`: kotlin.Long): SyncPart {
+            return FfiConverterTypeSyncPart.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_anew_by_another(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * How an answer to a fetch ended it, or nothing where it brought bytes to take. `status`: none where no answer came.
+         */ fun `syncAnswer`(`status`: kotlin.UShort?, `whole`: kotlin.Boolean): SyncOutcome? {
+            return FfiConverterOptionalTypeSyncOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_answer(
+        FfiConverterOptionalUShort.lower(`status`),FfiConverterBoolean.lower(`whole`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * How long after a start the first fetch waits (ms), so a worker can wait them out.
+         */ fun `syncFirstAfterMs`(): kotlin.Long {
+            return FfiConverterLong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_first_after_ms(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Whether a part should say it is paused.
+         */ fun `syncPaused`(`part`: SyncPart): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_paused(
+        FfiConverterTypeSyncPart.lower(`part`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * What to do now with a part.
+         */ fun `syncStep`(`part`: SyncPart, `network`: SyncNetwork, `mobile`: SyncMobile, `now`: kotlin.Long): SyncStep {
+            return FfiConverterTypeSyncStep.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_step(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterTypeSyncNetwork.lower(`network`),FfiConverterTypeSyncMobile.lower(`mobile`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * A feed applied to what is kept.
+         */ fun `syncTakeChanges`(`kind`: SyncKind, `kept`: kotlin.ByteArray, `feed`: kotlin.ByteArray): SyncTaken {
+            return FfiConverterTypeSyncTaken.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_take_changes(
+        FfiConverterTypeSyncKind.lower(`kind`),FfiConverterByteArray.lower(`kept`),FfiConverterByteArray.lower(`feed`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Bytes just fetched whole, read through.
+         */ fun `syncTakeWhole`(`kind`: SyncKind, `bytes`: kotlin.ByteArray): SyncTaken {
+            return FfiConverterTypeSyncTaken.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_take_whole(
+        FfiConverterTypeSyncKind.lower(`kind`),FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The version a part's bytes must be for this app to read them.
+         */ fun `syncVersion`(`kind`: SyncKind): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_version(
+        FfiConverterTypeSyncKind.lower(`kind`),_status)
 }
     )
     }
