@@ -2327,6 +2327,40 @@ impl<'a, A: Fn() -> &'a Alike> View<'a, A> {
     }
 }
 
+/// A crate's conditions as they show (`own`, what it leaves out by hand in `left`), and which of them each cause added (decision 0095):
+/// what the crate is first, then its toggles, what is excluded everywhere and each condition of the filter.
+pub fn shown_saying(own: &[Condition], left: &[String], tracks: Favourites, albums: Favourites, excluded: &[String], artists: &HashSet<String>, filter: &[Condition]) -> (Vec<Condition>, Vec<Cause>) {
+    let mut shown = leaving_out(left, own);
+    let mut causes = Vec::new();
+    let mut add = |kind: Why, key: Option<String>, label: &str, more: Vec<Condition>| {
+        let at = shown.len()..shown.len() + more.len();
+        shown.extend(more);
+        if !at.is_empty() {
+            causes.push(Cause { kind, key, label: label.to_string(), at });
+        }
+    };
+    let only = |f: Favourites| f == Favourites::Only;
+    add(Why::Favourites, None, if only(tracks) { "Favourites only" } else { "No favourites" }, tracks.with(&[]));
+    add(Why::FavouriteAlbums, None, if only(albums) { "Favourite albums only" } else { "No favourite albums" }, albums.with_albums(&[]));
+    add(Why::Excluded, None, "Excluded", leaving_out_artists(artists, &leaving_out(excluded, &[])));
+    for c in filter {
+        add(Why::Filter, Some(c.axis.clone()), axis_label(&c.axis).unwrap_or(c.axis.as_str()), vec![c.clone()]);
+    }
+    (shown, causes)
+}
+
+/// Lines by how well each fits the taste (Best match, decision 0094), the best first; those it knows nothing of after, in their own
+/// order (all of them, while there is no taste: the list's own order); `down` turns it all round.
+pub fn by_fit(mut lines: Vec<String>, fit: impl Fn(&str) -> Option<f64>, down: bool) -> Vec<String> {
+    let fits: HashMap<String, f64> = lines.iter().filter_map(|l| Some((l.clone(), fit(l)?))).collect();
+    let of = |l: &String| fits.get(l).copied().unwrap_or(f64::NEG_INFINITY);
+    lines.sort_by(|a, b| of(b).total_cmp(&of(a)));
+    if down {
+        lines.reverse();
+    }
+    lines
+}
+
 /// Whether working the conditions out needs the media server's favourites.
 pub fn needs_favourites(conditions: &[Condition]) -> bool {
     conditions.iter().any(|c| c.enabled && c.axis == "favourite")

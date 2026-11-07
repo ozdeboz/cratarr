@@ -17,7 +17,7 @@
 //!   hold it, so switching a library works offline. Which copy plays stays the server's to say.
 //! - **What is an account's own stays out of it:** plays, favourites, playlists and fits are the caller's, as `World` and
 //!   `radio::Song` take them. Rows are found by id or by their line ([`Facts::rel`]). What the server last worked out of them
-//!   comes apart, an account's own ([`Marks`]).
+//!   comes apart, an account's own ([`Marks`], and [`own::Own`] in them).
 //! - **[`Sounds`] are kept apart** (0101's point 16): they change rarely and weigh more than all the rest.
 
 use std::collections::{HashMap, HashSet};
@@ -26,6 +26,9 @@ use std::sync::Arc;
 use crate::crates::Facts;
 use crate::{ids, radio, similarity};
 
+#[cfg(any(test, feature = "device"))]
+pub mod device;
+pub mod own;
 mod read;
 pub mod sync;
 
@@ -38,7 +41,7 @@ pub const VERSION: u32 = 1;
 pub const SOUNDS_VERSION: u32 = 1;
 
 /// The same for an account's marks.
-pub const MARKS_VERSION: u32 = 1;
+pub const MARKS_VERSION: u32 = 2;
 
 // --- Rows: what goes in, and what comes out when asked for ---
 
@@ -1767,6 +1770,8 @@ pub struct Mark {
 pub struct Marks {
     at: i64,
     marked: Marked,
+    /// [`own::Own`] as JSON: the server writes it, and only what answers on a device reads it.
+    own: String,
 }
 
 impl PartialEq for Marks {
@@ -1788,7 +1793,17 @@ impl Marks {
             to.rating.push(row.rating.map_or(NONE, i64::from));
             to.skips.push(i64::from(row.skips));
         }
-        Self { at, marked: to }
+        Self { at, marked: to, own: String::new() }
+    }
+
+    /// These with the rest of what is the account's own, as JSON.
+    pub fn with_own(self, own: String) -> Self {
+        Self { own, ..self }
+    }
+
+    /// The rest of what is the account's own, as JSON.
+    pub fn own(&self) -> &str {
+        &self.own
     }
 
     /// When they were worked out: what a device's own plays since are added to.
@@ -1822,6 +1837,8 @@ impl Marks {
         let mut out = vec![0; HEADER];
         varint(&mut out, zigzag(self.at));
         self.marked.write(&mut out);
+        varint(&mut out, self.own.len() as u64);
+        out.extend_from_slice(self.own.as_bytes());
         sealed(out, MARKS, MARKS_VERSION)
     }
 
@@ -1829,8 +1846,10 @@ impl Marks {
         let mut from = opened(bytes, MARKS, MARKS_VERSION)?;
         let at = from.int()?;
         let marked = Marked::read(&mut from)?;
+        let length = from.rows()?;
+        let own = String::from_utf8(from.take(length)?.to_vec()).map_err(|_| Refused::Damaged)?;
         from.done()?;
-        if marked.track.windows(2).all(|w| w[0] < w[1]) { Ok(Self { at, marked }) } else { Err(Refused::Damaged) }
+        if marked.track.windows(2).all(|w| w[0] < w[1]) { Ok(Self { at, marked, own }) } else { Err(Refused::Damaged) }
     }
 }
 

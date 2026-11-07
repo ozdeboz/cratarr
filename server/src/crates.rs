@@ -252,6 +252,11 @@ impl CrateStore {
         self.write_stored(s).await
     }
 
+    /// Every fixed crate with conditions added to it, by `kept_id`.
+    pub async fn all_added(&self) -> Result<BTreeMap<String, Vec<Condition>>> {
+        Ok(self.stored().await?.added)
+    }
+
     /// The conditions added to a fixed crate (decision 0083), by `kept_id` (none until some are).
     pub async fn added(&self, id: &str) -> Result<Vec<Condition>> {
         Ok(self.stored().await?.added.get(id).cloned().unwrap_or_default())

@@ -1,6 +1,55 @@
 //! Names to match by: how two spellings of one name are told to be one. Pure text work, for the server's imports and
 //! for the artists a crate leaves out alike (`excluded_artists`).
 
+/// A name in lower case, the common accents taken off: what `natural_keys` compares.
+pub fn name_key(s: &str) -> Vec<char> {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à'..='å' => 'a',
+            'ç' => 'c',
+            'è'..='ë' => 'e',
+            'ì'..='ï' => 'i',
+            'ñ' => 'n',
+            'ò'..='ö' | 'ø' => 'o',
+            'ù'..='ü' => 'u',
+            'ý' | 'ÿ' => 'y',
+            c => c,
+        })
+        .collect()
+}
+
+/// Two names as `name_key` keys them, in their natural order: numbers by what they count.
+pub fn natural_keys(x: &[char], y: &[char]) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut i, mut j) = (0, 0);
+    while i < x.len() && j < y.len() {
+        if x[i].is_ascii_digit() && y[j].is_ascii_digit() {
+            let (si, sj) = (i, j);
+            while i < x.len() && x[i].is_ascii_digit() {
+                i += 1;
+            }
+            while j < y.len() && y[j].is_ascii_digit() {
+                j += 1;
+            }
+            let digits = |d: &[char]| -> String { d.iter().skip_while(|c| **c == '0').collect() };
+            let (n, m) = (digits(&x[si..i]), digits(&y[sj..j]));
+            match n.len().cmp(&m.len()).then_with(|| n.cmp(&m)) {
+                Ordering::Equal => continue,
+                o => return o,
+            }
+        }
+        match x[i].cmp(&y[j]) {
+            Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+            o => return o,
+        }
+    }
+    (x.len() - i).cmp(&(y.len() - j))
+}
+
 /// A name to match by: lower case, letters and digits only.
 pub fn key(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()

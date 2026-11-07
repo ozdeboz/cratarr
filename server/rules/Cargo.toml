@@ -19,18 +19,22 @@ nfkd = ["dep:unicode-normalization"]
 wasm-brake = []
 wasm-matcher = []
 # The library on a device, for the page: index.wasm, fetched when the page first keeps or reads it.
-wasm-index = []
+wasm-index = ["device"]
 # A crate's records kept apart, for the page (0.13): in matcher.wasm, which has an allocator already (in rules.wasm it
 # took it from 9 to 38 KB).
 wasm-spread = []
 # Radio's modes in the page's generated types: the server's tests turn it on, as they write those. Nothing that plays
 # builds it.
 ts = ["dep:ts-rs"]
+# A device answering for itself (`index::device`): crates, Sounds like and picks over what it keeps, JSON in and out. For the page's
+# index.wasm and the app's bridge. Nothing on the server builds it but its tests.
+device = ["dep:serde_json"]
 # A library made up to the real one's size (`index::made_up`), to measure on a device. Nothing that plays builds it.
 made-up = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", optional = true }
 ts-rs = { version = "12.0.1", optional = true }
 unicode-normalization = { version = "0.1", optional = true }
 
