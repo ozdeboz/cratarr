@@ -17,6 +17,7 @@
 //! The weights are all equal until AudioMuse has heard the whole library; then they are weighed (docs/plans.md).
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +64,9 @@ const NUMBER_SIGNALS: [Signal; 4] = [Signal::Era, Signal::Tempo, Signal::Energy,
 /// 100% of all of them: 2026-10-23.)
 const SOUND_LO: f32 = 0.62;
 const SOUND_HI: f32 = 1.0;
+/// How far from 1 the length of a sound of unit length can read, for rounding alone: 4 steps at most in 40,000 vectors of
+/// 200 numbers. Anything further is made so, as the shared cases' rounded sounds are: the nearest reads 20 steps away.
+const UNIT_READS: f32 = 16.0 * f32::EPSILON;
 
 /// One track as similarity sees it; its words as numbers, each kind its own.
 #[derive(Debug, Clone, Default)]
@@ -109,14 +113,15 @@ pub struct Library {
     idf: [Vec<f64>; WORDS.len()],
     /// Per number, what two tracks typically differ by: their interquartile range.
     reach: [f64; NUMBERS],
-    /// Each track's "sounds like" vector, of unit length, where AudioMuse heard it.
-    sounds: Vec<Option<Box<[f32]>>>,
+    /// Each track's "sounds like" vector, of unit length, where AudioMuse heard it. Shared with the facts it came from:
+    /// the facts, the crates' library and the radio's each held a copy, 61 MB more of the NAS's 768.
+    sounds: Vec<Option<Arc<[f32]>>>,
 }
 
 impl Library {
     /// `sounds`: by the tracks' places, as `tracks`; any length (missing ones unheard), any length of vector (unit
-    /// length is made here).
-    pub fn new<'a>(tracks: impl IntoIterator<Item = &'a Track>, sounds: Vec<Option<Vec<f32>>>) -> Self {
+    /// length is made here, in a vector of its own; one of unit length already is shared as it is).
+    pub fn new<'a>(tracks: impl IntoIterator<Item = &'a Track>, sounds: Vec<Option<Arc<[f32]>>>) -> Self {
         let mut df: [HashMap<u32, f64>; WORDS.len()] = Default::default();
         let mut values: [Vec<f64>; NUMBERS] = Default::default();
         let mut n = 0.0;
@@ -156,7 +161,10 @@ impl Library {
             .map(|v| {
                 let v = v?;
                 let len = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-                (len > 0.0 && len.is_finite()).then(|| v.into_iter().map(|x| x / len).collect())
+                if (len - 1.0).abs() <= UNIT_READS {
+                    return Some(v);
+                }
+                (len > 0.0 && len.is_finite()).then(|| v.iter().map(|x| x / len).collect())
             })
             .collect();
         Library { idf, reach, sounds }
@@ -569,12 +577,40 @@ mod tests {
     #[test]
     fn what_is_not_known_does_not_count() {
         let tracks = vec![track(1, 1990, 0.5), Track { genres: vec![1], year: Some(1990), ..Track::default() }, track(2, 2020, 0.9)];
-        let lib = Library::new(&tracks, vec![Some(vec![1.0, 0.0]), None, Some(vec![0.0, 1.0])]);
+        let lib = Library::new(&tracks, vec![Some(Arc::from([1.0, 0.0])), None, Some(Arc::from([0.0, 1.0]))]);
         let seed = Profile::of(&lib, &[0], |i| &tracks[i]);
         let unheard = seed.to_track(&lib, 1, &tracks[1]);
         assert_eq!((unheard.get(Signal::Energy), unheard.get(Signal::Sound), unheard.get(Signal::Tracks)), (None, None, None));
         assert_eq!(unheard.score(&Weights::EQUAL), 1.0, "alike in all that is known");
         assert_eq!(seed.to_track(&lib, 2, &tracks[2]).score(&Weights::EQUAL), 0.0);
+    }
+
+    /// Numbers as a track's sound holds them, the same every time.
+    fn heard(seed: u64, dims: usize) -> Vec<f32> {
+        let mut r = crate::Rng::seeded(seed);
+        (0..dims).map(|_| r.unit() as f32 - 0.5).collect()
+    }
+
+    #[test]
+    fn a_sound_of_unit_length_is_shared_and_any_other_is_made_so_in_a_vector_of_its_own() {
+        let tracks = vec![Track::default(); 3];
+        let (unit, long): (Arc<[f32]>, Arc<[f32]>) = (Arc::from(mean_sound(&[&heard(1, 200)]).unwrap()), Arc::from(heard(2, 200)));
+        let lib = Library::new(&tracks, vec![Some(unit.clone()), Some(long.clone()), Some(Arc::from([0.0, 0.0]))]);
+        assert!(Arc::ptr_eq(lib.sounds[0].as_ref().unwrap(), &unit));
+        let made = lib.sounds[1].as_ref().unwrap();
+        let len = made.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(!Arc::ptr_eq(made, &long) && (len - 1.0).abs() <= UNIT_READS, "{len}");
+        assert_eq!(lib.sound(2), None, "all zeros: no length to make so");
+    }
+
+    #[test]
+    fn rounding_never_turns_a_shared_sound_into_a_copy() {
+        for dims in [16, 200, 512] {
+            let sounds: Vec<Arc<[f32]>> = (0..4000).map(|seed| Arc::from(mean_sound(&[&mean_sound(&[&heard(seed, dims)]).unwrap()]).unwrap())).collect();
+            let tracks = vec![Track::default(); sounds.len()];
+            let lib = Library::new(&tracks, sounds.iter().cloned().map(Some).collect());
+            assert!(sounds.iter().zip(&lib.sounds).all(|(s, held)| held.as_ref().is_some_and(|h| Arc::ptr_eq(h, s))), "{dims} numbers");
+        }
     }
 
     #[test]

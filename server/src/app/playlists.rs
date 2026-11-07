@@ -2430,7 +2430,7 @@ impl PlaylistService {
 
     /// `rows_of`, each entry read at the line beside it in `at` (`Store::led_entries`): the entry stays what an edit names.
     async fn rows_as(&self, entries: Vec<String>, at: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
-        let (c, sid, music, served) = (self.lib.catalogue(), source.to_string(), self.lib.music(), self.served.clone());
+        let (c, sid, served) = (self.lib.catalogue(), source.to_string(), self.served.clone());
         let rows = tokio::task::spawn_blocking(move || -> Result<Vec<PlaylistRow>> {
             let facts = c.line_rows(&sid, &at)?;
             // Cratarr's own tracks with their album, as the library has it (the app's downloads are told it, and find
@@ -2448,7 +2448,6 @@ impl PlaylistService {
                 }
                 _ => Default::default(),
             };
-            let dir = music.map(std::path::PathBuf::from);
             Ok(entries
                 .into_iter()
                 .zip(at)
@@ -2457,7 +2456,7 @@ impl PlaylistService {
                     entry_id: None,
                     album_id: f.track_id.as_ref().and_then(|t| albums.get(t).cloned()),
                     album_tracks: f.track_id.as_ref().and_then(|t| albums.get(t)).and_then(|a| album_tracks.get(a).copied()),
-                    missing: !line_exists(&c, dir.as_deref(), &at),
+                    missing: !line_exists(&c, &at),
                     file: at.rsplit('/').next().unwrap_or(&at).to_string(),
                     entry,
                     id: f.track_id,
@@ -3932,7 +3931,7 @@ impl PlaylistService {
         let gone = || ToggleError::Refused("Those tracks are not on a connected server.".into());
         let (a, s) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id).ok_or_else(gone)?;
         let (store, name) = self.own(id)?;
-        let folders = self.lib.folders();
+        let folders = self.lib.catalogue().folders();
         let mut entries = Vec::new();
         for track in ids {
             if !crate::covers::valid_item_id(track) {
@@ -4674,10 +4673,10 @@ mod library_tests {
         std::fs::write(m.join("A/1.flac"), "a").unwrap();
         std::fs::write(inc.join("X/1.flac"), "x").unwrap();
         let cat = crate::catalogue::Catalogue::open(None, vec![m.clone(), inc.clone()]).unwrap();
-        assert!(line_exists(&cat, Some(m.as_path()), "A/1.flac"));
-        assert!(line_exists(&cat, Some(m.as_path()), "../in/X/1.flac"), "an Incoming track's line");
-        assert!(!line_exists(&cat, Some(m.as_path()), "../in/X/2.flac"));
-        assert!(!line_exists(&cat, Some(m.as_path()), "../elsewhere/X/1.flac"), "in no folder of the catalogue");
+        assert!(line_exists(&cat, "A/1.flac"));
+        assert!(line_exists(&cat, "../in/X/1.flac"), "an Incoming track's line");
+        assert!(!line_exists(&cat, "../in/X/2.flac"));
+        assert!(!line_exists(&cat, "../elsewhere/X/1.flac"), "in no folder of the catalogue");
         std::fs::remove_dir_all(&root).ok();
     }
 }

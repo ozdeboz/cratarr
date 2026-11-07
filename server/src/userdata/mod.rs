@@ -1643,8 +1643,9 @@ impl UserData {
     /// Songs' annotations, and what imports brought in for them, follow their persistent ids to new song ids (the
     /// catalogue was rebuilt): `moves` is (persistent id, song id now). A persistent id given twice goes to its first
     /// song only: two would move its data there and back every time. Ids are for life, so what lies on one of `songs`, the
-    /// ids a song holds, stays: a copy tagged otherwise has a persistent id of its own, and the one on a row can leave with
-    /// a copy while the track stays. Returns how many annotations moved.
+    /// ids of tracks alive, listed or away with their library, stays: a copy tagged otherwise has a persistent id of its own,
+    /// the one on a row can leave with a copy while the track stays, and two records can be tagged alike. Returns how many
+    /// annotations moved.
     pub fn follow_pids(&self, moves: &[(String, String)], songs: &std::collections::HashSet<String>) -> Result<usize> {
         let mut to = std::collections::HashMap::new();
         for (pid, item) in moves {

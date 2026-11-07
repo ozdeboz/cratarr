@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** One sign-in for both addresses (0.12, the owner 2026-10-30): the session read, written and followed. */
 class SessionsTest {
@@ -20,6 +21,76 @@ class SessionsTest {
         assertEquals(a, Sessions.tokenIn("__Host-cratarr-session=$a"))
         assertEquals("as Cratarr reads it", b, Sessions.tokenIn("cratarr-session=$a; __Host-cratarr-session=$b"))
         assertEquals(a, Sessions.tokenIn("cratarr-prefs=x; cratarr-guest=${"c".repeat(32)};  cratarr-session=$a ; other=1"))
+    }
+
+    @Test
+    fun theSignInPageSaysNobodyIsSignedIn() {
+        assertTrue(Sessions.nobodyAfter(Sessions.SIGN_IN, Step.NOTHING))
+        assertTrue("signed out into it", Sessions.nobodyAfter(Sessions.SIGN_IN, Step.CLEAR))
+        assertFalse("the other address's session taken: it goes on as that one", Sessions.nobodyAfter(Sessions.SIGN_IN, Step.TAKE))
+        assertFalse("any other page", Sessions.nobodyAfter("/", Step.NOTHING))
+        assertFalse(Sessions.nobodyAfter(Sessions.SIGN_OUT, Step.NOTHING))
+    }
+
+    // What runs only on a device, read from its source: says a line is there, not that it works.
+
+    private fun source(name: String) = File("src/main/java/app/cratarr/$name").readText().replace("\r\n", "\n")
+
+    @Test
+    fun theSignInPageMakesItNobodysHereUnlessTheOtherSessionWasTaken() {
+        val loaded = source("Sessions.kt").substringAfter("fun loaded(").substringBefore("\n    }\n")
+        assertTrue("if (nobodyAfter(path, step)) Who.set(context, null)" in loaded)
+    }
+
+    @Test
+    fun theAppIsNobodysWhenThePageHearsNoOneIsSignedInAndStays() {
+        val heard = source("MainActivity.kt").substringAfter("\"nobody\" ->").substringBefore("\n")
+        assertTrue(heard, "Who.set(this@MainActivity, null)" in heard)
+    }
+
+    @Test
+    fun theFirstPageWaitsForWhoseItIsAMomentAtMost() {
+        val start = source("MainActivity.kt").substringAfter("val looking = ").substringBefore("show(it)")
+        assertTrue("Plays.look(this@MainActivity)" in start)
+        assertTrue("within the first look's limit", start.indexOf("Plays.look") < start.indexOf("withTimeoutOrNull(FIRST_LOOK_MS)"))
+    }
+
+    @Test
+    fun signingOutInTheAppEndsTheSessionOnBothAddresses() {
+        val signOut = source("MainActivity.kt").substringAfter("\"sign-out\" -> {").substringBefore("\"account-downloads-remove\"")
+        assertTrue("Sessions.signOutAsked()" in signOut)
+        assertTrue("before the page is told to end it", signOut.indexOf("Sessions.signOutAsked()") < signOut.indexOf("signed-out"))
+    }
+
+    @Test
+    fun aSignOutIsKnownBeforeAnythingOfItCanWait() {
+        val main = source("MainActivity.kt")
+        val signOut = main.substringAfter("\"sign-out\" -> {")
+        assertTrue("the flush alone takes seconds, and answers land in them", signOut.indexOf("Sessions.signOutAsked()") < signOut.indexOf("Plays.flush"))
+        val account = main.substringAfter("\"account\" -> {").substringBefore("\"nobody\" ->")
+        assertTrue("the page's own answer, on its way across the bridge", "Sessions.signingOut" in account)
+        val learn = source("Plays.kt").substringAfter("private fun learn(").substringBefore("\n    }\n")
+        assertTrue("noted before asking", learn.indexOf("Who.current(app)") < learn.indexOf("Net.open"))
+        assertTrue("stands(asked, Who.current(app), Sessions.signingOut)" in learn)
+    }
+
+    @Test
+    fun thePageOpensAsTheAppsAccountOnEitherAddress() {
+        val keep = source("MainActivity.kt").substringAfter("private fun keepPagePrefs(").substringBefore("\n    }\n")
+        assertTrue("localStorage.setItem('cratarr-who', \${JSONObject.quote(Who.forPage(who))})" in keep)
+        assertFalse("nothing kept yet is no reason to say nothing of whose it is", "?: return" in keep)
+    }
+
+    @Test
+    fun whoseThingsTheseAreDoesNotGoToAnotherPhone() {
+        assertTrue("android:allowBackup=\"false\"" in File("src/main/AndroidManifest.xml").readText())
+    }
+
+    @Test
+    fun aMoveBetweenAddressesIsNoSignOutForTheOneUserOfAServerWithSignInOff() {
+        val signedIn = source("Plays.kt").substringAfter("fun signedIn(").substringBefore("\n    }\n")
+        assertTrue("if (Who.current(app) != Who.keyOf(\"\")) Who.set(app, null)" in signedIn)
+        assertEquals("@", Who.keyOf(""))
     }
 
     @Test

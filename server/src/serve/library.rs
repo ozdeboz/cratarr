@@ -805,10 +805,11 @@ impl Library {
         };
         // The analyses' part is the fingerprint's tail (`… analysis <count>/<sum of when>`).
         let (files, analyses) = served.split_once(" analysis ").unwrap_or((served.as_str(), ""));
+        // The folders by their paths, not how many: a library renamed changes no file, and what was built lists it by the path it had.
         let songs = format!(
-            "catalogue {} {} {} kinds {:?} rules {:x} files {}",
+            "catalogue {} {:?} {} kinds {:?} rules {:x} files {}",
             cat.generation(),
-            cat.folders().count(),
+            cat.folders(),
             format!("{} originals {}", self.added_print(), self.originals_print()),
             self.kinds(),
             {

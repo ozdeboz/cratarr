@@ -74,7 +74,7 @@ object Reach {
                 code == 200 -> head(c).let { body ->
                     Health(url, code, isCratarr(body), instanceOf(body)).also { h -> if (h.cratarr) toldPage(context, h, body) }
                 }
-                else -> Health(url, code, code == 401 && c.getHeaderField("WWW-Authenticate")?.let { it.trim().startsWith("Cookie", ignoreCase = true) && "realm=\"Cratarr\"" in it } == true)
+                else -> Health(url, code, code == 401 && Sessions.asksSignIn(c.getHeaderField("WWW-Authenticate")))
             }
         } catch (e: Exception) {
             Health(url, null, false)

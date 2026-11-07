@@ -199,7 +199,7 @@ impl PlaylistService {
     /// Each add's line, from its track as a connected server and the catalogue give it (never a path a page sent), or
     /// why there is none; `None` for every other operation.
     async fn lines_added(&self, ops: &[PlaylistOp]) -> Vec<Option<Result<String, &'static str>>> {
-        let folders = self.lib.folders();
+        let folders = self.lib.catalogue().folders();
         let sources = self.lib.connected();
         let mut out = Vec::with_capacity(ops.len());
         for op in ops {

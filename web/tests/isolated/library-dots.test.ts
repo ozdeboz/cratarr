@@ -41,7 +41,9 @@ test('an id the list does not hold has no dots', () => {
 
 test('a switch thrown on the page takes its copy\'s dot at once', () => {
   library.view = view([{ id: 'al-5', title: 'Five', copies: [{ library: 'mine' }, { library: 'music' }] }]);
+  prefs.hiddenLibraries = ['own/music'];
+  assert.deepEqual(names({ id: 'al-5' }), ['mine']);
   prefs.hiddenLibraries = ['own/mine'];
-  assert.deepEqual(names({ id: 'al-5' }), ['music']);
+  assert.deepEqual(names({ id: 'al-5' }), [], 'home alone on goes without saying');
   prefs.hiddenLibraries = [];
 });

@@ -1,0 +1,98 @@
+// A stand-in for Cratarr, for the browser tests with no built server (`pnpm run e2e:standin`, e2e/standin-run.mjs; the real
+// one is scripts/browser-e2e.sh): sign-in and its session as server/src/serve/signin.rs makes them, the 401 of access.rs,
+// /api/me, preferences, and an account's few reads. Everything else is not here, which the page takes as it takes a server
+// without it. The sign-in page's own script is read from signin.rs: what it does to the page's stores is the server's line,
+// not a copy of it.
+import { randomBytes } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+
+const COOKIE = 'cratarr-session';
+const challenge = `Cookie realm="Cratarr", form-action="/signin", cookie-name="${COOKIE}"`;
+const script = readFileSync(new URL('../../server/src/serve/signin.rs', import.meta.url), 'utf8')
+  .match(/<script nonce="\{nonce\}">([\s\S]*?)<\/script>/)[1]
+  .replaceAll('{{', '{')
+  .replaceAll('}}', '}');
+
+const escaped = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const page = (next) =>
+  `<!doctype html><title>Sign in</title><form method="post" action="/signin"><input type="hidden" name="next" value="${escaped(next)}"><input type="hidden" name="browser" value=""><input name="username"><input name="password" type="password"><button>Sign in</button></form><script>${script}</script>`;
+
+const body = (req) =>
+  new Promise((done) => {
+    let s = '';
+    req.on('data', (c) => (s += c));
+    req.on('end', () => done(s));
+  });
+const json = (res, status, v, headers = {}) => {
+  res.writeHead(status, { 'content-type': 'application/json', ...headers });
+  res.end(JSON.stringify(v));
+};
+
+/** On `port`, with two invented accounts, `ann` an administrator and `bob`, their passwords in `accounts` (`name password` a
+ *  line, as e2e/browser.mjs reads them). Returns the server, for closing. */
+export function standIn(port, accounts) {
+  const passwords = { ann: randomBytes(9).toString('hex'), bob: randomBytes(9).toString('hex') };
+  writeFileSync(accounts, Object.entries(passwords).map(([n, p]) => `${n} ${p}`).join('\n') + '\n', { mode: 0o600 });
+  const sessions = new Map();
+  const preferences = {};
+  const whoOf = (req) => {
+    const token = (req.headers.cookie ?? '').split(';').map((c) => c.trim().split('=')).find(([n]) => n === COOKIE)?.[1];
+    return token ? sessions.get(token) : undefined;
+  };
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://x');
+    const path = url.pathname;
+    const me = whoOf(req);
+    if (path === '/signin' && req.method === 'GET') {
+      // Served to a device with no live session only: one that has one is sent on.
+      if (me) {
+        res.writeHead(303, { location: url.searchParams.get('next') ?? '/' });
+        return res.end();
+      }
+      res.writeHead(200, { 'content-type': 'text/html', 'referrer-policy': 'same-origin', 'cache-control': 'no-store' });
+      return res.end(page(url.searchParams.get('next') ?? '/'));
+    }
+    if (path === '/signin' && req.method === 'POST') {
+      const form = new URLSearchParams(await body(req));
+      const name = form.get('username');
+      if (passwords[name] !== form.get('password')) {
+        res.writeHead(401, { 'content-type': 'text/html', 'referrer-policy': 'same-origin' });
+        return res.end(page('/'));
+      }
+      const token = randomBytes(32).toString('hex');
+      sessions.set(token, name);
+      res.writeHead(303, { location: form.get('next') ?? '/', 'set-cookie': `${COOKIE}=${token}; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax`, 'referrer-policy': 'same-origin' });
+      return res.end();
+    }
+    if (path === '/signout' && req.method === 'POST') {
+      for (const [t, n] of sessions) if (n === me) sessions.delete(t);
+      res.writeHead(303, { location: '/signin', 'set-cookie': `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax` });
+      return res.end();
+    }
+    if (!path.startsWith('/api/')) return json(res, 404, { error: 'Not here.' });
+    if (!me) return json(res, 401, { error: 'Sign in to Cratarr.', signin: '/signin' }, { 'www-authenticate': challenge });
+    if (path === '/api/me') {
+      const permissions = { offline: true, playlists: true, share: true, links: true, request: true, auto_approve: true, manage_requests: true };
+      return json(res, 200, { name: me, admin: me === 'ann', permissions, sessions: [{ id: 's', current: true }], devices: [] });
+    }
+    const held = (preferences[me] ??= {});
+    if (path === '/api/me/preferences') return json(res, 200, { values: held });
+    const key = path.match(/^\/api\/me\/preferences\/(\w+)$/)?.[1];
+    if (key && req.method === 'PUT') {
+      const { value, changed } = JSON.parse(await body(req));
+      if (!held[key] || changed > held[key].changed) held[key] = { value, changed };
+      return json(res, 200, held[key]);
+    }
+    if (path === '/api/capabilities') return json(res, 200, { capabilities: [], version: '0.16.0' });
+    if (path === '/api/albums') return json(res, 200, { whose: me, albums: [] });
+    if (path === '/api/playlists') return json(res, 200, []);
+    if (path === '/api/events') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
+      return void res.write(': hello\n\n');
+    }
+    return json(res, 404, { error: 'Not here.' });
+  });
+  server.listen(port, '127.0.0.1');
+  return server;
+}

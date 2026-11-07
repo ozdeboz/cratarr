@@ -38,6 +38,9 @@ export const kept = $state({
   /** Bytes on the device in all (kept and downloaded), and the budget (null: no limit). */
   used: 0,
   budget: null as number | null,
+  /** Each account's share of them (decision 0101; a file two hold counts in both), `here`: the one signed in; none
+   *  while nobody is. */
+  accounts: [] as { account: string; bytes: number; here: boolean }[],
   /** What holds the work back: Wi-Fi, charging, no connection; null when nothing does. */
   waiting: null as 'wifi' | 'charging' | 'network' | null,
   /** The track downloading now, as "artist – name". */
@@ -45,6 +48,10 @@ export const kept = $state({
   /** The app's sync job under way, from its start to its end, as the app says (held back by its rules too). */
   running: false,
 });
+
+/** Whether This device shows each account's share: more than one, or one who is not here, whose files fill this one's limit
+ *  for a reason it would not otherwise see, and whose Remove is the only way to it. */
+export const sharesShow = () => kept.accounts.length > 1 || kept.accounts.some((a) => !a.here);
 
 export const keptKey = (kind: KeptKind, source: string, id: string) => `${kind}:${source}/${id}`;
 
@@ -110,6 +117,7 @@ if (inApp) {
     kept.items = Array.isArray(m.items) ? (m.items as KeptItem[]) : [];
     kept.used = typeof m.used === 'number' ? m.used : 0;
     kept.budget = typeof m.budget === 'number' ? m.budget : null;
+    kept.accounts = Array.isArray(m.accounts) ? (m.accounts as typeof kept.accounts).filter((a) => typeof a?.account === 'string' && typeof a.bytes === 'number') : [];
     kept.waiting = m.waiting === 'wifi' || m.waiting === 'charging' || m.waiting === 'network' ? m.waiting : null;
     kept.current = typeof m.current === 'string' ? m.current : null;
     kept.running = m.running === true;

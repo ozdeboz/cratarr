@@ -26,7 +26,6 @@ export async function loadCrates() {
       ...(c.id in pendingAlbums ? { favourite_albums: pendingAlbums[c.id] } : {}),
     }));
     crates.error = null;
-    await moveBrowserSettings(list);
   } catch (e) {
     crates.error = e instanceof Error ? e.message : 'Unexpected error';
   }
@@ -123,30 +122,6 @@ function saved(to: CrateFavourites, shown: Record<CrateFavourites, { label: stri
   withUndo(`${shown[to].label}.`, [undo], { after: () => loadCrates() });
 }
 
-// Before the setting was the server's (2026-10-14), each browser kept its own: sent once, then forgotten here.
-const OLD_KEY = 'cratarr-crate-favourites';
-async function moveBrowserSettings(list: Crate[]) {
-  let read: unknown = null;
-  try {
-    read = JSON.parse(localStorage.getItem(OLD_KEY) ?? 'null');
-    localStorage.removeItem(OLD_KEY);
-  } catch {
-    return;
-  }
-  if (!read || typeof read !== 'object') return;
-  const old = read as Record<string, CrateFavourites>;
-  const moved = list.filter((c) => old[c.id] && old[c.id] !== c.favourites);
-  for (const c of moved) {
-    try {
-      await setCrateFavourites(c.id, old[c.id]);
-      const shown = crates.list?.find((x) => x.id === c.id);
-      if (shown && !(c.id in pending)) shown.favourites = old[c.id];
-    } catch {
-      /* the server's setting stays */
-    }
-  }
-}
-
 /** A crate's id in the panel's address (`?view=crate:unlisted`), and back. */
 export const CRATE = 'crate:';
 export const crateOf = (viewed: string | null) => (viewed?.startsWith(CRATE) ? viewed.slice(CRATE.length) : null);
@@ -170,8 +145,9 @@ export type CrateDraft = {
   words?: string;
 };
 const draftKey = (id: string | null) => id ?? 'new';
-// The builder reads and keeps its draft inside its effects: untracked, as a draft kept, here or from the account, is no
-// reason to start the builder over or to keep it again.
+// Each account's own, as the rest of its preferences here (lib/prefs' PERSONAL, decision 0101), hidden while another is
+// signed in. The builder reads and keeps its draft inside its effects: untracked, as a draft kept, here or from the
+// account, is no reason to start the builder over or to keep it again.
 export function keptDraft(id: string | null): CrateDraft | null {
   const kept = untrack(() => prefs.crateDrafts[draftKey(id)]);
   return kept ? $state.snapshot(kept) : null;
@@ -184,20 +160,6 @@ export function forgetDraft(id: string | null) {
     const { [draftKey(id)]: _, ...rest } = prefs.crateDrafts;
     prefs.crateDrafts = rest;
   });
-}
-// A draft from before they followed the account, each under a key of its own in this browser: taken in, to go with the
-// rest (decision 0101 point 14: the first device sends its own once).
-const OLD_DRAFT = 'cratarr-crate-draft:';
-try {
-  for (let i = localStorage.length - 1; i >= 0; i--) {
-    const key = localStorage.key(i);
-    if (!key?.startsWith(OLD_DRAFT)) continue;
-    const kept = JSON.parse(localStorage.getItem(key) ?? 'null');
-    if (kept && Array.isArray(kept.conditions)) keepDraft(key.slice(OLD_DRAFT.length), kept);
-    localStorage.removeItem(key);
-  }
-} catch {
-  /* none to take in */
 }
 /** A crate's name, or null while it is not known yet (the crates not read, a Sounds like crate's name not asked):
  *  a header shows nothing rather than its id first. */

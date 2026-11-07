@@ -21,9 +21,8 @@ globalThis.fetch = (async (input: string, init?: RequestInit) => {
   return json(path.endsWith('/api/me/preferences') ? { values: held } : {});
 }) as typeof fetch;
 
-/** A draft from before drafts followed the account, as a device coming to 0.16 holds one. */
+/** A draft of a crate that is there, kept beside one for a new crate. */
 const OLD = { name: 'From before', conditions: [] };
-localStorage.setItem('cratarr-crate-draft:cr-1', JSON.stringify(OLD));
 
 const { accountLearnt } = await import('../../src/lib/account.ts');
 const { fittedCopy, HOME_HEADER, homePicture, localCovers } = await import('../../src/lib/localCovers.svelte.ts');
@@ -39,14 +38,11 @@ async function changesGo() {
 }
 const answered = () => wait(50);
 
-test('a crate draft kept before drafts followed the account is taken in, and its old place let go', () => {
-  assert.deepEqual(keptDraft('cr-1'), OLD);
-  assert.equal(localStorage.getItem('cratarr-crate-draft:cr-1'), null);
-});
-
 test('a crate draft begun here reaches the account, the whole of them as one value', async () => {
   accountLearnt('ann');
   await answered();
+  keepDraft('cr-1', OLD);
+  await changesGo();
   sent.length = 0;
   const draft = { name: 'Late nights', conditions: [] };
   keepDraft(null, draft);
