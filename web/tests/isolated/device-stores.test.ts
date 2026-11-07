@@ -138,6 +138,30 @@ test('a stream two accounts keep is stored once, and goes with the last one to l
   assert.equal(cached.get('cratarr-offline-2')!.has(stream), false);
 });
 
+test('a keep that outlives its account stores nothing with no list, and gives the next one none of what was left of it', async () => {
+  accountLearnt('ann');
+  await turns();
+  const first = { ...TRACK, id: 'tr-first' };
+  const next = { ...TRACK, id: 'tr-next' };
+  const streams = () => [...(cached.get('cratarr-offline-2')?.keys() ?? [])].filter((k) => /tr-(first|next)/.test(k));
+  waiting = holdBack(/\/file\/tr-first/);
+  const keeping = keepOffline([first, next]);
+  while (!asked) await turns();
+  accountLearnt('bo');
+  await turns();
+  go();
+  await keeping;
+  held = null;
+  assert.deepEqual(streams(), [], 'it would sit there for ever, in nobody’s list');
+  assert.equal(isKept(first), false);
+  assert.equal(isKept(next), false, 'not his');
+  assert.ok(!addresses.includes('/file/tr-next'), 'nor fetched under his session');
+  accountLearnt('ann');
+  await turns();
+  assert.equal(isKept(next), false);
+  asked = 0;
+});
+
 test("the shelf is each account's own database, following only that account's list", async () => {
   accountLearnt('ann');
   await turns();

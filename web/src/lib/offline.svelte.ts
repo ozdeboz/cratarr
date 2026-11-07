@@ -114,6 +114,8 @@ const form = () => ({ as: 'stream', form: chosen(), opus: chosen() === 'opus' })
 
 /** Keeps `tracks` in this browser: Cratarr makes each one's stream, then it comes in whole, its cover and waveform too. */
 export async function keepOffline(tracks: Wanted[]) {
+  // The account they are fetched for: one signed in meanwhile gets none of them.
+  const forList = listOf;
   const want = tracks.filter((t) => !isKept(t) && !offline.fetching[keyOf(t)]?.state.match(/waiting|downloading/));
   if (!want.length) return;
   for (const t of want) offline.fetching[keyOf(t)] = { state: 'waiting' };
@@ -133,17 +135,16 @@ export async function keepOffline(tracks: Wanted[]) {
     for (const t of want) {
       const f = byKey.get(keyOf(t));
       if (!f?.offline || !f.file?.ready) continue;
-      await fetchOne(t, f);
+      await fetchOne(t, f, forList);
     }
   } catch (e) {
     for (const t of want) if (offline.fetching[keyOf(t)]?.state !== 'failed' && !isKept(t)) offline.fetching[keyOf(t)] = { state: 'failed', why: e instanceof Error ? e.message : String(e) };
   }
 }
 
-async function fetchOne(t: Wanted, f: Facts) {
+async function fetchOne(t: Wanted, f: Facts, forList: string) {
+  if (forList !== listOf) return;
   const key = keyOf(t);
-  // The account it is fetched for: one signed in meanwhile does not get it.
-  const forList = listOf;
   offline.fetching[key] = { state: 'downloading', percent: 0 };
   try {
     const res = await fetch(f.file!.url);
@@ -162,6 +163,8 @@ async function fetchOne(t: Wanted, f: Facts) {
     }
     const headers = new Headers(res.headers);
     headers.set('content-length', String(got));
+    // Before it is stored: a stream in no list is in nobody's way to let go of, for good.
+    if (forList !== listOf) return;
     await (await caches.open(OFFLINE)).put(streamKey(t), new Response(new Blob(parts as BlobPart[], { type: res.headers.get('content-type') ?? '' }), { status: 200, headers }));
     if (forList !== listOf) return;
     // Its cover and waveform where the service worker keeps them already, the account's.
