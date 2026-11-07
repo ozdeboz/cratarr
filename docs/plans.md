@@ -95,6 +95,9 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   The track map (below) comes after these: the least important of the ideas (the owner, 2026-11-04).
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
+- **Genre aliases from MusicBrainz** (the owner, 2026-11-07): its whole genre list and each genre's aliases, asked again
+  every 90 days and joined to the hand-kept list in search's matching. Built once on a branch of 2026-10-30, never
+  merged: done again on the code as it stands.
 - **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
   own pages (0.11, done); Downloads an offline shelf, and nothing done offline lost, playlist edits included (0.12,
   done); the whole library's index on the device, and crates and the queue on the device (0.16).
@@ -594,5 +597,8 @@ Liked, not taken up:
   smaller, with care.
 - Giving back to MusicBrainz, very far down the line: a record Cratarr knows that has no entry there is offered back
   through MusicBrainz's own form, filled in for a person to check and send. Nothing writes to it unattended.
+- The visuals' touch work, for their next round: a cable picked by touch (the canvas does not pan, and the one picked shows
+  a finger-sized grip), a module's view listing its outputs and where each cable goes, and a line on a snapshot saying
+  what it is. Begun on a branch of 2026-10-20.
 
 Shelved by the owner: a live DJ mix between tracks (Auto DJ), and an MCP server in the desktop app.
