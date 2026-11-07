@@ -11,6 +11,7 @@
   import Meter from './lib/Meter.svelte';
   import AlbumMenu from './lib/AlbumMenu.svelte';
   import { library, readLibrary } from './lib/albums.svelte';
+  import { whenReadsMove } from './lib/deviceIndex.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
@@ -20,7 +21,7 @@
   import { filterBlocked, passing } from './lib/listFilter.svelte';
   import { recordOn } from './lib/copiesRule';
   import { shownIn } from './lib/sources.svelte';
-  import { untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { me } from './lib/me.svelte';
   import ComposerList from './lib/ComposerList.svelte';
   import ComposerWorks from './lib/ComposerWorks.svelte';
@@ -60,6 +61,12 @@
     }
     tellReadError();
   }
+  // A list that could not be read may be read now: the device may have it (with one on the page, lib/albums reads it again itself).
+  onMount(() => {
+    const again = () => void (error && load(true));
+    whenReadsMove.add(again);
+    return () => whenReadsMove.delete(again);
+  });
   // One read for several changes told at once (an action changes Incoming's list and Music's).
   let soon: ReturnType<typeof setTimeout> | null = null;
   const reload = () => {

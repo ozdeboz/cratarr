@@ -7,6 +7,7 @@ import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
+import { deviceAlbums, deviceRecord, readsNow } from './deviceIndex.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
 import type { PlaylistOp } from './playlistOps';
@@ -175,11 +176,23 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     reached();
     throw message ? new ApiError(message, false, res.status) : new ApiError(`Server returned ${res.status}`, true, res.status);
   }
-  // Its last copy, the server out of reach (public/sw.js): shown, and said to be offline.
+  // Its last copy, the server out of reach (public/sw.js): shown, and said to be offline. The album list's copy shown at once says
+  // nothing either way: taken for an answer, it would undo every look that found Cratarr gone.
   if (res.headers.get('X-Cratarr-Kept')) keptAnswer();
-  else reached();
+  else if (!res.headers.get('X-Cratarr-Copy')) reached();
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/** The one door for what a page reads (docs/architecture.md: Reads): from Cratarr, or from this device once lib/deviceIndex says so,
+ *  and no page asks which. `fromDevice` answers null where the device has nothing to say: the read then goes where any other
+ *  read goes, to a last copy or the one out of reach line. */
+export async function read<T>(fromServer: () => Promise<T>, fromDevice: () => Promise<T | null>): Promise<T> {
+  if (readsNow().from === 'device') {
+    const here = await fromDevice().catch(() => null);
+    if (here !== null) return here;
+  }
+  return fromServer();
 }
 
 /** A change through the outbox (lib/later, decision 0085 step 3): kept on this device first, then tried with its op id
@@ -1785,7 +1798,11 @@ export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: s
 
 /** Every album of each server's used libraries (the Library page). `fresh` asks past the service worker's copy (which
  *  answers at once, see sw.js) for the server's latest. */
-export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>(`/api/albums${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
+export const getAlbums = (source?: string, fresh = false) =>
+  read(
+    () => quietly<AlbumsView>(`/api/albums${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined),
+    () => deviceAlbums(source),
+  );
 
 // Classical (0.10): its composers, each one's records, a record's mark, and a track's other versions (the library's
 // recordings of the same work, by MusicBrainz's work links).
@@ -2451,7 +2468,10 @@ export async function searchBeyond(q: string, limit = 20, offset = 0): Promise<B
 export const windMap = (url: string) =>
   quietly<{ map: [number, number, number][]; speed: number; length_ms: number }>(`${url}${url.includes('?') ? '&' : '?'}map=1`);
 export const albumView = (source: string, album: string) =>
-  quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
+  read(
+    () => quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`),
+    () => deviceRecord(source, album),
+  );
 /** An artist as their panel shows them (decided 2026-10-16, as Symfonium's), by name as the albums credit them: their
  *  albums and the albums they appear on, newest first, and their tracks album by album with the plays. */
 export type ArtistView = {

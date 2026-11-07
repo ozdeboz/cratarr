@@ -16,7 +16,6 @@
     getHomeBack,
     getHomeNew,
     getHomeWeek,
-    getMoment,
     type Digging,
     type HomeBack,
     type HomeWeek,
@@ -59,7 +58,8 @@
   import { holdUntil } from './lib/holdPlace.svelte';
   import { toast } from './lib/toast.svelte';
   import { albumAway, away, here, rowsAway } from './lib/away.svelte';
-  import { momentHere } from './lib/momentHere.svelte';
+  import { momentNow } from './lib/momentHere.svelte';
+  import { whenReadsMove } from './lib/deviceIndex.svelte';
   import { askDevicePlays, backHere, devicePlays, LOCAL_PARTS, newestHere, playHereAlbums } from './lib/localHome.svelte';
 
   const WEEK = `${LIKE}week`;
@@ -175,23 +175,15 @@
   let moment = $state<Moment | null>(momentKept ? (kept.moment ?? null) : null);
   let momentIn = $state(momentKept);
   const showMoment = (m: Moment) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), delete failed.moment, (momentIn = true));
-  // Cratarr out of reach (lib/momentHere): its albums as last given, under the time and weather here, never a name from before.
+  // From wherever reads come from (lib/momentHere): read again when they move, so Cratarr's own moment is back with it, weather and all.
   const readMoment = () =>
-    getMoment(prefs.source || undefined, hiddenLibraries()).then(
-      async (m) => showMoment(away() ? await momentHere(m.albums) : m),
-      async (e) => {
-        const albums = kept.moment?.albums;
-        if (away() && albums?.length) showMoment(await momentHere(albums));
-        else (!moment && fail('moment', e), (momentIn = true));
-      },
-    );
+    momentNow(prefs.source || undefined, hiddenLibraries(), kept.moment?.albums).then(showMoment, (e) => (!moment && fail('moment', e), (momentIn = true)));
   onMount(() => {
     if (local) return void (momentIn = true);
     readMoment();
-  });
-  // Cratarr answers again: its own moment, weather and all.
-  $effect(() => {
-    if (!away() && moment?.timeOnly) void readMoment();
+    const again = () => void readMoment();
+    whenReadsMove.add(again);
+    return () => whenReadsMove.delete(again);
   });
   const momentAlbums = $derived(
     (moment?.albums ?? []).flatMap((id) => sources.find((s) => s.id === 'cratarr')?.albums.find((x) => x.id === id) ?? []),

@@ -66,13 +66,20 @@ export function unreached() {
   for (const f of whenAway) f();
 }
 
+/** Called each time the device says it has a network again. */
+export const whenNetwork = new Set<() => void>();
+
+/** The device's own word on its network: with none, out of reach at once. */
+export function networkSaid(online: boolean) {
+  reach.noNetwork = !online;
+  if (!online) return unreached();
+  for (const f of whenNetwork) f();
+}
+
 if (typeof window !== 'undefined') {
   // No network at all: out of reach at once, before any request finds out (the app says it too: lib/app's `network`).
-  addEventListener('offline', () => {
-    reach.noNetwork = true;
-    unreached();
-  });
-  addEventListener('online', () => (reach.noNetwork = false));
+  addEventListener('offline', () => networkSaid(false));
+  addEventListener('online', () => networkSaid(true));
   if (navigator.onLine === false) reach.away = reach.noNetwork = true;
   // A read of the service worker's reached Cratarr again.
   navigator.serviceWorker?.addEventListener('message', (e) => {

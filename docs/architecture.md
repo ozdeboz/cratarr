@@ -98,6 +98,10 @@ the parts are and how they talk.
   (`keptStore.ts`: IndexedDB, else localStorage), then sent in order with its `Idempotency-Key` and the change's time
   (`X-Cratarr-At`); `changes.svelte.ts` reads the server's change log (`GET /api/changes?since=`) and asks again what
   changed; `playlistOps.ts` turns playlist edits into operations (`POST /api/playlists/{id}/ops`).
+- Reads, server or device: `read(fromServer, fromDevice)` in `src/lib/api.ts` is the one door, and no page asks whether it is
+  offline. `src/lib/deviceIndex.svelte.ts` says where reads come from and why (`readsFrom`, in `deviceIndexRule.ts`, pure): Cratarr
+  out of reach, looked for twice, or no network. The index itself is the rules crate's, as `src/lib/wasm/index.wasm`
+  (`indexEngine.ts`), its bytes in `indexStore.ts`, each account's apart; `deviceReads.ts` gives its rows the shapes Cratarr gives.
 - `src/lib/shelf.ts` and `shelfStore.svelte.ts` (0.12, decision 0085 step 2): Downloads' details and small covers in
   the page's IndexedDB, filled from the album views while Cratarr answers; it moves into the Rust core's store with
   the whole library's index (0.13).

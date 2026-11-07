@@ -30,9 +30,9 @@ globalThis.fetch = (async (input: string) => {
   return new Response(JSON.stringify(answer), { headers: { 'content-type': 'application/json' } });
 }) as typeof fetch;
 
-const { momentHere, weatherHere } = await import('../../src/lib/momentHere.svelte.ts');
+const { momentHere, momentNow, weatherHere } = await import('../../src/lib/momentHere.svelte.ts');
 const { prefs } = await import('../../src/lib/prefs.svelte.ts');
-const { reach } = await import('../../src/lib/reach.svelte.ts');
+const { networkSaid, reach } = await import('../../src/lib/reach.svelte.ts');
 const { network } = await import('../../src/lib/away.svelte.ts');
 
 const HALF_HOUR = 30 * 60_000;
@@ -183,6 +183,39 @@ test('weather older than the half hour is not used for want of a new one', async
   await weatherHere(t);
   nav.onLine = false;
   assert.equal(await weatherHere(t + HALF_HOUR), null);
+});
+
+test('with reads on the device it is worked out here, from the albums Cratarr last gave, and Cratarr is asked nothing', async () => {
+  networkSaid(false);
+  place = null;
+  const m = await momentNow(undefined, [], ['al-1', 'al-2']);
+  networkSaid(true);
+  assert.deepEqual(m.albums, ['al-1', 'al-2']);
+  assert.equal(m.timeOnly, true);
+  assert.deepEqual(asked, []);
+});
+
+test('with none held, its last copy\'s albums, under a name worked out here and never the copy\'s', async () => {
+  networkSaid(false);
+  place = null;
+  answer = { name: 'Music from Before', sky: 'sunny', dark: false, albums: ['al-9'] };
+  const m = await momentNow(undefined, [], undefined);
+  networkSaid(true);
+  assert.deepEqual(m.albums, ['al-9']);
+  assert.notEqual(m.name, 'Music from Before');
+});
+
+test('no albums to go on: the read goes where any other goes', async () => {
+  networkSaid(false);
+  answer = { name: 'Music from Before', sky: 'sunny', dark: false, albums: [] };
+  const m = await momentNow(undefined, [], undefined);
+  networkSaid(true);
+  assert.equal(m.name, 'Music from Before');
+});
+
+test('with Cratarr answering it is its own moment, whatever is held', async () => {
+  answer = { name: 'Its Own', sky: 'sunny', dark: false, albums: ['al-3'] };
+  assert.equal((await momentNow(undefined, [], ['al-1'])).name, 'Its Own');
 });
 
 test('it goes by this device\'s clock', async () => {

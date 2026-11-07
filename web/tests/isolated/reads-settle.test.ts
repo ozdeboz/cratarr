@@ -4,7 +4,7 @@ import { afterEach, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import '../harness/pageGlobals.ts';
 
-const { reach, reached, refused, unreached } = await import('../../src/lib/reach.svelte.ts');
+const { networkSaid, reach, reached, refused, unreached } = await import('../../src/lib/reach.svelte.ts');
 const { readsNow, whenReadsMove } = await import('../../src/lib/deviceIndex.svelte.ts');
 const { LOOK_AGAIN_MS } = await import('../../src/lib/deviceIndexRule.ts');
 
@@ -95,10 +95,13 @@ test('Cratarr answering moves them back at once, and the look under way is dropp
   assert.equal(looks, 1, 'the one before: answered first, this one never went');
 });
 
-test('no network moves the reads with no look at all', async () => {
-  reach.noNetwork = true;
+test('no network moves the reads with no look at all, and the network back moves them back, each told', async () => {
+  networkSaid(false);
   assert.deepEqual(readsNow(), { from: 'device', why: 'no-network' });
-  reach.noNetwork = false;
+  assert.equal(moves, 1);
+  networkSaid(true);
+  assert.deepEqual(readsNow(), { from: 'server', why: 'answers' });
+  assert.equal(moves, 2);
   assert.equal(looks, 0);
 });
 

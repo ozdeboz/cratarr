@@ -2,7 +2,7 @@
 // every half hour, and only where the switch in This device is on and the internet is there. Nothing is asked while Cratarr
 // answers, as it has the weather itself, and the place goes to Open-Meteo alone, never to Cratarr. No weather: time and day only,
 // and the moment says so.
-import type { Moment } from './api';
+import { getMoment, read, type Moment } from './api';
 import { inApp, onApp, toApp } from './app.svelte';
 import { network } from './away.svelte';
 import { askFor, coarse, momentOf, weatherOf, type Weather } from './moment';
@@ -98,6 +98,17 @@ export async function weatherHere(now = Date.now()): Promise<Weather | null> {
   asking ??= ask(now).finally(() => (asking = null));
   return asking;
 }
+
+/** The moment, from wherever reads come from: from the device, the albums Cratarr last gave (`last`, else its last copy), under the time
+ *  and weather here, never a name from before. No albums to go on: the read goes where any other goes. */
+export const momentNow = (source: string | undefined, without: string[], last: string[] | undefined) =>
+  read(
+    () => getMoment(source, without),
+    async () => {
+      const albums = last ?? (await getMoment(source, without).catch(() => null))?.albums;
+      return albums?.length ? momentHere(albums) : null;
+    },
+  );
 
 /** The moment with Cratarr out of reach: `albums` as Cratarr last gave them, its name and sky worked out here. */
 export async function momentHere(albums: string[], now = new Date()): Promise<Moment> {

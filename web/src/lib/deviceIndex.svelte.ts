@@ -1,7 +1,17 @@
 // The library on this device, and the one place that says where reads come from (lib/deviceIndexRule's `readsFrom`). No page asks
 // whether it is offline: reads go through lib/api's `read`, and whatever must read again when they move is told (`whenReadsMove`).
+//
+// Memory is the device's (the tablet held 173 MB in rules): at rest an instance of index.wasm is held by nobody, and the bytes lie in
+// IndexedDB. An index is opened for reads only while reads come from the device. `facts`, `Alike` and Radio's index are made only
+// when a crate or a pick asks, and from one reading of the sounds (D18 to D20): nothing here opens them.
+import indexUrl from './wasm/index.wasm?url';
+import { accountKey, whenAccount, whoOf } from './account';
 import { lookedAgain, notReached, readsFrom, answered, type ReadsFrom, type Settle } from './deviceIndexRule';
-import { lookForCratarr, reach, whenAway, whenReached } from './reach.svelte';
+import { listView, OWN, recordNumber, recordView } from './deviceReads';
+import { instantiateIndex, type IndexEngine } from './indexEngine';
+import { readPart } from './indexStore';
+import { lookForCratarr, reach, whenAway, whenNetwork, whenReached } from './reach.svelte';
+import type { AlbumsView, AlbumView } from './api';
 
 export { readsFrom };
 
@@ -19,6 +29,7 @@ function moved() {
   const now = readsNow().from;
   if (now === wereFrom) return;
   wereFrom = now;
+  if (now === 'server') closeReads();
   for (const f of whenReadsMove) f();
 }
 
@@ -43,4 +54,70 @@ whenReached.add(() => {
   looking = null;
   moved();
 });
+whenNetwork.add(moved);
 if (reach.away) away();
+
+// --- index.wasm ---
+
+let compiled: Promise<WebAssembly.Module> | null = null;
+
+/** An instance of its own, the file compiled once. Failing, it is asked again next time. */
+export function newEngine(): Promise<IndexEngine> {
+  compiled ??= fetch(indexUrl)
+    .then((r) => {
+      if (!r.ok) throw new Error(`index.wasm: ${r.status}`);
+      return r.arrayBuffer();
+    })
+    .then((bytes) => WebAssembly.compile(bytes))
+    .catch((e) => {
+      compiled = null;
+      throw e;
+    });
+  return compiled.then(instantiateIndex);
+}
+
+// --- Reads ---
+
+/** The index open for reads, and when it last stood where Cratarr does; what a read finds there. */
+type Open = { engine: IndexEngine; at: number };
+let reading: Promise<Open | null> | null = null;
+
+/** Lets the instance go: its memory goes with it. */
+export function closeReads() {
+  reading = null;
+}
+
+whenAccount.add(closeReads);
+
+async function open(): Promise<Open | null> {
+  if (accountKey() === null) return null;
+  const kept = await readPart(whoOf(accountKey()), 'index');
+  if (!kept?.bytes) return null;
+  const engine = await newEngine();
+  return engine.loadIndex(kept.bytes) ? null : { engine, at: kept.at ?? 0 };
+}
+
+function opened(): Promise<Open | null> {
+  const asked = (reading ??= open().catch(() => null));
+  // Nothing to read is no answer for good: a sync may bring it, and the file may come.
+  void asked.then((held) => {
+    if (!held && reading === asked) reading = null;
+  });
+  return asked;
+}
+
+/** The Library's list from the index; null where it has none to give. */
+export async function deviceAlbums(source?: string): Promise<AlbumsView | null> {
+  if (source && source !== OWN) return null;
+  const held = await opened();
+  const rows = held?.engine.list();
+  return held && rows ? listView(rows, accountKey(), held.at) : null;
+}
+
+/** A record's view from the index; null where it does not hold it. */
+export async function deviceRecord(source: string, album: string): Promise<AlbumView | null> {
+  const id = recordNumber(album);
+  if (source !== OWN || id === null) return null;
+  const rows = (await opened())?.engine.record(id);
+  return rows ? recordView(rows) : null;
+}

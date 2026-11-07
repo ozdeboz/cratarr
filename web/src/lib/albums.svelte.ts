@@ -1,5 +1,6 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
 import { whenChanged } from './dataChanged';
+import { whenReadsMove } from './deviceIndex.svelte';
 import { trackSteps } from './progress.svelte';
 import { favouriteOf } from './changeLog';
 import { on } from './events.svelte';
@@ -41,6 +42,8 @@ let lastRead: { text: string; sources: AlbumsView['sources'] | null } = { text: 
 // The Library's list read again whenever its records' files or places changed (lib/dataChanged: a fix's titles, years
 // or lengths written; a record kept or moved), once it has been read.
 whenChanged(['files', 'collection', 'words'], () => void (library.view && readLibrary(true).catch(() => {})));
+// And when reads move: what it shows came from the other place.
+whenReadsMove.add(() => void (library.view && readLibrary(true).catch(() => {})));
 
 export function readLibrary(fresh: boolean): Promise<void> {
   reading ??= getAlbums(prefs.source || undefined, fresh)

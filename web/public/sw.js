@@ -234,7 +234,16 @@ self.addEventListener('fetch', (event) => {
       return;
     }
     event.waitUntil(fresh.catch(() => {}));
-    event.respondWith(mine.then(async (name) => (name && (await caches.match(req, { cacheName: name }))) || fresh));
+    event.respondWith(
+      mine.then(async (name) => {
+        const hit = name && (await caches.match(req, { cacheName: name }));
+        if (!hit) return fresh;
+        // Shown at once, whatever Cratarr would answer: a page must not take this for Cratarr answering (lib/api).
+        const headers = new Headers(hit.headers);
+        headers.set('X-Cratarr-Copy', '1');
+        return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers });
+      }),
+    );
     return;
   }
   // A stream naming its copy (an intake card's snippet, a Play from queue) is that copy's: what is kept under the track's

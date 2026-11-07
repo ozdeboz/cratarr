@@ -8,7 +8,7 @@ import { ApiError, albumView, artistView, crateRows, playlistRows, type Picked, 
 import { downloads, inApp, onApp } from './app.svelte';
 import { DEVICE } from './deviceMusic.svelte';
 import { offline } from './offline.svelte';
-import { reach, unreached } from './reach.svelte';
+import { networkSaid, reach } from './reach.svelte';
 import { shuffled } from './shuffle';
 
 export const NOT_HERE = 'Not on this device';
@@ -22,8 +22,7 @@ if (inApp)
     network.online = typeof m.online === 'boolean' ? m.online : null;
     network.validated = typeof m.validated === 'boolean' ? m.validated : null;
     network.kind = typeof m.kind === 'string' ? m.kind : null;
-    reach.noNetwork = network.online === false;
-    if (network.online === false) unreached();
+    networkSaid(network.online !== false);
   });
 
 /** Each track on the device (`source/id`), and how many of each album's (`source/album_id`). */
