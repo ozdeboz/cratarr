@@ -276,7 +276,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   (else as its download says), the count with the space they take ("3 albums · 225 MB"). A cover plays what is on the
   device, so the page plays without a connection; an album still coming shows how far ("Downloading 6 of 10"), one
   partly here "3 of 8 on this device". The select bar plays or removes; the menu is the album's one menu, with Remove
-  from this device (and Download for the rest), as everywhere an album is downloaded.
+  from this device (and Download for the rest), as everywhere an album is downloaded. A kept list that cannot be read
+  says so, "Kept list can't be read", with Start again (the owner, 2026-11-07): what was kept in step starts over and
+  the downloads stay, in the app and in the installed page alike.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as **big
   cards** (decided 2026-10-16, `lib/CrateCard`; one across a phone): its picture on the left (its own, else a mosaic of
   its albums' covers), then its name, tracks and length with the favourites setting's small heart, its top three

@@ -15,7 +15,7 @@
  *   allowed, charging when asked. What is still downloading goes on only for one who holds it.
  * - The lists are written whole (KeptFile). A list, of the items or the holders, that is there and cannot be read stops
  *   the sync and any keep, and what it held stays on the device: read as nothing kept or held, the next sync or Remove
- *   would take it all, every account's.
+ *   would take it all, every account's. The page says so, and starts it again when asked ([startAgain]), the music staying.
  * All of it runs on one thread, so the lists are never changed at once from two places.
  */
 package app.cratarr
@@ -131,6 +131,15 @@ object Kept {
         emptyMap()
     }
 
+    /** Whether both lists read: one that does not stops everything here, and the page offers [startAgain]. */
+    private fun readable(context: Context): Boolean = try {
+        loadItems(context)
+        loadHolders(context)
+        true
+    } catch (e: IOException) {
+        false
+    }
+
     private fun saveHolders(context: Context, holders: Map<String, Set<String>>) {
         val o = JSONObject()
         for ((k, v) in holders) if (v.isNotEmpty()) o.put(k, JSONArray(v.toList()))
@@ -155,6 +164,39 @@ object Kept {
             } catch (e: IOException) {
                 // A list that cannot be read is not written over, and a full disk is no reason to end the app and its player.
                 Log.w(TAG, "keep: ${e.message}")
+                return@execute
+            }
+            syncHere(app, retryFailed = false)
+        }
+    }
+
+    /**
+     * A list that cannot be read, started again (the owner, 2026-11-07), then a sync: one that reads is left as it is. Nothing on the
+     * device goes: [KeptHolds.startAgain] says whose each download is from now on.
+     */
+    fun startAgain(context: Context) {
+        val app = context.applicationContext
+        val who = Who.current(app)
+        worker.execute {
+            val items = try {
+                loadItems(app)
+            } catch (e: IOException) {
+                null
+            }
+            val holders = try {
+                loadHolders(app)
+            } catch (e: IOException) {
+                null
+            }
+            if (items != null && holders != null) return@execute
+            val downloads = mutableListOf<String>()
+            Downloads.manager(app).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) downloads.add(c.download.request.id) }
+            try {
+                saveHolders(app, KeptHolds.startAgain(holders, itemsGone = items == null, downloads, who))
+                if (items == null) saveItems(app, emptyList())
+            } catch (e: IOException) {
+                // A full disk: the list stays as it was, and so does the offer.
+                Log.w(TAG, "start again: ${e.message}")
                 return@execute
             }
             syncHere(app, retryFailed = false)
@@ -433,6 +475,7 @@ object Kept {
         val app = context.applicationContext
         val who = Who.current(app)
         val (items, holders) = worker.submit<Pair<List<Item>, Map<String, Set<String>>>> { shownItems(app).filter { it.who == who } to shownHolders(app) }.get()
+        val unreadable = !worker.submit<Boolean> { readable(app) }.get()
         val downloads = mutableMapOf<String, Download>()
         Downloads.manager(app).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) downloads[c.download.request.id] = c.download }
         val manager = Downloads.manager(app)
@@ -501,6 +544,7 @@ object Kept {
             .put("waiting", waiting ?: JSONObject.NULL)
             .put("running", running)
             .put("current", current ?: JSONObject.NULL)
+            .put("unreadable", unreadable)
     }
 }
 
@@ -567,6 +611,16 @@ internal object KeptHolds {
             }
         }
         return out
+    }
+
+    /**
+     * Whose each download is once a list that could not be read starts again ([Kept.startAgain]), so that nothing on the device goes.
+     * The holders gone: every download is [who]'s own, as nothing tells whose it was. The items gone: each hold of an item becomes its
+     * account's own, so what the items kept stays, and shows, as downloaded once.
+     */
+    fun startAgain(holders: Map<String, Set<String>>?, itemsGone: Boolean, downloads: Collection<String>, who: String): MutableMap<String, MutableSet<String>> {
+        if (holders == null) return downloads.associateWith { mutableSetOf(held(who, Kept.MANUAL)) }.toMutableMap()
+        return holders.mapValues { (_, h) -> if (itemsGone) h.mapTo(mutableSetOf()) { held(whoOf(it), Kept.MANUAL) } else h.toMutableSet() }.toMutableMap()
     }
 
     /** After a pass: every account's own Downloads stay, the items' holds are what the budget gave ([wanted]). Those

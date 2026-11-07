@@ -125,6 +125,12 @@ export function standIn(port, accounts) {
       if (!held[key] || changed > held[key].changed) held[key] = { value, changed };
       return json(res, 200, held[key]);
     }
+    if (path === '/api/tracks/describe' && req.method === 'POST') {
+      // The stand-in tells no track by its id: each comes back not found, as Cratarr tells one it no longer has.
+      const { tracks } = JSON.parse(await body(req));
+      const none = { name: '', artist: null, album: null, album_id: null, duration_secs: null, addable: false, favorite: null, found: false };
+      return json(res, 200, { tracks: tracks.map((t) => ({ ...t, ...none })) });
+    }
     if (path === '/api/capabilities') return json(res, 200, { capabilities: ['changes'], version: '0.16.0' });
     if (path === '/api/changes') {
       const since = url.searchParams.get('index');

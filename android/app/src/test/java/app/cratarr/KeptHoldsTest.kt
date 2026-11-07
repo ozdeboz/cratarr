@@ -195,4 +195,42 @@ class KeptHoldsTest {
         }
     }
 
+    /** The owner, 2026-11-07: a list that cannot be read starts again, the music staying. */
+    @Test
+    fun started_again_with_the_items_gone_each_accounts_downloads_are_its_own() {
+        val h = holders("a" to setOf(item(ann), manual(bo)), "b" to setOf(item(bo, "playlist:cratarr/p")))
+        val after = KeptHolds.startAgain(h, itemsGone = true, listOf("a", "b"), ann)
+        assertEquals(setOf(manual(ann), manual(bo)), after["a"])
+        assertEquals(setOf(manual(bo)), after["b"])
+    }
+
+    @Test
+    fun started_again_with_the_holders_gone_every_download_is_the_one_signed_ins() {
+        assertEquals(mapOf("a" to setOf(manual(ann)), "b" to setOf(manual(ann))), KeptHolds.startAgain(null, itemsGone = false, listOf("a", "b"), ann))
+    }
+
+    @Test
+    fun started_again_with_the_items_there_the_holders_are_as_they_were() {
+        val h = holders("a" to setOf(item(ann)), "b" to setOf(manual(bo)))
+        assertEquals(h, KeptHolds.startAgain(h, itemsGone = false, listOf("a", "b"), ann))
+    }
+
+    /** What the music staying means: the pass after it, with no items at all, removes nothing. */
+    @Test
+    fun the_pass_after_starting_again_removes_nothing() {
+        val items = KeptHolds.startAgain(holders("a" to setOf(item(ann)), "b" to setOf(item(bo))), itemsGone = true, listOf("a", "b"), ann)
+        assertEquals(emptyList<String>(), KeptHolds.afterPass(items, emptyMap()))
+        val all = KeptHolds.startAgain(null, itemsGone = true, listOf("a", "b"), ann)
+        assertEquals(emptyList<String>(), KeptHolds.afterPass(all, emptyMap()))
+    }
+
+    private fun source(name: String) = File("src/main/java/app/cratarr/$name").readText().replace("\r\n", "\n")
+
+    /** What needs a device to run is held to the source: the page told, its ask taken, and two lists that read left alone. */
+    @Test
+    fun the_page_is_told_and_its_start_again_is_taken_only_for_a_list_that_cannot_be_read() {
+        assertTrue(source("Kept.kt").contains(".put(\"unreadable\", unreadable)"))
+        assertTrue(source("MainActivity.kt").contains("\"kept-start-again\" -> Kept.startAgain(this)"))
+        assertTrue(source("Kept.kt").contains("if (items != null && holders != null) return@execute"))
+    }
 }

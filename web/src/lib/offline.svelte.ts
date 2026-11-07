@@ -8,6 +8,7 @@
 // Each account keeps its own list (decision 0101), hidden while another is signed in; a stream two accounts keep is
 // stored once, and goes with the last one's.
 import { accountKey, perAccount, whenAccount, whoOf } from './account';
+import { describeTracks, type DescribedTrack } from './api';
 import { whenReadsMove } from './deviceIndex.svelte';
 import { desktop } from './desktop';
 import { losslessAs, playsSmaller } from './localPlayer.svelte';
@@ -38,7 +39,9 @@ export type KeptTrack = {
 export type Fetching = { state: 'waiting' | 'downloading' | 'failed'; percent?: number; why?: string };
 
 /** `who`: whose list it is (lib/account's whoOf). */
-export const offline = $state({ kept: {} as Record<string, KeptTrack>, fetching: {} as Record<string, Fetching>, who: whoOf(accountKey()) });
+/** `unreadable`: its list as kept cannot be read: nothing more is kept here until it starts again (`startOfflineAgain`), the
+ *  owner's call of 2026-11-07, as the app's. */
+export const offline = $state({ kept: {} as Record<string, KeptTrack>, fetching: {} as Record<string, Fetching>, who: whoOf(accountKey()), unreadable: false });
 
 /** Installed (on a home screen, as an app window, or in the desktop app): where this page keeps tracks. */
 export const installed =
@@ -63,11 +66,21 @@ function load() {
   offline.who = whoOf(accountKey());
   offline.kept = {};
   offline.fetching = {};
+  offline.unreadable = false;
+  let stored: string | null;
   try {
-    const saved = JSON.parse(localStorage.getItem(listOf) ?? '{}');
-    if (saved && typeof saved === 'object') offline.kept = saved;
+    stored = localStorage.getItem(listOf);
   } catch {
-    /* none kept, or no storage */
+    // No storage: nothing kept.
+    return;
+  }
+  if (stored === null) return;
+  try {
+    const saved = JSON.parse(stored);
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) offline.kept = saved;
+    else offline.unreadable = true;
+  } catch {
+    offline.unreadable = true;
   }
 }
 load();
@@ -76,6 +89,8 @@ whenAccount.add(() => {
   void checkKept();
 });
 function save() {
+  // A list that cannot be read is not written over: what it held would be gone for good, though its streams are here.
+  if (offline.unreadable) return;
   try {
     localStorage.setItem(listOf, JSON.stringify(offline.kept));
   } catch {
@@ -102,6 +117,42 @@ export async function checkKept() {
 }
 void checkKept();
 whenReadsMove.add(() => void checkKept());
+/** A track's stream as kept: its source and id, from its address. */
+function streamOf(path: string): { source: string; id: string } | null {
+  const at = /^\/api\/stream\/([^/]+)\/([^/]+)$/.exec(path);
+  return at ? { source: decodeURIComponent(at[1]), id: decodeURIComponent(at[2]) } : null;
+}
+
+/** A list that cannot be read, started again from what this browser holds (the owner, 2026-11-07: the music stays): each stream no
+ *  other account here lists, described by Cratarr, as nothing else here can. A track Cratarr no longer knows goes on by its id.
+ *  With Cratarr out of reach it throws, and the list stays as it was. */
+export async function startOfflineAgain() {
+  const forList = listOf;
+  if (!offline.unreadable || typeof caches === 'undefined') return;
+  const cache = await caches.open(OFFLINE);
+  const held: { source: string; id: string; bytes: number }[] = [];
+  for (const r of await cache.keys()) {
+    const t = streamOf(new URL(r.url).pathname);
+    if (!t || keptByAnother(keyOf(t))) continue;
+    held.push({ ...t, bytes: Number((await cache.match(r))?.headers.get('content-length')) || 0 });
+  }
+  const described = new Map<string, DescribedTrack>();
+  for (let i = 0; i < held.length; i += 500) {
+    for (const d of (await describeTracks(held.slice(i, i + 500).map(({ source, id }) => ({ source, id })))).tracks) described.set(keyOf(d), d);
+  }
+  if (forList !== listOf) return;
+  const now = Date.now();
+  const kept: Record<string, KeptTrack> = {};
+  for (const t of held) {
+    const d = described.get(keyOf(t));
+    const known = d?.found ? d : null;
+    kept[keyOf(t)] = { source: t.source, id: t.id, name: known?.name ?? t.id, artist: known?.artist ?? null, album: known?.album ?? null, album_id: known?.album_id ?? null, duration_secs: known?.duration_secs ?? null, bytes: t.bytes, at: now };
+  }
+  offline.kept = kept;
+  offline.unreadable = false;
+  save();
+}
+
 /** Whether another account's list here holds the track too (its stream then stays). */
 function keptByAnother(key: string): boolean {
   try {
@@ -134,8 +185,10 @@ function chosen(): 'opus' | 'alac' | 'mp3' | 'original' {
 }
 const form = () => ({ as: 'stream', form: chosen(), opus: chosen() === 'opus' });
 
-/** Keeps `tracks` in this browser: Cratarr makes each one's stream, then it comes in whole, its cover and waveform too. */
+/** Keeps `tracks` in this browser: Cratarr makes each one's stream, then it comes in whole, its cover and waveform too. Not while the
+ *  list cannot be read: what came in could not be listed. */
 export async function keepOffline(tracks: Wanted[]) {
+  if (offline.unreadable) return;
   // The account they are fetched for: one signed in meanwhile gets none of them.
   const forList = listOf;
   const want = tracks.filter((t) => !isKept(t) && !offline.fetching[keyOf(t)]?.state.match(/waiting|downloading/));

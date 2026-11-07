@@ -47,6 +47,8 @@ export const kept = $state({
   current: null as string | null,
   /** The app's sync job under way, from its start to its end, as the app says (held back by its rules too). */
   running: false,
+  /** Its list cannot be read: nothing is kept in step until it starts again (`startKeptAgain`). */
+  unreadable: false,
 });
 
 /** Whether This device shows each account's share: more than one, or one who is not here, whose files fill this one's limit
@@ -65,7 +67,9 @@ export const keptBusy = () => kept.running;
 
 /** Keep an item on the device, or not (`name` for the sheet). The app answers with the whole list again. */
 export function setKept(kind: KeptKind, source: string, id: string, on: boolean, name: string = id) {
-  if (!inApp) return;
+  // A list that cannot be read takes nothing until it starts again (Downloads says so): the app leaves it as it is, so the page
+  // would show an item syncing that never does.
+  if (!inApp || kept.unreadable) return;
   // At once in the page; the app's report follows.
   const key = keptKey(kind, source, id);
   if (on && !kept.items.some((i) => i.key === key)) {
@@ -74,6 +78,11 @@ export function setKept(kind: KeptKind, source: string, id: string, on: boolean,
     kept.items = kept.items.filter((i) => i.key !== key);
   }
   toApp({ type: 'kept-set', kind, source, id, name, on });
+}
+
+/** A list that cannot be read, started again by the app; what is on the device stays. */
+export function startKeptAgain() {
+  if (inApp) toApp({ type: 'kept-start-again' });
 }
 
 /** Asks the app for the list and its progress again. */
@@ -121,6 +130,7 @@ if (inApp) {
     kept.waiting = m.waiting === 'wifi' || m.waiting === 'charging' || m.waiting === 'network' ? m.waiting : null;
     kept.current = typeof m.current === 'string' ? m.current : null;
     kept.running = m.running === true;
+    kept.unreadable = m.unreadable === true;
     kept.known = true;
     // A sync asked for by hand: ended once the job has (held back by the rules counts as its end).
     if (asked) {

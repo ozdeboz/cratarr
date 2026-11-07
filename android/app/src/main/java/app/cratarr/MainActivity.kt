@@ -732,6 +732,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "kept-sync" -> Kept.sync(this, retryFailed = true)
+            "kept-start-again" -> Kept.startAgain(this)
             // Download… (0.10): Cratarr prepared the export and named its download (a zip, or the one file); the user
             // says where it is saved, in Android's save dialog with that name.
             "export-save" -> {
