@@ -12,6 +12,7 @@ use std::sync::Arc;
 use cratarr_rules::crates::{self, Alike, Avoid, Condition, Facts, Favourites, LikeMode, Target, Trait, Use, Value, View, World, credited_names};
 use cratarr_rules::excluded_artists;
 use cratarr_rules::ids::song;
+use cratarr_rules::index::{self, Artist, Library, Rows};
 use cratarr_rules::radio::{Ask, Index, Mode, RadioBy, Song, choose};
 use cratarr_rules::similarity::{MOODS, Signal, Track, Weights};
 use cratarr_rules::{ByHand, How, Lane, Picked, Rng, add_place, pick, restore_order, shuffle_order};
@@ -786,6 +787,94 @@ fn random_is_written_with_a_seed_left_to_draw_that_holds_each_thing_it_may_not_p
     }
     assert_eq!(kept_out.len(), 4, "{kept_out:?}");
     assert!(cases.iter().any(|c| c.ask.mode == Mode::Random && left(c).iter().any(|t| c.expected.contains(t))), "no case draws from the seed");
+}
+
+// --- The same answers through the index (0101's point 17): what a device holds is what the server read ---
+
+/// The shared library as a device holds it: an index of its files, through its bytes. A record's and an artist's id are numbers
+/// for life there, so what a case names by this library's own words moves to them first: what they became is the second part.
+fn held(lib: &Shared) -> (index::Index, HashMap<String, String>) {
+    let (mut records, mut artists) = (Numbers::default(), Numbers::default());
+    let mut moved = HashMap::new();
+    let mut rows = Rows::default();
+    for (name, id) in &lib.artist_ids {
+        let number = i64::from(artists.of(id)) + 1;
+        moved.insert(id.clone(), format!("ar-{number}"));
+        match rows.artists.iter_mut().find(|a| a.id == number) {
+            Some(a) => a.spelled.push(name.clone()),
+            None => rows.artists.push(Artist { id: number, name: name.clone(), sort: name.to_lowercase(), spelled: Vec::new() }),
+        }
+    }
+    for f in &lib.files {
+        let record = i64::from(records.of(&f.album)) + 1;
+        moved.insert(f.album.clone(), format!("al-{record}"));
+        if !rows.records.iter().any(|r| r.id == record) {
+            rows.records.push(index::Record { id: record, title: f.album.clone(), sort: f.album.clone(), ..index::Record::default() });
+        }
+        if !rows.libraries.iter().any(|l| l.id == f.folder) {
+            rows.libraries.push(Library { id: f.folder, key: format!("library-{}", f.folder), name: format!("Library {}", f.folder), ..Library::default() });
+        }
+        let artist_ids = f.artists.iter().map(|a| moved[&lib.artist_ids[a]][3..].parse().unwrap()).collect();
+        rows.tracks.push(index::Track { id: f.track, record, number: Some(f.track as u32), title: f.rel.clone(), artist_ids, facts: f.facts(), ..index::Track::default() });
+    }
+    let saved = index::Index::build(1, &rows).unwrap().save();
+    (index::Index::load(&saved).unwrap(), moved)
+}
+
+/// The index's facts, with the sounds as written: how near eight bits come is another question, and this one is what else differs.
+fn facts_held(index: &index::Index, lib: &Shared) -> Vec<Facts> {
+    let mut files = index.facts(None);
+    for (f, written) in files.iter_mut().zip(lib.facts()) {
+        assert_eq!(f.rel, written.rel, "the order they are handed in");
+        f.sound = written.sound;
+    }
+    files
+}
+
+#[test]
+fn every_crate_answers_as_written_through_the_index() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let mut cases: Vec<CrateCase> = serde_json::from_str(CRATES).unwrap();
+    let (index, moved) = held(&lib);
+    let files = facts_held(&index, &lib);
+    let alike = Alike::of(&files, &lib.membership(), &index.artist_ids());
+    assert!(cases.len() >= 60);
+    for c in &mut cases {
+        crates::move_named(&mut c.conditions, &mut |id| moved.get(id).cloned());
+        assert_eq!(crate_answer(&lib, &files, &alike, c), c.expected, "{}", c.name);
+    }
+}
+
+/// Radio's index of the shared library as the server reads one (`app::radio`): songs by their album's id as text, then track,
+/// albums and artists numbered as met, the facts on top.
+fn read_as_the_server_does(lib: &Shared, moved: &HashMap<String, String>, member: &HashMap<String, Vec<u32>>) -> Index {
+    let mut files: Vec<&File> = lib.files.iter().collect();
+    files.sort_by_key(|f| (moved[&f.album].clone(), f.track));
+    let (mut albums, mut artists) = (Numbers::default(), Numbers::default());
+    let songs = files
+        .into_iter()
+        .map(|f| {
+            let id = song(f.track);
+            let like = Track { playlists: member.get(&id).cloned().unwrap_or_default(), artists: f.artists.iter().map(|a| artists.of(&lib.artist_ids[a])).collect(), ..Track::default() };
+            Song { id, title: f.rel.clone(), album: f.album.clone(), album_id: moved[&f.album].clone(), album_n: albums.of(&f.album), like, folders: vec![f.folder], ..Song::default() }
+        })
+        .collect();
+    Index::new(songs).with_facts(&lib.facts())
+}
+
+#[test]
+fn radio_picks_through_the_index_as_from_the_servers_read() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let cases: Vec<RadioCase> = serde_json::from_str(RADIO).unwrap();
+    let (index, moved) = held(&lib);
+    let mut lists = Numbers::default();
+    let member: HashMap<String, Vec<u32>> =
+        lib.files.iter().filter_map(|f| Some((song(f.track), lib.playlists.get(&f.rel)?.iter().map(|p| lists.of(p)).collect()))).collect();
+    let (device, server) = (index.radio(&facts_held(&index, &lib), &member), read_as_the_server_does(&lib, &moved, &member));
+    assert!(cases.len() >= 100);
+    for c in &cases {
+        assert_eq!(radio_answer(&device, c), radio_answer(&server, c), "{}", c.name);
+    }
 }
 
 #[test]
