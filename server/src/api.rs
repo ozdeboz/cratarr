@@ -342,6 +342,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/admin/migration", get(migration_report))
             .route("/api/admin/migration/moved", get(migration_moved))
             .route("/api/health/report", get(health_report))
+            // Health's Missing list: a track there is this one (A5), for good.
+            .route("/api/missing/reconnect", post(reconnect_track))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
             .route("/api/folders/suggested", get(suggested_folders))
@@ -1179,6 +1181,31 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
         crate::app::words::tell_changed();
     }
     Ok(Json(json!({ "albums": set })))
+}
+
+#[derive(Deserialize)]
+struct Reconnect {
+    /// The track on the Missing list, and the track it is.
+    track: String,
+    to: String,
+}
+
+/// A track on Health's Missing list is this one (A5): the take's way, for good, so its plays, hearts and lines follow it now.
+async fn reconnect_track(ctx: Ctx, Json(b): Json<Reconnect>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let cat = ctx.app.library.catalogue();
+    let (Some(goes), Some(stays)) = (crate::serve::ids::track_of(&b.track), crate::serve::ids::track_of(&b.to)) else {
+        return Err(ToggleError::BadSettings("Name two tracks.".into()).into());
+    };
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cat.reconnect(goes, stays)?;
+        serve.refresh()?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({})))
 }
 
 /// A track's Other versions (0.10): its MusicBrainz work, the work's composers, and the library's other tracks of it,

@@ -96,6 +96,9 @@ pub struct Item {
     /// track replacement).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    /// Since when it stands so (epoch s, `library:missing`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
 }
 
 /// At most this many files an item names.
@@ -128,6 +131,28 @@ pub(crate) fn short_cause(path: &std::path::Path, heard: i64) -> &'static str {
         Some(_) => "files:cut-short",
         None => "files:length-guessed",
     }
+}
+
+/// Health's Missing list (A4): what Cratarr knows of and has no file for, none of it forgotten by itself. A library out of use, and the
+/// tracks with no file to play: those with files gone a while, and of those retired, the ones `held` says an account has something on,
+/// as the rest is nobody's loss. A track's row says where it lay, and takes a person's word for what it is now (`Catalogue::reconnect`).
+fn missing_list(m: crate::catalogue::Missing, held: &std::collections::HashSet<String>) -> Option<Finding> {
+    let track = |t: crate::catalogue::MissingTrack| {
+        let by: Vec<String> = [t.artist, t.album].into_iter().flatten().collect();
+        let title = t.title.or_else(|| t.rel.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string())).unwrap_or_else(|| crate::serve::ids::song(t.track));
+        Item { title, line: (!by.is_empty()).then(|| by.join(" · ")), files: t.rel.into_iter().collect(), track: Some(crate::serve::ids::song(t.track)), since: Some(t.since), ..Item::default() }
+    };
+    let libraries = m.parked.into_iter().map(|l| Item { line: Some(n(l.files, "file, its library out of use", "files, their library out of use")), since: l.since, title: l.path, ..Item::default() });
+    let retired = m.retired.into_iter().filter(|t| held.contains(&crate::serve::ids::song(t.track)));
+    let items: Vec<Item> = libraries.chain(m.gone.into_iter().chain(retired).map(track)).collect();
+    if items.is_empty() {
+        return None;
+    }
+    let count = items.len() as u64;
+    let mut f = finding("library", "library:missing", Level::Info, count, n(count, "thing is missing", "things are missing"));
+    f.detail = Some("Libraries out of use, files gone, and tracks that hold plays or favourites with no file to play. Nothing here is forgotten by itself.".into());
+    f.items = items;
+    Some(f)
 }
 
 /// A length as a clock: m:ss, or h:mm:ss.
@@ -217,6 +242,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "library:discs" => ("Disc numbers", "off"),
         "library:incomplete" => ("Tracks", "missing"),
         "library:references" => ("References", "missing"),
+        "library:missing" => ("Music", "missing"),
         "library:rules" => ("Names", "set by a rule"),
         "files:broken" => ("Files", "unreadable"),
         "files:cut-short" => ("Files", "cut off"),
@@ -272,6 +298,7 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "library:musicbrainz" => "Missing MusicBrainz ids",
         "library:incomplete" => "Records missing tracks",
         "library:references" => "References",
+        "library:missing" => "Missing music",
         "library:rules" => "Named otherwise by a rule",
         "incoming:upgrades" => "Quality replacements",
         "incoming:duplicates" => "Duplicates",
@@ -626,6 +653,7 @@ impl App {
         }
         findings.extend(self.check_players());
         checked.insert("players", at);
+        findings.extend(or_failed("library", self.check_missing().await));
         for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
@@ -649,6 +677,14 @@ impl App {
             wrong = tokio::task::spawn_blocking(move || files_wrong(&served, &id)).await??;
         }
         Ok(record(&found, &(source.to_string(), album.to_string()), &wrong))
+    }
+
+    /// Health's Missing list, the report's alone: a record's own page has no use for it (`record_health`).
+    async fn check_missing(&self) -> anyhow::Result<Vec<Finding>> {
+        let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
+        let (c, ud) = (self.library.catalogue(), served.userdata.clone());
+        let (missing, held) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((c.missing()?, ud.songs_held()?)) }).await??;
+        Ok(missing_list(missing, &held).into_iter().collect())
     }
 
     async fn check_files(&self) -> anyhow::Result<Vec<Finding>> {
@@ -1151,6 +1187,30 @@ mod tests {
         let f = finding("library", "library:cover", Level::Warning, 3, "3 records without a cover");
         assert_eq!((f.thing.as_deref(), f.state.as_deref()), (Some("Covers"), Some("missing")));
         assert_eq!(label_of("files:something-new"), None, "the page falls back on the name");
+    }
+
+    fn a_track(track: i64, title: Option<&str>) -> crate::catalogue::MissingTrack {
+        crate::catalogue::MissingTrack { track, title: title.map(str::to_string), artist: Some("A".into()), album: Some("B".into()), rel: Some("A - B/01 One.flac".into()), since: 100 }
+    }
+
+    /// A4: a library, a track gone and a retired one that holds something, each with where it lay and since when. A retired track nobody
+    /// holds anything on is nobody's loss, and with nothing left the list is no finding.
+    #[test]
+    fn the_missing_list_holds_what_someone_would_miss() {
+        use crate::catalogue::{Missing, ParkedLibrary};
+        let m = Missing {
+            parked: vec![ParkedLibrary { path: "/media/drive".into(), since: Some(50), files: 3 }],
+            gone: vec![a_track(1, Some("Gone"))],
+            retired: vec![a_track(2, Some("Heard")), a_track(3, Some("Nobody's")), a_track(4, None)],
+        };
+        let held = ["tr-2".to_string(), "tr-4".to_string()].into();
+        let f = missing_list(m, &held).expect("a finding");
+        assert_eq!((f.key.as_str(), f.domain, f.level, f.count), ("library:missing", "library", Level::Info, 4));
+        assert_eq!(f.items.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["/media/drive", "Gone", "Heard", "01 One.flac"], "a library, then tracks; one with no title by its file");
+        let row = &f.items[2];
+        assert_eq!((row.track.as_deref(), row.since, row.line.as_deref(), row.files.as_slice()), (Some("tr-2"), Some(100), Some("A · B"), &["A - B/01 One.flac".to_string()][..]));
+        assert_eq!((f.items[0].track.clone(), f.items[0].since), (None, Some(50)), "a library has no track to reconnect");
+        assert!(missing_list(Missing { retired: vec![a_track(3, None)], ..Missing::default() }, &["tr-2".to_string()].into()).is_none());
     }
 
     #[test]

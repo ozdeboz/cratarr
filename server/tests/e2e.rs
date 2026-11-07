@@ -2359,6 +2359,68 @@ async fn what_settings_say_stands_against_the_environment_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// A5: what no rule can pair, a title and a file name changed at once with no recording, leaves a track with plays and no file. It is on
+/// Health's Missing list, and a person's word puts its plays and heart on the file it became.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_track_found_again_by_hand_keeps_what_it_held_end_to_end() {
+    let root = temp("reconnect");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let music = library.join("music");
+    settings(&data, &[(&music, "main")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    s.until("the library read", Duration::from_secs(120), || async { ann.albums().await.iter().any(|a| a["title"] == "Tide Tables") }).await;
+    let old = tracks_at(&data, &music, TIDE)[0].clone();
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{old}/favorite?on=true"), json!({})).await;
+    ask(&ann, "scrobble", &format!("id={old}&time=1700000000000")).await;
+
+    let (was, now) = (music.join(TIDE).join("01 Slack Water.flac"), music.join(TIDE).join("01 Low Water.flac"));
+    set_vorbis(&was, "TITLE", "Low Water");
+    std::fs::rename(&was, &now).unwrap();
+    let catalogue = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    catalogue.busy_timeout(Duration::from_secs(10)).unwrap();
+    let new = || catalogue.query_row("SELECT 'tr-' || track FROM files WHERE rel = ?1 AND track IS NOT NULL", [format!("{TIDE}/01 Low Water.flac")], |r| r.get::<_, String>(0)).ok();
+    s.until("the file read as new", Duration::from_secs(120), || async {
+        ask(&ann, "startScan", "").await;
+        built(&ann).await;
+        new().is_some()
+    })
+    .await;
+    let chosen = new().unwrap();
+    assert_ne!(chosen, old, "no rule pairs them");
+
+    // Its day over: the gone row's end, as a day passing leaves it.
+    catalogue.execute("UPDATE files SET gone_at = gone_at - 100000 WHERE gone_at IS NOT NULL", []).unwrap();
+    let on_the_list = || async {
+        let report = ann.get("/api/health/report").await;
+        report["findings"].as_array().unwrap().iter().find(|f| f["key"] == "library:missing").map_or(Vec::new(), |f| f["items"].as_array().unwrap().iter().filter(|i| i["track"] == old.as_str()).cloned().collect::<Vec<Value>>())
+    };
+    s.until("it to retire onto the list", Duration::from_secs(120), || async {
+        ask(&ann, "startScan", "").await;
+        built(&ann).await;
+        catalogue.query_row("SELECT retired_at IS NOT NULL FROM tracks WHERE 'tr-' || id = ?1", [&old], |r| r.get::<_, bool>(0)).unwrap() && !on_the_list().await.is_empty()
+    })
+    .await;
+    let row = on_the_list().await.remove(0);
+    assert_eq!((row["title"].as_str(), row["files"][0].as_str().map(|f| f.ends_with("01 Slack Water.flac"))), (Some("Slack Water"), Some(true)), "what it was and where it lay: {row}");
+    assert!(row["since"].is_number(), "since when: {row}");
+
+    ann.ok(reqwest::Method::POST, "/api/missing/reconnect", json!({ "track": old, "to": chosen })).await;
+    assert!(on_the_list().await.is_empty(), "off the list");
+    let held = ask(&ann, "getSong", &format!("id={chosen}")).await["song"].clone();
+    assert_eq!(held["playCount"], 1, "its play: {held}");
+    assert!(held["starred"].is_string(), "its heart: {held}");
+    let again = ann.send(reqwest::Method::POST, "/api/missing/reconnect", json!({ "track": old, "to": chosen })).await;
+    assert_eq!(again.0, 409, "a take stands: {:?}", again.1);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Replace: the new files take the place and the track ids of the old, which go to Music's trash. A copy missing a track is refused
 /// and nothing moves. Its Undo gives each library its own files and each file its own id again.
 #[tokio::test(flavor = "multi_thread")]

@@ -581,6 +581,51 @@ fn count_facts_writes(conn: &Connection, written: Arc<AtomicU64>) -> Result<()> 
 /// A file's place in the catalogue: its folder and path there.
 type Place = (i64, String);
 
+/// What the catalogue knows of and holds no file for, for Health's Missing list: nothing here is forgotten by itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Missing {
+    pub parked: Vec<ParkedLibrary>,
+    /// Tracks whose every file is gone a while, each by one of them.
+    pub gone: Vec<MissingTrack>,
+    /// Tracks retired, nothing having taken them, the latest first.
+    pub retired: Vec<MissingTrack>,
+}
+
+/// A library out of use, its rows kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParkedLibrary {
+    pub path: String,
+    /// Epoch seconds; none for a library parked before that was kept.
+    pub since: Option<i64>,
+    pub files: u64,
+}
+
+/// A track with no file to play.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MissingTrack {
+    pub track: i64,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// Where it last lay, in its library.
+    pub rel: Option<String>,
+    /// Epoch seconds.
+    pub since: i64,
+}
+
+/// `goes` is `stays` for good, every file of it and all that follows it (`track_moved`). In the caller's transaction, which has
+/// retired `goes`.
+fn taken_for_good(tx: &Connection, goes: i64, stays: i64) -> Result<()> {
+    tx.execute("UPDATE files SET track = ?2 WHERE track = ?1", params![goes, stays])?;
+    tx.execute("UPDATE track_moved SET id = ?2 WHERE id = ?1", params![goes, stays])?;
+    tx.execute("INSERT OR REPLACE INTO track_moved (old, id, followed) VALUES (?1, ?2, 0)", params![goes, stays])?;
+    // A link names one file a track: the next pass makes the one that stays its own.
+    tx.execute("DELETE FROM source_ids WHERE source = ?1 AND track_id = ?2", params![crate::source::cratarr::KIND.id, crate::serve::ids::song(goes)])?;
+    tx.execute("UPDATE OR IGNORE audiomuse SET track = ?2 WHERE track = ?1", params![goes, stays])?;
+    tx.execute("DELETE FROM audiomuse WHERE track = ?1", [goes])?;
+    Ok(())
+}
+
 /// A file as `identify` reads it, new or gone.
 struct Identified {
     folder: i64,
@@ -2722,13 +2767,7 @@ impl Catalogue {
         for goes in taken {
             let stays = take.now(goes);
             tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {REMEMBER} WHERE id = ?1"), params![goes, now])?;
-            tx.execute("UPDATE files SET track = ?2 WHERE track = ?1", params![goes, stays])?;
-            tx.execute("UPDATE track_moved SET id = ?2 WHERE id = ?1", params![goes, stays])?;
-            tx.execute("INSERT OR REPLACE INTO track_moved (old, id, followed) VALUES (?1, ?2, 0)", params![goes, stays])?;
-            // A link names one file a track: the next pass makes the one that stays its own.
-            tx.execute("DELETE FROM source_ids WHERE source = ?1 AND track_id = ?2", params![crate::source::cratarr::KIND.id, crate::serve::ids::song(goes)])?;
-            tx.execute("UPDATE OR IGNORE audiomuse SET track = ?2 WHERE track = ?1", params![goes, stays])?;
-            tx.execute("DELETE FROM audiomuse WHERE track = ?1", [goes])?;
+            taken_for_good(tx, goes, stays)?;
             left.extend(held.record.get(&goes).copied());
             given += 1;
         }
@@ -2846,6 +2885,60 @@ impl Catalogue {
         if !files.is_empty() {
             self.changed_outside_pass();
         }
+        Ok(())
+    }
+
+    /// What the catalogue knows of and has no file for: libraries out of use, tracks with nothing but files gone a while, and
+    /// tracks retired that nothing took. Blocking.
+    pub fn missing(&self) -> Result<Missing> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, path, (SELECT count(*) FROM files f WHERE f.folder = folders.id) FROM folders WHERE id < 0 ORDER BY path")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut since = db.prepare_cached("SELECT value FROM meta WHERE key = ?1")?;
+        let mut parked = Vec::with_capacity(rows.len());
+        for (id, path, files) in rows {
+            let at: Option<String> = since.query_row([format!("parked:{id}")], |r| r.get(0)).optional()?;
+            parked.push(ParkedLibrary { path, since: at.and_then(|v| v.parse().ok()), files: files as u64 });
+        }
+        let tag = |name: &str| format!("(SELECT value FROM tags t WHERE t.folder = f.folder AND t.rel = f.rel AND t.name = '{name}' ORDER BY t.n LIMIT 1)");
+        let mut st = db.prepare(&format!(
+            "SELECT f.track, {}, {}, {}, f.rel, max(f.gone_at) FROM files f WHERE f.gone_at IS NOT NULL AND f.track IS NOT NULL AND f.folder >= 0
+               AND NOT EXISTS (SELECT 1 FROM files o WHERE o.track = f.track AND o.gone_at IS NULL)
+             GROUP BY f.track ORDER BY max(f.gone_at) DESC, f.track",
+            tag("title"),
+            tag("artist"),
+            tag("album")
+        ))?;
+        let row = |r: &rusqlite::Row| -> rusqlite::Result<MissingTrack> { Ok(MissingTrack { track: r.get(0)?, title: r.get(1)?, artist: r.get(2)?, album: r.get(3)?, rel: r.get(4)?, since: r.get(5)? }) };
+        let gone = st.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
+        let mut st = db.prepare("SELECT id, was_title, was_artist, was_album, was_rel, retired_at FROM tracks WHERE retired_at IS NOT NULL AND id NOT IN (SELECT old FROM track_moved) ORDER BY retired_at DESC, id")?;
+        let retired = st.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
+        Ok(Missing { parked, gone, retired })
+    }
+
+    /// A person says a track on Health's Missing list is `stays` (A5): what no rule could pair, a retag and a rename at once, say. It
+    /// goes as a take goes, for good, so what names it follows it at the next check. Refused for what still has a file to play, what
+    /// went already, and a track that is itself missing: a person's word is for the track in front of them. Blocking.
+    pub fn reconnect(&self, goes: i64, stays: i64) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        anyhow::ensure!(goes != stays, "A track can't be itself");
+        let (retired, record): (bool, Option<i64>) = tx.query_row("SELECT retired_at IS NOT NULL, record FROM tracks WHERE id = ?1", [goes], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.context("That track is not known")?;
+        anyhow::ensure!(taken_by(&tx, goes)? == goes, "That track was taken already");
+        let here = |track: i64| -> Result<bool> { Ok(tx.prepare_cached(&format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}"))?.exists([track])?) };
+        anyhow::ensure!(!here(goes)?, "That track has a file");
+        anyhow::ensure!(here(stays)?, "That track has no file to take it");
+        // What it was stays as it retired: its files went then, and it would be read from nothing.
+        if retired {
+            tx.execute("UPDATE tracks SET record = NULL, back = NULL WHERE id = ?1", [goes])?;
+        } else {
+            tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {REMEMBER} WHERE id = ?1"), params![goes, now()])?;
+        }
+        taken_for_good(&tx, goes, stays)?;
+        tx.execute("UPDATE records SET retired_at = ?2 WHERE id = ?1 AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)", params![record, now()])?;
+        tx.commit()?;
+        drop(db);
+        self.changed_outside_pass();
         Ok(())
     }
 
@@ -7014,6 +7107,105 @@ mod tests {
         for d in [&a, &b] {
             std::fs::remove_dir_all(d).ok();
         }
+    }
+
+    /// A4: what no file answers for, each with where it lay and since when: a library out of use, a track with nothing but gone files,
+    /// and one retired. A file gone beside another of its track is no track missing, and what a take took is not missing at all.
+    #[test]
+    fn the_missing_list_says_what_has_no_file_and_since_when() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let rel = "A - B (2020)/01 One.mp3";
+        let (gone, other) = (cat.track_of(0, rel).unwrap(), cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap());
+        cat.tag_for_tests(0, rel, &[("title", "One"), ("artist", "A"), ("album", "B")]);
+        std::fs::remove_file(a.join(rel)).unwrap();
+        cat.walk_all();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        let missing = cat.missing().unwrap();
+        assert_eq!((missing.parked.len(), missing.parked[0].path.as_str(), missing.parked[0].files), (1, &*b.display().to_string(), 2));
+        assert!(missing.parked[0].since.is_some(), "since when");
+        assert_eq!(missing.gone.len(), 1);
+        assert_eq!((missing.gone[0].track, missing.gone[0].title.as_deref(), missing.gone[0].album.as_deref(), missing.gone[0].rel.as_deref()), (gone, Some("One"), Some("B"), Some(rel)));
+        assert!(missing.retired.is_empty());
+
+        cat.gone_long_ago_for_tests();
+        cat.identify().unwrap();
+        let missing = cat.missing().unwrap();
+        assert!(missing.gone.is_empty(), "its day over");
+        assert_eq!(missing.retired.iter().map(|t| (t.track, t.title.as_deref())).collect::<Vec<_>>(), [(gone, Some("One"))], "it is remembered");
+        cat.reconnect(gone, other).unwrap();
+        assert!(cat.missing().unwrap().retired.is_empty(), "what was taken is not missing");
+        for d in [&a, &b] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A gone file with another of its track still here plays from that one: nothing is missing.
+    #[test]
+    fn a_file_gone_beside_another_of_its_track_is_no_track_missing() {
+        let cat = tracks(6);
+        let (_, second, _) = two_copies(&cat);
+        cat.db().execute("UPDATE files SET gone_at = 1 WHERE rel = ?1", [&second.files[0].1]).unwrap();
+        assert!(cat.missing().unwrap().gone.is_empty());
+    }
+
+    /// A5: a person's word, as a take: the old id leads to the track chosen, for good, and what names it is there to follow.
+    #[test]
+    fn a_track_reconnected_by_hand_is_taken_by_the_one_chosen() {
+        let cat = tracks(2);
+        file_of_track(&cat, "A/2.flac", 2);
+        cat.db().execute("UPDATE tracks SET retired_at = 5, was_title = 'Gone', record = NULL WHERE id = 1", []).unwrap();
+        cat.reconnect(1, 2).unwrap();
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(1, 2)]));
+        assert_eq!(cat.tracks_to_follow().unwrap(), [(1, 2)]);
+        assert_eq!(cat.track_of_source(crate::source::cratarr::KIND.id, "tr-1"), Some(2), "an old id plays what took it");
+        assert_eq!(cat.remembered(1).unwrap().title.as_deref(), Some("Gone"), "what it was stays");
+        assert!(retired(&cat, 1));
+    }
+
+    /// One gone a while has its file's row still: that goes too, and comes to nothing when its day is over.
+    #[test]
+    fn a_track_gone_a_while_can_be_reconnected_and_lets_go_of_its_file() {
+        let cat = tracks(2);
+        file_of_track(&cat, "A/1.flac", 1);
+        file_of_track(&cat, "B/2.flac", 2);
+        cat.db().execute("UPDATE files SET gone_at = 1 WHERE track = 1", []).unwrap();
+        cat.db().execute("UPDATE tracks SET was_title = NULL WHERE id = 1", []).unwrap();
+        cat.tag_for_tests(0, "A/1.flac", &[("title", "Was")]);
+        cat.reconnect(1, 2).unwrap();
+        assert!(retired(&cat, 1));
+        assert_eq!(cat.remembered(1).unwrap().title.as_deref(), Some("Was"), "read before its file went to the other");
+        assert_eq!(cat.files_of(2).len(), 1, "the one to play");
+    }
+
+    #[test]
+    fn a_track_is_reconnected_only_from_nothing_to_something() {
+        let cat = tracks(4);
+        file_of_track(&cat, "A/1.flac", 1);
+        file_of_track(&cat, "A/2.flac", 2);
+        cat.db().execute("UPDATE tracks SET retired_at = 5 WHERE id IN (3, 4)", []).unwrap();
+        assert!(cat.reconnect(1, 2).is_err(), "it has a file");
+        assert!(cat.reconnect(3, 3).is_err(), "itself");
+        assert!(cat.reconnect(3, 4).is_err(), "onto one that has none");
+        assert!(cat.reconnect(99, 2).is_err(), "not known");
+        cat.reconnect(3, 2).unwrap();
+        assert!(cat.reconnect(3, 1).is_err(), "taken already: a take stands");
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(3, 2)]));
+    }
+
+    /// A record of tracks all gone on goes with the last of them, as a take leaves it.
+    #[test]
+    fn a_record_whose_last_track_was_reconnected_retires() {
+        let cat = tracks(2);
+        cat.assign_records(&[album("Gone", &[1])]).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        cat.db().execute("UPDATE tracks SET retired_at = NULL WHERE id = 1", []).unwrap();
+        file_of_track(&cat, "A/2.flac", 2);
+        cat.reconnect(1, 2).unwrap();
+        assert!(record_retired(&cat, record));
     }
 
     /// A3: a library out of use is forgotten by nobody's clock: however long it is parked, its rows wait, and it comes back as itself,

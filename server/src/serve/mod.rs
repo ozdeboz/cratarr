@@ -840,6 +840,28 @@ mod tests {
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
+    /// A5: a track on the Missing list is another by a person's word: its plays go to it at once, each once, and an old id in a queue
+    /// plays what it chose.
+    #[test]
+    fn a_track_reconnected_by_hand_brings_its_plays_with_it() {
+        let (roots, cat, serve) = on_two_folders("reconnected");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")]);
+        serve.refresh().unwrap();
+        let (old, chosen) = (cat.track_of(0, "A/01 One.flac").unwrap(), cat.track_of(0, "A/02 Two.flac").unwrap());
+        let (was, is) = (ids::song(old), ids::song(chosen));
+        serve.userdata.record("me", (&was, "p"), "al-x", &[], &Heard::counted(100)).unwrap();
+        serve.userdata.record("me", (&is, "q"), "al-x", &[], &Heard::counted(200)).unwrap();
+        std::fs::remove_file(roots[0].join("A/01 One.flac")).unwrap();
+        cat.walk_all();
+        cat.gone_long_ago_for_tests();
+        cat.identify().unwrap();
+        cat.reconnect(old, chosen).unwrap();
+        serve.refresh().unwrap();
+        assert_eq!((plays_of(&serve, &is), plays_of(&serve, &was)), (2, 0), "both plays on the one chosen, none left");
+        assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
     /// Q8: the copy with more tracks keeps what points at the record, even from a later folder. The two copies' songs are tagged
     /// alike, one persistent id, and a build must not move the plays to the copy that left by it.
     #[test]
