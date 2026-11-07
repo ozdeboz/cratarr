@@ -495,7 +495,7 @@ fn measured_device_answers_at_34_000_tracks() {
     let at = Instant::now();
     let mut d = Device::new(index, Some(&sounds), &marks);
     println!("opened {:?}, own {} bytes, own's text {} bytes", at.elapsed(), bytes.len(), marks.own().len());
-    let mut once = |d: &mut Device, asked: &str| {
+    let once = |d: &mut Device, asked: &str| {
         let at = Instant::now();
         let answer = d.ask(asked).unwrap();
         (at.elapsed(), answer.len())
