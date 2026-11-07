@@ -359,6 +359,12 @@ impl Serve {
         self.play_on.get()
     }
 
+    /// Tests elsewhere: the covers' stamps as a build's end leaves them.
+    #[cfg(test)]
+    pub fn covers_read_again_for_tests(&self) {
+        self.covers_built();
+    }
+
     /// Tests elsewhere: the time of the last build moved on, as a build's end moves it.
     #[cfg(test)]
     pub fn build_passed_for_tests(&self) {
@@ -667,6 +673,14 @@ impl Serve {
     pub async fn cover_bytes(self: &Arc<Self>, album: &str) -> Result<Option<(String, Vec<u8>)>> {
         let (me, album) = (self.clone(), album.to_string());
         Ok(tokio::task::spawn_blocking(move || me.art_of(&album)).await??.map(|(ct, bytes, _)| (ct, bytes)))
+    }
+
+    /// A record's cover made small for a device (`art::jpeg_at`), a decode at a time as `cover`'s are; none where it has none or
+    /// it cannot be read.
+    pub async fn small_cover(self: &Arc<Self>, album: &str, side: u32, quality: u8) -> Result<Option<Vec<u8>>> {
+        let Some((_, bytes)) = self.cover_bytes(album).await? else { return Ok(None) };
+        let _turn = self.resizing.acquire().await?;
+        Ok(tokio::task::spawn_blocking(move || art::jpeg_at(&bytes, side, quality)).await?.ok())
     }
 
     /// The cover of a record's copy in `library`, as `cover_bytes` has it; none where it has no copy there.

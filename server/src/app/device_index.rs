@@ -22,6 +22,7 @@
 //!   them, as they weigh more than all the rest and change rarely. Their rev is the log's, and their feed its `sound` rows.
 //! - **What is an account's own goes apart too** (0101's point 18), as `index::Marks`: its fits and its last counts, worked out on
 //!   asking, with no feed. They move with every play and are a small part of what the index weighs.
+//! - **Small covers** have a file of their own (`device_covers`): they are no rows, and they are made in the background.
 //! - **"Start again":** a rev from before what is kept or ahead of it, or more changed than rows are worth (a library in front of
 //!   the others moves every line): 410 with `{rev, reset: true}`, as `/api/changes` says it, and the device fetches whole.
 
@@ -171,7 +172,12 @@ pub struct Settled {
 impl Settled {
     /// Whether what was settled is what stands now: no row can differ, and nothing needs building.
     fn holds(&self, facts: &Arc<Vec<Facts>>, built: i64, rev: i64, libraries: &[index::Library]) -> bool {
-        std::ptr::eq(self.facts.as_ptr(), Arc::as_ptr(facts)) && self.built == built && self.rev == rev && self.libraries == libraries
+        self.rev == rev && self.stands(facts, built, libraries)
+    }
+
+    /// `holds`, but for the log: the reading, the build and the libraries, which move rows with no word in it.
+    fn stands(&self, facts: &Arc<Vec<Facts>>, built: i64, libraries: &[index::Library]) -> bool {
+        std::ptr::eq(self.facts.as_ptr(), Arc::as_ptr(facts)) && self.built == built && self.libraries == libraries
     }
 }
 
@@ -347,7 +353,7 @@ fn stands_for(serve: &Serve, libraries: &[index::Library], since: Option<i64>) -
     let (rev, floor) = (cat.index_rev()?, cat.index_floor()?);
     let Some(since) = since.filter(|s| *s >= floor && *s <= rev) else { return Ok(IndexStands { rev, changed: true, reset: Some(true) }) };
     let facts = cat.crate_facts()?;
-    Ok(IndexStands { rev, changed: since < rev || !turn.holds(&facts, serve.built_at(), rev, libraries), reset: None })
+    Ok(IndexStands { rev, changed: cat.index_moved(since, rev)? || !turn.stands(&facts, serve.built_at(), libraries), reset: None })
 }
 
 /// Bytes as gzip: a device fetches these over whatever connection it has.
@@ -462,15 +468,15 @@ pub async fn stands(app: &Arc<App>, serve: Arc<Serve>, since: Option<i64>) -> Re
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
+pub(super) mod tests {
+    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::catalogue::{Catalogue, Rules};
     use crate::serve::copies::Kind as CopyKind;
 
     /// A server over folders on the disk, for a test named `name`: what `add` puts there is read, identified and built.
-    pub(super) struct Served {
+    pub(in crate::app) struct Served {
         pub roots: Vec<PathBuf>,
         pub cat: Arc<Catalogue>,
         pub serve: Arc<Serve>,
@@ -484,14 +490,19 @@ mod tests {
         }
     }
 
-    pub(super) fn served(name: &str, kinds: &[CopyKind]) -> Served {
+    pub(in crate::app) fn served(name: &str, kinds: &[CopyKind]) -> Served {
+        served_in(name, kinds, None)
+    }
+
+    /// `served`, its data folder `data`, as covers need one.
+    pub(in crate::app) fn served_in(name: &str, kinds: &[CopyKind], data: Option<&Path>) -> Served {
         let roots: Vec<PathBuf> = (0..kinds.len()).map(|n| std::env::temp_dir().join(format!("cratarr-device-{name}-{n}-{}", std::process::id()))).collect();
         for root in &roots {
             std::fs::remove_dir_all(root).ok();
             std::fs::create_dir_all(root).unwrap();
         }
         let cat = Arc::new(Catalogue::open(None, roots.clone()).unwrap());
-        let serve = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        let serve = Serve::open(data, Rules::default(), &|_| None).unwrap();
         serve.library.set_kinds(kinds.iter().enumerate().map(|(n, k)| (n as i64, *k)).collect());
         serve.attach_catalogue(cat.clone());
         Served { roots, cat, serve }
@@ -887,6 +898,20 @@ mod tests {
         s.serve.library.db().execute("ALTER TABLE songs RENAME TO songs_away", []).unwrap();
         assert_eq!(feed(&s.serve, &s.libraries(), Some("ann"), device.rev(), false).unwrap(), Feed::Same);
         s.serve.library.db().execute("ALTER TABLE songs_away RENAME TO songs", []).unwrap();
+    }
+
+    /// A library's covers take hours on a NAS, and each is logged: a device told "changed" at each would ask for a whole build.
+    #[test]
+    fn a_cover_made_moves_the_log_and_no_row() {
+        let s = served("cover", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["One"]);
+        s.built();
+        let rev = s.index().rev();
+        s.cat.index_note("cover", 1).unwrap();
+        let at = || stands_for(&s.serve, &s.libraries(), Some(rev)).unwrap();
+        assert_eq!(at(), IndexStands { rev: rev + 1, changed: false, reset: None }, "the rev says a cover's feed has something");
+        s.cat.tag_for_tests(0, "A/00 One.flac", &[("title", "Renamed")]);
+        assert!(at().changed, "a row past it");
     }
 
     #[test]

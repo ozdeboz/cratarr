@@ -160,6 +160,8 @@ pub fn router(app: Arc<App>) -> Router {
         // The library on a device (0101's point 16): bytes, as the rules crate reads them.
         .route("/api/index", get(device_index))
         .route("/api/index/changes", get(device_index_changes))
+        .route("/api/index/covers", get(device_covers))
+        .route("/api/index/covers/changes", get(device_cover_changes))
         .route("/api/index/own", get(device_own))
         .route("/api/index/sounds", get(device_sounds))
         .route("/api/index/sounds/changes", get(device_sound_changes))
@@ -4341,6 +4343,16 @@ struct IndexSince {
 async fn device_index_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
     use crate::app::device_index::{changes, takes_gzip};
     Ok(changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
+}
+
+/// Every small cover made so far, as one bundle (`app::device_covers`).
+async fn device_covers(ctx: Ctx) -> Result<Response, ApiError> {
+    Ok(crate::app::device_covers::read(ctx.serve()?).await?.into_response())
+}
+
+/// What changed of the covers after `since`: as `device_index_changes`.
+async fn device_cover_changes(ctx: Ctx, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    Ok(crate::app::device_covers::changes(ctx.serve()?, q.since).await?.into_response())
 }
 
 /// The fits and counts of the account asking (`app::device_index`).

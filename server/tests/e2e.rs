@@ -1451,6 +1451,24 @@ async fn two_accounts_fetch_every_library_they_can_see_end_to_end() {
     assert!(his.rows().is_empty(), "bob has done nothing: {:?}", his.rows());
     assert_eq!(s.anyone().bytes("/api/index/own").await.0, 401);
 
+    // Small covers come as they are made: a record with a cover beside it or inside it, in the bundle sooner or later.
+    let covers = |bytes: &[u8]| {
+        assert_eq!(&bytes[..4], b"CRXV");
+        let (mut at, mut records) = (16, std::collections::BTreeSet::new());
+        while at < bytes.len() {
+            let length = u32::from_le_bytes(bytes[at + 8..at + 12].try_into().unwrap()) as usize;
+            assert!(length > 0, "a bundle holds what is there");
+            records.insert(i64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()));
+            at += 12 + length;
+        }
+        records
+    };
+    let tide = of_ann.records.iter().find(|r| r.title == "Tide Tables").unwrap().id;
+    let two_rooms = of_ann.records.iter().find(|r| r.title == "Two Rooms").unwrap().id;
+    s.until("the small covers made", Duration::from_secs(120), || async { let held = covers(&ann.bytes("/api/index/covers").await.1); held.contains(&tide) && held.contains(&two_rooms) }).await;
+    assert_eq!(s.anyone().bytes("/api/index/covers").await.0, 401);
+    assert_eq!(ann.bytes(&format!("/api/index/covers/changes?since={}", i64::MAX)).await.0, 410);
+
     // Beside the user data's changes, a word on the library's log, by a rev of its own.
     let at = |rev: i64| format!("/api/changes?since=0&kinds=favourite,index&index={rev}");
     s.until("the library still", Duration::from_secs(60), || async {

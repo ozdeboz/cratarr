@@ -51,10 +51,13 @@ the parts are and how they talk.
   - `classical` and `works` (the Classical kind, a work's other versions, from MusicBrainz), `excluded_artists`;
   - `track_fetch` (a single missing track, from Soulseek or a file on the server, checked before it is added);
   - `health`, `history` and `taste` (listening), `insights`, `visuals`, `kodi`, `listenbrainz`, `audiomuse`;
-  - `runtime` (the server's own settings: trusted proxies, home networks, the guest page).
+  - `runtime` (the server's own settings: trusted proxies, home networks, the guest page);
+  - `device_index` and `device_covers` (the library on a device, decision 0101: `/api/index` whole and then what moved, the
+    sounds, an account's fits and counts, small covers).
 - `src/serve/`: Cratarr as an OpenSubsonic server, and sign-in for everything: sessions, accounts, API keys, LDAP;
   `guest.rs` (the guest page, at home only); `access.rs` and `proxy.rs` (who a request is, and from where).
-- `src/catalogue/`: every audio file and its tags, read once and kept up to date.
+- `src/catalogue/`: every audio file and its tags, read once and kept up to date. `index_log.rs` is what a device's index
+  has to hear of: triggers on the tables it reads, and a print of every row for what moves with no write.
 - `src/source/`: where music comes from (Cratarr's own folders; Jellyfin optionally), behind one trait.
 - `src/crates.rs`: one's crates as they are kept. The rules that make playlists by themselves are the rules crate's
   (`rules/src/crates.rs`), named here; filters use the same engine.
