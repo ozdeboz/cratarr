@@ -2712,7 +2712,7 @@ struct Shelf {
 }
 
 /// A server's libraries in Settings' order, under the build's own folder: Settings takes only a folder inside a mount
-/// (`chosen_folders_ok`), and the temporary folder is none, where that one is, on a PC as in the Dockerfile's stages.
+/// (`chosen_folders_ok`), and the temporary folder is none (`saved`).
 struct Shelves {
     root: PathBuf,
     data: PathBuf,
@@ -2750,9 +2750,19 @@ impl Shelves {
         settings(&self.data, &self.libraries(), &self.root.join("no-own-music"));
     }
 
-    /// Settings as they stand, sent as the page sends them.
-    async fn save(&self, who: &Caller<'_>) {
-        who.ok(reqwest::Method::PUT, "/api/settings", json!({ "sources": [own_source(&self.libraries(), &self.root.join("no-own-music"))] })).await;
+    /// Settings as they stand, sent as the page sends them, and the server that goes on. Settings takes only a folder inside a mount, and
+    /// whether the build's folder is one goes by how the build runs: a stage of the Dockerfile may read its cache as a layer, no mount. There
+    /// the settings file and a start stand in, as for the suite's other tests, and only what a save does on a running server goes unasked.
+    async fn saved(&self, s: Server) -> Server {
+        let sent = json!({ "sources": [own_source(&self.libraries(), &self.root.join("no-own-music"))] });
+        let (status, said) = s.sign_in(ANN.0, ANN.1).await.send(reqwest::Method::PUT, "/api/settings", sent).await;
+        if (200..300).contains(&status) {
+            return s;
+        }
+        assert!(said.to_string().contains("cannot see"), "{status} {said}");
+        println!("Settings cannot see {}: the settings file and a start stand in", self.root.display());
+        self.write();
+        restarted(s, &self.data).await
     }
 
     /// A library's folder under another name, as a mount renamed. What Settings says is the caller's.
@@ -3206,7 +3216,8 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
         std::fs::copy(from_shores.join(&file), to_shores.join(&file)).unwrap();
     }
     shelves.list.push(Shelf { at: landed.clone(), kind: "incoming", name: "landed" });
-    shelves.save(&ann).await;
+    let s = shelves.saved(s).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
     s.until("the new library read", SETTLES, || async {
         built(&ann).await;
         ask(&ann, "startScan", "").await;
@@ -3231,7 +3242,8 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     let annex = shelves.root.join("library/Annex");
     a_new_library(&annex, "Annexed", &shelves.at("second").join(FAR).join("01 Far Bank.flac"));
     shelves.list.insert(0, Shelf { at: annex.clone(), kind: "main", name: "annex" });
-    shelves.save(&ann).await;
+    let s = shelves.saved(s).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
     s.until("the new main library read", SETTLES, || async {
         built(&ann).await;
         ask(&ann, "startScan", "").await;
@@ -3264,23 +3276,24 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     s.stop();
     shelves.rename("second", "rack");
     s = Server::start(&shelves.data).await;
+    s = shelves.saved(s).await;
     let ann = s.sign_in(ANN.0, ANN.1).await;
-    shelves.save(&ann).await;
     say(&mut findings, "second renamed rack, then told", settled(&ann, &shelves, &mine, from_at_once(&want)).await);
 
     // 3. A library removed, the server restarted, and the library added back. While it is away what lies only there is off every list and
     // its lines read as missing, as nobody could hear it; nothing it holds is touched. Each kind of library, and the first of all.
     for name in ["second", "incoming", "music"] {
-        let ann = s.sign_in(ANN.0, ANN.1).await;
         let at = shelves.list.iter().position(|l| l.name == name).unwrap();
         let shelf = shelves.list.remove(at);
-        shelves.save(&ann).await;
+        s = shelves.saved(s).await;
+        let ann = s.sign_in(ANN.0, ANN.1).await;
         say(&mut findings, &format!("{name} removed"), settled(&ann, &shelves, &mine, from_while_away(&want, name)).await);
         s = restarted(s, &shelves.data).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
         say(&mut findings, &format!("{name} removed, started again"), settled(&ann, &shelves, &mine, from_while_away(&want, name)).await);
         shelves.list.insert(at, shelf);
-        shelves.save(&ann).await;
+        s = shelves.saved(s).await;
+        let ann = s.sign_in(ANN.0, ANN.1).await;
         say(&mut findings, &format!("{name} added back"), settled(&ann, &shelves, &mine, from_at_once(&want)).await);
         s = restarted(s, &shelves.data).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
