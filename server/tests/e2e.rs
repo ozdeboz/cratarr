@@ -2692,6 +2692,8 @@ async fn a_second_run_waits_while_the_first_writes_end_to_end() {
 
 /// The account of the proof below, and the albums it is given: each case of what a listener can lose, by where it lies.
 const ANN: (&str, &str) = ("ann", "ann's password");
+/// A second account, with libraries switched off.
+const BO: (&str, &str) = ("bo", "bo's password");
 const TIDE: &str = "Glass Harbour/Tide Tables (2012)";
 const PARTIAL: &str = "Glass Harbour/Partial Shore (2011)";
 const CLUB: &str = "Various Artists/Club Classics (2001)";
@@ -2945,6 +2947,23 @@ fn rows_kept(data: &Path) -> Value {
     let mut st = db.prepare("SELECT user, song, at FROM plays ORDER BY at, song").unwrap();
     let plays: Vec<(String, String, i64)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
     json!({ "annotation": rows, "plays": plays })
+}
+
+/// What `BO` has switched off, each library by what the proof calls it, and which copy of a record in every library that leaves to play.
+async fn switched_off(s: &Server, shelves: &Shelves) -> Value {
+    let bo = s.sign_in(BO.0, BO.1).await;
+    let off = bo.get("/api/me/preferences").await["values"]["hidden_libraries"]["value"].clone();
+    let albums = bo.albums().await;
+    let shores = albums.iter().find(|a| a["title"] == "Both Shores").expect("a record in every library");
+    let plays: Vec<&Value> = shores["copies"].as_array().unwrap().iter().filter(|c| c["plays"] == true).map(|c| &c["library"]).collect();
+    shelves.plain(&json!({ "off": off, "plays": plays }))
+}
+
+/// Where what `switched_off` finds differs from `want`.
+async fn switched_otherwise(s: &Server, shelves: &Shelves, want: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    differences("", want, &switched_off(s, shelves).await, &mut out);
+    out
 }
 
 /// What an account holds of the library, each thing as a door of the API answers it, each library by the name `Shelves` has for it: what
@@ -3260,6 +3279,15 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     let ann = s.sign_in(ANN.0, ANN.1).await;
     say(&mut findings, "a main library put first, started again", settled(&ann, &shelves, &mine, from(&want)).await);
 
+    // A library switched off stays off wherever it goes, and a switch says its library's path: a rename that did not reach it would turn
+    // the library back on, for one account and on every device. Both main libraries that hold the record, so a switch lost plays that one.
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": BO.0, "password": BO.1 })).await;
+    let off: Vec<String> = ["music", "second", "landed"].iter().map(|name| format!("cratarr/{}", shelves.at(name).display())).collect();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    s.sign_in(BO.0, BO.1).await.ok(reqwest::Method::PUT, "/api/me/preferences/hidden_libraries", json!({ "value": off, "changed": now })).await;
+    let bos = switched_off(&s, &shelves).await;
+    assert_eq!(bos["off"], json!(["cratarr/<music>", "cratarr/<second>", "cratarr/<landed>"]), "{bos}");
+
     // 2. A library's folder renamed, mount and settings together, with the server down, as a mount takes a restart. By a new name, and
     // only by case, which turned production's two Incoming folders round, and the first main library's too.
     let mut s = s;
@@ -3270,6 +3298,7 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
         s = Server::start(&shelves.data).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
         say(&mut findings, &format!("{name} renamed {to}"), settled(&ann, &shelves, &mine, from(&want)).await);
+        say(&mut findings, &format!("{name} renamed {to}, its switch"), switched_otherwise(&s, &shelves, &bos).await);
     }
 
     // In two moves, the way a mount is changed first: it starts with the library not there, and Settings is told afterwards.
@@ -3279,6 +3308,7 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     s = shelves.saved(s).await;
     let ann = s.sign_in(ANN.0, ANN.1).await;
     say(&mut findings, "second renamed rack, then told", settled(&ann, &shelves, &mine, from_at_once(&want)).await);
+    say(&mut findings, "second renamed rack, then told, its switch", switched_otherwise(&s, &shelves, &bos).await);
 
     // 3. A library removed, the server restarted, and the library added back. While it is away what lies only there is off every list and
     // its lines read as missing, as nobody could hear it; nothing it holds is touched. Each kind of library, and the first of all.
@@ -3298,6 +3328,7 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
         s = restarted(s, &shelves.data).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
         say(&mut findings, &format!("{name} added back, started again"), settled(&ann, &shelves, &mine, from(&want)).await);
+        say(&mut findings, &format!("{name} added back, its switch"), switched_otherwise(&s, &shelves, &bos).await);
     }
 
     // 4. Files changed outside Cratarr, as a tagger and a file manager do, with the server running.

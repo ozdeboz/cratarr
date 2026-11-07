@@ -478,7 +478,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 29] = [
+const ADDED_COLUMNS: [(&str, &str); 30] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -488,6 +488,8 @@ const ADDED_COLUMNS: [(&str, &str); 29] = [
     // 0101 point 1 (the owner, 2026-11-04): a folder's id for life, kept while it is parked under a negative id, so it
     // comes back as itself (`set_folders`).
     ("folders", "home INTEGER"),
+    // The path a library left, until what names it by its path has followed (`Catalogue::paths_to_follow`).
+    ("folders", "was TEXT"),
     // 0101 point 11: what a track was, kept as it retires (its tags go with its file): a missing entry shows it, and a
     // file that is it again takes the id back. Its last path, its length, and its title, artist, album and MusicBrainz
     // recording as tagged.
@@ -1147,7 +1149,9 @@ impl Catalogue {
             match taken {
                 Some(p) => {
                     rekey(p, id)?;
-                    tx.execute("UPDATE folders SET path = ?2, home = ?1 WHERE id = ?1", params![id, path])?;
+                    // Of two moves before anything followed, what names it still says the first path.
+                    let left = rows.iter().find(|(at, q, _)| *at == p && q != path).map(|(_, q, _)| q);
+                    tx.execute("UPDATE folders SET path = ?2, home = ?1, was = coalesce(was, ?3) WHERE id = ?1", params![id, path, left])?;
                     tx.execute("DELETE FROM meta WHERE key = ?1", [format!("parked:{p}")])?;
                     stepped.retain(|s| *s != p);
                     tracing::info!("catalogue: {path} is in use again, with its rows");
@@ -1198,6 +1202,30 @@ impl Catalogue {
         drop(db);
         *self.folders.write().unwrap_or_else(|p| p.into_inner()) = in_use;
         self.poke.notify_one();
+        Ok(())
+    }
+
+    /// The libraries that changed path since what names them by it last followed: (where it was, where it is). A switch on an
+    /// account says a library's path, so a rename must reach it, or the library comes back on. Kept here until it has, as
+    /// `track_moved` is: a stop between the two databases finishes at the next start. Blocking.
+    pub fn paths_to_follow(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT was, path FROM folders WHERE was IS NOT NULL AND was != path")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What `paths_to_follow` gave has been followed. A library that moved again meanwhile waits: it says the path followed from no
+    /// longer. Blocking.
+    pub fn paths_followed(&self, moved: &[(String, String)]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        for (was, path) in moved {
+            tx.execute("UPDATE folders SET was = NULL WHERE was = ?1 AND path = ?2", params![was, path])?;
+        }
+        // Moved there and back: nothing named it elsewhere.
+        tx.execute("UPDATE folders SET was = NULL WHERE was = path", [])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -6709,6 +6737,47 @@ mod tests {
         cat.set_folders(vec![a.clone(), copy.clone(), renamed.clone()]).unwrap();
         assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(one), "the one parked comes back as itself");
         for d in [&a, &renamed, &copy] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// What names a library by its path hears where it went, however it came there: renamed in one breath, or parked on the way by a
+    /// mount changed first. Until that has followed it says the path that is named, and a library back where it was moved nowhere.
+    #[test]
+    fn a_library_that_changed_path_says_where_it_was_until_that_has_followed() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        let at = |p: &PathBuf| p.display().to_string();
+        let renamed = b.with_extension("renamed");
+        std::fs::rename(&b, &renamed).unwrap();
+        cat.set_folders(vec![a.clone(), renamed.clone()]).unwrap();
+        assert_eq!(cat.paths_to_follow().unwrap(), [(at(&b), at(&renamed))], "in one breath");
+
+        let again = renamed.with_extension("again");
+        std::fs::rename(&renamed, &again).unwrap();
+        cat.set_folders(vec![a.clone(), again.clone()]).unwrap();
+        let moved = cat.paths_to_follow().unwrap();
+        assert_eq!(moved, [(at(&b), at(&again))], "moved on first: what names it still says the first path");
+        cat.paths_followed(&moved).unwrap();
+        assert!(cat.paths_to_follow().unwrap().is_empty(), "told once");
+
+        let third = again.with_extension("third");
+        std::fs::rename(&again, &third).unwrap();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        assert!(cat.paths_to_follow().unwrap().is_empty(), "parked, it has gone nowhere yet");
+        cat.set_folders(vec![a.clone(), third.clone()]).unwrap();
+        let moved = cat.paths_to_follow().unwrap();
+        assert_eq!(moved, [(at(&again), at(&third))], "in two moves");
+
+        std::fs::rename(&third, &again).unwrap();
+        cat.set_folders(vec![a.clone(), again.clone()]).unwrap();
+        assert!(cat.paths_to_follow().unwrap().is_empty(), "there and back before it followed: nothing to say");
+        cat.paths_followed(&moved).unwrap();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        cat.set_folders(vec![a.clone(), again.clone()]).unwrap();
+        assert!(cat.paths_to_follow().unwrap().is_empty(), "out of use and back at its own path");
+        for d in [&a, &again] {
             std::fs::remove_dir_all(d).ok();
         }
     }

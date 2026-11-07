@@ -308,6 +308,19 @@ fn lines_folder(catalogue: &Catalogue, folders: &Folders) -> Option<String> {
     catalogue.folders().first().map(|(_, path)| path.display().to_string())
 }
 
+/// What names a library by its path follows it (`Catalogue::paths_to_follow`): a library switched off stays off, however it
+/// came to another path. The catalogue's word stands until the user data has it, so a stop between them finishes at the next
+/// start. Blocking.
+fn follow_paths(catalogue: &Catalogue, userdata: &crate::userdata::UserData) -> Result<()> {
+    let moved = catalogue.paths_to_follow()?;
+    if !moved.is_empty() {
+        tracing::info!("libraries changed path: {moved:?}");
+        userdata.follow_library_paths(&moved)?;
+        catalogue.paths_followed(&moved)?;
+    }
+    Ok(())
+}
+
 /// The first administrator's playlists over the Music folder (none without one), its `.m3u` files brought in first
 /// (once). Ones that could not be brought in are tried again at the next start: the store opens meanwhile, so the rest
 /// of Cratarr does.
@@ -391,6 +404,7 @@ impl Library {
         let kinds = kinds_of(&folders, &catalogue.folders());
         let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds, rules: tag_rules.clone() };
         start.run().await.context("the first start of 0.16 did not finish")?;
+        follow_paths(&catalogue, &playlists_db).context("following the libraries' paths")?;
         if !catalogue.ids_lost() {
             playlists_db.set_meta(TOP_KEY, &catalogue.top_id().to_string())?;
         }
@@ -725,6 +739,8 @@ impl Library {
             let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&folders));
             let lines_were = lines_folder(&self.catalogue, &old);
             tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            let (c, db) = (self.catalogue.clone(), self.playlists_db.clone());
+            tokio::task::spawn_blocking(move || follow_paths(&c, &db)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
             let lines_from = lines_folder(&self.catalogue, &folders);
             let store = if lines_from != lines_were {
                 Some(music_store(&self.playlists_db, &self.catalogue, self.data_dir.as_deref(), lines_from.as_deref()).await)
