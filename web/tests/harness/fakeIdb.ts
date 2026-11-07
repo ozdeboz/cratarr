@@ -46,11 +46,16 @@ function objectStore(s: Store) {
 }
 
 function database(stores: Map<string, Store>) {
+  let closed = false;
   return {
     objectStoreNames: { contains: (n: string) => stores.has(n) },
     createObjectStore: (n: string, o?: { keyPath?: string }) => void stores.set(n, { keyPath: o?.keyPath, rows: new Map() }),
-    close() {},
+    close() {
+      closed = true;
+    },
     transaction(names: string | string[]) {
+      // As a browser refuses it: a write that outlives its database throws, and is not quietly kept.
+      if (closed) throw new DOMException('The database connection is closing.', 'InvalidStateError');
       const t: { oncomplete?: (() => void) | null; onerror?: (() => void) | null; onabort?: (() => void) | null; error: unknown; objectStore: (n: string) => ReturnType<typeof objectStore> } = {
         error: null,
         objectStore: (n: string) => {

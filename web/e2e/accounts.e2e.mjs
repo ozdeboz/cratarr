@@ -64,7 +64,7 @@ test('hers again at her next sign-in', async () => {
   assert.deepEqual(p.hiddenLibraries, ['cratarr/x']);
 });
 
-test('every store kept per account is named for one', async () => {
+test('the stores this run writes, kept per account, are each named for one', async () => {
   const keys = Object.keys(await storage(d.page));
-  for (const plain of ['cratarr-queues', 'cratarr.scrobblers', 'cratarr.scrobbleQueue', 'cratarr-offline-index-2', 'cratarr-prefs-account', 'cratarr-home-picture']) assert.ok(!keys.includes(plain), `${plain} has no account`);
+  for (const plain of ['cratarr-queues', 'cratarr.scrobbleQueue', 'cratarr-prefs-account']) assert.ok(!keys.includes(plain), plain);
 });

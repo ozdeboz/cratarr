@@ -73,14 +73,14 @@ test('a session that ended with no page open: whoever signs in next opens on not
   assert.deepEqual([...new Set(read.filter((k) => k.endsWith('@ann')))], []);
 });
 
-test('what the worker kept of hers stayed hers, and his reads are his', async () => {
+test('his reads are kept as his, and none of them lands among hers', async () => {
   await d.page.evaluate(async () => {
     await fetch('/api/me');
     await new Promise((r) => setTimeout(r, 800));
   });
   const name = (cacheName) => d.page.evaluate(async (cacheName) => (await (await caches.match('/api/me', { cacheName }))?.json())?.name ?? null, cacheName);
   assert.equal(await name('cratarr-data-2@bob'), 'bob');
-  assert.equal(await name('cratarr-data-2@ann'), null, 'ann read none through it here, and none of his went there');
+  assert.equal(await name('cratarr-data-2@ann'), null);
 });
 
 test('another account in one tab starts another over at once: nothing is refused it, and what it holds in memory is the one before’s', async () => {
