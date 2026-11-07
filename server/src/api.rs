@@ -939,8 +939,9 @@ async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Q
     Ok(Json(app.playing.toggle(&id, f.source.as_deref(), f.member).await?))
 }
 
-async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+async fn cover(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Query<CoverStamp>, headers: HeaderMap) -> Response {
     use crate::covers::Outcome;
+    let app = ctx.app.clone();
     if source == crate::bandcamp::SOURCE {
         return bandcamp_cover(&id).await;
     }
@@ -948,6 +949,28 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
     // Asked again each time, answered by its ETag (0.9.7): a changed cover shows at once, an unchanged one costs a 304.
     let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, no-cache"));
     let tag = |etag: &str| HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""));
+    // A track's row in a list (finding 86): its record's cover at that size, as the record's own row gets it. Its print is the
+    // library's word, so a 304 reads nothing.
+    if let (Some(size), Some(served)) = (q.size, ctx.served.clone())
+        && source == crate::source::cratarr::KIND.id
+        && id.starts_with(crate::serve::ids::SONG)
+    {
+        let (s, song) = (served.clone(), id.clone());
+        let Some(album) = tokio::task::spawn_blocking(move || s.album_of_song(&song)).await.ok().flatten() else {
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response();
+        };
+        let etag = format!("\"{}-{size}\"", served.cover_stamps().get(&album).map_or("", String::as_str));
+        if inm.is_some_and(|h| crate::covers::etag_matches(h, &etag)) {
+            return (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response();
+        }
+        return match crate::app::device_covers::for_list(&served, &album, size).await {
+            Some((ct, bytes)) => {
+                let ct = HeaderValue::from_static(crate::serve::art::picture_type(Some(&ct), &bytes));
+                ([cache, (header::ETAG, tag(&etag)), (header::CONTENT_TYPE, ct)], bytes).into_response()
+            }
+            None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+        };
+    }
     match app.playing.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
         Outcome::NotModified { etag } => (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response(),
@@ -4036,16 +4059,21 @@ struct CoverStamp {
     /// The picture of its copy in this library, where it matters which: Replace shows two copies of one record side by side.
     #[serde(default)]
     from: Option<String>,
+    /// At most this many pixels on its longer side, for a list or a grid (finding 86); none, the whole picture.
+    #[serde(default)]
+    size: Option<u32>,
 }
 
 /// An album's cover. Asked by its stamp (`?v=`, 0.9.7): kept for good, a changed cover having another address; else
 /// for an hour (another server's album, a device's picture).
 async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
-    let found = match (q.from.as_deref(), ctx.served.as_ref()) {
-        (Some(library), Some(served)) if source == crate::source::cratarr::KIND.id => served.copy_cover_bytes(&album, library).await.unwrap_or_else(|e| {
+    let own = source == crate::source::cratarr::KIND.id;
+    let found = match (q.from.as_deref(), q.size, ctx.served.as_ref()) {
+        (Some(library), _, Some(served)) if own => served.copy_cover_bytes(&album, library).await.unwrap_or_else(|e| {
             tracing::warn!("cover of {album} in {library}: {e:#}");
             None
         }),
+        (None, Some(size), Some(served)) if own => crate::app::device_covers::for_list(served, &album, size).await,
         _ => ctx.app.playing.album_cover(&source, &album).await,
     };
     match found {

@@ -8,6 +8,7 @@
   // and the next few are fetched ahead.
   import { untrack, type Snippet } from 'svelte';
   import Cover from './Cover.svelte';
+  import { sizedCover } from './coverSize';
 
   let {
     covers,
@@ -21,8 +22,11 @@
     enter = false,
     bleed = 0,
     fade = false,
+    whole = false,
     front: frontLayer,
   }: {
+    /** Its covers whole, whatever their boxes: a panel's own (finding 86). */
+    whole?: boolean;
     /** Come in when shown (Home's featured flow; the owner, 2026-10-26): from both edges towards the middle, the outer
      *  covers first, the front one last. */
     enter?: boolean;
@@ -156,11 +160,16 @@
   $effect(() => {
     if (n) onfront?.(at);
   });
-  // The next few on each side, fetched ahead so a quick flick does not show them blank.
+  // The next few on each side, fetched ahead so a quick flick does not show them blank: as each will ask, at the size of the box
+  // they are all laid out in (lib/Cover), or whole where they are.
   $effect(() => {
-    if (!n) return;
+    if (!n || !measured) return;
     const reach = front.sides + 3;
-    for (let k = -reach; k <= reach; k++) new Image().src = covers[wrap(Math.round(pos) + k)];
+    const px = front.w * (window.devicePixelRatio || 1);
+    for (let k = -reach; k <= reach; k++) {
+      const src = covers[wrap(Math.round(pos) + k)];
+      new Image().src = whole ? src : sizedCover(src, px);
+    }
   });
 
   // A drag sideways moves through them; let go, the nearest comes to the front. A tap: one on, or (`onopen`) the front
@@ -284,7 +293,7 @@
       style:transition-duration={entered ? null : `${ENTER_MS}ms`}
       style:transition-delay={entered ? null : `${Math.max(0, front.sides + 1 - Math.abs(c.key - Math.round(pos))) * STAGGER_MS}ms`}
       class:veiled={!!frontLayer && c.key === Math.round(pos)}
-      style:z-index={c.z}><Cover src={c.src} lazy={false} onready={() => (ready[c.src] = true)} />{#if frontLayer && c.key === Math.round(pos)}{@render frontLayer()}{/if}</span
+      style:z-index={c.z}><Cover src={c.src} lazy={false} {whole} onready={() => (ready[c.src] = true)} />{#if frontLayer && c.key === Math.round(pos)}{@render frontLayer()}{/if}</span
     >
   {/each}
 </div>

@@ -2809,6 +2809,44 @@ async fn a_cover_is_written_and_its_undo_puts_the_old_one_back_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// Finding 86: a list's cover comes at the size it asks, a track's row by its record's, made once and kept; the player and a panel
+/// ask without a size, and get the picture whole, as it is in the files.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_list_gets_a_cover_at_its_size_and_the_player_the_whole_one_end_to_end() {
+    let (s, root, music, _) = on_the_fixtures("sized-covers").await;
+    let big = {
+        let picture = image::RgbImage::from_fn(1200, 1200, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(picture).write_to(&mut out, image::ImageFormat::Jpeg).unwrap();
+        out.into_inner()
+    };
+    let album = s.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap();
+    let id = album["id"].as_str().unwrap().to_string();
+    let stamp = || async { s.get("/api/covers/stamps").await[format!("cratarr/{id}")].clone() };
+    let before = stamp().await;
+    s.upload_cover(&album, &big).await;
+    s.done_run(None).await;
+    s.until("the new cover's stamp", Duration::from_secs(120), || async { stamp().await != before }).await;
+    let whole = std::fs::read(music.join("Glass Harbour/Tide Tables (2012)/cover.jpg")).unwrap();
+    let side = |bytes: &[u8]| {
+        let shown = image::load_from_memory(bytes).unwrap();
+        shown.width().max(shown.height())
+    };
+    assert_eq!(side(&whole), 1200);
+
+    let (status, small) = s.anyone().bytes(&format!("/api/albums/cratarr/{id}/cover?size=320")).await;
+    assert_eq!((status, side(&small)), (200, 320));
+    let (status, got) = s.anyone().bytes(&format!("/api/albums/cratarr/{id}/cover")).await;
+    assert_eq!(status, 200);
+    assert!(got == whole, "the whole picture, as it is in the files");
+    let song = s.songs_of(&album).await[0].clone();
+    let (status, row) = s.anyone().bytes(&format!("/api/cover/cratarr/{song}?size=160")).await;
+    assert_eq!((status, side(&row)), (200, 160));
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// lofty keeps a FLAC's pictures on the file, not in its comments: `retag::rewrite` moves them over, or none could be taken out.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]

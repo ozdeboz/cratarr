@@ -307,7 +307,8 @@ self.addEventListener('fetch', (event) => {
       fetch(req)
         .then(async (r) => {
           if (!r.ok) return (await kept()) || (r.status !== 404 && (await smallCover(url.pathname))) || r;
-          if (await kept()) {
+          // Kept whole for the player away from home: a list's size of it never takes its place.
+          if (!url.searchParams.has('size') && (await kept())) {
             const copy = r.clone();
             mine.then((name) => name && caches.open(name).then((c) => c.put(url.pathname, copy)));
           }

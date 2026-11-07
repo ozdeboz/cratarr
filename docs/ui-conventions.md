@@ -268,7 +268,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   in for. No other icon, also where a crate, playlist, artist or snapshot used to show its own. Every cover is
   `lib/Cover.svelte`, which shows it when there is no address or the image fails to load; a failed address is
   remembered, so the same album shows the stand-in at once everywhere. The players and the queue's card show it only
-  when there is no cover to load, not while one loads. Blurred backdrops simply leave out a cover that fails.
+  when there is no cover to load, not while one loads. Blurred backdrops simply leave out a cover that fails. A list's
+  or a grid's cover is asked at the size its box shows, in the device's pixels (`lib/coverSize`, finding 86); the
+  players and a panel's own cover ask for it whole (`whole`).
 - **Downloads** (in the app) is the Library's list of what is on this device (decided 2026-10-16: "a special case of
   the library page"): the same rows or covers, order, size, search and select, each album as the Library lists it
   (else as its download says), the count with the space they take ("3 albums · 225 MB"). A cover plays what is on the
