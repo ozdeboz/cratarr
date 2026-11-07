@@ -556,6 +556,30 @@ Its weak spot: it never lays out again for growth, so a library that changes a l
 - Pampalk, *Islands of Music* (2001): the classic music-library map.
 - Kima Hub's map code (above); AudioMuse-AI's `app_map.py`.
 
+## One index for the whole library (explored 2026-11-07)
+
+A server browsed on a library of 34,000 tracks holds about 490 MB, and 262 MB of that has a name: the crates' facts,
+Spotify's matcher, radio's index, the alike list and the words. Each keeps its own copy of the whole library, an entry a
+track, however few rows a page shows, so paging changes nothing here. At this size the trouble is not how fast a search
+is, it is holding the library several times over. The figures below are estimates: each step is measured when it is built.
+
+The steps, the biggest first:
+
+- **One index.** Built once per library build and read by crates, radio, similarity and matching. Each keeps ids into it,
+  not rows of its own.
+- **Compact rows.** Words and names as integer ids from one table, the rows in one block rather than many small
+  allocations, bitmaps for "the tracks with this tag". Fewer small allocations may also be what lets the allocator give
+  memory back.
+- **The bulky parts on disk.** The sound vectors in a flat, memory-mapped file: the system caches it and can drop it under
+  pressure, so it counts far less against a memory limit. As 8-bit values, about a quarter of the size.
+- **What SQLite can answer stays in SQLite.** Filters and text search, from its indexes and FTS.
+- **Letting go.** What has gone quiet is dropped after some minutes, and one whole-library read runs at a time.
+- **A budget.** A target for resident memory after browsing a library of a given size, checked on every preview. A setting
+  for the quiet minutes only if a small server needs one.
+
+Not taken: an approximate vector index such as HNSW, which adds memory where a plain scan of 34,000 vectors should take
+milliseconds; a separate search engine; paging.
+
 ## Parked
 
 Liked, not taken up:
