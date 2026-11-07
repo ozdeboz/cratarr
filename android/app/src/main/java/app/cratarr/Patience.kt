@@ -4,7 +4,7 @@
  * before it gives up on that track. Twice a restart left a player stopped (the phone at 54, the tablet at 57, 2026-10-17):
  * the player had given up after its three quick tries, then skipped on through tracks it could not load either.
  * What is gone (a 4xx) is given up at once; anything else (a device without a network to ask on: no such host) gets
- * the player's own three quick tries, so offline it goes on to what it holds on the device, as before.
+ * the player's own three quick tries. Given up, a track that could not be reached holds the player where it got to ([Holding]).
  */
 package app.cratarr
 
@@ -14,6 +14,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
+import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.UnknownHostException
 
@@ -38,6 +39,13 @@ class Patience : DefaultLoadErrorHandlingPolicy() {
 
         /** Cratarr's refusal of the session (sign in again): every track would be refused alike. */
         fun refused(e: Throwable?): Boolean = e is HttpDataSource.InvalidResponseCodeException && (e.responseCode == 401 || e.responseCode == 403)
+
+        /** No network under the device to ask on, or none that leads there. */
+        fun noWay(e: Throwable?): Boolean = e is UnknownHostException || e is NoRouteToHostException || e is ConnectException
+
+        /** Whether this failure says Cratarr is out of reach, whatever the track: for a moment, or with no way there. It
+         *  says nothing of the track, so the player holds where it got to ([Holding]). */
+        fun outOfReach(e: Throwable?): Boolean = waitFor(e) || (e is HttpDataSource.HttpDataSourceException && noWay(e.cause))
 
         /** Whether this failure is Cratarr out of reach for a moment (worth waiting for), not a track that is gone or a
          *  device that is offline. */

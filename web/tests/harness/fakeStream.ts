@@ -106,7 +106,7 @@ class FakeBuffer extends EventTarget {
 }
 
 class FakeSource extends EventTarget {
-  static isTypeSupported = (type: string) => type.includes('flac');
+  static isTypeSupported = (type: string) => type.includes('flac') || (server.opus && type.includes('opus'));
   readyState = 'closed';
   buffer: FakeBuffer | null = null;
   get duration() {
@@ -229,9 +229,10 @@ class FakeAudio extends EventTarget {
   }
 }
 
-/** What a request for a track gives: `gives` seconds from where it starts, then it `breaks` (a read error), `hangs` (a
- *  server that says no more, the connection open) or `ends`. No plan: all of it. */
-export type Plan = { gives: number; then: 'breaks' | 'hangs' | 'ends' };
+/** What a request for a track gives: `gives` seconds from where it starts, then it `breaks` (a read error), `dies` (the same,
+ *  and Cratarr with it: `server.away`), `hangs` (a server that says no more, the connection open) or `ends`. No plan: all
+ *  of it. */
+export type Plan = { gives: number; then: 'breaks' | 'dies' | 'hangs' | 'ends' };
 
 export const server = {
   /** Each track's length (s). */
@@ -244,8 +245,16 @@ export const server = {
   addresses: [] as string[],
   /** What Autoplay's next ask is answered with. */
   picks: [] as unknown[],
-  /** Not reached: every stream fails to start. */
+  /** Not reached: every request fails to start, but for a track kept on the device. */
   away: false,
+  /** What the service worker keeps: these come whatever else does. */
+  kept: new Set<string>(),
+  /** Every stream's answer in place of its sound (a proxy's); null: its sound. */
+  answer: null as { status: number; body?: string } | null,
+  /** A track's own, in the words Cratarr gives. */
+  refused: new Map<string, string>(),
+  /** The browser takes Opus too, so a track has a form to fall back to. */
+  opus: false,
 };
 
 function stream(track: string, from: number, signal: AbortSignal | undefined) {
@@ -262,7 +271,8 @@ function stream(track: string, from: number, signal: AbortSignal | undefined) {
         activity++;
         if (at >= stop) {
           if (!plan || at >= length || plan.then === 'ends') return c.close();
-          if (plan.then === 'breaks') return c.error(new TypeError('network error'));
+          if (plan.then === 'dies') server.away = true;
+          if (plan.then === 'breaks' || plan.then === 'dies') return c.error(new TypeError('network error'));
           return new Promise<void>(() => {});
         }
         const secs = Math.min(CHUNK_S, stop - at);
@@ -281,6 +291,7 @@ globalThis.fetch = (async (input: string, init?: RequestInit) => {
   const url = new URL(String(input), 'http://cratarr.test');
   const asked = url.pathname.match(/^\/api\/stream\/[^/]+\/([^/]+)$/);
   if (!asked) {
+    if (server.away) throw new TypeError('Failed to fetch');
     const picks = url.pathname.includes('radio') ? server.picks.splice(0) : [];
     return new Response(JSON.stringify({ tracks: picks }), { headers: { 'content-type': 'application/json' } });
   }
@@ -288,7 +299,12 @@ globalThis.fetch = (async (input: string, init?: RequestInit) => {
   const from = Number(url.searchParams.get('from_ms') ?? 0) / 1000;
   server.asked.push({ track, from });
   server.addresses.push(String(input));
-  if (server.away) throw new TypeError('Failed to fetch');
+  if (!server.kept.has(track)) {
+    if (server.away) throw new TypeError('Failed to fetch');
+    if (server.answer) return new Response(server.answer.body ?? '', { status: server.answer.status });
+    const refused = server.refused.get(track);
+    if (refused) return new Response(JSON.stringify({ error: refused }), { status: 404 });
+  }
   const length = server.lengths.get(track) ?? 0;
   return new Response(stream(track, from, init?.signal ?? undefined), {
     headers: { 'content-type': 'audio/mp4; codecs="flac"', 'x-sample-rate': '1000', 'x-total-samples': String(length * 1000), 'x-duration-ms': String(length * 1000) },
@@ -345,7 +361,9 @@ export function track(id: string, secs: number) {
 export async function fromRest() {
   player.stop();
   Object.assign(player.local, { repeat: 'off', autoplay: null, radio: false, error: null });
-  Object.assign(server, { away: false, asked: [], addresses: [], picks: [] });
+  Object.assign(server, { away: false, answer: null, opus: false, asked: [], addresses: [], picks: [] });
   server.plans.clear();
+  server.kept.clear();
+  server.refused.clear();
   await settle();
 }

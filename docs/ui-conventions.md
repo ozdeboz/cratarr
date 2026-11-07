@@ -585,6 +585,11 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   queue that plays is kept on the device, each account's and mode's, the place going on with it, a Play from queue's copy too.
   Cratarr gives its own back as the player connects, with its word on playing on, so the device's is taken up, paused where it
   was, where it cannot be: Cratarr out of reach, or a queue that went on meanwhile, which then reaches Play On with the next report.
+- **Cratarr gone while it plays** (the owner, 2026-11-06; `lib/player/holdOn`, the app's `Holding`): what has come of the music
+  plays out and the player stops at the place reached, the queue whole, shown as not sounding yet, with nothing said and nothing
+  skipped. It asks again, every few seconds at first and at most every half minute, at once when Cratarr answers, and goes
+  on by itself; paused, it stays paused. A track on the device plays in its turn; one that is not holds the queue there, whatever
+  lies after it, and a tap on a row plays that row.
 - **What an action did, or why it failed, is a toast** (`lib/toast.svelte.ts`): one at a time, floating above the
   mini-player, or the bottom edge without it (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
   warnings, red for errors. Done and warnings go after a few seconds; errors stay until dismissed, replaced, or the

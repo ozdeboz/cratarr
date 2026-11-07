@@ -254,6 +254,12 @@ The owner, 2026-11-03: "Defer conflicts for later". 632's recommendations for th
   - Since preview 2 (D04) the library is in every build that makes an app (`rulesLibrary`, scripts/rules-android.sh), and
     no switch stands before it: the Kotlin brake is left for the unit tests and a device where it does not load.
 
+## Amended 2026-11-06: Cratarr gone while it plays (the owner, for preview 2)
+
+The player stops at the place reached, keeps the queue, and carries on by itself when Cratarr answers. A track that could not be
+asked for says nothing of itself, so it is not skipped, and the queue does not run out behind the sound. This goes for a device
+that lost its network too: what was skipped there as gone, in the app, now holds. What is on the device still plays in its turn.
+
 ## Amended 2026-11-03: the tape engine joins 0.16 (0102)
 
 The owner decided 0102 the same day, for 0.16: every wind's sound is made on the device, from the track decoded in

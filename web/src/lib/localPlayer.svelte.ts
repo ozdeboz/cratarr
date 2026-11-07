@@ -20,13 +20,13 @@ import { ask, heard as heardAsked, type Asked } from './player/asked';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type Collection, type QueueItem, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, UNREACHED, windMap, type Collection, type QueueItem, type TrackGain } from './api';
 import { collectionIn } from './within';
 import { commandOf } from './player/commands';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './deckCourse';
-import { asksSignIn, reach, toSignIn, whenAway } from './reach.svelte';
+import { asksSignIn, notReached, reach, refused as refusedHere, refusedFor, toSignIn, unreached, whenAway, whenReached } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { firstFrame } from './mp3Frames';
@@ -41,6 +41,7 @@ import { afterLetGo, holdInReverse, knobFor, letGoTo, notSounding, skipWay } fro
 import { resumePlace } from './player/resumePlace';
 import { drivenHold, NO_DRIVEN_HOLD, NO_OWN_RAMP, NO_PENDING_NEXT, ownRamp, pendingNext, type DrivenHold, type OwnRamp, type PendingNext } from './player/tapeParts';
 import { due, entered, NO_DEADLINES, type Deadlines } from './player/graces';
+import { heldAt, holdAfterCut, type HeldFor } from './player/holdOn';
 import { brakeLengthMs, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 import { heard as readClock, heardSpeed } from './player/heard';
@@ -239,6 +240,11 @@ let appendingIndex = -1;
 let lastAppended = -1;
 /** The queue index `local.error` is about: it goes once a later track plays. */
 let errorIndex = -1;
+/** The track that could not be asked for, Cratarr out of reach (lib/player/holdOn): nothing after it is asked for. What the
+ *  stream holds plays out, and it stands there with the queue kept until that track comes. */
+let hold: HeldFor | null = null;
+/** Cratarr did not answer for it: the network, or its proxy's empty 5xx or bare 403. Nothing is known of the track. */
+class NotReached extends Error {}
 
 // --- The tape engine's one state (decision 0075; the owner, 2026-10-27: "spread... fix it") ---
 // Everything that moves the tape, in one place, so no two parts of it can disagree: what a ramp has committed to and how
@@ -633,6 +639,8 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
     if (t.from) query.set('from', t.from);
     const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${query.toString() ? `?${query}` : ''}`, {
       signal: ctl.signal,
+    }).catch((e) => {
+      throw (e as DOMException).name === 'AbortError' ? e : new NotReached();
     });
     if (!res.ok) {
       if (asksSignIn(res)) toSignIn();
@@ -642,8 +650,13 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
       } catch {
         /* no words */
       }
+      if (!text && notReached(res.status)) {
+        if (res.status === 403) refusedHere();
+        throw new NotReached();
+      }
       throw new Error(`${t.name || 'A track'}: ${text || 'it could not be loaded.'}`);
     }
+    if (hold?.index === index) hold = null;
     // Part of a file from a moment that does not say where it begins (x-start-ms): never taken as its start (0.10: a
     // Bandcamp preview's seek, so placed, came out short and was passed over). Asked again from its top instead.
     if (from > 0 && !whole && res.status === 206 && !res.headers.has('x-start-ms')) {
@@ -790,6 +803,13 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
   } catch (e) {
     if ((e as DOMException).name === 'AbortError' || gen !== generation) return;
     playback('warn', 'track failed', { track: t.id, source: t.source, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), ms: ms?.readyState ?? null, sb: !!sb, mime });
+    // Cratarr out of reach, which says nothing of this track: held here, none of what follows asked for, so the queue does not
+    // run out while the stream plays what it has. Said by nothing but the player waiting.
+    if (e instanceof NotReached) {
+      hold = heldAt(hold, { index, from, whole }, Date.now(), refusedFor());
+      unreached();
+      return;
+    }
     // Broke while it plays (a roam, a restart, a proxy tired of a paused stream): it ends at what the stream holds, so
     // what follows goes after that, never over it. Its rest is asked for from there, once: a fresh stream would throw
     // away the minute already in, which is all there is to play while Cratarr cannot be reached.
@@ -799,6 +819,12 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
       placedSegment.length = here.offset + ahead();
       streamEnd = Math.max(streamEnd, placedSegment.start + placedSegment.length);
       if (!again) return appendTrack(index, placedSegment.length, gen, whole, true);
+    }
+    // Broke before its turn: what came of it goes, and it is asked for once more, which tells Cratarr gone from a track that
+    // will not come.
+    if (placedSegment && !reached && !again) {
+      cutFrom(index);
+      return appendTrack(index, 0, gen, false, true);
     }
     local.error = e instanceof Error ? e.message : String(e);
     errorIndex = index;
@@ -841,6 +867,7 @@ async function fresh(index: number, from = 0, play = true) {
   from = r.from;
   play = r.play;
   const gen = ++generation;
+  hold = null;
   streamFrom = { index, from };
   fetching?.abort();
   // Its own track's append is under way from here (its source opening first): the tick appends no other meanwhile. A
@@ -943,7 +970,9 @@ function tick() {
     showOnLockScreen();
   }
   const gen = generation;
-  if (!appending && lastAppended >= local.index && lastAppended < local.queue.length - 1 && streamEnd - audio.currentTime < AHEAD && streaming()) {
+  if (hold) {
+    if (Date.now() >= hold.askAt) askHeld();
+  } else if (!appending && lastAppended >= local.index && lastAppended < local.queue.length - 1 && streamEnd - audio.currentTime < AHEAD && streaming()) {
     appendTrack(lastAppended + 1, 0, gen);
   }
   if (!appending) evict();
@@ -1163,7 +1192,7 @@ if (audio) {
   el.addEventListener('stalled', () => {
     const buffered = el.buffered.length ? Math.round(el.buffered.end(el.buffered.length - 1) * 10) / 10 : 0;
     playback('warn', 'stalled', { index: local.index, at: Math.round(el.currentTime * 10) / 10, buffered });
-    if (buffered === 0) fallBack('stalled with nothing in');
+    if (buffered === 0 && !hold) fallBack('stalled with nothing in');
   });
   el.addEventListener('waiting', () => {
     playback('info', 'waiting', { index: local.index, at: Math.round(el.currentTime * 10) / 10 });
@@ -1795,6 +1824,8 @@ export async function startRadio(seed: string[], from: string | null, within: Co
 const BATCH = 5;
 const LOW = 3;
 let filling = false;
+/** Cratarr out of reach when Radio or Autoplay asked. */
+let picksOwed = false;
 /** The own tracks Radio has asked inserts for (by entry, or place and id): one ask per track. */
 const insertedFor = new Set<string>();
 
@@ -1804,6 +1835,12 @@ function fill() {
   nextRound();
   insertRadio();
   fillAutoplay();
+}
+
+/** Radio's or Autoplay's ask failed: said, unless Cratarr is out of reach, when they are asked for again as it answers. */
+function picksFailed(e: unknown) {
+  if (e instanceof Error && e.message === UNREACHED) picksOwed = true;
+  else local.error = e instanceof Error ? e.message : String(e);
 }
 
 /** Radio, this page's own stream: about five tracks like the own track that plays, right after it and its hand-added
@@ -1829,7 +1866,7 @@ function insertRadio() {
     })
     .catch((e) => {
       insertedFor.delete(key);
-      local.error = e instanceof Error ? e.message : String(e);
+      picksFailed(e);
     });
 }
 
@@ -1860,7 +1897,7 @@ function fillAutoplay() {
         next();
       }
     })
-    .catch((e) => (local.error = e instanceof Error ? e.message : String(e)))
+    .catch(picksFailed)
     .finally(() => {
       filling = false;
       nextKept = pendingNext.filled(nextKept);
@@ -2051,6 +2088,7 @@ export const moveUpcoming = (from: number, to: number) => move(local.index + 1 +
 /** The queue changed from index `at` on: what the stream holds (or is fetching) from there is no longer what comes
  *  next. It is dropped, and the tick appends the new next track gaplessly after the last one kept. */
 function cutFrom(at: number) {
+  hold = holdAfterCut(hold, at, local.queue.length);
   // A track still coming in counts as appended only once wholly in, but its segment and its sound are in the stream
   // already: stopped, they go too.
   const aborted = appending && appendingIndex >= at;
@@ -2281,6 +2319,7 @@ export function stop(): { queue: LocalTrack[]; index: number; position: number }
 /** The stream ended and the player emptied: nothing of what played lingers. */
 function empty() {
   generation++;
+  hold = null;
   endRewind();
   atOnce();
   resetTape();
@@ -2523,6 +2562,22 @@ function takeUpKept() {
 }
 whenAway.add(takeUpKept);
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => document.hidden && !handed() && local.queue.length && keepNow());
+
+// --- Held on server loss (lib/player/holdOn) ---
+
+/** The track held for, asked for again. It goes on from there by itself, as the stream never ended: what the element ran out
+ *  of comes in behind it, and a paused player stays paused. */
+function askHeld() {
+  if (hold && !appending) void appendTrack(hold.index, hold.from, generation, hold.whole);
+}
+
+// Cratarr answers: what waited for it at once, not at the next knock.
+whenReached.add(() => {
+  askHeld();
+  if (!picksOwed) return;
+  picksOwed = false;
+  if (!handed()) fill();
+});
 
 // --- Play On to this page (decision 0033: a page is a Play On target while it is open; 0031 amended) ---
 

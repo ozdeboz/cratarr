@@ -54,8 +54,8 @@ test('a track that breaks again ends at what the stream held, and the next plays
   assert.equal(server.asked.filter((a) => a.track === 'a').length, 2, 'asked once more, no more than that');
 });
 
-test('a track not reached yet that breaks takes no time in the stream: the one after it plays in its place', async () => {
-  server.plans.set('b', [{ gives: 5, then: 'breaks' }]);
+test('a track not reached yet that breaks twice takes no time in the stream: the one after it plays in its place', async () => {
+  server.plans.set('b', [{ gives: 5, then: 'breaks' }, { gives: 5, then: 'breaks' }]);
   await plays(track('a', 40), track('b', 100), track('c', 100));
   await runFor(30);
   assert.equal(heard(), 'a', 'what plays goes on');
@@ -63,7 +63,16 @@ test('a track not reached yet that breaks takes no time in the stream: the one a
   assert.equal(heard(), 'c');
   assert.equal(shown(), 'c');
   near(local.position, 10, 'from its start');
-  assert.equal(server.asked.filter((a) => a.track === 'b').length, 1, 'not reached, so not asked again');
+  assert.equal(server.asked.filter((a) => a.track === 'b').length, 2, 'asked once more, no more than that');
+});
+
+test('a track not reached yet that breaks once loses nothing: asked for again, from its start', async () => {
+  server.plans.set('b', [{ gives: 5, then: 'breaks' }]);
+  await plays(track('a', 40), track('b', 100));
+  await runFor(50);
+  assert.equal(heard(), 'b');
+  near(audio.heard()!.at, 10, 'whole, nothing of what came first laid over it');
+  assert.equal(local.error, null, 'mended, so nothing to say');
 });
 
 test('a track that breaks with nothing of it held moves on at once, as one that never came', async () => {

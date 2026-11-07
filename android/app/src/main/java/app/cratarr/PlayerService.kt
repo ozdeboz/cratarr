@@ -61,6 +61,8 @@ class PlayerService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     /** Sync play (decision 0037): this device in a group. */
     private lateinit var sync: SyncPlay
+    /** Cratarr out of reach: the player stands where it got to, and goes on by itself. */
+    private lateinit var holding: Holding
 
     /** Start and stop (0.9.6): play, pause and stop, and next and previous where asked, ramped as the device says. */
     lateinit var startStop: StartStop
@@ -158,6 +160,12 @@ class PlayerService : MediaSessionService() {
             // (local mode, content://) through Android.
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, Downloads.playback(this))).setLoadErrorHandlingPolicy(Patience()))
             .build()
+        holding = Holding(
+            { r, ms -> main.postDelayed(r, ms) },
+            main::removeCallbacks,
+            // Paused, a press asks: nothing keeps a device awake asking for what nobody is waiting to hear.
+            { if (player.playerError != null && player.playWhenReady) player.prepare() },
+        )
         player.addListener(Keeper(player).also { keeper = it })
         player.addListener(Course(player))
         sync.attach(player)
@@ -471,6 +479,9 @@ class PlayerService : MediaSessionService() {
         if (QueueKept.whenAway(saved, player.mediaItemCount, queueWho)) restore(saved)
     }
 
+    /** Cratarr answers: what the player held for is asked for at once. */
+    fun cratarrAnswered() = holding.answered()
+
     /** A report told Cratarr of the queue: what is kept here says it is in step. */
     fun queueTold() {
         if (!prefs.ownQueue && player.mediaItemCount > 0) keepQueue.run()
@@ -709,9 +720,10 @@ class PlayerService : MediaSessionService() {
                 val at = Sleep.get(this@PlayerService)?.atMs
                 if (player.isPlaying && at != null && at <= System.currentTimeMillis()) Sleep.clear(this@PlayerService)
             }
-            // Nothing queued any more: no timer.
-            if (events.contains(Player.EVENT_TIMELINE_CHANGED) && player.mediaItemCount == 0 && Sleep.get(this@PlayerService) != null) {
-                Sleep.clear(this@PlayerService)
+            // Nothing queued any more: no timer, and nothing to hold for.
+            if (events.contains(Player.EVENT_TIMELINE_CHANGED) && player.mediaItemCount == 0) {
+                holding.ended()
+                if (Sleep.get(this@PlayerService) != null) Sleep.clear(this@PlayerService)
             }
         }
 
@@ -721,21 +733,22 @@ class PlayerService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_READY) holding.ended()
             if (playbackState == Player.STATE_ENDED && Sleep.get(this@PlayerService)?.endOfTrack == true) Sleep.clear(this@PlayerService)
         }
 
         override fun onPlayerError(error: PlaybackException) {
             val cause = error.cause
             val status = (cause as? HttpDataSource.InvalidResponseCodeException)?.responseCode
-            // Cratarr still out of reach after a minute of asking (Patience): the same track again in a while, where it
-            // was. Refused (sign in again): every track would be, so it waits for the sign-in (Net tells the owner).
-            // Otherwise, as a player does: what cannot play (gone, or out of reach offline) is skipped, unless it was
-            // the last.
+            // Cratarr out of reach (the owner, 2026-11-06: Patience's minute of asking over, or no network): held where it got
+            // to, as what follows could not be had either and the queue would run out. Refused (sign in again): every track
+            // would be, so it waits for the sign-in (Net tells the owner). Otherwise, as a player does: what cannot play is
+            // skipped, unless it was the last.
             val action = when {
                 // The device's music, no longer allowed: every track would fail.
                 player.currentMediaItem?.let(DeviceMusic::owns) == true && !DeviceMusic.granted(this@PlayerService) -> "stop"
                 Patience.refused(cause) -> "wait for sign-in"
-                Patience.waitFor(cause) -> "again"
+                Patience.outOfReach(cause) -> "hold"
                 player.hasNextMediaItem() -> "skip"
                 else -> "stop"
             }
@@ -743,8 +756,9 @@ class PlayerService : MediaSessionService() {
                 this@PlayerService, "warn", "playon", "track failed",
                 "track" to player.currentMediaItem?.mediaId, "error" to error.errorCodeName, "status" to status, "action" to action,
             )
+            if (action != "hold") holding.ended()
             when (action) {
-                "again" -> main.postDelayed({ if (player.playerError != null) player.prepare() }, AGAIN_MS)
+                "hold" -> holding.begin()
                 "skip" -> {
                     player.seekToNextMediaItem()
                     player.prepare()
@@ -763,6 +777,7 @@ class PlayerService : MediaSessionService() {
         LinkLog.add(this, "info", "playon", "service stopped")
         DeviceWatch.stop()
         Who.changed.remove(whoChanged)
+        holding.ended()
         main.removeCallbacksAndMessages(null)
         keepQueue.run()
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
@@ -952,8 +967,6 @@ class PlayerService : MediaSessionService() {
     companion object {
         private const val TAG = "CratarrPlayer"
         const val RESTART_AFTER_MS = 5_000L
-        /** A track Cratarr could not give for a minute: asked for again after this long. */
-        private const val AGAIN_MS = 15_000L
         /** How often the playing track is looked at for counting. */
         private const val COUNT_EVERY_MS = 5_000L
         /** How far behind the place kept may fall while it plays ([keepQueue]). */

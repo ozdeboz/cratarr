@@ -231,6 +231,7 @@ class PlayOnLink(
                 if (code != 200) throw java.io.IOException("HTTP $code")
                 opened = true
                 LinkLog.add(service, "info", "playon", "connected", "address" to address, "conn" to id, "failed_before" to failed.takeIf { it > 0 })
+                main.post(service::cratarrAnswered)
                 // Ready for what Cratarr sends: in the foreground (Stay ready), where Android lets the music start.
                 if (prefs.stayReady) Ready.ensure(service, "connected")
                 connectedSince = System.currentTimeMillis()
