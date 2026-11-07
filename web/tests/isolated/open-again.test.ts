@@ -12,6 +12,7 @@ const every = setInterval;
 g.setInterval = (...args: Parameters<typeof setInterval>) => every(...args).unref();
 g.matchMedia = () => ({ matches: false, addEventListener() {} });
 g.screen = { width: 1000, height: 800 };
+Object.assign(g.location as object, { assign() {} });
 Object.defineProperty(globalThis, 'navigator', { value: { onLine: true, serviceWorker: { addEventListener() {} } }, configurable: true });
 
 // Opened as ann: the name kept, a play left to send, and her sign-in here.
@@ -31,7 +32,8 @@ globalThis.fetch = (async (input: string) => {
   return json({});
 }) as typeof fetch;
 
-const { accountKey, accountLearnt, whenAccount } = await import('../../src/lib/account.ts');
+const { accountKey, accountLearnt, pageGoing, whenAccount } = await import('../../src/lib/account.ts');
+const { toSignIn } = await import('../../src/lib/reach.svelte.ts');
 const { scrobbling } = await import('../../src/lib/scrobbles.svelte.ts');
 const { prefs } = await import('../../src/lib/prefs.svelte.ts');
 await import('../../src/lib/accountPrefs.svelte.ts');
@@ -60,4 +62,10 @@ test('what waited from before goes then, and what shows of the services is read'
 
 test('the preferences are compared at an ordinary open, with no live channel to set it off', () => {
   assert.deepEqual(prefs.pinned, ['from the phone']);
+});
+
+test('sent to sign in, the page is going: nothing for the browser to ask', () => {
+  assert.equal(pageGoing(), false);
+  toSignIn();
+  assert.equal(pageGoing(), true);
 });

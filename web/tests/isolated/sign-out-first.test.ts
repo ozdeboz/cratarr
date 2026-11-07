@@ -28,11 +28,14 @@ Object.defineProperty(globalThis, 'navigator', { value: { onLine: true, serviceW
  *  stores send what waits, and that is the sign-out's to do here. */
 const steps: string[] = [];
 let reached = false;
+/** Whether the page was going by the time it asked Cratarr to end the session: the answer may never come. */
+let goingAsItAsked = false;
 globalThis.fetch = (async (input: string, init?: RequestInit) => {
   const path = String(input);
   if (!reached) throw new TypeError('no network');
   if (init?.method !== 'POST') return new Response('{}');
   steps.push(`asked ${path}`);
+  if (path === '/signout') goingAsItAsked = pageGoing();
   await wait(15);
   steps.push(`answered ${path}`);
   if (path === '/api/plays') return new Response(JSON.stringify({ done: JSON.parse(String(init.body)).events.map((e: { id: string }) => e.id) }));
@@ -46,6 +49,7 @@ localStorage.setItem('cratarr-kept-plays', JSON.stringify([{ id: 'p1', source: '
 localStorage.setItem('cratarr.scrobblers@ann', JSON.stringify({ listenbrainz: { token: 'hers', name: 'ann-lb' } }));
 localStorage.setItem('cratarr.scrobbleQueue@ann', JSON.stringify({ plays: [{ id: 's1', at: Math.floor(at / 1000), artist: 'a', title: 't', album: null, duration_secs: 100 }], sent: { listenbrainz: [], lastfm: [] } }));
 
+const { pageGoing } = await import('../../src/lib/account.ts');
 const { reach } = await import('../../src/lib/reach.svelte.ts');
 reach.away = true;
 await import('../../src/lib/output.svelte.ts');
@@ -75,4 +79,5 @@ test('it all goes before the session it is told under ends', async () => {
 
 test('a sign-out asks nothing, music playing or not: Cancel would leave her session, her music and nobody’s stores', () => {
   assert.equal(asksToStay(), false);
+  assert.equal(goingAsItAsked, true, 'from the moment it began: Cratarr may never answer');
 });

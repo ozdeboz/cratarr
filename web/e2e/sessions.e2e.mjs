@@ -133,6 +133,22 @@ test('a sign-out that did not reach Cratarr: the next open is not hers, and the 
   assert.equal(me, 401, 'and it is over');
 });
 
+test('owed, its session then ended some other way: the sign-in page settles it, or the next one in would be signed out for it', async () => {
+  await signIn(d.page, 'ann', '/signin');
+  await d.page.route('**/signout', (r) => r.abort());
+  await askSignOut(d.page);
+  await d.page.waitForFunction(() => localStorage.getItem('cratarr-sign-out-owed') !== null);
+  await d.page.waitForLoadState('load');
+  await d.page.unroute('**/signout');
+  await d.page.goto('about:blank');
+  await d.page.context().clearCookies();
+  await signIn(d.page, 'bob', '/signin');
+  await d.page.reload();
+  await d.page.waitForLoadState('load');
+  assert.equal(await d.page.evaluate(async () => (await fetch('/api/me')).status), 200);
+  await signOut(d.page);
+});
+
 test('a sign-out that reached Cratarr ends the session it held', async () => {
   await signIn(d.page, 'ann', '/signin');
   await signOut(d.page);

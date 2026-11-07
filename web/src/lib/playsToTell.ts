@@ -15,8 +15,8 @@ const KEPT = 500;
 /** The latest [KEPT] of each account's, in their order: one's plays do not push out another's. */
 function latestOfEach<P extends { account?: string }>(plays: P[]): P[] {
   const counted = new Map<string | undefined, number>();
-  return plays
-    .toReversed()
+  return [...plays]
+    .reverse()
     .filter((p) => {
       const n = counted.get(p.account) ?? 0;
       counted.set(p.account, n + 1);

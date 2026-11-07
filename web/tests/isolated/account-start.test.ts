@@ -60,13 +60,15 @@ test('the service worker hears whose the page is from its first line, before any
 });
 
 test('another tab signing out or in starts this page over: what it holds in memory is the one before\'s', async () => {
-  await opened('"ann"');
+  const a = await opened('"ann"');
   reloads = 0;
   localStorage.setItem(WHO, 'null');
   fire('storage', { key: 'cratarr-prefs' });
   assert.equal(reloads, 0, 'another store changing is nothing to it');
+  assert.equal(a.pageGoing(), false);
   fire('storage', { key: WHO });
   assert.equal(reloads, 1);
+  assert.equal(a.pageGoing(), true, 'the browser is not to ask, music playing or not');
   localStorage.setItem(WHO, '"bo"');
   fire('storage', { key: WHO });
   assert.equal(reloads, 2);
