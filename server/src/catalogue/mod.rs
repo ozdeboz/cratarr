@@ -160,9 +160,6 @@ const PRESENT: &str = "folder >= 0 AND gone_at IS NULL AND trashed IS NULL";
 /// The same, with the files table named `f` (in a join with `source_ids`, which has a folder too).
 const PRESENT_F: &str = "f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL";
 
-/// How long a folder out of use keeps its rows (parked) before they are forgotten.
-const PARKED_KEEP_SECS: i64 = 30 * 24 * 3600;
-
 /// How many of a folder's files `set_folders` looks for at a path, to tell whether those rows are that folder's.
 const SAMPLE: i64 = 20;
 
@@ -1058,8 +1055,9 @@ impl Catalogue {
     /// A folder that is no longer in use is parked, not forgotten: its rows (files, tags, links to the servers' ids)
     /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, with its files
     /// where they were, it picks them up again under its own id: the same track ids, only changed files read again. A
-    /// source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. Parked folders are
-    /// forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path. "The same files" is more than half
+    /// source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. A parked folder is
+    /// forgotten only when other files are found at its path, never for its age: what it holds is listeners', and how long a
+    /// drive stays in a drawer says nothing of whether it comes back. "The same files" is more than half
     /// of a sample spread over the folder: one album gone while it was away forgets nothing (rows go one by one, once the
     /// walk misses them), and nothing at all there is no other files, but a mount not up (`holds_nothing`).
     pub fn set_folders(&self, folders: Vec<PathBuf>) -> Result<()> {
@@ -1174,22 +1172,10 @@ impl Catalogue {
                 }
             }
         }
-        // 3. What stepped aside and was not taken is parked, from now on; parked too long, it is forgotten.
-        for p in &stepped {
+        // 3. What stepped aside and was not taken is parked, from now on, and stays so: the mark says since when.
+        for (p, path, _) in known(&tx)?.into_iter().filter(|(id, _, _)| stepped.contains(id)) {
             tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?1, ?2)", params![format!("parked:{p}"), now_s.to_string()])?;
-        }
-        for (p, path, _) in known(&tx)?.into_iter().filter(|(id, _, _)| *id < 0) {
-            let since: i64 = tx
-                .query_row("SELECT value FROM meta WHERE key = ?1", [format!("parked:{p}")], |r| r.get::<_, String>(0))
-                .optional()?
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(now_s);
-            if stepped.contains(&p) && now_s == since {
-                tracing::info!("catalogue: {path} is out of use; its rows are kept for {} days", PARKED_KEEP_SECS / 86_400);
-            }
-            if now_s - since >= PARKED_KEEP_SECS {
-                forget.push(p);
-            }
+            tracing::info!("catalogue: {path} is out of use; its rows are kept");
         }
         for p in forget {
             tx.execute(
@@ -6812,6 +6798,37 @@ mod tests {
         }
     }
 
+    /// A3: a library out of use is forgotten by nobody's clock: however long it is parked, its rows wait, and it comes back as itself,
+    /// the same ids on the same files, with nothing read again.
+    #[test]
+    fn a_library_parked_however_long_comes_back_as_itself() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(1, "A - B (2020)/01 One.mp3").unwrap();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        let parked: Vec<(String, String)> = {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT key, value FROM meta WHERE key LIKE 'parked:%'").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(parked.len(), 1, "since when it is parked is kept");
+        let years_ago = now() - 10 * 365 * 24 * 3600;
+        cat.db().execute("UPDATE meta SET value = ?2 WHERE key = ?1", params![parked[0].0, years_ago.to_string()]).unwrap();
+        // Every start and every change of the libraries looks at it again.
+        cat.set_folders(vec![a.clone()]).unwrap();
+        let (rows, retired): (i64, i64) = cat.db().query_row("SELECT (SELECT count(*) FROM files WHERE folder < 0), (SELECT count(*) FROM tracks WHERE retired_at IS NOT NULL)", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((rows, retired), (2, 0), "its rows wait, and no track of it retires");
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&b), Some(1), "its own id");
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(one), "its own track");
+        for d in [&a, &b] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     /// What names a library by its path hears where it went, however it came there: renamed in one breath, or parked on the way by a
     /// mount changed first. Until that has followed it says the path that is named, and a library back where it was moved nowhere.
     #[test]
@@ -6863,12 +6880,10 @@ mod tests {
         read_as_audio(&cat);
         cat.identify().unwrap();
         let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
-        cat.db().execute("DELETE FROM tags", []).unwrap();
         std::fs::create_dir_all(d.join("Elsewhere")).unwrap();
         std::fs::rename(d.join("A - B (2020)/01 One.mp3"), d.join("Elsewhere/first take.mp3")).unwrap();
         cat.walk_all();
         read_as_audio(&cat);
-        cat.db().execute("DELETE FROM tags", []).unwrap();
         assert_eq!(cat.identify().unwrap(), (1, 0), "recognised: no id given");
         assert_eq!(cat.track_of(0, "Elsewhere/first take.mp3"), Some(one));
         std::fs::remove_dir_all(&d).ok();
