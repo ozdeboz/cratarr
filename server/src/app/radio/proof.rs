@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
 
+use cratarr_rules::index::Marks;
+use cratarr_rules::index::device::Device;
 use cratarr_rules::radio::DEFAULT_COUNT;
 
 use super::*;
@@ -239,6 +241,9 @@ async fn listens(app: &Arc<App>, served: &Serve, account: &str, turn: usize, son
     let dismissed = crates::Fit { dismissed: vec!["tempo".to_string()], ..crates::Fit::default() };
     app.playlists.set_crate_fit(&format!("{}{}{list}", crates::LIKE, crates::LIST), dismissed).await.unwrap();
     app.playlists.exclude(None, &every(17), true).await.unwrap();
+    // A fixed crate's toggles as saved, for every device.
+    app.playlists.set_crate_favourites("unlisted", [crates::Favourites::Only, crates::Favourites::None][turn]).await.unwrap();
+    app.playlists.set_crate_favourite_albums("unlisted", [crates::Favourites::All, crates::Favourites::Only][turn]).await.unwrap();
     if turn == 1 {
         app.playlists.exclude_artist("Kite Theory").await.unwrap();
     }
@@ -285,6 +290,164 @@ async fn a_data_folder_of_the_fixture_library() {
         served.users.set(account, "pw").unwrap();
         acting_as(who(&served, account), listens(&app, &served, account, turn, &songs, &albums, now)).await;
     }
+}
+
+/// A device that fetched all it fetches of this account, the sounds as the server holds them: eight bits move a Sounds like a little
+/// (D11 says how far), and here the rules are what is compared.
+async fn device_of(app: &Arc<App>, served: &Arc<Serve>, account: &str) -> Device {
+    let libraries = app.library.index_libraries(served);
+    let (s, a) = (served.clone(), account.to_string());
+    let (index, facts) = tokio::task::spawn_blocking(move || crate::app::device_index::whole_of(&s, &libraries, Some(&a))).await.unwrap().unwrap();
+    let own = crate::app::device_index::own(app, Some(account.to_string()), false).await.unwrap();
+    let marks = Marks::load(&own.bytes).unwrap();
+    let heard: HashMap<i64, Arc<[f32]>> = facts.iter().filter_map(|f| Some((f.track?, f.sound.clone()?))).collect();
+    let mut held = index.facts(None);
+    held.iter_mut().for_each(|f| f.sound = f.track.and_then(|t| heard.get(&t).cloned()));
+    Device::over(index, held, &marks)
+}
+
+/// The tracks a device says a crate holds, in its own order; none where it has nothing to say.
+fn device_crate(device: &mut Device, id: &str, now: i64) -> Option<Vec<String>> {
+    let asked = serde_json::json!({ "ask": "rows", "id": id, "order": "own", "offset": 0, "limit": 100_000, "now": now });
+    let answer: serde_json::Value = serde_json::from_str(&device.ask(&asked.to_string())?).unwrap();
+    Some(answer["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect())
+}
+
+/// Every crate of `crates_of`'s and a Sounds like of a spread of tracks, records and artists, on a device and on the server. A moment
+/// is the weather's, and says nothing on a device. How many held tracks, and what differs, one line each.
+async fn crates_against(app: &Arc<App>, device: &mut Device, account: &str, now: i64) -> (usize, Vec<String>) {
+    let cat = app.library.catalogue();
+    let facts = cat.crate_facts().unwrap();
+    let mut ids: BTreeSet<String> = app.playlists.crate_members(&[]).await.unwrap().into_iter().map(|(id, _, _)| id).collect();
+    ids.extend(facts.iter().flat_map(|f| f.genres.iter()).map(|g| format!("{}{g}", crates::GENRE)));
+    ids.extend(app.playlists.crate_fits().await.unwrap().into_iter().map(|f| f.crate_id));
+    ids.extend(facts.iter().step_by(7).filter_map(|f| Some(format!("{}{}", crates::LIKE, f.song()?))));
+    ids.extend(facts.iter().step_by(11).filter_map(|f| Some(format!("{}{}", crates::LIKE, f.album.as_deref()?))));
+    ids.insert(crates::SECOND_CHANCE.to_string());
+    let (mut held, mut out) = (0, Vec::new());
+    for id in ids {
+        let server = super::super::play::own_songs(app, &crate_within(&id), Some(account)).await.ok();
+        let here = device_crate(device, &id, now);
+        held += usize::from(server.as_ref().is_some_and(|tracks| !tracks.is_empty()));
+        if server != here {
+            out.push(format!("{account}: {id}: {server:?} on the server, {here:?} on the device"));
+        }
+    }
+    (held, out)
+}
+
+/// The Crates page on a device and on the server: the list, and each crate's card, sizes and toggles. A Sounds like's sizes at the
+/// settings it is not set to are the server's alone (one pass over the library is a device's): where a device has none, they are not
+/// compared. How many crates, and what differs, one line each.
+async fn list_against(app: &Arc<App>, device: &mut Device, account: &str, now: i64) -> (usize, Vec<String>) {
+    let server = serde_json::to_value(app.playlists.crates(None, &[]).await.unwrap()).unwrap();
+    let asked = serde_json::json!({ "ask": "crates", "without": [], "now": now });
+    let here: serde_json::Value = serde_json::from_str(&device.ask(&asked.to_string()).unwrap()).unwrap();
+    let (server, mut here) = (server.as_array().unwrap().clone(), here.as_array().unwrap().clone());
+    let ids = |list: &[serde_json::Value]| -> Vec<String> { list.iter().map(|c| c["id"].as_str().unwrap_or_default().to_string()).collect() };
+    let mut out = Vec::new();
+    if ids(&server) != ids(&here) {
+        out.push(format!("{account}: the list: {:?} on the server, {:?} on the device", ids(&server), ids(&here)));
+    }
+    for (s, h) in server.iter().zip(here.iter_mut()) {
+        for setting in ["all", "only", "none"] {
+            if h["counts"][setting].is_null() {
+                h["counts"][setting] = s["counts"][setting].clone();
+            }
+        }
+        if s != h {
+            out.push(format!("{account}: {}: {s} on the server, {h} on the device", s["id"]));
+        }
+    }
+    (server.len(), out)
+}
+
+/// `Asking::lines`' every way of asking after a spread of tracks, and inside each crate, on a device and with the server's index. How
+/// many picked anything, and what differs, one line each.
+async fn picks_against(app: &Arc<App>, device: &mut Device, account: &str, seed: u64, now: i64) -> (usize, Vec<String>) {
+    let (index, recent) = ready().await.unwrap();
+    let asked = as_asked(NextRequest::default()).unwrap().0.ask;
+    let plain = with_taste(app, index.clone(), Some(account), false).await.unwrap();
+    let tasted = with_taste(app, index, Some(account), true).await.unwrap();
+    let (mut picked, mut out) = (0, Vec::new());
+    let mut against = |inside: Option<(&str, &[usize])>, seed_tracks: &[String], track: &str| {
+        for (mode, by) in ASKS {
+            for (albums, skip_favourites) in [(false, false), (false, true), (true, false), (true, true)] {
+                let of = if mode == Mode::Radio { vec![track.to_string()] } else { seed_tracks.to_vec() };
+                let req = Ask { mode, by, albums, skip_favourites, exclude: of.clone(), seed: of, last: Some(track.to_string()), count: Some(DEFAULT_COUNT), ..asked.clone() };
+                let index = if mode == Mode::Taste { &tasted } else { &plain };
+                let server: Vec<String> = choose(index, &req, &recent, inside.map(|i| i.1), &mut Rng::seeded(seed)).iter().map(|&i| index.songs[i].id.clone()).collect();
+                let mut ask = serde_json::to_value(&req).unwrap();
+                let fields = ask.as_object_mut().unwrap();
+                fields.insert("ask".into(), "pick".into());
+                fields.insert("draw".into(), seed.into());
+                fields.insert("now".into(), now.into());
+                if let Some((id, _)) = inside {
+                    fields.insert("within".into(), serde_json::json!({ "kind": "crate", "id": id }));
+                }
+                let answer: serde_json::Value = serde_json::from_str(&device.ask(&ask.to_string()).unwrap()).unwrap();
+                let here: Vec<String> = answer["tracks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect();
+                picked += usize::from(!server.is_empty());
+                if server != here {
+                    out.push(format!("{account}: {mode:?} {by:?} albums {albums} no favourites {skip_favourites} inside {:?} after {track}: {server:?} on the server, {here:?} on the device", inside.map(|i| i.0)));
+                }
+            }
+        }
+    };
+    let step = (plain.songs.len() / 12).max(1);
+    for song in plain.songs.iter().step_by(step) {
+        let album: Vec<String> = plain.albums[&song.album_n].iter().map(|&i| plain.songs[i].id.clone()).collect();
+        against(None, &album, &song.id);
+    }
+    for (id, _, _) in app.playlists.crate_members(&[]).await.unwrap() {
+        let Ok(songs) = super::super::play::own_songs(app, &crate_within(&id), Some(account)).await else { continue };
+        let places = plain.find(&songs);
+        let Some(&first) = places.first() else { continue };
+        let track = plain.songs[first].id.clone();
+        against(Some((&id, &places)), std::slice::from_ref(&track), &track);
+    }
+    (picked, out)
+}
+
+/// What differs between a device and the server, by account: see `a_device_answers_as_the_server_does_end_to_end`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "run by `a_device_answers_as_the_server_does_end_to_end`, in a process of its own"]
+async fn a_device_against_a_data_folder() {
+    let data = PathBuf::from(var("PROOF_DATA"));
+    let now: i64 = var("PROOF_NOW").parse().expect("PROOF_NOW: epoch seconds");
+    crate::app::moment::PINNED.store(now, Ordering::Relaxed);
+    let (app, served) = open(&data).await;
+    built(&served).await;
+    let mut differing = Vec::new();
+    for account in served.users.names() {
+        let ((listed, list), (held, crates), (picked, picks)) = acting_as(who(&served, &account), async {
+            let mut device = device_of(&app, &served, &account).await;
+            let list = list_against(&app, &mut device, &account, now).await;
+            (list, crates_against(&app, &mut device, &account, now).await, picks_against(&app, &mut device, &account, 7, now).await)
+        })
+        .await;
+        println!("{account}: {listed} crates listed, {held} crates held tracks, {picked} asks picked some");
+        assert!(listed >= 4 && held >= 20 && picked >= 500, "too little compared to prove anything: {listed} listed, {held} crates, {picked} picks");
+        differing.extend(list);
+        differing.extend(crates);
+        differing.extend(picks);
+    }
+    assert!(differing.is_empty(), "{} differ:\n{}", differing.len(), differing.iter().take(30).map(|d| d.chars().take(500).collect::<String>()).collect::<Vec<_>>().join("\n"));
+}
+
+/// D18 to D20's proof on the fixture (PREVIEW2: same crate, same answer; same seed, same picks on the same data): two accounts that
+/// listened, with crates, a playlist, what they left out and excluded; everything a device fetches of each; every crate and a spread of
+/// Sounds likes as the server plays them, and Radio in every mode after a spread of tracks and inside each crate.
+#[test]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+fn a_device_answers_as_the_server_does_end_to_end() {
+    let root = std::env::temp_dir().join(format!("cratarr-proof-device-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::create_dir_all(&root).unwrap();
+    let now: i64 = 1_800_000_000;
+    alone("a_data_folder_of_the_fixture_library", &[("PROOF_MAKE", root.display().to_string()), ("PROOF_NOW", now.to_string())]);
+    alone("a_device_against_a_data_folder", &[("PROOF_DATA", root.join("data").display().to_string()), ("PROOF_NOW", now.to_string())]);
+    std::fs::remove_dir_all(&root).ok();
 }
 
 fn copy_folder(from: &Path, to: &Path) {

@@ -18,7 +18,7 @@ export type Step = { do: 'stopped' | 'rest' | 'ask' | 'whole' | 'changes' } | { 
 /** What a search asks (`index::find::Ask`). `kinds`: the module's, none for all of them. */
 export type FindAsk = { q: string; kinds: string[]; limit: number; offset: number; without: string[] };
 /** A part of what a device keeps, as the module numbers it. */
-const KIND = { index: 0, sounds: 1, covers: 2 } as const;
+const KIND = { index: 0, sounds: 1, covers: 2, own: 3 } as const;
 export type Kind = keyof typeof KIND;
 /** How a fetch ended, or a new start: `start-over-another` where another version than this one's kept what is there. */
 export type Outcome = 'took' | 'lost' | 'failed' | 'start-again' | 'version' | 'start' | 'start-over-another';
@@ -40,8 +40,13 @@ type Exports = {
   sounds_apply(ptr: number, len: number): number;
   sounds_save(): number;
   sounds_rev(): number;
+  marks_load(ptr: number, len: number): number;
+  marks_at(): number;
+  device_open(): number;
+  device_ask(ptr: number, len: number): number;
   index_version(): number;
   sounds_version(): number;
+  marks_version(): number;
   refused_found(): number;
   refused_wants(): number;
   sync_answer(status: number, whole: number): number;
@@ -50,6 +55,7 @@ type Exports = {
   covers_version(): number;
   covers_rev_taken(): number;
   sync_step(whole: number, stopped: number, lost: number, failed: number, tried: number, started: number, network: number, mobile: number, told: number, now: number): number;
+  sync_step_stale(whole: number, stopped: number, lost: number, failed: number, tried: number, started: number, network: number, mobile: number, took: number, now: number): number;
   sync_after(whole: number, stopped: number, lost: number, failed: number, outcome: number): number;
   sync_paused(lost: number): number;
   sync_first_after(): number;
@@ -127,6 +133,24 @@ export class IndexEngine {
   saveSounds = () => this.taken(this.x.sounds_save());
   soundsRev = () => this.x.sounds_rev();
 
+  /** An account's own, for what a device answers for itself. */
+  loadOwn = (bytes: Uint8Array) => this.refused(this.over(bytes, this.x.marks_load));
+  /** When the account's own held were worked out (epoch s). */
+  ownAt = () => this.x.marks_at();
+
+  /** What a device answers for itself made ready over what is held: whether there was an index to do it on. */
+  openDevice = () => this.x.device_open() === 0;
+
+  /** What is asked of it, by `index::device`'s words; null where it has no answer. */
+  ask<T>(asked: unknown): T | null {
+    const bytes = encoder.encode(JSON.stringify(asked));
+    const ptr = this.x.index_alloc(bytes.length);
+    new Uint8Array(this.x.memory.buffer, ptr, bytes.length).set(bytes);
+    const answer = this.x.device_ask(ptr, bytes.length);
+    this.x.index_free(ptr, bytes.length);
+    return this.json<T>(answer);
+  }
+
   /** How an answer ended a fetch, or `bytes` where it brought some to take. `status` null: no answer came. */
   answer(status: number | null, whole: boolean): Outcome | 'bytes' {
     const said = this.x.sync_answer(status ?? -1, +whole);
@@ -157,6 +181,12 @@ export class IndexEngine {
     return said >= 0 ? { do: 'wait', until: said } : { do: STEP[said] };
   }
 
+  /** What to do now with what has no feed and goes stale. `took`: when it was last taken. */
+  stepStale(p: Part, network: Network, mobile: Mobile, took: number | null, now: number): Step {
+    const said = this.x.sync_step_stale(+p.whole, +p.stopped, p.lost, p.failed, p.tried ?? -1, p.started, NETWORK.indexOf(network), MOBILE.indexOf(mobile), took ?? -1, now);
+    return said >= 0 ? { do: 'wait', until: said } : { do: STEP[said] };
+  }
+
   /** How a part stands after a fetch that ended at `now`, or a start at `now`. */
   after(p: Part, outcome: Outcome, now: number): Part {
     const bits = this.x.sync_after(+p.whole, +p.stopped, p.lost, p.failed, OUTCOME.indexOf(outcome));
@@ -175,6 +205,7 @@ export class IndexEngine {
   indexVersion = () => this.x.index_version();
   soundsVersion = () => this.x.sounds_version();
   coversVersion = () => this.x.covers_version();
+  ownVersion = () => this.x.marks_version();
 }
 
 /** The module's instance: one to let go when done. */

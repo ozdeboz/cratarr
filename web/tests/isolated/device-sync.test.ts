@@ -54,6 +54,7 @@ const route = (url: string) => {
   if (path === '/api/index') return bytes(vector('whole.bin'));
   if (path === '/api/index/sounds') return bytes(vector('sounds.bin'));
   if (path === '/api/index/covers') return bytes(bundle(5, frame(1, picture(1)), frame(2, picture(2))));
+  if (path === '/api/index/own') return bytes(vector('own.bin'));
   return none();
 };
 globalThis.fetch = (async (input: string) => {
@@ -67,10 +68,10 @@ let n = 0;
 let me = '';
 /** Each test's own day: a refusal from one is long over at the next. */
 const DAY = 86_400_000;
-const kept = (name: 'index' | 'sounds' | 'covers') => readPart(whoOf(me), name);
+const kept = (name: 'index' | 'sounds' | 'covers' | 'own') => readPart(whoOf(me), name);
 const bytesKept = (name: 'index' | 'sounds') => readBytes(whoOf(me), name);
 const coversKept = () => rowsOf(`cratarr-index${whoOf(me)}`, 'covers');
-const WHOLES = ['/api/index', '/api/index/sounds', '/api/index/covers'];
+const WHOLES = ['/api/index', '/api/index/sounds', '/api/index/covers', '/api/index/own'];
 const same = (a: Uint8Array | null | undefined, b: Uint8Array) => assert.deepEqual(a && [...a], [...b]);
 
 /** `ms` go by, and a look they bring ends. */
@@ -133,6 +134,47 @@ test('whole once: the bytes kept as fetched, each part at its rev, and This devi
   assert.equal(indexSync.at, Date.now());
   assert.equal(indexSync.rev, 5);
   assert.equal(indexWord(indexSync.shows, indexSync.at, () => 'the date'), 'the date');
+});
+
+const HOURS = 3_600_000;
+
+test("an account's own goes whole with the rest, and once kept is not asked again for hours", async () => {
+  await held();
+  same(await readBytes(whoOf(me), 'own'), vector('own.bin'));
+  await syncNow(true);
+  assert.ok(!asked.some((a) => a.startsWith('/api/index/own')), 'told or not, it has no feed');
+  asked = [];
+  await gone(6 * HOURS - 1);
+  await syncNow();
+  assert.ok(!asked.includes('/api/index/own'));
+  asked = [];
+  await gone(1);
+  await syncNow();
+  assert.ok(asked.includes('/api/index/own'), 'six hours on a free network');
+});
+
+test('on mobile data it goes once a day for one who said yes, and asks nothing of its own', async () => {
+  await held();
+  connection.type = 'cellular';
+  await gone(24 * HOURS);
+  await syncNow();
+  assert.ok(!asked.includes('/api/index/own'), 'nobody said yes');
+  assert.equal(indexSync.shows, 'idle', 'and no question');
+  prefs.indexMobile = 'yes';
+  await syncNow();
+  assert.ok(asked.includes('/api/index/own'));
+  asked = [];
+  await gone(24 * HOURS - 1);
+  await syncNow();
+  assert.ok(!asked.includes('/api/index/own'), 'not before the day is over');
+});
+
+test("however an account's own fares, the row says nothing of it", async () => {
+  answers['/api/index/own'] = lost;
+  await started();
+  for (let n = 0; n < 4; n++) await gone(30_000);
+  assert.equal(indexSync.shows, 'idle');
+  assert.equal((await kept('own'))?.part.lost, 5, 'it tried, as any part does');
 });
 
 test('persistent storage is asked for at the first download, and once', async () => {

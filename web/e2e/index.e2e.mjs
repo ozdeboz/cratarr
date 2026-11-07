@@ -1,5 +1,6 @@
 // The library on a device in a real browser: index.wasm as Vite serves it, IndexedDB and the door, on the rules crate's own bytes
-// (e2e/standin.mjs). Each account's apart, the first seconds left alone, and with Cratarr gone a page reads what is kept.
+// (e2e/standin.mjs). Each account's apart, the first seconds left alone, and with Cratarr gone a page reads what is kept, and a crate
+// is what the device answers.
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { device, inModule, PAGE, signIn } from './browser.mjs';
@@ -85,6 +86,20 @@ test('Cratarr gone: once it was looked for twice the Library lists what the devi
   await until(() => records(d.page), (r) => Array.isArray(r) && r.includes('Second Wind') && r.includes('Own Thing'), 'the list');
   const view = await inModule(d.page, API, (m) => m.albumView('cratarr', 'al-10'));
   assert.deepEqual(view.rows.map((r) => r.name), ['Dawn', 'Noon']);
+});
+
+test('Cratarr gone: the Crates page, a crate and a Sounds like are what this device answers, by the rules crate', async () => {
+  await d.page.goto(`${PAGE}/#/crates`);
+  await d.page.getByText('Hearted', { exact: true }).first().waitFor({ timeout: 45_000 });
+  const said = await inModule(d.page, API, async (m) => {
+    const list = await m.getCrates();
+    const rows = await m.crateRows('hearted', 0, 10);
+    const like = await m.crateRows('like:tr-100@10', 0, 20, undefined, undefined, undefined, { order: 'own' });
+    return { crates: list.map((c) => [c.id, c.counts]), rows: rows.rows.map((r) => r.id), like: like.rows.map((r) => r.id) };
+  });
+  assert.deepEqual(said, { crates: [['hearted', { all: 5, only: 2, none: 3 }]], rows: ['tr-102', 'tr-101'], like: ['tr-100', 'tr-101', 'tr-104', 'tr-102', 'tr-103'] });
+  const picked = await inModule(d.page, API, (m) => m.radioNext({ mode: 'similar', seed: ['tr-101'], exclude: ['tr-101'], last: 'tr-101', count: 5 }));
+  assert.deepEqual(picked.tracks, [], 'nothing downloaded here: nothing, and no word');
 });
 
 test('Cratarr back: reads are its own again, and what it changed meanwhile comes by the feed, to the rev', async () => {

@@ -490,6 +490,18 @@ fn recent_plays(userdata: &Path, owner: &str) -> Result<HashMap<String, i64>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// What Radio leaves for later of `user`'s, as `ready` reads it: nothing while its play history is off.
+pub(super) fn recent_of(serve: &crate::serve::Serve, user: &str) -> Result<HashMap<String, i64>> {
+    let Some(dir) = &serve.data_dir else { return Ok(HashMap::new()) };
+    if serve.userdata.tracking(user) { recent_plays(&dir.join("userdata.sqlite"), user) } else { Ok(HashMap::new()) }
+}
+
+/// The folders of the libraries `user` lets Radio and Autoplay choose from; none: every one.
+pub(super) fn folders_of(serve: &crate::serve::Serve, user: &str) -> Option<Vec<i64>> {
+    let libraries = more_music_of(user).0?;
+    Some(serve.library.roots().into_iter().filter(|(_, r)| libraries.iter().any(|l| Path::new(l) == Path::new(r))).map(|(f, _)| f).collect())
+}
+
 /// Interns names as numbers: genres and tags in any case, ids exactly.
 #[derive(Default)]
 struct Names {

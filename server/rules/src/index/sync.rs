@@ -12,6 +12,10 @@
 //! - **Another version in bytes just fetched stops:** the app and Cratarr differ, and fetching again will not mend it.
 //! - **A start over what another version kept begins whole:** its stop was its own to say, and this one may not read its bytes, though a
 //!   feed would have nothing to say of them.
+//! - **An account's own has no feed** (`Part::step_stale`): it moves with every play and is worked out whole, each fetch costing the
+//!   server the account's taste. Fetched whole when it has stood a while: on a free network every few hours; on mobile data once a
+//!   day, and only for one who said yes to the library on mobile data. It asks no question of its own: a device holding an older
+//!   one still answers, as of then.
 //! - **What an answer and what bytes came to are said here too** (`ended`, `Outcome::of_whole`, `Outcome::of_changes`), or each device
 //!   would decide them for itself.
 
@@ -47,6 +51,10 @@ pub const PAUSED_AFTER: u32 = 3;
 pub const FAILED_AGAIN_MS: i64 = 60_000;
 /// Failed this many times, it rests until the next start.
 pub const FAILED_MOST: u32 = 5;
+
+/// How long an account's own stands before it is fetched again, on a free network and on mobile data.
+pub const OWN_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
+pub const OWN_EVERY_METERED_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// What a fetch costs the person, as the device can tell. One that cannot tell (most browsers) counts as free.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -179,6 +187,26 @@ impl Part {
         }
     }
 
+    /// What to do now with what has no feed and goes stale: an account's own. `took`: when it was last taken.
+    pub fn step_stale(&self, network: Network, mobile: Mobile, took: Option<i64>, now: i64) -> Step {
+        let first = self.started + FIRST_AFTER_MS;
+        if self.stopped {
+            return Step::Stopped;
+        }
+        if network == Network::Off || self.failed >= FAILED_MOST {
+            return Step::Rest;
+        }
+        if now < first {
+            return Step::Wait(first);
+        }
+        if let Some(again) = self.again().filter(|again| now < *again) {
+            return Step::Wait(again);
+        }
+        let every = if network == Network::Metered { OWN_EVERY_METERED_MS } else { OWN_EVERY_MS };
+        let due = self.whole || took.is_none_or(|took| now - took >= every);
+        if due && (network == Network::Free || mobile == Mobile::Yes) { Step::Whole } else { Step::Rest }
+    }
+
     /// How it stands after a fetch.
     pub fn after(self, outcome: Outcome, now: i64) -> Self {
         let tried = Some(now);
@@ -220,6 +248,34 @@ mod tests {
 
     fn held() -> Part {
         Part { started: START, ..Part::default() }
+    }
+
+    #[test]
+    fn an_accounts_own_goes_whole_on_a_free_network_when_it_has_stood_a_while() {
+        let took = LATER - OWN_EVERY_MS;
+        assert_eq!(held().step_stale(Network::Free, Mobile::Unasked, None, LATER), Step::Whole, "never taken");
+        assert_eq!(held().step_stale(Network::Free, Mobile::No, Some(took), LATER), Step::Whole);
+        assert_eq!(held().step_stale(Network::Free, Mobile::Unasked, Some(took + 1), LATER), Step::Rest, "not yet");
+        assert_eq!(whole().step_stale(Network::Free, Mobile::Unasked, Some(took + 1), LATER), Step::Whole, "nothing held");
+    }
+
+    #[test]
+    fn on_mobile_data_an_accounts_own_goes_once_a_day_for_one_who_said_yes_and_asks_nothing() {
+        let took = LATER - OWN_EVERY_METERED_MS;
+        assert_eq!(held().step_stale(Network::Metered, Mobile::Yes, Some(took), LATER), Step::Whole);
+        assert_eq!(held().step_stale(Network::Metered, Mobile::Yes, Some(took + 1), LATER), Step::Rest);
+        assert_eq!(held().step_stale(Network::Metered, Mobile::Unasked, None, LATER), Step::Rest, "no question of its own");
+        assert_eq!(held().step_stale(Network::Metered, Mobile::No, None, LATER), Step::Rest);
+    }
+
+    #[test]
+    fn an_accounts_own_waits_and_stops_as_any_part_does() {
+        assert_eq!(held().step_stale(Network::Free, Mobile::Yes, None, START), Step::Wait(LATER), "its first seconds");
+        assert_eq!(held().step_stale(Network::Off, Mobile::Yes, None, LATER), Step::Rest);
+        assert_eq!(Part { stopped: true, ..held() }.step_stale(Network::Free, Mobile::Yes, None, LATER), Step::Stopped);
+        assert_eq!(Part { failed: FAILED_MOST, ..held() }.step_stale(Network::Free, Mobile::Yes, None, LATER), Step::Rest);
+        let lost = held().after(Outcome::Lost, LATER);
+        assert_eq!(lost.step_stale(Network::Free, Mobile::Yes, None, LATER), Step::Wait(LATER + LOST_AGAIN_MS));
     }
 
     #[test]

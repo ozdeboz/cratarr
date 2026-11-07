@@ -32,6 +32,13 @@ object Plays {
 
     private val sender = Executors.newSingleThreadExecutor()
 
+    /** The plays of the account signed in not told yet: what this device adds to the counts it last heard. */
+    @Synchronized
+    fun waiting(context: Context): JSONArray {
+        val who = Who.accountOf(Who.current(context))
+        return JSONArray(load(context).filter { who != null && ours(it, who) }.map(::told))
+    }
+
     /** Told (on the player's thread) when the device music played here changed. */
     @Volatile var onPlayedHere: (() -> Unit)? = null
 

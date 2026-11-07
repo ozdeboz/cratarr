@@ -124,19 +124,24 @@ mod matcher_exports {
 
 // The library on a device (PREVIEW2's D14): bytes in and out over the module's memory, as the matcher's are. An instance holds one
 // index and one set of sounds at most, and neither unless asked: WebAssembly's memory never shrinks, so the page lets a whole
-// instance go to give it back. `facts`, `Alike` and Radio's index are not made here until a crate or a pick asks (D18 to D20).
+// instance go to give it back. `facts`, `Alike` and Radio's index are made only once something asks what a device answers for itself
+// (`device_open`, `index::device`), and go with the instance.
 #[cfg(feature = "wasm-index")]
 mod index_exports {
+    use crate::index::device::Device;
     use crate::index::find::{Ask, Finder};
     use crate::index::sync::{ANEW_AFTER_MS, COVERS_VERSION, FIRST_AFTER_MS, Mobile, Network, Outcome, Part, Step, covers_rev, ended};
-    use crate::index::{Changes, Index, Refused, SOUNDS_VERSION, SoundChanges, Sounds, VERSION};
-    use std::sync::{Mutex, MutexGuard};
+    use crate::index::{Changes, Index, MARKS_VERSION, Marks, Refused, SOUNDS_VERSION, SoundChanges, Sounds, VERSION};
+    use std::sync::{Arc, Mutex, MutexGuard};
 
-    static INDEX: Mutex<Option<Index>> = Mutex::new(None);
+    static INDEX: Mutex<Option<Arc<Index>>> = Mutex::new(None);
     static SOUNDS: Mutex<Option<Sounds>> = Mutex::new(None);
     /// What a search reads of the index held: made at the first search, let go with any change to it. Never by its rev: another
     /// account's stands at the same one.
     static FINDER: Mutex<Option<Finder>> = Mutex::new(None);
+    static MARKS: Mutex<Option<Marks>> = Mutex::new(None);
+    /// What the page asks of a device, once it was opened (`device_open`).
+    static DEVICE: Mutex<Option<Device>> = Mutex::new(None);
     /// Where the covers last taken stand: their frames are the page's, and only this is the crate's.
     static COVERS: Mutex<f64> = Mutex::new(-1.0);
     /// The version the last refusal found, and the one this module reads.
@@ -148,7 +153,7 @@ mod index_exports {
 
     /// `index` is the one held from now on.
     fn hold(index: Index) {
-        *held(&INDEX) = Some(index);
+        *held(&INDEX) = Some(index.into());
         *held(&FINDER) = None;
     }
 
@@ -240,7 +245,7 @@ mod index_exports {
         match held(&INDEX).as_mut() {
             Some(index) => {
                 *held(&FINDER) = None;
-                said(index.apply(&changes))
+                said(Arc::make_mut(index).apply(&changes))
             }
             None => 3,
         }
@@ -344,6 +349,48 @@ mod index_exports {
         held(&SOUNDS).as_ref().map_or(-1.0, |sounds| sounds.rev() as f64)
     }
 
+    #[unsafe(no_mangle)]
+    pub extern "C" fn marks_version() -> u32 {
+        MARKS_VERSION
+    }
+
+    /// An account's own from its bytes: `said`'s answer.
+    ///
+    /// # Safety
+    /// `ptr` holds `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn marks_load(ptr: *const u8, len: usize) -> u32 {
+        said(Marks::load(unsafe { input(ptr, len) }).map(|marks| *held(&MARKS) = Some(marks)))
+    }
+
+    /// When the account's own held were worked out (epoch s); -1 where none are.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn marks_at() -> f64 {
+        held(&MARKS).as_ref().map_or(-1.0, |marks| marks.at() as f64)
+    }
+
+    /// What a device answers for itself made ready over the index, the sounds and the account's own held: 1 where there is no index
+    /// to answer from. An account with nothing kept yet is one with nothing set.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn device_open() -> u32 {
+        let Some(index) = held(&INDEX).clone() else { return 1 };
+        let marks = held(&MARKS).take().unwrap_or_default();
+        *held(&DEVICE) = Some(Device::new(index, held(&SOUNDS).as_ref(), &marks));
+        // They are the device's facts now: a second copy of the sounds is what the tablet could not hold.
+        *held(&SOUNDS) = None;
+        0
+    }
+
+    /// What is asked, as JSON (`Device::ask`): the answer as JSON, null where it has none.
+    ///
+    /// # Safety
+    /// `ptr` holds `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn device_ask(ptr: *const u8, len: usize) -> *mut u8 {
+        let Ok(asked) = std::str::from_utf8(unsafe { input(ptr, len) }) else { return core::ptr::null_mut() };
+        held(&DEVICE).as_mut().and_then(|d| d.ask(asked)).map_or(core::ptr::null_mut(), |json| answer(json.as_bytes()))
+    }
+
     /// `index::sync`'s state from the page's numbers: `tried` below zero for none.
     fn state(whole: u32, stopped: u32, lost: u32, failed: u32, tried: f64, started: f64) -> Part {
         Part { whole: whole != 0, stopped: stopped != 0, lost, failed, tried: (tried >= 0.0).then_some(tried as i64), started: started as i64 }
@@ -357,6 +404,22 @@ mod index_exports {
         let network = [Network::Free, Network::Metered][..].get(network as usize).copied().unwrap_or(Network::Off);
         let mobile = [Mobile::Unasked, Mobile::Yes][..].get(mobile as usize).copied().unwrap_or(Mobile::No);
         match state(whole, stopped, lost, failed, tried, started).step(network, mobile, told != 0, now as i64) {
+            Step::Wait(until) => until as f64,
+            Step::Stopped => -1.0,
+            Step::Rest => -2.0,
+            Step::Ask => -3.0,
+            Step::Whole => -4.0,
+            Step::Changes => -5.0,
+        }
+    }
+
+    /// What to do now with an account's own (`Part::step_stale`): as `sync_step`, `took` when it was last taken, below zero for never.
+    #[unsafe(no_mangle)]
+    #[allow(clippy::too_many_arguments)]
+    pub extern "C" fn sync_step_stale(whole: u32, stopped: u32, lost: u32, failed: u32, tried: f64, started: f64, network: u32, mobile: u32, took: f64, now: f64) -> f64 {
+        let network = [Network::Free, Network::Metered][..].get(network as usize).copied().unwrap_or(Network::Off);
+        let mobile = [Mobile::Unasked, Mobile::Yes][..].get(mobile as usize).copied().unwrap_or(Mobile::No);
+        match state(whole, stopped, lost, failed, tried, started).step_stale(network, mobile, (took >= 0.0).then_some(took as i64), now as i64) {
             Step::Wait(until) => until as f64,
             Step::Stopped => -1.0,
             Step::Rest => -2.0,
@@ -420,7 +483,7 @@ mod index_exports {
     }
 
     /// Bytes just fetched whole, held if they can be: how that ended (`Outcome::of_whole`), as `sync_after` numbers it. `kind`: 0 the
-    /// index, 1 the sounds, 2 the covers, by their head alone.
+    /// index, 1 the sounds, 2 the covers, by their head alone, 3 the account's own.
     ///
     /// # Safety
     /// `ptr` holds `len` bytes.
@@ -430,6 +493,7 @@ mod index_exports {
         number(match kind {
             0 => Outcome::of_whole(&Index::load(bytes).map(hold)),
             1 => Outcome::of_whole(&Sounds::load(bytes).map(|sounds| *held(&SOUNDS) = Some(sounds))),
+            3 => Outcome::of_whole(&Marks::load(bytes).map(|marks| *held(&MARKS) = Some(marks))),
             _ => Outcome::of_whole(&head_of(bytes)),
         })
     }

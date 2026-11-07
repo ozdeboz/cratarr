@@ -6,8 +6,10 @@
 import { hiddenLibraries } from './listFilter.svelte';
 import { ApiError, albumView, artistView, crateRows, playlistRows, type Picked, type Picking, type PlayHow, type PlaylistRow } from './api';
 import { downloads, inApp, onApp } from './app.svelte';
+import { heldHere } from './deviceAnswers.svelte';
 import { reads } from './deviceIndex.svelte';
 import { DEVICE } from './deviceMusic.svelte';
+import { OWN } from './deviceReads';
 import { offline } from './offline.svelte';
 import { networkSaid, reach } from './reach.svelte';
 import { shuffled } from './shuffle';
@@ -38,6 +40,8 @@ const onDevice = $derived.by(() => {
   else for (const t of Object.values(offline.kept)) one(t.source, t.id, t.album_id);
   return { tracks, albums };
 });
+
+heldHere.tracks = () => [...onDevice.tracks].flatMap((key) => (key.startsWith(`${OWN}/`) ? [key.slice(OWN.length + 1)] : []));
 
 /** Out of reach: only what is on the device plays. */
 export const away = () => reach.away;

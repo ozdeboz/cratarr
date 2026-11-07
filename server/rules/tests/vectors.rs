@@ -12,6 +12,7 @@ use std::sync::Arc;
 use cratarr_rules::crates::{self, Alike, Avoid, Condition, Facts, Favourites, LikeMode, Target, Trait, Use, Value, View, World, credited_names};
 use cratarr_rules::excluded_artists;
 use cratarr_rules::ids::song;
+use cratarr_rules::index::own::{Kept, List, Own};
 use cratarr_rules::index::{self, Artist, Library, Rows};
 use cratarr_rules::radio::{Ask, Index, Mode, RadioBy, Song, choose};
 use cratarr_rules::similarity::{MOODS, Signal, Track, Weights, mean_sound};
@@ -912,6 +913,7 @@ struct Device {
     sounds: index::Sounds,
     sound_changes: index::SoundChanges,
     sounds_after: index::Sounds,
+    own: index::Marks,
 }
 
 fn device_library() -> Device {
@@ -1028,7 +1030,11 @@ fn device_library() -> Device {
     let (sounds, sounds_after) =
         (index::Sounds::build(5, &[(100, sound(0.25)), (101, sound(0.5)), (103, sound(0.75))]), index::Sounds::build(9, &[(100, sound(0.25)), (101, sound(0.625)), (105, sound(0.125))]));
     let sound_changes = sounds_after.changes(5, &[101, 103, 105]);
-    Device { before: index::Index::build(5, &before).unwrap(), changes, after: index::Index::build(9, &after).unwrap(), sounds, sound_changes, sounds_after }
+    let hearted = Kept { id: "hearted".into(), name: "Hearted".into(), conditions: vec![Condition::new("favourite", false, Value::Yes)], listed: true, ..Kept::default() };
+    let own = Own { favourites: vec![101, 102], crates: vec![hearted], lists: vec![List { id: "pl-1".into(), name: "Mix".into(), tracks: vec![100] }], ..Own::default() };
+    let marks = [index::Mark { track: 102, fit: Some(0.9), ..index::Mark::default() }, index::Mark { track: 101, fit: Some(0.25), plays: 2, last: Some(1_700_000_000), ..index::Mark::default() }];
+    let own = index::Marks::build(1_800_000_000, &marks).with_own(serde_json::to_string(&own).unwrap());
+    Device { before: index::Index::build(5, &before).unwrap(), changes, after: index::Index::build(9, &after).unwrap(), sounds, sound_changes, sounds_after, own }
 }
 
 /// Where those files lie.
@@ -1046,6 +1052,7 @@ fn the_files_a_device_is_tested_on_are_what_this_library_makes_them() {
     assert_eq!(read("sounds.bin"), d.sounds.save());
     assert_eq!(read("sound-changes.bin"), d.sound_changes.save());
     assert_eq!(read("sounds-after.bin"), d.sounds_after.save());
+    assert_eq!(read("own.bin"), d.own.save());
     let text = |name: &str| String::from_utf8(read(name)).unwrap().replace('\r', "");
     assert_eq!(text("list.json"), d.before.list_json() + "\n");
     assert_eq!(text("record.json"), d.before.record_json(10).unwrap() + "\n");
@@ -1077,6 +1084,7 @@ fn write() {
         ("sounds.bin", d.sounds.save()),
         ("sound-changes.bin", d.sound_changes.save()),
         ("sounds-after.bin", d.sounds_after.save()),
+        ("own.bin", d.own.save()),
         ("list.json", (d.before.list_json() + "\n").into_bytes()),
         ("record.json", (d.before.record_json(10).unwrap() + "\n").into_bytes()),
     ] {

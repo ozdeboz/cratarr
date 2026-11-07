@@ -27,8 +27,8 @@ export const ANEW_AFTER_MS = 5 * 60 * 60 * 1000;
 /** Fetches for one part at one look: "start again", then its whole. */
 const TURNS = 3;
 
-/** What a part is, to fetching it. D12's fits are one more row here. `always`: its feed builds nothing, and is asked at every sync;
- *  `frames`: it comes a frame at a time, and is kept by the frame. */
+/** What a part is, to fetching it. `always`: its feed builds nothing, and is asked at every sync; `frames`: it comes a frame at a time,
+ *  and is kept by the frame; `stale`: it has no feed, and is fetched whole when it has stood a while (`Part::step_stale`). */
 type Def = {
   name: PartName;
   whole: string;
@@ -38,6 +38,7 @@ type Def = {
   version: (e: IndexEngine) => number;
   always?: boolean;
   frames?: boolean;
+  stale?: boolean;
 };
 
 const PARTS: Def[] = [
@@ -67,6 +68,16 @@ const PARTS: Def[] = [
     version: (e) => e.coversVersion(),
     always: true,
     frames: true,
+  },
+  // An account's fits, counts, crates and the rest a crate and a pick read (`index::own`).
+  {
+    name: 'own',
+    whole: '/api/index/own',
+    feed: () => '/api/index/own',
+    save: () => null,
+    rev: (e) => e.ownAt(),
+    version: (e) => e.ownVersion(),
+    stale: true,
   },
 ];
 
@@ -180,7 +191,7 @@ async function bringUp(e: IndexEngine, def: Def, who: string, told: boolean): Pr
     if (whoOf(accountKey()) !== who) return { do: 'rest' };
     const kept = (await readPart(who, def.name)) ?? nothingKept();
     const part = partOf(e, def, kept);
-    const step = e.step(part, networkNow(), prefs.indexMobile, told || !!def.always, Date.now());
+    const step = def.stale ? e.stepStale(part, networkNow(), prefs.indexMobile, kept.at, Date.now()) : e.step(part, networkNow(), prefs.indexMobile, told || !!def.always, Date.now());
     if ((step.do !== 'whole' && step.do !== 'changes') || turn === TURNS) return step;
     indexSync.shows = 'fetching';
     if (step.do === 'whole' && kept.rev === null) await keepForGood();
@@ -203,7 +214,8 @@ async function bringUp(e: IndexEngine, def: Def, who: string, told: boolean): Pr
 function say(e: IndexEngine, steps: Step[]) {
   const facts = PARTS.flatMap((def, n): PartFacts[] => {
     const p = parts.get(def.name);
-    return p ? [{ whole: p.whole, stopped: p.stopped, paused: e.paused(p), asks: steps[n].do === 'ask' }] : [];
+    // An account's own asks nothing and waits for nothing the row need say: the library is what it speaks of.
+    return p && !def.stale ? [{ whole: p.whole, stopped: p.stopped, paused: e.paused(p), asks: steps[n].do === 'ask' }] : [];
   });
   indexSync.shows = indexShows(facts, prefs.indexMobile, networkNow() === 'metered');
 }

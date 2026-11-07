@@ -20,8 +20,9 @@
 //!   page's heap as one string. `/api/changes` says where the log stands, and whether there is anything to fetch.
 //! - **The sounds go apart** (0101's point 16): eight bits each, from what the crates hold, and only for what a device asks for
 //!   them, as they weigh more than all the rest and change rarely. Their rev is the log's, and their feed its `sound` rows.
-//! - **What is an account's own goes apart too** (0101's point 18), as `index::Marks`: its fits and its last counts, worked out on
-//!   asking, with no feed. They move with every play and are a small part of what the index weighs.
+//! - **What is an account's own goes apart too** (0101's point 18), as `index::Marks`: its fits and its last counts, and all else a
+//!   crate and a pick read of it (`index::own`), worked out on asking, with no feed. They move with every play and are a small part
+//!   of what the index weighs.
 //! - **Small covers** have a file of their own (`device_covers`): they are no rows, and they are made in the background.
 //! - **"Start again":** a rev from before what is kept or ahead of it, or more changed than rows are worth (a library in front of
 //!   the others moves every line): 410 with `{rev, reset: true}`, as `/api/changes` says it, and the device fetches whole.
@@ -182,7 +183,7 @@ impl Settled {
 }
 
 /// The sounds of `index`'s tracks, as of its rev: a track's taken from the reading in its turn, and held in eight bits.
-fn sounds_of(facts: &[Facts], index: &Index) -> Sounds {
+pub(super) fn sounds_of(facts: &[Facts], index: &Index) -> Sounds {
     let mut heard: Vec<(i64, &[f32])> = facts.iter().filter_map(|f| Some((f.track?, f.sound.as_deref()?))).filter(|(track, _)| index.holds(*track)).collect();
     heard.sort_unstable_by_key(|h| h.0);
     Sounds::from_sorted(index.rev(), heard)
@@ -212,7 +213,7 @@ fn seen_by(serve: &Serve, facts: &[Facts], index: Index, libraries: &[index::Lib
 }
 
 /// The index `account` can see, as it stands, and the reading it was made of. Blocking.
-fn whole_of(serve: &Serve, libraries: &[index::Library], account: Option<&str>) -> Result<(Index, Arc<Vec<Facts>>)> {
+pub(super) fn whole_of(serve: &Serve, libraries: &[index::Library], account: Option<&str>) -> Result<(Index, Arc<Vec<Facts>>)> {
     let mut turn = serve.device_turn();
     let cat = serve.catalogue();
     let read_at = cat.index_rev()?;
@@ -456,7 +457,8 @@ fn marks_of(fits: &HashMap<String, f64>, skipped: &HashMap<String, f64>, uses: &
 pub async fn own(app: &Arc<App>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
     let user = account.ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
     let (fits, skipped, uses) = (app.playlists.taste_fits(&user, &[]).await?, app.playlists.skipped_fits(&user, &[]).await?, app.playlists.uses_by_track(&user).await?);
-    let bytes = tokio::task::spawn_blocking(move || Bytes::of(index::Marks::build(super::moment::now_secs(), &marks_of(&fits, &skipped, &uses)).save(), takes_gzip));
+    let rest = serde_json::to_string(&app.playlists.device_own(&user).await?).map_err(|e| anyhow!("{e}"))?;
+    let bytes = tokio::task::spawn_blocking(move || Bytes::of(index::Marks::build(super::moment::now_secs(), &marks_of(&fits, &skipped, &uses)).with_own(rest).save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
 }
 

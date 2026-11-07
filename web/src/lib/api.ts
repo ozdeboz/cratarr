@@ -7,6 +7,7 @@ import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
+import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick } from './deviceAnswers.svelte';
 import { deviceAlbums, deviceArtist, deviceRecord, deviceSearch, readsNow } from './deviceIndex.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
@@ -482,7 +483,11 @@ function crateQuery(q: URLSearchParams, source?: string, look: CrateLook = {}) {
   return t ? `?${t}` : '';
 }
 export const getCrateAxes = (source?: string, without?: string[]) => quietly<Axis[]>(`/api/crates/axes${crateQuery(new URLSearchParams(), source, { without })}`);
-export const getCrate = (id: string) => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`);
+export const getCrate = (id: string) =>
+  read(
+    () => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`),
+    () => deviceCrate<CrateDef>(id),
+  );
 /** An artist left out (0.10, decision 0083): by the server's key (the name loosely) and as named. */
 export type ExcludedArtist = { key: string; name: string; at?: number };
 /** An artist left out of one crate, or taken back: the crate's list after it, and the undo. Through the outbox (lib/later,
@@ -596,7 +601,11 @@ export const filterList = (list: FilterList, conditions: Condition[], source?: s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ list, conditions, ...(switches?.length ? { switches } : {}), ...(without?.length ? { without } : {}), ...(explain ? { explain: true } : {}) }),
   });
-export const getCrates = (source?: string, without?: string[]) => quietly<Crate[]>(`/api/crates${crateQuery(new URLSearchParams(), source, { without })}`);
+export const getCrates = (source?: string, without?: string[]) =>
+  read(
+    () => quietly<Crate[]>(`/api/crates${crateQuery(new URLSearchParams(), source, { without })}`),
+    () => deviceCrates(source, without),
+  );
 /** A page of a crate's rows (newest first) and the crate's size. */
 /** A crate's own picture (kept as JPEG within 800 px); `round` reads it again after a change. */
 export const crateImageUrl = (id: string, round = 0) => `/api/crates/${encodeURIComponent(id)}/image${round ? `?v=${round}` : ''}`;
@@ -627,8 +636,10 @@ export const crateRows = (
     for (const w of explain.q) q.append('q', w);
   }
   // `limit`: the most rows the page could hold (the server serves 500 at most a page); a page with fewer is the last.
-  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; word?: WordOf }>(
-    `/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`,
+  type Page = { source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; word?: WordOf };
+  return read(
+    () => quietly<Page>(`/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`),
+    () => deviceCrateRows<Page>(id, offset, limit, source, favourites, favouriteAlbums, look),
   );
 };
 /** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
@@ -656,7 +667,10 @@ export const crateTempo = (id: string, source?: string, favourites?: CrateFavour
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
-  return quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo${crateQuery(q, source, look)}`);
+  return read(
+    () => quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo${crateQuery(q, source, look)}`),
+    () => deviceCrateTempo(id, source, favourites, favouriteAlbums, look),
+  );
 };
 /** A playlist's facts for the Playlists page's table (decision 0042): its length, top genres, how much the owner never
  *  played (null: no owner account) and when they last played any of it, and when its file last changed (epoch s). */
@@ -785,7 +799,10 @@ export const radioNext = (ask: {
   /** Leave the owner's favourites out. */
   skip_favourites?: boolean;
 }) =>
-  post<{ tracks: QueueTrack[] }>('/api/radio/next', ask).then(({ tracks }) => ({
+  read(
+    () => post<{ tracks: QueueTrack[] }>('/api/radio/next', ask),
+    () => devicePick(ask),
+  ).then(({ tracks }) => ({
     // Bandcamp's (Discover's suggestions, 0.9.5): previews, never in a playlist (decision 0071).
     tracks: tracks.map((t) => (t.source === 'bandcamp' ? { ...t, addable: false } : t)),
   }));

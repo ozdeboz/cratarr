@@ -18,7 +18,7 @@ const wasm = readFileSync(new URL('../../src/lib/wasm/index.wasm', import.meta.u
 
 /** A bundle of no covers yet, at rev 5, as a fresh server gives. */
 const COVERS = new Uint8Array([...new TextEncoder().encode('CRXV'), ...new Uint8Array(new Uint32Array([1]).buffer), ...new Uint8Array(new BigInt64Array([5n]).buffer)]);
-const WHOLES = ['/api/index', '/api/index/sounds', '/api/index/covers'];
+const WHOLES = ['/api/index', '/api/index/sounds', '/api/index/covers', '/api/index/own'];
 /** What an untold look asks of a device holding all three: only the feed that builds nothing. */
 const UNTOLD = ['/api/index/covers/changes?since=5'];
 
@@ -38,6 +38,7 @@ globalThis.fetch = (async (input: string) => {
   if (url === '/api/index') return new Response(vector('whole.bin'));
   if (url === '/api/index/sounds') return new Response(vector('sounds.bin'));
   if (url === '/api/index/covers') return new Response(COVERS);
+  if (url === '/api/index/own') return new Response(vector('own.bin'));
   if (url.startsWith('/api/index')) return new Response(null, { status: 204 });
   if (url.startsWith('/api/changes')) return new Response(JSON.stringify({ rev: 1, changes: [], more: false, ...(url.includes('index=5') ? log : {}) }));
   if (url.startsWith('/api/capabilities')) return new Response(JSON.stringify({ capabilities: ['changes'], version: '1' }));
@@ -98,7 +99,8 @@ test('hidden for hours and back is a start: its first seconds, then a look', asy
   await gone(FIRST_LOOK_MS - 1);
   assert.deepEqual(asked, []);
   await gone(1);
-  assert.deepEqual(asked, UNTOLD);
+  // An account's own goes by how long it has stood, and that is hours by now.
+  assert.deepEqual(asked.filter((a) => a !== '/api/index/own'), UNTOLD);
 });
 
 test('the connection changing starts a look', async () => {

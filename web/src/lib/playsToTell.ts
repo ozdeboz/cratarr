@@ -69,6 +69,8 @@ export function playsToTell<P extends { id: string; at: number; account?: string
 
   return {
     tell,
+    /** What Cratarr has not taken yet, as it was heard: a device adds it to what the server last counted. */
+    waiting: () => [...telling, ...unsent],
     /** One more heard: kept, and told. */
     add(p: P) {
       if (p.account === undefined) return;

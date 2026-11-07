@@ -2,6 +2,7 @@
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
 import { untrack } from 'svelte';
 import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
+import { whenReadsMove } from './deviceIndex.svelte';
 import { noteChange } from './lastChange.svelte';
 import { port } from './player/port.svelte';
 import { dropFromQueue, local } from './localPlayer.svelte';
@@ -15,6 +16,9 @@ import { openRadio } from './radioAsk.svelte';
 import { withUndo } from './undo.svelte';
 
 export const crates = $state<{ list: Crate[] | null; error: string | null }>({ list: null, error: null });
+
+// What a page showed came from the other place.
+whenReadsMove.add(() => void (crates.list && loadCrates()));
 
 export async function loadCrates() {
   try {

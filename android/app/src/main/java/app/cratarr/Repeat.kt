@@ -6,14 +6,18 @@
  *   its tracks by their place in it, those added by hand not again (they play once); shuffled anew when the queue plays
  *   shuffled, and not starting with the track that just played.
  * - A new play turns repeat one off; previous on the first track under repeat all goes to the last.
+ * What the next round holds is the rules crate's (`next_round`): Kotlin holds no decisions.
  */
 package app.cratarr
 
 import android.content.Context
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import app.cratarr.rules.QueueTrack
+import app.cratarr.rules.nextRound
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.random.Random
 
 object Repeat {
     const val OFF = "off"
@@ -59,28 +63,15 @@ object Repeat {
         val count = player.mediaItemCount
         if (mode(context) != ALL || count == 0 || player.currentMediaItemIndex != count - 1) return
         val tracks = (0 until count).mapNotNull { trackOf(player.getMediaItemAt(it)) }
-        // The album or playlist: its tracks by their place in it (the last time each played), not those added by hand.
-        val byPlace = sortedMapOf<Int, JSONObject>()
-        // Only the album's or playlist's own tracks: none of a lane (added by hand, Radio's, Autoplay's).
-        val own = { t: JSONObject -> t.optString("lane").isEmpty() }
-        for (t in tracks) if (own(t) && t.has("n")) byPlace[t.optInt("n")] = t
-        val round = if (byPlace.isNotEmpty()) {
-            byPlace.values.toMutableList()
-        } else {
-            // A queue without places (played before they were kept): its own tracks, once each, in their order.
-            tracks.filter(own).distinctBy { "${it.optString("source")}/${it.optString("id")}" }.toMutableList()
+        val queue = tracks.map { QueueTrack("${it.optString("source")}/${it.optString("id")}", if (it.has("n")) it.optInt("n").toUInt() else null, laneOf(it)) }
+        val round = try {
+            nextRound(queue, (tracks.size - 1).toUInt(), Prefs(context).shuffled, Random.nextLong(Long.MAX_VALUE shr 11).toULong())
+        } catch (e: LinkageError) {
+            return
         }
         if (round.isEmpty()) return
-        if (Prefs(context).shuffled) {
-            round.shuffle()
-            // A round does not start with the track that just played.
-            val last = tracks.last()
-            if (round.size > 1 && same(round[0], last)) round.add(round.removeAt(0))
-        }
         // New entries for the new round's tracks; their places stay.
-        val copies = JSONArray(round.map { JSONObject(it.toString()).apply { remove("entry") } })
+        val copies = JSONArray(round.map { JSONObject(tracks[it.toInt()].toString()).apply { remove("entry") } })
         player.addMediaItems(mediaItems(copies).map(locate))
     }
-
-    private fun same(a: JSONObject, b: JSONObject) = a.optString("source") == b.optString("source") && a.optString("id") == b.optString("id")
 }

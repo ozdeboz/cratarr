@@ -51,6 +51,42 @@ test('the rows read as the rules crate wrote them', async () => {
   assert.equal(e.record(99), null);
 });
 
+test('the part of an account reads as the rules crate wrote it, and goes by how long it has stood', async () => {
+  const e = await engine();
+  assert.equal(e.loadOwn(vector('own.bin')), null);
+  assert.equal(e.ownAt(), 1_800_000_000);
+  assert.equal(e.takeWhole('own', vector('own.bin')), 'took');
+  assert.equal(e.takeWhole('own', vector('whole.bin')), 'failed', 'bytes of another kind');
+  assert.equal(e.ownVersion(), 2);
+  const every = 6 * 3_600_000;
+  const now = 2 * every;
+  assert.deepEqual(e.stepStale(held, 'free', 'unasked', null, now), { do: 'whole' });
+  assert.deepEqual(e.stepStale(held, 'free', 'no', now - every, now), { do: 'whole' });
+  assert.deepEqual(e.stepStale(held, 'free', 'yes', now - every + 1, now), { do: 'rest' });
+  assert.deepEqual(e.stepStale(held, 'metered', 'unasked', null, now), { do: 'rest' }, 'no question of its own');
+  assert.deepEqual(e.stepStale(held, 'metered', 'yes', null, now), { do: 'whole' });
+});
+
+test('a device answers for itself over what is held', async () => {
+  const e = await engine();
+  e.loadIndex(vector('whole.bin'));
+  e.loadSounds(vector('sounds.bin'));
+  e.loadOwn(vector('own.bin'));
+  assert.equal(e.openDevice(), true);
+  assert.equal(e.indexRev(), 5, 'the index stays, for a list');
+  assert.deepEqual(e.list(), text('list.json'));
+  const rows = e.ask<{ total: number; rows: { id: string }[] }>({ ask: 'rows', id: 'hearted', offset: 0, limit: 5, now: 1 });
+  assert.deepEqual(rows?.rows.map((r) => r.id), ['tr-102', 'tr-101'], 'by the fits it holds');
+  assert.equal(e.ask({ ask: 'rows', id: 'no such crate', offset: 0, limit: 5, now: 1 }), null);
+  assert.equal(e.ask({ ask: 'nothing of the kind' }), null);
+});
+
+test('with no index there is no device, and nothing to ask', async () => {
+  const e = await engine();
+  assert.equal(e.openDevice(), false);
+  assert.equal(e.ask({ ask: 'crates', now: 1 }), null);
+});
+
 test('with nothing held, nothing is there to say', async () => {
   const e = await engine();
   assert.equal(e.saveIndex(), null);

@@ -68,6 +68,11 @@ class DeviceIndexTest {
             }
         }
 
+        /** What the rule says of an account's own, by when it was last taken. */
+        var stale: (Long?) -> SyncStep = { SyncStep.Rest }
+
+        override fun stepStale(part: SyncPart, network: SyncNetwork, mobile: SyncMobile, took: Long?, now: Long): SyncStep = stale(took)
+
         override fun after(part: SyncPart, outcome: SyncOutcome, now: Long) = when (outcome) {
             SyncOutcome.TOOK -> part.copy(whole = false, lost = 0u, failed = 0u, tried = now)
             SyncOutcome.LOST -> part.copy(lost = part.lost + 1u, tried = now)
@@ -159,18 +164,21 @@ class DeviceIndexTest {
             "/api/index" -> IndexFetched(200, whole)
             "/api/index/sounds" -> IndexFetched(200, sounds)
             "/api/index/covers" -> IndexFetched(200, bundle(5, frame(1, picture(1)), frame(2, picture(2))))
+            "/api/index/own" -> IndexFetched(200, whole)
             else -> IndexFetched(204, null)
         }
     }
 
     private val wholes = listOf("/api/index", "/api/index/sounds", "/api/index/covers")
+    private val neverTaken = { took: Long? -> if (took == null) SyncStep.Whole else SyncStep.Rest }
     private val coverFeed = "/api/index/covers/changes?since=5"
     private fun coverFiles() = File(files.bytes(who, "index").parentFile, "covers").list()?.sorted() ?: emptyList()
 
     private fun bytes(name: String, of: String = who) = files.bytes(of, name).readBytes()
 
-    /** Both parts held, and a new start over them: as an app opened again leaves it. */
+    /** Every part held, and a new start over them: as an app opened again leaves it. */
     private fun held() {
+        rule.stale = neverTaken
         looks.look(who)
         asked.clear()
         clock += 1_000
@@ -188,6 +196,27 @@ class DeviceIndexTest {
         assertEquals(5L, stands.rev)
         assertEquals(2_000L, stands.at)
         assertFalse(stands.part.whole)
+    }
+
+    @Test
+    fun an_accounts_own_goes_whole_by_the_rule_for_what_has_no_feed_and_is_kept_as_it_came() {
+        rule.stale = neverTaken
+        clock = 2_000
+        looks.look(who)
+        assertEquals(wholes + "/api/index/own", asked)
+        assertArrayEquals(whole, bytes("own"))
+        assertEquals(2_000L, files.stands(who, "own")?.at)
+        asked.clear()
+        looks.look(who, told = true)
+        assertFalse("told or not, it goes by when it was taken", asked.any { it.startsWith("/api/index/own") })
+    }
+
+    @Test
+    fun an_accounts_own_says_nothing_of_how_the_library_stands() {
+        rule.stale = { SyncStep.Ask }
+        val steps = looks.look(who)
+        assertEquals(SyncStep.Ask, steps["own"])
+        assertEquals("the row speaks of the library", listOf(false, false, false), looks.facts(steps).map { it.asks })
     }
 
     @Test
@@ -439,7 +468,7 @@ class DeviceIndexTest {
         held()
         rule.starts.clear()
         looks.look(who)
-        assertEquals(listOf("plain", "plain", "plain"), rule.starts)
+        assertEquals(listOf("plain", "plain", "plain", "plain"), rule.starts)
     }
 
     @Test
@@ -449,7 +478,7 @@ class DeviceIndexTest {
         val stands = files.stands(who, "index")!!
         files.keep(who, "index", IndexStands(stands.rev, stands.at, 2, stands.part), null)
         looks.look(who)
-        assertEquals(listOf("by another", "plain", "plain"), rule.starts)
+        assertEquals(listOf("by another", "plain", "plain", "plain"), rule.starts)
         assertEquals(listOf("/api/index", "/api/index/sounds/changes?since=5", coverFeed), asked)
     }
 
@@ -459,7 +488,7 @@ class DeviceIndexTest {
         rule.starts.clear()
         looks.look(who)
         looks.look(who)
-        assertEquals(3, rule.starts.size)
+        assertEquals(4, rule.starts.size)
     }
 
     @Test
@@ -469,7 +498,7 @@ class DeviceIndexTest {
         rule.starts.clear()
         looks.startAnew()
         looks.look(who)
-        assertEquals(3, rule.starts.size)
+        assertEquals(4, rule.starts.size)
     }
 
     @Test
