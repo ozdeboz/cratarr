@@ -53,6 +53,8 @@ object Kept {
     const val MANUAL = "manual"
     /** A track whose size Cratarr does not know counts as this much against the budget. */
     private const val UNKNOWN_SIZE = 10_000_000L
+    /** Why a download waits (Media3's stop reason, kept with it): no one holding it is signed in. */
+    private const val HOLDER_AWAY = 1
     private const val WORK = "cratarr-kept"
 
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "cratarr-kept").apply { isDaemon = true } }
@@ -265,6 +267,7 @@ object Kept {
             val who = Who.current(app)
             // A list that cannot be read ends the pass here, before anything is removed or saved.
             val items = loadItems(app)
+            holdBack(app, who)
             // Only the account signed in's items are asked after (its session asks); the others keep what they have.
             val ours = items.filter { it.who == who }
             if (server != null && ours.isNotEmpty()) ask(app, server, ours)
@@ -333,6 +336,19 @@ object Kept {
             passes.decrementAndGet()
         }
         onChange?.invoke()
+    }
+
+    /** What is still coming goes on only for one who holds it ([KeptHolds.goesOn]), and takes up again at their return.
+     *  Before anything is asked: each try of each file is a refusal until then. */
+    private fun holdBack(app: Context, who: String) {
+        val holders = loadHolders(app)
+        Downloads.manager(app).downloadIndex.getDownloads(Download.STATE_QUEUED, Download.STATE_DOWNLOADING, Download.STATE_STOPPED).use { c ->
+            while (c.moveToNext()) {
+                val d = c.download
+                val reason = if (KeptHolds.goesOn(holders[d.request.id], who)) Download.STOP_REASON_NONE else HOLDER_AWAY
+                if (reason != d.stopReason) DownloadService.sendSetStopReason(app, CratarrDownloadService::class.java, d.request.id, reason, false)
+            }
+        }
     }
 
     /** The libraries the account signed in switched off, in its page settings here (`hiddenLibraries`, `source/library`
@@ -506,6 +522,11 @@ internal object KeptHolds {
     fun whoOf(holder: String) = holder.substringBefore('\t')
 
     fun isManual(holder: String) = holder.substringAfter('\t') == Kept.MANUAL
+
+    /** Whether a download not finished goes on with [who] signed in. It reads with whatever session there is: with none each
+     *  file is refused until Media3 gives it up for good, and with another's it comes as that one's best copy, into a hold
+     *  that chose otherwise. One nothing holds is left alone, as a pass leaves it: its hold is on its way, or it is going. */
+    fun goesOn(holders: Set<String>?, who: String): Boolean = holders.isNullOrEmpty() || holders.any { whoOf(it) == who }
 
     /** The order a pass takes kept items in: the accounts' away first, what they have here staying; then those of [who], the
      *  one signed in, the newest kept first. */

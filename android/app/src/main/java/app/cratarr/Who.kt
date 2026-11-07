@@ -53,6 +53,8 @@ object Who {
             p.edit().putString(KEY, to).commit()
             was
         }
+        // Here, not a listener's: a play told behind a locked screen can bring this about with no activity open.
+        Kept.sync(app)
         for (f in changed) f(from, to)
     }
 }

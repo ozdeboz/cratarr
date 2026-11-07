@@ -118,6 +118,17 @@ class KeptHoldsTest {
     }
 
     @Test
+    fun a_download_under_way_goes_on_only_for_one_who_holds_it() {
+        assertTrue(KeptHolds.goesOn(setOf(manual(ann)), ann))
+        assertTrue("an item's hold too", KeptHolds.goesOn(setOf(item(ann)), ann))
+        assertTrue("held by two", KeptHolds.goesOn(setOf(manual(ann), item(bo)), bo))
+        assertFalse("nobody signed in: each try refused", KeptHolds.goesOn(setOf(manual(ann)), Who.NONE))
+        assertFalse("another's session: his copy into her hold", KeptHolds.goesOn(setOf(manual(ann), item(ann)), bo))
+        assertTrue("just added, its hold on its way", KeptHolds.goesOn(null, ann))
+        assertTrue("or nothing holds it", KeptHolds.goesOn(emptySet(), Who.NONE))
+    }
+
+    @Test
     fun each_accounts_share_counts_a_file_it_holds_once_and_one_two_hold_in_both() {
         val h = holders("hers" to setOf(manual(ann), item(ann)), "both" to setOf(manual(ann), manual(bo)), "gone_from_the_store" to setOf(manual(bo)))
         val bytes = mapOf("hers" to 10L, "both" to 5L)
@@ -144,6 +155,19 @@ class KeptHoldsTest {
         assertTrue("KeptHolds.letGo(holders, keys, gone)" in release)
         assertFalse("downloadIndex" in release)
         assertFalse("downloadedKeys" in release)
+    }
+
+    @Test
+    fun what_is_under_way_stops_at_a_change_with_no_activity_and_before_a_pass_asks_anything() {
+        val pass = kept.substringAfter("private fun syncHere(").substringBefore("private fun librariesOff(")
+        assertTrue(pass.indexOf("holdBack(app, who)") in 0 until pass.indexOf("ask(app, server, ours)"))
+        val hold = kept.substringAfter("private fun holdBack(").substringBefore("\n    }\n")
+        assertTrue("KeptHolds.goesOn(holders[d.request.id], who)" in hold)
+        assertTrue("taken up again at the holder's return", "Download.STATE_STOPPED" in hold && "sendSetStopReason" in hold)
+        val set = File("src/main/java/app/cratarr/Who.kt").readText().substringAfter("fun set(")
+        assertTrue("Kept.sync(app)" in set)
+        val activity = File("src/main/java/app/cratarr/MainActivity.kt").readText().substringAfter("private val whoChanged")
+        assertFalse("one pass, not two", "Kept.sync(" in activity.substringBefore("override fun onDestroy"))
     }
 
     @Test

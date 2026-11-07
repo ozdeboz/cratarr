@@ -340,7 +340,6 @@ class MainActivity : AppCompatActivity() {
             }
             tellDownloads(now = true)
             tellKept(now = true)
-            Kept.sync(this)
             webView?.let(::keepPagePrefs)
         }
     }
