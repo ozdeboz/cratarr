@@ -13,6 +13,8 @@ export const reach = $state({
   /** What the pages show came from their last copies (public/sw.js: Cratarr out of reach; the owner, 2026-10-26):
    *  offline, as last seen, until Cratarr answers again. */
   kept: false,
+  /** The device says it has no network at all: the browser's word, or the app's (lib/away's `network`). */
+  noNetwork: false,
 });
 
 /** A status with no words from Cratarr in it that means it was not reached, rather than that it refused. */
@@ -45,6 +47,7 @@ export function reached() {
   reach.away = false;
   reach.answered = true;
   reach.kept = false;
+  reach.noNetwork = false;
   tell(false);
   for (const f of whenReached) f();
 }
@@ -65,8 +68,12 @@ export function unreached() {
 
 if (typeof window !== 'undefined') {
   // No network at all: out of reach at once, before any request finds out (the app says it too: lib/app's `network`).
-  addEventListener('offline', unreached);
-  if (navigator.onLine === false) reach.away = true;
+  addEventListener('offline', () => {
+    reach.noNetwork = true;
+    unreached();
+  });
+  addEventListener('online', () => (reach.noNetwork = false));
+  if (navigator.onLine === false) reach.away = reach.noNetwork = true;
   // A read of the service worker's reached Cratarr again.
   navigator.serviceWorker?.addEventListener('message', (e) => {
     if (e.data?.type === 'reached' && reach.away) {
@@ -89,6 +96,23 @@ export const refusedFor = () => (signOutOwed() ? REFUSED_MS : Math.max(0, refuse
 export function refused() {
   refusedUntil = Date.now() + REFUSED_MS;
   reach.away = true;
+}
+
+/** How long a look for Cratarr waits for its answer. */
+const LOOK_MS = 5_000;
+
+/** Looks for Cratarr, past any copy (public/sw.js leaves /api/health to the network): whether it answered. Not while a refusal
+ *  holds the background requests back: this would be one more knock. */
+export async function lookForCratarr(): Promise<boolean> {
+  if (refusedFor() > 0) return false;
+  try {
+    const res = await fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(LOOK_MS) });
+    if (notReached(res.status)) return false;
+    reached();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Whether an answer is Cratarr asking for its sign-in (decision 0039: away from home, no session, or one that ended). */

@@ -22,6 +22,7 @@ if (inApp)
     network.online = typeof m.online === 'boolean' ? m.online : null;
     network.validated = typeof m.validated === 'boolean' ? m.validated : null;
     network.kind = typeof m.kind === 'string' ? m.kind : null;
+    reach.noNetwork = network.online === false;
     if (network.online === false) unreached();
   });
 

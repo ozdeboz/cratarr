@@ -7,6 +7,7 @@ import { audio, fromRest, player, runFor, server, settle, track } from '../harne
 
 const { enqueue, jump, local, next, playQueue, remove, seek, setAutoplay, togglePlay } = player;
 const { reach, reached } = await import('../../src/lib/reach.svelte.ts');
+const { readsNow } = await import('../../src/lib/deviceIndex.svelte.ts');
 const { heldAt, holdAfterCut, HOLD_FIRST_MS, HOLD_MOST_MS } = await import('../../src/lib/player/holdOn.ts');
 
 const heard = () => audio.heard()?.track ?? null;
@@ -48,6 +49,13 @@ test('Cratarr gone before the next track came: what the stream holds plays out, 
   assert.deepEqual(local.queue.map((t) => t.id), ['a', 'b', 'c']);
   assert.equal(asked('c').length, 0, 'none past the one it waits for: the queue does not run out behind the sound');
   assert.equal(audio.ended, false, 'its stream stays open for what comes');
+});
+
+test('the hold goes by no settling: the player has stopped while reads are still on the server, for the look that is due', async () => {
+  await heldAtTheEndOfA();
+  assert.equal(local.starting, true, 'held');
+  assert.equal(reach.away, true);
+  assert.equal(readsNow().from, 'server', 'A1 is the reads\' and the pages\', and stopping is not moving a page');
 });
 
 test('it shows the truth of that: asked to play, not sounding, and no failure to report', async () => {
