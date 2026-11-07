@@ -69,9 +69,9 @@ Hexagonal architecture was the starting point for this decision; what follows ta
      track).
    - **The feature that moves or replaces a file updates the catalogue itself,** in the same step as the file
      operation. That happens before a walk could see "old gone, new appeared" and break the identity. The walk only
-     catches changes made outside Cratarr: it recognises a moved file by MusicBrainz recording id, length and a
-     matching path, never by size or tags alone. That way identity survives Cratarr's own retagging and format
-     changes.
+     catches changes made outside Cratarr: it recognises a moved file by its own size, modified time and length
+     together (2026-11-07: a `mv` keeps them), then by MusicBrainz recording id, length and a matching path, never by
+     tags alone. That way identity survives Cratarr's own retagging and format changes.
    - **Replace pairs old and new tracks** in the core. The first rule that matches wins:
      1. the MusicBrainz recording id;
      2. disc and track number plus the folded title;

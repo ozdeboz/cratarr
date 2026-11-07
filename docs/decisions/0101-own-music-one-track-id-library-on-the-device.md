@@ -101,8 +101,8 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
     - The person's preferences move to their account's settings on the server and follow them; offline they come
       from the cached copy. These are pinned items, libraries switched off, filters, Home's header picture, crate
       drafts and Radio's last choice. A server mode's Home rows stay on the device, per account.
-    - Per preference, the latest change wins, the whole value. The first device that signs in to 0.16 while the server
-      holds none sends its own once; every other device takes the server's.
+    - Per preference, the latest change wins, the whole value. Every device takes the server's: see the amendment of
+      2026-11-07 for the first device.
     - The device's own settings stay the device's: zoom, theme, visuals, player name, outputs, speaker delay.
     - Signed out, the app shows sign-in, Local still plays, and nothing of any account shows.
 15. **Other servers' sign-ins (0098's modes) are per Cratarr account,** sealed under it, hidden and kept at sign-out.
@@ -333,6 +333,28 @@ This changes "how a record's copies behave" above: "Which copy plays", "An Incom
 
 Why: a pick had no way back to automatic, and what an account heard could differ from what Kodi did. Now Kodi hears what an
 account hears, unless their own music holds the better copy or a library is off. Downloads keep their saved file.
+
+## Amended 2026-11-07: a folder of one release, shared facts, libraries that change place (the owner, by question)
+
+docs/records-and-copies.md has these in full.
+
+- **A folder with the exact MusicBrainz release id of a record joins it at once,** even with tracks still missing. Without that id it
+  waits for its last file (CR19). This bends "the tracklists must match" for this case only, so 0100's rule of the same record keeps its
+  other cases: a deluxe edition is its own record, and a track new to the record parts two copies, of one release too.
+- **What a short copy does:** a whole copy plays before one short of tracks, whatever its quality; `from` hears it for what it holds;
+  Replace is refused; Delete takes its own files; a file takes the track it is by name and length, never by its place.
+- **Shared facts:** a record goes by a main library where it is in one, and a person's own copy never changes what others see. Only in
+  people's own music, the first copy added decides. "If it's owned by administrator, then only administrator can edit": a record in a
+  main library or Incoming is the administrators'; one only in people's own music its first copy's owner's, for the facts set by hand.
+- **Third-party apps see every library** (point 1, amended there). The filter stays on the account and still says which copy plays.
+- **A library's switch survives a rename or a moved mount:** a library off stays off, and one Radio chooses from stays chosen.
+- **Nothing keyed by place goes unlisted:** a test fails on a table by folder and path that `FILE_TABLES` does not hold or name exempt.
+- **An exact fit comes first** when a gone file is looked for: its size, modified time and length. Ambiguity is never guessed.
+- **A library out of use is not forgotten for its age.** Forgetting is a person's act, or other files at its path.
+- **One list of what is missing, for administrators, reachable from Health,** with a way to say by hand what a track is now, through the
+  take and `track_moved`.
+- **Point 14's "the first device sends its own once" no longer holds.** A device takes the server's preferences, and a preference goes up
+  only when someone changes it. Nothing a device held before 0.16 is carried up: each account starts from what the server holds.
 
 2026-11-06, the owner changed a card's dots, which were "In lists" above, point 1's "only while the viewer has two or more
 libraries on" and 0034's "while more than one library is switched on": one dot for each library foreign to home, the first kept

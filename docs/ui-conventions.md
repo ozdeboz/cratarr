@@ -231,7 +231,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **A record's copies in its panel** (the owner, 2026-11-06: "What's the difference!?!"; the rules are `lib/copiesRule`'s):
   a record of several copies has a line per copy under its details, in the order they would play: its library's dot, which
   every copy has here whatever a card's dots leave out, and name, its format and bitrate ("MP3 320", a lossless copy its
-  format alone), its size, and "plays" on the one Play would give. Format and bitrate leave the details line then, and the dots before it, as no line says one copy's quality as if
+  format alone), its size, or "3 of 10" for a copy short of the record's tracks, and "plays" on the one Play would give. Format and bitrate leave the details line then, and the dots before it, as no line says one copy's quality as if
   it were the record's. A tap on another copy's line is its Play from, as the menu's entry. A copy in a library off has no
   line, and the one left on by that keeps its own; a later folder of a library has a line and no tap, as `from` takes the
   first. A record of one copy has no lines. A long library name gives way, never what follows it.
