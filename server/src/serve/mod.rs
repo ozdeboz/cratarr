@@ -474,12 +474,19 @@ impl Serve {
         Ok(())
     }
 
+    /// When this build ended: past the build before even inside one second, as what was read between the two is kept by this, and
+    /// would pass for read after both. A reading of the crates so kept stands for five minutes, and a device's rows with it.
+    fn build_stamped(&self) -> i64 {
+        let mut at = self.built_at.write().unwrap_or_else(|p| p.into_inner());
+        *at = now().max(*at + 1);
+        *at
+    }
+
     /// After the library was built (whole, or `folders` of it): when, the plays and stars that follow songs to new ids, a
     /// line in the log; with changed songs, the catalogue links the built-in source's ids and those who keep its covers'
     /// stamps are told; and those who wait on a build. Blocking.
     fn built_now(&self, why: &str, whole: bool, folders: usize, songs_changed: bool) -> Result<()> {
-        let at = now();
-        *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = at;
+        let at = self.build_stamped();
         // Before the persistent ids: they would move what the merge means to add up. Failing, the next check goes over it.
         if let Err(e) = self.follow_taken() {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
@@ -1011,6 +1018,14 @@ mod tests {
         checked_again(&serve);
         assert_eq!((plays_of(&serve, &away), plays_of(&serve, &here)), (1, 0), "on its own track, and nothing on the other");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    #[test]
+    fn two_builds_inside_a_second_are_two_stamps() {
+        let s = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        let (first, second) = (s.build_stamped(), s.build_stamped());
+        assert!(second > first, "{first} then {second}");
+        assert_eq!(s.built_at(), second);
     }
 
     #[test]

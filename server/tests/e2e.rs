@@ -1506,13 +1506,14 @@ async fn fed(who: &Caller<'_>, device: &mut cratarr_rules::index::Index) -> Fed 
     }
 }
 
-/// `device` on the feed until it holds what a fresh fetch holds, to the byte. A change reaches the library a step at a time, so
-/// it may take a few; a feed that misses a row never gets there.
-async fn in_step(who: &Caller<'_>, device: &mut cratarr_rules::index::Index, what: &str) {
+/// `device` on the feed until it holds what a fresh fetch holds, to the byte, and that is what the change said (`arrived`): a
+/// change reaches the library a step at a time and the rows a step after, and until then a device and a fresh fetch agree on
+/// what stood before. A feed that misses a row never gets there.
+async fn in_step(who: &Caller<'_>, device: &mut cratarr_rules::index::Index, what: &str, arrived: impl Fn(&cratarr_rules::index::Index) -> bool) {
     let start = Instant::now();
     loop {
         assert_ne!(fed(who, device).await, Fed::Again, "{what}: told to start again");
-        if device.save() == index_of(who).await.save() {
+        if arrived(device) && device.save() == index_of(who).await.save() {
             return;
         }
         assert!(start.elapsed() < Duration::from_secs(60), "{what}: the feed never came to what a fresh index says");
@@ -1537,10 +1538,8 @@ async fn a_device_on_the_feed_holds_what_a_fresh_index_holds_end_to_end() {
     who.ok(reqwest::Method::POST, &format!("/api/incoming/keep/cratarr/{album}"), json!({})).await;
     let in_music = music.to_string_lossy().to_string();
     s.until("the Keep listed", Duration::from_secs(60), || async { who.albums().await.iter().any(|a| a["title"] == "Just Arrived" && a["library"].as_str() == Some(&*in_music)) }).await;
-    in_step(&who, &mut device, "a Keep").await;
-    let kept = listed(&device, "Just Arrived").unwrap();
-    assert_eq!(kept.id, was.id, "the same track");
-    assert_ne!(kept.facts.folders, was.facts.folders, "in the library it was added to");
+    in_step(&who, &mut device, "a Keep", |d| listed(d, "Just Arrived").is_some_and(|t| t.facts.folders != was.facts.folders)).await;
+    assert_eq!(listed(&device, "Just Arrived").unwrap().id, was.id, "the same track, in the library it was added to");
 
     let album = id_of(who.albums().await, "Tide Tables");
     set_vorbis(&music.join("Glass Harbour/Tide Tables (2012)/01 Slack Water.flac"), "TITLE", "Slacker Water");
@@ -1549,21 +1548,22 @@ async fn a_device_on_the_feed_holds_what_a_fresh_index_holds_end_to_end() {
         who.get(&format!("/api/albums/cratarr/{album}")).await["rows"].as_array().unwrap().iter().any(|r| r["name"] == "Slacker Water")
     })
     .await;
-    in_step(&who, &mut device, "a retag").await;
-    assert!(listed(&device, "Slacker Water").is_some() && listed(&device, "Slack Water").is_none());
+    in_step(&who, &mut device, "a retag", |d| listed(d, "Slacker Water").is_some() && listed(d, "Slack Water").is_none()).await;
 
     let album = id_of(who.albums().await, "Signal");
     let gone = listed(&device, "Signal").unwrap();
     who.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{album}/delete"), json!({})).await;
-    s.until("the delete seen", Duration::from_secs(60), || async { !who.albums().await.iter().any(|a| a["title"] == "Signal") }).await;
-    in_step(&who, &mut device, "a delete").await;
-    assert!(device.track(gone.id).is_none() && device.record(gone.record).is_none());
+    s.until("the delete seen", Duration::from_secs(120), || async {
+        ask(&who, "startScan", "").await;
+        !who.albums().await.iter().any(|a| a["title"] == "Signal")
+    })
+    .await;
+    in_step(&who, &mut device, "a delete", |d| d.track(gone.id).is_none() && d.record(gone.record).is_none()).await;
 
     let album = id_of(who.albums().await, "Undated");
     who.ok(reqwest::Method::PUT, "/api/albums/overrides", json!({ "albums": [album], "set": { "year": 1999 } })).await;
     s.until("the fact set", Duration::from_secs(90), || async { who.albums().await.iter().any(|a| a["title"] == "Undated" && a["year"] == 1999) }).await;
-    in_step(&who, &mut device, "a fact set by hand, written to nothing the catalogue holds").await;
-    assert_eq!(device.rows().records.iter().find(|r| r.title == "Undated").unwrap().year, Some(1999));
+    in_step(&who, &mut device, "a fact set by hand, written to nothing the catalogue holds", |d| d.rows().records.iter().any(|r| r.title == "Undated" && r.year == Some(1999))).await;
 
     s.until("nothing more", Duration::from_secs(60), || async {
         let mut now = index_of(&who).await;
