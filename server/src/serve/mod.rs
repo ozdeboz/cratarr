@@ -12,6 +12,7 @@ pub mod files;
 pub mod guest;
 pub mod ids;
 pub mod import;
+pub mod index_rows;
 pub mod ldap;
 pub mod library;
 pub mod library_api;
@@ -119,6 +120,8 @@ pub struct Serve {
     stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
     /// The covers a build changed (`subscribe_covers`).
     covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
+    /// One device's index made at a time, and what the library's log was last brought up to (`app::device_index`).
+    device: std::sync::Mutex<crate::app::device_index::Settled>,
 }
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
@@ -189,6 +192,7 @@ impl Serve {
             play_on: Default::default(),
             stamps: Default::default(),
             covers: tokio::sync::broadcast::channel(16).0,
+            device: Default::default(),
         }))
     }
 
@@ -353,6 +357,17 @@ impl Serve {
 
     pub fn play_on(&self) -> Option<&Arc<crate::app::PlayOn>> {
         self.play_on.get()
+    }
+
+    /// Tests elsewhere: the time of the last build moved on, as a build's end moves it.
+    #[cfg(test)]
+    pub fn build_passed_for_tests(&self) {
+        *self.built_at.write().unwrap() += 1;
+    }
+
+    /// A device's index being made: until this goes, another waits, as two would hold twice what one does. Blocking.
+    pub fn device_turn(&self) -> std::sync::MutexGuard<'_, crate::app::device_index::Settled> {
+        self.device.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Changes each time the library is built (to the time it was): for views kept from the built-in source.

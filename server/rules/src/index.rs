@@ -140,6 +140,24 @@ pub struct Track {
     pub facts: Facts,
 }
 
+impl Track {
+    fn head(&self) -> TrackHead<'_> {
+        TrackHead { id: self.id, record: self.record, disc: self.disc, number: self.number, title: &self.title, artist: self.artist.as_deref(), artist_ids: &self.artist_ids }
+    }
+}
+
+/// A track's own fields, as [`Builder::track`] takes them beside facts that stay where they are.
+#[derive(Debug, Clone, Copy)]
+pub struct TrackHead<'a> {
+    pub id: i64,
+    pub record: i64,
+    pub disc: Option<u32>,
+    pub number: Option<u32>,
+    pub title: &'a str,
+    pub artist: Option<&'a str>,
+    pub artist_ids: &'a [i64],
+}
+
 /// Rows, in any order: of two with one id the later stands.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Rows {
@@ -179,6 +197,7 @@ const HEADER: usize = 24;
 const INDEX: [u8; 4] = *b"CRXI";
 const CHANGES: [u8; 4] = *b"CRXC";
 const SOUNDS: [u8; 4] = *b"CRXS";
+const SOUND_CHANGES: [u8; 4] = *b"CRXD";
 
 /// What a body adds up to: a torn write or a changed byte is refused, not read as a library. Every step can be undone, so one
 /// word changed always changes the sum.
@@ -337,6 +356,8 @@ trait Cell: Copy + Default + PartialEq {
     fn word(&mut self) -> Option<&mut u32> {
         None
     }
+    /// What it says, whatever number its word has here: what a row's print is made of.
+    fn said(self, words: &Text, out: &mut Vec<u8>);
 }
 
 /// Each as what it differs by from the last: ids rise slowly and a record's tracks say the same, so most take a byte.
@@ -356,6 +377,10 @@ impl Cell for i64 {
             into.push(last);
         }
         Ok(())
+    }
+
+    fn said(self, _words: &Text, out: &mut Vec<u8>) {
+        out.extend(self.to_le_bytes());
     }
 }
 
@@ -383,6 +408,10 @@ impl Cell for Word {
 
     fn word(&mut self) -> Option<&mut u32> {
         Some(&mut self.0)
+    }
+
+    fn said(self, words: &Text, out: &mut Vec<u8>) {
+        said_text(words.word(self), out);
     }
 }
 
@@ -420,6 +449,10 @@ impl Cell for f64 {
         }
         Ok(())
     }
+
+    fn said(self, _words: &Text, out: &mut Vec<u8>) {
+        out.extend(self.to_bits().to_le_bytes());
+    }
 }
 
 impl Cell for f32 {
@@ -435,6 +468,10 @@ impl Cell for f32 {
         }
         Ok(())
     }
+
+    fn said(self, _words: &Text, out: &mut Vec<u8>) {
+        out.extend(self.to_bits().to_le_bytes());
+    }
 }
 
 impl Cell for i8 {
@@ -446,6 +483,10 @@ impl Cell for i8 {
         into.extend(from.take(n)?.iter().map(|v| *v as i8));
         Ok(())
     }
+
+    fn said(self, _words: &Text, out: &mut Vec<u8>) {
+        out.push(self as u8);
+    }
 }
 
 /// A column of a table: written and read whole, and taken from row by row when two tables become one.
@@ -456,6 +497,8 @@ trait Column: Default {
     fn take(&mut self, from: &Self, row: usize, map: &[u32]);
     /// Every word it holds.
     fn each_word(&mut self, _each: &mut dyn FnMut(&mut u32)) {}
+    /// What row `row` says.
+    fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>);
 }
 
 impl<T: Cell> Column for Vec<T> {
@@ -475,6 +518,10 @@ impl<T: Cell> Column for Vec<T> {
 
     fn each_word(&mut self, each: &mut dyn FnMut(&mut u32)) {
         self.iter_mut().filter_map(Cell::word).for_each(each);
+    }
+
+    fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>) {
+        self[row].said(words, out);
     }
 }
 
@@ -536,6 +583,12 @@ impl<T: Cell> Column for Lists<T> {
 
     fn each_word(&mut self, each: &mut dyn FnMut(&mut u32)) {
         self.items.iter_mut().filter_map(Cell::word).for_each(each);
+    }
+
+    fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>) {
+        let cells = self.of(row);
+        varint(out, cells.len() as u64);
+        cells.iter().for_each(|c| c.said(words, out));
     }
 }
 
@@ -610,6 +663,16 @@ impl Column for Text {
     fn take(&mut self, from: &Self, row: usize, _map: &[u32]) {
         self.push(from.get(row));
     }
+
+    fn said(&self, row: usize, _words: &Text, out: &mut Vec<u8>) {
+        said_text(self.get(row), out);
+    }
+}
+
+/// Text said with its length, so that two cells cannot run into one another and read the same.
+fn said_text(text: &str, out: &mut Vec<u8>) {
+    varint(out, text.len() as u64);
+    out.extend_from_slice(text.as_bytes());
 }
 
 /// A table: columns of one length, its rows in the order of its key.
@@ -619,6 +682,8 @@ trait Table: Default {
     fn read(from: &mut Reader) -> Result<Self, Refused>;
     fn take(&mut self, from: &Self, row: usize, map: &[u32]);
     fn each_word(&mut self, each: &mut dyn FnMut(&mut u32));
+    /// What row `row` says, column by column.
+    fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>);
 }
 
 /// A table's columns, said once: what is written, read and taken of a row follows from them.
@@ -651,6 +716,10 @@ macro_rules! table {
 
             fn each_word(&mut self, each: &mut dyn FnMut(&mut u32)) {
                 $(self.$col.each_word(each);)*
+            }
+
+            fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>) {
+                $(self.$col.said(row, words, out);)*
             }
         }
     };
@@ -801,6 +870,18 @@ fn merged<T: Table>(old: &T, new: &T, drop: &[i64], from_old: &[u32], from_new: 
     out
 }
 
+/// Each row of a table as a number, by its key: what it says, and what `also` adds of it.
+fn printed<T: Table>(table: &T, words: &Text, also: impl Fn(i64, &mut Vec<u8>)) -> Vec<(i64, u64)> {
+    let mut said = Vec::new();
+    let print = |(row, key): (usize, &i64)| {
+        said.clear();
+        table.said(row, words, &mut said);
+        also(*key, &mut said);
+        (*key, checksum(&said))
+    };
+    table.keys().iter().enumerate().map(print).collect()
+}
+
 /// A table's rows whose key is in `keep`.
 fn kept<T: Table>(table: &T, keep: &HashSet<i64>, same: &[u32]) -> T {
     let mut out = T::default();
@@ -860,6 +941,138 @@ impl Names {
     }
 }
 
+/// Rows packed one at a time, each table's in the order of its ids: how the server makes an index, as `Rows` would hold every
+/// track's facts a second time beside the crates', and a whole library of small strings does not go back to the system whole.
+pub struct Builder {
+    names: Names,
+    packed: Packed,
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Builder {
+    pub fn new() -> Self {
+        let mut names = Names::default();
+        names.of("");
+        Self { names, packed: Packed::default() }
+    }
+
+    pub fn library(&mut self, row: &Library) {
+        let (to, names) = (&mut self.packed.libraries, &mut self.names);
+        to.id.push(row.id);
+        to.key.push(names.of(&row.key));
+        to.name.push(names.of(&row.name));
+        to.kind.push(row.kind as i64);
+        to.order.push(i64::from(row.order));
+        to.colour.push(names.maybe(row.colour.as_deref()));
+        to.owner.push(names.maybe(row.owner.as_deref()));
+    }
+
+    pub fn artist(&mut self, row: &Artist) {
+        let (to, names) = (&mut self.packed.artists, &mut self.names);
+        to.id.push(row.id);
+        to.name.push(names.of(&row.name));
+        to.sort.push(&row.sort);
+        to.spelled.push(names.all(&row.spelled));
+    }
+
+    /// A record and its copies.
+    pub fn record(&mut self, row: &Record) {
+        let (to, names) = (&mut self.packed.records, &mut self.names);
+        to.id.push(row.id);
+        to.title.push(&row.title);
+        to.sort.push(&row.sort);
+        to.artist.push(names.of(&row.artist));
+        to.artist_ids.push(row.artist_ids.iter().copied());
+        to.year.push(from_small(row.year));
+        to.original_year.push(from_small(row.original_year));
+        to.added.push(row.added.unwrap_or(NONE));
+        to.kind.push(names.maybe(row.kind.as_deref()));
+        to.secondary.push(names.all(&row.secondary));
+        to.genres.push(names.all(&row.genres));
+        to.compilation.push(i64::from(row.compilation));
+        to.whole_tracks.push(from_small(row.whole_tracks));
+        for copy in &row.copies {
+            let to = &mut self.packed.copies;
+            to.record.push(row.id);
+            to.library.push(copy.library);
+            to.dir.push(&copy.dir);
+            to.format.push(names.maybe(copy.format.as_deref()));
+            to.min_kbps.push(from_small(copy.min_kbps));
+            to.bits.push(from_small(copy.bits));
+            to.rate.push(from_small(copy.rate));
+            to.size.push(copy.size.map_or(NONE, |s| s as i64));
+            to.added.push(copy.added.unwrap_or(NONE));
+            to.tracks.push(i64::from(copy.tracks));
+        }
+    }
+
+    /// A track: `row`'s own fields, and what the crates read of it.
+    pub fn track(&mut self, row: TrackHead, f: &Facts) {
+        let (to, names) = (&mut self.packed.tracks, &mut self.names);
+        to.id.push(row.id);
+        to.record.push(row.record);
+        to.disc.push(from_small(row.disc));
+        to.number.push(from_small(row.number));
+        to.title.push(row.title);
+        to.artist.push(names.maybe(row.artist));
+        to.artist_ids.push(row.artist_ids.iter().copied());
+        to.line.push(&f.rel);
+        to.lines.push(&f.lines.join(LINES_APART));
+        to.folders.push(f.folders.iter().copied());
+        to.born.push(f.born.unwrap_or(NONE));
+        to.length.push(from_float(f.length));
+        to.year.push(from_float(f.year));
+        to.bpm.push(from_float(f.bpm));
+        to.energy.push(from_float(f.energy));
+        to.danceability.push(from_float(f.danceability));
+        to.four.push(f.four.unwrap_or(f32::NAN));
+        to.clap_moods.push(f.clap_moods.iter().flatten().copied());
+        to.genres.push(names.all(&f.genres));
+        to.styles.push(names.all(&f.styles));
+        to.moods.push(names.all(&f.moods));
+        to.tags.push(names.all(&f.tags));
+        to.labels.push(names.all(&f.labels));
+        to.release_types.push(names.all(&f.release_types));
+        to.artists.push(names.all(&f.artists));
+        to.credits.push(names.all(&f.credits));
+        to.credit_names.push(names.all(&f.credit_names));
+        to.quality.push(names.maybe(f.quality.as_deref()));
+        to.key.push(names.maybe(f.key.as_deref()));
+        to.meter.push(names.maybe(f.meter.as_deref()));
+    }
+
+    /// What was packed, its words sorted: what is left is `tidy`'s.
+    fn packed(self) -> Packed {
+        let Self { names, mut packed } = self;
+        let mut sorted: Vec<(String, u32)> = names.0.into_iter().collect();
+        sorted.sort_unstable();
+        let mut place = vec![0; sorted.len()];
+        for (at, (word, n)) in sorted.iter().enumerate() {
+            place[*n as usize] = at as u32;
+            packed.words.push(word);
+        }
+        packed.each_word(&mut |w| *w = place[*w as usize]);
+        packed
+    }
+
+    /// The index of what was packed, as of `rev`. Refused where a row names what is not here, or came out of the order of its
+    /// ids: a file of that form would be refused by whoever loads it.
+    pub fn build(self, rev: i64) -> Result<Index, Refused> {
+        let mut packed = self.packed();
+        if !packed.in_order() {
+            return Err(Refused::Damaged);
+        }
+        packed.tidy();
+        packed.check()?;
+        Ok(Index { rev, packed })
+    }
+}
+
 /// Every table, and the words they say.
 #[derive(Debug, Clone, Default)]
 struct Packed {
@@ -874,97 +1087,12 @@ struct Packed {
 impl Packed {
     /// These rows, in order, their words sorted: what is left is `tidy`'s.
     fn of(rows: &Rows) -> Self {
-        let mut names = Names::default();
-        names.of("");
-        let mut packed = Packed::default();
-        for row in by_id(&rows.libraries, |l| l.id) {
-            let to = &mut packed.libraries;
-            to.id.push(row.id);
-            to.key.push(names.of(&row.key));
-            to.name.push(names.of(&row.name));
-            to.kind.push(row.kind as i64);
-            to.order.push(i64::from(row.order));
-            to.colour.push(names.maybe(row.colour.as_deref()));
-            to.owner.push(names.maybe(row.owner.as_deref()));
-        }
-        for row in by_id(&rows.artists, |a| a.id) {
-            let to = &mut packed.artists;
-            to.id.push(row.id);
-            to.name.push(names.of(&row.name));
-            to.sort.push(&row.sort);
-            to.spelled.push(names.all(&row.spelled));
-        }
-        for row in by_id(&rows.records, |r| r.id) {
-            let to = &mut packed.records;
-            to.id.push(row.id);
-            to.title.push(&row.title);
-            to.sort.push(&row.sort);
-            to.artist.push(names.of(&row.artist));
-            to.artist_ids.push(row.artist_ids.iter().copied());
-            to.year.push(from_small(row.year));
-            to.original_year.push(from_small(row.original_year));
-            to.added.push(row.added.unwrap_or(NONE));
-            to.kind.push(names.maybe(row.kind.as_deref()));
-            to.secondary.push(names.all(&row.secondary));
-            to.genres.push(names.all(&row.genres));
-            to.compilation.push(i64::from(row.compilation));
-            to.whole_tracks.push(from_small(row.whole_tracks));
-            for copy in &row.copies {
-                let to = &mut packed.copies;
-                to.record.push(row.id);
-                to.library.push(copy.library);
-                to.dir.push(&copy.dir);
-                to.format.push(names.maybe(copy.format.as_deref()));
-                to.min_kbps.push(from_small(copy.min_kbps));
-                to.bits.push(from_small(copy.bits));
-                to.rate.push(from_small(copy.rate));
-                to.size.push(copy.size.map_or(NONE, |s| s as i64));
-                to.added.push(copy.added.unwrap_or(NONE));
-                to.tracks.push(i64::from(copy.tracks));
-            }
-        }
-        for row in by_id(&rows.tracks, |t| t.id) {
-            let (to, f) = (&mut packed.tracks, &row.facts);
-            to.id.push(row.id);
-            to.record.push(row.record);
-            to.disc.push(from_small(row.disc));
-            to.number.push(from_small(row.number));
-            to.title.push(&row.title);
-            to.artist.push(names.maybe(row.artist.as_deref()));
-            to.artist_ids.push(row.artist_ids.iter().copied());
-            to.line.push(&f.rel);
-            to.lines.push(&f.lines.join(LINES_APART));
-            to.folders.push(f.folders.iter().copied());
-            to.born.push(f.born.unwrap_or(NONE));
-            to.length.push(from_float(f.length));
-            to.year.push(from_float(f.year));
-            to.bpm.push(from_float(f.bpm));
-            to.energy.push(from_float(f.energy));
-            to.danceability.push(from_float(f.danceability));
-            to.four.push(f.four.unwrap_or(f32::NAN));
-            to.clap_moods.push(f.clap_moods.iter().flatten().copied());
-            to.genres.push(names.all(&f.genres));
-            to.styles.push(names.all(&f.styles));
-            to.moods.push(names.all(&f.moods));
-            to.tags.push(names.all(&f.tags));
-            to.labels.push(names.all(&f.labels));
-            to.release_types.push(names.all(&f.release_types));
-            to.artists.push(names.all(&f.artists));
-            to.credits.push(names.all(&f.credits));
-            to.credit_names.push(names.all(&f.credit_names));
-            to.quality.push(names.maybe(f.quality.as_deref()));
-            to.key.push(names.maybe(f.key.as_deref()));
-            to.meter.push(names.maybe(f.meter.as_deref()));
-        }
-        let mut sorted: Vec<(String, u32)> = names.0.into_iter().collect();
-        sorted.sort_unstable();
-        let mut place = vec![0; sorted.len()];
-        for (at, (word, n)) in sorted.iter().enumerate() {
-            place[*n as usize] = at as u32;
-            packed.words.push(word);
-        }
-        packed.each_word(&mut |w| *w = place[*w as usize]);
-        packed
+        let mut to = Builder::new();
+        by_id(&rows.libraries, |l| l.id).into_iter().for_each(|row| to.library(row));
+        by_id(&rows.artists, |a| a.id).into_iter().for_each(|row| to.artist(row));
+        by_id(&rows.records, |r| r.id).into_iter().for_each(|row| to.record(row));
+        by_id(&rows.tracks, |t| t.id).into_iter().for_each(|row| to.track(row.head(), &row.facts));
+        to.packed()
     }
 
     fn each_word(&mut self, each: &mut dyn FnMut(&mut u32)) {
@@ -1052,13 +1180,16 @@ impl Packed {
             copies: Copies::read(from)?,
             tracks: Tracks::read(from)?,
         };
-        let rising = |ids: &[i64]| ids.windows(2).all(|w| w[0] < w[1]);
         let sorted = rows > 0 && packed.words.get(0).is_empty() && (1..rows).all(|i| packed.words.get(i - 1) < packed.words.get(i));
-        let in_order = rising(packed.libraries.keys()) && rising(packed.artists.keys()) && rising(packed.records.keys()) && rising(packed.tracks.keys());
-        let together = packed.copies.record.windows(2).all(|w| w[0] <= w[1]);
         let mut known = true;
         packed.each_word(&mut |w| known &= (*w as usize) < rows);
-        if sorted && in_order && together && known { Ok(packed) } else { Err(Refused::Damaged) }
+        if sorted && packed.in_order() && known { Ok(packed) } else { Err(Refused::Damaged) }
+    }
+
+    /// Whether each table's rows lie in the order of their ids, a record's copies together.
+    fn in_order(&self) -> bool {
+        let rising = |ids: &[i64]| ids.windows(2).all(|w| w[0] < w[1]);
+        rising(self.libraries.keys()) && rising(self.artists.keys()) && rising(self.records.keys()) && rising(self.tracks.keys()) && self.copies.record.windows(2).all(|w| w[0] <= w[1])
     }
 
     fn library_at(&self, row: usize) -> Library {
@@ -1205,6 +1336,35 @@ impl Index {
         self.rev
     }
 
+    /// This as of `rev`: the server knows where it stands only once it has compared what this holds with what was told.
+    pub fn at(mut self, rev: i64) -> Self {
+        self.rev = rev;
+        self
+    }
+
+    pub fn tracks(&self) -> usize {
+        self.packed.tracks.id.len()
+    }
+
+    /// Whether a track is held.
+    pub fn holds(&self, track: i64) -> bool {
+        self.packed.tracks.id.binary_search(&track).is_ok()
+    }
+
+    pub fn prints(&self) -> Prints {
+        let (p, none) = (&self.packed, |_: i64, _: &mut Vec<u8>| {});
+        let copies = |record: i64, out: &mut Vec<u8>| {
+            let at = p.copies.record.partition_point(|r| *r < record)..p.copies.record.partition_point(|r| *r <= record);
+            at.for_each(|row| p.copies.said(row, &p.words, out));
+        };
+        Prints { libraries: printed(&p.libraries, &p.words, none), artists: printed(&p.artists, &p.words, none), records: printed(&p.records, &p.words, copies), tracks: printed(&p.tracks, &p.words, none) }
+    }
+
+    /// Every library held.
+    pub fn libraries(&self) -> Vec<Library> {
+        (0..self.packed.libraries.id.len()).map(|row| self.packed.library_at(row)).collect()
+    }
+
     pub fn save(&self) -> Vec<u8> {
         let mut out = vec![0; HEADER];
         varint(&mut out, zigzag(self.rev));
@@ -1334,6 +1494,17 @@ impl Index {
     }
 }
 
+/// What each row of an index says, as a number: its id, and one that moves with anything the row says and with nothing else, not
+/// the rev, not where a word lies in the list. What the server has told devices is kept as these, so that a row moved with no write
+/// to it is seen for what it is: a mood's bar raised, a word of the household's, a copy's order. A record's says its copies too.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Prints {
+    pub libraries: Vec<(i64, u64)>,
+    pub artists: Vec<(i64, u64)>,
+    pub records: Vec<(i64, u64)>,
+    pub tracks: Vec<(i64, u64)>,
+}
+
 // --- Changes ---
 
 /// What the feed brings from one rev to the next: rows as they stand now, whole, and what left. A row sent is a row replaced,
@@ -1423,8 +1594,14 @@ fn eight_bits(sound: &[f32]) -> Option<Vec<i8>> {
 impl Sounds {
     /// These tracks' sounds as of `rev`.
     pub fn build(rev: i64, heard: &[(i64, Vec<f32>)]) -> Self {
+        Self::from_sorted(rev, by_id(heard, |h| h.0).into_iter().map(|(track, sound)| (*track, sound.as_slice())))
+    }
+
+    /// The same a sound at a time, in the order of the tracks' ids: the server's stay where they are, and only eight bits of each
+    /// are held here.
+    pub fn from_sorted<'a>(rev: i64, heard: impl IntoIterator<Item = (i64, &'a [f32])>) -> Self {
         let mut out = Heard::default();
-        for (track, sound) in by_id(heard, |h| h.0).into_iter().filter_map(|(track, sound)| Some((*track, eight_bits(sound)?))) {
+        for (track, sound) in heard.into_iter().filter_map(|(track, sound)| Some((track, eight_bits(sound)?))) {
             out.track.push(track);
             out.sound.push(sound);
         }
@@ -1433,6 +1610,41 @@ impl Sounds {
 
     pub fn rev(&self) -> i64 {
         self.rev
+    }
+
+    /// These as of `rev`, as [`Index::at`].
+    pub fn at(mut self, rev: i64) -> Self {
+        self.rev = rev;
+        self
+    }
+
+    /// How many tracks are heard.
+    pub fn len(&self) -> usize {
+        self.heard.track.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.heard.track.is_empty()
+    }
+
+    /// What each track's sound says, as [`Index::prints`] has it of a row.
+    pub fn prints(&self) -> Vec<(i64, u64)> {
+        printed(&self.heard, &Text::default(), |_, _| {})
+    }
+
+    /// `tracks` as they stand here, whole, from `from`: a device's feed. One not heard has left.
+    pub fn changes(&self, from: i64, tracks: &[i64]) -> SoundChanges {
+        let (mut set, mut gone) = (Heard::default(), Vec::new());
+        let mut tracks = tracks.to_vec();
+        tracks.sort_unstable();
+        tracks.dedup();
+        for track in tracks {
+            match self.heard.track.binary_search(&track) {
+                Ok(row) => set.take(&self.heard, row, &[]),
+                Err(_) => gone.push(track),
+            }
+        }
+        SoundChanges { from, to: self.rev, set, gone }
     }
 
     /// A track's sound, of unit length; none where it was not heard.
@@ -1457,16 +1669,57 @@ impl Sounds {
         if heard.track.windows(2).all(|w| w[0] < w[1]) { Ok(Self { rev, heard }) } else { Err(Refused::Damaged) }
     }
 
-    /// `changed`, a `Sounds` of what changed since `from`, up to its own rev, and the tracks no longer heard.
-    pub fn apply(&mut self, from: i64, changed: &Sounds, gone: &[i64]) -> Result<(), Refused> {
-        if from != self.rev || changed.rev < from {
-            return Err(Refused::Rev { at: self.rev, from });
+    /// The feed's next changes. Refused, what is held left as it was, if they do not start here.
+    pub fn apply(&mut self, changes: &SoundChanges) -> Result<(), Refused> {
+        if changes.from != self.rev || changes.to < changes.from {
+            return Err(Refused::Rev { at: self.rev, from: changes.from });
         }
-        let mut gone = gone.to_vec();
-        gone.sort_unstable();
-        self.heard = merged(&self.heard, &changed.heard, &gone, &[], &[]);
-        self.rev = changed.rev;
+        self.heard = merged(&self.heard, &changes.set, &changes.gone, &[], &[]);
+        self.rev = changes.to;
         Ok(())
+    }
+}
+
+/// What the feed brings of the sounds from one rev to the next: as [`Changes`] of rows, on their own, as a device on a mobile
+/// connection may leave them for later.
+#[derive(Debug, Clone)]
+pub struct SoundChanges {
+    from: i64,
+    to: i64,
+    set: Heard,
+    gone: Vec<i64>,
+}
+
+impl SoundChanges {
+    /// Where they leave what is held.
+    pub fn to(&self) -> i64 {
+        self.to
+    }
+
+    /// How many sounds they bring, and how many they take away.
+    pub fn counts(&self) -> (usize, usize) {
+        (self.set.track.len(), self.gone.len())
+    }
+
+    pub fn save(&self) -> Vec<u8> {
+        let mut out = vec![0; HEADER];
+        varint(&mut out, zigzag(self.from));
+        varint(&mut out, zigzag(self.to));
+        self.set.write(&mut out);
+        varint(&mut out, self.gone.len() as u64);
+        self.gone.write(&mut out);
+        sealed(out, SOUND_CHANGES, SOUNDS_VERSION)
+    }
+
+    pub fn load(bytes: &[u8]) -> Result<Self, Refused> {
+        let mut from = opened(bytes, SOUND_CHANGES, SOUNDS_VERSION)?;
+        let (start, to) = (from.int()?, from.int()?);
+        let set = Heard::read(&mut from)?;
+        let rows = from.rows()?;
+        let mut gone: Vec<i64> = Column::read(&mut from, rows)?;
+        gone.sort_unstable();
+        from.done()?;
+        if set.track.windows(2).all(|w| w[0] < w[1]) { Ok(Self { from: start, to, set, gone }) } else { Err(Refused::Damaged) }
     }
 }
 
@@ -1666,7 +1919,7 @@ mod tests {
     use crate::Rng;
     use crate::crates::{Alike, Condition, Value, View, World};
     use crate::radio::{Ask, Mode, choose};
-    use crate::similarity::Weights;
+    use crate::similarity::{Signal, Weights};
 
     fn library(id: i64) -> Library {
         Library { id, key: format!("library-{id}"), name: format!("Library {id}"), order: id as u32, ..Library::default() }
@@ -1800,6 +2053,93 @@ mod tests {
         rows.artists.reverse();
         rows.libraries.reverse();
         assert_eq!(built(&rows).save(), first);
+    }
+
+    /// The rows of `a` and `b` that print differently, each table's ids.
+    fn moved(a: &Prints, b: &Prints) -> [Vec<i64>; 4] {
+        let differ = |x: &[(i64, u64)], y: &[(i64, u64)]| -> Vec<i64> {
+            let (x, y): (HashMap<i64, u64>, HashMap<i64, u64>) = (x.iter().copied().collect(), y.iter().copied().collect());
+            let mut ids: Vec<i64> = x.keys().chain(y.keys()).copied().filter(|id| x.get(id) != y.get(id)).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+        [differ(&a.libraries, &b.libraries), differ(&a.artists, &b.artists), differ(&a.records, &b.records), differ(&a.tracks, &b.tracks)]
+    }
+
+    #[test]
+    fn a_print_is_what_a_row_says_and_no_more() {
+        let rows = small();
+        let was = built(&rows).prints();
+        assert_eq!(Index::build(9, &rows).unwrap().prints(), was, "the rev says nothing of a row");
+        // A word that sorts first moves every other word's number, and says nothing of their rows.
+        let mut other = rows.clone();
+        other.tracks[2].facts.genres.push("AAA first of all".into());
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![], vec![], vec![200]]);
+        let mut other = rows.clone();
+        other.tracks[0].title = "Another".into();
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![], vec![], vec![100]]);
+        let mut other = rows.clone();
+        other.records[1].copies.reverse();
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![], vec![20], vec![]], "a copy's order is its record's");
+        let mut other = rows.clone();
+        other.records[1].copies[1].tracks = 3;
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![], vec![20], vec![]]);
+        let mut other = rows.clone();
+        other.artists[0].spelled.push("ARTIST".into());
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![1], vec![], vec![]]);
+        let mut other = rows.clone();
+        other.libraries[1].name = "Renamed".into();
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![1], vec![], vec![], vec![]]);
+    }
+
+    /// A column added is printed by the same line that writes it. Each of these went by another path once, and a row's cells must
+    /// not be able to run into each other: two words of one row read as one, or one list's end as another's start.
+    #[test]
+    fn cells_cannot_run_into_each_other_in_a_print() {
+        let mut one = small();
+        one.tracks[0].facts.genres = vec!["ab".into(), "c".into()];
+        let mut two = small();
+        two.tracks[0].facts.genres = vec!["a".into(), "bc".into()];
+        assert_eq!(moved(&built(&one).prints(), &built(&two).prints())[3], [100]);
+        let mut three = small();
+        three.tracks[0].facts.styles = vec!["ab".into()];
+        three.tracks[0].facts.genres = vec!["c".into()];
+        assert_eq!(moved(&built(&one).prints(), &built(&three).prints())[3], [100]);
+    }
+
+    /// The server packs a track at a time, its facts staying where they are, and must come to the very bytes `Rows` come to.
+    #[test]
+    fn rows_packed_one_at_a_time_save_what_a_whole_build_saves() {
+        let (mut rows, _) = made_up(300, 8);
+        rows.tracks.sort_by_key(|t| t.id);
+        rows.records.sort_by_key(|r| r.id);
+        rows.artists.sort_by_key(|a| a.id);
+        // Named by nothing: gone by either way.
+        rows.artists.push(artist(1_000_000));
+        let mut to = Builder::new();
+        rows.libraries.iter().for_each(|l| to.library(l));
+        rows.artists.iter().for_each(|a| to.artist(a));
+        rows.records.iter().for_each(|r| to.record(r));
+        rows.tracks.iter().for_each(|t| to.track(t.head(), &t.facts));
+        assert_eq!(to.build(7).unwrap().save(), Index::build(7, &rows).unwrap().save());
+    }
+
+    #[test]
+    fn rows_packed_out_of_their_order_are_refused_as_any_reader_would_refuse_them() {
+        let packing = |rows: &Rows, ids: [usize; 3]| {
+            let mut to = Builder::new();
+            rows.libraries.iter().for_each(|l| to.library(l));
+            rows.artists.iter().for_each(|a| to.artist(a));
+            rows.records.iter().for_each(|r| to.record(r));
+            ids.iter().for_each(|at| to.track(rows.tracks[*at].head(), &rows.tracks[*at].facts));
+            to.build(1)
+        };
+        assert!(packing(&small(), [0, 1, 2]).is_ok());
+        assert_eq!(packing(&small(), [1, 0, 2]).err(), Some(Refused::Damaged));
+        let mut unknown = small();
+        unknown.records.remove(1);
+        assert_eq!(packing(&unknown, [0, 1, 2]).err(), Some(Refused::Unknown { what: "record", id: 20 }));
     }
 
     /// What a pass of the library might do to `rows`, and the changes the feed brings for it, read as the server reads them: the
@@ -2272,11 +2612,158 @@ mod tests {
         let mut sounds = Sounds::build(1, &heard);
         let gone: Vec<i64> = heard.drain(..10).map(|(t, _)| t).collect();
         heard[0].1[0] += 1.0;
-        let changed = Sounds::build(2, &[heard[0].clone(), (9_999, vec![0.5; 200])]);
+        let first = heard[0].0;
         heard.push((9_999, vec![0.5; 200]));
-        assert_eq!(sounds.apply(0, &changed, &gone), Err(Refused::Rev { at: 1, from: 0 }));
-        sounds.apply(1, &changed, &gone).unwrap();
-        assert!(sounds == Sounds::build(2, &heard));
+        let fresh = Sounds::build(2, &heard);
+        let moved: Vec<i64> = gone.iter().copied().chain([first, 9_999]).collect();
+        let changes = SoundChanges::load(&fresh.changes(1, &moved).save()).unwrap();
+        assert_eq!((changes.counts(), changes.to()), ((2, 10), 2));
+        assert_eq!(sounds.apply(&fresh.changes(0, &moved)), Err(Refused::Rev { at: 1, from: 0 }));
+        assert!(sounds.rev() == 1, "held as it was");
+        sounds.apply(&changes).unwrap();
+        assert_eq!(sounds.save(), fresh.save());
+    }
+
+    #[test]
+    fn sound_changes_of_another_kind_or_version_or_cut_short_are_refused() {
+        let sounds = Sounds::build(2, &[(1, vec![1.0, 0.0])]);
+        let bytes = sounds.changes(1, &[1, 2]).save();
+        assert!(SoundChanges::load(&bytes).is_ok());
+        assert_eq!(SoundChanges::load(&bytes[..bytes.len() - 1]).err(), Some(Refused::Damaged));
+        assert_eq!(SoundChanges::load(&sounds.save()).err(), Some(Refused::Damaged), "whole sounds are no changes");
+        assert_eq!(SoundChanges::load(&another_version(bytes, SOUNDS_VERSION + 1)).err(), Some(Refused::Version { found: SOUNDS_VERSION + 1, wants: SOUNDS_VERSION }));
+    }
+
+    #[test]
+    fn sounds_print_what_they_say_as_a_device_holds_it() {
+        let two = |x: f32| Sounds::build(1, &[(1, vec![1.0, 0.5]), (2, vec![x, 0.25])]);
+        let (a, b) = (two(1.0).prints(), two(0.5).prints());
+        assert_eq!((a[0], a.len()), (b[0], 2), "the other's did not move");
+        assert_ne!(a[1], b[1]);
+        let kept = two(1.0 + 1e-6).prints();
+        assert_eq!(a, kept, "what eight bits cannot hold moves nothing a device has");
+    }
+
+    /// The sounds as a server holds them: of unit length, made so twice as `read_crate_facts` makes them.
+    fn as_read(heard: &[(i64, Vec<f32>)]) -> HashMap<i64, Arc<[f32]>> {
+        heard.iter().filter_map(|(t, s)| Some((*t, Arc::from(similarity::mean_sound(&[&similarity::mean_sound(&[s])?])?)))).collect()
+    }
+
+    /// How close a device's Sounds like comes to the server's for one seed: of the server's list, how many are on the device's; of
+    /// its first 20 how many are among the device's first 20; and the worst place on the device's list, from 1, of its first 10.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Closeness {
+        of_list: usize,
+        of_first: usize,
+        worst_of_ten: usize,
+    }
+
+    /// What "close" is, said before anything was measured (PREVIEW2's D11). A device shows a Sounds like of 200 tracks: at most one
+    /// in twenty of them another track than the server's, at most two of its first twenty, and nothing the server puts in the first
+    /// ten past the twentieth. A listener can tell a list with another first track from the server's, and not one that swaps
+    /// the 150th for the 210th. The order within is not held: two tracks about as close swap places on rounding alone.
+    const CLOSE: Closeness = Closeness { of_list: 190, of_first: 18, worst_of_ten: 20 };
+
+    impl Closeness {
+        fn of(server: &[String], device: &[String]) -> Self {
+            let on = |list: &[String], line: &String| list.iter().position(|l| l == line);
+            let first = &server[..20.min(server.len())];
+            Closeness {
+                of_list: server.iter().filter(|l| on(device, l).is_some()).count(),
+                of_first: first.iter().filter(|l| on(&device[..20.min(device.len())], l).is_some()).count(),
+                worst_of_ten: server.iter().take(10).map(|l| on(device, l).map_or(usize::MAX, |at| at + 1)).max().unwrap_or(0),
+            }
+        }
+
+        fn holds(self) -> bool {
+            self.of_list >= CLOSE.of_list && self.of_first >= CLOSE.of_first && self.worst_of_ten <= CLOSE.worst_of_ten
+        }
+    }
+
+    /// A Sounds like of each of `seeds` from the sounds as the server holds them and as a device does, by a listener's Similar by.
+    fn compared(index: &Index, heard: &[(i64, Vec<f32>)], seeds: &[i64], by: &Weights) -> Vec<Closeness> {
+        let exact = as_read(heard);
+        let mut server = index.facts(None);
+        server.iter_mut().for_each(|f| f.sound = f.track.and_then(|t| exact.get(&t).cloned()));
+        let device = index.facts(Some(&Sounds::load(&Sounds::build(1, heard).save()).unwrap()));
+        let (membership, off, names) = (HashMap::new(), HashSet::new(), index.artist_ids());
+        let (on_server, on_device) = (Alike::of(&server, &membership, &names), Alike::of(&device, &membership, &names));
+        let world = || World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 1_800_000_000, fits: None };
+        let (a, b) = (
+            View { files: &server, switched_off: &off, world: world(), by, alike: || &on_server },
+            View { files: &device, switched_off: &off, world: world(), by, alike: || &on_device },
+        );
+        let list = |seed: i64| crate::crates::like_crate("like:x", "Like", vec![ids::song(seed)], crate::crates::LIKE_COUNT).conditions;
+        seeds.iter().map(|seed| Closeness::of(&a.select(&list(*seed), false), &b.select(&list(*seed), false))).collect()
+    }
+
+    /// Sounds far closer together than `made_up`'s, as a library of few styles has them: a few centres, a record close to its centre
+    /// and a track close to its record, so that the 200 closest of a seed lie within a hair of each other.
+    fn crowded(rows: &Rows, heard: &[(i64, Vec<f32>)], centres: usize, r: &mut Rng) -> Vec<(i64, Vec<f32>)> {
+        let dims = heard[0].1.len();
+        let noise = |r: &mut Rng, by: f32| (0..dims).map(|_| by * (r.unit() as f32 - 0.5)).collect::<Vec<f32>>();
+        let centres: Vec<Vec<f32>> = (0..centres).map(|_| noise(r, 1.0)).collect();
+        let records: HashMap<i64, Vec<f32>> = rows
+            .records
+            .iter()
+            .map(|record| {
+                let (centre, by) = (&centres[r.below(centres.len())], noise(r, 0.3));
+                (record.id, centre.iter().zip(by).map(|(a, b)| a + b).collect())
+            })
+            .collect();
+        let record_of: HashMap<i64, i64> = rows.tracks.iter().map(|t| (t.id, t.record)).collect();
+        heard.iter().map(|(track, _)| (*track, records[&record_of[track]].iter().zip(noise(r, 0.2)).map(|(a, b)| a + b).collect())).collect()
+    }
+
+    fn every_nth(heard: &[(i64, Vec<f32>)], seeds: usize) -> Vec<i64> {
+        heard.iter().step_by((heard.len() / seeds).max(1)).take(seeds).map(|h| h.0).collect()
+    }
+
+    #[test]
+    fn a_sounds_like_from_eight_bits_stays_close_to_the_servers() {
+        let (rows, heard) = made_up(3_000, 31);
+        let index = built(&rows);
+        for (what, sounds) in [("far apart", heard.clone()), ("crowded", crowded(&rows, &heard, 12, &mut Rng::seeded(5)))] {
+            for by in [Weights::EQUAL, Weights::ranked(&[Signal::Sound])] {
+                for close in compared(&index, &sounds, &every_nth(&sounds, 12), &by) {
+                    assert!(close.holds(), "{what}, by {by:?}: {close:?}");
+                }
+            }
+        }
+    }
+
+    /// `seeds` compared, as the worst of each number and their mean.
+    fn reported(what: &str, closeness: &[Closeness]) {
+        let n = closeness.len() as f64;
+        let mean = |f: fn(&Closeness) -> usize| closeness.iter().map(|c| f(c) as f64).sum::<f64>() / n;
+        let held = closeness.iter().filter(|c| c.holds()).count();
+        println!(
+            "{what}: close for {held} of {} seeds; of 200 mean {:.1} worst {}; of the first 20 mean {:.1} worst {}; the first 10's last place mean {:.1} worst {}",
+            closeness.len(),
+            mean(|c| c.of_list),
+            closeness.iter().map(|c| c.of_list).min().unwrap_or(0),
+            mean(|c| c.of_first),
+            closeness.iter().map(|c| c.of_first).min().unwrap_or(0),
+            mean(|c| c.worst_of_ten),
+            closeness.iter().map(|c| c.worst_of_ten).max().unwrap_or(0),
+        );
+    }
+
+    /// D11's measure, on made-up vectors. Their centres are random, so what this says of a real library's closest tracks is how
+    /// much eight bits move a score, not whether a real seed's neighbours lie as near: D22 reads that off real ones.
+    #[test]
+    #[ignore = "measures: --ignored --nocapture"]
+    fn measured_sounds_like_from_eight_bits_at_34_000_tracks() {
+        let (rows, heard) = made_up(34_000, 37);
+        let index = built(&rows);
+        let (every_signal, sound_alone) = (Weights::EQUAL, Weights::ranked(&[Signal::Sound]));
+        reported("far apart, every signal", &compared(&index, &heard, &every_nth(&heard, 40), &every_signal));
+        reported("far apart, sound alone", &compared(&index, &heard, &every_nth(&heard, 40), &sound_alone));
+        for centres in [40, 12, 3] {
+            let sounds = crowded(&rows, &heard, centres, &mut Rng::seeded(centres as u64));
+            reported(&format!("crowded, {centres} centres, every signal"), &compared(&index, &sounds, &every_nth(&sounds, 40), &every_signal));
+            reported(&format!("crowded, {centres} centres, sound alone"), &compared(&index, &sounds, &every_nth(&sounds, 40), &sound_alone));
+        }
     }
 
     /// Counts what is held, so a measure can say what a thing weighs in memory.
