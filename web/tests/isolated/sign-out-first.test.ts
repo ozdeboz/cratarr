@@ -12,7 +12,16 @@ const every = setInterval;
 g.setInterval = (...args: Parameters<typeof setInterval>) => every(...args).unref();
 g.matchMedia = () => ({ matches: false, addEventListener() {} });
 g.screen = { width: 1000, height: 800 };
+g.MediaSource = { isTypeSupported: () => true };
 Object.assign(g.location as object, { assign() {}, reload() {} });
+/** The page's `beforeunload`, as the browser would call it: whether it asks "Leave site?". */
+let beforeUnload: ((e: Event) => void) | null = null;
+g.addEventListener = (type: string, f: (e: Event) => void) => void (type === 'beforeunload' && (beforeUnload = f));
+const asksToStay = () => {
+  const e = new Event('beforeunload', { cancelable: true });
+  beforeUnload!(e);
+  return e.defaultPrevented;
+};
 Object.defineProperty(globalThis, 'navigator', { value: { onLine: true, serviceWorker: { addEventListener() {} } }, configurable: true });
 
 /** What was asked of whom, and when each was answered. Cratarr is out of reach until the sign-out: any answer would have the
@@ -40,9 +49,15 @@ localStorage.setItem('cratarr.scrobbleQueue@ann', JSON.stringify({ plays: [{ id:
 const { reach } = await import('../../src/lib/reach.svelte.ts');
 reach.away = true;
 await import('../../src/lib/output.svelte.ts');
+const { local } = await import('../../src/lib/localPlayer.svelte.ts');
 await import('../../src/lib/scrobbles.svelte.ts');
 const { signOut } = await import('../../src/lib/signOut.svelte.ts');
 await wait(20);
+
+test('music playing, closing the page asks first', () => {
+  Object.assign(local, { index: 0, paused: false });
+  assert.equal(asksToStay(), true);
+});
 
 test('it all goes before the session it is told under ends', async () => {
   assert.deepEqual(steps, [], 'nothing has gone yet');
@@ -56,4 +71,8 @@ test('it all goes before the session it is told under ends', async () => {
     assert.ok(answered >= 0, `${told} went: ${steps.join(', ')}`);
     assert.ok(answered < ended, `and was answered first: ${steps.join(', ')}`);
   }
+});
+
+test('a sign-out asks nothing, music playing or not: Cancel would leave her session, her music and nobody’s stores', () => {
+  assert.equal(asksToStay(), false);
 });

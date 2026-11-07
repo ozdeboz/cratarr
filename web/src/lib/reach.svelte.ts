@@ -3,7 +3,7 @@
 // three are out of reach: the pages say so in one line, the pollers ask less often, and the app opens on its downloads
 // (decision 0033, step 4).
 // Without a session away from home, Cratarr asks for its sign-in instead: the page goes to the sign-in page.
-import { accountForgotten, signOutOwed } from './account';
+import { accountForgotten, pageGoes, signOutOwed } from './account';
 
 export const reach = $state({
   /** The last request did not reach Cratarr. */
@@ -108,5 +108,6 @@ export function toSignIn() {
 function signIn() {
   if (leaving) return;
   leaving = true;
+  pageGoes();
   location.assign(`/signin?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`);
 }

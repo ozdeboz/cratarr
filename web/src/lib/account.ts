@@ -45,6 +45,12 @@ function owedKept() {
 let owed = typeof window !== 'undefined' && owedKept();
 export const signOutOwed = () => owed;
 
+/** This page is going by the account's doing, a sign-out or another's in another tab: no leave for the browser to ask about
+ *  (lib/output). On its Cancel the page would stay, its memory the one gone's over stores that are not. */
+let going = false;
+export const pageGoing = () => going;
+export const pageGoes = () => void (going = true);
+
 /** The account signed in: its name, '' with sign-in off; null for nobody (or nothing learnt on this device yet). */
 export const accountKey = () => key;
 
@@ -98,7 +104,9 @@ if (typeof window !== 'undefined') {
   // in memory is the one before's and no store says so, so it starts over as the one there is now.
   const another = () => {
     const now = stored();
-    if (now !== undefined && now !== key) location.reload();
+    if (now === undefined || now === key) return;
+    pageGoes();
+    location.reload();
   };
   addEventListener('storage', (e) => {
     if ((e as StorageEvent).key === LS) another();
@@ -106,8 +114,9 @@ if (typeof window !== 'undefined') {
   addEventListener('pageshow', (e) => {
     if (!(e as PageTransitionEvent).persisted) return;
     // Its own sign-out cleared the name it would be compared by: its stores are nobody's, and its memory the account's.
-    if (key === null) location.reload();
-    else another();
+    if (key !== null) return another();
+    pageGoes();
+    location.reload();
   });
 }
 
@@ -132,6 +141,7 @@ export function accountForgotten() {
 /** A sign-out begins here: nobody's from now on, and owed until [signOutTold]. Kept first, so that a tab closed on the way
  *  owes it too. */
 export function signOutBegun() {
+  pageGoes();
   owed = true;
   try {
     localStorage.setItem(OWED, '1');
@@ -143,6 +153,7 @@ export function signOutBegun() {
 
 /** Cratarr has said the session is over. */
 export function signOutTold() {
+  pageGoes();
   owed = false;
   try {
     localStorage.removeItem(OWED);
