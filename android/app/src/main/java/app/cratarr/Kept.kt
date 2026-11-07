@@ -10,8 +10,9 @@
  *   are never dropped, and what the items of the accounts away have here stays too (decision 0101, point 13: hidden but
  *   kept), whatever that leaves. Then the items of the one signed in, the newest kept first, each in its own order: what
  *   does not fit is left out, so the item kept longest ago shrinks first.
- * - Synced when the app starts, when an item is kept, when the settings change, and every few hours by WorkManager
- *   (KeptWorker), with the downloads' own rules: Wi-Fi unless mobile data is allowed, charging when asked.
+ * - Synced when the app starts, when an item is kept, when the settings change, when another's things are the device's
+ *   ([Who.set]), and every few hours by WorkManager (KeptWorker), with the downloads' own rules: Wi-Fi unless mobile data is
+ *   allowed, charging when asked. What is still downloading goes on only for one who holds it.
  * - The lists are written whole (KeptFile). A list, of the items or the holders, that is there and cannot be read stops
  *   the sync and any keep, and what it held stays on the device: read as nothing kept or held, the next sync or Remove
  *   would take it all, every account's.
