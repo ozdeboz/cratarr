@@ -21,6 +21,8 @@ Object.defineProperty(globalThis, 'navigator', { value: { onLine: true, serviceW
 /** Whether Cratarr can be reached, what was asked of it, and the session it holds. */
 let down = false;
 let session: string | null = 'ann';
+/** The worker answers /api/me with its last copy, Cratarr out of reach. */
+let keptMe = false;
 const asked: string[] = [];
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
 globalThis.fetch = (async (input: string, init?: RequestInit) => {
@@ -32,6 +34,7 @@ globalThis.fetch = (async (input: string, init?: RequestInit) => {
     // As a browser gives a redirect not followed: no status of its own, not `ok`.
     return { ok: false, status: 0, type: 'opaqueredirect' };
   }
+  if (keptMe && path === '/api/me') return new Response(JSON.stringify({ name: 'ann', admin: false, permissions: {} }), { headers: { 'X-Cratarr-Kept': '1' } });
   if (path === '/api/me') return session ? json({ name: session, admin: false, permissions: {} }) : json({ error: 'Sign in to Cratarr.' }, 401);
   return json({});
 }) as typeof fetch;
@@ -105,4 +108,17 @@ test('still out of reach it stays owed, and the first answer ends it', async () 
   assert.equal(session, null);
   assert.equal(localStorage.getItem(OWED), null);
   assert.deepEqual(left, ['/signin']);
+});
+
+test('a kept answer teaches nothing: it is the worker’s last copy, and says who was', async () => {
+  assert.equal(accountKey(), null);
+  keptMe = true;
+  // Past the moment a kept answer is only a slow one (lib/reach).
+  const now = Date.now;
+  Date.now = () => now() + 60_000;
+  await loadMe();
+  Date.now = now;
+  keptMe = false;
+  assert.equal(accountKey(), null);
+  assert.equal(localStorage.getItem('cratarr-who'), 'null');
 });

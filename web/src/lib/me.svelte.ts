@@ -7,6 +7,7 @@ import { accountLearnt, signOutOwed } from './account';
 import { ApiError, getMe, type Me, type Permissions } from './api';
 import { toApp } from './app.svelte';
 import { loadCapabilities } from './capabilities.svelte';
+import { reach } from './reach.svelte';
 import { settleSignOut } from './signOut.svelte';
 
 const ALL: Permissions = { offline: true, playlists: true, share: true, links: true, request: true, auto_approve: true, manage_requests: true };
@@ -21,8 +22,11 @@ export async function loadMe() {
     // A sign-out began while it was asked: it speaks of a session on its way out, and the app would take her back on it.
     if (signOutOwed()) return;
     Object.assign(me, { app_password: undefined, devices: undefined, sessions: undefined }, answer, { known: true });
-    accountLearnt(me.name);
-    toApp({ type: 'account', name: me.name ?? '' });
+    // The worker's last copy says who was, and shows as last seen: only Cratarr says who is.
+    if (!reach.kept) {
+      accountLearnt(me.name);
+      toApp({ type: 'account', name: me.name ?? '' });
+    }
     // Signed in (or again): what the server can do, read with the account (its list is a signed-in one).
     void loadCapabilities();
   } catch (e) {
