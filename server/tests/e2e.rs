@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -376,6 +376,41 @@ fn temp(name: &str) -> PathBuf {
     d
 }
 
+/// What `flag` makes, made once a run and copied to `to`, the test's own to change. Writing and encoding it takes a debug
+/// build most of a minute, and each test paid that.
+fn made_once(once: &'static OnceLock<PathBuf>, flag: &str, to: &Path) {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap().flatten() {
+            let (p, q) = (e.path(), to.join(e.file_name()));
+            if p.is_dir() {
+                copy(&p, &q);
+            } else {
+                std::fs::copy(&p, &q).unwrap();
+            }
+        }
+    }
+    let made = once.get_or_init(|| {
+        let at = temp(flag.trim_start_matches('-')).join("made");
+        assert!(Command::new(BIN).arg(flag).arg(&at).status().unwrap().success(), "{flag} made nothing");
+        at
+    });
+    std::fs::remove_dir_all(to).ok();
+    copy(made, to);
+}
+
+/// The whole layout at `to`.
+fn make_layout(to: &Path) {
+    static MADE: OnceLock<PathBuf> = OnceLock::new();
+    made_once(&MADE, "--make-layout", to);
+}
+
+/// The fixture library at `to`.
+fn make_fixtures(to: &Path) {
+    static MADE: OnceLock<PathBuf> = OnceLock::new();
+    made_once(&MADE, "--make-fixtures", to);
+}
+
 /// Every audio file under `dir`, relative to it, sorted.
 fn audio_under(dir: &Path) -> Vec<String> {
     fn walk(root: &Path, at: &Path, out: &mut Vec<String>) {
@@ -404,7 +439,7 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     let root = temp("playlists");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    make_fixtures(&music);
     let files = audio_under(&music);
     let folder = music.to_string_lossy().to_string();
     let lists = music.join(".playlists");
@@ -478,7 +513,7 @@ async fn a_crate_of_four(name: &str) -> (Server, PathBuf, String, Vec<String>) {
     let root = temp(name);
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -639,7 +674,7 @@ async fn two_banks(name: &str) -> (Server, PathBuf, Banks) {
     let root = temp(name);
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second) = (library.join("music"), library.join("second"));
     std::fs::rename(second.join(FAR), music.join(FAR)).unwrap();
     let far = music.join(FAR).join("01 Far Bank.flac");
@@ -771,7 +806,7 @@ async fn an_artist_is_one_id_by_name_and_by_number_end_to_end() {
     let root = temp("artist-id");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -882,7 +917,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let root = temp("data-0-15");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     data_0_15(&library, &data);
     let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
     user.execute("INSERT INTO annotation (user, item, kind, play_count, rating, starred, starred_at, own_count) VALUES ('ann', ?1, 'album', 7, 2, 1, 1760000000, 7)", [ORPHAN]).unwrap();
@@ -1033,7 +1068,7 @@ async fn an_old_album_link_opens_the_record_end_to_end() {
     let root = temp("old-links");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     data_0_15(&library, &data);
     let s = Server::start(&data).await;
     let ann = s.sign_in("ann", "ann's password").await;
@@ -1098,7 +1133,7 @@ async fn a_first_start_stopped_at_any_step_finishes_on_restart_end_to_end() {
     let (library, straight, data) = (root.join("library"), root.join("straight"), root.join("data"));
     std::fs::create_dir_all(&straight).unwrap();
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
 
     // What it comes to with nothing in its way: the first start is over by the time the server answers.
     data_0_15(&library, &straight);
@@ -1175,7 +1210,7 @@ async fn who_hears_what_by_the_bytes_on_both_streams_end_to_end() {
     let root = temp("who-hears");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (kept, waiting, own) = (library.join("incoming"), library.join("second"), library.join("own"));
     // Kept: the MP3s. Her own: Music's FLACs, in place of her MP3s. Waiting: the other FLACs.
     let hers = own.join("ann").join(SHORES);
@@ -1264,7 +1299,7 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     let root = temp("accounts");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let own = library.join("own");
     settings(&data, &[(&library.join("music"), "main"), (&library.join("second"), "main"), (&library.join("incoming"), "incoming")], &own);
 
@@ -1398,7 +1433,7 @@ async fn a_record_whose_services_are_away_waits_and_blames_no_user_end_to_end() 
     let root = temp("soulseek");
     let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
     let file = library.join("music/Glass Harbour/Tide Tables (2012)/01 Slack Water.flac");
     let name = file.file_name().unwrap().to_string_lossy().to_string();
@@ -1453,8 +1488,7 @@ async fn types_and_years_into_the_files_end_to_end() {
     let root = temp("types");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
-    assert!(made.success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
 
     let s = Server::start(&data).await;
@@ -1555,8 +1589,7 @@ async fn a_run_killed_half_way_keeps_to_what_it_wrote_end_to_end() {
     let root = temp("killed");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
-    assert!(made.success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
 
     let s = Server::start(&data).await;
@@ -1617,8 +1650,7 @@ async fn a_cover_killed_part_way_is_put_back_by_its_undo_end_to_end() {
     let root = temp("cover");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
-    assert!(made.success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
 
     let s = Server::start(&data).await;
@@ -1708,7 +1740,7 @@ async fn on_the_fixtures(name: &str) -> (Server, PathBuf, PathBuf, PathBuf) {
     let root = temp(name);
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -1721,7 +1753,7 @@ async fn on_music_and_incoming(name: &str) -> (Server, PathBuf, PathBuf, PathBuf
     let root = temp(name);
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     settings(&data, &[(&music, "main"), (&incoming, "incoming")], &library.join("own"));
     let s = Server::start(&data).await;
@@ -1838,7 +1870,7 @@ async fn the_copy_named_is_the_copy_touched_end_to_end() {
     let root = temp("named");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
     let dir = "Salt Meridian/Both Shores (2018)";
     // The second main library without its copy, for one to move to.
@@ -1906,7 +1938,7 @@ async fn the_card_hears_the_incoming_copy_end_to_end() {
     let root = temp("card");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     // No own music: two copies, the record's and the one waiting.
     settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
@@ -1971,7 +2003,7 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     let root = temp("requester");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     settings(&data, &[(&music, "main"), (&incoming, "incoming")], &library.join("own"));
     let s = Server::start(&data).await;
@@ -2013,7 +2045,7 @@ async fn a_copy_over_two_folders_lists_its_own_format_end_to_end() {
     let root = temp("two-folders");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     let dir = "Salt Meridian/Both Shores (2018)";
     for folder in [music.join(dir), incoming.join(dir)] {
@@ -2054,7 +2086,7 @@ async fn the_best_copy_plays_whoever_owns_it_and_nothing_is_kept_end_to_end() {
     let root = temp("best-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second, incoming, own) = (library.join("music"), library.join("second"), library.join("incoming"), library.join("own"));
     let (kept, hers, waiting, aside) = (music.join(SHORES), own.join("ann").join(SHORES), incoming.join(SHORES), root.join("aside"));
     std::fs::remove_dir_all(&waiting).unwrap();
@@ -2133,7 +2165,7 @@ async fn a_copy_named_is_heard_on_every_address_and_through_a_signed_link_end_to
     let root = temp("named-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     // A FLAC waiting, a second longer than Music's at its first track: its bytes and its length tell it.
     let (music, waiting) = (library.join("music"), library.join("second"));
     settings(&data, &[(&music, "main"), (&waiting, "incoming")], &root.join("no-own-music"));
@@ -2185,7 +2217,7 @@ async fn a_copy_arriving_file_by_file_is_the_record_from_its_first_file_end_to_e
     let root = temp("arriving");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming, aside) = (library.join("music"), library.join("incoming"), root.join("aside"));
     std::fs::rename(incoming.join(SHORES), &aside).unwrap();
     settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
@@ -2266,7 +2298,7 @@ async fn who_may_set_a_records_facts_goes_by_whose_record_it_is_end_to_end() {
     let root = temp("whose");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -2310,7 +2342,7 @@ async fn an_app_sees_every_library_whatever_the_librarys_filter_says_end_to_end(
     let root = temp("apps");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second) = (library.join("music"), library.join("second"));
     settings(&data, &[(&music, "main"), (&second, "main")], &root.join("no-own-music"));
     let s = Server::start(&data).await;
@@ -2367,7 +2399,7 @@ async fn a_track_found_again_by_hand_keeps_what_it_held_end_to_end() {
     let root = temp("reconnect");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let music = library.join("music");
     settings(&data, &[(&music, "main")], &root.join("no-own-music"));
     let s = Server::start(&data).await;
@@ -2591,7 +2623,7 @@ async fn on_two_copies(name: &str, kinds: [&str; 2], second: &str) -> (Server, P
     let root = temp(name);
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, other) = (library.join("music"), library.join(second));
     settings(&data, &[(&music, kinds[0]), (&other, kinds[1])], &library.join("own"));
     let s = Server::start(&data).await;
@@ -2635,7 +2667,7 @@ async fn keep_makes_a_second_copy_on_the_records_tracks_and_its_undo_takes_it_ba
     let root = temp("second-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
     std::fs::remove_dir_all(second.join(SHORES)).unwrap();
     settings(&data, &[(&music, "main"), (&second, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
@@ -2720,7 +2752,7 @@ async fn a_moved_copy_stays_on_the_records_tracks_and_plays_from_where_it_went_e
     let root = temp("moved-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
     std::fs::remove_dir_all(second.join(SHORES)).unwrap();
     settings(&data, &[(&music, "main"), (&second, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
@@ -2750,7 +2782,7 @@ async fn a_tracks_tag_reaches_its_file_in_every_copy_by_its_track_end_to_end() {
     let root = temp("tag-by-track");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     // Named as one copy's owner likes: only the track says which file this is.
     let (renamed, other) = (incoming.join(SHORES).join("02 By Another Name.mp3"), incoming.join(SHORES).join("03 Return.mp3"));
@@ -2980,7 +3012,7 @@ impl Shelves {
         std::fs::remove_dir_all(&root).ok();
         let (library, data) = (root.join("library"), root.join("data"));
         std::fs::create_dir_all(&data).unwrap();
-        assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+        make_layout(&library);
         // A cover in the library that goes first, and a recording to know a file by, as a tagger leaves one.
         std::fs::copy(library.join("music").join(TIDE).join("cover.jpg"), library.join("second").join(FAR).join("cover.jpg")).unwrap();
         set_vorbis(&library.join("music").join(JUNK).join("01 Zero.flac"), "MUSICBRAINZ_TRACKID", "00000000-0000-4000-8000-000000000301");
