@@ -35,7 +35,7 @@ globalThis.fetch = (async (input: string, init?: RequestInit) => {
   return json({});
 }) as typeof fetch;
 
-const { accountKey, accountLearnt, signOutBegun, signOutTold } = await import('../../src/lib/account.ts');
+const { accountKey, accountLearnt, signOutBegun, signOutOwed, signOutTold } = await import('../../src/lib/account.ts');
 const { inApp } = await import('../../src/lib/app.svelte.ts');
 const { keepCoversAway } = await import('../../src/lib/coversAway.svelte.ts');
 const { shelf } = await import('../../src/lib/shelfStore.svelte.ts');
@@ -181,5 +181,21 @@ test("signing out in the app: the app first, its answer awaited, then the page i
   await done;
   assert.equal(accountKey(), null);
   assert.deepEqual(steps, ['POST /signout']);
+  assert.equal(goneTo, '/');
+});
+
+test('Cratarr out of reach, the app ends the sessions itself at its next load: nothing is owed for the page to tell', async () => {
+  accountLearnt('ann');
+  goneTo = null;
+  const reachable = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError('no network');
+  }) as typeof fetch;
+  const done = signOut(false);
+  await turns();
+  fromApp({ type: 'signed-out' });
+  await done;
+  globalThis.fetch = reachable;
+  assert.equal(signOutOwed(), false, 'owed, every read of a page signed in again later would be turned back');
   assert.equal(goneTo, '/');
 });

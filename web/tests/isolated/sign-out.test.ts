@@ -38,6 +38,7 @@ globalThis.fetch = (async (input: string, init?: RequestInit) => {
 
 const { accountKey, accountLearnt } = await import('../../src/lib/account.ts');
 const { getCrates, getSettings } = await import('../../src/lib/api.ts');
+const { refusedFor } = await import('../../src/lib/reach.svelte.ts');
 const { loadMe } = await import('../../src/lib/me.svelte.ts');
 const { signOut } = await import('../../src/lib/signOut.svelte.ts');
 
@@ -74,6 +75,7 @@ test('owed, nothing Cratarr answers is anyone’s, /api/me least of all', async 
   await assert.rejects(getCrates(), 'nothing is asked under the session, in the background');
   await assert.rejects(getSettings(), 'or for what one taps');
   assert.deepEqual(asked, []);
+  assert.ok(refusedFor() > 0, 'the live channel, Play On and the shelf ask for themselves, and go by this');
   await loadMe();
   await wait(20);
   assert.equal(accountKey(), null, 'her session stands, and is not taken up');

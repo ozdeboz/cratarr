@@ -110,7 +110,10 @@ test('each account keeps its latest apart: his plays do not push out hers', () =
 });
 
 test('a telling can be waited for, to the end of what waits: a sign-out goes after it', async () => {
-  const { t, plays } = telling((ids) => ids.slice(0, 1));
+  const { t, plays } = telling(async (ids) => {
+    await settled();
+    return ids.slice(0, 1);
+  });
   plays.took([play('a', 'ann'), play('b', 'ann')]);
   await plays.tell();
   assert.deepEqual(t.sent, [['a', 'b'], ['b']]);

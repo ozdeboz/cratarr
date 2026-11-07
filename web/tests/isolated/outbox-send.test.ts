@@ -44,9 +44,12 @@ test('a heart of day 0, its account signed out for a week: sent at her return, a
   assert.deepEqual(later.list, []);
 });
 
+/** Each try of `answering`'s. */
+let tries = 0;
 /** What Cratarr answers from now on, and whether the change is still kept after a try. */
 async function answering(status: number | null, op: ReturnType<typeof change> & { tried?: number }) {
   globalThis.fetch = (async () => {
+    tries++;
     if (status === null) throw new TypeError('no network');
     return new Response('', { status });
   }) as typeof fetch;
@@ -64,7 +67,9 @@ test('the first answer to turn one away starts its week; the week past, the next
 });
 
 test('and a week past is no reason not to try it once more: Cratarr may have mended', async () => {
+  tries = 0;
   assert.equal(await answering(200, { ...change('mended'), tried: Date.now() - 8 * DAY }), undefined);
+  assert.equal(tries, 1, 'gone because it was taken');
 });
 
 test('a device away, or a session over, starts no week: nothing was said of the change', async () => {
