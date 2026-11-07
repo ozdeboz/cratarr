@@ -266,7 +266,7 @@ class PlayOnLink(
                 if (waitWhy != "refused") LinkLog.add(service, "warn", "playon", "waiting", "until" to held, "why" to "refused")
                 waitUntil = held
                 waitWhy = "refused"
-                sleep((held - System.currentTimeMillis()).coerceIn(wait, Net.REFUSED_MS))
+                waitOutRefusal(address, wait)
                 continue
             }
             waitUntil = System.currentTimeMillis() + wait
@@ -334,6 +334,16 @@ class PlayOnLink(
                 }
             }
         }
+    }
+
+    /**
+     * Until [address]'s refusal is over, or a sign-in ended it: it is the session that was refused, so the new one is let in
+     * at once. Nothing wakes this thread, so it looks again every [REFUSAL_LOOK_MS]. Slept through in one go, an app opened
+     * before its sign-in stayed off Play On for ten minutes, its reports getting through all the while.
+     */
+    private fun waitOutRefusal(address: String?, atLeast: Long) {
+        sleep(atLeast)
+        while (running && (address?.let { Net.heldUntil(service, it) } ?: 0L) > System.currentTimeMillis()) sleep(REFUSAL_LOOK_MS)
     }
 
     private fun sleep(ms: Long) {
@@ -727,6 +737,8 @@ class PlayOnLink(
     }
 
     private companion object {
+        /** How often a refused link looks whether a sign-in has ended the refusal. */
+        const val REFUSAL_LOOK_MS = 2_000L
         const val TAG = "CratarrPlayOn"
         const val HEARTBEAT_MS = 30_000L
         /** A ducked player plays at this part of its volume. */
