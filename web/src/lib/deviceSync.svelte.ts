@@ -104,8 +104,7 @@ async function whole(e: IndexEngine, def: Def): Promise<Got> {
 }
 
 async function changes(e: IndexEngine, def: Def, kept: Kept): Promise<Got> {
-  // A page of another version wrote it, so this one may not read it, and a feed with nothing to say would leave it so.
-  if (!kept.bytes || kept.rev === null || kept.wants !== def.version(e)) return { outcome: 'start-again' };
+  if (!kept.bytes || kept.rev === null) return { outcome: 'start-again' };
   const got = await fetched(def.feed(kept.rev));
   if (!('bytes' in got)) return got.outcome === 'same' ? { outcome: 'took', keep: { at: Date.now() } } : { outcome: got.outcome };
   // What cannot go on, of whichever version, is fetched whole: only bytes fetched whole can say the two differ for good.
@@ -121,13 +120,11 @@ async function keepForGood() {
   await navigator.storage?.persist?.().catch(() => false);
 }
 
-/** A part as this start takes it from what is kept: what went wrong is forgotten, and a stop stands, unless this page reads another
- *  version than the one that stopped. */
+/** A part as this start takes it from what is kept. */
 function partOf(e: IndexEngine, def: Def, kept: Kept): Part {
   const known = parts.get(def.name);
   if (known) return known;
-  const begun = e.after({ ...kept.part, started }, 'start', started);
-  const part = begun.stopped && kept.wants !== def.version(e) ? { ...begun, stopped: false } : begun;
+  const part = e.after({ ...kept.part, started }, kept.wants === def.version(e) ? 'start' : 'start-over-another', started);
   parts.set(def.name, part);
   return part;
 }

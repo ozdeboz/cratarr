@@ -138,6 +138,12 @@ test('with a whole held, a look asks only for what changed', async () => {
   assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
 });
 
+test('a new start over a copy this page\'s version kept asks only for what changed', async () => {
+  await held();
+  await started();
+  assert.deepEqual(asked, ['/api/index/changes?since=5', '/api/index/sounds/changes?since=5']);
+});
+
 test('a feed applied leaves what a fresh fetch would, to the byte, and moves the date', async () => {
   await held();
   mock.timers.tick(60_000);

@@ -119,6 +119,11 @@ test('a start forgets what went wrong, and a stop stands', async () => {
   assert.deepEqual(e.after({ ...held, lost: 2, failed: 3, tried: 5, stopped: true }, 'start', LATER), { ...held, stopped: true, started: LATER });
 });
 
+test('a start over what another version kept forgets what went wrong, lifts its stop, and comes whole', async () => {
+  const e = await engine();
+  assert.deepEqual(e.after({ ...held, lost: 2, failed: 3, tried: 5, stopped: true }, 'start-over-another', LATER), { ...whole, started: LATER });
+});
+
 test('paused is the crate\'s to say', async () => {
   const e = await engine();
   assert.equal(e.paused({ ...held, lost: 2 }), false);

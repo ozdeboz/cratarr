@@ -15,8 +15,8 @@ export type Mobile = 'unasked' | 'yes' | 'no';
 export type Part = { whole: boolean; stopped: boolean; lost: number; failed: number; tried: number | null; started: number };
 /** What to do now. */
 export type Step = { do: 'stopped' | 'rest' | 'ask' | 'whole' | 'changes' } | { do: 'wait'; until: number };
-/** How a fetch ended, or `start`: a new start. */
-export type Outcome = 'took' | 'lost' | 'failed' | 'start-again' | 'version' | 'start';
+/** How a fetch ended, or a new start: `start-over-another` where another version than this one's kept what is there. */
+export type Outcome = 'took' | 'lost' | 'failed' | 'start-again' | 'version' | 'start' | 'start-over-another';
 
 type Exports = {
   memory: WebAssembly.Memory;
@@ -46,7 +46,7 @@ type Exports = {
 
 const NETWORK: Network[] = ['free', 'metered', 'off'];
 const MOBILE: Mobile[] = ['unasked', 'yes', 'no'];
-const OUTCOME: Outcome[] = ['took', 'lost', 'failed', 'start-again', 'version', 'start'];
+const OUTCOME: Outcome[] = ['took', 'lost', 'failed', 'start-again', 'version', 'start', 'start-over-another'];
 const STEP: Record<number, 'stopped' | 'rest' | 'ask' | 'whole' | 'changes'> = { [-1]: 'stopped', [-2]: 'rest', [-3]: 'ask', [-4]: 'whole', [-5]: 'changes' };
 const decoder = new TextDecoder();
 
@@ -119,7 +119,7 @@ export class IndexEngine {
   /** How a part stands after a fetch that ended at `now`, or a start at `now`. */
   after(p: Part, outcome: Outcome, now: number): Part {
     const bits = this.x.sync_after(+p.whole, +p.stopped, p.lost, p.failed, OUTCOME.indexOf(outcome));
-    const start = outcome === 'start';
+    const start = outcome === 'start' || outcome === 'start-over-another';
     return { whole: !!(bits & 1), stopped: !!(bits & 2), lost: (bits >> 8) & 255, failed: (bits >> 16) & 255, tried: start ? null : now, started: start ? now : p.started };
   }
 

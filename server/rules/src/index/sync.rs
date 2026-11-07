@@ -8,6 +8,8 @@
 //! - **A lost connection is no failure** (A2): it waits and counts for nothing. Only a real answer can fail, and failing a few times
 //!   rests until the next start. Lost a few times in a row, the device may say it is paused, once.
 //! - **Another version in bytes just fetched stops:** the app and Cratarr differ, and fetching again will not mend it.
+//! - **A start over what another version kept begins whole:** its stop was its own to say, and this one may not read its bytes, though a
+//!   feed would have nothing to say of them.
 
 /// How long after a start the first fetch waits.
 pub const FIRST_AFTER_MS: i64 = 10_000;
@@ -140,6 +142,11 @@ impl Part {
         Self { lost: 0, failed: 0, tried: None, started: now, ..self }
     }
 
+    /// A start over what a reader of another version kept. The caller knows, by keeping the version with each write.
+    pub fn anew_by_another(self, now: i64) -> Self {
+        Self { whole: true, stopped: false, ..self.anew(now) }
+    }
+
     /// Whether it should say it is paused: the connection keeps going.
     pub fn paused(&self) -> bool {
         self.lost >= PAUSED_AFTER
@@ -255,6 +262,26 @@ mod tests {
         let s = whole().after(Outcome::Version, LATER);
         assert_eq!(s.step(Network::Free, Mobile::Yes, LATER + 1), Step::Stopped);
         assert_eq!(s.anew(LATER + ANEW_AFTER_MS).step(Network::Free, Mobile::Yes, LATER + 2 * ANEW_AFTER_MS), Step::Stopped);
+    }
+
+    #[test]
+    fn a_start_over_another_versions_stop_tries_again() {
+        let s = whole().after(Outcome::Version, LATER).anew_by_another(LATER + 1);
+        assert_eq!(s.step(Network::Free, Mobile::Yes, LATER + 1 + FIRST_AFTER_MS), Step::Whole);
+    }
+
+    #[test]
+    fn a_start_over_another_versions_copy_comes_whole_as_any_whole_is_asked() {
+        let s = held().anew_by_another(LATER + 1);
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER + 1 + FIRST_AFTER_MS), Step::Whole, "not by the feed");
+        assert_eq!(s.step(Network::Metered, Mobile::Unasked, LATER + 1 + FIRST_AFTER_MS), Step::Ask);
+    }
+
+    #[test]
+    fn a_start_over_another_versions_forgets_what_went_wrong_and_keeps_its_first_seconds() {
+        let s = held().after(Outcome::Failed, LATER).after(Outcome::Lost, LATER).anew_by_another(LATER + 1);
+        assert_eq!((s.failed, s.lost, s.tried), (0, 0, None));
+        assert_eq!(s.step(Network::Free, Mobile::Unasked, LATER + 1), Step::Wait(LATER + 1 + FIRST_AFTER_MS));
     }
 
     #[test]

@@ -338,13 +338,18 @@ mod index_exports {
         u32::from(Part { lost, ..Part::default() }.paused())
     }
 
-    /// How a part stands after a fetch (`Part::after`), or at a start (`Part::anew`). `outcome`: 0 took, 1 lost, 2 failed, 3 start again, 4
-    /// another version, 5 a start. Its answer in bits: 1 whole, 2 stopped, then lost from bit 8 and failed from bit 16.
+    /// How a part stands after a fetch (`Part::after`), or at a start (`Part::anew`, `Part::anew_by_another`). `outcome`: 0 took, 1 lost,
+    /// 2 failed, 3 start again, 4 another version, 5 a start, 6 a start over what another version kept. Its answer in bits: 1 whole,
+    /// 2 stopped, then lost from bit 8 and failed from bit 16.
     #[unsafe(no_mangle)]
     pub extern "C" fn sync_after(whole: u32, stopped: u32, lost: u32, failed: u32, outcome: u32) -> u32 {
-        let outcome = [Outcome::Took, Outcome::Lost, Outcome::Failed, Outcome::StartAgain, Outcome::Version][..].get(outcome as usize).copied();
+        let ended = [Outcome::Took, Outcome::Lost, Outcome::Failed, Outcome::StartAgain, Outcome::Version][..].get(outcome as usize).copied();
         let s = state(whole, stopped, lost, failed, -1.0, 0.0);
-        let s = outcome.map_or(s.anew(0), |o| s.after(o, 0));
+        let s = match ended {
+            Some(o) => s.after(o, 0),
+            None if outcome == 5 => s.anew(0),
+            None => s.anew_by_another(0),
+        };
         u32::from(s.whole) | u32::from(s.stopped) << 1 | s.lost.min(255) << 8 | s.failed.min(255) << 16
     }
 }
