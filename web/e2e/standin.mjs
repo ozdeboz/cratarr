@@ -32,7 +32,9 @@ const i64 = (n) => {
   b.writeBigInt64LE(BigInt(n));
   return b;
 };
-const coverFrame = (record) => Buffer.concat([i64(record), u32(4), Buffer.from([0xff, 0xd8, record, 0xd9])]);
+/** A cover a browser can show. */
+const JPEG = readFileSync(new URL('./cover.jpg', import.meta.url));
+const coverFrame = (record) => Buffer.concat([i64(record), u32(JPEG.length), JPEG]);
 const coverBundle = (rev, ...records) => Buffer.concat([Buffer.from('CRXV'), u32(1), i64(rev), ...records.map(coverFrame)]);
 
 const escaped = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -135,13 +137,13 @@ export function standIn(port, accounts) {
     };
     if (path === '/api/index') return bytes(vector(indexRev === 5 ? 'whole.bin' : 'after.bin'));
     if (path === '/api/index/sounds') return bytes(vector(indexRev === 5 ? 'sounds.bin' : 'sounds-after.bin'));
-    if (path === '/api/index/covers') return bytes(indexRev === 5 ? coverBundle(5, 1, 2) : coverBundle(9, 1, 2, 3));
+    if (path === '/api/index/covers') return bytes(indexRev === 5 ? coverBundle(5, 10, 11) : coverBundle(9, 10, 11, 13));
     if (path === '/api/index/covers/changes') {
       if (Number(url.searchParams.get('since')) === indexRev) {
         res.writeHead(204);
         return res.end();
       }
-      return bytes(coverBundle(indexRev, 3));
+      return bytes(coverBundle(indexRev, 13));
     }
     if (path === '/api/index/changes' || path === '/api/index/sounds/changes') {
       if (Number(url.searchParams.get('since')) === indexRev) {

@@ -57,7 +57,7 @@
   import PageLoading from './lib/PageLoading.svelte';
   import { holdUntil } from './lib/holdPlace.svelte';
   import { toast } from './lib/toast.svelte';
-  import { albumAway, away, here, rowsAway } from './lib/away.svelte';
+  import { albumAway, away, rowsAway } from './lib/away.svelte';
   import { momentNow } from './lib/momentHere.svelte';
   import { whenReadsMove } from './lib/deviceIndex.svelte';
   import { askDevicePlays, backHere, devicePlays, LOCAL_PARTS, newestHere, playHereAlbums } from './lib/localHome.svelte';
@@ -741,7 +741,7 @@
             <!-- A tap opens its album, as every card does (the owner, 2026-10-25: it played at once, with no play to be
                  seen); the section's Play plays them, the long-press is the track's menu. -->
             <button
-              class:gone={away() && !here('cratarr', t.id)}
+              class:gone={rowsAway('cratarr', [t.id])}
               onclick={() => viewFor(albumSubject('cratarr', t.album_id), t.id)}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id })}
             >
@@ -803,7 +803,7 @@
           <li>
             <!-- As Blast from the past's: a tap opens its album, the section's Play plays them, a long-press its menu. -->
             <button
-              class:gone={away() && !here('cratarr', t.id)}
+              class:gone={rowsAway('cratarr', [t.id])}
               onclick={() => t.album_id && t.id && viewFor(albumSubject('cratarr', t.album_id), t.id)}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id!, name: t.name ?? t.file, artist: t.artist, album: t.album, album_id: t.album_id ?? null })}
             >

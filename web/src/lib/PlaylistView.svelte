@@ -136,7 +136,7 @@
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
-  import { away, here } from './away.svelte';
+  import { away, rowsAway } from './away.svelte';
   import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, playListedAlbum, readLibrary } from './albums.svelte';
   import { copyLines, librariesOf, type CopyLine } from './copiesRule';
   import { shownIn } from './sources.svelte';
@@ -812,8 +812,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** Edit mode: there is a picture of its own to remove (as saved, or picked). */
   const ownImage = $derived(crateImage ? crateImage !== 'remove' : !!crates.list?.find((c) => c.id === builder?.id)?.image);
 
-  /** Offline (lib/reach), a track that cannot play: not on this device (the owner, 2026-10-26: dimmed; lib/away). */
-  const awayDim = (r: PlaylistRow, src: string) => away() && !here(src, r.id);
+  /** Offline, a track that cannot play: not on this device (the owner, 2026-10-26: dimmed; lib/away). */
+  const awayDim = (r: PlaylistRow, src: string) => rowsAway(src, [r.id]);
   const length = $derived(rows ? rows.reduce((a, r) => a + (r.duration_secs ?? 0), 0) : 0);
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
 

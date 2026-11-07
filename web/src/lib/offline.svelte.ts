@@ -8,6 +8,7 @@
 // Each account keeps its own list (decision 0101), hidden while another is signed in; a stream two accounts keep is
 // stored once, and goes with the last one's.
 import { accountKey, perAccount, whenAccount, whoOf } from './account';
+import { whenReadsMove } from './deviceIndex.svelte';
 import { desktop } from './desktop';
 import { losslessAs, playsSmaller } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
@@ -72,6 +73,7 @@ function load() {
 load();
 whenAccount.add(() => {
   if (perAccount(INDEX) !== listOf) load();
+  void checkKept();
 });
 function save() {
   try {
@@ -80,6 +82,26 @@ function save() {
     /* kept for this visit */
   }
 }
+
+/** What the list says is here, held to what is (Finamp's A4): a browser can drop what it keeps, even asked not to, and a track listed
+ *  and gone would show as playing and not play. Gone from the list, it reads as not here. Storage that cannot be read says nothing.
+ *  Only what was listed before the read is judged: a track that came in during it would read as gone. The cache is everyone's, so
+ *  what it says holds for whoever is signed in by then. */
+export async function checkKept() {
+  const listed = Object.entries(offline.kept);
+  if (typeof caches === 'undefined' || !listed.length) return;
+  const stored = await caches
+    .open(OFFLINE)
+    .then((c) => c.keys())
+    .catch(() => null);
+  if (!stored) return;
+  const here = new Set(stored.map((r) => new URL(r.url).pathname));
+  const gone = listed.filter(([key, t]) => key in offline.kept && !here.has(streamKey(t)));
+  for (const [key] of gone) delete offline.kept[key];
+  if (gone.length) save();
+}
+void checkKept();
+whenReadsMove.add(() => void checkKept());
 /** Whether another account's list here holds the track too (its stream then stays). */
 function keptByAnother(key: string): boolean {
   try {

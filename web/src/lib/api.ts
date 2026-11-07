@@ -130,6 +130,8 @@ export class ApiError extends Error {
     super(message);
   }
 }
+/** It failed for no other reason than that Cratarr did not answer. */
+export const notAnswered = (e: unknown) => e instanceof ApiError && e.message === UNREACHED;
 
 /** A request the user is waiting for: counted for the progress bar (lib/progress.svelte.ts). */
 function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -204,7 +206,7 @@ async function later<T>(path: string, init: RequestInit, answer: () => T): Promi
   const r = await keepAndTry(
     op,
     (headers) => fetchJson<T>(path, { ...init, headers }),
-    (e) => e instanceof ApiError && e.message === UNREACHED,
+    notAnswered,
   );
   return r ? r.value : answer();
 }

@@ -162,6 +162,11 @@ it asks the rules crate through UniFFI, so no second copy of the logic grows the
   sounds' and the small covers', and gives no feed another's. The first two feeds are each a whole build on the server, so they are
   asked when `/api/changes` says something moved. The covers' builds nothing, and is asked at every sync, which sets their maker
   going. Covers are plain frames, read as they come (`coverFrames.ts`) and kept one by one: only their head goes to the rule.
+  What shows as not here goes by that door too (`lib/away`'s `albumAway`, `rowsAway`), so a blip dims nothing, though what plays goes
+  by the first failed request, as a hold does. What is said to be here is held to what is: a browser can drop what it keeps, so
+  `offline.svelte.ts` holds its list to Cache Storage, and the app calls a download done only with its bytes in the store. A record's
+  small cover answers under its full cover's address (`public/sw.js`), so a page cannot tell: from the index in a browser, and from the
+  app at `/__device/index/cover/{record}`, which holds them itself.
 - `src/lib/shelf.ts` and `shelfStore.svelte.ts` (0.12, decision 0085 step 2): Downloads' details and small covers in
   the page's IndexedDB, filled from the album views while Cratarr answers; it moves into the Rust core's store with
   the whole library's index (0.13).

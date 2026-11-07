@@ -61,6 +61,49 @@ const ALBUM_COVER = /^\/api\/albums\/[^/]+\/[^/]+\/cover$/;
 // asks (the player cuts what lies before the position); the page's fetch of the whole copy (?whole=1) passes.
 const OFFLINE = 'cratarr-offline-2';
 const STREAM = /^\/api\/stream\/[^/]+\/[^/]+$/;
+// Every record's small cover, kept with the index (decision 0085: small ones for the index, full ones for what is downloaded), so a
+// list away from Cratarr shows them. They answer under the full cover's address: a page cannot tell, and remembers no failure. In a
+// browser they lie in the account's index, a row each by the record's number (lib/indexStore); the app holds them itself, and
+// answers them at INDEX_COVER (android DeviceIndex).
+const RECORD_COVER = /^\/api\/albums\/cratarr\/al-(\d+)\/cover$/;
+const INDEX_DB = 'cratarr-index';
+const INDEX_COVERS = 'covers';
+const INDEX_COVER = '/__device/index/cover/';
+
+/** The account's index as it stands, null where this browser has none: only looked for, as it is the page's to make. */
+async function keptIndex(name) {
+  if (!(await indexedDB.databases()).some((d) => d.name === name)) return null;
+  return new Promise((done) => {
+    const r = indexedDB.open(name);
+    r.onsuccess = () => done(r.result);
+    r.onerror = () => done(null);
+  });
+}
+
+/** A record's small cover by its full cover's address, the account's; null where none is held. No index here: the app's own, or none. */
+async function smallCover(path) {
+  const record = RECORD_COVER.exec(path)?.[1];
+  const w = await whoNow();
+  if (!record || w === NOBODY) return null;
+  const db = await keptIndex(INDEX_DB + w).catch(() => null);
+  if (!db) {
+    // A server that does not know the address answers its page.
+    const r = await fetch(INDEX_COVER + record).catch(() => null);
+    return r?.ok && r.headers.get('content-type')?.startsWith('image/') ? r : null;
+  }
+  const jpeg = await new Promise((done) => {
+    try {
+      const r = db.transaction(INDEX_COVERS).objectStore(INDEX_COVERS).get(Number(record));
+      r.onsuccess = () => done(r.result);
+      r.onerror = () => done(null);
+    } catch {
+      // Made before covers had a store, and the page has not been back since.
+      done(null);
+    }
+  });
+  db.close();
+  return jpeg ? new Response(jpeg, { headers: { 'Content-Type': 'image/jpeg' } }) : null;
+}
 
 /** Keeps every file of the build that is not kept yet, and lets go of those of earlier builds. */
 async function keepTheApp() {
@@ -254,7 +297,7 @@ self.addEventListener('fetch', (event) => {
   }
   if (ALBUM_COVER.test(url.pathname)) {
     // A kept cover (the account's) is kept fresh, and serves while Cratarr is out of reach (the proxy's 403, or no
-    // network).
+    // network); then the small one. Not found is Cratarr's own word: it has none.
     const mine = ours(COVERS);
     const kept = async () => {
       const cacheName = await mine;
@@ -263,14 +306,14 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then(async (r) => {
-          if (!r.ok) return (await kept()) || r;
+          if (!r.ok) return (await kept()) || (r.status !== 404 && (await smallCover(url.pathname))) || r;
           if (await kept()) {
             const copy = r.clone();
             mine.then((name) => name && caches.open(name).then((c) => c.put(url.pathname, copy)));
           }
           return r;
         })
-        .catch(async () => (await kept()) || Response.error()),
+        .catch(async () => (await kept()) || (await smallCover(url.pathname)) || Response.error()),
     );
     return;
   }

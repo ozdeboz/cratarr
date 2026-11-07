@@ -78,6 +78,7 @@ function database(stores: Map<string, Store>) {
 }
 
 export const fakeIndexedDB = {
+  databases: async () => [...databases.keys()].map((name) => ({ name })),
   open(name: string) {
     const r: Handlers & { onupgradeneeded?: (() => void) | null; onblocked?: (() => void) | null } = {};
     later(() => {

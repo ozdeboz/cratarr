@@ -630,6 +630,22 @@ class DeviceIndexTest {
         assertEquals("a start's own time is not kept", part.copy(started = 0L), read.part)
     }
 
+    @Test
+    fun a_small_covers_address_names_its_record_and_no_other_address_does() {
+        assertEquals(10L, coverRecord("/__device/index/cover/10"))
+        assertEquals(null, coverRecord("/__device/index"))
+        assertEquals(null, coverRecord("/__device/cover/10"))
+        assertEquals(null, coverRecord("/__device/index/cover/"))
+        assertEquals(null, coverRecord("/__device/index/cover/al-10"))
+    }
+
+    /** The worker's fetch reaches the app by its own client, not the page's: asked of one alone, a list away from Cratarr shows no cover. */
+    @Test
+    fun the_service_worker_asks_a_small_cover_where_the_app_answers_it() {
+        assertTrue(File("../../web/public/sw.js").readText().contains("const INDEX_COVER = '${DeviceIndex.COVER_PATH}';"))
+        assertTrue(source("MainActivity.kt").contains("return request.url.path?.let { DeviceIndex.answer(app, it) } ?: BundledPage.answer(app, request.method, request.url)"))
+    }
+
     private fun source(name: String) = File("src/main/java/app/cratarr/$name").readText().replace("\r\n", "\n")
     private fun page(name: String) = File("../../web/src/lib/$name").readText().replace("\r\n", "\n")
 
@@ -707,8 +723,8 @@ class DeviceIndexTest {
         assertTrue(reads.contains("'$path'"))
         assertTrue(reads.contains("X-Cratarr-At"))
         assertTrue(source("DeviceIndex.kt").contains("\"X-Cratarr-At\" to"))
-        assertTrue(source("CratarrWebViewClient.kt").contains("if (url.path == DeviceIndex.PAGE_PATH) deviceIndex()?.let { return it }"))
-        assertTrue(source("MainActivity.kt").contains("deviceIndex = { DeviceIndex.answer(app) }"))
+        assertTrue(source("CratarrWebViewClient.kt").contains("url.path?.let(deviceIndex)?.let { return it }"))
+        assertTrue(source("MainActivity.kt").contains("deviceIndex = { DeviceIndex.answer(app, it) }"))
     }
 
     @Test

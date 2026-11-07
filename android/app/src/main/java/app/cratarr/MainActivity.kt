@@ -411,18 +411,21 @@ class MainActivity : AppCompatActivity() {
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
             serverCover = { server, cover, size -> Servers.cover(app, server, cover, size) },
-            deviceIndex = { DeviceIndex.answer(app) },
+            deviceIndex = { DeviceIndex.answer(app, it) },
             // One sign-in for both addresses (0.12, the owner 2026-10-30): the session a page loaded with goes to the
             // other address too; a sign-in page with the other's session at hand takes it and loads again.
             onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },
         )
-        // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above.
+        // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above. And for a record's
+        // small cover with Cratarr away, which it cannot open itself here: the app holds them.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
             WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)
         ) {
             ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
-                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? =
-                    if (Prefs.originOf(request.url.toString()) in origins) BundledPage.answer(app, request.method, request.url) else null
+                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
+                    if (Prefs.originOf(request.url.toString()) !in origins) return null
+                    return request.url.path?.let { DeviceIndex.answer(app, it) } ?: BundledPage.answer(app, request.method, request.url)
+                }
             })
         }
         view.webChromeClient = CratarrWebChromeClient { intent, callback ->

@@ -76,6 +76,9 @@ object DeviceIndex {
     /** Where the page reads what is kept of the index (web/src/lib/deviceIndex). */
     const val PAGE_PATH = "/__device/index"
 
+    /** Where the page's service worker asks for a record's small cover, by its number (public/sw.js): a browser's opens them itself. */
+    const val COVER_PATH = "/__device/index/cover/"
+
     private val worker = Executors.newSingleThreadScheduledExecutor { Thread(it, "cratarr-index").apply { isDaemon = true } }
 
     /** Told after anything changed (MainActivity sends the page a report). */
@@ -243,18 +246,33 @@ object DeviceIndex {
             .put("parts", JSONArray(known.map { JSONObject().put("whole", it.whole).put("stopped", it.stopped).put("paused", it.paused).put("asks", it.asks) }))
     }
 
-    /** The index as kept for the account signed in, for the page: its bytes, and when it last stood where Cratarr does. */
-    fun answer(context: Context): WebResourceResponse {
+    /** What is kept for the account signed in, by its address: the index ([PAGE_PATH]) or a small cover ([COVER_PATH]). Null for any other. */
+    fun answer(context: Context, path: String): WebResourceResponse? {
         val app = context.applicationContext
+        return if (path == PAGE_PATH) index(app) else coverRecord(path)?.let { cover(app, it) }
+    }
+
+    /** The index, for the page: its bytes, and when it last stood where Cratarr does. */
+    private fun index(app: Context): WebResourceResponse {
         val who = Who.current(app)
         val files = files(app)
         val bytes = files.bytes(who, INDEX).takeIf { it.exists() }
         val stands = files.stands(who, INDEX)
-        if (bytes == null || stands == null) return WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
+        if (bytes == null || stands == null) return nothing()
         val headers = mapOf("Cache-Control" to "no-store", "X-Cratarr-At" to (stands.at ?: 0L).toString())
         return WebResourceResponse("application/octet-stream", null, 200, "OK", headers, FileInputStream(bytes))
     }
+
+    private fun cover(app: Context, record: Long): WebResourceResponse {
+        val file = files(app).cover(Who.current(app), record).takeIf { it.exists() } ?: return nothing()
+        return WebResourceResponse("image/jpeg", null, 200, "OK", mapOf("Cache-Control" to "no-store"), FileInputStream(file))
+    }
+
+    private fun nothing() = WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
 }
+
+/** The record a small cover's address names; null where it names none. */
+internal fun coverRecord(path: String): Long? = path.takeIf { it.startsWith(DeviceIndex.COVER_PATH) }?.removePrefix(DeviceIndex.COVER_PATH)?.toLongOrNull()
 
 /** Every few hours: the library kept up to date, with no page open ([DeviceIndex.schedule]). */
 class IndexWorker(context: Context, params: WorkerParameters) : Worker(context, params) {

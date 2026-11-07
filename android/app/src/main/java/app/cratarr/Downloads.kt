@@ -34,6 +34,15 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 
+/** A download as the page is told it. Finished with its bytes gone from the store, a card taken out or the folder emptied, it is no copy
+ *  any more (Finamp's A4): failed, so it shows as not here and can be fetched again. It would read as playing, and not play. */
+internal fun stateOf(download: Int, stored: Long, bytes: Long): String = when (download) {
+    Download.STATE_COMPLETED -> if (stored >= bytes) "done" else "failed"
+    Download.STATE_FAILED -> "failed"
+    Download.STATE_DOWNLOADING -> "downloading"
+    else -> "waiting"
+}
+
 @OptIn(UnstableApi::class)
 object Downloads {
     private const val TAG = "CratarrDownloads"
@@ -150,6 +159,7 @@ object Downloads {
         var bytes = 0L
         val albums = Kept.albumIds(context)
         val held = Kept.heldHere(context)
+        val store = cache(context)
         manager(context).downloadIndex.getDownloads().use { c ->
             while (c.moveToNext()) {
                 val d = c.download
@@ -161,12 +171,7 @@ object Downloads {
                 }
                 // An older request without its album: the kept item's track has it (Kept.albumIds).
                 if (t.isNull("album_id")) albums[d.request.id]?.let { t.put("album_id", it) }
-                val state = when (d.state) {
-                    Download.STATE_COMPLETED -> "done"
-                    Download.STATE_FAILED -> "failed"
-                    Download.STATE_DOWNLOADING -> "downloading"
-                    else -> "waiting"
-                }
+                val state = stateOf(d.state, store.getCachedBytes(d.request.customCacheKey ?: d.request.id, 0, d.bytesDownloaded), d.bytesDownloaded)
                 // Downloaded once by the account, or there only for what it syncs (decision 0038).
                 t.put("manual", manual)
                 t.put("download", JSONObject().put("id", d.request.id).put("state", state).put("bytes", d.bytesDownloaded).put("percent", d.percentDownloaded.toDouble()))

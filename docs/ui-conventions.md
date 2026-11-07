@@ -496,7 +496,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   Info, Repair and Sync tabs, the crate builder's preview and Health's files is Finamp's list tile (plain, 64 px, a
   60 px cover or a control in front). A track is a large row with its cover (`lib/TrackCover.svelte`).
 - **States are the row's:** viewed in the panel or ticked: a border in the accent; holding what plays: a stronger tint;
-  not usable now (a missing file): its contents dimmed (the row stays opaque).
+  not usable now (a missing file, a record with nothing of it on this device with Cratarr away): its contents dimmed (the row
+  stays opaque), and it still opens.
 - **What is listed has its own row on top of it,** the same wherever it shows: `lib/PlaylistItem.svelte` (the name, the
   pin and own-account marks, the count, a favourite's heart over the problems' dot), `lib/FileItem.svelte` (the file,
   and under it its album folder and what is wrong, or "→ the file a repair points it at"). Where it is decides only
@@ -538,7 +539,7 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   own lines), what sits over the picture (`over`: an album's Play in its upper right corner, the wait of its
   opening), the action (a tick while selecting) over its lower right corner, and over its upper left one a pill with what
   the list is ordered by when the lines do not say it already (an album list by Year or Added; decided 2026-10-16).
-  The album lists' View also has **Dates**: Relative ("3 days ago") or Absolute ("14 Oct"), remembered. Its states are the row's: a border when viewed, a tint when it holds what plays.
+  The album lists' View also has **Dates**: Relative ("3 days ago") or Absolute ("14 Oct"), remembered. Its states are the row's: a border when viewed, a tint when it holds what plays, dimmed when it cannot be used now.
 - **A list's sections** (`lib/Section.svelte`): a heading with its count that folds the list, and while open one line
   on what the list is. A selection's Tracks (a section per playlist), the Repair tab's kinds of repair, the Info tab
   for several playlists, Health's kinds of problem (folded at first).

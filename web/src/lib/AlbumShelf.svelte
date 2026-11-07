@@ -30,6 +30,7 @@
   import Notice from './Notice.svelte';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
+  import { albumAway } from './away.svelte';
   import { libraryLayoutShown } from './layouts';
   import ViewSheet from './ViewSheet.svelte';
   import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
@@ -596,7 +597,7 @@
           onmenu={(i, rect) => (selecting ? (selectSheet = true) : openMenu(s, albums[i], rect))}
           onname={() => front && view(s.id, front)}
           onplay={() => front && playOf(s, front)}
-          canPlay={albumPlay.starting === null}
+          canPlay={albumPlay.starting === null && !(front && albumAway(s.id, front.id))}
           playing={!!front && albumPlay.starting === front.id}
           details={front ? detailsOf(s, front) : null}
         />
@@ -612,6 +613,7 @@
           {@const here = playing?.album_id === a.id}
           {@const viewed = panelBeside() && panel.viewed === albumSubject(s.id, a.id)}
           {@const on = !!selecting && selecting.has(keyOf(s, a))}
+          {@const gone = albumAway(s.id, a.id)}
           <li class:playing={here} class:ticked={on} data-subject={albumSubject(s.id, a.id)}>
             {#if layout === 'grid'}
               <Tile
@@ -621,6 +623,7 @@
                 label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.title}` : `View ${a.title}`}
                 active={viewed || on}
                 strong={here}
+                off={gone}
                 onclick={() => (selecting ? tick(s, a) : view(s.id, a))}
                 attach={longPress(s, a)}
               >
@@ -640,6 +643,7 @@
                 cells={tableCols.length ? cellsOf(s, a) : undefined}
                 label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.title}` : `View ${a.title}`}
                 active={viewed}
+                off={gone}
                 onclick={() => (selecting ? tick(s, a) : view(s.id, a))}
                 attach={longPress(s, a)}
               >
@@ -662,6 +666,7 @@
                 title={a.title}
                 label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.title}` : `View ${a.title}`}
                 active={viewed}
+                off={gone}
                 onclick={() => (selecting ? tick(s, a) : view(s.id, a))}
                 attach={longPress(s, a)}
               >
@@ -746,9 +751,11 @@
   {/if}
 {/snippet}
 
-<!-- Play, in the cover's upper right corner (lib/CoverPlay): the only thing on a cover that plays. -->
+<!-- Play, in the cover's upper right corner (lib/CoverPlay): the only thing on a cover that plays. Gone where nothing of it can. -->
 {#snippet play(s: ShelfSource, a: ListedAlbum, small = false)}
-  <CoverPlay label={a.title} album={a.id} {small} busy={albumPlay.starting === a.id} disabled={albumPlay.starting !== null} onplay={() => playOf(s, a)} />
+  {#if !albumAway(s.id, a.id)}
+    <CoverPlay label={a.title} album={a.id} {small} busy={albumPlay.starting === a.id} disabled={albumPlay.starting !== null} onplay={() => playOf(s, a)} />
+  {/if}
 {/snippet}
 
 {#snippet severalExtra(close: () => void)}

@@ -25,11 +25,13 @@ export const readsNow = (): ReadsFrom => readsFrom({ unreachable: settle.failed 
 /** Called when reads move, either way: what a page showed came from the other place. */
 export const whenReadsMove = new Set<() => void>();
 
-let wereFrom = readsNow().from;
+/** Where they come from as a page can watch it: what shows by it, a card dimmed, changes as they move. */
+export const reads = $state({ from: readsNow().from });
+
 function moved() {
   const now = readsNow().from;
-  if (now === wereFrom) return;
-  wereFrom = now;
+  if (now === reads.from) return;
+  reads.from = now;
   if (now === 'server') closeReads();
   for (const f of whenReadsMove) f();
 }
