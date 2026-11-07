@@ -1,7 +1,7 @@
 // Scrobbling, the account's way (decision 0091): from each device (the start) or through the server. This device's
 // own sign-ins and, in a browser, its queue and its sending (lib/scrobbleDevice); in the apps, their own code does the
 // sending with the sign-ins the app keeps (the page asks it: `scrobblers`). Never sent to Cratarr's server.
-import { accountKey, perAccount, whenAccount, whenLearnt, whoOf } from './account';
+import { accountKey, perAccount, whenAccount, whenLearnt, whenLeaving, whoOf } from './account';
 import { getScrobbles } from './api';
 import { inApp, onApp, toApp } from './app.svelte';
 import { mine, setScrobbleWay } from './mySettings.svelte';
@@ -35,7 +35,8 @@ export const scrobbling = $state({
 // Read at every open, once Cratarr has said whose the page is, and what waits from before sent then: with no way known a
 // browser's plays go nowhere, neither sent nor queued.
 if (typeof window !== 'undefined')
-  whenLearnt.add(() => {
+  whenLeaving.add(send);
+whenLearnt.add(() => {
     void readWay().then(send);
     readHere();
   });

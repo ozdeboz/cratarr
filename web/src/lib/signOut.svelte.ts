@@ -7,9 +7,8 @@
 // Only Cratarr can end a session: its cookie is out of the page's reach, and in a browser nothing else ends it. So the page
 // has to hear that it did, which a form's post cannot, its answer being the browser's. One that does not reach it is owed
 // (lib/account), told at the next chance: at an open it comes before all else, or the account is taken up again, live.
-import { signOutBegun, signOutOwed, signOutTold } from './account';
+import { signOutBegun, signOutOwed, signOutTold, whenLeaving } from './account';
 import { inApp, onApp, toApp } from './app.svelte';
-import { sendLater } from './later.svelte';
 
 /** Waits for `p`, `ms` at most. */
 const within = (p: Promise<unknown>, ms: number) => Promise.race([p.catch(() => {}), new Promise((done) => setTimeout(done, ms))]);
@@ -28,7 +27,7 @@ async function told(): Promise<boolean> {
 }
 
 export async function signOut(removeDownloads: boolean) {
-  await within(sendLater(), 5_000);
+  await within(Promise.all([...whenLeaving].map((send) => send())), 5_000);
   if (inApp) {
     const done = new Promise<void>((resolve) => (answered = resolve));
     toApp({ type: 'sign-out', remove: removeDownloads });

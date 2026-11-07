@@ -18,7 +18,7 @@ import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 import { keep, readKept } from './keptStore';
-import { accountKey, whenAccount } from './account';
+import { accountKey, whenAccount, whenLeaving } from './account';
 import { playsToTell } from './playsToTell';
 import { reach, whenReached } from './reach.svelte';
 
@@ -89,6 +89,7 @@ if (typeof window !== 'undefined') {
   });
   whenReached.add(plays.tell);
   whenAccount.add(plays.tell);
+  whenLeaving.add(plays.tell);
 }
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
 const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);

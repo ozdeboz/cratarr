@@ -38,16 +38,17 @@ export function playsToTell<P extends { id: string; at: number; account?: string
   let restUntil = 0;
   const save = () => keep(latestOfEach([...telling, ...unsent]));
 
-  /** Tells what waits of the account signed in, unless some is on its way or the last report moved nothing just now. */
-  function tell() {
+  /** Tells what waits of the account signed in, unless some is on its way or the last report moved nothing just now; done
+   *  once Cratarr has answered for all of it, or moved nothing. */
+  function tell(): Promise<void> {
     const a = account();
-    if (telling.length || a === null || now() < restUntil) return;
+    if (telling.length || a === null || now() < restUntil) return Promise.resolve();
     unsent = unsent.filter((e) => !outlived(e, a, now()));
     telling = unsent.filter((e) => ours(e, a)).slice(-KEPT);
-    if (!telling.length) return;
+    if (!telling.length) return Promise.resolve();
     unsent = unsent.filter((e) => !ours(e, a));
     let moved = false;
-    report(telling)
+    return report(telling)
       .then(
         (r) => {
           const left = telling.filter((e) => !r.done.includes(e.id));
@@ -60,7 +61,7 @@ export function playsToTell<P extends { id: string; at: number; account?: string
         telling = [];
         save();
         if (!moved) restUntil = now() + TELL_AGAIN_MS;
-        else if (unsent.length) tell();
+        else if (unsent.length) return tell();
       });
   }
 
@@ -71,7 +72,7 @@ export function playsToTell<P extends { id: string; at: number; account?: string
       if (p.account === undefined) return;
       unsent.push(p);
       save();
-      tell();
+      void tell();
     },
     /** What was kept here before this page: those not known yet taken in. */
     took(kept: P[]) {

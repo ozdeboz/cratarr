@@ -109,6 +109,14 @@ test('each account keeps its latest apart: his plays do not push out hers', () =
   assert.deepEqual(t.kept.slice(0, 2).map((p) => p.id), ['hers', 'his-100'], 'in order, the oldest of his gone');
 });
 
+test('a telling can be waited for, to the end of what waits: a sign-out goes after it', async () => {
+  const { t, plays } = telling((ids) => ids.slice(0, 1));
+  plays.took([play('a', 'ann'), play('b', 'ann')]);
+  await plays.tell();
+  assert.deepEqual(t.sent, [['a', 'b'], ['b']]);
+  assert.deepEqual(t.kept, []);
+});
+
 test('what was kept before this page comes in once, by its id', async () => {
   const { t, plays } = telling((ids) => ids);
   plays.took([play('a', 'ann'), play('b', 'ann')]);

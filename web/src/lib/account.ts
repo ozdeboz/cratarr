@@ -61,6 +61,10 @@ export const whenAccount = new Set<() => void>();
  *  [whenAccount] does not hear of it: what must run at every open, once Cratarr has said who it is, is here. */
 export const whenLearnt = new Set<() => void>();
 
+/** What waits of the account, each to be sent, as far as it can be, before a sign-out ends it (decision 0101, point 13: "they
+ *  go first if the device is online"; lib/signOut). */
+export const whenLeaving = new Set<() => Promise<unknown>>();
+
 function set(k: string | null) {
   if (k === key) return;
   key = k;

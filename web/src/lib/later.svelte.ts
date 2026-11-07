@@ -6,7 +6,7 @@
 // change Cratarr turns down when it comes (the playlist gone meanwhile) is let go: Cratarr's state is the truth. Each
 // carries the account it was made under and is sent only while that account is signed in (0.13, lib/account). The
 // rules are lib/outbox's.
-import { accountKey, whenAccount } from './account';
+import { accountKey, whenAccount, whenLeaving } from './account';
 import { keep, readKept } from './keptStore';
 import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, turnedAway, worded, type Op } from './outbox';
 import { notReached, reach, whenReached } from './reach.svelte';
@@ -139,6 +139,7 @@ export async function sendLater() {
 }
 
 whenReached.add(() => void sendLater());
+whenLeaving.add(sendLater);
 whenAccount.add(async () => {
   await loaded;
   stamp();

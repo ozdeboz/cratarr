@@ -208,8 +208,8 @@ object Kept {
 
     /**
      * An account's downloads all go from this device (decision 0101: "Remove this account's downloads" at its sign-out,
-     * This device's Remove, an account Cratarr removed): its holds and its kept items; a file another account holds
-     * stays.
+     * This device's Remove): its holds and its kept items; a file another account holds stays. Point 13's account Cratarr
+     * removed does not come here: the device cannot tell one from a session ended, each a 401.
      */
     fun releaseAccount(context: Context, who: String) {
         val app = context.applicationContext
