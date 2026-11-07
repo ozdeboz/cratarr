@@ -1436,6 +1436,21 @@ async fn two_accounts_fetch_every_library_they_can_see_end_to_end() {
     assert_eq!(s.anyone().bytes("/api/index/sounds").await.0, 401);
     assert_eq!(ann.bytes(&format!("/api/index/sounds/changes?since={}", i64::MAX)).await.0, 410);
 
+    // Fits and counts are each account's own: what ann did says nothing of bob.
+    let marks = |bytes: Vec<u8>| cratarr_rules::index::Marks::load(&bytes).unwrap();
+    let landing = of_ann.tracks.iter().find(|t| t.title == "Landing").unwrap().id;
+    let song = format!("tr-{landing}");
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{song}/favorite?on=true"), json!({})).await;
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{song}/played"), json!({})).await;
+    let (status, hers) = ann.bytes("/api/index/own").await;
+    assert_eq!(status, 200);
+    let (hers, his) = (marks(hers), marks(bob.bytes("/api/index/own").await.1));
+    let mark = hers.of(landing).unwrap();
+    assert_eq!(mark.plays, 1, "{mark:?}");
+    assert!(mark.fit.is_some(), "a favourite makes a taste: {mark:?}");
+    assert!(his.rows().is_empty(), "bob has done nothing: {:?}", his.rows());
+    assert_eq!(s.anyone().bytes("/api/index/own").await.0, 401);
+
     // Beside the user data's changes, a word on the library's log, by a rev of its own.
     let at = |rev: i64| format!("/api/changes?since=0&kinds=favourite,index&index={rev}");
     s.until("the library still", Duration::from_secs(60), || async {

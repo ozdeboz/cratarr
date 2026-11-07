@@ -160,6 +160,7 @@ pub fn router(app: Arc<App>) -> Router {
         // The library on a device (0101's point 16): bytes, as the rules crate reads them.
         .route("/api/index", get(device_index))
         .route("/api/index/changes", get(device_index_changes))
+        .route("/api/index/own", get(device_own))
         .route("/api/index/sounds", get(device_sounds))
         .route("/api/index/sounds/changes", get(device_sound_changes))
         .route("/api/incoming", get(incoming))
@@ -4340,6 +4341,12 @@ struct IndexSince {
 async fn device_index_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
     use crate::app::device_index::{changes, takes_gzip};
     Ok(changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
+}
+
+/// The fits and counts of the account asking (`app::device_index`).
+async fn device_own(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{own, takes_gzip};
+    Ok(own(&ctx.app, ctx.account(), takes_gzip(&headers)).await?.into_response())
 }
 
 /// Every sound the account can see, eight bits each (`app::device_index`).

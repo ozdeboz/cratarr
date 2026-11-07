@@ -20,6 +20,8 @@
 //!   page's heap as one string. `/api/changes` says where the log stands, and whether there is anything to fetch.
 //! - **The sounds go apart** (0101's point 16): eight bits each, from what the crates hold, and only for what a device asks for
 //!   them, as they weigh more than all the rest and change rarely. Their rev is the log's, and their feed its `sound` rows.
+//! - **What is an account's own goes apart too** (0101's point 18), as `index::Marks`: its fits and its last counts, worked out on
+//!   asking, with no feed. They move with every play and are a small part of what the index weighs.
 //! - **"Start again":** a rev from before what is kept or ahead of it, or more changed than rows are worth (a library in front of
 //!   the others moves every line): 410 with `{rev, reset: true}`, as `/api/changes` says it, and the device fetches whole.
 
@@ -420,6 +422,38 @@ pub async fn sound_changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<St
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
+/// One account's fits and counts as a device holds them: a row for every track with anything to say.
+fn marks_of(fits: &HashMap<String, f64>, skipped: &HashMap<String, f64>, uses: &HashMap<i64, crate::crates::Use>) -> Vec<index::Mark> {
+    fn row(rows: &mut HashMap<i64, index::Mark>, track: i64) -> &mut index::Mark {
+        rows.entry(track).or_insert_with(|| index::Mark { track, ..index::Mark::default() })
+    }
+    let mut rows: HashMap<i64, index::Mark> = HashMap::new();
+    for (song, fit) in fits {
+        if let Some(track) = ids::track_of(song) {
+            row(&mut rows, track).fit = Some(*fit);
+        }
+    }
+    for (song, like) in skipped {
+        if let Some(track) = ids::track_of(song) {
+            row(&mut rows, track).skipped = Some(*like);
+        }
+    }
+    for (track, u) in uses {
+        let m = row(&mut rows, *track);
+        (m.plays, m.last, m.rating, m.skips) = (u.plays, u.last, u.rating, u.skips);
+    }
+    rows.into_values().collect()
+}
+
+/// `GET /api/index/own`: what the server last worked out for the account asking, and no one else: its fits and its counts, as
+/// `Marks::save` writes them.
+pub async fn own(app: &Arc<App>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
+    let user = account.ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+    let (fits, skipped, uses) = (app.playlists.taste_fits(&user, &[]).await?, app.playlists.skipped_fits(&user, &[]).await?, app.playlists.uses_by_track(&user).await?);
+    let bytes = tokio::task::spawn_blocking(move || Bytes::of(index::Marks::build(super::moment::now_secs(), &marks_of(&fits, &skipped, &uses)).save(), takes_gzip));
+    Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
+}
+
 /// `/api/changes`' word on the index, for a device at `since`.
 pub async fn stands(app: &Arc<App>, serve: Arc<Serve>, since: Option<i64>) -> Result<IndexStands, ToggleError> {
     let libraries = app.library.index_libraries(&serve);
@@ -584,6 +618,10 @@ mod tests {
         let sounds_packed = Bytes::of(sound_bytes.clone(), true).unwrap();
         let sounds_zipped = zipped_at.elapsed();
         println!("sounds: made and saved {sounds_took:?}, gzip {sounds_zipped:?}; bytes {}, gzip {} ({:.0}%); resident top now {:.1}", sound_bytes.len(), sounds_packed.bytes.len(), sounds_packed.bytes.len() as f64 * 100.0 / sound_bytes.len() as f64, status_mb("VmHWM"));
+        // Every track with a fit and one heard skip's likeness, and every fifth played: an account that listens a lot.
+        let marks: Vec<index::Mark> = facts.iter().enumerate().filter_map(|(n, f)| Some(index::Mark { track: f.track?, fit: Some(n as f64 / 34_567.0), skipped: Some(n as f64 / 76_543.0), plays: if n % 5 == 0 { n as u32 % 40 } else { 0 }, last: (n % 5 == 0).then_some(1_700_000_000 + n as i64 * 977), rating: None, skips: 0 })).collect();
+        let own = index::Marks::build(1, &marks).save();
+        println!("an account's marks: bytes {}, gzip {}", own.len(), Bytes::of(own.clone(), true).unwrap().bytes.len());
         println!("{tracks} tracks: build {built:?}, save {saved:?}, gzip {zipped:?}");
         println!("bytes {}, gzip {} ({:.0}%)", bytes.len(), packed.bytes.len(), packed.bytes.len() as f64 * 100.0 / bytes.len() as f64);
         println!("resident {before:.1} MB before, {held:.1} with the index and its bytes held, top {top:.1} (top before {hwm_before:.1}): a build costs {:.1} MB at its top", top - before);
@@ -774,6 +812,19 @@ mod tests {
             assert!(device.save() == fresh.save(), "{what}");
         }
         assert!(device.rev() > at);
+    }
+
+    #[test]
+    fn a_tracks_mark_is_its_fit_what_it_is_like_of_the_skipped_and_what_was_done_with_it() {
+        use crate::crates::Use;
+        let fits = HashMap::from([(ids::song(1), 0.75), (ids::song(2), 0.5), ("al-3".to_string(), 0.1)]);
+        let skipped = HashMap::from([(ids::song(2), 0.25)]);
+        let uses = HashMap::from([(1, Use { plays: 3, last: Some(100), rating: Some(4), skips: 2 }), (5, Use { plays: 1, ..Use::default() })]);
+        let marks = index::Marks::build(1, &marks_of(&fits, &skipped, &uses));
+        assert_eq!(marks.of(1).unwrap(), index::Mark { track: 1, fit: Some(0.75), skipped: None, plays: 3, last: Some(100), rating: Some(4), skips: 2 });
+        assert_eq!(marks.of(2).unwrap(), index::Mark { track: 2, fit: Some(0.5), skipped: Some(0.25), ..index::Mark::default() });
+        assert_eq!(marks.of(5).unwrap().plays, 1, "played, and no fit known");
+        assert_eq!(marks.rows().len(), 3, "and no row of what is no track");
     }
 
     /// A reading of `s`'s facts with these tracks heard, for the sounds' feed.

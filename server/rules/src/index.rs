@@ -16,7 +16,8 @@
 //! - **A record's copies travel with it**, in the order they would play for this account, and a track says which libraries
 //!   hold it, so switching a library works offline. Which copy plays stays the server's to say.
 //! - **What is an account's own stays out of it:** plays, favourites, playlists and fits are the caller's, as `World` and
-//!   `radio::Song` take them. Rows are found by id or by their line ([`Facts::rel`]).
+//!   `radio::Song` take them. Rows are found by id or by their line ([`Facts::rel`]). What the server last worked out of them
+//!   comes apart, an account's own ([`Marks`]).
 //! - **[`Sounds`] are kept apart** (0101's point 16): they change rarely and weigh more than all the rest.
 
 use std::collections::{HashMap, HashSet};
@@ -32,6 +33,9 @@ pub const VERSION: u32 = 1;
 
 /// The same for the sounds, on their own: a column added to the index is no reason to fetch them again.
 pub const SOUNDS_VERSION: u32 = 1;
+
+/// The same for an account's marks.
+pub const MARKS_VERSION: u32 = 1;
 
 // --- Rows: what goes in, and what comes out when asked for ---
 
@@ -198,6 +202,7 @@ const INDEX: [u8; 4] = *b"CRXI";
 const CHANGES: [u8; 4] = *b"CRXC";
 const SOUNDS: [u8; 4] = *b"CRXS";
 const SOUND_CHANGES: [u8; 4] = *b"CRXD";
+const MARKS: [u8; 4] = *b"CRXM";
 
 /// What a body adds up to: a torn write or a changed byte is refused, not read as a library. Every step can be undone, so one
 /// word changed always changes the sum.
@@ -1723,6 +1728,109 @@ impl SoundChanges {
     }
 }
 
+// --- An account's marks ---
+
+table! {
+    /// By track: only those with anything to say.
+    Marked by track {
+        track: Vec<i64>,
+        fit: Vec<f64>,
+        skipped: Vec<f64>,
+        plays: Vec<i64>,
+        last: Vec<i64>,
+        rating: Vec<i64>,
+        skips: Vec<i64>,
+    }
+}
+
+/// What the server last worked out for one account of one track: how well it fits their taste and how like it is to what they
+/// skip (decision 0094: Best match, Fits your taste, Radio's Your taste), and what `crates::Use` holds of their listening. A
+/// device adds its own unsent plays to the counts (0101's point 18).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Mark {
+    pub track: i64,
+    pub fit: Option<f64>,
+    pub skipped: Option<f64>,
+    pub plays: u32,
+    /// When last played (epoch s).
+    pub last: Option<i64>,
+    pub rating: Option<u8>,
+    pub skips: u32,
+}
+
+/// An account's marks as of when they were worked out. They go with no feed: they move with every play, weigh little beside the
+/// index, and are worked out whole.
+#[derive(Debug, Clone, Default)]
+pub struct Marks {
+    at: i64,
+    marked: Marked,
+}
+
+impl PartialEq for Marks {
+    fn eq(&self, other: &Self) -> bool {
+        self.save() == other.save()
+    }
+}
+
+impl Marks {
+    /// `rows`, in any order, as of `at` (epoch s).
+    pub fn build(at: i64, rows: &[Mark]) -> Self {
+        let mut to = Marked::default();
+        for row in by_id(rows, |m| m.track) {
+            to.track.push(row.track);
+            to.fit.push(from_float(row.fit));
+            to.skipped.push(from_float(row.skipped));
+            to.plays.push(i64::from(row.plays));
+            to.last.push(row.last.unwrap_or(NONE));
+            to.rating.push(row.rating.map_or(NONE, i64::from));
+            to.skips.push(i64::from(row.skips));
+        }
+        Self { at, marked: to }
+    }
+
+    /// When they were worked out: what a device's own plays since are added to.
+    pub fn at(&self) -> i64 {
+        self.at
+    }
+
+    fn at_row(&self, row: usize) -> Mark {
+        let m = &self.marked;
+        Mark {
+            track: m.track[row],
+            fit: to_float(m.fit[row]),
+            skipped: to_float(m.skipped[row]),
+            plays: to_small(m.plays[row]).unwrap_or(0),
+            last: to_int(m.last[row]),
+            rating: u8::try_from(m.rating[row]).ok(),
+            skips: to_small(m.skips[row]).unwrap_or(0),
+        }
+    }
+
+    /// A track's, where it has any.
+    pub fn of(&self, track: i64) -> Option<Mark> {
+        self.marked.track.binary_search(&track).ok().map(|row| self.at_row(row))
+    }
+
+    pub fn rows(&self) -> Vec<Mark> {
+        (0..self.marked.track.len()).map(|row| self.at_row(row)).collect()
+    }
+
+    pub fn save(&self) -> Vec<u8> {
+        let mut out = vec![0; HEADER];
+        varint(&mut out, zigzag(self.at));
+        self.marked.write(&mut out);
+        sealed(out, MARKS, MARKS_VERSION)
+    }
+
+    pub fn load(bytes: &[u8]) -> Result<Self, Refused> {
+        let mut from = opened(bytes, MARKS, MARKS_VERSION)?;
+        let at = from.int()?;
+        let marked = Marked::read(&mut from)?;
+        from.done()?;
+        if marked.track.windows(2).all(|w| w[0] < w[1]) { Ok(Self { at, marked }) } else { Err(Refused::Damaged) }
+    }
+}
+
 // --- A library made up ---
 
 /// A library made up in a real one's proportions (about eleven tracks a record, a few more artists than records, three
@@ -2764,6 +2872,30 @@ mod tests {
             reported(&format!("crowded, {centres} centres, every signal"), &compared(&index, &sounds, &every_nth(&sounds, 40), &every_signal));
             reported(&format!("crowded, {centres} centres, sound alone"), &compared(&index, &sounds, &every_nth(&sounds, 40), &sound_alone));
         }
+    }
+
+    #[test]
+    fn an_accounts_marks_come_back_as_they_went_in() {
+        let rows = vec![
+            Mark { track: 9, fit: Some(0.123_456_789_012), skipped: Some(0.5), plays: 3, last: Some(1_700_000_000), rating: Some(4), skips: 1 },
+            Mark { track: 2, plays: 1, ..Mark::default() },
+            Mark { track: 5, fit: Some(0.25), ..Mark::default() },
+        ];
+        let marks = Marks::load(&Marks::build(1_800_000_000, &rows).save()).unwrap();
+        assert_eq!(marks.at(), 1_800_000_000);
+        assert_eq!(marks.of(9).as_ref(), Some(&rows[0]), "a fit exact: a share of the library is cut by rank");
+        assert_eq!(marks.of(2).as_ref(), Some(&rows[1]));
+        assert_eq!(marks.of(3), None);
+        assert_eq!(marks.rows().iter().map(|m| m.track).collect::<Vec<_>>(), [2, 5, 9], "by track");
+        assert!(marks == Marks::build(1_800_000_000, &[rows[2].clone(), rows[0].clone(), rows[1].clone()]));
+    }
+
+    #[test]
+    fn marks_of_another_kind_or_version_or_cut_short_are_refused() {
+        let bytes = Marks::build(1, &[Mark { track: 1, ..Mark::default() }]).save();
+        assert_eq!(Marks::load(&bytes[..bytes.len() - 1]).err(), Some(Refused::Damaged));
+        assert_eq!(Marks::load(&built(&small()).save()).err(), Some(Refused::Damaged));
+        assert_eq!(Marks::load(&another_version(bytes, MARKS_VERSION + 1)).err(), Some(Refused::Version { found: MARKS_VERSION + 1, wants: MARKS_VERSION }));
     }
 
     /// Counts what is held, so a measure can say what a thing weighs in memory.
