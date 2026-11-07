@@ -897,7 +897,8 @@ pub struct Facts {
     pub styles: Vec<String>,
     /// The library's words of its album that are tags (0.9.7, `app::words`): Last.fm's, MusicBrainz's, the household's.
     pub tags: Vec<String>,
-    /// Its track in the catalogue, and AudioMuse's "sounds like" vector of it (unit length; none where not heard).
+    /// Its track in the catalogue, and AudioMuse's "sounds like" vector of it (unit length; none where not heard): the
+    /// one vector, which `similarity::Library` shares.
     pub track: Option<i64>,
     pub sound: Option<Arc<[f32]>>,
     /// Its artists and album artist (a compilation's left out), for a list's profile.
@@ -1661,7 +1662,7 @@ impl Alike {
             t.playlists = f.lists(membership).into_iter().map(|p| intern(0, p)).collect();
             t.artists = f.artists.iter().map(|a| intern(1, a)).collect();
             tracks.push(t);
-            sounds.push(f.sound.as_deref().map(<[f32]>::to_vec));
+            sounds.push(f.sound.clone());
         }
         let lib = Library::new(&tracks, sounds);
         // By every line: a playlist's entry may name any copy.
@@ -3674,6 +3675,19 @@ mod tests {
         assert_eq!(asked.get(), 0, "it costs a pass over every file");
         view.select(&like_crate("like:tr-1", "Seed", vec!["tr-1".into()], 2).conditions, false);
         assert_eq!(asked.get(), 1);
+    }
+
+    #[test]
+    fn a_sound_is_one_vector_in_the_facts_and_in_both_libraries_made_of_them() {
+        use crate::radio::{Index, Song};
+        let sound: Arc<[f32]> = Arc::from([0.6, 0.8]);
+        let files = vec![Facts { rel: "a/1.flac".into(), track: Some(1), sound: Some(sound.clone()), ..Facts::default() }];
+        let alike = Alike::of(&files, &HashMap::new(), &HashMap::new());
+        let index = Index::new(vec![Song { id: crate::ids::song(1), ..Song::default() }]).with_facts(&files);
+        let is_it = |held: Option<&[f32]>| held.is_some_and(|h| std::ptr::eq(h, &*sound));
+        assert!(is_it(alike.lib.sound(0)), "the crates' library");
+        assert!(is_it(index.like.sound(0)), "the radio's library");
+        assert_eq!(Arc::strong_count(&sound), 4, "here, the facts and the two libraries: nothing else holds it");
     }
 
     #[test]

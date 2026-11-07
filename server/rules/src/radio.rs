@@ -205,7 +205,7 @@ impl Index {
                 }
                 None => s.like.genres.clear(),
             }
-            sounds.push(f.and_then(|f| f.sound.as_deref().map(<[f32]>::to_vec)));
+            sounds.push(f.and_then(|f| f.sound.clone()));
         }
         self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
         self
@@ -537,7 +537,7 @@ mod tests {
     impl Index {
         /// With what AudioMuse heard of each song, by its id: the sound alone, as `with_facts` makes it from a track's facts.
         fn with_sounds(mut self, sound: impl Fn(&str) -> Option<Vec<f32>>) -> Self {
-            let sounds = self.songs.iter().map(|s| sound(&s.id)).collect();
+            let sounds = self.songs.iter().map(|s| sound(&s.id).map(Arc::from)).collect();
             self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
             self
         }

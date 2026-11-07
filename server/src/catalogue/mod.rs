@@ -1760,9 +1760,11 @@ impl Catalogue {
                 let (mut energy, mut danceability, mut moods, mut styles, mut sound, mut clap_moods, mut muse_key) = (None, None, Vec::new(), Vec::new(), None, None, None);
                 if let Some((e, style, clap, embedding, k)) = file_track.and_then(|t| muse.remove(&t)) {
                     muse_key = k;
-                    // Its "sounds like" (decision 0054), of unit length: what a Sounds like condition compares.
+                    // Its "sounds like" (decision 0054), of unit length: what a Sounds like condition compares. Made so
+                    // twice: `similarity::Library` shares this vector now, and made so again what it was handed when it
+                    // kept a copy. Once alone is a last bit off in most vectors, and a near tie would fall the other way.
                     let v: Vec<f32> = embedding.unwrap_or_default().chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-                    sound = crate::similarity::mean_sound(&[&v]).map(std::sync::Arc::from);
+                    sound = crate::similarity::mean_sound(&[&v]).and_then(|v| crate::similarity::mean_sound(&[&v])).map(std::sync::Arc::from);
                     // Every mood's score, for a list's profile; none until CLAP heard the file (all 0).
                     clap_moods = crate::app::audiomuse::mood_scores(clap.as_deref());
                     moods = crate::app::audiomuse::moods_of(clap_moods, &stand_out).into_iter().map(|(m, _)| m.to_string()).collect();
@@ -6212,6 +6214,52 @@ mod tests {
         // Out of use, a folder's files leave the crates.
         cat.set_folders(vec![m.clone()]).unwrap();
         assert_eq!(cat.crate_facts().unwrap().iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["A/01.mp3"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_heard_track_reads_to_the_bit_as_the_library_made_it_and_is_one_vector_wherever_it_is_held() {
+        let root = music();
+        for n in 0..24 {
+            std::fs::write(root.join(format!("A - B (2020)/{n:02}.mp3")), "a").unwrap();
+        }
+        let cat = Catalogue::open(None, vec![root.clone()]).unwrap();
+        cat.walk_all();
+        let heard = |track: i64| -> Vec<f32> {
+            let mut r = cratarr_rules::Rng::seeded(track as u64);
+            (0..200).map(|_| r.unit() as f32 - 0.5).collect()
+        };
+        for n in 0..24 {
+            cat.db().execute("INSERT INTO tracks (id, born) VALUES (?1, 5)", [100 + n]).unwrap();
+            cat.give_track_for_tests(0, &format!("A - B (2020)/{n:02}.mp3"), 100 + n);
+        }
+        let rows: Vec<AudioMuseRow> =
+            (100..124).map(|track| AudioMuseRow { track, embedding: Some(heard(track).iter().flat_map(|x| x.to_le_bytes()).collect()), ..AudioMuseRow::default() }).collect();
+        cat.replace_audiomuse(&rows).unwrap();
+        let facts = cat.crate_facts().unwrap();
+        let held: Vec<&crate::crates::Facts> = facts.iter().filter(|f| f.sound.is_some()).collect();
+        assert_eq!(held.len(), 24);
+
+        // Made so as the catalogue did, then as the library did what it was handed, when it kept a copy.
+        let made_so = |v: &[f32]| -> Vec<f32> {
+            let len = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            v.iter().map(|x| x / len).collect()
+        };
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<u32>>();
+        for f in &held {
+            let once = made_so(&heard(f.track.unwrap()));
+            assert_eq!(bits(f.sound.as_ref().unwrap()), bits(&made_so(&once)), "{}", f.rel);
+        }
+        assert!(held.iter().any(|f| bits(f.sound.as_ref().unwrap()) != bits(&made_so(&heard(f.track.unwrap())))), "once is not twice, or this says nothing");
+
+        let alike = crate::crates::Alike::of(&facts, &HashMap::new(), &HashMap::new());
+        let songs = facts.iter().map(|f| cratarr_rules::radio::Song { id: crate::serve::ids::song(f.track.unwrap_or_default()), ..Default::default() }).collect();
+        let index = cratarr_rules::radio::Index::new(songs).with_facts(&facts);
+        for (place, f) in facts.iter().enumerate() {
+            let Some(sound) = &f.sound else { continue };
+            assert!(alike.heard(place) && index.like.sound(place).is_some_and(|held| std::ptr::eq(held, &**sound)), "{}", f.rel);
+            assert_eq!(std::sync::Arc::strong_count(sound), 3, "{}: the facts and the two libraries", f.rel);
+        }
         std::fs::remove_dir_all(&root).ok();
     }
 

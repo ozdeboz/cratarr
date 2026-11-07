@@ -13,7 +13,7 @@ use cratarr_rules::crates::{self, Alike, Avoid, Condition, Facts, Favourites, Li
 use cratarr_rules::excluded_artists;
 use cratarr_rules::ids::song;
 use cratarr_rules::radio::{Ask, Index, Mode, RadioBy, Song, choose};
-use cratarr_rules::similarity::{MOODS, Signal, Track, Weights};
+use cratarr_rules::similarity::{MOODS, Signal, Track, Weights, mean_sound};
 use cratarr_rules::{ByHand, How, Lane, Picked, Rng, add_place, pick, restore_order, shuffle_order};
 use serde::{Deserialize, Serialize};
 
@@ -225,8 +225,12 @@ impl Shared {
         Alike::of(files, &self.membership(), &self.artist_ids.iter().map(|(n, id)| (n.clone(), id.clone())).collect())
     }
 
-    /// Radio's index of it, as a caller makes one: albums, artists and playlists numbered as first met, its facts on top.
     fn index(&self) -> Index {
+        self.index_of(&self.facts())
+    }
+
+    /// Radio's index of it, as a caller makes one: albums, artists and playlists numbered as first met, its facts on top.
+    fn index_of(&self, files: &[Facts]) -> Index {
         let (mut albums, mut artists, mut lists) = (Numbers::default(), Numbers::default(), Numbers::default());
         let songs = self
             .files
@@ -237,7 +241,7 @@ impl Shared {
                 Song { id: song(f.track), title: f.rel.clone(), album: f.album.clone(), album_id: f.album.clone(), album_n: albums.of(&f.album), like, folders: vec![f.folder], ..Song::default() }
             })
             .collect();
-        Index::new(songs).with_facts(&self.facts())
+        Index::new(songs).with_facts(files)
     }
 
     /// A line's song.
@@ -725,6 +729,27 @@ fn radio_picks_as_written() {
     for c in &cases {
         assert_eq!(radio_answer(&index, c), c.expected, "{}", c.name);
         assert!(!c.expected.is_empty() || c.name.contains("nothing"), "{}: picks nothing", c.name);
+    }
+}
+
+/// The written answers come of sounds each library made of unit length itself. A server's facts come so already and the
+/// libraries share them: the answers stay the ones written.
+#[test]
+fn every_crate_and_pick_answers_as_written_from_sounds_of_unit_length_shared() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let (crates, radio): (Vec<CrateCase>, Vec<RadioCase>) = (serde_json::from_str(CRATES).unwrap(), serde_json::from_str(RADIO).unwrap());
+    let mut files = lib.facts();
+    for f in &mut files {
+        f.sound = f.sound.take().and_then(|s| mean_sound(&[&s])).map(Arc::from);
+    }
+    assert!(files.iter().any(|f| f.sound.is_some()));
+    let alike = lib.alike(&files);
+    for c in &crates {
+        assert_eq!(crate_answer(&lib, &files, &alike, c), c.expected, "{}", c.name);
+    }
+    let index = lib.index_of(&files);
+    for c in &radio {
+        assert_eq!(radio_answer(&index, c), c.expected, "{}", c.name);
     }
 }
 
