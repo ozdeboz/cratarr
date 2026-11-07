@@ -172,8 +172,9 @@ const GENERATION: &str = "generation";
 /// How long a gone file waits to be recognised as moved before its track id is retired (decision 0011 §4).
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
-/// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along.
-const FILE_TABLES: [&str; 6] = ["files", "tags", "source_ids", "analysis", "analysis_shape", "beat_this"];
+/// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along. A table with
+/// both goes here or says why not (`every_table_by_folder_and_path_goes_with_its_file`), or it stays at a place its file left.
+const FILE_TABLES: [&str; 7] = ["files", "cover_files", "tags", "source_ids", "analysis", "analysis_shape", "beat_this"];
 
 /// What a retiring track was, from its file and tags while they are still there (`tracks`' kept columns).
 const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id LIMIT 1),
@@ -6737,6 +6738,58 @@ mod tests {
         cat.set_folders(vec![a.clone(), copy.clone(), renamed.clone()]).unwrap();
         assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(one), "the one parked comes back as itself");
         for d in [&a, &renamed, &copy] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A1: a place stands in for a file in these tables, so a new one left out of `FILE_TABLES` stays where its file left, as a
+    /// waveform once did. `handovers` is the one that is not a file's: it is a promise about a place a file is on its way to, kept
+    /// through what lies there now going, and taken along it would be gone before the file came. It goes by the folder's id, which
+    /// is for life, so a parked folder finds it on its return, and it ends by itself within the day.
+    #[test]
+    fn every_table_by_folder_and_path_goes_with_its_file() {
+        const OF_NO_FILE: [&str; 1] = ["handovers"];
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let tables: Vec<String> = {
+            let db = cat.db();
+            let mut st = db
+                .prepare(
+                    "SELECT m.name FROM sqlite_master m WHERE m.type = 'table'
+                       AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) WHERE name = 'folder')
+                       AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) WHERE name = 'rel') ORDER BY m.name",
+                )
+                .unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        for table in &tables {
+            assert!(FILE_TABLES.contains(&table.as_str()) || OF_NO_FILE.contains(&table.as_str()), "{table} goes by folder and path: add it to FILE_TABLES, or say why not");
+        }
+        let named: Vec<&str> = FILE_TABLES.iter().chain(&OF_NO_FILE).copied().collect();
+        assert_eq!(named.len(), tables.len(), "a table named is a table there: {named:?} against {tables:?}");
+    }
+
+    /// A library's cover files are parked with it and go when it is forgotten, or they stay for good under an id nothing will hold.
+    #[test]
+    fn a_librarys_cover_files_go_where_it_goes() {
+        let (a, b) = (music(), music());
+        std::fs::write(b.join("A - B (2020)/cover.jpg"), b"a picture").unwrap();
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        let print = cat.cover_prints().unwrap();
+        assert!(print.contains_key(&(1, "A - B (2020)".to_string())), "{print:?}");
+        cat.set_folders(vec![a.clone()]).unwrap();
+        assert!(!cat.cover_prints().unwrap().contains_key(&(1, "A - B (2020)".to_string())), "parked with its library");
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(cat.cover_prints().unwrap(), print, "back with it");
+
+        cat.set_folders(vec![a.clone()]).unwrap();
+        std::fs::remove_dir_all(&b).unwrap();
+        std::fs::create_dir_all(b.join("Other")).unwrap();
+        std::fs::write(b.join("Other/01 Other.mp3"), b"other files at its path").unwrap();
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&b), Some(2), "a new library");
+        assert!(cat.cover_prints().unwrap().is_empty(), "nothing left of the one forgotten");
+        for d in [&a, &b] {
             std::fs::remove_dir_all(d).ok();
         }
     }
