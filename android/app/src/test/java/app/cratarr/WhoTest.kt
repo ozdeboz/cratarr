@@ -167,6 +167,26 @@ class WhoTest {
     }
 
     @Test
+    fun a_download_being_saved_goes_by_its_name_only_while_whoever_asked_is_signed_in() {
+        assertEquals("Her road trip.zip", ExportPaths.titleOf("Her road trip.zip", ann, ann))
+        assertEquals("gone by the time it ends", null, ExportPaths.titleOf("Her road trip.zip", ann, Who.NONE))
+        assertEquals(null, ExportPaths.titleOf("Her road trip.zip", ann, bo))
+        assertEquals("nothing of its own to say", null, ExportPaths.titleOf(" ", ann, ann))
+        assertEquals("the service's note as it starts, no download named", null, ExportPaths.titleOf(null, null, ann))
+    }
+
+    @Test
+    fun what_the_tray_says_of_the_one_left_goes_with_them_with_no_activity_open() {
+        val set = source("Who.kt").substringAfter("fun set(").substringBefore("for (f in changed)")
+        assertTrue("Notices.forget(app)" in set)
+        assertTrue("ExportSave.forget(app)" in set)
+        assertTrue(".cancel(NOTIFICATION)" in source("Notices.kt").substringAfter("fun forget("))
+        assertTrue(".cancel(DONE_NOTIFICATION)" in source("ExportSave.kt").substringAfter("fun forget("))
+        assertTrue("every note of a download", "ExportPaths.titleOf(job?.name, job?.who, Who.current(context))" in source("ExportSave.kt"))
+        assertTrue("whose it is, from the start", "ExportSave.Job(doc, token, message.optString(\"name\"), Who.current(this))" in source("MainActivity.kt"))
+    }
+
+    @Test
     fun the_player_takes_up_whoever_it_is_by_then() {
         assertTrue("main.post { whoCame(Who.current(this)) }" in source("PlayerService.kt"))
     }

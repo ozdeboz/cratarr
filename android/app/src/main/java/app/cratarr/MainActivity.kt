@@ -165,7 +165,7 @@ class MainActivity : AppCompatActivity() {
             reply.postMessage(ExportSave.message(token, "cancelled").toString())
             return@registerForActivityResult
         }
-        ExportSave.start(this, ExportSave.Job(doc, token, message.optString("name")))
+        ExportSave.start(this, ExportSave.Job(doc, token, message.optString("name"), Who.current(this)))
     }
 
     /** Where the first page opens, past the server's address: Settings (the launcher's Settings shortcut), or a

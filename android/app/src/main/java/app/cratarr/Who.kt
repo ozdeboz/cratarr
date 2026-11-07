@@ -54,6 +54,8 @@ object Who {
             was
         }
         // Here, not a listener's: a play told behind a locked screen can bring this about with no activity open.
+        Notices.forget(app)
+        ExportSave.forget(app)
         Kept.sync(app)
         for (f in changed) f(from, to)
     }
