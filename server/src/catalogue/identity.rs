@@ -2,8 +2,10 @@
 //! moves and replacements write the track id themselves. Pure.
 //!
 //! A pair is made only when it is unambiguous both ways: one new file and one gone file fit, and no other. The gone
-//! files of one track are one fit: they are its copies, and any of them gives the new file the same id. Size and tags
-//! alone never pair two files, so retagging or a format change made elsewhere gives a new id rather than a wrong one.
+//! files of one track are one fit: they are its copies, and any of them gives the new file the same id. The surest fit
+//! comes first: a `mv` keeps a file's size and modified time, which together with its length say it is that file, whatever it is
+//! called now and whatever it says of itself. Short of that, tags alone never pair two files, so retagging or a format
+//! change made elsewhere gives a new id rather than a wrong one.
 
 use std::collections::BTreeMap;
 
@@ -17,6 +19,9 @@ pub struct FileFacts {
     /// The file name, without folders.
     pub name: String,
     pub duration_ms: Option<i64>,
+    /// Its size and modified time. None for what has no file any more, a retired track: no exact fit there.
+    pub size: Option<i64>,
+    pub mtime: Option<i64>,
     /// MusicBrainz recording id.
     pub recording: Option<String>,
     pub title: Option<String>,
@@ -48,7 +53,9 @@ fn some_eq(a: &Option<String>, b: &Option<String>) -> bool {
 type Rule = fn(&FileFacts, &FileFacts) -> bool;
 
 /// Rules in order; the first that pairs a file decides.
-const RULES: [Rule; 3] = [
+const RULES: [Rule; 4] = [
+    // The file itself, moved: the same size, modified time and length.
+    |n, g| matches!((n.size, g.size), (Some(x), Some(y)) if x == y) && matches!((n.mtime, g.mtime), (Some(x), Some(y)) if x == y) && matches!((n.duration_ms, g.duration_ms), (Some(x), Some(y)) if x == y),
     // The same MusicBrainz recording.
     |n, g| some_eq(&n.recording, &g.recording),
     // Renamed folder, same file name and length (and title, when both have one).
@@ -343,10 +350,17 @@ mod tests {
             track: None,
             name: name_of(name),
             duration_ms: Some(ms),
+            size: None,
+            mtime: None,
             recording: recording.map(fold),
             title: title.map(fold),
             artist: artist.map(fold),
         }
+    }
+
+    /// A file as a walk found it: its size and modified time beside its name and length.
+    fn on_disk(name: &str, ms: i64, size: i64, mtime: i64) -> FileFacts {
+        FileFacts { size: Some(size), mtime: Some(mtime), ..f(name, ms, None, None, None) }
     }
 
     /// One song, as a file of a folder.
@@ -472,6 +486,44 @@ mod tests {
         assert_eq!(match_moves_by_folder(&new, &[moved.clone(), weaker.clone()]), vec![(0, 0)]);
         let here = FileFacts { folder: 0, ..moved.clone() };
         assert_eq!(match_moves_by_folder(&new, &[moved, here, weaker]), vec![(0, 1)], "the same rule in two folders: its own");
+    }
+
+    /// A2: a file with no tags to go by and another name, which no other rule can follow: its size, time and length say it is that file.
+    #[test]
+    fn a_file_moved_and_renamed_with_nothing_to_go_by_pairs_as_itself() {
+        let new = vec![on_disk("x/track one.flac", 200_000, 4_000_000, 1_700_000_000)];
+        let gone = vec![on_disk("y/01.flac", 200_000, 4_000_000, 1_700_000_000), on_disk("y/02.flac", 200_000, 4_000_001, 1_700_000_000)];
+        assert_eq!(match_moves(&new, &gone), vec![(0, 0)]);
+        assert!(match_moves(&[on_disk("x/track one.flac", 200_000, 4_000_000, 1_700_000_001)], &gone[..1]).is_empty(), "another time: written since");
+        assert!(match_moves(&[on_disk("x/track one.flac", 200_000, 4_000_001, 1_700_000_000)], &gone[..1]).is_empty(), "another size");
+        assert!(match_moves(&[on_disk("x/track one.flac", 200_500, 4_000_000, 1_700_000_000)], &gone[..1]).is_empty(), "another length, within what a rule forgives");
+    }
+
+    /// Asked first, it beats a fit by a weaker rule, which is what it is for: a file moved to where another's name is.
+    #[test]
+    fn the_file_itself_beats_a_fit_by_name() {
+        let new = vec![FileFacts { size: Some(4_000_000), mtime: Some(1_700_000_000), ..f("c/01 Intro.flac", 60_000, None, Some("Intro"), None) }];
+        let namesake = FileFacts { size: Some(5_000_000), mtime: Some(1_600_000_000), ..f("a/01 Intro.flac", 60_000, None, Some("Intro"), None) };
+        let itself = FileFacts { size: Some(4_000_000), mtime: Some(1_700_000_000), ..f("b/Intro take.flac", 60_000, None, Some("Intro"), None) };
+        assert_eq!(match_moves(&new, &[namesake, itself]), vec![(0, 1)]);
+    }
+
+    /// Two identical copies are two fits, as under any rule: the first to take one would be a guess.
+    #[test]
+    fn identical_copies_are_not_told_apart_by_being_identical() {
+        let copy = |name: &str| on_disk(name, 200_000, 4_000_000, 1_700_000_000);
+        assert!(match_moves(&[copy("c/1.flac")], &[copy("a/2.flac"), copy("b/3.flac")]).is_empty(), "two gone, one new");
+        assert!(match_moves(&[copy("c/1.flac"), copy("d/1.flac")], &[copy("a/2.flac")]).is_empty(), "one gone, two new");
+    }
+
+    /// What has no file any more has no size to fit: a retired track, as `retired_like` reads it, or a file not read to its length.
+    #[test]
+    fn nothing_fits_exactly_without_a_size_a_time_and_a_length() {
+        let retired = f("a/1.flac", 200_000, None, None, None);
+        assert!(match_moves(&[on_disk("x/2.flac", 200_000, 1, 1)], &[retired]).is_empty());
+        let (mut unread, mut gone) = (on_disk("x/2.flac", 0, 1, 1), on_disk("a/1.flac", 0, 1, 1));
+        (unread.duration_ms, gone.duration_ms) = (None, None);
+        assert!(match_moves(&[unread], &[gone]).is_empty());
     }
 
     #[test]

@@ -584,6 +584,16 @@ fn count_facts_writes(conn: &Connection, written: Arc<AtomicU64>) -> Result<()> 
 /// A file's place in the catalogue: its folder and path there.
 type Place = (i64, String);
 
+/// A file as `identify` reads it, new or gone.
+struct Identified {
+    folder: i64,
+    rel: String,
+    duration_ms: Option<i64>,
+    track: Option<i64>,
+    size: i64,
+    mtime: i64,
+}
+
 /// The tracks with more than one file present: a record's copies. Few, so reading them first costs next to nothing.
 fn tracks_of_several(db: &Connection) -> Result<Vec<i64>> {
     let mut st = db.prepare(&format!("SELECT track FROM files WHERE track IS NOT NULL AND {PRESENT} GROUP BY track HAVING count(*) > 1"))?;
@@ -2292,13 +2302,13 @@ impl Catalogue {
         let folders = self.folders();
         let mut db = self.db();
         let tx = db.transaction()?;
-        let facts = |sql: &str| -> Result<Vec<(i64, String, Option<i64>, Option<i64>)>> {
+        let facts = |sql: &str| -> Result<Vec<Identified>> {
             let mut st = tx.prepare(sql)?;
-            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            let rows = st.query_map([], |r| Ok(Identified { folder: r.get(0)?, rel: r.get(1)?, duration_ms: r.get(2)?, track: r.get(3)?, size: r.get(4)?, mtime: r.get(5)? }))?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         };
         let mut new = facts(&format!(
-            "SELECT folder, rel, duration_ms, track FROM files WHERE track IS NULL AND state != {PENDING} AND {PRESENT}"
+            "SELECT folder, rel, duration_ms, track, size, mtime FROM files WHERE track IS NULL AND state != {PENDING} AND {PRESENT}"
         ))?;
         let mut moved = 0;
         let mut claimed: std::collections::HashSet<(i64, String)> = std::collections::HashSet::new();
@@ -2311,7 +2321,7 @@ impl Catalogue {
                 st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
             drop(st);
             for (folder, rel, track, replaces) in handed {
-                if !new.iter().any(|(f, r, _, _)| *f == folder && *r == rel) {
+                if !new.iter().any(|f| f.folder == folder && f.rel == rel) {
                     continue;
                 }
                 // Handed on before a take, it is the record's track now (CR4).
@@ -2332,17 +2342,25 @@ impl Catalogue {
                 moved += 1;
             }
             tx.execute("DELETE FROM handovers WHERE at < ?1", [now - GONE_KEEP_SECS])?;
-            new.retain(|(f, r, _, _)| !claimed.contains(&(*f, r.clone())));
+            new.retain(|f| !claimed.contains(&(f.folder, f.rel.clone())));
         }
-        let gone = facts("SELECT folder, rel, duration_ms, track FROM files WHERE gone_at IS NOT NULL AND track IS NOT NULL")?;
+        let gone = facts("SELECT folder, rel, duration_ms, track, size, mtime FROM files WHERE gone_at IS NOT NULL AND track IS NOT NULL")?;
         let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
         if !new.is_empty() {
             let mut tag = tx.prepare_cached(
                 "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('musicbrainz_trackid', 'title', 'artist') ORDER BY n",
             )?;
-            let mut file_facts = |(folder, rel, ms, track): &(i64, String, Option<i64>, Option<i64>)| -> Result<identity::FileFacts> {
-                let mut f = identity::FileFacts { folder: *folder, track: *track, name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
-                for row in tag.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let mut file_facts = |file: &Identified| -> Result<identity::FileFacts> {
+                let mut f = identity::FileFacts {
+                    folder: file.folder,
+                    track: file.track,
+                    name: identity::name_of(&file.rel),
+                    duration_ms: file.duration_ms,
+                    size: Some(file.size),
+                    mtime: Some(file.mtime),
+                    ..Default::default()
+                };
+                for row in tag.query_map(params![file.folder, file.rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
                     let (name, value) = row?;
                     let slot = match name.as_str() {
                         "musicbrainz_trackid" => &mut f.recording,
@@ -2359,7 +2377,7 @@ impl Catalogue {
             let gone_facts = gone.iter().map(&mut file_facts).collect::<Result<Vec<_>>>()?;
             drop(tag);
             for (n, g) in identity::match_moves_by_folder(&new_facts, &gone_facts) {
-                let ((nf, nr, _, _), (gf, gr, _, track)) = (&new[n], &gone[g]);
+                let (Identified { folder: nf, rel: nr, .. }, Identified { folder: gf, rel: gr, track, .. }) = (&new[n], &gone[g]);
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
                 carry_came(&tx, (*nf, nr), (*gf, gr))?;
                 // The same sound under another name: what was worked out of it goes along, and is read while the file is as it was then.
@@ -2376,13 +2394,13 @@ impl Catalogue {
             // A retired track comes back as itself (0101 point 11: a missing entry relinks by itself): a file moved
             // outside Cratarr after the gone files' day, or fetched again, by the same rules, among the retired tracks
             // that share something with a new file (there may be thousands).
-            let free: Vec<usize> = (0..new.len()).filter(|&n| !claimed.contains(&(new[n].0, new[n].1.clone()))).collect();
+            let free: Vec<usize> = (0..new.len()).filter(|&n| !claimed.contains(&(new[n].folder, new[n].rel.clone()))).collect();
             if !free.is_empty() {
                 let free_facts: Vec<identity::FileFacts> = free.iter().map(|&n| new_facts[n].clone()).collect();
                 let retired = retired_like(&tx, &free_facts)?;
                 let retired_facts: Vec<identity::FileFacts> = retired.iter().map(|(_, f)| f.clone()).collect();
                 for (i, r) in identity::match_moves(&free_facts, &retired_facts) {
-                    let (folder, rel, _, _) = &new[free[i]];
+                    let Identified { folder, rel, .. } = &new[free[i]];
                     // Its old row went as it retired: when the track was born is what is left of when it came.
                     tx.execute(
                         "UPDATE files SET track = ?3, came = (SELECT born FROM tracks WHERE id = ?3) WHERE folder = ?1 AND rel = ?2",
@@ -2398,9 +2416,9 @@ impl Catalogue {
         {
             let mut born = tx.prepare_cached("INSERT INTO tracks (born) VALUES (?1)")?;
             let mut give = tx.prepare_cached("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2")?;
-            for (folder, rel, _, _) in new.iter().filter(|(f, r, _, _)| !claimed.contains(&(*f, r.clone()))) {
+            for file in new.iter().filter(|f| !claimed.contains(&(f.folder, f.rel.clone()))) {
                 born.execute([now])?;
-                give.execute(params![folder, rel, tx.last_insert_rowid()])?;
+                give.execute(params![file.folder, file.rel, tx.last_insert_rowid()])?;
                 fresh += 1;
             }
         }
@@ -2409,7 +2427,7 @@ impl Catalogue {
             .iter()
             .enumerate()
             .filter(|(i, _)| !taken.contains(i))
-            .map(|(_, (f, r, _, _))| (*f, r.clone()))
+            .map(|(_, f)| (f.folder, f.rel.clone()))
             .collect();
         {
             let mut st = tx.prepare("SELECT folder, rel FROM files WHERE gone_at IS NOT NULL AND gone_at >= ?1")?;
@@ -6833,6 +6851,27 @@ mod tests {
         for d in [&a, &again] {
             std::fs::remove_dir_all(d).ok();
         }
+    }
+
+    /// A2 at the door: a file with no tags to speak of, moved and renamed, keeps its track by its size, time and length. Walked in
+    /// two passes, as a `mv` is seen: gone from one place, new at another, with what the disk says of it unchanged.
+    #[test]
+    fn a_file_moved_and_renamed_with_no_tags_keeps_its_track() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        cat.db().execute("DELETE FROM tags", []).unwrap();
+        std::fs::create_dir_all(d.join("Elsewhere")).unwrap();
+        std::fs::rename(d.join("A - B (2020)/01 One.mp3"), d.join("Elsewhere/first take.mp3")).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.db().execute("DELETE FROM tags", []).unwrap();
+        assert_eq!(cat.identify().unwrap(), (1, 0), "recognised: no id given");
+        assert_eq!(cat.track_of(0, "Elsewhere/first take.mp3"), Some(one));
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// A file renamed or moved outside Cratarr is the same sound under another name: what was worked out of it goes with it, or its
