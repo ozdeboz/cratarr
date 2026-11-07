@@ -19,7 +19,9 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [dependencies]
-cratarr-rules = { path = "../rules" }
+# `made-up`: the library the speed spike measures (src/speed.rs). D04 takes it out, or every app carries it.
+cratarr-rules = { path = "../rules", features = ["made-up"] }
+serde_json = "1"
 uniffi = { version = "0.29", features = ["cli"] }
 
 [profile.release]
@@ -28,3 +30,12 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# The library's index is what the speed spike measures, and a device will run it for every crate and pick: built for speed,
+# the rest for size, or the numbers are the size setting's.
+[profile.release.package.cratarr-rules]
+opt-level = 3
+# This crate too, for those numbers: the rules' generics are compiled here (a crate's `View`), and the link-time pass runs at the
+# level of the crate that links. Left at "z" it cost a pick and a Sounds like about a tenth, on a release build on a PC.
+[profile.release.package.cratarr-rules-ffi]
+opt-level = 3
