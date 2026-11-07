@@ -4,7 +4,7 @@ import { afterEach, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import '../harness/pageGlobals.ts';
-import { rowsOf } from '../harness/fakeIdb.ts';
+import { rowsOf, storage } from '../harness/fakeIdb.ts';
 
 const connection = { type: 'wifi', saveData: false };
 let persistAsked = 0;
@@ -81,6 +81,7 @@ async function held() {
 beforeEach(() => {
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000_000 + n * DAY });
   [answers, asked, persistAsked] = [{}, [], 0];
+  storage.refused = false;
   Object.assign(connection, { type: 'wifi', saveData: false });
   Object.assign(prefs, { indexMobile: 'unasked', storageAsked: false });
   me = `who${++n}`;
@@ -323,6 +324,17 @@ test('bytes held of another version are not a stop: they are fetched whole', asy
   assert.equal(indexSync.shows, 'idle');
 });
 
+test('a copy a page of another version kept is fetched whole, though the feed has nothing to say', async () => {
+  await held();
+  const stands = (await kept('index'))!;
+  await writePart(whoOf(me), 'index', { ...stands, bytes: otherVersion(vector('whole.bin')), wants: 0 });
+  answers['/api/index'] = () => bytes(vector('after.bin'));
+  await started();
+  same((await kept('index'))?.bytes, vector('after.bin'));
+  assert.equal(indexSync.rev, 9);
+  assert.equal(indexSync.shows, 'idle');
+});
+
 test('a feed that does not fit is no failure either: it is fetched whole', async () => {
   await held();
   answers['/api/index/changes'] = () => bytes(vector('changes.bin').slice(0, 50));
@@ -338,6 +350,23 @@ test('a feed with another version in it asks for the whole, and only that can st
   await syncNow();
   assert.ok(asked.includes('/api/index'));
   assert.equal(indexSync.shows, 'idle');
+});
+
+test('storage refusing what was fetched shows no date, waits as a failure does, and a later fetch keeps it', async () => {
+  storage.refused = true;
+  await started();
+  assert.equal(indexSync.at, null);
+  assert.equal(indexSync.rev, null);
+  assert.equal(indexWord(indexSync.shows, indexSync.at, () => 'the date'), 'Not yet');
+  const fetches = () => asked.filter((a) => a === '/api/index').length;
+  assert.equal(fetches(), 1);
+  await syncNow();
+  assert.equal(fetches(), 1, 'not again at once');
+  storage.refused = false;
+  await gone(60_000);
+  assert.equal(fetches(), 2);
+  same((await kept('index'))?.bytes, vector('whole.bin'));
+  assert.equal(indexSync.at, Date.now());
 });
 
 test('each account\'s lies apart, and what was fetched for one is not kept for another', async () => {

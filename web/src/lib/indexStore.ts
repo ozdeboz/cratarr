@@ -10,8 +10,8 @@ const PARTS = 'parts';
 /** The parts a device keeps. D12's fits and D13's small covers are more of these, each with its own rev, as the sounds are. */
 export type PartName = 'index' | 'sounds';
 
-/** A part as it is kept. `at`: when it last stood where Cratarr does (ms); `wants`: stopped, the version this page read then; `part`: how
- *  its fetching stands. */
+/** A part as it is kept. `at`: when it last stood where Cratarr does (ms); `wants`: the version the page that wrote this reads; `part`:
+ *  how its fetching stands. */
 export type Kept = { bytes: Uint8Array | null; rev: number | null; at: number | null; wants: number | null; part: Omit<Part, 'started'> };
 
 const open = new Map<string, Promise<IDBDatabase | null>>();

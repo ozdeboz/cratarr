@@ -104,7 +104,8 @@ async function whole(e: IndexEngine, def: Def): Promise<Got> {
 }
 
 async function changes(e: IndexEngine, def: Def, kept: Kept): Promise<Got> {
-  if (!kept.bytes || kept.rev === null) return { outcome: 'start-again' };
+  // A page of another version wrote it, so this one may not read it, and a feed with nothing to say would leave it so.
+  if (!kept.bytes || kept.rev === null || kept.wants !== def.version(e)) return { outcome: 'start-again' };
   const got = await fetched(def.feed(kept.rev));
   if (!('bytes' in got)) return got.outcome === 'same' ? { outcome: 'took', keep: { at: Date.now() } } : { outcome: got.outcome };
   // What cannot go on, of whichever version, is fetched whole: only bytes fetched whole can say the two differ for good.
@@ -147,9 +148,11 @@ async function bringUp(e: IndexEngine, def: Def, who: string): Promise<Step> {
     const after = e.after(part, got.outcome, Date.now());
     parts.set(def.name, after);
     const { started: _, ...stands } = after;
-    await writePart(who, def.name, { ...kept, ...got.keep, wants: after.stopped ? def.version(e) : null, part: stands });
-    if (def.name === 'index' && got.keep) Object.assign(indexSync, { at: got.keep.at ?? indexSync.at, rev: got.keep.rev ?? indexSync.rev });
-    if (got.outcome === 'took') return { do: 'rest' };
+    const wrote = await writePart(who, def.name, { ...kept, ...got.keep, wants: def.version(e), part: stands });
+    if (def.name === 'index' && got.keep && wrote) Object.assign(indexSync, { at: got.keep.at ?? indexSync.at, rev: got.keep.rev ?? indexSync.rev });
+    if (got.outcome === 'took' && wrote) return { do: 'rest' };
+    // Storage refused it: nothing was taken, and a fetch at once would only be refused again.
+    if (got.outcome === 'took') parts.set(def.name, e.after(part, 'failed', Date.now()));
   }
 }
 
