@@ -12,6 +12,7 @@ mod artists;
 mod first;
 mod id3;
 pub mod identity;
+mod index_log;
 pub mod normalise;
 pub mod tags;
 pub mod walk;
@@ -926,6 +927,7 @@ impl Catalogue {
             conn.execute_batch("DELETE FROM tags WHERE name IS NULL; INSERT OR REPLACE INTO meta (key, value) VALUES ('tags', 'named');")?;
         }
         move_analysis_shapes(&conn)?;
+        index_log::start(&conn).context("starting the library's change log")?;
         let facts_written = Arc::new(AtomicU64::new(0));
         count_facts_writes(&conn, facts_written.clone())?;
         let cat = Self {
