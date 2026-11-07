@@ -114,6 +114,9 @@ class MainActivity : AppCompatActivity() {
     /** The moment's weather: Android's permission for a rough place, as its switch in This device is turned on. */
     private val locationAsk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    /** Android's permission for notifications, asked as the app starts: once, whatever the answer. */
+    private val notificationsAsk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { prefs.notificationsAsked = true }
+
     /** Android's index of the device's music changed: the page is told once things settle (a copy is many changes). */
     private val deviceMusicChanged = object : ContentObserver(Handler(Looper.getMainLooper())) {
         private val tell = Runnable { page?.postMessage(JSONObject().put("type", "device-library-changed").toString()) }
@@ -1007,9 +1010,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun askForNotifications() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || prefs.notificationsAsked) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
-        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        notificationsAsk.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private companion object {

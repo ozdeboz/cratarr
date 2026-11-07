@@ -378,6 +378,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   - **On a phone, or a window without room,** the list is alone. A part opens over it as a playlist does, and ✕ goes
     back to the list.
   - **A part belongs to the Settings page.** Going to another page leaves it closed (`keepViewed` does not carry it).
+  - **Asked as the app starts** (the owner, 2026-11-07: "a shortcut to the existing controls"; `lib/askAtStart`): where Android may
+    stop the app, one sheet asks once, "Keep playing in the background?", its Allow opening Android's own dialog as This device's
+    Background row does. Answered or closed it is not asked again, and that row stays the place for it. Notifications are
+    Android's own dialog, asked once too.
   - **The parts, in this order:**
     - This device (its name in the row's line; in the app also its player, Stay ready, what is downloaded);
     - Network and Sync (in the app only);

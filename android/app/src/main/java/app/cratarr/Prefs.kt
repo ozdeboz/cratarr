@@ -239,6 +239,13 @@ class Prefs(context: Context) {
             p.edit().putBoolean(DEVICE_MUSIC_ASKED, value).apply()
         }
 
+    /** Android's permission for notifications was asked for: it is not asked again, whatever the answer. */
+    var notificationsAsked: Boolean
+        get() = p.getBoolean(NOTIFICATIONS_ASKED, false)
+        set(value) {
+            p.edit().putBoolean(NOTIFICATIONS_ASKED, value).apply()
+        }
+
     /** A mode's queue as put by (PlayerService's snapshot, as JSON; empty for none) for one account ([Who]'s key): the
      *  one not playing, and the one that plays too, so it lasts a restart ([QueueKept] says when Cratarr's mode takes it up). */
     fun savedQueue(mode: String, who: String): String = p.getString(queueKey(mode) + who, null).orEmpty()
@@ -578,6 +585,7 @@ class Prefs(context: Context) {
         const val MODE_CRATARR = "cratarr"
         const val MODE_DEVICE = "device"
         const val DEVICE_MUSIC_ASKED = "device_music_asked"
+        const val NOTIFICATIONS_ASKED = "notifications_asked"
         const val LOCAL_FOLDERS = "local_folders"
         const val DEVICE_QUEUE = "device_queue"
         const val CRATARR_QUEUE = "cratarr_queue"

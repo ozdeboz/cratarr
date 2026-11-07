@@ -76,6 +76,7 @@
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
+  import BackgroundAsk from './lib/BackgroundAsk.svelte';
   import ManyConfirm from './lib/ManyConfirm.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
@@ -1286,6 +1287,7 @@
   {/if}
   <Toasts />
   <ManyConfirm />
+  <BackgroundAsk />
 <LabelTip />
   <ProgressBar />
 
