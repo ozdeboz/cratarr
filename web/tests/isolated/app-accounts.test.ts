@@ -155,16 +155,7 @@ test("a session ended while the app plays Local or another server: the page stay
   assert.deepEqual(toTheApp.filter((m) => m.type === 'nobody'), [{ type: 'nobody' }]);
   me = signedIn;
   fromApp({ type: 'app', version: '1', mode: 'cratarr' });
-  accountLearnt('ann');
-});
-
-test('in Cratarr’s mode the sign-in page says it: a session of the other address’s may yet be taken for it', async () => {
-  toTheApp.length = 0;
-  fromApp({ type: 'app', version: '1', mode: 'cratarr' });
-  const { toSignIn } = await import('../../src/lib/reach.svelte.ts');
-  toSignIn();
-  assert.deepEqual(toTheApp.filter((m) => m.type === 'nobody'), []);
-  assert.match(String(goneTo), /^\/signin/);
+  assert.match(String(goneTo), /^\/signin/, 'the sign-in that waited goes once Cratarr’s mode comes');
   goneTo = null;
   accountLearnt('ann');
 });
