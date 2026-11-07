@@ -146,6 +146,9 @@ pub fn router(app: Arc<App>) -> Router {
         // Asked of everyone: who may is the record's own (0101 point 2).
         .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
         .route("/api/albums/{source}/{album}/delete", post(delete_album))
+        // A record's facts set by hand (0.13): one record or a selection. The administrators', and a record only in one person's
+        // own music theirs (`may_change`).
+        .route("/api/albums/overrides", put(set_overrides))
         // Classical (0.10): its composers, a composer's records, a track's other versions; everyone's.
         .route("/api/classical/composers", get(classical_composers))
         .route("/api/classical/composers/{key}", get(classical_composer))
@@ -160,6 +163,9 @@ pub fn router(app: Arc<App>) -> Router {
         // The library on a device (0101's point 16): bytes, as the rules crate reads them.
         .route("/api/index", get(device_index))
         .route("/api/index/changes", get(device_index_changes))
+        .route("/api/index/covers", get(device_covers))
+        .route("/api/index/covers/changes", get(device_cover_changes))
+        .route("/api/index/own", get(device_own))
         .route("/api/index/sounds", get(device_sounds))
         .route("/api/index/sounds/changes", get(device_sound_changes))
         .route("/api/incoming", get(incoming))
@@ -315,8 +321,6 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
             // A record marked classical or not (0.10), library-wide.
             .route("/api/albums/{source}/{album}/classical", put(mark_classical))
-            // A record's facts set by hand (0.13): one record or a selection.
-            .route("/api/albums/overrides", put(set_overrides))
             .route("/api/artists/discogs", get(artist_discogs))
             .route("/api/track-search", post(start_track_search))
             .route("/api/track-search/{id}", get(track_search))
@@ -346,6 +350,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/admin/migration", get(migration_report))
             .route("/api/admin/migration/moved", get(migration_moved))
             .route("/api/health/report", get(health_report))
+            // Health's Missing list: a track there is this one (A5), for good.
+            .route("/api/missing/reconnect", post(reconnect_track))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
             .route("/api/folders/suggested", get(suggested_folders))
@@ -1118,6 +1124,14 @@ async fn mark_classical(ctx: Ctx, Path((source, album)): Path<(String, String)>,
     Ok(Json(json!({ "classical": classical, "classical_mark": kept })))
 }
 
+/// Whether someone not an administrator, `mine` being their own music's folder, may change what `album` says: only where it lies in
+/// people's own music alone and their copy speaks for it (the owner, 2026-11-07: "If it's owned by administrator, then only
+/// administrator can edit"). A copy of one's own of a record in a main library gives no say. Blocking.
+fn may_change(serve: &crate::serve::Serve, album: &str, mine: Option<i64>) -> anyhow::Result<bool> {
+    let owner = crate::serve::copies::owned_by(&serve.library.copies_of(album)?);
+    Ok(owner.is_some() && owner == mine)
+}
+
 #[derive(Deserialize)]
 struct SetOverrides {
     albums: Vec<String>,
@@ -1128,7 +1142,7 @@ struct SetOverrides {
 /// or null}}`, Cratarr's own library's albums. A field given is set (null: reset to what Cratarr finds), one left out
 /// is left as it is; the fields are `type`, `secondary`, `year`, `genres` and `classical` (`userdata::overrides`). Kept
 /// by each record, household-wide; the library is built again with them before the answer, and the
-/// pages are told. `{albums: {id: {field: value}}}`: each record's facts set now.
+/// pages are told. `{albums: {id: {field: value}}}`: each record's facts set now. All of them or none: `may_change` for each.
 async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<serde_json::Value>, ApiError> {
     if b.albums.is_empty() || b.set.is_empty() {
         return Err(ToggleError::BadSettings("Name the records and what to set.".into()).into());
@@ -1141,6 +1155,18 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
     let s = ctx.serve()?;
     let albums = b.albums;
     let b_words = facts.iter().any(|(f, _)| matches!(f.as_str(), "genres" | "styles" | "moods" | "tags"));
+    if !crate::serve::access::administering() {
+        // By a sign-in, as a key acts for no one's own music.
+        let mine = ctx.account().filter(|_| crate::serve::access::signed_in()).and_then(|a| ctx.app.library.own_folder(&a));
+        let (s, albums) = (s.clone(), albums.clone());
+        let may = tokio::task::spawn_blocking(move || albums.iter().try_fold(true, |all, album| Ok::<bool, anyhow::Error>(all && may_change(&s, album, mine)?)))
+            .await
+            .map_err(|e| ToggleError::Refused(format!("{e}")))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        if !may {
+            return Err(ToggleError::Forbidden("This record is the administrators'.".into()).into());
+        }
+    }
     let set = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
         for album in &albums {
             anyhow::ensure!(s.library.has_album(album)?, "That record is not in the library.");
@@ -1163,6 +1189,31 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
         crate::app::words::tell_changed();
     }
     Ok(Json(json!({ "albums": set })))
+}
+
+#[derive(Deserialize)]
+struct Reconnect {
+    /// The track on the Missing list, and the track it is.
+    track: String,
+    to: String,
+}
+
+/// A track on Health's Missing list is this one (A5): the take's way, for good, so its plays, hearts and lines follow it now.
+async fn reconnect_track(ctx: Ctx, Json(b): Json<Reconnect>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let cat = ctx.app.library.catalogue();
+    let (Some(goes), Some(stays)) = (crate::serve::ids::track_of(&b.track), crate::serve::ids::track_of(&b.to)) else {
+        return Err(ToggleError::BadSettings("Name two tracks.".into()).into());
+    };
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cat.reconnect(goes, stays)?;
+        serve.refresh()?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({})))
 }
 
 /// A track's Other versions (0.10): its MusicBrainz work, the work's composers, and the library's other tracks of it,
@@ -4342,6 +4393,22 @@ async fn device_index_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<Inde
     Ok(changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
 }
 
+/// Every small cover made so far, as one bundle (`app::device_covers`).
+async fn device_covers(ctx: Ctx) -> Result<Response, ApiError> {
+    Ok(crate::app::device_covers::read(ctx.serve()?).await?.into_response())
+}
+
+/// What changed of the covers after `since`: as `device_index_changes`.
+async fn device_cover_changes(ctx: Ctx, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    Ok(crate::app::device_covers::changes(ctx.serve()?, q.since).await?.into_response())
+}
+
+/// The fits and counts of the account asking (`app::device_index`).
+async fn device_own(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{own, takes_gzip};
+    Ok(own(&ctx.app, ctx.account(), takes_gzip(&headers)).await?.into_response())
+}
+
 /// Every sound the account can see, eight bits each (`app::device_index`).
 async fn device_sounds(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
     use crate::app::device_index::{sounds, takes_gzip};
@@ -5654,7 +5721,7 @@ async fn lastfm_who(ctx: &Ctx, b: LastFmImport) -> Result<(Arc<crate::serve::Ser
         (Some((key, session, secret)), _) => crate::app::lastfm::Auth { key, signed: Some((session, secret)) },
         (None, Some(key)) => crate::app::lastfm::Auth { key, signed: None },
         (None, None) => {
-            return Err(ToggleError::Refused("Last.fm needs an API key: make one at last.fm/api/account/create, or connect Last.fm under Connections.".into()).into());
+            return Err(ToggleError::Refused("Last.fm needs an API key: make one at last.fm/api/account/create, or connect Last.fm under Tracking.".into()).into());
         }
     };
     Ok((serve, account, b.user.trim().to_string(), auth))

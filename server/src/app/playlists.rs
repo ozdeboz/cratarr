@@ -4257,6 +4257,19 @@ impl PlaylistService {
         Ok(ids.iter().filter_map(|id| Some((id.clone(), *all.get(id)?))).collect())
     }
 
+    /// What `user` did with each track, by its id: the crates' Play count, Last played, Rating and Skips, as `uses_of` has them by
+    /// line, for a device to count on when it cannot ask (0101's point 18).
+    pub async fn uses_by_track(&self, user: &str) -> Result<HashMap<i64, crates::Use>, ToggleError> {
+        let (serve, cat, user) = (self.served.clone(), self.lib.catalogue(), user.to_string());
+        tokio::task::spawn_blocking(move || -> Result<HashMap<i64, crates::Use>, ToggleError> {
+            let files = cat.crate_facts()?;
+            let by_line = uses_of(serve.as_deref(), &user, &files)?;
+            Ok(files.iter().filter_map(|f| Some((f.track?, *by_line.get(&f.rel)?))).collect())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
     /// How like each track of the libraries not in `without` is to what `user` skips (`skipped_in`; decision 0094:
     /// skips keep tracks away in Radio and Autoplay), by its song id; none while nothing is skipped or skips are off.
     pub async fn skipped_fits(&self, user: &str, without: &[String]) -> Result<HashMap<String, f64>, ToggleError> {

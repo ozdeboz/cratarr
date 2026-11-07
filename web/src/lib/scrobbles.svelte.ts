@@ -43,7 +43,7 @@ whenLearnt.add(() => {
 export async function readWay() {
   try {
     const r = (await getScrobbles()) as { way?: Way };
-    scrobbling.way = r.way === 'device' ? 'device' : 'server';
+    scrobbling.way = r.way === 'server' ? 'server' : 'device';
   } catch {
     // As it was.
   }

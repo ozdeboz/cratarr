@@ -11,7 +11,7 @@ import { size } from './exportChoices';
 const LOSSLESS = new Set(['FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV', 'WAVPACK', 'DSF', 'DFF']);
 export const isLossless = (format: string | null | undefined) => !!format && LOSSLESS.has(format.toUpperCase());
 
-export type Held = { library?: string; copies?: AlbumCopy[] };
+export type Held = { library?: string; copies?: AlbumCopy[]; tracks?: number };
 export type Dot = { id: string; colour: string; name: string };
 type On = (library: string) => boolean;
 
@@ -211,6 +211,18 @@ export function playFromEntries(a: Held, info: LibraryInfo[] | undefined, on: On
   return [...held].filter((id) => on(id) && id !== playing).map((library) => ({ library, label: `Play from ${info?.find((l) => l.id === library)?.name ?? library}` }));
 }
 
+/** Whether the viewer may change what a record says (lib/RecordEdit): an administrator, or where it lies only in people's own
+ *  music, the owner of the copy added first, which speaks for it. The server's rule is `copies::owned_by`; this one says what to
+ *  offer. A copy of one's own of a record in a main library gives no say. */
+export function mayEdit(a: Held, info: LibraryInfo[] | undefined, admin: boolean): boolean {
+  if (admin) return true;
+  const copies = a.copies ?? [];
+  const of = (c: AlbumCopy) => info?.find((l) => l.id === c.library);
+  if (!copies.length || !copies.every((c) => of(c)?.kind === 'own')) return false;
+  const first = copies.reduce((x, y) => ((y.added ?? Infinity) < (x.added ?? Infinity) ? y : x));
+  return !!of(first)?.mine;
+}
+
 /** One copy's line in its record's panel. */
 export type CopyLine = {
   name: string;
@@ -218,7 +230,8 @@ export type CopyLine = {
   colour: string | null;
   /** "MP3 320", "FLAC". */
   quality: string;
-  /** "92 MB"; null where the list says none. */
+  /** "92 MB"; null where the list says none. A copy short of the record's tracks, still arriving or for good: "3 of 10", as how
+   *  much of it is there says more than its bytes. */
   size: string | null;
   /** It is what Play would give. */
   plays: boolean;
@@ -248,7 +261,7 @@ export function copyLines(a: Held, info: LibraryInfo[] | undefined, on: On): Cop
       name: library?.name ?? c.library,
       colour: library?.colour ?? null,
       quality: qualityOfCopy(c),
-      size: c.size ? size(c.size) : null,
+      size: a.tracks && c.tracks < a.tracks ? `${c.tracks} of ${a.tracks}` : c.size ? size(c.size) : null,
       plays: c === playing,
       playFrom: first ? (entries.find((e) => e.library === c.library) ?? null) : null,
     };

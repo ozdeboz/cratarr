@@ -1816,19 +1816,22 @@ fn blended<'a>(of: &[String], weights: &[f32], avoid: &Avoid, alike: &Alike, amo
     // between): each group its own profile, and the picks taken from the groups by their share of the seed, the
     // closest of each first. One group: closest first, as one profile.
     let groups = sound_groups(&seed, &alike.lib);
+    let profiles: Vec<crate::similarity::Profile> = groups.iter().map(|group| crate::similarity::Profile::of_counted(&alike.lib, group, |i| &alike.tracks[i])).collect();
+    // One pass over the library, however many sounds the seed holds: what is the file's own is read once, and each group adds its side.
+    let together = crate::similarity::Together::of(&alike.lib, &profiles);
+    let mut scores: Vec<Vec<(usize, f64)>> = vec![Vec::new(); groups.len()];
+    for (k, f) in among.iter().enumerate() {
+        let Some(&i) = alike.place.get(&f.rel) else { continue };
+        let against = avoid.against(f);
+        together.to_track(i, &alike.tracks[i], |group, signals| {
+            if signals.known() {
+                scores[group].push((k, signals.score(by) - against));
+            }
+        });
+    }
     let mut best: HashMap<usize, (f64, f64)> = HashMap::new();
-    for group in &groups {
+    for (group, mut scored) in groups.iter().zip(scores) {
         let share = group.len() as f64 / seed.len() as f64;
-        let profile = crate::similarity::Profile::of_counted(&alike.lib, group, |i| &alike.tracks[i]);
-        let mut scored: Vec<(usize, f64)> = among
-            .iter()
-            .enumerate()
-            .filter_map(|(k, f)| {
-                let &i = alike.place.get(&f.rel)?;
-                let signals = profile.to_track(&alike.lib, i, &alike.tracks[i]);
-                signals.known().then(|| (k, signals.score(by) - avoid.against(f)))
-            })
-            .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| among[a.0].rel.cmp(&among[b.0].rel)));
         for (rank, (k, x)) in scored.into_iter().enumerate() {
             // Its turn among the picks: its place in the group's order, a large group's coming round more often.
@@ -2690,6 +2693,22 @@ mod tests {
         let one: Vec<String> = (1..=8).map(|t| format!("tr-{t}")).collect();
         let found: Vec<&str> = closest_weighted(&one, &[], LikeMode::Blend, &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.as_str()).collect();
         assert_eq!(found, ["near-a.flac", "between.flac", "near-b.flac"]);
+    }
+
+    /// The picks go by each sound's own order and its share of the seed, the larger's coming round more often, in however many passes:
+    /// closest first, whichever the sound, would put b1 second.
+    #[test]
+    fn a_varied_seeds_picks_go_by_each_sounds_own_order_and_share() {
+        let heard = |rel: &str, track: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), sound: Some(Arc::from(v.as_slice())), ..Facts::default() };
+        // Ten tracks of one sound, four of the other.
+        let mut files: Vec<Facts> = (1..=10).map(|t| heard(&format!("seed-a{t}.flac"), t, [1.0, 0.0])).collect();
+        files.extend((11..=14).map(|t| heard(&format!("seed-b{t}.flac"), t, [0.0, 1.0])));
+        files.extend([heard("a1.flac", 20, [0.990, 0.139]), heard("a2.flac", 21, [0.970, 0.242]), heard("a3.flac", 22, [0.961, 0.276]), heard("b1.flac", 23, [0.199, 0.980]), heard("b2.flac", 24, [0.309, 0.951])]);
+        let alike = Alike::of(&files, &HashMap::new(), &HashMap::new());
+        let among: Vec<&Facts> = files.iter().filter(|f| f.track.is_some_and(|t| t >= 20)).collect();
+        let of: Vec<String> = (1..=14).map(|t| format!("tr-{t}")).collect();
+        let found: Vec<&str> = closest_weighted(&of, &[], LikeMode::Blend, &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.as_str()).collect();
+        assert_eq!(found, ["a1.flac", "a2.flac", "b1.flac", "a3.flac", "b2.flac"]);
     }
 
     #[test]

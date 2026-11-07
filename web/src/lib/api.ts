@@ -1603,9 +1603,13 @@ export type HealthItem = {
   request?: RequestMark | null;
   /** A track's own (2026-10-28: a file cut off or breaking off): its song id in `album`, for a better copy of it. */
   track?: string;
+  /** Since when it stands so (epoch seconds, Missing music). */
+  since?: number;
 };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
+/** A track on Health's Missing music is `to` (A5): for good, so what names it follows it. */
+export const reconnectTrack = (track: string, to: string) => post<unknown>('/api/missing/reconnect', { track, to });
 /** A record's own Health problems (0.14, `/api/albums/{source}/{id}/health`): each finding that names it, worst first, by
  *  its kind (the report's key) and row, with only the record's items; its tracks' file problems as `files:{kind}`
  *  findings, an item for each track (`track`, `files`, the problem in `line`). */
@@ -1678,8 +1682,8 @@ export const setReferences = (album: string, choice: { counting?: ReferenceSourc
 /** One copy of a record: one folder's files of it (docs/records-and-copies.md). `format` and `kbps` are as `ListedAlbum`'s,
  *  `bits` and `rate` a lossless copy's, null where one of its files is not read. `deletable`, `keepable`, `keep_to` and
  *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `plays`: the
- *  one the server would play them. `size`: its files' bytes, null where not known. `job`: the conversion at work on this
- *  copy, `Job.id`. */
+ *  one the server would play them. `size`: its files' bytes, null where not known. `tracks`: how many of the record's it
+ *  holds. `job`: the conversion at work on this copy, `Job.id`. */
 export type AlbumCopy = {
   library: string;
   format: string | null;
@@ -1693,6 +1697,7 @@ export type AlbumCopy = {
   plays: boolean;
   added: number | null;
   size: number | null;
+  tracks: number;
   job: number | null;
 };
 

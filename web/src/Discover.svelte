@@ -346,7 +346,7 @@
     <PageLoading>{@render how()}</PageLoading>
   {:else}
     {#if !connected}
-      <p class="note">ListenBrainz or Last.fm would add albums like what you play: <a href={viewOn('settings', 'settings:connections')}>connect one</a>.</p>
+      <p class="note">ListenBrainz or Last.fm would add albums like what you play: <a href={viewOn('settings', 'settings:tracking')}>connect one</a>.</p>
     {/if}
     {#if looking && !albums.length}
       <!-- The first look: the page's loader where it always is, how far it is under it (ui-conventions, Progress). -->
@@ -361,7 +361,7 @@
       {#if !looking}{#if kept.length || view.found}{#if !(kept.length && pageView.none)}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{/if}{:else if error}<Notice text={error} onretry={load} />{:else if task?.error}<Notice text={task.error} onretry={refresh} />{:else}<PageLoading />{/if}{/if}
     {:else}
       {#if me.admin && !view.lidarr}
-        <p class="note">Want needs Lidarr: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>
+        <p class="note">Want needs Lidarr: {#if me.admin}<a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>{:else}an administrator can connect it{/if}.</p>
       {/if}
       {#if (mode === 'artists' ? !artists.length : !cards.length) && !pageView.none}<p class="note">None of them match.</p>{/if}
       {#each artists as x (x.name)}

@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -29,11 +29,17 @@ struct Server {
 impl Server {
     /// The server on `data`, on a free port, once it answers: asking for a sign-in is an answer.
     async fn start(data: &Path) -> Server {
+        Self::start_with(data, &[]).await
+    }
+
+    /// `start`, with these in its environment.
+    async fn start_with(data: &Path, env: &[(&str, &str)]) -> Server {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let child = Command::new(BIN)
             .env("CRATARR_DATA_DIR", data)
             .env("CRATARR_BIND", format!("127.0.0.1:{port}"))
             .env("RUST_LOG", "warn")
+            .envs(env.iter().copied())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
@@ -370,6 +376,41 @@ fn temp(name: &str) -> PathBuf {
     d
 }
 
+/// What `flag` makes, made once a run and copied to `to`, the test's own to change. Writing and encoding it takes a debug
+/// build most of a minute, and each test paid that.
+fn made_once(once: &'static OnceLock<PathBuf>, flag: &str, to: &Path) {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap().flatten() {
+            let (p, q) = (e.path(), to.join(e.file_name()));
+            if p.is_dir() {
+                copy(&p, &q);
+            } else {
+                std::fs::copy(&p, &q).unwrap();
+            }
+        }
+    }
+    let made = once.get_or_init(|| {
+        let at = temp(flag.trim_start_matches('-')).join("made");
+        assert!(Command::new(BIN).arg(flag).arg(&at).status().unwrap().success(), "{flag} made nothing");
+        at
+    });
+    std::fs::remove_dir_all(to).ok();
+    copy(made, to);
+}
+
+/// The whole layout at `to`.
+fn make_layout(to: &Path) {
+    static MADE: OnceLock<PathBuf> = OnceLock::new();
+    made_once(&MADE, "--make-layout", to);
+}
+
+/// The fixture library at `to`.
+fn make_fixtures(to: &Path) {
+    static MADE: OnceLock<PathBuf> = OnceLock::new();
+    made_once(&MADE, "--make-fixtures", to);
+}
+
 /// Every audio file under `dir`, relative to it, sorted.
 fn audio_under(dir: &Path) -> Vec<String> {
     fn walk(root: &Path, at: &Path, out: &mut Vec<String>) {
@@ -398,7 +439,7 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     let root = temp("playlists");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    make_fixtures(&music);
     let files = audio_under(&music);
     let folder = music.to_string_lossy().to_string();
     let lists = music.join(".playlists");
@@ -472,7 +513,7 @@ async fn a_crate_of_four(name: &str) -> (Server, PathBuf, String, Vec<String>) {
     let root = temp(name);
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -633,7 +674,7 @@ async fn two_banks(name: &str) -> (Server, PathBuf, Banks) {
     let root = temp(name);
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second) = (library.join("music"), library.join("second"));
     std::fs::rename(second.join(FAR), music.join(FAR)).unwrap();
     let far = music.join(FAR).join("01 Far Bank.flac");
@@ -765,7 +806,7 @@ async fn an_artist_is_one_id_by_name_and_by_number_end_to_end() {
     let root = temp("artist-id");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -876,7 +917,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let root = temp("data-0-15");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     data_0_15(&library, &data);
     let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
     user.execute("INSERT INTO annotation (user, item, kind, play_count, rating, starred, starred_at, own_count) VALUES ('ann', ?1, 'album', 7, 2, 1, 1760000000, 7)", [ORPHAN]).unwrap();
@@ -900,7 +941,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     // The catalogue: the main library's tracks stand, the other two copies on them, and nothing new, nothing else moved.
     let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
     let taken: std::collections::HashMap<i64, i64> = db.prepare("SELECT old, id FROM track_moved").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
-    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46)].into(), "Music's ids survive, each track by its place");
+    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46), (15, 41), (14, 40), (13, 39)].into(), "Music's ids survive, each track by its place");
     let followed: Vec<(i64, String, i64)> = left.iter().map(|(folder, rel, track)| (*folder, rel.clone(), *taken.get(track).unwrap_or(track))).collect();
     assert_eq!(tracks_of_files(&db), followed, "nothing new, and nothing moved but what the merge moved");
     assert_eq!(db.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), left.len() as i64 + 1, "a taken id keeps its row, and the retired one stands");
@@ -909,8 +950,8 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     // The report, and each table's rows told over: what met another is counted, and a row goes nowhere else.
     let report = ann.get("/api/admin/migration").await;
     let part = report["parts"]["records"].clone();
-    assert_eq!((part["tracks_merged"].as_u64(), part["bases_on_two_records"].as_u64()), (Some(6), Some(3)), "{part}");
-    assert_eq!(part["copies"].as_u64().unwrap(), part["records"].as_u64().unwrap() + 2, "Both Shores' three copies are one record: {part}");
+    assert_eq!((part["tracks_merged"].as_u64(), part["bases_on_two_records"].as_u64()), (Some(9), Some(2)), "{part}");
+    assert_eq!(part["copies"].as_u64().unwrap(), part["records"].as_u64().unwrap() + 3, "Both Shores' three copies are one record, and Short Measure's two: {part}");
     assert!(part["artists"].as_u64().unwrap() >= 4, "{part}");
     for row in part["tables"].as_array().unwrap() {
         let (name, before, after, merged) = (&row["name"], row["before"].as_u64().unwrap(), row["after"].as_u64().unwrap(), row["merged"].as_u64().unwrap());
@@ -969,7 +1010,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let picture = format!("x{}.jpg", format!("like:{}", now("al-4Jx9dQszNKgnbo4mZtic7y")).bytes().map(|b| format!("{b:02x}")).collect::<String>());
     assert!(data.join("crate-images").join(picture).is_file(), "a crate's picture follows its seed");
     assert_eq!(every_text(&data.join("journal.sqlite")).iter().flat_map(|(_, text)| hashes_in(text)).collect::<Vec<_>>(), Vec::<String>::new());
-    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6"];
+    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6", "tr-15", "tr-14", "tr-13"];
     let names_one = |text: &str| gone.iter().any(|id| text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|word| word == *id));
     // A device told of a heart hears it went, by the id it knew, and a play keeps the event it was told by.
     let kept = |table: &str, text: &str| table == "migration_report" || table == "change_log" || text.starts_with("backfill:");
@@ -1027,7 +1068,7 @@ async fn an_old_album_link_opens_the_record_end_to_end() {
     let root = temp("old-links");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     data_0_15(&library, &data);
     let s = Server::start(&data).await;
     let ann = s.sign_in("ann", "ann's password").await;
@@ -1092,7 +1133,7 @@ async fn a_first_start_stopped_at_any_step_finishes_on_restart_end_to_end() {
     let (library, straight, data) = (root.join("library"), root.join("straight"), root.join("data"));
     std::fs::create_dir_all(&straight).unwrap();
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
 
     // What it comes to with nothing in its way: the first start is over by the time the server answers.
     data_0_15(&library, &straight);
@@ -1123,7 +1164,7 @@ async fn a_first_start_stopped_at_any_step_finishes_on_restart_end_to_end() {
         let (file, kept) = (data.join(file), std::fs::read(data.join(file)).unwrap());
         std::fs::write(&file, b"nothing a server could read").unwrap();
         let said = start_refused(&data);
-        assert_eq!((done(&data), merged(&data)), (false, 6), "{}: {said}", file.display());
+        assert_eq!((done(&data), merged(&data)), (false, 9), "{}: {said}", file.display());
         std::fs::write(&file, kept).unwrap();
     };
     unreadable("journal.sqlite");
@@ -1169,7 +1210,7 @@ async fn who_hears_what_by_the_bytes_on_both_streams_end_to_end() {
     let root = temp("who-hears");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (kept, waiting, own) = (library.join("incoming"), library.join("second"), library.join("own"));
     // Kept: the MP3s. Her own: Music's FLACs, in place of her MP3s. Waiting: the other FLACs.
     let hers = own.join("ann").join(SHORES);
@@ -1258,7 +1299,7 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     let root = temp("accounts");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let own = library.join("own");
     settings(&data, &[(&library.join("music"), "main"), (&library.join("second"), "main"), (&library.join("incoming"), "incoming")], &own);
 
@@ -1436,6 +1477,39 @@ async fn two_accounts_fetch_every_library_they_can_see_end_to_end() {
     assert_eq!(s.anyone().bytes("/api/index/sounds").await.0, 401);
     assert_eq!(ann.bytes(&format!("/api/index/sounds/changes?since={}", i64::MAX)).await.0, 410);
 
+    // Fits and counts are each account's own: what ann did says nothing of bob.
+    let marks = |bytes: Vec<u8>| cratarr_rules::index::Marks::load(&bytes).unwrap();
+    let landing = of_ann.tracks.iter().find(|t| t.title == "Landing").unwrap().id;
+    let song = format!("tr-{landing}");
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{song}/favorite?on=true"), json!({})).await;
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{song}/played"), json!({})).await;
+    let (status, hers) = ann.bytes("/api/index/own").await;
+    assert_eq!(status, 200);
+    let (hers, his) = (marks(hers), marks(bob.bytes("/api/index/own").await.1));
+    let mark = hers.of(landing).unwrap();
+    assert_eq!(mark.plays, 1, "{mark:?}");
+    assert!(mark.fit.is_some(), "a favourite makes a taste: {mark:?}");
+    assert!(his.rows().is_empty(), "bob has done nothing: {:?}", his.rows());
+    assert_eq!(s.anyone().bytes("/api/index/own").await.0, 401);
+
+    // Small covers come as they are made: a record with a cover beside it or inside it, in the bundle sooner or later.
+    let covers = |bytes: &[u8]| {
+        assert_eq!(&bytes[..4], b"CRXV");
+        let (mut at, mut records) = (16, std::collections::BTreeSet::new());
+        while at < bytes.len() {
+            let length = u32::from_le_bytes(bytes[at + 8..at + 12].try_into().unwrap()) as usize;
+            assert!(length > 0, "a bundle holds what is there");
+            records.insert(i64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()));
+            at += 12 + length;
+        }
+        records
+    };
+    let tide = of_ann.records.iter().find(|r| r.title == "Tide Tables").unwrap().id;
+    let two_rooms = of_ann.records.iter().find(|r| r.title == "Two Rooms").unwrap().id;
+    s.until("the small covers made", Duration::from_secs(120), || async { let held = covers(&ann.bytes("/api/index/covers").await.1); held.contains(&tide) && held.contains(&two_rooms) }).await;
+    assert_eq!(s.anyone().bytes("/api/index/covers").await.0, 401);
+    assert_eq!(ann.bytes(&format!("/api/index/covers/changes?since={}", i64::MAX)).await.0, 410);
+
     // Beside the user data's changes, a word on the library's log, by a rev of its own.
     let at = |rev: i64| format!("/api/changes?since=0&kinds=favourite,index&index={rev}");
     s.until("the library still", Duration::from_secs(60), || async {
@@ -1473,13 +1547,14 @@ async fn fed(who: &Caller<'_>, device: &mut cratarr_rules::index::Index) -> Fed 
     }
 }
 
-/// `device` on the feed until it holds what a fresh fetch holds, to the byte. A change reaches the library a step at a time, so
-/// it may take a few; a feed that misses a row never gets there.
-async fn in_step(who: &Caller<'_>, device: &mut cratarr_rules::index::Index, what: &str) {
+/// `device` on the feed until it holds what a fresh fetch holds, to the byte, and that is what the change said (`arrived`): a
+/// change reaches the library a step at a time and the rows a step after, and until then a device and a fresh fetch agree on
+/// what stood before. A feed that misses a row never gets there.
+async fn in_step(who: &Caller<'_>, device: &mut cratarr_rules::index::Index, what: &str, arrived: impl Fn(&cratarr_rules::index::Index) -> bool) {
     let start = Instant::now();
     loop {
         assert_ne!(fed(who, device).await, Fed::Again, "{what}: told to start again");
-        if device.save() == index_of(who).await.save() {
+        if arrived(device) && device.save() == index_of(who).await.save() {
             return;
         }
         assert!(start.elapsed() < Duration::from_secs(60), "{what}: the feed never came to what a fresh index says");
@@ -1504,10 +1579,8 @@ async fn a_device_on_the_feed_holds_what_a_fresh_index_holds_end_to_end() {
     who.ok(reqwest::Method::POST, &format!("/api/incoming/keep/cratarr/{album}"), json!({})).await;
     let in_music = music.to_string_lossy().to_string();
     s.until("the Keep listed", Duration::from_secs(60), || async { who.albums().await.iter().any(|a| a["title"] == "Just Arrived" && a["library"].as_str() == Some(&*in_music)) }).await;
-    in_step(&who, &mut device, "a Keep").await;
-    let kept = listed(&device, "Just Arrived").unwrap();
-    assert_eq!(kept.id, was.id, "the same track");
-    assert_ne!(kept.facts.folders, was.facts.folders, "in the library it was added to");
+    in_step(&who, &mut device, "a Keep", |d| listed(d, "Just Arrived").is_some_and(|t| t.facts.folders != was.facts.folders)).await;
+    assert_eq!(listed(&device, "Just Arrived").unwrap().id, was.id, "the same track, in the library it was added to");
 
     let album = id_of(who.albums().await, "Tide Tables");
     set_vorbis(&music.join("Glass Harbour/Tide Tables (2012)/01 Slack Water.flac"), "TITLE", "Slacker Water");
@@ -1516,21 +1589,22 @@ async fn a_device_on_the_feed_holds_what_a_fresh_index_holds_end_to_end() {
         who.get(&format!("/api/albums/cratarr/{album}")).await["rows"].as_array().unwrap().iter().any(|r| r["name"] == "Slacker Water")
     })
     .await;
-    in_step(&who, &mut device, "a retag").await;
-    assert!(listed(&device, "Slacker Water").is_some() && listed(&device, "Slack Water").is_none());
+    in_step(&who, &mut device, "a retag", |d| listed(d, "Slacker Water").is_some() && listed(d, "Slack Water").is_none()).await;
 
     let album = id_of(who.albums().await, "Signal");
     let gone = listed(&device, "Signal").unwrap();
     who.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{album}/delete"), json!({})).await;
-    s.until("the delete seen", Duration::from_secs(60), || async { !who.albums().await.iter().any(|a| a["title"] == "Signal") }).await;
-    in_step(&who, &mut device, "a delete").await;
-    assert!(device.track(gone.id).is_none() && device.record(gone.record).is_none());
+    s.until("the delete seen", Duration::from_secs(120), || async {
+        ask(&who, "startScan", "").await;
+        !who.albums().await.iter().any(|a| a["title"] == "Signal")
+    })
+    .await;
+    in_step(&who, &mut device, "a delete", |d| d.track(gone.id).is_none() && d.record(gone.record).is_none()).await;
 
     let album = id_of(who.albums().await, "Undated");
     who.ok(reqwest::Method::PUT, "/api/albums/overrides", json!({ "albums": [album], "set": { "year": 1999 } })).await;
     s.until("the fact set", Duration::from_secs(90), || async { who.albums().await.iter().any(|a| a["title"] == "Undated" && a["year"] == 1999) }).await;
-    in_step(&who, &mut device, "a fact set by hand, written to nothing the catalogue holds").await;
-    assert_eq!(device.rows().records.iter().find(|r| r.title == "Undated").unwrap().year, Some(1999));
+    in_step(&who, &mut device, "a fact set by hand, written to nothing the catalogue holds", |d| d.rows().records.iter().any(|r| r.title == "Undated" && r.year == Some(1999))).await;
 
     s.until("nothing more", Duration::from_secs(60), || async {
         let mut now = index_of(&who).await;
@@ -1586,7 +1660,7 @@ async fn a_record_whose_services_are_away_waits_and_blames_no_user_end_to_end() 
     let root = temp("soulseek");
     let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
     let file = library.join("music/Glass Harbour/Tide Tables (2012)/01 Slack Water.flac");
     let name = file.file_name().unwrap().to_string_lossy().to_string();
@@ -1641,8 +1715,7 @@ async fn types_and_years_into_the_files_end_to_end() {
     let root = temp("types");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
-    assert!(made.success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
 
     let s = Server::start(&data).await;
@@ -1743,8 +1816,7 @@ async fn a_run_killed_half_way_keeps_to_what_it_wrote_end_to_end() {
     let root = temp("killed");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
-    assert!(made.success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
 
     let s = Server::start(&data).await;
@@ -1805,8 +1877,7 @@ async fn a_cover_killed_part_way_is_put_back_by_its_undo_end_to_end() {
     let root = temp("cover");
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
-    assert!(made.success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
 
     let s = Server::start(&data).await;
@@ -1896,7 +1967,7 @@ async fn on_the_fixtures(name: &str) -> (Server, PathBuf, PathBuf, PathBuf) {
     let root = temp(name);
     let (music, data) = (root.join("music"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    make_fixtures(&music);
     settings_0_15(&data, &music.to_string_lossy());
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -1909,7 +1980,7 @@ async fn on_music_and_incoming(name: &str) -> (Server, PathBuf, PathBuf, PathBuf
     let root = temp(name);
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     settings(&data, &[(&music, "main"), (&incoming, "incoming")], &library.join("own"));
     let s = Server::start(&data).await;
@@ -2026,7 +2097,7 @@ async fn the_copy_named_is_the_copy_touched_end_to_end() {
     let root = temp("named");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
     let dir = "Salt Meridian/Both Shores (2018)";
     // The second main library without its copy, for one to move to.
@@ -2094,7 +2165,7 @@ async fn the_card_hears_the_incoming_copy_end_to_end() {
     let root = temp("card");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     // No own music: two copies, the record's and the one waiting.
     settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
@@ -2159,7 +2230,7 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     let root = temp("requester");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     settings(&data, &[(&music, "main"), (&incoming, "incoming")], &library.join("own"));
     let s = Server::start(&data).await;
@@ -2201,7 +2272,7 @@ async fn a_copy_over_two_folders_lists_its_own_format_end_to_end() {
     let root = temp("two-folders");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     let dir = "Salt Meridian/Both Shores (2018)";
     for folder in [music.join(dir), incoming.join(dir)] {
@@ -2242,7 +2313,7 @@ async fn the_best_copy_plays_whoever_owns_it_and_nothing_is_kept_end_to_end() {
     let root = temp("best-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second, incoming, own) = (library.join("music"), library.join("second"), library.join("incoming"), library.join("own"));
     let (kept, hers, waiting, aside) = (music.join(SHORES), own.join("ann").join(SHORES), incoming.join(SHORES), root.join("aside"));
     std::fs::remove_dir_all(&waiting).unwrap();
@@ -2321,7 +2392,7 @@ async fn a_copy_named_is_heard_on_every_address_and_through_a_signed_link_end_to
     let root = temp("named-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     // A FLAC waiting, a second longer than Music's at its first track: its bytes and its length tell it.
     let (music, waiting) = (library.join("music"), library.join("second"));
     settings(&data, &[(&music, "main"), (&waiting, "incoming")], &root.join("no-own-music"));
@@ -2359,6 +2430,252 @@ async fn a_copy_named_is_heard_on_every_address_and_through_a_signed_link_end_to
     assert!(s.anyone().bytes(&format!("{file}?{}", signed(&data, &file))).await.1 == kept, "with none named, the row copy");
     let (status, bytes) = s.anyone().bytes(&format!("{stream}?{from}&{}", signed(&data, &stream))).await;
     assert!(status == 200 && bytes == asked, "a stream too: {status}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The owner, 2026-11-07: a folder of the very same release is the record from its first file. On real files through passes, its last
+/// track first: one card, each file on the track it is, what plays as it was, the copy heard by `from` for what it holds and passed over
+/// for what it does not, Replace refused as it would take tracks it lacks, a Delete taking its files alone, and its last file in, a copy
+/// like any other.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_arriving_file_by_file_is_the_record_from_its_first_file_end_to_end() {
+    let root = temp("arriving");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, incoming, aside) = (library.join("music"), library.join("incoming"), root.join("aside"));
+    std::fs::rename(incoming.join(SHORES), &aside).unwrap();
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    let entries = || async { ann.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect::<Vec<Value>>() };
+    s.until("Music's copy read", Duration::from_secs(120), || async { !entries().await.is_empty() }).await;
+    let id = entries().await[0]["id"].as_str().unwrap().to_string();
+    let songs: Vec<String> = ann.get(&format!("/api/albums/cratarr/{id}")).await["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(songs.len(), 3);
+    let (kept, waiting) = (audio_under(&music.join(SHORES)), audio_under(&aside));
+    let arrives = |file: &str| {
+        std::fs::create_dir_all(incoming.join(SHORES)).unwrap();
+        std::fs::copy(aside.join(file), incoming.join(SHORES).join(file)).unwrap();
+    };
+    let copies_held = |n: u64| {
+        let (ann, entries, there) = (&ann, &entries, id_of(&incoming));
+        async move {
+            ask(ann, "startScan", "").await;
+            built(ann).await;
+            entries().await.first().is_some_and(|a| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"] == there.as_str() && c["tracks"] == n)))
+        }
+    };
+
+    arrives(&waiting[2]);
+    s.until("its first file", Duration::from_secs(120), || copies_held(1)).await;
+    let listed = entries().await;
+    assert_eq!((listed.len(), listed[0]["id"].as_str()), (1, Some(id.as_str())), "the record you hold, one card: {listed:?}");
+    assert_eq!(listed[0]["tracks"], 3, "listing what it lists");
+    assert_eq!(tracks_at(&data, &incoming, SHORES), songs[2..], "the track it is");
+    let plays: Vec<&Value> = listed[0]["copies"].as_array().unwrap().iter().filter(|c| c["plays"] == true).map(|c| &c["library"]).collect();
+    assert_eq!(plays, [&json!(id_of(&music))], "what played plays on");
+
+    // Play: Music's, and an Incoming copy only by `from`, which a track it does not hold passes over.
+    let (kept_last, waiting_last) = (std::fs::read(music.join(SHORES).join(&kept[2])).unwrap(), std::fs::read(aside.join(&waiting[2])).unwrap());
+    let from = format!("from={}", id_of(&incoming).replace('/', "%2F"));
+    assert!(ann.bytes(&format!("/api/file/cratarr/{}", songs[2])).await.1 == kept_last, "Music's, as ever");
+    assert!(ann.bytes(&format!("/api/file/cratarr/{}?{from}", songs[2])).await.1 == waiting_last, "the copy named, for the track it holds");
+    let first = std::fs::read(music.join(SHORES).join(&kept[0])).unwrap();
+    assert!(ann.bytes(&format!("/api/file/cratarr/{}?{from}", songs[0])).await.1 == first, "passed over for one it does not");
+
+    // Replace would put three tracks' place in the hands of one: refused, and nothing moves.
+    let (old, new) = (as_it_lies(&music.join(SHORES)), as_it_lies(&incoming.join(SHORES)));
+    let replacing = format!("/api/incoming/replace/cratarr/{id}?{from}");
+    let preview = ann.get(&replacing).await;
+    assert!(!preview["refused"].is_null(), "two tracks of Music's have no match: {preview}");
+    assert_eq!(ann.send(reqwest::Method::POST, &replacing, json!({ "from": id_of(&incoming) })).await.0, 409);
+    assert!(as_it_lies(&music.join(SHORES)) == old && as_it_lies(&incoming.join(SHORES)) == new, "a refusal moves nothing");
+
+    // A Delete takes its one file. The record goes on, and an Undo brings it back on the track it was.
+    let gone = ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/delete"), json!({ "from": id_of(&incoming) })).await;
+    assert!(!incoming.join(SHORES).exists(), "the copy named went");
+    assert!(as_it_lies(&music.join(SHORES)) == old, "and no other");
+    s.until("the copy to go", Duration::from_secs(120), || async { entries().await.first().is_some_and(|a| a["copies"].as_array().is_some_and(|c| c.len() == 1)) }).await;
+    assert_eq!(entries().await[0]["id"].as_str(), Some(id.as_str()));
+    ann.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
+    s.until("its Undo", Duration::from_secs(120), || copies_held(1)).await;
+    assert_eq!(tracks_at(&data, &incoming, SHORES), songs[2..]);
+
+    // The rest come in, in no order, and it is a copy like any other, on the record's tracks.
+    arrives(&waiting[0]);
+    s.until("its next file", Duration::from_secs(120), || copies_held(2)).await;
+    arrives(&waiting[1]);
+    s.until("its last file", Duration::from_secs(120), || copies_held(3)).await;
+    assert_eq!(tracks_at(&data, &incoming, SHORES), songs, "each on the track it is");
+    assert_eq!(entries().await.len(), 1);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The owner, 2026-11-07: "If it's owned by administrator, then only administrator can edit." A record in a main library is the
+/// administrators', a copy of one's own beside it or not; a record only in one person's own music is theirs, and no one else's.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn who_may_set_a_records_facts_goes_by_whose_record_it_is_end_to_end() {
+    let root = temp("whose");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let all = ["Tide Tables", "No Papers", "Other Room", "Own Room", "Just Arrived"];
+    s.until("every library read", Duration::from_secs(180), || async {
+        let albums = ann.albums().await;
+        all.iter().all(|t| albums.iter().any(|a| a["title"] == *t))
+    })
+    .await;
+    let albums = ann.albums().await;
+    let id = |title: &str| albums.iter().find(|a| a["title"] == title).unwrap()["id"].clone();
+    let setting = |title: &str, year: u32| json!({ "albums": [id(title)], "set": { "year": year } });
+
+    let (status, said) = bob.send(reqwest::Method::PUT, "/api/albums/overrides", setting("Tide Tables", 1950)).await;
+    assert_eq!(status, 403, "Music's: {said}");
+    assert_eq!(bob.send(reqwest::Method::PUT, "/api/albums/overrides", setting("No Papers", 1950)).await.0, 403, "his own copy gives him no say in Music's record");
+    assert_eq!(bob.send(reqwest::Method::PUT, "/api/albums/overrides", setting("Own Room", 1950)).await.0, 403, "another's own music");
+    assert_eq!(bob.send(reqwest::Method::PUT, "/api/albums/overrides", setting("Just Arrived", 1950)).await.0, 403, "Incoming's");
+    let both = json!({ "albums": [id("Other Room"), id("Tide Tables")], "set": { "year": 1950 } });
+    assert_eq!(bob.send(reqwest::Method::PUT, "/api/albums/overrides", both).await.0, 403, "all of a selection or none");
+    let year_now = |albums: Vec<Value>, title: &str| albums.into_iter().find(|a| a["title"] == title).unwrap()["year"].clone();
+    assert_ne!(year_now(ann.albums().await, "Other Room"), 1950, "none");
+
+    bob.ok(reqwest::Method::PUT, "/api/albums/overrides", setting("Other Room", 1951)).await;
+    assert_eq!(year_now(ann.albums().await, "Other Room"), 1951, "only in his own music: his to change");
+    ann.ok(reqwest::Method::PUT, "/api/albums/overrides", setting("Tide Tables", 1952)).await;
+    ann.ok(reqwest::Method::PUT, "/api/albums/overrides", setting("Other Room", 1953)).await;
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The owner, 2026-11-07: an app sees every library, whatever the Library page's filter says. The filter stays on the account, and goes
+/// on saying which copy plays.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_app_sees_every_library_whatever_the_librarys_filter_says_end_to_end() {
+    let root = temp("apps");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, second) = (library.join("music"), library.join("second"));
+    settings(&data, &[(&music, "main"), (&second, "main")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    let shores = || async { ann.albums().await.into_iter().find(|a| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 2)) };
+    s.until("both copies read", Duration::from_secs(120), || async { shores().await.is_some() }).await;
+    let folders = || async { ask(&ann, "getMusicFolders", "").await["musicFolders"]["musicFolder"].as_array().unwrap().iter().map(|f| f["id"].clone()).collect::<Vec<Value>>() };
+    let (all, numbers) = (folders().await, ask(&ann, "getUser", &format!("username={}", ANN.0)).await["user"]["folder"].clone());
+    assert_eq!((all.len(), numbers.as_array().map(Vec::len)), (2, Some(2)));
+
+    let plays = |a: Value| a["copies"].as_array().unwrap().iter().find(|c| c["plays"] == true).unwrap()["library"].clone();
+    let first = plays(shores().await.unwrap());
+    let (now, other) = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64, if first == id_of(&music).as_str() { &second } else { &music });
+    ann.ok(reqwest::Method::PUT, "/api/me/preferences/hidden_libraries", json!({ "value": [format!("cratarr/{}", first.as_str().unwrap())], "changed": now })).await;
+    assert_eq!(folders().await, all, "its music folders stay");
+    assert_eq!(ask(&ann, "getUser", &format!("username={}", ANN.0)).await["user"]["folder"], numbers, "and its account's");
+    assert_eq!(plays(shores().await.unwrap()), id_of(other).as_str(), "the copy that plays still follows the switch");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The environment starts a server and Settings runs it: a Lidarr removed stays removed and a password changed stays changed, across
+/// restarts on the same environment.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn what_settings_say_stands_against_the_environment_end_to_end() {
+    let root = temp("environment");
+    let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let env = [("LIDARR_URL", "http://127.0.0.1:9"), ("LIDARR_API_KEY", "key"), ("CRATARR_SUBSONIC_USER", "ann"), ("CRATARR_SUBSONIC_PASSWORD", "from-the-environment")];
+    let s = Server::start_with(&data, &env).await;
+    let ann = s.sign_in("ann", "from-the-environment").await;
+    assert_eq!(ann.get("/api/settings").await["lidarr"]["url"], "http://127.0.0.1:9", "the environment's, until Settings says");
+    ann.ok(reqwest::Method::PUT, "/api/me/password", json!({ "current": "from-the-environment", "password": "chosen-here" })).await;
+    ann.ok(reqwest::Method::PUT, "/api/settings", json!({ "sources": [], "lidarr": { "url": "", "api_key": "", "enabled": false } })).await;
+    s.stop();
+
+    let s = Server::start_with(&data, &env).await;
+    let ann = s.sign_in("ann", "chosen-here").await;
+    assert!(ann.get("/api/settings").await["lidarr"].is_null(), "removed stays removed");
+    let said = s.anyone().get("/rest/ping?u=ann&p=from-the-environment&v=1.16.1&c=e2e").await;
+    assert_eq!(said["subsonic-response"]["status"], "failed", "the environment's password is no longer the account's: {said}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A5: what no rule can pair, a title and a file name changed at once with no recording, leaves a track with plays and no file. It is on
+/// Health's Missing list, and a person's word puts its plays and heart on the file it became.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_track_found_again_by_hand_keeps_what_it_held_end_to_end() {
+    let root = temp("reconnect");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let music = library.join("music");
+    settings(&data, &[(&music, "main")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    s.until("the library read", Duration::from_secs(120), || async { ann.albums().await.iter().any(|a| a["title"] == "Tide Tables") }).await;
+    let old = tracks_at(&data, &music, TIDE)[0].clone();
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{old}/favorite?on=true"), json!({})).await;
+    ask(&ann, "scrobble", &format!("id={old}&time=1700000000000")).await;
+
+    let (was, now) = (music.join(TIDE).join("01 Slack Water.flac"), music.join(TIDE).join("01 Low Water.flac"));
+    set_vorbis(&was, "TITLE", "Low Water");
+    std::fs::rename(&was, &now).unwrap();
+    let catalogue = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    catalogue.busy_timeout(Duration::from_secs(10)).unwrap();
+    let new = || catalogue.query_row("SELECT 'tr-' || track FROM files WHERE rel = ?1 AND track IS NOT NULL", [format!("{TIDE}/01 Low Water.flac")], |r| r.get::<_, String>(0)).ok();
+    s.until("the file read as new", Duration::from_secs(120), || async {
+        ask(&ann, "startScan", "").await;
+        built(&ann).await;
+        new().is_some()
+    })
+    .await;
+    let chosen = new().unwrap();
+    assert_ne!(chosen, old, "no rule pairs them");
+
+    // Its day over: the gone row's end, as a day passing leaves it.
+    catalogue.execute("UPDATE files SET gone_at = gone_at - 100000 WHERE gone_at IS NOT NULL", []).unwrap();
+    let on_the_list = || async {
+        let report = ann.get("/api/health/report").await;
+        report["findings"].as_array().unwrap().iter().find(|f| f["key"] == "library:missing").map_or(Vec::new(), |f| f["items"].as_array().unwrap().iter().filter(|i| i["track"] == old.as_str()).cloned().collect::<Vec<Value>>())
+    };
+    s.until("it to retire onto the list", Duration::from_secs(120), || async {
+        ask(&ann, "startScan", "").await;
+        built(&ann).await;
+        catalogue.query_row("SELECT retired_at IS NOT NULL FROM tracks WHERE 'tr-' || id = ?1", [&old], |r| r.get::<_, bool>(0)).unwrap() && !on_the_list().await.is_empty()
+    })
+    .await;
+    let row = on_the_list().await.remove(0);
+    assert_eq!((row["title"].as_str(), row["files"][0].as_str().map(|f| f.ends_with("01 Slack Water.flac"))), (Some("Slack Water"), Some(true)), "what it was and where it lay: {row}");
+    assert!(row["since"].is_number(), "since when: {row}");
+
+    ann.ok(reqwest::Method::POST, "/api/missing/reconnect", json!({ "track": old, "to": chosen })).await;
+    assert!(on_the_list().await.is_empty(), "off the list");
+    let held = ask(&ann, "getSong", &format!("id={chosen}")).await["song"].clone();
+    assert_eq!(held["playCount"], 1, "its play: {held}");
+    assert!(held["starred"].is_string(), "its heart: {held}");
+    let again = ann.send(reqwest::Method::POST, "/api/missing/reconnect", json!({ "track": old, "to": chosen })).await;
+    assert_eq!(again.0, 409, "a take stands: {:?}", again.1);
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
@@ -2533,7 +2850,7 @@ async fn on_two_copies(name: &str, kinds: [&str; 2], second: &str) -> (Server, P
     let root = temp(name);
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, other) = (library.join("music"), library.join(second));
     settings(&data, &[(&music, kinds[0]), (&other, kinds[1])], &library.join("own"));
     let s = Server::start(&data).await;
@@ -2577,7 +2894,7 @@ async fn keep_makes_a_second_copy_on_the_records_tracks_and_its_undo_takes_it_ba
     let root = temp("second-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
     std::fs::remove_dir_all(second.join(SHORES)).unwrap();
     settings(&data, &[(&music, "main"), (&second, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
@@ -2662,7 +2979,7 @@ async fn a_moved_copy_stays_on_the_records_tracks_and_plays_from_where_it_went_e
     let root = temp("moved-copy");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
     std::fs::remove_dir_all(second.join(SHORES)).unwrap();
     settings(&data, &[(&music, "main"), (&second, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
@@ -2692,7 +3009,7 @@ async fn a_tracks_tag_reaches_its_file_in_every_copy_by_its_track_end_to_end() {
     let root = temp("tag-by-track");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
-    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    make_layout(&library);
     let (music, incoming) = (library.join("music"), library.join("incoming"));
     // Named as one copy's owner likes: only the track says which file this is.
     let (renamed, other) = (incoming.join(SHORES).join("02 By Another Name.mp3"), incoming.join(SHORES).join("03 Return.mp3"));
@@ -2886,6 +3203,8 @@ async fn a_second_run_waits_while_the_first_writes_end_to_end() {
 
 /// The account of the proof below, and the albums it is given: each case of what a listener can lose, by where it lies.
 const ANN: (&str, &str) = ("ann", "ann's password");
+/// A second account, with libraries switched off.
+const BO: (&str, &str) = ("bo", "bo's password");
 const TIDE: &str = "Glass Harbour/Tide Tables (2012)";
 const PARTIAL: &str = "Glass Harbour/Partial Shore (2011)";
 const CLUB: &str = "Various Artists/Club Classics (2001)";
@@ -2920,7 +3239,7 @@ impl Shelves {
         std::fs::remove_dir_all(&root).ok();
         let (library, data) = (root.join("library"), root.join("data"));
         std::fs::create_dir_all(&data).unwrap();
-        assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+        make_layout(&library);
         // A cover in the library that goes first, and a recording to know a file by, as a tagger leaves one.
         std::fs::copy(library.join("music").join(TIDE).join("cover.jpg"), library.join("second").join(FAR).join("cover.jpg")).unwrap();
         set_vorbis(&library.join("music").join(JUNK).join("01 Zero.flac"), "MUSICBRAINZ_TRACKID", "00000000-0000-4000-8000-000000000301");
@@ -3141,6 +3460,23 @@ fn rows_kept(data: &Path) -> Value {
     json!({ "annotation": rows, "plays": plays })
 }
 
+/// What `BO` has switched off, each library by what the proof calls it, and which copy of a record in every library that leaves to play.
+async fn switched_off(s: &Server, shelves: &Shelves) -> Value {
+    let bo = s.sign_in(BO.0, BO.1).await;
+    let off = bo.get("/api/me/preferences").await["values"]["hidden_libraries"]["value"].clone();
+    let albums = bo.albums().await;
+    let shores = albums.iter().find(|a| a["title"] == "Both Shores").expect("a record in every library");
+    let plays: Vec<&Value> = shores["copies"].as_array().unwrap().iter().filter(|c| c["plays"] == true).map(|c| &c["library"]).collect();
+    shelves.plain(&json!({ "off": off, "plays": plays }))
+}
+
+/// Where what `switched_off` finds differs from `want`.
+async fn switched_otherwise(s: &Server, shelves: &Shelves, want: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    differences("", want, &switched_off(s, shelves).await, &mut out);
+    out
+}
+
 /// What an account holds of the library, each thing as a door of the API answers it, each library by the name `Shelves` has for it: what
 /// a step must leave as it found it. `owned` is what is the listener's, `facts` what the files say.
 async fn held_by(who: &Caller<'_>, shelves: &Shelves, mine: &Mine) -> Value {
@@ -3281,10 +3617,10 @@ fn from_at_once(want: &Value) -> impl Fn(&Value) -> Vec<String> {
 
 /// What must stand while a library is away: every row of the account's, what each album left has by its id, each list's lines and the
 /// crate's own. Not what a door makes of it, as a record gone from every list has nothing to show its play on. `gone`: the albums lying
-/// only there.
-fn kept_while_away(held: &Value, gone: &[String]) -> Value {
+/// only there. `lacking`: the tracks lying only there of a record that stays, by a copy short of them.
+fn kept_while_away(held: &Value, gone: &[String], lacking: &[String]) -> Value {
     let album = |a: &Value| {
-        let songs: serde_json::Map<String, Value> = a["songs"].as_object().unwrap().iter().map(|(id, s)| (id.clone(), s["owned"].clone())).collect();
+        let songs: serde_json::Map<String, Value> = a["songs"].as_object().unwrap().iter().filter(|(id, _)| !lacking.contains(id)).map(|(id, s)| (id.clone(), s["owned"].clone())).collect();
         json!({ "owned": a["owned"], "songs": songs })
     };
     let albums: serde_json::Map<String, Value> = held["albums"].as_object().unwrap().iter().filter(|(id, _)| !gone.contains(id)).map(|(id, a)| (id.clone(), album(a))).collect();
@@ -3301,11 +3637,11 @@ fn lying_only_in(want: &Value, library: &str) -> Vec<String> {
 }
 
 /// What differs from `want` while `library` is away, by `kept_while_away`, and a line of a record gone that does not say it is missing.
-fn from_while_away<'a>(want: &'a Value, library: &'a str) -> impl Fn(&Value) -> Vec<String> + 'a {
+fn from_while_away<'a>(want: &'a Value, library: &'a str, lacking: &'a [String]) -> impl Fn(&Value) -> Vec<String> + 'a {
     move |got| {
         let gone = lying_only_in(want, library);
         let mut out = Vec::new();
-        differences("", &kept_while_away(want, &gone), &kept_while_away(got, &[]), &mut out);
+        differences("", &kept_while_away(want, &gone, lacking), &kept_while_away(got, &[], &[]), &mut out);
         for (id, list) in want["playlists"].as_object().unwrap() {
             for (n, row) in list["rows"].as_array().unwrap().iter().enumerate() {
                 let is_gone = gone.iter().any(|a| row["album_id"] == a.as_str());
@@ -3454,6 +3790,15 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     let ann = s.sign_in(ANN.0, ANN.1).await;
     say(&mut findings, "a main library put first, started again", settled(&ann, &shelves, &mine, from(&want)).await);
 
+    // A library switched off stays off wherever it goes, and a switch says its library's path: a rename that did not reach it would turn
+    // the library back on, for one account and on every device. Both main libraries that hold the record, so a switch lost plays that one.
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": BO.0, "password": BO.1 })).await;
+    let off: Vec<String> = ["music", "second", "landed"].iter().map(|name| format!("cratarr/{}", shelves.at(name).display())).collect();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    s.sign_in(BO.0, BO.1).await.ok(reqwest::Method::PUT, "/api/me/preferences/hidden_libraries", json!({ "value": off, "changed": now })).await;
+    let bos = switched_off(&s, &shelves).await;
+    assert_eq!(bos["off"], json!(["cratarr/<music>", "cratarr/<second>", "cratarr/<landed>"]), "{bos}");
+
     // 2. A library's folder renamed, mount and settings together, with the server down, as a mount takes a restart. By a new name, and
     // only by case, which turned production's two Incoming folders round, and the first main library's too.
     let mut s = s;
@@ -3464,6 +3809,7 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
         s = Server::start(&shelves.data).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
         say(&mut findings, &format!("{name} renamed {to}"), settled(&ann, &shelves, &mine, from(&want)).await);
+        say(&mut findings, &format!("{name} renamed {to}, its switch"), switched_otherwise(&s, &shelves, &bos).await);
     }
 
     // In two moves, the way a mount is changed first: it starts with the library not there, and Settings is told afterwards.
@@ -3473,18 +3819,24 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     s = shelves.saved(s).await;
     let ann = s.sign_in(ANN.0, ANN.1).await;
     say(&mut findings, "second renamed rack, then told", settled(&ann, &shelves, &mine, from_at_once(&want)).await);
+    say(&mut findings, "second renamed rack, then told, its switch", switched_otherwise(&s, &shelves, &bos).await);
 
     // 3. A library removed, the server restarted, and the library added back. While it is away what lies only there is off every list and
-    // its lines read as missing, as nobody could hear it; nothing it holds is touched. Each kind of library, and the first of all.
+    // its lines read as missing, as nobody could hear it; nothing it holds is touched. Each kind of library, and the first of all. Incoming's
+    // copy of Short Measure is short of its last track: with Music away the record stays by that copy, and that track goes with its file.
+    let (whole, short) = (tracks_at(&shelves.data, shelves.at("music"), MEASURE), tracks_at(&shelves.data, shelves.at("incoming"), MEASURE));
+    let only_in_music: Vec<String> = whole.into_iter().filter(|t| !short.contains(t)).collect();
+    assert_eq!(only_in_music.len(), 1, "{short:?}");
     for name in ["second", "incoming", "music"] {
+        let lacking: &[String] = if name == "music" { &only_in_music } else { &[] };
         let at = shelves.list.iter().position(|l| l.name == name).unwrap();
         let shelf = shelves.list.remove(at);
         s = shelves.saved(s).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
-        say(&mut findings, &format!("{name} removed"), settled(&ann, &shelves, &mine, from_while_away(&want, name)).await);
+        say(&mut findings, &format!("{name} removed"), settled(&ann, &shelves, &mine, from_while_away(&want, name, lacking)).await);
         s = restarted(s, &shelves.data).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
-        say(&mut findings, &format!("{name} removed, started again"), settled(&ann, &shelves, &mine, from_while_away(&want, name)).await);
+        say(&mut findings, &format!("{name} removed, started again"), settled(&ann, &shelves, &mine, from_while_away(&want, name, lacking)).await);
         shelves.list.insert(at, shelf);
         s = shelves.saved(s).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
@@ -3492,6 +3844,7 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
         s = restarted(s, &shelves.data).await;
         let ann = s.sign_in(ANN.0, ANN.1).await;
         say(&mut findings, &format!("{name} added back, started again"), settled(&ann, &shelves, &mine, from(&want)).await);
+        say(&mut findings, &format!("{name} added back, its switch"), switched_otherwise(&s, &shelves, &bos).await);
     }
 
     // 4. Files changed outside Cratarr, as a tagger and a file manager do, with the server running.

@@ -39,6 +39,57 @@ the parts are and how they talk.
   check: crates and Radio are asked of one library there. It also builds to WebAssembly (`web/src/lib/wasm/`), which the
   page can use instead of its own code behind a switch (off by default).
 
+## How the code is shaped
+
+Seven rules, for anything new. They come from ports and adapters, functional core with an imperative shell, and
+domain-driven design, taken as far as they pay here and no further.
+
+1. **Decisions live in pure code.** What decides, which copy plays, what a crate holds, how two rows merge, goes in the
+   rules crate or a `*Rule.ts` file, with no network or disk, and the time passed in as a value. The code around it
+   gathers, calls and writes.
+2. **One door per purpose, not per service.** The doors are below, in one word each. A new one needs two real sides, and a test's stand-in
+   counts as one. With one side, a plain function will do.
+3. **One writer per fact.** `copy_for` alone says which copy plays, and one way changes files (decision 0092).
+4. **Identity is an id, never a place.** A path or a place in a list can change. What other things point at needs an id
+   for life: a track, a record, an artist, a folder.
+5. **One meaning inside each area.** Library, listening, playback, intake and settings each keep their words consistent.
+   Where one word crosses areas, say how the two relate.
+6. **A rule is guarded in one place.** "Copies hold the same tracks" lives in one function, and other code asks it.
+7. **Areas are folders, not services.** One binary. `api.rs` splits along these lines when a change touches it.
+
+Left out on purpose: event sourcing, CQRS across the system, a repository for every table, layers of copied objects,
+interfaces with one implementation. The device's index reads a copy and writes through an outbox, which is as far as
+that goes.
+
+The platform is three things, and each door belongs to one of them.
+
+**The shared core** is the rules crate: decisions, the same on the server, in the page and in the app.
+
+**The server** owns the truth about the library.
+
+| Door | Purpose | Where |
+|---|---|---|
+| Sources | What music is there? | `source::Source`: Cratarr, Jellyfin, Subsonic |
+| Fetching | Get me this record | `ports::Fetcher`, `ports::Acquisition`: Lidarr, Soulseek |
+| References | What is this? | `Asked` for MusicBrainz so far: Discogs, Bandcamp and AcoustID are called one by one |
+| Files | Change what is on disk | `ports::Files`, `playlists::Store` |
+| Players | Play it over there | Play On, Kodi, Snapcast's `Groups` |
+| Scrobbling | Tell others what played | ListenBrainz, Last.fm |
+
+**The clients**, the page and the app, own the experience on a device.
+
+| Door | Purpose | In a browser | In the app |
+|---|---|---|---|
+| Reads | Server or device? | One decision, and no page asks | The same |
+| Writes | Kept here first, sent when Cratarr answers | The outbox, `lib/later` | The same |
+| Sound | Make audio | The audio element | ExoPlayer, the tape engine |
+| Storage | What is kept here | IndexedDB, caches | Files, `Prefs` |
+| Device | Notifications, lock screen, battery, the background | Very little | Android |
+
+In the app the page is the interface and the app gives it what only a device can do, through the bridge: from the page, the
+bridge is the Device door. Kotlin holds no decisions. Where the app must decide alone, as Autoplay does with the page asleep,
+it asks the rules crate through UniFFI, so no second copy of the logic grows there.
+
 ## Server (`server/`)
 
 - `src/main.rs`: start-up, the environment, the background passes.
@@ -51,10 +102,13 @@ the parts are and how they talk.
   - `classical` and `works` (the Classical kind, a work's other versions, from MusicBrainz), `excluded_artists`;
   - `track_fetch` (a single missing track, from Soulseek or a file on the server, checked before it is added);
   - `health`, `history` and `taste` (listening), `insights`, `visuals`, `kodi`, `listenbrainz`, `audiomuse`;
-  - `runtime` (the server's own settings: trusted proxies, home networks, the guest page).
+  - `runtime` (the server's own settings: trusted proxies, home networks, the guest page);
+  - `device_index` and `device_covers` (the library on a device, decision 0101: `/api/index` whole and then what moved, the
+    sounds, an account's fits and counts, small covers).
 - `src/serve/`: Cratarr as an OpenSubsonic server, and sign-in for everything: sessions, accounts, API keys, LDAP;
   `guest.rs` (the guest page, at home only); `access.rs` and `proxy.rs` (who a request is, and from where).
-- `src/catalogue/`: every audio file and its tags, read once and kept up to date.
+- `src/catalogue/`: every audio file and its tags, read once and kept up to date. `index_log.rs` is what a device's index
+  has to hear of: triggers on the tables it reads, and a print of every row for what moves with no write.
 - `src/source/`: where music comes from (Cratarr's own folders; Jellyfin optionally), behind one trait.
 - `src/crates.rs`: one's crates as they are kept. The rules that make playlists by themselves are the rules crate's
   (`rules/src/crates.rs`), named here; filters use the same engine.

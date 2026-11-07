@@ -103,12 +103,15 @@ pub fn resize(data: &[u8], size: u32) -> Result<Option<Vec<u8>>> {
 /// A picture as JPEG, no larger than `size` on its longer side (a crate's own picture): resized when larger, else only
 /// written again as JPEG.
 pub fn jpeg_within(data: &[u8], size: u32) -> Result<Vec<u8>> {
-    if let Some(small) = resize(data, size)? {
-        return Ok(small);
-    }
-    let img = image::load_from_memory(data).context("not a picture Cratarr can read")?.to_rgb8();
+    jpeg_at(data, size, 85)
+}
+
+/// `jpeg_within` at this JPEG quality.
+pub fn jpeg_at(data: &[u8], size: u32, quality: u8) -> Result<Vec<u8>> {
+    let img = image::load_from_memory(data).context("not a picture Cratarr can read")?;
+    let small = if img.width().max(img.height()) > size { img.resize(size, size, image::imageops::FilterType::Triangle) } else { img };
     let mut out = std::io::Cursor::new(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&img)?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode_image(&small.to_rgb8())?;
     Ok(out.into_inner())
 }
 

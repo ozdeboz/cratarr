@@ -1881,6 +1881,14 @@ impl UserData {
         Ok(self.db().execute("DELETE FROM scrobble_queue WHERE user = ?1", [user])?)
     }
 
+    /// The tracks any account holds a play, a heart or a rating on, as served: what is worth finding again on Health's Missing list.
+    pub fn songs_held(&self) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT item FROM annotation WHERE kind = 'song' AND (play_count > 0 OR starred != 0 OR rating > 0) UNION SELECT song FROM plays")?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// A user's own settings (decision 0051: Radio's and Autoplay's defaults and the like, as the apps keep them) and
     /// their version; version 0 and none while nothing is kept.
     pub fn settings_of(&self, user: &str) -> Result<(i64, serde_json::Value)> {

@@ -207,8 +207,6 @@ fn folder_of(p: &Params) -> Option<i64> {
     p.number("musicFolderId").filter(|n| *n > 0).map(|n| n - 1)
 }
 
-/// The catalogue folders `user` has switched off (decision 0101 point 14: the libraries switched off, kept on the
-/// account), left out of their music folders.
 /// A music folder's name for `user`: own music by whose it is (0101 point 9), any other by its folder.
 fn folder_name(folder: &std::path::Path, own: Option<&std::path::Path>, user: &str) -> String {
     let name = folder.file_name().map_or_else(|| folder.display().to_string(), |n| n.to_string_lossy().to_string());
@@ -217,14 +215,6 @@ fn folder_name(folder: &std::path::Path, own: Option<&std::path::Path>, user: &s
         Some(_) if folder.parent() == own => format!("{name}'s music"),
         _ => name,
     }
-}
-
-fn hidden_folders(serve: &Serve, user: &str) -> Vec<i64> {
-    let hidden = serve.userdata.hidden_libraries(user).unwrap_or_default();
-    if hidden.is_empty() {
-        return Vec::new();
-    }
-    serve.incoming().map(|i| i.folders_off(&hidden)).unwrap_or_default()
 }
 
 pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, headers: &HeaderMap) -> Result<Answer, Failed> {
@@ -240,24 +230,21 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         ] }))),
         // Its roles as its permissions say (decision 0051): keeping tracks offline, playlists, public share links.
         "getUser" => {
-            let off = hidden_folders(serve, &user.name);
             Ok(Answer::Json(json!({ "user": {
                 "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
                 "downloadRole": user.permissions.offline, "playlistRole": user.permissions.playlists, "coverArtRole": true,
                 "commentRole": false, "podcastRole": false, "shareRole": user.permissions.links, "jukeboxRole": false,
                 "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
-                "folder": serve.catalogue().folders().ids().filter(|i| !off.contains(i)).map(|i| i + 1).collect::<Vec<_>>(),
+                "folder": serve.catalogue().folders().ids().map(|i| i + 1).collect::<Vec<_>>(),
             } })))
         }
         "getMusicFolders" => {
-            // Only those the user has on (decision 0101 points 1 and 14).
-            let off = hidden_folders(serve, &me);
+            // Every library: the Library page's filter is that page's (the owner, 2026-11-07), and an app has its own.
             let own = serve.own_music();
             let folders: Vec<Value> = serve
                 .catalogue()
                 .folders()
                 .iter()
-                .filter(|(i, _)| !off.contains(i))
                 .map(|(i, f)| json!({ "id": i + 1, "name": folder_name(f, own.as_deref(), &me) }))
                 .collect();
             Ok(Answer::Json(json!({ "musicFolders": { "musicFolder": folders } })))

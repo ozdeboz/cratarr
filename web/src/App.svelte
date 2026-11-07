@@ -421,7 +421,7 @@
   // `page` follows, and opening one then would write it into the next page's address.
   $effect(() => {
     if (!settingsSplit || settingsShown || openedHere() || !me.known || fromHash() !== 'settings') return;
-    const parts = SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin));
+    const parts = SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone));
     const part = parts.find((x) => x.id === prefs.settingsPart) ?? parts[0];
     if (part) untrack(() => viewInPlace(SETTINGS_VIEW + part.id));
   });

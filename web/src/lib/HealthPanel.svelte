@@ -36,6 +36,7 @@
   import HealthEvents from './HealthEvents.svelte';
   import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
+  import HealthReconnect from './HealthReconnect.svelte';
   import HealthRenumber from './HealthRenumber.svelte';
   import RecordReferences from './RecordReferences.svelte';
   import { FIXABLE } from './fixes.svelte';
@@ -426,6 +427,8 @@
   {@const on = onward(x)}
   <div class="opened">
     {#if x.playlist}<div class="tool"><HealthMissing playlist={x.playlist} /></div>{/if}
+    <!-- A track of Missing music: what it is now, by a person's word (lib/HealthReconnect). -->
+    {#if problem === 'library:missing' && x.track}<div class="tool"><HealthReconnect track={x.track} title={x.title} ongone={gone} /></div>{/if}
     {#if incoming && x.album}<div class="tool"><HealthIncoming source={x.album[0]} album={x.album[1]} ongone={gone} /></div>{/if}
     <!-- Track numbers off (unnumbered ones too), disc numbers: renumbered as a release has them (lib/HealthRenumber). -->
     {#if RENUMBERS.has(problem) && x.album?.[0] === 'cratarr' && offers('renumber')}<div class="tool"><HealthRenumber album={x.album[1]} title={x.title} ongone={gone} /></div>{/if}
@@ -582,7 +585,7 @@
               {:else if x.album}
                 <ReleaseRow cover={albumCoverUrl(x.album[0], x.album[1])} title={x.title} line={x.line ?? null} expanded={open} onclick={() => toggle(x)} />
               {:else}
-                <Item name={x.title} line={x.line ?? null} expanded={open} onclick={() => toggle(x)} />
+                <Item name={x.title} line={[x.line, x.since ? `since ${since(x.since)}` : null].filter(Boolean).join(' · ') || null} expanded={open} onclick={() => toggle(x)} />
               {/if}
               {#if open}{@render opened(x)}{/if}
             {/if}

@@ -161,9 +161,6 @@ const PRESENT: &str = "folder >= 0 AND gone_at IS NULL AND trashed IS NULL";
 /// The same, with the files table named `f` (in a join with `source_ids`, which has a folder too).
 const PRESENT_F: &str = "f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL";
 
-/// How long a folder out of use keeps its rows (parked) before they are forgotten.
-const PARKED_KEEP_SECS: i64 = 30 * 24 * 3600;
-
 /// How many of a folder's files `set_folders` looks for at a path, to tell whether those rows are that folder's.
 const SAMPLE: i64 = 20;
 
@@ -173,8 +170,9 @@ const GENERATION: &str = "generation";
 /// How long a gone file waits to be recognised as moved before its track id is retired (decision 0011 §4).
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
-/// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along.
-const FILE_TABLES: [&str; 6] = ["files", "tags", "source_ids", "analysis", "analysis_shape", "beat_this"];
+/// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along. A table with
+/// both goes here or says why not (`every_table_by_folder_and_path_goes_with_its_file`), or it stays at a place its file left.
+const FILE_TABLES: [&str; 7] = ["files", "cover_files", "tags", "source_ids", "analysis", "analysis_shape", "beat_this"];
 
 /// What a retiring track was, from its file and tags while they are still there (`tracks`' kept columns).
 const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id LIMIT 1),
@@ -479,7 +477,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 29] = [
+const ADDED_COLUMNS: [(&str, &str); 30] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -489,6 +487,8 @@ const ADDED_COLUMNS: [(&str, &str); 29] = [
     // 0101 point 1 (the owner, 2026-11-04): a folder's id for life, kept while it is parked under a negative id, so it
     // comes back as itself (`set_folders`).
     ("folders", "home INTEGER"),
+    // The path a library left, until what names it by its path has followed (`Catalogue::paths_to_follow`).
+    ("folders", "was TEXT"),
     // 0101 point 11: what a track was, kept as it retires (its tags go with its file): a missing entry shows it, and a
     // file that is it again takes the id back. Its last path, its length, and its title, artist, album and MusicBrainz
     // recording as tagged.
@@ -581,6 +581,61 @@ fn count_facts_writes(conn: &Connection, written: Arc<AtomicU64>) -> Result<()> 
 
 /// A file's place in the catalogue: its folder and path there.
 type Place = (i64, String);
+
+/// What the catalogue knows of and holds no file for, for Health's Missing list: nothing here is forgotten by itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Missing {
+    pub parked: Vec<ParkedLibrary>,
+    /// Tracks whose every file is gone a while, each by one of them.
+    pub gone: Vec<MissingTrack>,
+    /// Tracks retired, nothing having taken them, the latest first.
+    pub retired: Vec<MissingTrack>,
+}
+
+/// A library out of use, its rows kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParkedLibrary {
+    pub path: String,
+    /// Epoch seconds; none for a library parked before that was kept.
+    pub since: Option<i64>,
+    pub files: u64,
+}
+
+/// A track with no file to play.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MissingTrack {
+    pub track: i64,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// Where it last lay, in its library.
+    pub rel: Option<String>,
+    /// Epoch seconds.
+    pub since: i64,
+}
+
+/// `goes` is `stays` for good, every file of it and all that follows it (`track_moved`). In the caller's transaction, which has
+/// retired `goes`.
+fn taken_for_good(tx: &Connection, goes: i64, stays: i64) -> Result<()> {
+    tx.execute("UPDATE files SET track = ?2 WHERE track = ?1", params![goes, stays])?;
+    tx.execute("UPDATE track_moved SET id = ?2 WHERE id = ?1", params![goes, stays])?;
+    tx.execute("INSERT OR REPLACE INTO track_moved (old, id, followed) VALUES (?1, ?2, 0)", params![goes, stays])?;
+    // A link names one file a track: the next pass makes the one that stays its own.
+    tx.execute("DELETE FROM source_ids WHERE source = ?1 AND track_id = ?2", params![crate::source::cratarr::KIND.id, crate::serve::ids::song(goes)])?;
+    tx.execute("UPDATE OR IGNORE audiomuse SET track = ?2 WHERE track = ?1", params![goes, stays])?;
+    tx.execute("DELETE FROM audiomuse WHERE track = ?1", [goes])?;
+    Ok(())
+}
+
+/// A file as `identify` reads it, new or gone.
+struct Identified {
+    folder: i64,
+    rel: String,
+    duration_ms: Option<i64>,
+    track: Option<i64>,
+    size: i64,
+    mtime: i64,
+}
 
 /// The tracks with more than one file present: a record's copies. Few, so reading them first costs next to nothing.
 fn tracks_of_several(db: &Connection) -> Result<Vec<i64>> {
@@ -1047,8 +1102,9 @@ impl Catalogue {
     /// A folder that is no longer in use is parked, not forgotten: its rows (files, tags, links to the servers' ids)
     /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, with its files
     /// where they were, it picks them up again under its own id: the same track ids, only changed files read again. A
-    /// source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. Parked folders are
-    /// forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path. "The same files" is more than half
+    /// source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. A parked folder is
+    /// forgotten only when other files are found at its path, never for its age: what it holds is listeners', and how long a
+    /// drive stays in a drawer says nothing of whether it comes back. "The same files" is more than half
     /// of a sample spread over the folder: one album gone while it was away forgets nothing (rows go one by one, once the
     /// walk misses them), and nothing at all there is no other files, but a mount not up (`holds_nothing`).
     pub fn set_folders(&self, folders: Vec<PathBuf>) -> Result<()> {
@@ -1149,7 +1205,9 @@ impl Catalogue {
             match taken {
                 Some(p) => {
                     rekey(p, id)?;
-                    tx.execute("UPDATE folders SET path = ?2, home = ?1 WHERE id = ?1", params![id, path])?;
+                    // Of two moves before anything followed, what names it still says the first path.
+                    let left = rows.iter().find(|(at, q, _)| *at == p && q != path).map(|(_, q, _)| q);
+                    tx.execute("UPDATE folders SET path = ?2, home = ?1, was = coalesce(was, ?3) WHERE id = ?1", params![id, path, left])?;
                     tx.execute("DELETE FROM meta WHERE key = ?1", [format!("parked:{p}")])?;
                     stepped.retain(|s| *s != p);
                     tracing::info!("catalogue: {path} is in use again, with its rows");
@@ -1161,22 +1219,10 @@ impl Catalogue {
                 }
             }
         }
-        // 3. What stepped aside and was not taken is parked, from now on; parked too long, it is forgotten.
-        for p in &stepped {
+        // 3. What stepped aside and was not taken is parked, from now on, and stays so: the mark says since when.
+        for (p, path, _) in known(&tx)?.into_iter().filter(|(id, _, _)| stepped.contains(id)) {
             tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?1, ?2)", params![format!("parked:{p}"), now_s.to_string()])?;
-        }
-        for (p, path, _) in known(&tx)?.into_iter().filter(|(id, _, _)| *id < 0) {
-            let since: i64 = tx
-                .query_row("SELECT value FROM meta WHERE key = ?1", [format!("parked:{p}")], |r| r.get::<_, String>(0))
-                .optional()?
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(now_s);
-            if stepped.contains(&p) && now_s == since {
-                tracing::info!("catalogue: {path} is out of use; its rows are kept for {} days", PARKED_KEEP_SECS / 86_400);
-            }
-            if now_s - since >= PARKED_KEEP_SECS {
-                forget.push(p);
-            }
+            tracing::info!("catalogue: {path} is out of use; its rows are kept");
         }
         for p in forget {
             tx.execute(
@@ -1200,6 +1246,30 @@ impl Catalogue {
         drop(db);
         *self.folders.write().unwrap_or_else(|p| p.into_inner()) = in_use;
         self.poke.notify_one();
+        Ok(())
+    }
+
+    /// The libraries that changed path since what names them by it last followed: (where it was, where it is). A switch on an
+    /// account says a library's path, so a rename must reach it, or the library comes back on. Kept here until it has, as
+    /// `track_moved` is: a stop between the two databases finishes at the next start. Blocking.
+    pub fn paths_to_follow(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT was, path FROM folders WHERE was IS NOT NULL AND was != path")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What `paths_to_follow` gave has been followed. A library that moved again meanwhile waits: it says the path followed from no
+    /// longer. Blocking.
+    pub fn paths_followed(&self, moved: &[(String, String)]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        for (was, path) in moved {
+            tx.execute("UPDATE folders SET was = NULL WHERE was = ?1 AND path = ?2", params![was, path])?;
+        }
+        // Moved there and back: nothing named it elsewhere.
+        tx.execute("UPDATE folders SET was = NULL WHERE was = path", [])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -2215,6 +2285,12 @@ impl Catalogue {
         self.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
     }
 
+    /// Tests elsewhere: when a folder's files came.
+    #[cfg(test)]
+    pub fn came_for_tests(&self, folder: i64, at: i64) {
+        self.db().execute("UPDATE files SET came = ?2 WHERE folder = ?1", [folder, at]).unwrap();
+    }
+
     /// Tests elsewhere: every gone file gone longer than a gone file waits, for `identify` to retire it.
     #[cfg(test)]
     pub fn gone_long_ago_for_tests(&self) {
@@ -2265,13 +2341,13 @@ impl Catalogue {
         let folders = self.folders();
         let mut db = self.db();
         let tx = db.transaction()?;
-        let facts = |sql: &str| -> Result<Vec<(i64, String, Option<i64>, Option<i64>)>> {
+        let facts = |sql: &str| -> Result<Vec<Identified>> {
             let mut st = tx.prepare(sql)?;
-            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            let rows = st.query_map([], |r| Ok(Identified { folder: r.get(0)?, rel: r.get(1)?, duration_ms: r.get(2)?, track: r.get(3)?, size: r.get(4)?, mtime: r.get(5)? }))?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         };
         let mut new = facts(&format!(
-            "SELECT folder, rel, duration_ms, track FROM files WHERE track IS NULL AND state != {PENDING} AND {PRESENT}"
+            "SELECT folder, rel, duration_ms, track, size, mtime FROM files WHERE track IS NULL AND state != {PENDING} AND {PRESENT}"
         ))?;
         let mut moved = 0;
         let mut claimed: std::collections::HashSet<(i64, String)> = std::collections::HashSet::new();
@@ -2284,7 +2360,7 @@ impl Catalogue {
                 st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
             drop(st);
             for (folder, rel, track, replaces) in handed {
-                if !new.iter().any(|(f, r, _, _)| *f == folder && *r == rel) {
+                if !new.iter().any(|f| f.folder == folder && f.rel == rel) {
                     continue;
                 }
                 // Handed on before a take, it is the record's track now (CR4).
@@ -2305,17 +2381,25 @@ impl Catalogue {
                 moved += 1;
             }
             tx.execute("DELETE FROM handovers WHERE at < ?1", [now - GONE_KEEP_SECS])?;
-            new.retain(|(f, r, _, _)| !claimed.contains(&(*f, r.clone())));
+            new.retain(|f| !claimed.contains(&(f.folder, f.rel.clone())));
         }
-        let gone = facts("SELECT folder, rel, duration_ms, track FROM files WHERE gone_at IS NOT NULL AND track IS NOT NULL")?;
+        let gone = facts("SELECT folder, rel, duration_ms, track, size, mtime FROM files WHERE gone_at IS NOT NULL AND track IS NOT NULL")?;
         let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
         if !new.is_empty() {
             let mut tag = tx.prepare_cached(
                 "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('musicbrainz_trackid', 'title', 'artist') ORDER BY n",
             )?;
-            let mut file_facts = |(folder, rel, ms, track): &(i64, String, Option<i64>, Option<i64>)| -> Result<identity::FileFacts> {
-                let mut f = identity::FileFacts { folder: *folder, track: *track, name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
-                for row in tag.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let mut file_facts = |file: &Identified| -> Result<identity::FileFacts> {
+                let mut f = identity::FileFacts {
+                    folder: file.folder,
+                    track: file.track,
+                    name: identity::name_of(&file.rel),
+                    duration_ms: file.duration_ms,
+                    size: Some(file.size),
+                    mtime: Some(file.mtime),
+                    ..Default::default()
+                };
+                for row in tag.query_map(params![file.folder, file.rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
                     let (name, value) = row?;
                     let slot = match name.as_str() {
                         "musicbrainz_trackid" => &mut f.recording,
@@ -2332,7 +2416,7 @@ impl Catalogue {
             let gone_facts = gone.iter().map(&mut file_facts).collect::<Result<Vec<_>>>()?;
             drop(tag);
             for (n, g) in identity::match_moves_by_folder(&new_facts, &gone_facts) {
-                let ((nf, nr, _, _), (gf, gr, _, track)) = (&new[n], &gone[g]);
+                let (Identified { folder: nf, rel: nr, .. }, Identified { folder: gf, rel: gr, track, .. }) = (&new[n], &gone[g]);
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
                 carry_came(&tx, (*nf, nr), (*gf, gr))?;
                 // The same sound under another name: what was worked out of it goes along, and is read while the file is as it was then.
@@ -2349,13 +2433,13 @@ impl Catalogue {
             // A retired track comes back as itself (0101 point 11: a missing entry relinks by itself): a file moved
             // outside Cratarr after the gone files' day, or fetched again, by the same rules, among the retired tracks
             // that share something with a new file (there may be thousands).
-            let free: Vec<usize> = (0..new.len()).filter(|&n| !claimed.contains(&(new[n].0, new[n].1.clone()))).collect();
+            let free: Vec<usize> = (0..new.len()).filter(|&n| !claimed.contains(&(new[n].folder, new[n].rel.clone()))).collect();
             if !free.is_empty() {
                 let free_facts: Vec<identity::FileFacts> = free.iter().map(|&n| new_facts[n].clone()).collect();
                 let retired = retired_like(&tx, &free_facts)?;
                 let retired_facts: Vec<identity::FileFacts> = retired.iter().map(|(_, f)| f.clone()).collect();
                 for (i, r) in identity::match_moves(&free_facts, &retired_facts) {
-                    let (folder, rel, _, _) = &new[free[i]];
+                    let Identified { folder, rel, .. } = &new[free[i]];
                     // Its old row went as it retired: when the track was born is what is left of when it came.
                     tx.execute(
                         "UPDATE files SET track = ?3, came = (SELECT born FROM tracks WHERE id = ?3) WHERE folder = ?1 AND rel = ?2",
@@ -2371,9 +2455,9 @@ impl Catalogue {
         {
             let mut born = tx.prepare_cached("INSERT INTO tracks (born) VALUES (?1)")?;
             let mut give = tx.prepare_cached("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2")?;
-            for (folder, rel, _, _) in new.iter().filter(|(f, r, _, _)| !claimed.contains(&(*f, r.clone()))) {
+            for file in new.iter().filter(|f| !claimed.contains(&(f.folder, f.rel.clone()))) {
                 born.execute([now])?;
-                give.execute(params![folder, rel, tx.last_insert_rowid()])?;
+                give.execute(params![file.folder, file.rel, tx.last_insert_rowid()])?;
                 fresh += 1;
             }
         }
@@ -2382,7 +2466,7 @@ impl Catalogue {
             .iter()
             .enumerate()
             .filter(|(i, _)| !taken.contains(i))
-            .map(|(_, (f, r, _, _))| (*f, r.clone()))
+            .map(|(_, f)| (f.folder, f.rel.clone()))
             .collect();
         {
             let mut st = tx.prepare("SELECT folder, rel FROM files WHERE gone_at IS NOT NULL AND gone_at >= ?1")?;
@@ -2499,6 +2583,8 @@ impl Catalogue {
         // Each album's tracks as this pass leaves them.
         let mut tracks: Vec<Vec<i64>> = albums.iter().map(|a| a.tracks.iter().map(|t| t.0).collect()).collect();
         let mut take = Take::default();
+        // Those told here to leave: what they join below is a record they are the same as, never one they are short of.
+        let mut leaving: HashSet<usize> = HashSet::new();
         // The tracklists must match, always, so albums voting one record hold one set of tracks. Where the ids alone differ, a
         // file replaced outside Cratarr, the track is taken. Where the tracks do, a track added to one or one disc of a double
         // album retagged, the first by kind keeps the record, then the largest, then the first met (CR18: nobody has checked an
@@ -2524,10 +2610,16 @@ impl Catalogue {
                 named.by_name(&held, *record, (&tracks[i], &albums[i].facts.tracks), (&tracks[keeps], &albums[keeps].facts.tracks));
                 let (mine, theirs) = (named.all(&tracks[i]), named.all(&tracks[keeps]));
                 let (lacking, more): (Vec<i64>, Vec<i64>) = (theirs.difference(&mine).copied().collect(), mine.difference(&theirs).copied().collect());
-                if held.lacks_for_now(&albums[i], &lacking) && held.lacks_for_now(&albums[keeps], &more) {
+                // Of the very same release a copy can be short of what the record has (the owner, 2026-11-07), arriving or for good,
+                // and its ids hold it there whatever the tags say since. A track new to the record is no such thing: there the
+                // other copy grew, and the one that holds all the record ever had leaves as any other, by Q8.
+                let of_the_record = |list: &[i64]| list.iter().any(|t| held.record.get(t) == Some(record));
+                let short = identity::same_release(&albums[i].facts, &albums[keeps].facts) && ((more.is_empty() && of_the_record(&lacking)) || (lacking.is_empty() && of_the_record(&more)));
+                if short || (held.lacks_for_now(&albums[i], &lacking) && held.lacks_for_now(&albums[keeps], &more)) {
                     take = named;
                 } else if !moving {
                     records[i] = None;
+                    leaving.insert(i);
                 }
             }
         }
@@ -2580,6 +2672,14 @@ impl Catalogue {
                         let named = by_name.get(&(a.facts.artist.clone(), a.facts.title.clone())).into_iter().flatten();
                         let released = a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten();
                         let same: Option<(usize, i64)> = named.chain(released).find(|(j, _)| identity::same_record(&a.facts, &albums[*j].facts)).copied();
+                        // A folder of the very same release joins at once, short of the record or not yet held by it and more than
+                        // it has (the owner, 2026-11-07). Held by it already and longer, it is a copy that grew, which is Q8's. Held against
+                        // the longest there is, as a copy short of it says less of what its tracks are.
+                        let arrives = |(j, r): &&(usize, i64)| {
+                            let other = &albums[*j];
+                            !leaving.contains(&i) && identity::short_of(&a.facts, &other.facts) && (a.tracks.len() < other.tracks.len() || !a.tracks.iter().any(|t| held.record.get(&t.0) == Some(r)))
+                        };
+                        let same = same.or_else(|| a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten().filter(arrives).max_by_key(|(j, _)| albums[*j].tracks.len()).copied());
                         // Nothing here can take a record: every track stays with a file elsewhere, gone a while or in a trash.
                         // One with no record has nowhere to stay, and a row with no record is not served.
                         let stays = |t: &i64| {
@@ -2623,8 +2723,13 @@ impl Catalogue {
                             }
                         }
                         let r = match same {
-                            Some((j, r)) => {
+                            Some((j, r)) if identity::same_record(&a.facts, &albums[j].facts) => {
                                 take.place_by_place(&held, r, &tracks[i], &tracks[j]);
+                                r
+                            }
+                            // By name and length, as place by place a file would take a track it is not.
+                            Some((j, r)) => {
+                                take.by_name(&held, r, (&tracks[i], &a.facts.tracks), (&tracks[j], &albums[j].facts.tracks));
                                 r
                             }
                             None => {
@@ -2664,13 +2769,7 @@ impl Catalogue {
         for goes in taken {
             let stays = take.now(goes);
             tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {REMEMBER} WHERE id = ?1"), params![goes, now])?;
-            tx.execute("UPDATE files SET track = ?2 WHERE track = ?1", params![goes, stays])?;
-            tx.execute("UPDATE track_moved SET id = ?2 WHERE id = ?1", params![goes, stays])?;
-            tx.execute("INSERT OR REPLACE INTO track_moved (old, id, followed) VALUES (?1, ?2, 0)", params![goes, stays])?;
-            // A link names one file a track: the next pass makes the one that stays its own.
-            tx.execute("DELETE FROM source_ids WHERE source = ?1 AND track_id = ?2", params![crate::source::cratarr::KIND.id, crate::serve::ids::song(goes)])?;
-            tx.execute("UPDATE OR IGNORE audiomuse SET track = ?2 WHERE track = ?1", params![goes, stays])?;
-            tx.execute("DELETE FROM audiomuse WHERE track = ?1", [goes])?;
+            taken_for_good(tx, goes, stays)?;
             left.extend(held.record.get(&goes).copied());
             given += 1;
         }
@@ -2788,6 +2887,60 @@ impl Catalogue {
         if !files.is_empty() {
             self.changed_outside_pass();
         }
+        Ok(())
+    }
+
+    /// What the catalogue knows of and has no file for: libraries out of use, tracks with nothing but files gone a while, and
+    /// tracks retired that nothing took. Blocking.
+    pub fn missing(&self) -> Result<Missing> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, path, (SELECT count(*) FROM files f WHERE f.folder = folders.id) FROM folders WHERE id < 0 ORDER BY path")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut since = db.prepare_cached("SELECT value FROM meta WHERE key = ?1")?;
+        let mut parked = Vec::with_capacity(rows.len());
+        for (id, path, files) in rows {
+            let at: Option<String> = since.query_row([format!("parked:{id}")], |r| r.get(0)).optional()?;
+            parked.push(ParkedLibrary { path, since: at.and_then(|v| v.parse().ok()), files: files as u64 });
+        }
+        let tag = |name: &str| format!("(SELECT value FROM tags t WHERE t.folder = f.folder AND t.rel = f.rel AND t.name = '{name}' ORDER BY t.n LIMIT 1)");
+        let mut st = db.prepare(&format!(
+            "SELECT f.track, {}, {}, {}, f.rel, max(f.gone_at) FROM files f WHERE f.gone_at IS NOT NULL AND f.track IS NOT NULL AND f.folder >= 0
+               AND NOT EXISTS (SELECT 1 FROM files o WHERE o.track = f.track AND o.gone_at IS NULL)
+             GROUP BY f.track ORDER BY max(f.gone_at) DESC, f.track",
+            tag("title"),
+            tag("artist"),
+            tag("album")
+        ))?;
+        let row = |r: &rusqlite::Row| -> rusqlite::Result<MissingTrack> { Ok(MissingTrack { track: r.get(0)?, title: r.get(1)?, artist: r.get(2)?, album: r.get(3)?, rel: r.get(4)?, since: r.get(5)? }) };
+        let gone = st.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
+        let mut st = db.prepare("SELECT id, was_title, was_artist, was_album, was_rel, retired_at FROM tracks WHERE retired_at IS NOT NULL AND id NOT IN (SELECT old FROM track_moved) ORDER BY retired_at DESC, id")?;
+        let retired = st.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
+        Ok(Missing { parked, gone, retired })
+    }
+
+    /// A person says a track on Health's Missing list is `stays` (A5): what no rule could pair, a retag and a rename at once, say. It
+    /// goes as a take goes, for good, so what names it follows it at the next check. Refused for what still has a file to play, what
+    /// went already, and a track that is itself missing: a person's word is for the track in front of them. Blocking.
+    pub fn reconnect(&self, goes: i64, stays: i64) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        anyhow::ensure!(goes != stays, "A track can't be itself");
+        let (retired, record): (bool, Option<i64>) = tx.query_row("SELECT retired_at IS NOT NULL, record FROM tracks WHERE id = ?1", [goes], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.context("That track is not known")?;
+        anyhow::ensure!(taken_by(&tx, goes)? == goes, "That track was taken already");
+        let here = |track: i64| -> Result<bool> { Ok(tx.prepare_cached(&format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}"))?.exists([track])?) };
+        anyhow::ensure!(!here(goes)?, "That track has a file");
+        anyhow::ensure!(here(stays)?, "That track has no file to take it");
+        // What it was stays as it retired: its files went then, and it would be read from nothing.
+        if retired {
+            tx.execute("UPDATE tracks SET record = NULL, back = NULL WHERE id = ?1", [goes])?;
+        } else {
+            tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {REMEMBER} WHERE id = ?1"), params![goes, now()])?;
+        }
+        taken_for_good(&tx, goes, stays)?;
+        tx.execute("UPDATE records SET retired_at = ?2 WHERE id = ?1 AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)", params![record, now()])?;
+        tx.commit()?;
+        drop(db);
+        self.changed_outside_pass();
         Ok(())
     }
 
@@ -5680,6 +5833,197 @@ mod tests {
         assert_eq!(young, 1, "the record it was for a while went with its tracks");
     }
 
+    /// These tracks by name as a folder of the very same release holds them so far.
+    fn of_the_release(list: &[(i64, &str)]) -> AlbumCopy {
+        let tracks: Vec<(i64, &str, i64)> = list.iter().map(|(t, name)| (*t, *name, 200_000)).collect();
+        copy(Some("release"), "A", "Three", &tracks)
+    }
+
+    /// Three tracks of the release in `Kept`, on tracks 1, 2 and 3, as the record stands: the copy, and the record.
+    fn kept_of_the_release(cat: &Catalogue) -> (AlbumCopy, Option<i64>) {
+        let kept = lying_in(cat, "Kept", of_the_release(&[(1, "One"), (2, "Two"), (3, "Three")]));
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        let record = record_of(cat, 1);
+        (kept, record)
+    }
+
+    /// One folder of the release as a pass reads it: these files, by name, on the tracks they hold now.
+    fn as_read(cat: &Catalogue, dir: &str, names: &[&str]) -> AlbumCopy {
+        let places: Vec<(i64, String)> = names.iter().map(|name| (0, format!("{dir}/{name}.flac"))).collect();
+        let list: Vec<(i64, &str)> = places.iter().zip(names).map(|((folder, rel), name)| (cat.track_of(*folder, rel).unwrap(), *name)).collect();
+        AlbumCopy { files: places, ..of_the_release(&list) }
+    }
+
+    /// The owner, 2026-11-07: a folder of the very same release is the record from its first file, and each file takes the track it
+    /// is: the last track first here, which place by place would take the record's first. No record is born for it on the way.
+    #[test]
+    fn a_folder_of_the_very_same_release_joins_at_its_first_file() {
+        let cat = tracks(6);
+        let (kept, record) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Copy/Three.flac", 6);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["Three"])]).unwrap();
+        assert_eq!(cat.track_of(0, "Copy/Three.flac"), Some(3), "the track it is");
+        assert_eq!(cat.files_of(1).len(), 1, "and no track it does not hold");
+        assert_eq!(records_made(&cat), 1, "no record of its own");
+        file_of_track(&cat, "Copy/One.flac", 4);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Three"])]).unwrap();
+        assert_eq!(cat.track_of(0, "Copy/One.flac"), Some(1));
+        file_of_track(&cat, "Copy/Two.flac", 5);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(4, 1), (5, 2), (6, 3)]));
+        assert_eq!((record_of(&cat, 1), records_made(&cat)), (record, 1));
+        assert_eq!(cat.assign_records(&[kept, as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap(), 0, "settled");
+    }
+
+    /// While it is short it is settled too: nothing moves at the next build, and nothing of it leaves.
+    #[test]
+    fn a_folder_short_of_its_release_stays_as_it_is_between_files() {
+        let cat = tracks(5);
+        let (kept, record) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Copy/One.flac", 4);
+        file_of_track(&cat, "Copy/Two.flac", 5);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two"])]).unwrap();
+        assert_eq!(cat.assign_records(&[kept, as_read(&cat, "Copy", &["One", "Two"])]).unwrap(), 0);
+        assert_eq!((cat.track_of(0, "Copy/Two.flac"), record_of(&cat, 2)), (Some(2), record));
+    }
+
+    /// Short of it, the tags no longer say what they did, and what the ids hold together stays together, as with a whole copy.
+    #[test]
+    fn a_copy_short_of_its_release_stays_whatever_the_tags_say_since() {
+        let cat = tracks(4);
+        let (kept, _) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Copy/One.flac", 4);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One"])]).unwrap();
+        let mut retagged = as_read(&cat, "Copy", &["One"]);
+        retagged.facts.tracks[0] = identity::Listed::of("Uno", 200_000);
+        assert_eq!(cat.assign_records(&[kept, retagged]).unwrap(), 0);
+        assert_eq!(cat.track_of(0, "Copy/One.flac"), Some(1));
+    }
+
+    /// Without that very release nothing changes: a folder short of a record is a record of its own until its last file (CR19).
+    #[test]
+    fn a_folder_with_no_release_or_another_waits_for_its_last_file() {
+        for release in [None, Some("another")] {
+            let cat = tracks(4);
+            let (kept, record) = kept_of_the_release(&cat);
+            file_of_track(&cat, "Copy/One.flac", 4);
+            let first = AlbumCopy { files: vec![(0, "Copy/One.flac".to_string())], ..copy(release, "A", "Three", &[(4, "One", 200_000)]) };
+            cat.assign_records(&[kept, first]).unwrap();
+            assert!(cat.moved_tracks().unwrap().is_empty(), "{release:?}");
+            assert_ne!(record_of(&cat, 4), record, "{release:?}");
+        }
+    }
+
+    /// A track the record does not list is no track of that release, whatever the folder says: nothing here joins.
+    #[test]
+    fn a_folder_with_a_track_the_record_does_not_list_stays_out() {
+        let cat = tracks(5);
+        let (kept, record) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Copy/One.flac", 4);
+        file_of_track(&cat, "Copy/Bonus.flac", 5);
+        let mine = AlbumCopy { files: vec![(0, "Copy/One.flac".to_string()), (0, "Copy/Bonus.flac".to_string())], ..of_the_release(&[(4, "One"), (5, "Bonus")]) };
+        cat.assign_records(&[kept, mine]).unwrap();
+        assert!(cat.moved_tracks().unwrap().is_empty());
+        assert_ne!(record_of(&cat, 4), record);
+    }
+
+    /// The other way round: the record is short of the folder, a whole copy landing beside a few tracks you hold. It is that record,
+    /// and what it brings are tracks of it. Who keeps the record goes by kind still: Music's stays what it was.
+    #[test]
+    fn a_whole_folder_joins_a_record_short_of_it() {
+        let cat = tracks(5);
+        let kept = AlbumCopy { rank: 2, ..lying_in(&cat, "Kept", of_the_release(&[(1, "One"), (2, "Two")])) };
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        cat.db().execute("UPDATE records SET born = born - ?1", [GONE_KEEP_SECS + 1]).unwrap();
+        let record = record_of(&cat, 1);
+        for (rel, track) in [("Copy/One.flac", 3), ("Copy/Two.flac", 4), ("Copy/Three.flac", 5)] {
+            file_of_track(&cat, rel, track);
+        }
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(3, 1), (4, 2)]));
+        assert_eq!(record_of(&cat, 5), record, "a track of the record now");
+        assert_eq!(cat.assign_records(&[kept, as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap(), 0, "settled, the shorter staying");
+    }
+
+    /// Q8 stands where it is a copy that grew: a track new to the record parts two whole copies, of one release too, and the one that
+    /// left does not come back as a folder short of it.
+    #[test]
+    fn a_track_new_to_the_record_parts_whole_copies_of_one_release() {
+        let cat = tracks(7);
+        let (kept, record) = kept_of_the_release(&cat);
+        for (rel, track) in [("Copy/One.flac", 4), ("Copy/Two.flac", 5), ("Copy/Three.flac", 6)] {
+            file_of_track(&cat, rel, track);
+        }
+        let second = as_read(&cat, "Copy", &["One", "Two", "Three"]);
+        cat.assign_records(&[kept.clone(), second.clone()]).unwrap();
+        file_of_track(&cat, "Kept/Four.flac", 7);
+        let list = [(1, "One"), (2, "Two"), (3, "Three"), (7, "Four")];
+        let grown = AlbumCopy { files: [kept.files.clone(), vec![(0, "Kept/Four.flac".to_string())]].concat(), ..of_the_release(&list) };
+        cat.assign_records(&[grown.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        let left = as_read(&cat, "Copy", &["One", "Two", "Three"]);
+        assert_eq!(record_of(&cat, 1), record, "the copy with more keeps it");
+        assert_eq!(record_of(&cat, 7), record);
+        assert_ne!(record_of(&cat, left.tracks[0].0), record, "the other leaves");
+        assert_eq!(cat.assign_records(&[grown, left.clone()]).unwrap(), 0, "and stays out");
+        assert_ne!(record_of(&cat, left.tracks[0].0), record);
+    }
+
+    /// A copy of the release that lost a file for good is short of it, as one arriving is: it stays, and its track stays the record's.
+    #[test]
+    fn a_copy_of_one_release_that_lost_a_file_for_good_stays_short_of_it() {
+        let cat = tracks(6);
+        let (kept, record) = kept_of_the_release(&cat);
+        for (rel, track) in [("Copy/One.flac", 4), ("Copy/Two.flac", 5), ("Copy/Three.flac", 6)] {
+            file_of_track(&cat, rel, track);
+        }
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        cat.db().execute("DELETE FROM files WHERE rel = 'Copy/Two.flac'", []).unwrap();
+        assert_eq!(cat.assign_records(&[kept, as_read(&cat, "Copy", &["One", "Three"])]).unwrap(), 0);
+        assert_eq!((cat.track_of(0, "Copy/One.flac"), record_of(&cat, 2)), (Some(1), record));
+    }
+
+    /// Two folders arriving at once, the release in neither yet: the first met is the record, the other joins it file by file.
+    #[test]
+    fn two_folders_of_one_release_arriving_at_once_are_one_record() {
+        let cat = tracks(3);
+        let a = lying_in(&cat, "A", of_the_release(&[(1, "One"), (2, "Two")]));
+        let b = lying_in(&cat, "B", of_the_release(&[(3, "Two")]));
+        cat.assign_records(&[a, b]).unwrap();
+        assert_eq!((cat.track_of(0, "B/3.flac"), records_made(&cat)), (Some(2), 1));
+    }
+
+    /// Gaining more than it held takes a copy past any vote, and it is held against the others as a new folder is. It is no new folder:
+    /// the record holds it already, and it grew, so it leaves as Q8 and m5 say, the record staying with the copy that is still it.
+    #[test]
+    fn a_copy_of_one_release_that_gained_more_than_it_held_still_leaves() {
+        let cat = tracks(14);
+        let (kept, record) = kept_of_the_release(&cat);
+        for (rel, track) in [("Copy/One.flac", 4), ("Copy/Two.flac", 5), ("Copy/Three.flac", 6)] {
+            file_of_track(&cat, rel, track);
+        }
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        (7..=14).for_each(|t| file_of_track(&cat, &format!("Kept/{t}.flac"), t));
+        let names: Vec<String> = (7..=14).map(|t| format!("New {t}")).collect();
+        let list: Vec<(i64, &str)> = [(1, "One"), (2, "Two"), (3, "Three")].into_iter().chain((7..=14).zip(names.iter().map(String::as_str))).collect();
+        let grown = AlbumCopy { files: kept.files.iter().cloned().chain((7..=14).map(|t| (0, format!("Kept/{t}.flac")))).collect(), ..of_the_release(&list) };
+        cat.assign_records(&[grown, as_read(&cat, "Copy", &["One", "Two", "Three"])]).unwrap();
+        assert_eq!(cat.track_of(0, "Copy/One.flac"), Some(1), "the copy that is still the record");
+        assert_ne!(record_of(&cat, 14), record, "what grew left with what it brought");
+    }
+
+    /// A folder held against a copy short of the record would keep tracks of its own for what the other copy has: it goes by the longest.
+    #[test]
+    fn a_folder_of_one_release_is_held_against_the_longest_copy_of_it() {
+        let cat = tracks(6);
+        let (kept, _) = kept_of_the_release(&cat);
+        file_of_track(&cat, "Short/One.flac", 4);
+        cat.assign_records(&[kept.clone(), as_read(&cat, "Short", &["One"])]).unwrap();
+        file_of_track(&cat, "Copy/One.flac", 5);
+        file_of_track(&cat, "Copy/Two.flac", 6);
+        cat.assign_records(&[as_read(&cat, "Short", &["One"]), kept, as_read(&cat, "Copy", &["One", "Two"])]).unwrap();
+        assert_eq!((cat.track_of(0, "Copy/One.flac"), cat.track_of(0, "Copy/Two.flac")), (Some(1), Some(2)), "each on the record's own");
+    }
+
     /// CR19: only the young. Past a day a record has what names it, and nothing merges two records.
     #[test]
     fn a_record_past_its_first_day_joins_nothing() {
@@ -6713,6 +7057,248 @@ mod tests {
         for d in [&a, &renamed, &copy] {
             std::fs::remove_dir_all(d).ok();
         }
+    }
+
+    /// A1: a place stands in for a file in these tables, so a new one left out of `FILE_TABLES` stays where its file left, as a
+    /// waveform once did. `handovers` is the one that is not a file's: it is a promise about a place a file is on its way to, kept
+    /// through what lies there now going, and taken along it would be gone before the file came. It goes by the folder's id, which
+    /// is for life, so a parked folder finds it on its return, and it ends by itself within the day.
+    #[test]
+    fn every_table_by_folder_and_path_goes_with_its_file() {
+        const OF_NO_FILE: [&str; 1] = ["handovers"];
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let tables: Vec<String> = {
+            let db = cat.db();
+            let mut st = db
+                .prepare(
+                    "SELECT m.name FROM sqlite_master m WHERE m.type = 'table'
+                       AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) WHERE name = 'folder')
+                       AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) WHERE name = 'rel') ORDER BY m.name",
+                )
+                .unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        for table in &tables {
+            assert!(FILE_TABLES.contains(&table.as_str()) || OF_NO_FILE.contains(&table.as_str()), "{table} goes by folder and path: add it to FILE_TABLES, or say why not");
+        }
+        let named: Vec<&str> = FILE_TABLES.iter().chain(&OF_NO_FILE).copied().collect();
+        assert_eq!(named.len(), tables.len(), "a table named is a table there: {named:?} against {tables:?}");
+    }
+
+    /// A library's cover files are parked with it and go when it is forgotten, or they stay for good under an id nothing will hold.
+    #[test]
+    fn a_librarys_cover_files_go_where_it_goes() {
+        let (a, b) = (music(), music());
+        std::fs::write(b.join("A - B (2020)/cover.jpg"), b"a picture").unwrap();
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        let print = cat.cover_prints().unwrap();
+        assert!(print.contains_key(&(1, "A - B (2020)".to_string())), "{print:?}");
+        cat.set_folders(vec![a.clone()]).unwrap();
+        assert!(!cat.cover_prints().unwrap().contains_key(&(1, "A - B (2020)".to_string())), "parked with its library");
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(cat.cover_prints().unwrap(), print, "back with it");
+
+        cat.set_folders(vec![a.clone()]).unwrap();
+        std::fs::remove_dir_all(&b).unwrap();
+        std::fs::create_dir_all(b.join("Other")).unwrap();
+        std::fs::write(b.join("Other/01 Other.mp3"), b"other files at its path").unwrap();
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&b), Some(2), "a new library");
+        assert!(cat.cover_prints().unwrap().is_empty(), "nothing left of the one forgotten");
+        for d in [&a, &b] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A4: what no file answers for, each with where it lay and since when: a library out of use, a track with nothing but gone files,
+    /// and one retired. A file gone beside another of its track is no track missing, and what a take took is not missing at all.
+    #[test]
+    fn the_missing_list_says_what_has_no_file_and_since_when() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let rel = "A - B (2020)/01 One.mp3";
+        let (gone, other) = (cat.track_of(0, rel).unwrap(), cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap());
+        cat.tag_for_tests(0, rel, &[("title", "One"), ("artist", "A"), ("album", "B")]);
+        std::fs::remove_file(a.join(rel)).unwrap();
+        cat.walk_all();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        let missing = cat.missing().unwrap();
+        assert_eq!((missing.parked.len(), missing.parked[0].path.as_str(), missing.parked[0].files), (1, &*b.display().to_string(), 2));
+        assert!(missing.parked[0].since.is_some(), "since when");
+        assert_eq!(missing.gone.len(), 1);
+        assert_eq!((missing.gone[0].track, missing.gone[0].title.as_deref(), missing.gone[0].album.as_deref(), missing.gone[0].rel.as_deref()), (gone, Some("One"), Some("B"), Some(rel)));
+        assert!(missing.retired.is_empty());
+
+        cat.gone_long_ago_for_tests();
+        cat.identify().unwrap();
+        let missing = cat.missing().unwrap();
+        assert!(missing.gone.is_empty(), "its day over");
+        assert_eq!(missing.retired.iter().map(|t| (t.track, t.title.as_deref())).collect::<Vec<_>>(), [(gone, Some("One"))], "it is remembered");
+        cat.reconnect(gone, other).unwrap();
+        assert!(cat.missing().unwrap().retired.is_empty(), "what was taken is not missing");
+        for d in [&a, &b] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A gone file with another of its track still here plays from that one: nothing is missing.
+    #[test]
+    fn a_file_gone_beside_another_of_its_track_is_no_track_missing() {
+        let cat = tracks(6);
+        let (_, second, _) = two_copies(&cat);
+        cat.db().execute("UPDATE files SET gone_at = 1 WHERE rel = ?1", [&second.files[0].1]).unwrap();
+        assert!(cat.missing().unwrap().gone.is_empty());
+    }
+
+    /// A5: a person's word, as a take: the old id leads to the track chosen, for good, and what names it is there to follow.
+    #[test]
+    fn a_track_reconnected_by_hand_is_taken_by_the_one_chosen() {
+        let cat = tracks(2);
+        file_of_track(&cat, "A/2.flac", 2);
+        cat.db().execute("UPDATE tracks SET retired_at = 5, was_title = 'Gone', record = NULL WHERE id = 1", []).unwrap();
+        cat.reconnect(1, 2).unwrap();
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(1, 2)]));
+        assert_eq!(cat.tracks_to_follow().unwrap(), [(1, 2)]);
+        assert_eq!(cat.track_of_source(crate::source::cratarr::KIND.id, "tr-1"), Some(2), "an old id plays what took it");
+        assert_eq!(cat.remembered(1).unwrap().title.as_deref(), Some("Gone"), "what it was stays");
+        assert!(retired(&cat, 1));
+    }
+
+    /// One gone a while has its file's row still: that goes too, and comes to nothing when its day is over.
+    #[test]
+    fn a_track_gone_a_while_can_be_reconnected_and_lets_go_of_its_file() {
+        let cat = tracks(2);
+        file_of_track(&cat, "A/1.flac", 1);
+        file_of_track(&cat, "B/2.flac", 2);
+        cat.db().execute("UPDATE files SET gone_at = 1 WHERE track = 1", []).unwrap();
+        cat.db().execute("UPDATE tracks SET was_title = NULL WHERE id = 1", []).unwrap();
+        cat.tag_for_tests(0, "A/1.flac", &[("title", "Was")]);
+        cat.reconnect(1, 2).unwrap();
+        assert!(retired(&cat, 1));
+        assert_eq!(cat.remembered(1).unwrap().title.as_deref(), Some("Was"), "read before its file went to the other");
+        assert_eq!(cat.files_of(2).len(), 1, "the one to play");
+    }
+
+    #[test]
+    fn a_track_is_reconnected_only_from_nothing_to_something() {
+        let cat = tracks(4);
+        file_of_track(&cat, "A/1.flac", 1);
+        file_of_track(&cat, "A/2.flac", 2);
+        cat.db().execute("UPDATE tracks SET retired_at = 5 WHERE id IN (3, 4)", []).unwrap();
+        assert!(cat.reconnect(1, 2).is_err(), "it has a file");
+        assert!(cat.reconnect(3, 3).is_err(), "itself");
+        assert!(cat.reconnect(3, 4).is_err(), "onto one that has none");
+        assert!(cat.reconnect(99, 2).is_err(), "not known");
+        cat.reconnect(3, 2).unwrap();
+        assert!(cat.reconnect(3, 1).is_err(), "taken already: a take stands");
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(3, 2)]));
+    }
+
+    /// A record of tracks all gone on goes with the last of them, as a take leaves it.
+    #[test]
+    fn a_record_whose_last_track_was_reconnected_retires() {
+        let cat = tracks(2);
+        cat.assign_records(&[album("Gone", &[1])]).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        cat.db().execute("UPDATE tracks SET retired_at = NULL WHERE id = 1", []).unwrap();
+        file_of_track(&cat, "A/2.flac", 2);
+        cat.reconnect(1, 2).unwrap();
+        assert!(record_retired(&cat, record));
+    }
+
+    /// A3: a library out of use is forgotten by nobody's clock: however long it is parked, its rows wait, and it comes back as itself,
+    /// the same ids on the same files, with nothing read again.
+    #[test]
+    fn a_library_parked_however_long_comes_back_as_itself() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(1, "A - B (2020)/01 One.mp3").unwrap();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        let parked: Vec<(String, String)> = {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT key, value FROM meta WHERE key LIKE 'parked:%'").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(parked.len(), 1, "since when it is parked is kept");
+        let years_ago = now() - 10 * 365 * 24 * 3600;
+        cat.db().execute("UPDATE meta SET value = ?2 WHERE key = ?1", params![parked[0].0, years_ago.to_string()]).unwrap();
+        // Every start and every change of the libraries looks at it again.
+        cat.set_folders(vec![a.clone()]).unwrap();
+        let (rows, retired): (i64, i64) = cat.db().query_row("SELECT (SELECT count(*) FROM files WHERE folder < 0), (SELECT count(*) FROM tracks WHERE retired_at IS NOT NULL)", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((rows, retired), (2, 0), "its rows wait, and no track of it retires");
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&b), Some(1), "its own id");
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(one), "its own track");
+        for d in [&a, &b] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// What names a library by its path hears where it went, however it came there: renamed in one breath, or parked on the way by a
+    /// mount changed first. Until that has followed it says the path that is named, and a library back where it was moved nowhere.
+    #[test]
+    fn a_library_that_changed_path_says_where_it_was_until_that_has_followed() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        let at = |p: &PathBuf| p.display().to_string();
+        let renamed = b.with_extension("renamed");
+        std::fs::rename(&b, &renamed).unwrap();
+        cat.set_folders(vec![a.clone(), renamed.clone()]).unwrap();
+        assert_eq!(cat.paths_to_follow().unwrap(), [(at(&b), at(&renamed))], "in one breath");
+
+        let again = renamed.with_extension("again");
+        std::fs::rename(&renamed, &again).unwrap();
+        cat.set_folders(vec![a.clone(), again.clone()]).unwrap();
+        let moved = cat.paths_to_follow().unwrap();
+        assert_eq!(moved, [(at(&b), at(&again))], "moved on first: what names it still says the first path");
+        cat.paths_followed(&moved).unwrap();
+        assert!(cat.paths_to_follow().unwrap().is_empty(), "told once");
+
+        let third = again.with_extension("third");
+        std::fs::rename(&again, &third).unwrap();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        assert!(cat.paths_to_follow().unwrap().is_empty(), "parked, it has gone nowhere yet");
+        cat.set_folders(vec![a.clone(), third.clone()]).unwrap();
+        let moved = cat.paths_to_follow().unwrap();
+        assert_eq!(moved, [(at(&again), at(&third))], "in two moves");
+
+        std::fs::rename(&third, &again).unwrap();
+        cat.set_folders(vec![a.clone(), again.clone()]).unwrap();
+        assert!(cat.paths_to_follow().unwrap().is_empty(), "there and back before it followed: nothing to say");
+        cat.paths_followed(&moved).unwrap();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        cat.set_folders(vec![a.clone(), again.clone()]).unwrap();
+        assert!(cat.paths_to_follow().unwrap().is_empty(), "out of use and back at its own path");
+        for d in [&a, &again] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A2 at the door: a file with no tags to speak of, moved and renamed, keeps its track by its size, time and length. Walked in
+    /// two passes, as a `mv` is seen: gone from one place, new at another, with what the disk says of it unchanged.
+    #[test]
+    fn a_file_moved_and_renamed_with_no_tags_keeps_its_track() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        std::fs::create_dir_all(d.join("Elsewhere")).unwrap();
+        std::fs::rename(d.join("A - B (2020)/01 One.mp3"), d.join("Elsewhere/first take.mp3")).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (1, 0), "recognised: no id given");
+        assert_eq!(cat.track_of(0, "Elsewhere/first take.mp3"), Some(one));
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// A file renamed or moved outside Cratarr is the same sound under another name: what was worked out of it goes with it, or its

@@ -813,6 +813,26 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The environment makes an account, and leaves its password to it: set at every start, one changed in Account came back.
+    #[test]
+    fn the_environments_password_makes_an_account_and_changes_none() {
+        let dir = std::env::temp_dir().join(format!("cratarr-env-password-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let env = |key: &str| match key {
+            "CRATARR_SUBSONIC_USER" => Some("ann".to_string()),
+            "CRATARR_SUBSONIC_PASSWORD" => Some("from the environment".to_string()),
+            _ => None,
+        };
+        let s = Serve::open(Some(&dir), Rules::default(), &env).unwrap();
+        assert_eq!(s.users.get("ann").unwrap().password, "from the environment", "made");
+        s.users.set("ann", "chosen").unwrap();
+        drop(s);
+        let s = Serve::open(Some(&dir), Rules::default(), &env).unwrap();
+        assert_eq!(s.users.get("ann").unwrap().password, "chosen", "and left as it is");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn a_key_minted_on_the_server_goes_to_an_owner_only_file() {
         let dir = std::env::temp_dir().join(format!("cratarr-mint-{}", std::process::id()));

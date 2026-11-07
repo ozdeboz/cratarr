@@ -22,7 +22,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use super::Catalogue;
 
 pub(super) const SCHEMA: &str = "
--- What was written that a device's index reads: `kind` is `track`, `record`, `artist`, `library` or `sound`, `item` its id.
+-- What was written that a device's index reads: `kind` is `track`, `record`, `artist`, `library`, `sound` or `cover`, `item` its id.
 CREATE TABLE IF NOT EXISTS index_log (rev INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, item INTEGER NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS index_log_one ON index_log (kind, item);
 -- What each row of the index last said, as `index::Prints` makes it a number: one that says something else has changed.
@@ -182,6 +182,17 @@ impl Catalogue {
     /// The items of each kind written after `after`, up to and with `upto`. Blocking.
     pub fn index_logged(&self, after: i64, upto: i64) -> Result<BTreeMap<String, Vec<i64>>> {
         self.beside(|db| logged_in(db, after, upto))
+    }
+
+    /// `kind`'s `item` changed, in what has no trigger to say so: a small cover made. Blocking.
+    pub fn index_note(&self, kind: &str, item: i64) -> Result<()> {
+        log_one(&self.db(), kind, item)
+    }
+
+    /// Whether the log names anything but covers after `after`, up to and with `upto`. Covers are no rows and have a feed of their
+    /// own, and a library's worth of them takes hours: at each a device would ask for a whole build, to hear nothing. Blocking.
+    pub fn index_moved(&self, after: i64, upto: i64) -> Result<bool> {
+        self.beside(|db| Ok(db.query_row("SELECT EXISTS (SELECT 1 FROM index_log WHERE rev > ?1 AND rev <= ?2 AND kind <> 'cover')", [after, upto], |r| r.get(0))?))
     }
 
     /// The lowest rev a device can go on from. Blocking.

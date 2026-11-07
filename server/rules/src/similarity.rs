@@ -386,6 +386,64 @@ impl Profile {
     }
 }
 
+/// Several profiles against the library in one pass (the tablet, 2026-11-07: a Sounds like of six sounds was six passes, 708 ms
+/// against a budget of 300): what is the track's alone is worked out once, however many ask, and each profile's weights are read by
+/// the word's number, not looked for in a map. The same sums in the same order, so each answer is `Profile::to_track`'s to the bit.
+pub struct Together<'a> {
+    lib: &'a Library,
+    profiles: &'a [Profile],
+    /// Per profile, per kind of word, each word's weight by its number.
+    weights: Vec<[Vec<f64>; WORDS.len()]>,
+}
+
+impl<'a> Together<'a> {
+    pub fn of(lib: &'a Library, profiles: &'a [Profile]) -> Self {
+        let dense = |p: &Profile| -> [Vec<f64>; WORDS.len()] {
+            std::array::from_fn(|k| {
+                let mut by_word = vec![0.0; p.weights[k].keys().next_back().map_or(0, |&w| w as usize + 1)];
+                for (&w, &x) in &p.weights[k] {
+                    by_word[w as usize] = x;
+                }
+                by_word
+            })
+        };
+        Together { lib, profiles, weights: profiles.iter().map(dense).collect() }
+    }
+
+    /// How alike the track at place `i` is to each profile, in their order: `each(which, signals)`.
+    pub fn to_track(&self, i: usize, t: &Track, mut each: impl FnMut(usize, Signals)) {
+        let lib = self.lib;
+        let words: [Vec<(u32, f64)>; WORDS.len()] = {
+            let kinds = t.words();
+            std::array::from_fn(|k| unique(kinds[k]).map(|w| (w, lib.idf(k, w))).collect())
+        };
+        let lengths = words.each_ref().map(|list| list.iter().fold(0.0, |len, (_, x)| len + x * x));
+        let theirs = t.numbers();
+        let sound = lib.sound(i);
+        for (at, p) in self.profiles.iter().enumerate() {
+            let mut out = Signals::default();
+            if p.n == 0 {
+                each(at, out);
+                continue;
+            }
+            for k in 0..WORDS.len() {
+                if p.norms[k] == 0.0 {
+                    continue;
+                }
+                let weights = &self.weights[at][k];
+                let dot = words[k].iter().fold(0.0, |dot, (w, x)| dot + x * weights.get(*w as usize).copied().unwrap_or(0.0));
+                let len = lengths[k];
+                out.set(WORDS[k], if len == 0.0 { 0.0 } else { (dot / (len.sqrt() * p.norms[k])).clamp(0.0, 1.0) });
+            }
+            p.numbers_against(lib, |k| theirs[k].filter(|x| x.is_finite()).map(|x| Spread { middle: x as f64, spread: 0.0 }), true, &mut out);
+            if let (Some(s), Some(v)) = (&p.sound, sound) {
+                out.set(Signal::Sound, sounds_alike(s, v));
+            }
+            each(at, out);
+        }
+    }
+}
+
 /// How alike two things are on each signal, 0 to 1; none where it is not known (a track AudioMuse has not heard, a
 /// set without genres).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -640,6 +698,38 @@ mod tests {
         let first = once();
         for _ in 0..50 {
             assert_eq!(once(), first);
+        }
+    }
+
+    /// One pass over the library for several profiles is that many passes, to the last bit of every signal: words of many rarities and
+    /// some known to no profile, numbers, moods and sounds, and tracks missing some of them.
+    #[test]
+    fn several_profiles_in_one_pass_read_to_the_bit_as_each_alone() {
+        let tracks: Vec<Track> = (0..200u32)
+            .map(|n| Track {
+                genres: (0..n % 9).map(|g| (g * 7 + n % 3) % 41).collect(),
+                artists: vec![n % 13, n % 13],
+                tags: if n % 4 == 0 { Vec::new() } else { vec![n % 5, 1000 + n % 2] },
+                year: (n % 3 != 0).then_some(1970 + n % 50),
+                bpm: (n % 2 == 0).then_some(80.0 + (n % 90) as f32),
+                energy: Some((n % 10) as f32 / 10.0),
+                moods: (n % 5 != 0).then_some([0.1, 0.2, (n % 7) as f32 / 7.0, 0.4, 0.5]),
+                ..Track::default()
+            })
+            .collect();
+        let sounds: Vec<Option<Arc<[f32]>>> = (0..200u64).map(|n| (n % 6 != 0).then(|| heard(n, 16).into())).collect();
+        let lib = Library::new(&tracks, sounds);
+        let sets: [Vec<usize>; 4] = [vec![1, 2, 3], (10..40).collect(), vec![0], Vec::new()];
+        let profiles: Vec<Profile> = sets.iter().map(|set| Profile::of_counted(&lib, set, |i| &tracks[i])).collect();
+        let together = Together::of(&lib, &profiles);
+        for (i, t) in tracks.iter().enumerate() {
+            let mut told = 0;
+            together.to_track(i, t, |at, signals| {
+                let alone = profiles[at].to_track(&lib, i, t);
+                assert_eq!(signals.0.map(|s| s.map(f64::to_bits)), alone.0.map(|s| s.map(f64::to_bits)), "track {i}, profile {at}");
+                told += 1;
+            });
+            assert_eq!(told, profiles.len(), "every profile hears of every track");
         }
     }
 
