@@ -77,6 +77,7 @@
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
   import BackgroundAsk from './lib/BackgroundAsk.svelte';
+  import IndexAsk from './lib/IndexAsk.svelte';
   import ManyConfirm from './lib/ManyConfirm.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
@@ -1288,6 +1289,7 @@
   <Toasts />
   <ManyConfirm />
   <BackgroundAsk />
+  <IndexAsk />
 <LabelTip />
   <ProgressBar />
 

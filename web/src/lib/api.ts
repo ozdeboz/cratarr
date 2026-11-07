@@ -932,8 +932,11 @@ export const playlistOps = (id: string, ops: PlaylistOp[]) =>
   );
 
 /** What changed since `since` (decision 0087, lib/changes), of these kinds. */
-export const getChanges = (since: number, kinds: readonly string[]) =>
-  quietly<ChangesAnswer>(`/api/changes?${new URLSearchParams({ since: String(since), kinds: kinds.join(',') })}`);
+/** `index`: where this device's index stands, for the log's word on the library (lib/deviceSync): a device with none asks none. */
+export const getChanges = (since: number, kinds: readonly string[], index?: number | null) =>
+  quietly<ChangesAnswer>(
+    `/api/changes?${new URLSearchParams({ since: String(since), ...(typeof index === 'number' ? { kinds: [...kinds, 'index'].join(','), index: String(index) } : { kinds: kinds.join(',') }) })}`,
+  );
 
 /** Lists like a list, of its kind (the one similarity): the closest first, each with how alike (0 to 100). */
 export type Alike = { id: string; alike: number };

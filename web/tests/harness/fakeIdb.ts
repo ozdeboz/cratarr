@@ -11,7 +11,7 @@ export const databases = new Map<string, Map<string, Store>>();
 /** A store's rows in a database, as they are; none where it was never made. */
 export const rowsOf = (db: string, store: string) => databases.get(db)?.get(store)?.rows ?? new Map<unknown, unknown>();
 
-const later = (f: () => void) => void setTimeout(f);
+const later = (f: () => void) => void setImmediate(f);
 
 function request<T>(work: () => T): Handlers {
   const r: Handlers = {};

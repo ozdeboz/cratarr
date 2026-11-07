@@ -22,6 +22,19 @@ export function readsFrom(i: ReadInputs): ReadsFrom {
   return i.unreachable ? { from: 'device', why: 'unreachable' } : { from: 'server', why: 'answers' };
 }
 
+/** What This device says of the library kept here: fetching, asking, waiting for Wi-Fi, the connection gone again and again, or the
+ *  two stopped by their versions. */
+export type IndexShows = 'idle' | 'fetching' | 'asks' | 'wifi' | 'paused' | 'stopped';
+
+/** Its row's value: the date it last stood where Cratarr does, unless something stands in the way. */
+export function indexWord(shows: IndexShows, at: number | null, date: (ms: number) => string): string {
+  if (shows === 'stopped') return 'Differs from Cratarr';
+  if (shows === 'wifi' || shows === 'asks') return 'Waiting for Wi-Fi';
+  if (shows === 'paused') return 'Paused';
+  if (at !== null) return date(at);
+  return shows === 'fetching' ? 'Fetching' : 'Not yet';
+}
+
 /** How long after a failed reach Cratarr is looked for again. Finamp's number: nothing here has measured it. */
 export const LOOK_AGAIN_MS = 7_000;
 

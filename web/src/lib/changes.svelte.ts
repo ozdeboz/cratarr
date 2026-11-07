@@ -6,6 +6,7 @@ import { accountKey, whenAccount } from './account';
 import { getChanges } from './api';
 import { can } from './capabilities.svelte';
 import { readChanges, type Refresh } from './changeLog';
+import { indexStands, indexSync } from './deviceSync.svelte';
 import { emit } from './events.svelte';
 import { keep, readKept } from './keptStore';
 import { whenSent } from './later.svelte';
@@ -49,7 +50,9 @@ export async function readChangesNow() {
     const first = revs[account] === undefined;
     const refresh: Refresh = new Map();
     for (let page = 0; page < PAGES; page++) {
-      const r = readChanges(KINDS, await getChanges(revs[account] ?? 0, KINDS), refresh);
+      const answer = await getChanges(revs[account] ?? 0, KINDS, indexSync.rev);
+      if (page === 0) void indexStands(answer.index);
+      const r = readChanges(KINDS, answer, refresh);
       revs[account] = r.rev;
       if (!r.more) break;
     }

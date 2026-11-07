@@ -3,7 +3,7 @@
 // log keeps answers `reset`: every kind is read again whole. The fetching and the reading again are lib/changes.
 
 export type Change = { rev: number; kind: string; id: string; op: 'changed' | 'deleted' };
-export type ChangesAnswer = { rev: number; changes?: Change[]; more?: boolean; reset?: boolean };
+export type ChangesAnswer = { rev: number; changes?: Change[]; more?: boolean; reset?: boolean; index?: { rev: number; changed: boolean; reset?: boolean } };
 
 /** Per kind, the ids to read again, or 'all'. */
 export type Refresh = Map<string, Set<string> | 'all'>;

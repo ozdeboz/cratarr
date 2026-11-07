@@ -180,6 +180,9 @@ export type Prefs = {
   momentWeather: boolean;
   /** The app asked at its start for what playing in the background needs (lib/askAtStart): once, whatever the answer. */
   backgroundAsked: boolean;
+  /** What was said of fetching the library whole on mobile data, and whether the browser was asked to keep it (lib/deviceSync). */
+  indexMobile: 'unasked' | 'yes' | 'no';
+  storageAsked: boolean;
   /** Shuffle (the owner, 2026-10-27): the ticked ones take turns behind the flows, in place of the one chosen. */
   flowShuffle: boolean;
   /** The ones ticked for Shuffle. */
@@ -473,6 +476,8 @@ export const DEFAULTS: Prefs = {
   snippetsInMenus: true,
   momentWeather: false,
   backgroundAsked: false,
+  indexMobile: 'unasked',
+  storageAsked: false,
   flowShuffle: false,
   flowShuffled: [...FLOW_BACKDROPS.filter((b) => b !== 'own')],
   flowShuffleWhen: 'flow',
@@ -623,6 +628,8 @@ function parse(kept: string | null): Prefs {
       if (typeof saved.snippetsInMenus === 'boolean') p.snippetsInMenus = saved.snippetsInMenus;
       if (typeof saved.momentWeather === 'boolean') p.momentWeather = saved.momentWeather;
       if (typeof saved.backgroundAsked === 'boolean') p.backgroundAsked = saved.backgroundAsked;
+      if (saved.indexMobile === 'yes' || saved.indexMobile === 'no') p.indexMobile = saved.indexMobile;
+      if (typeof saved.storageAsked === 'boolean') p.storageAsked = saved.storageAsked;
       if (Array.isArray(saved.flowShuffled)) {
         const ticked = saved.flowShuffled.filter((b: unknown): b is FlowBackdrop => FLOW_BACKDROPS.includes(b as FlowBackdrop));
         if (ticked.length) p.flowShuffled = ticked;
