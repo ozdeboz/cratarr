@@ -442,7 +442,7 @@ object Kept {
             notMet and Requirements.NETWORK != 0 -> "network"
             else -> null
         }
-        val current = manager.currentDownloads.firstOrNull { it.state == Download.STATE_DOWNLOADING }?.let {
+        val current = manager.currentDownloads.firstOrNull { it.state == Download.STATE_DOWNLOADING && KeptHolds.goesOn(holders[it.request.id], who) }?.let {
             try {
                 val t = JSONObject(String(it.request.data))
                 listOf(t.optString("artist"), t.optString("name")).filter { s -> s.isNotEmpty() }.joinToString(" – ")

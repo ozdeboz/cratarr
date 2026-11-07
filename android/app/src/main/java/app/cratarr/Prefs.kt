@@ -616,6 +616,8 @@ class Prefs(context: Context) {
                 }
             }
             if (!come.has(TARGET)) e.putString(TARGET, TARGET_SELF)
+            // Whoever set it has gone: it would pause the next one's music.
+            e.remove(SLEEP)
             e.apply()
         }
 

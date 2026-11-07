@@ -187,6 +187,29 @@ class WhoTest {
     }
 
     @Test
+    fun a_sleep_timer_goes_with_whoever_set_it() {
+        val p = Memory()
+        p.values[Prefs.SLEEP] = "123,false"
+        Prefs.handOver(p, ann, bo)
+        assertNull(p.values[Prefs.SLEEP])
+    }
+
+    @Test
+    fun what_is_on_its_way_across_a_change_is_not_the_next_ones() {
+        val fill = source("Radio.kt").substringAfter("val who = Who.current(app)")
+        assertTrue("an Autoplay pick looks before it lands", fill.indexOf("if (Who.current(app) != who) return@post") in 0 until fill.indexOf("player.addMediaItems"))
+        assertTrue("the track downloading is named to one who holds it", "Download.STATE_DOWNLOADING && KeptHolds.goesOn(holders[it.request.id], who)" in source("Kept.kt"))
+    }
+
+    @Test
+    fun the_device_music_played_here_is_each_accounts_own() {
+        val plays = source("Plays.kt")
+        assertEquals(3, Regex("Who\\.keyed\\(context, PLAYED_HERE\\)").findAll(plays).count())
+        assertEquals("and no other use of it, the name's own line aside", 4, Regex("\\bPLAYED_HERE\\b").findAll(plays).count())
+        assertTrue("told at a change", "Plays.playedHere(this)" in source("MainActivity.kt").substringAfter("private val whoChanged").substringBefore("override fun onDestroy"))
+    }
+
+    @Test
     fun the_player_takes_up_whoever_it_is_by_then() {
         assertTrue("main.post { whoCame(Who.current(this)) }" in source("PlayerService.kt"))
     }

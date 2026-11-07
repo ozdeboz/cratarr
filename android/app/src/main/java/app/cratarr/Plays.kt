@@ -74,24 +74,24 @@ object Plays {
     /**
      * Played here (0.9.15, local mode's Home; the owner, 2026-10-28: "the best PWA offline support possible"): the
      * device music this device played, kept here, as Cratarr cannot know it offline, and the app plays with the page
-     * closed (in the background, Android Auto). Each track once: when last played, and how often.
+     * closed (in the background, Android Auto). Each track once: when last played, and how often. Each account's its own.
      */
     @Synchronized
     private fun playedHere(context: Context, id: String, atMs: Long) {
-        val all = loadArray(context, PLAYED_HERE)
+        val all = loadArray(context, Who.keyed(context, PLAYED_HERE))
         val was = all.firstOrNull { it.optString("id") == id }
         val count = (was?.optInt("count") ?: 0) + 1
         val now = all.filter { it !== was }.toMutableList()
         now.add(JSONObject().put("id", id).put("at", atMs).put("count", count))
         val kept = now.sortedByDescending { it.optLong("at") }.take(PLAYED_HERE_MOST)
-        Prefs.shared(context).edit().putString(PLAYED_HERE, JSONArray(kept).toString()).apply()
+        Prefs.shared(context).edit().putString(Who.keyed(context, PLAYED_HERE), JSONArray(kept).toString()).apply()
         onPlayedHere?.invoke()
     }
 
     /** The page's `device-plays` message: the device music played here, the latest first. */
     @Synchronized
     fun playedHere(context: Context): JSONObject =
-        JSONObject().put("type", "device-plays").put("plays", JSONArray(loadArray(context, PLAYED_HERE)))
+        JSONObject().put("type", "device-plays").put("plays", JSONArray(loadArray(context, Who.keyed(context, PLAYED_HERE))))
 
     /** The page signed in (another session): whose it is, learnt now ([Who]), so the plays heard from now on carry it;
      *  then that account's own plays are told. No session: nobody is signed in. */

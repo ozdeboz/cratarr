@@ -337,6 +337,7 @@ class MainActivity : AppCompatActivity() {
                 p.postMessage(appMessage())
                 tellServers(p)
                 p.postMessage(Scrobblers.here(this).toString())
+                p.postMessage(Plays.playedHere(this).toString())
             }
             tellDownloads(now = true)
             tellKept(now = true)
