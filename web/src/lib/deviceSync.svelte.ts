@@ -1,11 +1,13 @@
 // The library on this device kept up to date (D14). Whole once, then what changes; the rule is the rules crate's (`index::sync`), so
-// the app's worker asks the same one, and this only fetches, keeps and says. In a browser: in the app the app keeps it (D15), and the
-// page reads what it holds. Each account's apart (lib/indexStore), and nothing fetched for one lands under another.
+// the app's worker asks the same one, and this only fetches, keeps and says. In a browser: in the app the app keeps it (android's
+// DeviceIndex), and this says what the app tells and passes on what is asked. Each account's apart (lib/indexStore), and nothing
+// fetched for one lands under another.
 //
 // What is kept is bytes. An instance of index.wasm lives for one sync and is let go whole: nothing of it stays in memory, and the sounds
 // are not loaded at all unless their feed has something to apply.
+import { tick } from 'svelte';
 import { accountKey, whenAccount, whoOf } from './account';
-import { inApp } from './app.svelte';
+import { inApp, onApp, toApp } from './app.svelte';
 import { newEngine, readsNow, whenReadsMove } from './deviceIndex.svelte';
 import { indexShows, type IndexShows, type PartFacts } from './deviceIndexRule';
 import type { IndexEngine, Network, Outcome, Part, Step } from './indexEngine';
@@ -179,9 +181,17 @@ export function stopLooking() {
   timer = null;
 }
 
-/** Looks at what to fetch, and fetches it. Nothing in the app, nor for nobody, nor through a refusal. */
+/** The app told something. What the page just set goes first: the app reads the person's answer from the page's settings, and those
+ *  go by an effect, after this turn. */
+async function tellApp(type: string) {
+  await tick();
+  toApp({ type });
+}
+
+/** Looks at what to fetch, and fetches it; in the app the app looks. Nothing for nobody, nor through a refusal. */
 export function syncNow(): Promise<void> {
-  if (inApp || accountKey() === null || refusedFor() > 0) return Promise.resolve();
+  if (inApp) return tellApp('index-look');
+  if (accountKey() === null || refusedFor() > 0) return Promise.resolve();
   if (looking) {
     owed = true;
     return looking;
@@ -228,9 +238,16 @@ export function answerMobile(yes: boolean) {
 /** The row tapped: asked again, what stopped tried again. */
 export function tryIndexAgain() {
   if (prefs.indexMobile === 'no') prefs.indexMobile = 'unasked';
+  if (inApp) return tellApp('index-again');
   for (const [name, p] of parts) if (p.stopped) parts.set(name, { ...p, stopped: false });
   return syncNow();
 }
+
+// What the app says of what it keeps (DeviceIndex.report): facts, and the row's word is said here, as in a browser.
+onApp('device-index', (m) => {
+  const told = m as unknown as { at: number | null; rev: number | null; metered: boolean; parts: PartFacts[] };
+  Object.assign(indexSync, { at: told.at, rev: told.rev, shows: indexShows(told.parts, prefs.indexMobile, told.metered) });
+});
 
 if (typeof window !== 'undefined' && !inApp) {
   void shownFromStore();

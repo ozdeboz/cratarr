@@ -226,8 +226,8 @@ object Reach {
         return Triple(local != null, local?.get(), public?.get())
     }
 
-    /** Looks again in the background, after [delayMs]; a failure's call only every so often. */
-    fun checkSoon(context: Context, delayMs: Long = 0, failed: Boolean = false) {
+    /** Looks again in the background, after [delayMs]; a failure's call only every so often. [then] follows, the address settled. */
+    fun checkSoon(context: Context, delayMs: Long = 0, failed: Boolean = false, then: (() -> Unit)? = null) {
         if (failed && SystemClock.elapsedRealtime() - checked < AGAIN_MS) return
         val app = context.applicationContext
         later.schedule({
@@ -238,6 +238,7 @@ object Reach {
                     checking.set(false)
                 }
             }
+            then?.invoke()
         }, delayMs, TimeUnit.MILLISECONDS)
     }
 
@@ -252,7 +253,7 @@ object Reach {
                 // Another network: the local address is no one's until it answers as the app's own Cratarr again.
                 override fun onAvailable(network: Network) {
                     localTrusted = null
-                    checkSoon(app, SETTLE_MS)
+                    checkSoon(app, SETTLE_MS) { DeviceIndex.look(app) }
                 }
                 override fun onLost(network: Network) {
                     localTrusted = null

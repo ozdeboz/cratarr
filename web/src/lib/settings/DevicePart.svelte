@@ -110,14 +110,12 @@
 
 <!-- The moment's weather (decision 0101, point 18; lib/momentHere): the one thing here that sends where the device is. -->
 <Group title="Away from Cratarr">
-  {#if !inApp}
-    <!-- The library kept here (lib/deviceSync). In the app the app keeps it (D15). Only what waits on someone can be tapped. -->
-    <Item
-      name="Library on this device"
-      value={indexWord(indexSync.shows, indexSync.at, (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))}
-      onclick={indexSync.shows === 'wifi' || indexSync.shows === 'stopped' ? tryIndexAgain : null}
-    />
-  {/if}
+  <!-- The library kept here (lib/deviceSync). Only what waits on someone can be tapped. -->
+  <Item
+    name="Library on this device"
+    value={indexWord(indexSync.shows, indexSync.at, (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))}
+    onclick={indexSync.shows === 'wifi' || indexSync.shows === 'stopped' ? tryIndexAgain : null}
+  />
   <Item
     name="Weather for the moment crate"
     line="Sends a rough location to Open-Meteo"

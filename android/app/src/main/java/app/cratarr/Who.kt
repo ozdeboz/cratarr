@@ -60,6 +60,7 @@ object Who {
         Notices.forget(app)
         ExportSave.forget(app)
         Kept.sync(app)
+        DeviceIndex.start(app)
         for (f in changed) f(from, to)
     }
 }

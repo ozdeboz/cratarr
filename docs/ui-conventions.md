@@ -188,7 +188,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   last gave, under a name and a sky worked out here: from Open-Meteo's weather where This device's "Weather for the moment crate" is
   on and the internet is there, else from the time and day, with "Time and day only" under the name. That switch, in its group
   "Away from Cratarr", is the only way the device's rough place leaves it, and never to Cratarr.
-- **The library on this device** (PREVIEW2's D14; `lib/deviceSync`): in a browser This device's "Library on this device" says the date
+- **The library on this device** (PREVIEW2's D14 and D15; `lib/deviceSync`): This device's "Library on this device" says the date
   it last stood where Cratarr does, or what stands in the way: "Waiting for Wi-Fi", "Paused" where the connection keeps going, and
   "Differs from Cratarr" where the two read other versions; "Waiting for Wi-Fi" and "Differs from Cratarr" can be tapped, to ask again. Fetching it whole on mobile data
   is asked once, on the sheet for a question, and a no waits for Wi-Fi. A page cannot tell where a read came from, and says nothing

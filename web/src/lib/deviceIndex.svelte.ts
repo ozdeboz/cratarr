@@ -6,6 +6,7 @@
 // when a crate or a pick asks, and from one reading of the sounds (D18 to D20): nothing here opens them.
 import indexUrl from './wasm/index.wasm?url';
 import { accountKey, whenAccount, whoOf } from './account';
+import { inApp } from './app.svelte';
 import { lookedAgain, notReached, readsFrom, answered, type ReadsFrom, type Settle } from './deviceIndexRule';
 import { listView, OWN, recordNumber, recordView } from './deviceReads';
 import { instantiateIndex, type IndexEngine } from './indexEngine';
@@ -89,14 +90,27 @@ export function closeReads() {
 
 whenAccount.add(closeReads);
 
+/** Where the app gives what it keeps of the index, and when that last stood where Cratarr does (android's DeviceIndex). */
+const APP_INDEX = '/__device/index';
+
+/** What is kept of an account's index: in a browser its own, in the app the app's, read here by the same module. */
+async function keptIndex(account: string): Promise<{ bytes: Uint8Array; at: number } | null> {
+  if (!inApp) {
+    const kept = await readPart(whoOf(account), 'index');
+    return kept?.bytes ? { bytes: kept.bytes, at: kept.at ?? 0 } : null;
+  }
+  const res = await fetch(APP_INDEX, { cache: 'no-store' });
+  return res.ok ? { bytes: new Uint8Array(await res.arrayBuffer()), at: Number(res.headers.get('X-Cratarr-At')) } : null;
+}
+
 async function open(): Promise<Open | null> {
   const account = accountKey();
   if (account === null) return null;
-  const kept = await readPart(whoOf(account), 'index');
-  if (!kept?.bytes) return null;
+  const kept = await keptIndex(account);
+  if (!kept) return null;
   const engine = await newEngine();
   // Another account came meanwhile: what was opened is the one before's, and a page that asked is the new one's.
-  return accountKey() !== account || engine.loadIndex(kept.bytes) ? null : { engine, at: kept.at ?? 0 };
+  return accountKey() !== account || engine.loadIndex(kept.bytes) ? null : { engine, at: kept.at };
 }
 
 function opened(): Promise<Open | null> {

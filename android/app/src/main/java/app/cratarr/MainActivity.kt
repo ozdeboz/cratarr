@@ -138,11 +138,13 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         Notices.inFront = true
+        DeviceIndex.shown(this)
         live()
     }
 
     override fun onStop() {
         Notices.inFront = false
+        DeviceIndex.hidden()
         LiveSound.listener = null
         super.onStop()
     }
@@ -274,6 +276,10 @@ class MainActivity : AppCompatActivity() {
         Kept.onChange = { runOnUiThread { tellKept() } }
         Kept.schedule(this)
         Kept.sync(this)
+        // The library on this device (PREVIEW2's D15): in step from here on, the page in view or not.
+        DeviceIndex.onChange = { runOnUiThread { page?.postMessage(DeviceIndex.report(this).toString()) } }
+        DeviceIndex.schedule(this)
+        DeviceIndex.start(this)
         // A download being saved reports to the page in view, whichever page asked for it.
         ExportSave.onReport = { m -> runOnUiThread { page?.postMessage(m) } }
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(inUseChanged)
@@ -359,6 +365,7 @@ class MainActivity : AppCompatActivity() {
         network?.stop()
         Plays.onPlayedHere = null
         ExportSave.onReport = null
+        DeviceIndex.onChange = null
         contentResolver.unregisterContentObserver(deviceMusicChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(modeChanged)
@@ -404,6 +411,7 @@ class MainActivity : AppCompatActivity() {
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
             serverCover = { server, cover, size -> Servers.cover(app, server, cover, size) },
+            deviceIndex = { DeviceIndex.answer(app) },
             // One sign-in for both addresses (0.12, the owner 2026-10-30): the session a page loaded with goes to the
             // other address too; a sign-in page with the other's session at hand takes it and loads again.
             onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },
@@ -450,7 +458,7 @@ class MainActivity : AppCompatActivity() {
     /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`
      *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
      *  `address`, `open` (a link outside), `export-save` (Download…: an export saved as its one file), `snippet` (a
-     *  track's snippet, 0.12). */
+     *  track's snippet, 0.12), `index-look` and `index-again` (the library on this device). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -468,6 +476,7 @@ class MainActivity : AppCompatActivity() {
                 // The network as it is, and the device music played here (0.9.15, offline).
                 reply.postMessage(NetState.now(this).toString())
                 reply.postMessage(Plays.playedHere(this).toString())
+                reply.postMessage(DeviceIndex.report(this).toString())
                 player?.report(withQueue = true)
                 // A download being saved: where it is.
                 ExportSave.latest?.let { reply.postMessage(it) }
@@ -476,6 +485,9 @@ class MainActivity : AppCompatActivity() {
                 followSession()
             }
             "network" -> reply.postMessage(NetState.now(this).toString())
+            // The library on this device: the page's word that it moved, or that the person answered; its row tapped.
+            "index-look" -> DeviceIndex.look(this)
+            "index-again" -> DeviceIndex.tryAgain(this)
             // Whose this device's things are (decision 0101): the account the page learnt from `/api/me` (`""` with
             // signing in off), at once rather than at the app's own next ask.
             "account" -> {

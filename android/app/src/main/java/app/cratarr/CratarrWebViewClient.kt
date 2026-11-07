@@ -31,6 +31,8 @@ class CratarrWebViewClient(
     private val deviceCover: (String) -> ByteArray?,
     /** A server's cover (decision 0098): its server's id, its cover's, the size; its type and bytes, null for none. */
     private val serverCover: (String, String, Int) -> Pair<String, ByteArray>? = { _, _, _ -> null },
+    /** What is kept of the library, for the page to read ([DeviceIndex.answer]); asked for off the main thread. */
+    private val deviceIndex: () -> WebResourceResponse? = { null },
     /** A page of Cratarr's finished loading (its URL): the session follows it ([Sessions.loaded]). */
     private val onLoaded: (WebView, String) -> Unit = { _, _ -> },
 ) : WebViewClientCompat() {
@@ -52,6 +54,7 @@ class CratarrWebViewClient(
         // ends once it has loaded (0.12: one sign-in for both addresses, the owner 2026-10-30). Not cleared here: the
         // request still carries the session, so Cratarr ends it.
         if (request.isForMainFrame && url.path == Sessions.SIGN_OUT) Sessions.signOutAsked()
+        if (url.path == DeviceIndex.PAGE_PATH) deviceIndex()?.let { return it }
         url.path?.takeIf { it.startsWith(SERVER_COVER) }?.removePrefix(SERVER_COVER)?.let { rest ->
             val parts = rest.split('/', limit = 2)
             val got = if (parts.size == 2) serverCover(Uri.decode(parts[0]), Uri.decode(parts[1]), url.getQueryParameter("size")?.toIntOrNull() ?: 600) else null

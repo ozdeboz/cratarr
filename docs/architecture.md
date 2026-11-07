@@ -102,7 +102,9 @@ the parts are and how they talk.
   offline. `src/lib/deviceIndex.svelte.ts` says where reads come from and why (`readsFrom`, in `deviceIndexRule.ts`, pure): Cratarr
   out of reach, looked for twice, or no network. The index itself is the rules crate's, as `src/lib/wasm/index.wasm`
   (`indexEngine.ts`), its bytes in `indexStore.ts`, each account's apart; `deviceReads.ts` gives its rows the shapes Cratarr gives.
-  `deviceSync.svelte.ts` keeps it up to date in a browser, by the rule the app's worker asks too (`index::sync`).
+  `deviceSync.svelte.ts` keeps it up to date in a browser. In the app `DeviceIndex.kt` does, with no page open, and the page reads
+  its bytes through `/__device/index` by the same module. Both go by one rule, `index::sync`: what to do, and what each answer and
+  each set of bytes came to, so neither decides anything of its own.
 - `src/lib/shelf.ts` and `shelfStore.svelte.ts` (0.12, decision 0085 step 2): Downloads' details and small covers in
   the page's IndexedDB, filled from the album views while Cratarr answers; it moves into the Rust core's store with
   the whole library's index (0.13).
