@@ -2296,6 +2296,38 @@ async fn who_may_set_a_records_facts_goes_by_whose_record_it_is_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The owner, 2026-11-07: an app sees every library, whatever the Library page's filter says. The filter stays on the account, and goes
+/// on saying which copy plays.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_app_sees_every_library_whatever_the_librarys_filter_says_end_to_end() {
+    let root = temp("apps");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (music, second) = (library.join("music"), library.join("second"));
+    settings(&data, &[(&music, "main"), (&second, "main")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    let shores = || async { ann.albums().await.into_iter().find(|a| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 2)) };
+    s.until("both copies read", Duration::from_secs(120), || async { shores().await.is_some() }).await;
+    let folders = || async { ask(&ann, "getMusicFolders", "").await["musicFolders"]["musicFolder"].as_array().unwrap().iter().map(|f| f["id"].clone()).collect::<Vec<Value>>() };
+    let (all, numbers) = (folders().await, ask(&ann, "getUser", &format!("username={}", ANN.0)).await["user"]["folder"].clone());
+    assert_eq!((all.len(), numbers.as_array().map(Vec::len)), (2, Some(2)));
+
+    let plays = |a: Value| a["copies"].as_array().unwrap().iter().find(|c| c["plays"] == true).unwrap()["library"].clone();
+    let first = plays(shores().await.unwrap());
+    let (now, other) = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64, if first == id_of(&music).as_str() { &second } else { &music });
+    ann.ok(reqwest::Method::PUT, "/api/me/preferences/hidden_libraries", json!({ "value": [format!("cratarr/{}", first.as_str().unwrap())], "changed": now })).await;
+    assert_eq!(folders().await, all, "its music folders stay");
+    assert_eq!(ask(&ann, "getUser", &format!("username={}", ANN.0)).await["user"]["folder"], numbers, "and its account's");
+    assert_eq!(plays(shores().await.unwrap()), id_of(other).as_str(), "the copy that plays still follows the switch");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Replace: the new files take the place and the track ids of the old, which go to Music's trash. A copy missing a track is refused
 /// and nothing moves. Its Undo gives each library its own files and each file its own id again.
 #[tokio::test(flavor = "multi_thread")]

@@ -32,8 +32,9 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
    main library.
    - Deleting asks twice for a main library's albums, once for Incoming's.
    - Each library has its own colour, shown as a dot only while the viewer has two or more libraries on.
-   - Subsonic's `getMusicFolders` lists the libraries by their own names, in the list's order, only those switched on
-     for that user.
+   - Subsonic's `getMusicFolders` lists the libraries by their own names, in the list's order, all of them (the owner,
+     2026-11-07: third-party apps don't follow the Library page's filter, and a switch thrown in a browser must not change
+     a phone's app). The filter stays on the account, and still says which copy plays.
 
 ### Requests and own music
 

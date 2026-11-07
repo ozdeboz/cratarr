@@ -1,7 +1,7 @@
 //! The person's preferences on their account (decision 0101 point 14): pinned items, libraries switched off, filters,
 //! Home's header picture, crate drafts and Radio's last choice, followed from device to device. Per preference the
 //! latest change wins, the whole value; offline a device works from its cached copy. Only the libraries switched off
-//! mean anything to the server (Subsonic's music folders); the others are the page's, kept and handed back.
+//! mean anything to the server (which copy plays); the others are the page's, kept and handed back.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
