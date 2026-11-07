@@ -310,6 +310,11 @@ const player = await import('../../src/lib/localPlayer.svelte.ts');
 export { player };
 export const audio = player.engineAudio() as unknown as FakeAudio;
 
+// The player's waits go by the clock on the wall, which here is `runFor`'s too.
+const wall = Date.now;
+let passed = 0;
+Date.now = () => wall() + passed;
+
 /** Everything under way done: the fetches read, the appends in, the promises run out. */
 export async function settle() {
   let seen = -1;
@@ -324,6 +329,7 @@ export async function settle() {
 export async function runFor(seconds: number) {
   for (let left = seconds; left > 1e-9; left -= STEP_S) {
     audio.advance(Math.min(STEP_S, left));
+    passed += Math.min(STEP_S, left) * 1000;
     tick();
     await settle();
   }

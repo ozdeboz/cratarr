@@ -66,6 +66,8 @@ class PlayOnLink(
     /** The announcement it plays or last played (Announcer), as reported. */
     private var announcing: Announcer.State? = null
     private var queueSent = false
+    /** What the player holds has not all reached Cratarr ([QueueKept]). */
+    val ahead: Boolean get() = QueueKept.aheadNow(reportsThrough, queueSent)
     /** The queue's version in the last command from Cratarr: reports say it, so Cratarr knows what they have seen. */
     private var version = -1L
     private var reportPending = false
@@ -258,8 +260,11 @@ class PlayOnLink(
                 main.post { report() }
             }
             if (!running) return
-            // Out of reach there: perhaps the other address answers.
-            if (!opened) Reach.checkSoon(service, failed = true)
+            // Out of reach there: perhaps the other address answers, and what is kept here plays meanwhile.
+            if (!opened) {
+                Reach.checkSoon(service, failed = true)
+                main.post(service::cratarrAway)
+            }
             val held = address?.let { Net.heldUntil(service, it) }
             if (held != null && held > System.currentTimeMillis()) {
                 // Refused there: its requests wait out the refusal (Net), so the connection does too.
@@ -682,7 +687,12 @@ class PlayOnLink(
         if (reports.isShutdown) return
         reports.execute {
             val sent = put("$base/state", body)
-            if (withQueue && sent) main.post { queueSent = true }
+            if (withQueue && sent) {
+                main.post {
+                    queueSent = true
+                    service.queueTold()
+                }
+            }
         }
     }
 

@@ -280,6 +280,8 @@ class PlayerService : MediaSessionService() {
         if (prefs.mode.startsWith(Servers.MODE_PREFIX)) {
             if (Servers.has(this, prefs.mode.removePrefix(Servers.MODE_PREFIX))) restore(prefs.savedQueue(prefs.mode, queueWho)) else prefs.mode = Prefs.MODE_CRATARR
         }
+        // Cratarr's gives its own back as the link connects; here, only one that went on while it could not be told ([QueueKept]).
+        if (prefs.mode == Prefs.MODE_CRATARR) prefs.savedQueue(prefs.mode, queueWho).takeIf(QueueKept::atStart)?.let(::restore)
         Who.changed.add(whoChanged)
         link = PlayOnLink(this, player, prefs, sync, commands).also { it.start() }
         Ready.ensure(this, "service started")
@@ -437,6 +439,7 @@ class PlayerService : MediaSessionService() {
         .put("position_ms", player.currentPosition)
         .put("repeat", prefs.repeat)
         .put("shuffled", prefs.shuffled)
+        .put(QueueKept.AHEAD, link?.ahead == true)
 
     /** A queue put by ([snapshot]) in the player, paused; none (empty): nothing queued. */
     private fun restore(saved: String) {
@@ -458,8 +461,20 @@ class PlayerService : MediaSessionService() {
         player.prepare()
     }
 
-    /** Local mode's queue kept as it goes, for a restart (changes close together as one). */
-    private val saveDevice = Runnable { if (prefs.ownQueue) prefs.saveQueue(prefs.mode, snapshot().toString(), queueWho) }
+    /** The queue kept as it goes, each mode's and account's, for a restart (changes close together as one). */
+    private val keepQueue = Runnable { prefs.saveQueue(prefs.mode, snapshot().toString(), queueWho) }
+
+    /** Cratarr did not answer ([PlayOnLink]): what is kept here taken up, paused, by a player that came up with nothing. */
+    fun cratarrAway() {
+        if (prefs.mode != Prefs.MODE_CRATARR) return
+        val saved = prefs.savedQueue(prefs.mode, queueWho)
+        if (QueueKept.whenAway(saved, player.mediaItemCount, queueWho)) restore(saved)
+    }
+
+    /** A report told Cratarr of the queue: what is kept here says it is in step. */
+    fun queueTold() {
+        if (!prefs.ownQueue && player.mediaItemCount > 0) keepQueue.run()
+    }
 
     /**
      * This device's output as chosen in its sheet (decision 0033, amended 2026-10-19): the player's sound goes there,
@@ -610,6 +625,16 @@ class PlayerService : MediaSessionService() {
             else Plays.heard(this@PlayerService, h.who, h.track, h.atMs, ended, false, h.heardMs, h.lengthMs)
         }
 
+        /** When its place was last kept: as it plays too, as a kill says no last word. */
+        private var placeKept = 0L
+
+        private fun keepPlace() {
+            val now = SystemClock.elapsedRealtime()
+            if (now - placeKept < PLACE_EVERY_MS) return
+            placeKept = now
+            keepQueue.run()
+        }
+
         private val count = object : Runnable {
             override fun run() {
                 if (hearing == null) {
@@ -635,7 +660,10 @@ class PlayerService : MediaSessionService() {
                         Plays.heard(this@PlayerService, h.who, h.track, h.atMs, "finished", true, h.heardMs, h.lengthMs)
                     }
                 }
-                if (player.isPlaying) main.postDelayed(this, COUNT_EVERY_MS)
+                if (player.isPlaying) {
+                    keepPlace()
+                    main.postDelayed(this, COUNT_EVERY_MS)
+                }
             }
         }
 
@@ -650,15 +678,15 @@ class PlayerService : MediaSessionService() {
                 Radio.insert(this@PlayerService, player, prefs.serverUrl, ::located)
                 Autoplay.fill(this@PlayerService, player, prefs.serverUrl, ::located)
             }
-            if (prefs.ownQueue && events.containsAny(
+            if (events.containsAny(
                     Player.EVENT_TIMELINE_CHANGED,
                     Player.EVENT_MEDIA_ITEM_TRANSITION,
                     Player.EVENT_PLAY_WHEN_READY_CHANGED,
                     Player.EVENT_POSITION_DISCONTINUITY,
                 )
             ) {
-                main.removeCallbacks(saveDevice)
-                main.postDelayed(saveDevice, 1_000)
+                main.removeCallbacks(keepQueue)
+                main.postDelayed(keepQueue, 1_000)
             }
             // Each time a track is reached it can count again (a repeat, a jump back); the one left is told.
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
@@ -736,7 +764,7 @@ class PlayerService : MediaSessionService() {
         DeviceWatch.stop()
         Who.changed.remove(whoChanged)
         main.removeCallbacksAndMessages(null)
-        saveDevice.run()
+        keepQueue.run()
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
         sync.release()
         link?.stop()
@@ -928,6 +956,8 @@ class PlayerService : MediaSessionService() {
         private const val AGAIN_MS = 15_000L
         /** How often the playing track is looked at for counting. */
         private const val COUNT_EVERY_MS = 5_000L
+        /** How far behind the place kept may fall while it plays ([keepQueue]). */
+        private const val PLACE_EVERY_MS = 30_000L
         /** Playing on this far past a track's length is written down ([Course]), looked at this often. */
         private const val PAST_END_MS = 1_000L
         private const val PAST_CHECK_MS = 2_000L

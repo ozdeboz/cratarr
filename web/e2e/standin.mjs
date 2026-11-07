@@ -1,8 +1,9 @@
 // A stand-in for Cratarr, for the browser tests with no built server (`pnpm run e2e:standin`, e2e/standin-run.mjs; the real
 // one is scripts/browser-e2e.sh): sign-in and its session as server/src/serve/signin.rs makes them, the 401 of access.rs,
-// /api/me, preferences, and an account's few reads. Everything else is not here, which the page takes as it takes a server
-// without it. The sign-in page's own script is read from signin.rs: what it does to the page's stores is the server's line,
-// not a copy of it.
+// /api/me, preferences, an account's few reads, and a player's connection and reports, kept for a test to read at
+// /api/standin/reports. Everything else is not here, which the page takes as it takes a server without it. The sign-in page's
+// own script is read from signin.rs: what it does to the page's stores is the server's line, not a copy of it. A test takes it
+// down and up again by /api/standin/down and /up: down, it answers as its proxy would with Cratarr stopped.
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -36,6 +37,8 @@ export function standIn(port, accounts) {
   writeFileSync(accounts, Object.entries(passwords).map(([n, p]) => `${n} ${p}`).join('\n') + '\n', { mode: 0o600 });
   const sessions = new Map();
   const preferences = {};
+  const reports = [];
+  let down = false;
   const whoOf = (req) => {
     const token = (req.headers.cookie ?? '').split(';').map((c) => c.trim().split('=')).find(([n]) => n === COOKIE)?.[1];
     return token ? sessions.get(token) : undefined;
@@ -71,6 +74,15 @@ export function standIn(port, accounts) {
       return res.end();
     }
     if (!path.startsWith('/api/')) return json(res, 404, { error: 'Not here.' });
+    if (path === '/api/standin/down' || path === '/api/standin/up') {
+      down = path.endsWith('down');
+      return json(res, 200, {});
+    }
+    if (path === '/api/standin/reports') return json(res, 200, reports);
+    if (down) {
+      res.writeHead(502);
+      return res.end();
+    }
     if (!me) return json(res, 401, { error: 'Sign in to Cratarr.', signin: '/signin' }, { 'www-authenticate': challenge });
     if (path === '/api/me') {
       const permissions = { offline: true, playlists: true, share: true, links: true, request: true, auto_approve: true, manage_requests: true };
@@ -87,6 +99,16 @@ export function standIn(port, accounts) {
     if (path === '/api/capabilities') return json(res, 200, { capabilities: [], version: '0.16.0' });
     if (path === '/api/albums') return json(res, 200, { whose: me, albums: [] });
     if (path === '/api/playlists') return json(res, 200, []);
+    if (path === '/api/players') return json(res, 200, { players: [] });
+    const player = path.match(/^\/api\/players\/[^/]+\/(connect|state)$/)?.[1];
+    if (player === 'connect') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
+      return void res.write(': hello\n\n');
+    }
+    if (player === 'state') {
+      reports.push(JSON.parse(await body(req)));
+      return json(res, 200, {});
+    }
     if (path === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
       return void res.write(': hello\n\n');

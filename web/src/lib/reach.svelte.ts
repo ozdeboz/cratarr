@@ -29,6 +29,9 @@ function tell(away: boolean) {
 /** Called each time Cratarr answers (lib/later sends what waited). */
 export const whenReached = new Set<() => void>();
 
+/** Called each time a request finds Cratarr out of reach (lib/localPlayer takes up the queue kept on this device). */
+export const whenAway = new Set<() => void>();
+
 /** When Cratarr last answered live (ms). */
 let lastReached = 0;
 /** A slow answer from the last copy this soon after a live one is a slow answer, not out of reach (0.12.3; the owner:
@@ -51,11 +54,13 @@ export function keptAnswer() {
   reach.away = true;
   reach.kept = true;
   tell(true);
+  for (const f of whenAway) f();
 }
 
 export function unreached() {
   reach.away = true;
   tell(true);
+  for (const f of whenAway) f();
 }
 
 if (typeof window !== 'undefined') {

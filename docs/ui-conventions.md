@@ -581,6 +581,10 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 - **Writes wait on the device** (0.12, the outbox, `lib/later.svelte.ts`): a favourite, a rating, a playlist change, an
   exclusion or a play is shown at once and kept on the device before it is sent; while Cratarr is out of reach the
   connection line says "N to send", and they go in order when it answers. No notice when they arrive.
+- **The queue outlasts the page and the app** (decision 0101, points 14 and 19; `lib/localPlayer`, the app's `QueueKept`): the
+  queue that plays is kept on the device, each account's and mode's, the place going on with it, a Play from queue's copy too.
+  Cratarr gives its own back as the player connects, with its word on playing on, so the device's is taken up, paused where it
+  was, where it cannot be: Cratarr out of reach, or a queue that went on meanwhile, which then reaches Play On with the next report.
 - **What an action did, or why it failed, is a toast** (`lib/toast.svelte.ts`): one at a time, floating above the
   mini-player, or the bottom edge without it (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
   warnings, red for errors. Done and warnings go after a few seconds; errors stay until dismissed, replaced, or the

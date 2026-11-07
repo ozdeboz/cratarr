@@ -240,7 +240,7 @@ class Prefs(context: Context) {
         }
 
     /** A mode's queue as put by (PlayerService's snapshot, as JSON; empty for none) for one account ([Who]'s key): the
-     *  one not playing, and local mode's while it plays too, so it lasts a restart (Cratarr gives its own back). */
+     *  one not playing, and the one that plays too, so it lasts a restart ([QueueKept] says when Cratarr's mode takes it up). */
     fun savedQueue(mode: String, who: String): String = p.getString(queueKey(mode) + who, null).orEmpty()
 
     fun saveQueue(mode: String, snapshot: String, who: String) {

@@ -14,7 +14,7 @@
 // of Cratarr's players (Play On, `drive`): then every call below is handed to that player (app.svelte.ts, or the
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
-import { perAccount, whenAccount } from './account';
+import { accountKey, perAccount, whenAccount } from './account';
 import { playback } from './deviceLog';
 import { ask, heard as heardAsked, type Asked } from './player/asked';
 import { cue } from './queueCue.svelte';
@@ -26,7 +26,7 @@ import { commandOf } from './player/commands';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './deckCourse';
-import { asksSignIn, toSignIn } from './reach.svelte';
+import { asksSignIn, reach, toSignIn, whenAway } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { firstFrame } from './mp3Frames';
@@ -947,6 +947,7 @@ function tick() {
     appendTrack(lastAppended + 1, 0, gen);
   }
   if (!appending) evict();
+  keepNowDue();
   if ('mediaSession' in navigator && local.duration && Number.isFinite(local.duration)) {
     try {
       navigator.mediaSession.setPositionState({ duration: local.duration, position: Math.min(local.position, local.duration), playbackRate: 1 });
@@ -2272,6 +2273,13 @@ export function stop(): { queue: LocalTrack[]; index: number; position: number }
   const was = { queue: local.queue, index: local.index, position: local.position };
   if (handed()) hand('stop');
   else keepLocal(standing(), '');
+  empty();
+  if (!handed()) keepNow();
+  return was;
+}
+
+/** The stream ended and the player emptied: nothing of what played lingers. */
+function empty() {
   generation++;
   endRewind();
   atOnce();
@@ -2282,7 +2290,6 @@ export function stop(): { queue: LocalTrack[]; index: number; position: number }
   local.queue = [];
   local.index = -1;
   local.paused = true;
-  return was;
 }
 
 // --- Queue history in this browser (decision 0033, amended: a browser playing itself keeps its own, here only) ---
@@ -2333,13 +2340,21 @@ function saveKept() {
   }
 }
 
-// Another account signed in, or nobody: the one leaving's list kept, the one come's read.
+// Another account signed in, or nobody: the one leaving's list and queue kept, the one come's read. What plays was the one
+// leaving's: it goes with them, and nothing of it is kept under the one come.
 whenAccount.add(() => {
   const k = perAccount(KEPT_KEY);
   if (k === keptOf) return;
   saveKept();
+  if (!handed() && local.queue.length) {
+    keepNow();
+    empty();
+    untold = false;
+  }
   keptOf = k;
+  nowOf = perAccount(NOW_KEY);
   keptHere.list = loadKept();
+  takeUpKept();
 });
 
 const newQueueId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
@@ -2402,6 +2417,11 @@ export function switchLocal(id: string) {
   const k = keptHere.list.find((x) => x.id === id);
   if (!k || id === keptHere.id) return;
   keepLocal(standing(), k.id);
+  takeUp(k, k.playing);
+}
+
+/** `k` in the player, where it was left. */
+function takeUp(k: KeptQueue, play: boolean) {
   keptHere.renamed = k.renamed;
   saveKept();
   Object.assign(local, {
@@ -2415,7 +2435,7 @@ export function switchLocal(id: string) {
     autoplay: k.autoplay,
     from: k.name,
   });
-  fresh(Math.min(k.index, k.tracks.length - 1), k.position, k.playing);
+  fresh(Math.min(k.index, k.tracks.length - 1), k.position, play);
   fill();
 }
 
@@ -2438,6 +2458,71 @@ export function deleteLocal(id: string) {
   keptHere.list = keptHere.list.filter((k) => k.id !== id);
   saveKept();
 }
+
+// --- The queue that plays, kept on this device (decision 0101, points 14 and 19) ---
+// Each account's own, as the list above. Cratarr holds a player's queue too, and gives it back as the page opens, with its
+// word on whether it plays on. So this copy is taken up only where that cannot be: Cratarr out of reach, or a queue that went on
+// while it was (`ahead`), which it cannot know of. Then the page's first report is how Play On takes it up. A browser's only:
+// in the app the app keeps its own (Prefs.savedQueue).
+
+/** The queue that plays as kept; `ahead`: Cratarr has not been told how it stands. */
+type KeptNow = KeptQueue & { ahead: boolean };
+
+const NOW_KEY = 'cratarr-queue-now';
+/** While it plays, its place is kept this often; a change of queue, track or pause at the clock's next moment. */
+const KEEP_EVERY_MS = 10_000;
+let nowOf = perAccount(NOW_KEY);
+/** What is kept is `ahead`. */
+let untold = false;
+let keptAt = 0;
+let keptAs = { queue: local.queue, index: local.index, paused: local.paused };
+
+function keepNow() {
+  const q = standing();
+  untold = !!q && (untold || reach.away);
+  try {
+    if (q) localStorage.setItem(nowOf, JSON.stringify({ ...q, id: keptHere.id || q.id, ahead: untold } satisfies KeptNow));
+    else localStorage.removeItem(nowOf);
+  } catch {
+    // As the list: it lasts as long as the page.
+  }
+  keptAt = Date.now();
+  keptAs = { queue: local.queue, index: local.index, paused: local.paused };
+}
+
+function keepNowDue() {
+  const same = keptAs.queue === local.queue && keptAs.index === local.index && keptAs.paused === local.paused;
+  if (!same || (!local.paused && Date.now() - keptAt >= KEEP_EVERY_MS)) keepNow();
+}
+
+/** A report reached Cratarr, the queue in it where it changed: this copy is no longer ahead of it. */
+export function queueTold() {
+  if (!untold) return;
+  untold = false;
+  if (!handed() && local.queue.length) keepNow();
+}
+
+function readNow(): KeptNow | null {
+  try {
+    const k = JSON.parse(localStorage.getItem(nowOf) ?? 'null');
+    return k && Array.isArray(k.tracks) && k.tracks.length ? k : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The queue kept here taken up, paused at the place it reached, where Cratarr cannot give it back or has an older one. The
+ *  page has no sound of its own to go on with before it is touched, and away it has only what it keeps. */
+function takeUpKept() {
+  if (!audio || handed() || prefs.output !== 'local' || local.queue.length || accountKey() === null) return;
+  const k = readNow();
+  if (!k || !(k.ahead || reach.away)) return;
+  untold = k.ahead;
+  keepLocal(null, k.id);
+  takeUp(k, false);
+}
+whenAway.add(takeUpKept);
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => document.hidden && !handed() && local.queue.length && keepNow());
 
 // --- Play On to this page (decision 0033: a page is a Play On target while it is open; 0031 amended) ---
 
@@ -4555,3 +4640,4 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
 }
 
 if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) lockScreenActions();
+takeUpKept();
