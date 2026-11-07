@@ -40,12 +40,17 @@ On the server's pages only, the app adds `window.CratarrApp` (`postMessage` and 
 
 ## Building
 
-Android Studio's JDK (21) and the Android SDK:
+Android Studio's JDK (21), the Android SDK and Docker (on Windows, in WSL):
 
 ```sh
 export JAVA_HOME="<Android Studio>/jbr" ANDROID_HOME="<Android SDK>"
 ./gradlew assembleDebug   # app/build/outputs/apk/debug/cratarr-android-debug.apk
 ```
+
+Every build that makes an app builds the rules library in Docker (`scripts/rules-android.sh`, `rulesLibrary` here), the
+first time fetching the NDK and Rust's Android targets into Docker volumes, and after that only when `server/rules` or
+`server/rules-ffi` changed. Its Kotlin is kept in the repository, so the unit tests need neither Docker nor Rust: a build whose
+library that Kotlin no longer fits stops, the file written anew, and goes through the second time.
 
 The app carries its own copy of the page (decision 0085): build it first (`pnpm build` in `web/`), so `web/dist` is this
 release's. Without it the app is built anyway and goes to the server's page, with a warning;

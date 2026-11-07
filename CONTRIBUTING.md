@@ -13,8 +13,8 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
   `web/dist` (`CRATARR_WEB_DIR`) on every request, so a new `pnpm build` shows without rebuilding the server.
 - **The image**: `docker build -t cratarr:local .` at the top of the repository builds both: the static binary and the
   page beside it in an otherwise empty image.
-- **Android app** (`android/`): see [android/README.md](android/README.md#building) (Android Studio's JDK and the
-  Android SDK, then `./gradlew assembleDebug`).
+- **Android app** (`android/`): see [android/README.md](android/README.md#building) (Android Studio's JDK, the Android SDK
+  and Docker, then `./gradlew assembleDebug`).
 - **Desktop app** (`desktop/`): see [desktop/README.md](desktop/README.md) (Node 24, `npm ci`, then `npm run dist`).
 
 ## Before a change goes in

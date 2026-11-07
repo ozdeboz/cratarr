@@ -251,6 +251,8 @@ The owner, 2026-11-03: "Defer conflicts for later". 632's recommendations for th
   - The recommendation: one WebAssembly build for the page and the app, native only if it misses the budget.
   - Settled: UniFFI, native. The rules crate is built for Android and called from Kotlin, as 0.11's Spike B does
     (server/rules-ffi, RustRules.kt); the page keeps WebAssembly. 27's budget is measured that way.
+  - Since preview 2 (D04) the library is in every build that makes an app (`rulesLibrary`, scripts/rules-android.sh), and
+    no switch stands before it: the Kotlin brake is left for the unit tests and a device where it does not load.
 
 ## Amended 2026-11-03: the tape engine joins 0.16 (0102)
 

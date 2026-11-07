@@ -142,7 +142,7 @@ class PlayerService : MediaSessionService() {
         LinkLog.add(this, "info", "playon", "service started")
         DeviceWatch.start(this)
         prefs = Prefs(this)
-        RustRules.set(this, prefs.rustRules)
+        RustRules.load(this)
         notifications = getSystemService(NotificationManager::class.java)
         val music = AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build()
         sync = SyncPlay(this, prefs)
