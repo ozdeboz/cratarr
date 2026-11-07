@@ -9,11 +9,15 @@
 //!   changed, however often it was written. The counter never goes back (AUTOINCREMENT), not even once rows are pruned.
 //! - **Rows are named by what the index names them by:** a track, a record, an artist by their ids for life, a library by its
 //!   catalogue folder. What a row says is read when it is sent, so all the log says is which.
+//! - **A row can change with no write here at all:** a word of the household's, a mood whose bar moved with AudioMuse's new rows, a
+//!   year set by hand, what a build makes of the tags that were read a minute ago. So what each row last said is kept as a print,
+//!   and `index_settle` logs every row that says something else now, however it came to. A device is told what is logged, so
+//!   it comes to what a fresh index says whatever moved it, and no writer or source has to be listed here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::Catalogue;
 
@@ -21,7 +25,16 @@ pub(super) const SCHEMA: &str = "
 -- What was written that a device's index reads: `kind` is `track`, `record`, `artist`, `library` or `sound`, `item` its id.
 CREATE TABLE IF NOT EXISTS index_log (rev INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, item INTEGER NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS index_log_one ON index_log (kind, item);
+-- What each row of the index last said, as `index::Prints` makes it a number: one that says something else has changed.
+CREATE TABLE IF NOT EXISTS index_prints (
+  kind TEXT NOT NULL, item INTEGER NOT NULL, print INTEGER NOT NULL, PRIMARY KEY (kind, item)) WITHOUT ROWID;
+-- The lowest rev a device can go on from: asked from before it, it fetches the index whole.
+CREATE TABLE IF NOT EXISTS index_floor (one INTEGER PRIMARY KEY CHECK (one = 1), rev INTEGER NOT NULL);
 ";
+
+/// The most rows the log keeps. It holds a row an item, so this is a library's every row more than once, and passing it takes
+/// a change of nearly everything: a device behind that fetches whole, as rows would cost it as much.
+const LOG_MOST: i64 = 200_000;
 
 /// `kind`'s items that `select` names (as `item`), logged: each one's earlier row gone, a new rev handed out. Not `INSERT OR
 /// REPLACE`: inside a trigger the conflict handling is the statement's that fired it, and its `OR IGNORE` would keep the old rev,
@@ -114,6 +127,33 @@ fn rev_in(db: &Connection) -> Result<i64> {
     Ok(db.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'index_log'", [], |r| r.get(0)).optional()?.unwrap_or(0))
 }
 
+/// What a device can go on from.
+fn floor_in(db: &Connection) -> Result<i64> {
+    Ok(db.query_row("SELECT rev FROM index_floor WHERE one = 1", [], |r| r.get(0)).optional()?.unwrap_or(0))
+}
+
+fn raise_floor(db: &Connection, rev: i64) -> Result<()> {
+    db.execute("INSERT INTO index_floor (one, rev) VALUES (1, ?1) ON CONFLICT (one) DO UPDATE SET rev = max(rev, excluded.rev)", [rev])?;
+    Ok(())
+}
+
+/// A row logged by what is no trigger, as a trigger logs one.
+fn log_one(db: &Connection, kind: &str, item: i64) -> Result<()> {
+    db.prepare_cached("DELETE FROM index_log WHERE kind = ?1 AND item = ?2")?.execute(params![kind, item])?;
+    db.prepare_cached("INSERT INTO index_log (kind, item) VALUES (?1, ?2)")?.execute(params![kind, item])?;
+    Ok(())
+}
+
+/// The oldest rows past `LOG_MOST` gone, and the floor raised past them.
+fn prune(db: &Connection) -> Result<()> {
+    let upto: Option<i64> = db.query_row("SELECT rev FROM index_log ORDER BY rev DESC LIMIT 1 OFFSET ?1", [LOG_MOST], |r| r.get(0)).optional()?;
+    if let Some(upto) = upto {
+        db.execute("DELETE FROM index_log WHERE rev <= ?1", [upto])?;
+        raise_floor(db, upto)?;
+    }
+    Ok(())
+}
+
 /// What the log holds after `after`, up to and with `upto`: the items of each kind.
 fn logged_in(db: &Connection, after: i64, upto: i64) -> Result<BTreeMap<String, Vec<i64>>> {
     let mut st = db.prepare_cached("SELECT kind, item FROM index_log WHERE rev > ?1 AND rev <= ?2 ORDER BY rev")?;
@@ -142,6 +182,51 @@ impl Catalogue {
     /// The items of each kind written after `after`, up to and with `upto`. Blocking.
     pub fn index_logged(&self, after: i64, upto: i64) -> Result<BTreeMap<String, Vec<i64>>> {
         self.beside(|db| logged_in(db, after, upto))
+    }
+
+    /// The lowest rev a device can go on from. Blocking.
+    pub fn index_floor(&self) -> Result<i64> {
+        self.beside(floor_in)
+    }
+
+    /// The index as it stands now, each kind's rows as (id, print): every row that says something else than when last told, or
+    /// has left, or is new, joins the log. `read_at` is where the log stood before these were read. Where it stood so still, the
+    /// rows hold all that is logged, and the rev answered is the log's, past what this logged, so a device given these rows is not
+    /// sent them again. Where something was written meanwhile, `read_at`: what the rows may lack comes by the feed. The first time
+    /// there is nothing to compare with and no device told anything, so no row is logged, and none goes on from before. Blocking.
+    pub fn index_settle(&self, read_at: i64, rows: &[(&str, &[(i64, u64)])]) -> Result<i64> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let before = rev_in(&tx)?;
+        let first = !tx.prepare_cached("SELECT 1 FROM index_prints LIMIT 1")?.exists([])?;
+        for (kind, now) in rows {
+            let mut was: HashMap<i64, i64> = {
+                let mut st = tx.prepare_cached("SELECT item, print FROM index_prints WHERE kind = ?1")?;
+                st.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+            };
+            let mut put = tx.prepare_cached("INSERT OR REPLACE INTO index_prints (kind, item, print) VALUES (?1, ?2, ?3)")?;
+            for (item, print) in *now {
+                let print = *print as i64;
+                if was.remove(item) != Some(print) {
+                    put.execute(params![kind, item, print])?;
+                    if !first {
+                        log_one(&tx, kind, *item)?;
+                    }
+                }
+            }
+            let mut left = tx.prepare_cached("DELETE FROM index_prints WHERE kind = ?1 AND item = ?2")?;
+            for item in was.into_keys() {
+                left.execute(params![kind, item])?;
+                log_one(&tx, kind, item)?;
+            }
+        }
+        let after = rev_in(&tx)?;
+        if first {
+            raise_floor(&tx, after)?;
+        }
+        prune(&tx)?;
+        tx.commit()?;
+        Ok(if before == read_at { after } else { read_at })
     }
 
     /// Tests elsewhere: the crates' facts read again at the next asking. With no server behind them a build does not tell them.
@@ -415,6 +500,94 @@ mod tests {
         l.cat.db().execute("DELETE FROM index_log", []).unwrap();
         l.cat.db().execute("UPDATE files SET bitrate = 3", []).unwrap();
         assert_eq!(l.cat.index_rev().unwrap(), before + 3, "a rev is never handed out again, however much is pruned");
+    }
+
+    /// What a row said, as a settle is handed it.
+    fn said(l: &Library, read_at: i64, tracks: &[(i64, u64)]) -> i64 {
+        l.cat.index_settle(read_at, &[("track", tracks)]).unwrap()
+    }
+
+    fn settled(l: &Library, tracks: &[(i64, u64)]) -> i64 {
+        said(l, l.cat.index_rev().unwrap(), tracks)
+    }
+
+    /// The first settle tells no one anything: no device holds a row to go on from.
+    #[test]
+    fn the_first_prints_log_nothing_and_no_rev_before_them_goes_on() {
+        let l = library("first", None, 2);
+        let (a, b) = (l.track(0), l.track(1));
+        let before = l.cat.index_rev().unwrap();
+        let rev = settled(&l, &[(a, 1), (b, 2)]);
+        assert_eq!(rev, before, "nothing logged");
+        assert_eq!(l.cat.index_floor().unwrap(), rev);
+    }
+
+    #[test]
+    fn a_row_that_says_something_else_joins_the_log_with_no_write_to_it() {
+        let l = library("moved", None, 3);
+        let (a, b, c) = (l.track(0), l.track(1), l.track(2));
+        let first = settled(&l, &[(a, 1), (b, 2), (c, 3)]);
+        assert_eq!(settled(&l, &[(a, 1), (b, 2), (c, 3)]), first, "as it was: nothing");
+        let rev = settled(&l, &[(a, 1), (b, 20), (c, 3)]);
+        assert_eq!(rev, first + 1);
+        assert_eq!(l.cat.index_logged(first, rev).unwrap(), just(&[("track", &[b])]));
+        assert_eq!(settled(&l, &[(a, 1), (b, 20), (c, 3)]), rev, "and it is not told twice");
+    }
+
+    #[test]
+    fn a_row_gone_or_new_joins_the_log() {
+        let l = library("gone", None, 2);
+        let (a, b) = (l.track(0), l.track(1));
+        let first = settled(&l, &[(a, 1)]);
+        let rev = settled(&l, &[(b, 2)]);
+        let mut logged = l.cat.index_logged(first, rev).unwrap().remove("track").unwrap();
+        logged.sort_unstable();
+        assert_eq!(logged, [a.min(b), a.max(b)]);
+    }
+
+    /// A kind not handed over is no kind that went: each is compared with itself alone.
+    #[test]
+    fn kinds_are_held_apart() {
+        let l = library("kinds", None, 1);
+        let a = l.track(0);
+        l.cat.index_settle(l.cat.index_rev().unwrap(), &[("track", &[(a, 1)]), ("record", &[(a + 100, 1)])]).unwrap();
+        let before = l.cat.index_rev().unwrap();
+        let rev = l.cat.index_settle(before, &[("record", &[(a + 100, 2)])]).unwrap();
+        assert_eq!(l.cat.index_logged(before, rev).unwrap(), just(&[("record", &[a + 100])]), "and the track's row is no record that left");
+    }
+
+    /// Rows read before a write lack it, and a device told the log's rev would never be sent it.
+    #[test]
+    fn what_was_written_while_the_rows_were_read_comes_again() {
+        let l = library("meanwhile", None, 2);
+        let (a, b) = (l.track(0), l.track(1));
+        settled(&l, &[(a, 1), (b, 2)]);
+        let read_at = l.cat.index_rev().unwrap();
+        l.cat.db().execute("UPDATE files SET bitrate = 9 WHERE track = ?1", [b]).unwrap();
+        assert_eq!(said(&l, read_at, &[(a, 10), (b, 2)]), read_at, "where the rows were read");
+        let logged = l.cat.index_logged(read_at, i64::MAX).unwrap().remove("track").unwrap();
+        assert_eq!(logged, [b, a], "both to come, what this logged too");
+    }
+
+    #[test]
+    fn a_log_past_its_most_goes_from_its_oldest_and_a_device_from_before_starts_again() {
+        let l = library("most", None, 1);
+        let a = l.track(0);
+        settled(&l, &[(a, 1)]);
+        let at = l.cat.index_rev().unwrap();
+        {
+            let db = l.cat.db();
+            let tx = db.unchecked_transaction().unwrap();
+            for item in 0..LOG_MOST + 3 {
+                log_one(&tx, "artist", item).unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        settled(&l, &[(a, 1)]);
+        let floor = l.cat.index_floor().unwrap();
+        assert!(floor > at, "{floor} over {at}");
+        assert_eq!(l.cat.db().query_row("SELECT count(*) FROM index_log", [], |r| r.get::<_, i64>(0)).unwrap(), LOG_MOST);
+        assert_eq!(l.cat.index_logged(at, floor).unwrap(), BTreeMap::new(), "nothing is left from before it");
     }
 
     #[test]

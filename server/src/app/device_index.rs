@@ -1,7 +1,7 @@
-//! The library on a device (0101's points 16 to 18): the rules crate's `Index`, made here from what the server holds, and sent
-//! whole. Nothing of it is kept between requests: 34,000 tracks pack in about a second, a device fetches them once, and the
-//! server is held to 768 MB, so each asking builds its bytes and lets them go. One build at a time (`Serve::device_turn`), as
-//! two would hold twice what one holds.
+//! The library on a device (0101's points 16 to 18): the rules crate's `Index`, made here from what the server holds, sent whole,
+//! and then as it changes. Nothing of it is kept between requests: 34,000 tracks pack in about a second, a device fetches them
+//! once, and the server is held to 768 MB, so each asking builds its bytes and lets them go. One build at a time
+//! (`Serve::device_turn`), as two would hold twice what one holds.
 //!
 //! - **Rows are the served library's, facts the crates'.** A track's own fields, its record and its artists come from the
 //!   library (`Library::index_rows`), its `Facts` as `Catalogue::crate_facts` reads them, by reference: the reading the pages
@@ -11,17 +11,28 @@
 //!   switching one on works offline. A library that is not seen leaves every row that names it ([`within`]).
 //! - **An own library goes by its owner**, not as "Your music": one index for everyone who sees the same libraries, and the
 //!   device knows who is signed in.
+//! - **The feed is a whole build, compared.** What a row says comes from a dozen places, some of them no write to anything here
+//!   (`Catalogue::index_settle`), and what it says is worked out in only one way. So a device's rows come from the index a fresh
+//!   fetch would be sent, and what it lacks is what the log says moved: applied, it is that index, to the byte. Asked with nothing
+//!   moved, nothing is built.
+//! - **Rows, not base64:** the changes have a route of their own, `/api/index/changes`, in the bytes `Changes::save` writes, gzip
+//!   over them. As text in `/api/changes` they would be a third larger, and a retag of a library would pass through the
+//!   page's heap as one string. `/api/changes` says where the log stands, and whether there is anything to fetch.
+//! - **"Start again":** a rev from before what is kept or ahead of it, or more changed than rows are worth (a library in front of
+//!   the others moves every line): 410 with `{rev, reset: true}`, as `/api/changes` says it, and the device fetches whole.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use anyhow::{Result, anyhow};
-use axum::http::{HeaderMap, HeaderValue, header};
+use axum::Json;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use cratarr_rules::index::{self, Artist, Builder, Index, Kind, Refused, TrackHead};
+use cratarr_rules::index::{self, Artist, Builder, Gone, Index, Kind, Refused, Rows, TrackHead};
 
+use super::changes::IndexStands;
 use super::{App, ToggleError};
 use crate::crates::Facts;
 use crate::serve::Serve;
@@ -143,15 +154,143 @@ pub fn build(serve: &Serve, facts: &[Facts], libraries: &[index::Library], rev: 
     to.build(rev).map_err(refused)
 }
 
-/// The index `account` can see, as of where the log stands: the log read first, as what is written while this reads is logged
-/// past it and comes again by the feed, where the other way round it would be lost. Blocking.
+/// What the log was last brought up to: all that can move a row without moving the log. The reading only weakly, so as not to
+/// hold on to it, and so its address stays taken: a reading made in the same place would pass for it (`Catalogue::crate_facts`).
+#[derive(Debug, Default)]
+pub struct Settled {
+    facts: Weak<Vec<Facts>>,
+    built: i64,
+    rev: i64,
+    libraries: Vec<index::Library>,
+}
+
+impl Settled {
+    /// Whether what was settled is what stands now: no row can differ, and nothing needs building.
+    fn holds(&self, facts: &Arc<Vec<Facts>>, built: i64, rev: i64, libraries: &[index::Library]) -> bool {
+        std::ptr::eq(self.facts.as_ptr(), Arc::as_ptr(facts)) && self.built == built && self.rev == rev && self.libraries == libraries
+    }
+}
+
+/// The index of every library, and the log brought up to it (`Catalogue::index_settle`): as of where the log was read (`read_at`),
+/// before any row was, as what is written while this reads is logged past that and comes again by the feed, where the other way
+/// round it would be lost. Blocking.
+fn settle(serve: &Serve, turn: &mut Settled, facts: &Arc<Vec<Facts>>, read_at: i64, libraries: &[index::Library]) -> Result<Index> {
+    let built = serve.built_at();
+    let index = build(serve, facts, libraries, read_at)?;
+    let prints = index.prints();
+    let rev = serve.catalogue().index_settle(read_at, &[("library", &prints.libraries[..]), ("artist", &prints.artists[..]), ("record", &prints.records[..]), ("track", &prints.tracks[..])])?;
+    *turn = Settled { facts: Arc::downgrade(facts), built, rev, libraries: libraries.to_vec() };
+    Ok(index.at(rev))
+}
+
+/// `index`, of every library, as `account` sees it. The same one where it sees them all. Blocking.
+fn seen_by(serve: &Serve, facts: &[Facts], index: Index, libraries: &[index::Library], account: Option<&str>) -> Result<Index> {
+    let seen: Vec<index::Library> = libraries.iter().filter(|l| can_see(l, account)).cloned().collect();
+    if seen.len() == libraries.len() {
+        return Ok(index);
+    }
+    let rev = index.rev();
+    drop(index);
+    build(serve, facts, &seen, rev)
+}
+
+/// The index `account` can see, as it stands. Blocking.
 fn whole(serve: &Serve, libraries: Vec<index::Library>, account: Option<&str>) -> Result<Index> {
-    let _turn = serve.device_turn();
+    let mut turn = serve.device_turn();
     let cat = serve.catalogue();
-    let rev = cat.index_rev()?;
+    let read_at = cat.index_rev()?;
     let facts = cat.crate_facts()?;
-    let seen: Vec<index::Library> = libraries.into_iter().filter(|l| can_see(l, account)).collect();
-    build(serve, &facts, &seen, rev)
+    let index = settle(serve, &mut turn, &facts, read_at, &libraries)?;
+    seen_by(serve, &facts, index, &libraries, account)
+}
+
+/// A batch of what `logged` names, as `index` has it, whole: a row left out of it has left. Each row brings what it names, as a
+/// device may not hold it. A record and an artist need no word when they leave: nothing names them on a device then either.
+fn batch(index: &Index, logged: &BTreeMap<String, Vec<i64>>) -> (Rows, Gone) {
+    let of = |kind: &str| logged.get(kind).map_or(&[][..], Vec::as_slice);
+    let (mut rows, mut gone) = (Rows { libraries: index.libraries(), ..Rows::default() }, Gone::default());
+    let (mut records, mut artists): (BTreeSet<i64>, BTreeSet<i64>) = (of("record").iter().copied().collect(), of("artist").iter().copied().collect());
+    for id in of("track") {
+        match index.track(*id) {
+            Some(t) => {
+                records.insert(t.record);
+                artists.extend(&t.artist_ids);
+                rows.tracks.push(t);
+            }
+            None => gone.tracks.push(*id),
+        }
+    }
+    for r in records.iter().filter_map(|id| index.record(*id)) {
+        artists.extend(&r.artist_ids);
+        rows.records.push(r);
+    }
+    rows.artists.extend(artists.iter().filter_map(|id| index.artist(*id)));
+    gone.libraries.extend(of("library").iter().filter(|id| !rows.libraries.iter().any(|l| l.id == **id)));
+    (rows, gone)
+}
+
+/// What a device at a rev is told.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Feed {
+    /// What it lacks, as `Changes::save` writes it.
+    Changes(Bytes),
+    /// It stands where the library does.
+    Same,
+    /// Start again: it fetches whole, and goes on from what that says.
+    Whole { rev: i64 },
+}
+
+impl IntoResponse for Feed {
+    fn into_response(self) -> Response {
+        match self {
+            Feed::Changes(bytes) => bytes.into_response(),
+            Feed::Same => StatusCode::NO_CONTENT.into_response(),
+            Feed::Whole { rev } => (StatusCode::GONE, Json(serde_json::json!({ "rev": rev, "reset": true }))).into_response(),
+        }
+    }
+}
+
+/// `feed`, on this reading of the facts. Blocking.
+#[allow(clippy::too_many_arguments)]
+fn feed_on(serve: &Serve, turn: &mut Settled, facts: &Arc<Vec<Facts>>, read_at: i64, libraries: &[index::Library], account: Option<&str>, since: i64, takes_gzip: bool) -> Result<Feed> {
+    if since == read_at && turn.holds(facts, serve.built_at(), read_at, libraries) {
+        return Ok(Feed::Same);
+    }
+    let index = settle(serve, turn, facts, read_at, libraries)?;
+    let (rev, cat) = (index.rev(), serve.catalogue());
+    if since < cat.index_floor()? || since > rev {
+        return Ok(Feed::Whole { rev });
+    }
+    if since == rev {
+        return Ok(Feed::Same);
+    }
+    let logged = cat.index_logged(since, rev)?;
+    let index = seen_by(serve, facts, index, libraries, account)?;
+    let (rows, gone) = batch(&index, &logged);
+    // Past this, rows cost as much as the whole and say less: a library in front of the others moves every line.
+    if (rows.tracks.len() + gone.tracks.len()) * 2 > index.tracks() {
+        return Ok(Feed::Whole { rev });
+    }
+    Ok(Feed::Changes(Bytes::of(index::Changes::new(since, rev, &rows, gone).save(), takes_gzip)?))
+}
+
+/// What `account` lacks at `since`. Blocking.
+fn feed(serve: &Serve, libraries: &[index::Library], account: Option<&str>, since: i64, takes_gzip: bool) -> Result<Feed> {
+    let mut turn = serve.device_turn();
+    let cat = serve.catalogue();
+    let read_at = cat.index_rev()?;
+    let facts = cat.crate_facts()?;
+    feed_on(serve, &mut turn, &facts, read_at, libraries, account, since, takes_gzip)
+}
+
+/// Where the log stands for a device at `since`, nothing built: whether it has anything to ask for. Blocking.
+fn stands_for(serve: &Serve, libraries: &[index::Library], since: Option<i64>) -> Result<IndexStands> {
+    let turn = serve.device_turn();
+    let cat = serve.catalogue();
+    let (rev, floor) = (cat.index_rev()?, cat.index_floor()?);
+    let Some(since) = since.filter(|s| *s >= floor && *s <= rev) else { return Ok(IndexStands { rev, changed: true, reset: Some(true) }) };
+    let facts = cat.crate_facts()?;
+    Ok(IndexStands { rev, changed: since < rev || !turn.holds(&facts, serve.built_at(), rev, libraries), reset: None })
 }
 
 /// Bytes as gzip: a device fetches these over whatever connection it has.
@@ -200,6 +339,20 @@ pub async fn read(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, ta
     let libraries = app.library.index_libraries(&serve);
     let bytes = tokio::task::spawn_blocking(move || Bytes::of(whole(&serve, libraries, account.as_deref())?.save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
+}
+
+/// `GET /api/index/changes?since=<rev>`: what `account` lacks at `since`.
+pub async fn changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
+    let libraries = app.library.index_libraries(&serve);
+    let found = tokio::task::spawn_blocking(move || feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
+    Ok(found.await.map_err(|e| anyhow!("{e}"))??)
+}
+
+/// `/api/changes`' word on the index, for a device at `since`.
+pub async fn stands(app: &Arc<App>, serve: Arc<Serve>, since: Option<i64>) -> Result<IndexStands, ToggleError> {
+    let libraries = app.library.index_libraries(&serve);
+    let found = tokio::task::spawn_blocking(move || stands_for(&serve, &libraries, since));
+    Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 #[cfg(test)]
@@ -258,6 +411,7 @@ mod tests {
         pub fn built_and_not_read(&self) {
             let (_, print) = self.serve.library.change(&self.cat, &Rules::default()).unwrap();
             self.serve.library.build_from(&self.cat, &Rules::default(), &print).unwrap();
+            self.serve.build_passed_for_tests();
         }
 
         /// The library built from what the catalogue holds now, and the facts read again at the next asking.
@@ -387,12 +541,309 @@ mod tests {
         assert_eq!((artist.name.as_str(), record.artist_ids.as_slice()), ("Someone", &first.artist_ids[..1]));
     }
 
+    /// The feed applied, to where it says nothing more. Refused, or told to start again: the test's failure.
+    fn fed(s: &Served, device: &mut Index) {
+        match feed(&s.serve, &s.libraries(), Some("ann"), device.rev(), false).unwrap() {
+            Feed::Changes(sent) => device.apply(&index::Changes::load(&sent.bytes).unwrap()).unwrap(),
+            Feed::Same => {}
+            Feed::Whole { rev } => panic!("told to start again at {rev}, from {}", device.rev()),
+        }
+    }
+
+    /// The owner's proof for D10: what a device comes to by the feed is what a fresh fetch says, to the byte.
+    fn in_step(s: &Served, device: &mut Index) {
+        fed(s, device);
+        assert!(device.save() == s.index().save(), "{:?}\nfresh {:?}", device.rows(), s.index().rows());
+    }
+
+    /// A device that holds the library as `s` has it.
+    fn device_of(s: &Served) -> Index {
+        Index::load(&s.index().save()).unwrap()
+    }
+
+    fn title_of(index: &Index, track: i64) -> String {
+        index.track(track).unwrap().title
+    }
+
+    #[test]
+    fn a_retag_comes_by_the_feed() {
+        let s = served("retag", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["First", "Second"]);
+        s.built();
+        let mut device = device_of(&s);
+        s.cat.tag_for_tests(0, "A/00 First.flac", &album("Record", "Someone", "Renamed").iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+        s.built();
+        in_step(&s, &mut device);
+        let track = s.cat.track_of(0, "A/00 First.flac").unwrap();
+        assert_eq!(title_of(&device, track), "Renamed");
+    }
+
+    /// The write is logged before the library is built from it, and a device asking in between is sent the row as it stands then:
+    /// the build moves it again with no write, and only the row's print can say so.
+    #[test]
+    fn a_device_asking_between_a_write_and_its_build_is_told_again_after_the_build() {
+        let s = served("between", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["First", "Second"]);
+        s.built();
+        let mut device = device_of(&s);
+        s.cat.tag_for_tests(0, "A/00 First.flac", &album("Record", "Someone", "Renamed").iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+        in_step(&s, &mut device);
+        let track = s.cat.track_of(0, "A/00 First.flac").unwrap();
+        assert_eq!(title_of(&device, track), "First", "not built yet");
+        s.built();
+        in_step(&s, &mut device);
+        assert_eq!(title_of(&device, track), "Renamed");
+    }
+
+    #[test]
+    fn a_keep_comes_by_the_feed() {
+        let s = served("keep", &[CopyKind::Main, CopyKind::Incoming]);
+        with_album(&s, 0, "A", "Stays", "Someone", &["One"]);
+        with_album(&s, 1, "B", "Comes", "Someone", &["Two"]);
+        s.built();
+        let mut device = device_of(&s);
+        let track = s.cat.track_of(1, "B/00 Two.flac").unwrap();
+        assert_eq!(device.track(track).unwrap().facts.folders, [1]);
+        std::fs::create_dir_all(s.roots[0].join("B")).unwrap();
+        std::fs::rename(s.roots[1].join("B/00 Two.flac"), s.roots[0].join("B/00 Two.flac")).unwrap();
+        s.cat.move_files(1, "B", 0, "B").unwrap();
+        s.built();
+        in_step(&s, &mut device);
+        assert_eq!(device.track(track).unwrap().facts.folders, [0], "the same track, in the library it was added to");
+        assert_eq!(device.record(device.track(track).unwrap().record).unwrap().copies[0].library, 0);
+    }
+
+    #[test]
+    fn a_delete_takes_its_track_its_record_and_who_only_it_named() {
+        let s = served("delete", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Stays", "Someone", &["One", "Three", "Four"]);
+        with_album(&s, 0, "B", "Goes", "Another", &["Two"]);
+        s.built();
+        let mut device = device_of(&s);
+        let track = s.cat.track_of(0, "B/00 Two.flac").unwrap();
+        let (record, artist) = (device.track(track).unwrap().record, device.track(track).unwrap().artist_ids[0]);
+        s.cat.mark_trashed(0, "B/00 Two.flac", "token").unwrap();
+        s.built();
+        in_step(&s, &mut device);
+        assert!(device.track(track).is_none() && device.record(record).is_none() && device.artist(artist).is_none());
+    }
+
+    /// The other copy stays: its record is what changed, and no row of the track's own says so but its folders.
+    #[test]
+    fn one_of_two_copies_going_changes_its_track_and_its_record() {
+        let s = served("copy", &[CopyKind::Main, CopyKind::Incoming]);
+        with_album(&s, 0, "A", "Both", "Someone", &["One"]);
+        with_album(&s, 1, "A", "Both", "Someone", &["One"]);
+        with_album(&s, 0, "B", "Beside", "Someone", &["Two", "Three", "Four"]);
+        s.built();
+        let mut device = device_of(&s);
+        let track = s.cat.track_of(0, "A/00 One.flac").unwrap();
+        let record = device.track(track).unwrap().record;
+        assert_eq!(device.record(record).unwrap().copies.len(), 2);
+        s.cat.mark_trashed(1, "A/00 One.flac", "token").unwrap();
+        s.built();
+        in_step(&s, &mut device);
+        let row = device.track(track).unwrap();
+        assert_eq!((device.record(record).unwrap().copies.len(), row.facts.folders.as_slice(), row.facts.lines.len()), (1, &[0][..], 0));
+    }
+
+    /// What the library's build makes of what is no file: a year set by hand, a type, a whole release's count. Nothing is written
+    /// to the catalogue, and no trigger can see it.
+    #[test]
+    fn a_records_row_moved_by_the_library_alone_comes_by_the_feed() {
+        let s = served("library", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["One"]);
+        s.built();
+        let mut device = device_of(&s);
+        let head = s.cat.index_rev().unwrap();
+        s.serve.library.db().execute("UPDATE albums SET year = 1999", []).unwrap();
+        s.serve.build_passed_for_tests();
+        assert_eq!(s.cat.index_rev().unwrap(), head, "no write to anything a trigger sees");
+        in_step(&s, &mut device);
+        assert_eq!(device.rows().records[0].year, Some(1999));
+    }
+
+    /// `tags`, `labels`, `release_types`, `moods`: read from elsewhere, or worked out over the whole library, so a track's row moves
+    /// with no write to it. A reading is what says so.
+    #[test]
+    fn what_a_new_reading_says_of_a_row_comes_by_the_feed_with_no_write_to_it() {
+        let s = served("reading", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["One", "Two"]);
+        s.built();
+        let facts = s.cat.crate_facts().unwrap();
+        let mut device = device_of(&s);
+        let libraries = s.libraries();
+        let changed: Vec<(&str, fn(&mut Facts))> = vec![
+            ("tags", |f| f.tags = vec!["night".into()]),
+            ("labels", |f| f.labels = vec!["Warp".into()]),
+            ("types", |f| f.release_types = vec!["EP".into()]),
+            ("moods", |f| f.moods = vec!["sad".into()]),
+        ];
+        let at = s.cat.index_rev().unwrap();
+        for (what, change) in changed {
+            let mut read: Vec<Facts> = facts.to_vec();
+            read.iter_mut().filter(|f| f.rel.contains("One")).for_each(change);
+            let read = Arc::new(read);
+            let mut turn = s.serve.device_turn();
+            let head = s.cat.index_rev().unwrap();
+            let Feed::Changes(sent) = feed_on(&s.serve, &mut turn, &read, head, &libraries, Some("ann"), device.rev(), false).unwrap() else { panic!("{what}: no changes") };
+            device.apply(&index::Changes::load(&sent.bytes).unwrap()).unwrap();
+            let fresh = build(&s.serve, &read, &libraries, device.rev()).unwrap();
+            assert!(device.save() == fresh.save(), "{what}");
+        }
+        assert!(device.rev() > at);
+    }
+
+    #[test]
+    fn with_nothing_moved_a_device_is_told_so_and_nothing_is_built() {
+        let s = served("same", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["One"]);
+        s.built();
+        let device = device_of(&s);
+        assert_eq!(feed(&s.serve, &s.libraries(), Some("ann"), device.rev(), false).unwrap(), Feed::Same);
+        assert!(s.serve.device_turn().holds(&s.cat.crate_facts().unwrap(), s.serve.built_at(), device.rev(), &s.libraries()));
+        // Nothing can be built from this: a build would fail on it, and the answer shows none was tried.
+        s.serve.library.db().execute("ALTER TABLE songs RENAME TO songs_away", []).unwrap();
+        assert_eq!(feed(&s.serve, &s.libraries(), Some("ann"), device.rev(), false).unwrap(), Feed::Same);
+        s.serve.library.db().execute("ALTER TABLE songs_away RENAME TO songs", []).unwrap();
+    }
+
+    #[test]
+    fn a_rev_no_longer_kept_or_ahead_of_the_log_starts_again() {
+        let s = served("reset", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["One"]);
+        s.built();
+        let rev = s.index().rev();
+        assert_eq!(feed(&s.serve, &s.libraries(), None, rev + 1, false).unwrap(), Feed::Whole { rev }, "ahead of the log");
+        assert_eq!(feed(&s.serve, &s.libraries(), None, rev - 1, false).unwrap(), Feed::Whole { rev }, "from before what was first told");
+    }
+
+    /// Every line moves, so every row is sent: the whole costs less, and says it in one.
+    #[test]
+    fn the_first_folder_going_moves_every_line_and_starts_again() {
+        let s = served("front", &[CopyKind::Main, CopyKind::Main]);
+        with_album(&s, 0, "A", "First", "Someone", &["One"]);
+        with_album(&s, 1, "B", "Second", "Someone", &["Two"]);
+        with_album(&s, 1, "C", "Third", "Someone", &["Three"]);
+        s.built();
+        let device = device_of(&s);
+        assert!(device.rows().tracks.iter().any(|t| t.facts.rel.starts_with("../")), "lines climb out of the first folder");
+        s.cat.set_folders(vec![s.roots[1].clone()]).unwrap();
+        s.serve.library.set_kinds(vec![(1, CopyKind::Main)]);
+        s.built();
+        let libraries = vec![s.libraries().remove(1)];
+        let Feed::Whole { rev } = feed(&s.serve, &libraries, Some("ann"), device.rev(), false).unwrap() else { panic!("rows for every line") };
+        assert!(rev > device.rev());
+    }
+
+    /// A batch names what a device may not hold, or it would refuse the row: a new track's record, its artists, and the record's.
+    #[test]
+    fn a_new_record_brings_its_artists_and_a_device_takes_it() {
+        let s = served("names", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Old", "Someone", &["One"]);
+        with_album(&s, 0, "B", "Older", "Someone", &["Two"]);
+        with_album(&s, 0, "D", "Oldest", "Someone", &["Four"]);
+        s.built();
+        let mut device = device_of(&s);
+        with_album(&s, 0, "C", "New", "Another", &["Three"]);
+        s.built();
+        in_step(&s, &mut device);
+        assert!(device.rows().records.iter().any(|r| r.title == "New"));
+        assert!(device.rows().artists.iter().any(|a| a.name == "Another"));
+    }
+
+    /// A compilation's track logged by itself: its record's album artist is no artist of the track, as Radio has it.
+    fn one_track_logged(name: &str) -> (Served, Rows, Index) {
+        let s = served(name, &[CopyKind::Main]);
+        s.add(0, &[("V/01.flac", &[("album", "Hits"), ("albumartist", "Various Artists"), ("artist", "Someone"), ("title", "One")])]);
+        s.built();
+        let index = s.index();
+        let track = index.rows().tracks[0].id;
+        let (rows, gone) = batch(&index, &BTreeMap::from([("track".to_string(), vec![track])]));
+        assert_eq!((rows.tracks.len(), gone.tracks.len()), (1, 0));
+        (s, rows, index)
+    }
+
+    /// The brief's "each changed row's record and artists": a device may hold none of what a row names, as a row can come into its
+    /// sight with no change to what it names, and it would refuse the row.
+    #[test]
+    fn a_batch_brings_each_tracks_record() {
+        let (_s, rows, _) = one_track_logged("batch-record");
+        assert_eq!(rows.records.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(), ["Hits"]);
+    }
+
+    #[test]
+    fn a_batch_brings_each_tracks_artists() {
+        let (_s, rows, _) = one_track_logged("batch-artists");
+        assert!(rows.artists.iter().any(|a| a.name == "Someone"), "{:?}", rows.artists);
+    }
+
+    #[test]
+    fn a_batch_brings_each_records_artists_who_are_no_artists_of_its_tracks() {
+        let (_s, rows, _) = one_track_logged("batch-various");
+        assert!(rows.artists.iter().any(|a| a.name == "Various Artists"), "{:?}", rows.artists);
+    }
+
+    /// All that a batch brings of a row makes a device of nothing whole.
+    #[test]
+    fn a_device_holding_nothing_of_a_batch_takes_it() {
+        let (_s, rows, index) = one_track_logged("batch-taken");
+        let (mut empty, set) = (Index::build(1, &Rows { libraries: rows.libraries.clone(), ..Rows::default() }).unwrap(), rows);
+        empty.apply(&index::Changes::new(1, index.rev(), &set, Gone::default())).unwrap();
+        assert_eq!(empty.save(), index.save());
+    }
+
+    #[test]
+    fn a_feed_for_an_account_that_sees_less_leaves_out_what_it_cannot_see() {
+        let s = served("narrow", &[CopyKind::Main, CopyKind::Own]);
+        with_album(&s, 0, "A", "Theirs", "Someone", &["One"]);
+        with_album(&s, 1, "B", "Hidden", "Another", &["Two"]);
+        s.built();
+        let facts = s.cat.crate_facts().unwrap();
+        let every = s.libraries();
+        let index = s.index();
+        let narrow = build(&s.serve, &facts, &every[..1], index.rev()).unwrap();
+        let (rows, gone) = batch(&narrow, &BTreeMap::from([("track".to_string(), index.rows().tracks.iter().map(|t| t.id).collect())]));
+        assert_eq!(rows.tracks.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), ["One"]);
+        assert_eq!(gone.tracks.len(), 1, "what it cannot see, gone if it held it");
+    }
+
+    #[test]
+    fn a_device_hears_where_the_log_stands_and_whether_to_ask() {
+        let s = served("stands", &[CopyKind::Main]);
+        with_album(&s, 0, "A", "Record", "Someone", &["One"]);
+        s.built();
+        let rev = s.index().rev();
+        let at = |since: Option<i64>| stands_for(&s.serve, &s.libraries(), since).unwrap();
+        assert_eq!(at(Some(rev)), IndexStands { rev, changed: false, reset: None });
+        assert_eq!(at(None), IndexStands { rev, changed: true, reset: Some(true) }, "no rev, nothing to go on from");
+        assert_eq!(at(Some(rev + 1)), IndexStands { rev, changed: true, reset: Some(true) });
+        assert_eq!(at(Some(rev - 1)), IndexStands { rev, changed: true, reset: Some(true) }, "from before what is kept");
+        s.cat.tag_for_tests(0, "A/00 One.flac", &[("title", "Renamed")]);
+        assert_eq!(at(Some(rev)), IndexStands { rev: s.cat.index_rev().unwrap(), changed: true, reset: None }, "a write");
+        s.index();
+        let rev = s.cat.index_rev().unwrap();
+        assert!(!at(Some(rev)).changed);
+        let mut renamed = s.libraries();
+        renamed[0].name = "Renamed".into();
+        assert!(stands_for(&s.serve, &renamed, Some(rev)).unwrap().changed, "what has no rev of its own moves it too");
+    }
+
     #[test]
     fn the_rev_is_read_before_the_rows_so_what_is_written_meanwhile_comes_again() {
         let s = served("rev", &[CopyKind::Main]);
-        with_album(&s, 0, "A/B", "Record", "Someone", &["First"]);
+        with_album(&s, 0, "A", "Record", "Someone", &["One", "Two", "Three"]);
         s.built();
-        assert_eq!(s.index().rev(), s.cat.index_rev().unwrap());
+        let mut device = device_of(&s);
+        let (read_at, facts, libraries) = (s.cat.index_rev().unwrap(), s.cat.crate_facts().unwrap(), s.libraries());
+        // Written after the log was read and before the rows are: they hold it or they do not.
+        s.cat.tag_for_tests(0, "A/00 One.flac", &album("Record", "Someone", "Meanwhile").iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+        let mut turn = Settled::default();
+        let index = settle(&s.serve, &mut turn, &facts, read_at, &libraries).unwrap();
+        drop(turn);
+        assert_eq!(index.rev(), read_at, "not past what the write logged");
+        s.built();
+        in_step(&s, &mut device);
     }
 
     #[test]

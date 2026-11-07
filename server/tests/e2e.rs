@@ -1427,6 +1427,112 @@ async fn two_accounts_fetch_every_library_they_can_see_end_to_end() {
     std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&packed[..]), &mut back).unwrap();
     assert!(back == plain, "packed, it is the same index");
     assert_eq!(index_bytes(&s.anyone(), false).await.0, 401, "no session, no library");
+
+    // Beside the user data's changes, a word on the library's log, by a rev of its own.
+    let at = |rev: i64| format!("/api/changes?since=0&kinds=favourite,index&index={rev}");
+    s.until("the library still", Duration::from_secs(60), || async {
+        let rev = index_of(&ann).await.rev();
+        ann.get(&at(rev)).await["index"] == json!({ "rev": rev, "changed": false })
+    })
+    .await;
+    let told = ann.get(&at(i64::MAX)).await;
+    assert!(told["index"]["reset"] == true && told["index"]["changed"] == true, "{told}");
+    assert!(ann.get("/api/changes?since=0&kinds=favourite").await.get("index").is_none(), "only where it is asked for");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// What a device was told.
+#[derive(Debug, PartialEq)]
+enum Fed {
+    Applied,
+    Same,
+    Again,
+}
+
+/// The feed from where `device` stands, applied.
+async fn fed(who: &Caller<'_>, device: &mut cratarr_rules::index::Index) -> Fed {
+    let r = who.request(reqwest::Method::GET, &format!("/api/index/changes?since={}", device.rev())).send().await.unwrap();
+    match r.status().as_u16() {
+        200 => {
+            let bytes = r.bytes().await.unwrap();
+            device.apply(&cratarr_rules::index::Changes::load(&bytes).unwrap()).unwrap();
+            Fed::Applied
+        }
+        204 => Fed::Same,
+        410 => Fed::Again,
+        status => panic!("the feed answered {status}: {}", r.text().await.unwrap()),
+    }
+}
+
+/// `device` on the feed until it holds what a fresh fetch holds, to the byte. A change reaches the library a step at a time, so
+/// it may take a few; a feed that misses a row never gets there.
+async fn in_step(who: &Caller<'_>, device: &mut cratarr_rules::index::Index, what: &str) {
+    let start = Instant::now();
+    loop {
+        assert_ne!(fed(who, device).await, Fed::Again, "{what}: told to start again");
+        if device.save() == index_of(who).await.save() {
+            return;
+        }
+        assert!(start.elapsed() < Duration::from_secs(60), "{what}: the feed never came to what a fresh index says");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// The owner's proof for the feed: a Keep, a retag on the disk, a delete and a fact set by hand each reach a device, which then
+/// holds what a fresh fetch holds, and with nothing to tell it is told so.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_device_on_the_feed_holds_what_a_fresh_index_holds_end_to_end() {
+    let (s, root, music, _) = on_music_and_incoming("feed").await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let who = s.sign_in(ANN.0, ANN.1).await;
+    let mut device = index_of(&who).await;
+    let listed = |device: &cratarr_rules::index::Index, title: &str| device.rows().tracks.into_iter().find(|t| t.title == title);
+    let id_of = |albums: Vec<Value>, title: &str| albums.iter().find(|a| a["title"] == title).unwrap()["id"].as_str().unwrap().to_string();
+
+    let album = id_of(who.albums().await, "Just Arrived");
+    let was = listed(&device, "Just Arrived").unwrap();
+    who.ok(reqwest::Method::POST, &format!("/api/incoming/keep/cratarr/{album}"), json!({})).await;
+    let in_music = music.to_string_lossy().to_string();
+    s.until("the Keep listed", Duration::from_secs(60), || async { who.albums().await.iter().any(|a| a["title"] == "Just Arrived" && a["library"].as_str() == Some(&*in_music)) }).await;
+    in_step(&who, &mut device, "a Keep").await;
+    let kept = listed(&device, "Just Arrived").unwrap();
+    assert_eq!(kept.id, was.id, "the same track");
+    assert_ne!(kept.facts.folders, was.facts.folders, "in the library it was added to");
+
+    let album = id_of(who.albums().await, "Tide Tables");
+    set_vorbis(&music.join("Glass Harbour/Tide Tables (2012)/01 Slack Water.flac"), "TITLE", "Slacker Water");
+    s.until("the retag read", Duration::from_secs(120), || async {
+        ask(&who, "startScan", "").await;
+        who.get(&format!("/api/albums/cratarr/{album}")).await["rows"].as_array().unwrap().iter().any(|r| r["name"] == "Slacker Water")
+    })
+    .await;
+    in_step(&who, &mut device, "a retag").await;
+    assert!(listed(&device, "Slacker Water").is_some() && listed(&device, "Slack Water").is_none());
+
+    let album = id_of(who.albums().await, "Signal");
+    let gone = listed(&device, "Signal").unwrap();
+    who.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{album}/delete"), json!({})).await;
+    s.until("the delete seen", Duration::from_secs(60), || async { !who.albums().await.iter().any(|a| a["title"] == "Signal") }).await;
+    in_step(&who, &mut device, "a delete").await;
+    assert!(device.track(gone.id).is_none() && device.record(gone.record).is_none());
+
+    let album = id_of(who.albums().await, "Undated");
+    who.ok(reqwest::Method::PUT, "/api/albums/overrides", json!({ "albums": [album], "set": { "year": 1999 } })).await;
+    s.until("the fact set", Duration::from_secs(90), || async { who.albums().await.iter().any(|a| a["title"] == "Undated" && a["year"] == 1999) }).await;
+    in_step(&who, &mut device, "a fact set by hand, written to nothing the catalogue holds").await;
+    assert_eq!(device.rows().records.iter().find(|r| r.title == "Undated").unwrap().year, Some(1999));
+
+    s.until("nothing more", Duration::from_secs(60), || async {
+        let mut now = index_of(&who).await;
+        fed(&who, &mut now).await == Fed::Same
+    })
+    .await;
+    let r = who.request(reqwest::Method::GET, &format!("/api/index/changes?since={}", i64::MAX)).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 410);
+    let told = r.json::<Value>().await.unwrap();
+    assert!(told["reset"] == true && told["rev"].as_i64().is_some_and(|rev| rev >= device.rev()), "start again, and from where: {told}");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

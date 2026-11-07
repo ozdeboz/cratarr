@@ -355,6 +355,8 @@ trait Cell: Copy + Default + PartialEq {
     fn word(&mut self) -> Option<&mut u32> {
         None
     }
+    /// What it says, whatever number its word has here: what a row's print is made of.
+    fn said(self, words: &Text, out: &mut Vec<u8>);
 }
 
 /// Each as what it differs by from the last: ids rise slowly and a record's tracks say the same, so most take a byte.
@@ -374,6 +376,10 @@ impl Cell for i64 {
             into.push(last);
         }
         Ok(())
+    }
+
+    fn said(self, _words: &Text, out: &mut Vec<u8>) {
+        out.extend(self.to_le_bytes());
     }
 }
 
@@ -401,6 +407,10 @@ impl Cell for Word {
 
     fn word(&mut self) -> Option<&mut u32> {
         Some(&mut self.0)
+    }
+
+    fn said(self, words: &Text, out: &mut Vec<u8>) {
+        said_text(words.word(self), out);
     }
 }
 
@@ -438,6 +448,10 @@ impl Cell for f64 {
         }
         Ok(())
     }
+
+    fn said(self, _words: &Text, out: &mut Vec<u8>) {
+        out.extend(self.to_bits().to_le_bytes());
+    }
 }
 
 impl Cell for f32 {
@@ -453,6 +467,10 @@ impl Cell for f32 {
         }
         Ok(())
     }
+
+    fn said(self, _words: &Text, out: &mut Vec<u8>) {
+        out.extend(self.to_bits().to_le_bytes());
+    }
 }
 
 impl Cell for i8 {
@@ -464,6 +482,10 @@ impl Cell for i8 {
         into.extend(from.take(n)?.iter().map(|v| *v as i8));
         Ok(())
     }
+
+    fn said(self, _words: &Text, out: &mut Vec<u8>) {
+        out.push(self as u8);
+    }
 }
 
 /// A column of a table: written and read whole, and taken from row by row when two tables become one.
@@ -474,6 +496,8 @@ trait Column: Default {
     fn take(&mut self, from: &Self, row: usize, map: &[u32]);
     /// Every word it holds.
     fn each_word(&mut self, _each: &mut dyn FnMut(&mut u32)) {}
+    /// What row `row` says.
+    fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>);
 }
 
 impl<T: Cell> Column for Vec<T> {
@@ -493,6 +517,10 @@ impl<T: Cell> Column for Vec<T> {
 
     fn each_word(&mut self, each: &mut dyn FnMut(&mut u32)) {
         self.iter_mut().filter_map(Cell::word).for_each(each);
+    }
+
+    fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>) {
+        self[row].said(words, out);
     }
 }
 
@@ -554,6 +582,12 @@ impl<T: Cell> Column for Lists<T> {
 
     fn each_word(&mut self, each: &mut dyn FnMut(&mut u32)) {
         self.items.iter_mut().filter_map(Cell::word).for_each(each);
+    }
+
+    fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>) {
+        let cells = self.of(row);
+        varint(out, cells.len() as u64);
+        cells.iter().for_each(|c| c.said(words, out));
     }
 }
 
@@ -628,6 +662,16 @@ impl Column for Text {
     fn take(&mut self, from: &Self, row: usize, _map: &[u32]) {
         self.push(from.get(row));
     }
+
+    fn said(&self, row: usize, _words: &Text, out: &mut Vec<u8>) {
+        said_text(self.get(row), out);
+    }
+}
+
+/// Text said with its length, so that two cells cannot run into one another and read the same.
+fn said_text(text: &str, out: &mut Vec<u8>) {
+    varint(out, text.len() as u64);
+    out.extend_from_slice(text.as_bytes());
 }
 
 /// A table: columns of one length, its rows in the order of its key.
@@ -637,6 +681,8 @@ trait Table: Default {
     fn read(from: &mut Reader) -> Result<Self, Refused>;
     fn take(&mut self, from: &Self, row: usize, map: &[u32]);
     fn each_word(&mut self, each: &mut dyn FnMut(&mut u32));
+    /// What row `row` says, column by column.
+    fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>);
 }
 
 /// A table's columns, said once: what is written, read and taken of a row follows from them.
@@ -669,6 +715,10 @@ macro_rules! table {
 
             fn each_word(&mut self, each: &mut dyn FnMut(&mut u32)) {
                 $(self.$col.each_word(each);)*
+            }
+
+            fn said(&self, row: usize, words: &Text, out: &mut Vec<u8>) {
+                $(self.$col.said(row, words, out);)*
             }
         }
     };
@@ -817,6 +867,18 @@ fn merged<T: Table>(old: &T, new: &T, drop: &[i64], from_old: &[u32], from_new: 
         j += theirs;
     }
     out
+}
+
+/// Each row of a table as a number, by its key: what it says, and what `also` adds of it.
+fn printed<T: Table>(table: &T, words: &Text, also: impl Fn(i64, &mut Vec<u8>)) -> Vec<(i64, u64)> {
+    let mut said = Vec::new();
+    let print = |(row, key): (usize, &i64)| {
+        said.clear();
+        table.said(row, words, &mut said);
+        also(*key, &mut said);
+        (*key, checksum(&said))
+    };
+    table.keys().iter().enumerate().map(print).collect()
 }
 
 /// A table's rows whose key is in `keep`.
@@ -1273,6 +1335,30 @@ impl Index {
         self.rev
     }
 
+    /// This as of `rev`: the server knows where it stands only once it has compared what this holds with what was told.
+    pub fn at(mut self, rev: i64) -> Self {
+        self.rev = rev;
+        self
+    }
+
+    pub fn tracks(&self) -> usize {
+        self.packed.tracks.id.len()
+    }
+
+    pub fn prints(&self) -> Prints {
+        let (p, none) = (&self.packed, |_: i64, _: &mut Vec<u8>| {});
+        let copies = |record: i64, out: &mut Vec<u8>| {
+            let at = p.copies.record.partition_point(|r| *r < record)..p.copies.record.partition_point(|r| *r <= record);
+            at.for_each(|row| p.copies.said(row, &p.words, out));
+        };
+        Prints { libraries: printed(&p.libraries, &p.words, none), artists: printed(&p.artists, &p.words, none), records: printed(&p.records, &p.words, copies), tracks: printed(&p.tracks, &p.words, none) }
+    }
+
+    /// Every library held.
+    pub fn libraries(&self) -> Vec<Library> {
+        (0..self.packed.libraries.id.len()).map(|row| self.packed.library_at(row)).collect()
+    }
+
     pub fn save(&self) -> Vec<u8> {
         let mut out = vec![0; HEADER];
         varint(&mut out, zigzag(self.rev));
@@ -1400,6 +1486,17 @@ impl Index {
         index.artist_ids = artist_ids;
         index.with_facts(facts)
     }
+}
+
+/// What each row of an index says, as a number: its id, and one that moves with anything the row says and with nothing else, not
+/// the rev, not where a word lies in the list. What the server has told devices is kept as these, so that a row moved with no write
+/// to it is seen for what it is: a mood's bar raised, a word of the household's, a copy's order. A record's says its copies too.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Prints {
+    pub libraries: Vec<(i64, u64)>,
+    pub artists: Vec<(i64, u64)>,
+    pub records: Vec<(i64, u64)>,
+    pub tracks: Vec<(i64, u64)>,
 }
 
 // --- Changes ---
@@ -1868,6 +1965,59 @@ mod tests {
         rows.artists.reverse();
         rows.libraries.reverse();
         assert_eq!(built(&rows).save(), first);
+    }
+
+    /// The rows of `a` and `b` that print differently, each table's ids.
+    fn moved(a: &Prints, b: &Prints) -> [Vec<i64>; 4] {
+        let differ = |x: &[(i64, u64)], y: &[(i64, u64)]| -> Vec<i64> {
+            let (x, y): (HashMap<i64, u64>, HashMap<i64, u64>) = (x.iter().copied().collect(), y.iter().copied().collect());
+            let mut ids: Vec<i64> = x.keys().chain(y.keys()).copied().filter(|id| x.get(id) != y.get(id)).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+        [differ(&a.libraries, &b.libraries), differ(&a.artists, &b.artists), differ(&a.records, &b.records), differ(&a.tracks, &b.tracks)]
+    }
+
+    #[test]
+    fn a_print_is_what_a_row_says_and_no_more() {
+        let rows = small();
+        let was = built(&rows).prints();
+        assert_eq!(Index::build(9, &rows).unwrap().prints(), was, "the rev says nothing of a row");
+        // A word that sorts first moves every other word's number, and says nothing of their rows.
+        let mut other = rows.clone();
+        other.tracks[2].facts.genres.push("AAA first of all".into());
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![], vec![], vec![200]]);
+        let mut other = rows.clone();
+        other.tracks[0].title = "Another".into();
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![], vec![], vec![100]]);
+        let mut other = rows.clone();
+        other.records[1].copies.reverse();
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![], vec![20], vec![]], "a copy's order is its record's");
+        let mut other = rows.clone();
+        other.records[1].copies[1].tracks = 3;
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![], vec![20], vec![]]);
+        let mut other = rows.clone();
+        other.artists[0].spelled.push("ARTIST".into());
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![], vec![1], vec![], vec![]]);
+        let mut other = rows.clone();
+        other.libraries[1].name = "Renamed".into();
+        assert_eq!(moved(&was, &built(&other).prints()), [vec![1], vec![], vec![], vec![]]);
+    }
+
+    /// A column added is printed by the same line that writes it. Each of these went by another path once, and a row's cells must
+    /// not be able to run into each other: two words of one row read as one, or one list's end as another's start.
+    #[test]
+    fn cells_cannot_run_into_each_other_in_a_print() {
+        let mut one = small();
+        one.tracks[0].facts.genres = vec!["ab".into(), "c".into()];
+        let mut two = small();
+        two.tracks[0].facts.genres = vec!["a".into(), "bc".into()];
+        assert_eq!(moved(&built(&one).prints(), &built(&two).prints())[3], [100]);
+        let mut three = small();
+        three.tracks[0].facts.styles = vec!["ab".into()];
+        three.tracks[0].facts.genres = vec!["c".into()];
+        assert_eq!(moved(&built(&one).prints(), &built(&three).prints())[3], [100]);
     }
 
     /// The server packs a track at a time, its facts staying where they are, and must come to the very bytes `Rows` come to.
