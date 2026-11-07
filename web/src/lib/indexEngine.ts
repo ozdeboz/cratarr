@@ -15,6 +15,9 @@ export type Mobile = 'unasked' | 'yes' | 'no';
 export type Part = { whole: boolean; stopped: boolean; lost: number; failed: number; tried: number | null; started: number };
 /** What to do now. */
 export type Step = { do: 'stopped' | 'rest' | 'ask' | 'whole' | 'changes' } | { do: 'wait'; until: number };
+/** A part of what a device keeps, as the module numbers it. */
+const KIND = { index: 0, sounds: 1 } as const;
+export type Kind = keyof typeof KIND;
 /** How a fetch ended, or a new start: `start-over-another` where another version than this one's kept what is there. */
 export type Outcome = 'took' | 'lost' | 'failed' | 'start-again' | 'version' | 'start' | 'start-over-another';
 
@@ -37,6 +40,9 @@ type Exports = {
   sounds_version(): number;
   refused_found(): number;
   refused_wants(): number;
+  sync_answer(status: number, whole: number): number;
+  sync_take_whole(kind: number, ptr: number, len: number): number;
+  sync_take_changes(kind: number, kept: number, keptLen: number, feed: number, feedLen: number): number;
   sync_step(whole: number, stopped: number, lost: number, failed: number, tried: number, started: number, network: number, mobile: number, now: number): number;
   sync_after(whole: number, stopped: number, lost: number, failed: number, outcome: number): number;
   sync_paused(lost: number): number;
@@ -109,6 +115,22 @@ export class IndexEngine {
   applySounds = (bytes: Uint8Array) => this.refused(this.over(bytes, this.x.sounds_apply));
   saveSounds = () => this.taken(this.x.sounds_save());
   soundsRev = () => this.x.sounds_rev();
+
+  /** How an answer ended a fetch, or `bytes` where it brought some to take. `status` null: no answer came. */
+  answer(status: number | null, whole: boolean): Outcome | 'bytes' {
+    const said = this.x.sync_answer(status ?? -1, +whole);
+    return said === 5 ? 'bytes' : OUTCOME[said];
+  }
+
+  /** Bytes just fetched whole, held if they can be: how that ended. */
+  takeWhole(kind: Kind, bytes: Uint8Array): Outcome {
+    return OUTCOME[this.over(bytes, (ptr, len) => this.x.sync_take_whole(KIND[kind], ptr, len))];
+  }
+
+  /** A feed applied to what is kept, the result held if it can be: how that ended. */
+  takeChanges(kind: Kind, kept: Uint8Array, feed: Uint8Array): Outcome {
+    return OUTCOME[this.over(kept, (k, kLen) => this.over(feed, (f, fLen) => this.x.sync_take_changes(KIND[kind], k, kLen, f, fLen)))];
+  }
 
   /** What to do now with a part. */
   step(p: Part, network: Network, mobile: Mobile, now: number): Step {

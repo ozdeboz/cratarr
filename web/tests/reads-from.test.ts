@@ -2,7 +2,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { answered, lookedAgain, LOOK_AGAIN_MS, notReached, readsFrom } = await import('../src/lib/deviceIndexRule.ts');
+const { answered, indexShows, lookedAgain, LOOK_AGAIN_MS, notReached, readsFrom } = await import('../src/lib/deviceIndexRule.ts');
+
+const part = { whole: false, stopped: false, paused: false, asks: false };
+
+test('the row goes by the worst of the parts, a stop first', () => {
+  assert.equal(indexShows([part, part], 'unasked', false), 'idle');
+  assert.equal(indexShows([], 'unasked', false), 'idle');
+  assert.equal(indexShows([part, { ...part, paused: true }], 'unasked', false), 'paused');
+  assert.equal(indexShows([{ ...part, stopped: true, paused: true, asks: true }, part], 'unasked', true), 'stopped');
+  assert.equal(indexShows([{ ...part, whole: true, asks: true, paused: true }], 'unasked', true), 'asks');
+  assert.equal(indexShows([{ ...part, whole: true, paused: true }], 'no', true), 'wifi');
+});
+
+test('a question stands only while nobody has answered it', () => {
+  assert.equal(indexShows([{ ...part, whole: true, asks: true }], 'no', true), 'wifi');
+  assert.equal(indexShows([{ ...part, whole: true, asks: true }], 'yes', true), 'idle');
+});
+
+test('a no waits for Wi-Fi only while something is to be fetched whole, and only on mobile data', () => {
+  assert.equal(indexShows([{ ...part, whole: true }], 'no', false), 'idle');
+  assert.equal(indexShows([part], 'no', true), 'idle');
+  assert.equal(indexShows([{ ...part, whole: true }], 'yes', true), 'idle');
+});
 
 test('with Cratarr answering, reads come from the server', () => {
   assert.deepEqual(readsFrom({ unreachable: false, noNetwork: false }), { from: 'server', why: 'answers' });

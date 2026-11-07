@@ -127,7 +127,7 @@ mod matcher_exports {
 // instance go to give it back. `facts`, `Alike` and Radio's index are not made here until a crate or a pick asks (D18 to D20).
 #[cfg(feature = "wasm-index")]
 mod index_exports {
-    use crate::index::sync::{ANEW_AFTER_MS, FIRST_AFTER_MS, Mobile, Network, Outcome, Part, Step};
+    use crate::index::sync::{ANEW_AFTER_MS, FIRST_AFTER_MS, Mobile, Network, Outcome, Part, Step, ended};
     use crate::index::{Changes, Index, Refused, SOUNDS_VERSION, SoundChanges, Sounds, VERSION};
     use std::sync::{Mutex, MutexGuard};
 
@@ -336,6 +336,56 @@ mod index_exports {
     #[unsafe(no_mangle)]
     pub extern "C" fn sync_paused(lost: u32) -> u32 {
         u32::from(Part { lost, ..Part::default() }.paused())
+    }
+
+    /// An ending as `sync_after` numbers it.
+    fn number(outcome: Outcome) -> u32 {
+        match outcome {
+            Outcome::Took => 0,
+            Outcome::Lost => 1,
+            Outcome::Failed => 2,
+            Outcome::StartAgain => 3,
+            Outcome::Version => 4,
+        }
+    }
+
+    /// How an answer ended a fetch (`sync::ended`), as `sync_after` numbers it, or 5 where it brought bytes to take. `status` below
+    /// 0: no answer came.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn sync_answer(status: i32, whole: u32) -> u32 {
+        ended(u16::try_from(status).ok(), whole != 0).map_or(5, number)
+    }
+
+    /// Bytes just fetched whole, held if they can be: how that ended (`Outcome::of_whole`), as `sync_after` numbers it. `kind`: 0 the
+    /// index, 1 the sounds.
+    ///
+    /// # Safety
+    /// `ptr` holds `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sync_take_whole(kind: u32, ptr: *const u8, len: usize) -> u32 {
+        let bytes = unsafe { input(ptr, len) };
+        number(if kind == 0 {
+            Outcome::of_whole(&Index::load(bytes).map(|index| *held(&INDEX) = Some(index)))
+        } else {
+            Outcome::of_whole(&Sounds::load(bytes).map(|sounds| *held(&SOUNDS) = Some(sounds)))
+        })
+    }
+
+    /// A feed applied to what is kept, the result held if it can be: how that ended (`Outcome::of_changes`), as `sync_after` numbers
+    /// it. `kind` as `sync_take_whole`'s.
+    ///
+    /// # Safety
+    /// `kept` holds `kept_len` bytes, and `feed` `feed_len`.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sync_take_changes(kind: u32, kept: *const u8, kept_len: usize, feed: *const u8, feed_len: usize) -> u32 {
+        let (kept, feed) = unsafe { (input(kept, kept_len), input(feed, feed_len)) };
+        number(if kind == 0 {
+            let applied = Index::load(kept).and_then(|mut index| Changes::load(feed).and_then(|c| index.apply(&c)).map(|()| index));
+            Outcome::of_changes(&applied.map(|index| *held(&INDEX) = Some(index)))
+        } else {
+            let applied = Sounds::load(kept).and_then(|mut sounds| SoundChanges::load(feed).and_then(|c| sounds.apply(&c)).map(|()| sounds));
+            Outcome::of_changes(&applied.map(|sounds| *held(&SOUNDS) = Some(sounds)))
+        })
     }
 
     /// How a part stands after a fetch (`Part::after`), or at a start (`Part::anew`, `Part::anew_by_another`). `outcome`: 0 took, 1 lost,

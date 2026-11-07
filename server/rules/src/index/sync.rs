@@ -10,6 +10,10 @@
 //! - **Another version in bytes just fetched stops:** the app and Cratarr differ, and fetching again will not mend it.
 //! - **A start over what another version kept begins whole:** its stop was its own to say, and this one may not read its bytes, though a
 //!   feed would have nothing to say of them.
+//! - **What an answer and what bytes came to are said here too** (`ended`, `Outcome::of_whole`, `Outcome::of_changes`), or each device
+//!   would decide them for itself.
+
+use super::Refused;
 
 /// How long after a start the first fetch waits.
 pub const FIRST_AFTER_MS: i64 = 10_000;
@@ -72,6 +76,35 @@ pub enum Outcome {
     StartAgain,
     /// Bytes just fetched whole are of another version.
     Version,
+}
+
+impl Outcome {
+    /// What bytes just fetched whole came to. Only these can say the two differ for good: anything else refused is a bad answer.
+    pub fn of_whole<T>(taken: &Result<T, Refused>) -> Self {
+        match taken {
+            Ok(_) => Self::Took,
+            Err(Refused::Version { .. }) => Self::Version,
+            Err(_) => Self::Failed,
+        }
+    }
+
+    /// What a feed came to: whatever cannot go on, of whichever version, is fetched whole.
+    pub fn of_changes<T>(taken: &Result<T, Refused>) -> Self {
+        if taken.is_ok() { Self::Took } else { Self::StartAgain }
+    }
+}
+
+/// How an answer ended a fetch, or `None` where it brought bytes to take. `status`: none where no answer came, `whole`: what was
+/// asked for. Nothing changed and "start again" are a feed's answers, and a whole has nothing less to be asked for.
+pub fn ended(status: Option<u16>, whole: bool) -> Option<Outcome> {
+    match status {
+        // No answer of Cratarr's, or none it can give this session: the connection's, and the sign-in's own to say.
+        None | Some(401 | 403 | 502 | 503 | 504) => Some(Outcome::Lost),
+        Some(204) => Some(if whole { Outcome::Failed } else { Outcome::Took }),
+        Some(410) => Some(if whole { Outcome::Failed } else { Outcome::StartAgain }),
+        Some(200..=299) => None,
+        Some(_) => Some(Outcome::Failed),
+    }
 }
 
 /// How one part stands. Kept by the caller, as it must outlast a start.
@@ -262,6 +295,50 @@ mod tests {
         let s = whole().after(Outcome::Version, LATER);
         assert_eq!(s.step(Network::Free, Mobile::Yes, LATER + 1), Step::Stopped);
         assert_eq!(s.anew(LATER + ANEW_AFTER_MS).step(Network::Free, Mobile::Yes, LATER + 2 * ANEW_AFTER_MS), Step::Stopped);
+    }
+
+    #[test]
+    fn an_answer_with_nothing_of_cratarrs_in_it_is_a_lost_connection_whatever_was_asked() {
+        for status in [None, Some(401), Some(403), Some(502), Some(503), Some(504)] {
+            assert_eq!(ended(status, true), Some(Outcome::Lost), "{status:?}");
+            assert_eq!(ended(status, false), Some(Outcome::Lost), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn nothing_changed_and_start_again_are_a_feeds_answers_and_a_whole_fails_on_them() {
+        assert_eq!(ended(Some(204), false), Some(Outcome::Took));
+        assert_eq!(ended(Some(410), false), Some(Outcome::StartAgain));
+        assert_eq!(ended(Some(204), true), Some(Outcome::Failed));
+        assert_eq!(ended(Some(410), true), Some(Outcome::Failed));
+    }
+
+    #[test]
+    fn a_real_answer_brings_bytes_or_fails() {
+        assert_eq!(ended(Some(200), true), None);
+        assert_eq!(ended(Some(200), false), None);
+        assert_eq!(ended(Some(206), true), None);
+        for status in [300, 400, 404, 500, 501] {
+            assert_eq!(ended(Some(status), false), Some(Outcome::Failed), "{status}");
+        }
+    }
+
+    #[test]
+    fn only_another_version_in_bytes_fetched_whole_stops() {
+        assert_eq!(Outcome::of_whole(&Ok(())), Outcome::Took);
+        assert_eq!(Outcome::of_whole::<()>(&Err(Refused::Version { found: 2, wants: 1 })), Outcome::Version);
+        assert_eq!(Outcome::of_whole::<()>(&Err(Refused::Damaged)), Outcome::Failed);
+        assert_eq!(Outcome::of_whole::<()>(&Err(Refused::Rev { at: 1, from: 2 })), Outcome::Failed);
+        assert_eq!(Outcome::of_whole::<()>(&Err(Refused::Unknown { what: "track", id: 1 })), Outcome::Failed);
+    }
+
+    #[test]
+    fn a_feed_refused_any_way_starts_again() {
+        assert_eq!(Outcome::of_changes(&Ok(())), Outcome::Took);
+        assert_eq!(Outcome::of_changes::<()>(&Err(Refused::Version { found: 2, wants: 1 })), Outcome::StartAgain);
+        assert_eq!(Outcome::of_changes::<()>(&Err(Refused::Damaged)), Outcome::StartAgain);
+        assert_eq!(Outcome::of_changes::<()>(&Err(Refused::Rev { at: 1, from: 2 })), Outcome::StartAgain);
+        assert_eq!(Outcome::of_changes::<()>(&Err(Refused::Unknown { what: "track", id: 1 })), Outcome::StartAgain);
     }
 
     #[test]

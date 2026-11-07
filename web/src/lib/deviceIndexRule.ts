@@ -26,6 +26,17 @@ export function readsFrom(i: ReadInputs): ReadsFrom {
  *  two stopped by their versions. */
 export type IndexShows = 'idle' | 'fetching' | 'asks' | 'wifi' | 'paused' | 'stopped';
 
+/** A part of what a device keeps, as the row goes by it: what the rule said of it, in a browser's own look or the app's. */
+export type PartFacts = { whole: boolean; stopped: boolean; paused: boolean; asks: boolean };
+
+/** What the row shows. A question stands only while nobody has answered it: the app's word on a part can be older than the answer. */
+export function indexShows(parts: PartFacts[], mobile: 'unasked' | 'yes' | 'no', metered: boolean): IndexShows {
+  if (parts.some((p) => p.stopped)) return 'stopped';
+  if (mobile === 'unasked' && parts.some((p) => p.asks)) return 'asks';
+  if (mobile === 'no' && metered && parts.some((p) => p.whole)) return 'wifi';
+  return parts.some((p) => p.paused) ? 'paused' : 'idle';
+}
+
 /** Its row's value: the date it last stood where Cratarr does, unless something stands in the way. */
 export function indexWord(shows: IndexShows, at: number | null, date: (ms: number) => string): string {
   if (shows === 'stopped') return 'Differs from Cratarr';

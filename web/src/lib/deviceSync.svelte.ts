@@ -7,11 +7,11 @@
 import { accountKey, whenAccount, whoOf } from './account';
 import { inApp } from './app.svelte';
 import { newEngine, readsNow, whenReadsMove } from './deviceIndex.svelte';
-import type { IndexShows } from './deviceIndexRule';
-import type { IndexEngine, Network, Outcome, Part, Refused, Step } from './indexEngine';
+import { indexShows, type IndexShows, type PartFacts } from './deviceIndexRule';
+import type { IndexEngine, Network, Outcome, Part, Step } from './indexEngine';
 import { readPart, writePart, type Kept, type PartName } from './indexStore';
 import { prefs } from './prefs.svelte';
-import { notReached, reach, refusedFor } from './reach.svelte';
+import { reach, refusedFor } from './reach.svelte';
 
 /** When a start first looks at what to fetch: the rule's own first seconds (`FIRST_AFTER_MS`), so index.wasm is not loaded sooner to say so. */
 export const FIRST_LOOK_MS = 10_000;
@@ -25,8 +25,6 @@ type Def = {
   name: PartName;
   whole: string;
   feed: (since: number) => string;
-  load: (e: IndexEngine, bytes: Uint8Array) => Refused | null;
-  apply: (e: IndexEngine, bytes: Uint8Array) => Refused | null;
   save: (e: IndexEngine) => Uint8Array | null;
   rev: (e: IndexEngine) => number;
   version: (e: IndexEngine) => number;
@@ -37,8 +35,6 @@ const PARTS: Def[] = [
     name: 'index',
     whole: '/api/index',
     feed: (since) => `/api/index/changes?since=${since}`,
-    load: (e, bytes) => e.loadIndex(bytes),
-    apply: (e, bytes) => e.applyIndex(bytes),
     save: (e) => e.saveIndex(),
     rev: (e) => e.indexRev(),
     version: (e) => e.indexVersion(),
@@ -48,8 +44,6 @@ const PARTS: Def[] = [
     name: 'sounds',
     whole: '/api/index/sounds',
     feed: (since) => `/api/index/sounds/changes?since=${since}`,
-    load: (e, bytes) => e.loadSounds(bytes),
-    apply: (e, bytes) => e.applySounds(bytes),
     save: (e) => e.saveSounds(),
     rev: (e) => e.soundsRev(),
     version: (e) => e.soundsVersion(),
@@ -76,17 +70,13 @@ function networkNow(): Network {
   return c?.type === 'cellular' || c?.saveData ? 'metered' : 'free';
 }
 
-type Fetched = { bytes: Uint8Array } | { outcome: Outcome | 'same' };
+type Fetched = { bytes: Uint8Array } | { outcome: Outcome };
 
-async function fetched(url: string): Promise<Fetched> {
+async function fetched(e: IndexEngine, url: string, whole: boolean): Promise<Fetched> {
   try {
     const res = await fetch(url);
-    if (res.status === 204) return { outcome: 'same' };
-    if (res.status === 410) return { outcome: 'start-again' };
-    // No answer of Cratarr's, or none it can give this session: the connection's, and the sign-in's own to say.
-    if (notReached(res.status) || res.status === 401) return { outcome: 'lost' };
-    if (!res.ok) return { outcome: 'failed' };
-    return { bytes: new Uint8Array(await res.arrayBuffer()) };
+    const said = e.answer(res.status, whole);
+    return said === 'bytes' ? { bytes: new Uint8Array(await res.arrayBuffer()) } : { outcome: said };
   } catch {
     return { outcome: 'lost' };
   }
@@ -96,19 +86,18 @@ async function fetched(url: string): Promise<Fetched> {
 type Got = { outcome: Outcome; keep?: Partial<Kept> };
 
 async function whole(e: IndexEngine, def: Def): Promise<Got> {
-  const got = await fetched(def.whole);
-  if (!('bytes' in got)) return { outcome: got.outcome === 'same' || got.outcome === 'start-again' ? 'failed' : got.outcome };
-  const refused = def.load(e, got.bytes);
-  if (refused) return { outcome: refused.why === 'version' ? 'version' : 'failed' };
-  return { outcome: 'took', keep: { bytes: got.bytes, rev: def.rev(e), at: Date.now() } };
+  const got = await fetched(e, def.whole, true);
+  if (!('bytes' in got)) return got;
+  const outcome = e.takeWhole(def.name, got.bytes);
+  return outcome === 'took' ? { outcome, keep: { bytes: got.bytes, rev: def.rev(e), at: Date.now() } } : { outcome };
 }
 
 async function changes(e: IndexEngine, def: Def, kept: Kept): Promise<Got> {
   if (!kept.bytes || kept.rev === null) return { outcome: 'start-again' };
-  const got = await fetched(def.feed(kept.rev));
-  if (!('bytes' in got)) return got.outcome === 'same' ? { outcome: 'took', keep: { at: Date.now() } } : { outcome: got.outcome };
-  // What cannot go on, of whichever version, is fetched whole: only bytes fetched whole can say the two differ for good.
-  if (def.load(e, kept.bytes) || def.apply(e, got.bytes)) return { outcome: 'start-again' };
+  const got = await fetched(e, def.feed(kept.rev), false);
+  if (!('bytes' in got)) return got.outcome === 'took' ? { outcome: 'took', keep: { at: Date.now() } } : got;
+  const outcome = e.takeChanges(def.name, kept.bytes, got.bytes);
+  if (outcome !== 'took') return { outcome };
   const bytes = def.save(e);
   return bytes ? { outcome: 'took', keep: { bytes, rev: def.rev(e), at: Date.now() } } : { outcome: 'failed' };
 }
@@ -155,17 +144,11 @@ async function bringUp(e: IndexEngine, def: Def, who: string): Promise<Step> {
 
 /** What the row says, from how the parts ended. */
 function say(e: IndexEngine, steps: Step[]) {
-  const all = [...parts.values()];
-  const shows: IndexShows = all.some((p) => p.stopped)
-    ? 'stopped'
-    : steps.some((s) => s.do === 'ask')
-      ? 'asks'
-      : all.some((p) => p.whole) && prefs.indexMobile === 'no' && networkNow() === 'metered'
-        ? 'wifi'
-        : all.some((p) => e.paused(p))
-          ? 'paused'
-          : 'idle';
-  indexSync.shows = shows;
+  const facts = PARTS.flatMap((def, n): PartFacts[] => {
+    const p = parts.get(def.name);
+    return p ? [{ whole: p.whole, stopped: p.stopped, paused: e.paused(p), asks: steps[n].do === 'ask' }] : [];
+  });
+  indexSync.shows = indexShows(facts, prefs.indexMobile, networkNow() === 'metered');
 }
 
 function lookAt(when: number) {

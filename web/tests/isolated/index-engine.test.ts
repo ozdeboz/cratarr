@@ -124,6 +124,45 @@ test('a start over what another version kept forgets what went wrong, lifts its 
   assert.deepEqual(e.after({ ...held, lost: 2, failed: 3, tried: 5, stopped: true }, 'start-over-another', LATER), { ...whole, started: LATER });
 });
 
+test('how an answer ended a fetch is the crate\'s to say', async () => {
+  const e = await engine();
+  assert.equal(e.answer(null, false), 'lost');
+  assert.equal(e.answer(401, true), 'lost');
+  assert.equal(e.answer(502, false), 'lost');
+  assert.equal(e.answer(200, true), 'bytes');
+  assert.equal(e.answer(204, false), 'took');
+  assert.equal(e.answer(204, true), 'failed');
+  assert.equal(e.answer(410, false), 'start-again');
+  assert.equal(e.answer(410, true), 'failed');
+  assert.equal(e.answer(500, false), 'failed');
+});
+
+test('bytes fetched whole are held, each part its own, and what they came to is said', async () => {
+  const e = await engine();
+  assert.equal(e.takeWhole('index', vector('whole.bin')), 'took');
+  assert.equal(e.indexRev(), 5);
+  assert.equal(e.soundsRev(), -1, 'the sounds are not touched');
+  assert.equal(e.takeWhole('sounds', vector('sounds.bin')), 'took');
+  assert.equal(e.soundsRev(), 5);
+  const other = vector('whole.bin').slice();
+  other[4] = 9;
+  assert.equal(e.takeWhole('index', other), 'version');
+  assert.equal(e.takeWhole('index', vector('whole.bin').slice(0, 100)), 'failed');
+});
+
+test('a feed taken leaves the result held, each part its own, and one that cannot go on starts again', async () => {
+  const e = await engine();
+  assert.equal(e.takeChanges('index', vector('whole.bin'), vector('changes.bin')), 'took');
+  assert.deepEqual(e.saveIndex(), vector('after.bin'));
+  assert.equal(e.takeChanges('sounds', vector('sounds.bin'), vector('sound-changes.bin')), 'took');
+  assert.deepEqual(e.saveSounds(), vector('sounds-after.bin'));
+  assert.equal(e.takeChanges('index', vector('after.bin'), vector('changes.bin')), 'start-again');
+  assert.equal(e.takeChanges('index', vector('whole.bin'), vector('changes.bin').slice(0, 50)), 'start-again');
+  const other = vector('whole.bin').slice();
+  other[4] = 9;
+  assert.equal(e.takeChanges('index', other, vector('changes.bin')), 'start-again');
+});
+
 test('paused is the crate\'s to say', async () => {
   const e = await engine();
   assert.equal(e.paused({ ...held, lost: 2 }), false);
