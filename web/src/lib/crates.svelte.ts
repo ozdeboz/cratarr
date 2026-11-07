@@ -26,7 +26,6 @@ export async function loadCrates() {
       ...(c.id in pendingAlbums ? { favourite_albums: pendingAlbums[c.id] } : {}),
     }));
     crates.error = null;
-    await moveBrowserSettings(list);
   } catch (e) {
     crates.error = e instanceof Error ? e.message : 'Unexpected error';
   }
@@ -121,30 +120,6 @@ function saved(to: CrateFavourites, shown: Record<CrateFavourites, { label: stri
   if (!undo) return;
   loadCrates();
   withUndo(`${shown[to].label}.`, [undo], { after: () => loadCrates() });
-}
-
-// Before the setting was the server's (2026-10-14), each browser kept its own: sent once, then forgotten here.
-const OLD_KEY = 'cratarr-crate-favourites';
-async function moveBrowserSettings(list: Crate[]) {
-  let read: unknown = null;
-  try {
-    read = JSON.parse(localStorage.getItem(OLD_KEY) ?? 'null');
-    localStorage.removeItem(OLD_KEY);
-  } catch {
-    return;
-  }
-  if (!read || typeof read !== 'object') return;
-  const old = read as Record<string, CrateFavourites>;
-  const moved = list.filter((c) => old[c.id] && old[c.id] !== c.favourites);
-  for (const c of moved) {
-    try {
-      await setCrateFavourites(c.id, old[c.id]);
-      const shown = crates.list?.find((x) => x.id === c.id);
-      if (shown && !(c.id in pending)) shown.favourites = old[c.id];
-    } catch {
-      /* the server's setting stays */
-    }
-  }
 }
 
 /** A crate's id in the panel's address (`?view=crate:unlisted`), and back. */
