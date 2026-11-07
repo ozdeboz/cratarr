@@ -90,11 +90,13 @@ export function closeReads() {
 whenAccount.add(closeReads);
 
 async function open(): Promise<Open | null> {
-  if (accountKey() === null) return null;
-  const kept = await readPart(whoOf(accountKey()), 'index');
+  const account = accountKey();
+  if (account === null) return null;
+  const kept = await readPart(whoOf(account), 'index');
   if (!kept?.bytes) return null;
   const engine = await newEngine();
-  return engine.loadIndex(kept.bytes) ? null : { engine, at: kept.at ?? 0 };
+  // Another account came meanwhile: what was opened is the one before's, and a page that asked is the new one's.
+  return accountKey() !== account || engine.loadIndex(kept.bytes) ? null : { engine, at: kept.at ?? 0 };
 }
 
 function opened(): Promise<Open | null> {

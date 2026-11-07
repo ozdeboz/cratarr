@@ -101,7 +101,7 @@ export async function weatherHere(now = Date.now()): Promise<Weather | null> {
 
 /** The moment, from wherever reads come from: from the device, the albums Cratarr last gave (`last`, else its last copy), under the time
  *  and weather here, never a name from before. No albums to go on: the read goes where any other goes. */
-export const momentNow = (source: string | undefined, without: string[], last: string[] | undefined) =>
+export const momentNow = (source: string | undefined, without: string[] | undefined, last: string[] | undefined) =>
   read(
     () => getMoment(source, without),
     async () => {

@@ -1,7 +1,7 @@
 // No page asks whether it is offline (the owner's North Star, 2026-11-07; docs/architecture.md's Reads door): reads go through
 // lib/api's `read`, and lib/deviceIndex alone says where they come from. So `reach.away` may tell a control or a word what to do,
-// and a poller when to ask, and may not choose what a page reads. Each use there is stands here with what it is for: a new one
-// fails until someone has said so, and what it chooses is then read in this list, not found by accident.
+// and a poller when to ask, and may not choose what a page reads. Each use stands here with what it is for: a new one fails until
+// someone has said so, and what it chooses is then read in this list, not found by accident.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { test } from 'node:test';

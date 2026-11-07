@@ -279,6 +279,13 @@ test('nobody reads anyone\'s, and one account\'s is not another\'s', async () =>
   assert.equal((await getAlbums()).sources[0].albums.length, 3);
 });
 
+test('a read under way as the account changes answers nothing of the one before\'s', async () => {
+  noNetwork();
+  const asking = getAlbums();
+  accountLearnt('bob');
+  await assert.rejects(asking, (e: Error) => e.message === UNREACHED);
+});
+
 test('another\'s own music keeps its name, and one\'s own is called so', async () => {
   await keepIndex(vector('whole.bin'), 'bob');
   accountLearnt('bob');
