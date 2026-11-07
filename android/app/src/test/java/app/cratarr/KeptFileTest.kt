@@ -1,5 +1,7 @@
 package app.cratarr
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -83,6 +85,42 @@ class KeptFileTest {
         assertThrows(IOException::class.java) { KeptFile.list(file) }
         file.writeText("""[{"kind":"album"},"cut"]""")
         assertThrows(IOException::class.java) { KeptFile.list(file) }
+    }
+
+    private fun holders() = File(folder.root, "kept-holders.json")
+
+    @Test
+    fun the_holders_read_as_they_were_written() {
+        val file = holders()
+        KeptFile.write(file, JSONObject().put("cratarr/tr-1", JSONArray(listOf("@ann\tmanual", "@bo\talbum:cratarr/al-1"))).toString())
+        assertEquals(mapOf("cratarr/tr-1" to setOf("@ann\tmanual", "@bo\talbum:cratarr/al-1")), KeptFile.holders(file))
+    }
+
+    @Test
+    fun holders_cut_off_are_not_read_as_nothing_held() {
+        // Nothing held, one account's Remove would take every account's downloads.
+        val file = holders()
+        file.writeText("""{"cratarr/tr-1":["@ann\tman""")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+        file.writeText("")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+        file.writeText("[]")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+    }
+
+    @Test
+    fun no_holders_yet_are_none() {
+        assertEquals(emptyMap<String, Set<String>>(), KeptFile.holders(holders()))
+    }
+
+    @Test
+    fun a_download_held_only_in_an_old_shape_is_not_there_for_a_pass_to_find_nothing_holds_it() {
+        // Read as held by nothing a pass would remove it. A device that kept its data past 0.16 keeps its files, unseen.
+        val file = holders()
+        file.writeText("""{"cratarr/tr-1":["manual"],"cratarr/tr-2":["@ann\tmanual","album:cratarr/al-1"]}""")
+        val h = KeptFile.holders(file)
+        assertEquals(mapOf("cratarr/tr-2" to setOf("@ann\tmanual")), h)
+        assertEquals(emptyList<String>(), KeptHolds.afterPass(h, emptyMap()))
     }
 
     @Test

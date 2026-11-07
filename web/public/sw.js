@@ -18,6 +18,28 @@ const COVERS = 'cratarr-covers-2';
 // `X-Cratarr-Kept` (when it was kept) so the page says it is offline. Live reads (the event stream, players, tasks,
 // sign-in, sound) are never kept.
 const DATA = 'cratarr-data-2';
+// Whose copies are kept and shown (decision 0101): the data's, the Library's album list and the downloaded albums'
+// covers are each account's apart (`cratarr-data-2@name`; the key as lib/account names it: `@name`, `@` with sign-in off),
+// hidden while another is signed in and shown again at its next sign-in. Nobody signed in (`-`): none kept, none shown.
+const WHO = 'cratarr-who';
+const NOBODY = '-';
+let who = null;
+const whoNow = async () => {
+  if (who !== null) return who;
+  const kept = await caches.open(WHO).then((c) => c.match('/__who')).then((r) => (r ? r.text() : NOBODY), () => NOBODY);
+  // Told while that was read, by a page that knows better: what it told stands.
+  return (who ??= kept);
+};
+/** `w`'s copies from now on, kept for a worker woken later. */
+const setWho = (w) => {
+  who = w;
+  return caches.open(WHO).then((c) => c.put('/__who', new Response(w)));
+};
+/** The account's own cache of `base` (DATA, COVERS); null for nobody. */
+const ours = async (base) => {
+  const w = await whoNow();
+  return w === NOBODY ? null : base + w;
+};
 const KEPT_AFTER_MS = 4000;
 // Known to be out of reach (the owner, 2026-10-28: no 4 s wait each time): no network, the page saying so (lib/reach,
 // the app's network report), or a read here that did not reach Cratarr. Then a read waits only this long for the
@@ -81,7 +103,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== COVERS && k !== DATA && k !== OFFLINE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== WHO && k !== OFFLINE && !k.startsWith(COVERS) && !k.startsWith(DATA)).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -94,27 +116,32 @@ const put = (key, response) => {
   return response;
 };
 
-/** A read answered from its last copy, marked with when it was kept. */
-async function keptCopy(req) {
-  const hit = await caches.match(req, { cacheName: DATA });
+/** A read answered from its last copy (in `mine`, the cache of the account who asked), marked with when it was kept. */
+async function keptCopy(req, mine) {
+  const cacheName = await mine;
+  const hit = cacheName && (await caches.match(req, { cacheName }));
   if (!hit) return null;
   const headers = new Headers(hit.headers);
   headers.set('X-Cratarr-Kept', hit.headers.get('X-Cratarr-Kept-At') ?? '1');
   return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers });
 }
-/** Keeps a read's answer, with when. */
-async function keep(req, r) {
+/** Keeps a read's answer, with when, as the account's who asked (nobody's: not kept). */
+async function keep(req, r, mine) {
+  const cacheName = await mine;
+  if (!cacheName) return;
   const headers = new Headers(r.headers);
   headers.set('X-Cratarr-Kept-At', String(Date.now()));
   const copy = new Response(await r.clone().arrayBuffer(), { status: r.status, statusText: r.statusText, headers });
-  await (await caches.open(DATA)).put(req, copy);
+  await (await caches.open(cacheName)).put(req, copy);
 }
 /** Network first; its last copy where the network does not answer in time (the fetch going on to keep a fresh one), fails, or
  *  meets the proxy's refusal (403 or a 5xx without Cratarr behind it). Not found or signed out stay the server's answer. */
 function keptRead(event, req) {
+  // Whose it is goes by who asked: the answer is that session's, whoever has signed in by the time it comes.
+  const mine = ours(DATA);
   const net = fetch(req).then(
     (r) => {
-      if (r.ok) event.waitUntil(keep(req, r).catch(() => {}));
+      if (r.ok) event.waitUntil(keep(req, r, mine).catch(() => {}));
       // Cratarr's own answer (the proxy's refusal or its empty 5xx are not).
       if (r.ok || r.status === 401 || r.status === 404 || (r.status < 500 && r.status !== 403)) setAway(false);
       else setAway(true);
@@ -127,7 +154,7 @@ function keptRead(event, req) {
     let done = false;
     const give = (r) => !done && ((done = true), resolve(r));
     const timer = setTimeout(async () => {
-      const k = await keptCopy(req);
+      const k = await keptCopy(req, mine);
       if (k) {
         // Waited the whole while: not answering is out of reach too.
         if (!away && self.navigator.onLine !== false) setAway(true);
@@ -137,7 +164,7 @@ function keptRead(event, req) {
     net.then(async (r) => {
       clearTimeout(timer);
       if (r && (r.ok || r.status === 401 || r.status === 404 || (r.status < 500 && r.status !== 403))) return give(r);
-      const k = await keptCopy(req);
+      const k = await keptCopy(req, mine);
       give(k ?? r ?? Response.error());
     });
   });
@@ -148,28 +175,22 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'reach' && typeof event.data.away === 'boolean') setAway(event.data.away);
 });
 
-// The account whose copies are kept: another one signing in, the last one's go.
+// The account signed in (its name, '' with sign-in off; null for nobody): its copies from now on, the others' kept.
 self.addEventListener('message', (event) => {
-  if (event.data?.type !== 'account' || typeof event.data.name !== 'string') return;
-  event.waitUntil(
-    caches.open(DATA).then(async (c) => {
-      const was = await c.match('/__account');
-      const name = was ? await was.text() : null;
-      if (name !== null && name !== event.data.name) {
-        await caches.delete(DATA);
-        c = await caches.open(DATA);
-      }
-      await c.put('/__account', new Response(event.data.name));
-    }),
-  );
+  if (event.data?.type !== 'account') return;
+  const name = event.data.name;
+  event.waitUntil(setWho(typeof name === 'string' ? `@${name}` : NOBODY));
 });
 
-// The covers to keep (their paths, without a version): those no longer listed go, the missing ones are fetched.
+// The covers to keep, the account's (their paths, without a version): those no longer listed go, the missing ones are
+// fetched.
 self.addEventListener('message', (event) => {
   if (event.data?.type !== 'keep-covers' || !Array.isArray(event.data.urls)) return;
   const want = new Set(event.data.urls.map((u) => new URL(u, self.location.origin).pathname));
   event.waitUntil(
-    caches.open(COVERS).then(async (c) => {
+    ours(COVERS).then(async (name) => {
+      if (!name) return;
+      const c = await caches.open(name);
       const have = new Set();
       for (const k of await c.keys()) {
         const path = new URL(k.url).pathname;
@@ -197,14 +218,23 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
 
   if (url.pathname === '/api/albums') {
-    const fresh = fetch(req).then((r) => put(req, r));
+    // The own copy of the account who asked, as any read's (nobody's: none).
+    const mine = ours(DATA);
+    const fresh = fetch(req).then(async (r) => {
+      const name = await mine;
+      if (name && r.ok) {
+        const copy = r.clone();
+        event.waitUntil(caches.open(name).then((c) => c.put(req, copy)));
+      }
+      return r;
+    });
     // The page asks with cache: 'no-cache' when it wants the latest, right after showing the kept copy.
     if (req.cache === 'no-cache') {
       event.respondWith(fresh);
       return;
     }
     event.waitUntil(fresh.catch(() => {}));
-    event.respondWith(caches.match(req).then((hit) => hit || fresh));
+    event.respondWith(mine.then(async (name) => (name && (await caches.match(req, { cacheName: name }))) || fresh));
     return;
   }
   // A stream naming its copy (an intake card's snippet, a Play from queue) is that copy's: what is kept under the track's
@@ -214,15 +244,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (ALBUM_COVER.test(url.pathname)) {
-    // A kept cover is kept fresh, and serves while Cratarr is out of reach (the proxy's 403, or no network).
-    const kept = () => caches.match(url.pathname, { cacheName: COVERS });
+    // A kept cover (the account's) is kept fresh, and serves while Cratarr is out of reach (the proxy's 403, or no
+    // network).
+    const mine = ours(COVERS);
+    const kept = async () => {
+      const cacheName = await mine;
+      return cacheName ? caches.match(url.pathname, { cacheName }) : undefined;
+    };
     event.respondWith(
       fetch(req)
         .then(async (r) => {
           if (!r.ok) return (await kept()) || r;
           if (await kept()) {
             const copy = r.clone();
-            caches.open(COVERS).then((c) => c.put(url.pathname, copy));
+            mine.then((name) => name && caches.open(name).then((c) => c.put(url.pathname, copy)));
           }
           return r;
         })
@@ -235,7 +270,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.pathname.startsWith('/api/')) return;
-  // Cratarr's sign-in page (decision 0039) is the server's own, never the shell.
+  // Cratarr's sign-in page (decision 0039) is the server's own, never the shell. Whoever comes through it is not known
+  // yet, and the one before may be someone whose session ended with no page open: nobody's, until the page says.
+  if (url.pathname === '/signin' && req.mode === 'navigate') event.waitUntil(setWho(NOBODY));
   if (url.pathname === '/signin' || url.pathname === '/signout') return;
 
   if (req.mode === 'navigate') {

@@ -165,7 +165,7 @@ class MainActivity : AppCompatActivity() {
             reply.postMessage(ExportSave.message(token, "cancelled").toString())
             return@registerForActivityResult
         }
-        ExportSave.start(this, ExportSave.Job(doc, token, message.optString("name")))
+        ExportSave.start(this, ExportSave.Job(doc, token, message.optString("name"), Who.current(this)))
     }
 
     /** Where the first page opens, past the server's address: Settings (the launcher's Settings shortcut), or a
@@ -278,6 +278,7 @@ class MainActivity : AppCompatActivity() {
         network = NetState.Watch(this) { page?.postMessage(it.toString()) }
         Plays.onPlayedHere = { runOnUiThread { page?.postMessage(Plays.playedHere(this).toString()) } }
         Scrobblers.onChanged = { runOnUiThread { page?.postMessage(Scrobblers.here(this).toString()) } }
+        Who.changed.add(whoChanged)
         // The device's music changed (decision 0052): the page asks for it again when it shows it.
         contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, deviceMusicChanged)
     }
@@ -308,7 +309,12 @@ class MainActivity : AppCompatActivity() {
             // reach); without a network, at once. An answer later from the other address moves the page there.
             shown == null -> lifecycleScope.launch {
                 if (NetState.connected(this@MainActivity)) {
-                    val looking = lifecycleScope.async(Dispatchers.IO) { Reach.check(this@MainActivity) }
+                    val looking = lifecycleScope.async(Dispatchers.IO) {
+                        Reach.check(this@MainActivity)
+                        // The page opens as [Who] says, from the app's own copy with no server in front of it: a session that
+                        // ended with the app closed is found out now, and what opens shows nothing of the account.
+                        Plays.look(this@MainActivity)
+                    }
                     withTimeoutOrNull(FIRST_LOOK_MS) { looking.await() }
                 } else {
                     Reach.checkSoon(this@MainActivity)
@@ -323,7 +329,24 @@ class MainActivity : AppCompatActivity() {
         PlayerService.ready(this)
     }
 
+    /** Another one's things are this device's ([Who], decision 0101): the page is told what is theirs, and their kept
+     *  items are brought in step. */
+    private val whoChanged: (String, String) -> Unit = { _, _ ->
+        runOnUiThread {
+            page?.let { p ->
+                p.postMessage(appMessage())
+                tellServers(p)
+                p.postMessage(Scrobblers.here(this).toString())
+                p.postMessage(Plays.playedHere(this).toString())
+            }
+            tellDownloads(now = true)
+            tellKept(now = true)
+            webView?.let(::keepPagePrefs)
+        }
+    }
+
     override fun onDestroy() {
+        Who.changed.remove(whoChanged)
         LiveSound.listener = null
         outputs?.stop()
         network?.stop()
@@ -446,6 +469,34 @@ class MainActivity : AppCompatActivity() {
                 followSession()
             }
             "network" -> reply.postMessage(NetState.now(this).toString())
+            // Whose this device's things are (decision 0101): the account the page learnt from `/api/me` (`""` with
+            // signing in off), at once rather than at the app's own next ask.
+            "account" -> {
+                val name = message.optString("name", "")
+                // One sent before a sign-out began names the session ending.
+                if (!Sessions.signingOut) lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, name) }
+            }
+            // Cratarr told the page no one is signed in, and in Local or a server's mode the page stays: no sign-in page for
+            // [Sessions.loaded] to see.
+            "nobody" -> lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, null) }
+            // The page signing out: what waits of the account's goes first (a few seconds at most), its downloads go
+            // when asked, then nobody's things show; answered, so the page signs out after.
+            "sign-out" -> {
+                val remove = message.optBoolean("remove")
+                // First of all: the flush alone takes seconds, and an answer landing in them must not sign her back in. The
+                // page ends its session with a request, no page load for the client to see, and then opens the app's own
+                // page: that load ends both addresses' (0.12), or the other's, still good, would sign it back in.
+                Sessions.signOutAsked()
+                lifecycleScope.launch(Dispatchers.IO) {
+                    Plays.flush(this@MainActivity)
+                    Scrobblers.flush(this@MainActivity)
+                    if (remove) Kept.releaseAccount(this@MainActivity, Who.current(this@MainActivity))
+                    Who.set(this@MainActivity, null)
+                    withContext(Dispatchers.Main) { reply.postMessage(JSONObject().put("type", "signed-out").toString()) }
+                }
+            }
+            // This device's Remove for an account's share (decision 0101), by its name as the kept report gives it.
+            "account-downloads-remove" -> Kept.releaseAccount(this, Who.keyOf(message.optString("account", "")))
             "device-plays" -> reply.postMessage(Plays.playedHere(this).toString())
             "player" -> player?.handle(message) ?: waiting.add(message)
             // A track's snippet (0.12): played beside the music by the player service. Before the player is connected
@@ -557,9 +608,14 @@ class MainActivity : AppCompatActivity() {
                 )
                 Reach.checkSoon(this@MainActivity)
             }
-            "page-prefs" -> message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }?.let {
-                prefs.pagePrefs = it
-                webView?.let(::keepPagePrefs)
+            // The device's settings, and the person's own under whose they are (decision 0101).
+            "page-prefs" -> {
+                val device = message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }
+                val who = message.optString("who")
+                val mine = message.optString("mine").takeIf { it.isNotEmpty() && who.isNotEmpty() && it != prefs.pagePrefsOf(who) }
+                device?.let { prefs.pagePrefs = it }
+                mine?.let { prefs.keepPagePrefsOf(who, it) }
+                if (device != null || mine != null) webView?.let(::keepPagePrefs)
             }
             "device-set" -> {
                 message.optString("player").trim().takeIf { it.isNotEmpty() }?.let { prefs.playerName = it }
@@ -854,14 +910,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address. */
+    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address:
+     *  whose the page is, as each address's storage may have an older word for it (the one signed in now, nobody, decision
+     *  0101), the device's settings, and the person's own. */
     private fun keepPagePrefs(view: WebView) {
         pageScript?.remove()
         pageScript = null
-        val saved = prefs.pagePrefs ?: return
         val origins = prefs.origins()
         if (origins.isEmpty() || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
-        val script = "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}) } catch (e) {}"
+        val who = Who.current(this)
+        val device = prefs.pagePrefs?.let { "localStorage.setItem('cratarr-prefs', ${JSONObject.quote(it)});" }.orEmpty()
+        val mine = prefs.pagePrefsOf(who)?.let { "localStorage.setItem(${JSONObject.quote("cratarr-prefs$who")}, ${JSONObject.quote(it)});" }.orEmpty()
+        val script = "try { localStorage.setItem('cratarr-who', ${JSONObject.quote(Who.forPage(who))}); $device $mine } catch (e) {}"
         pageScript = Prefs.withoutRefused(origins) { WebViewCompat.addDocumentStartJavaScript(view, script, it) }
     }
 

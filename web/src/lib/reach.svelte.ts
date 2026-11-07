@@ -3,6 +3,7 @@
 // three are out of reach: the pages say so in one line, the pollers ask less often, and the app opens on its downloads
 // (decision 0033, step 4).
 // Without a session away from home, Cratarr asks for its sign-in instead: the page goes to the sign-in page.
+import { accountForgotten, pageGoes, signOutOwed } from './account';
 
 export const reach = $state({
   /** The last request did not reach Cratarr. */
@@ -76,8 +77,9 @@ if (typeof window !== 'undefined') {
 const REFUSED_MS = 5 * 60_000;
 let refusedUntil = 0;
 
-/** Whether a refusal holds the background requests back; how long still (ms). */
-export const refusedFor = () => Math.max(0, refusedUntil - Date.now());
+/** Whether a refusal holds the background requests back; how long still (ms). A sign-out owed holds them too (lib/account):
+ *  nothing is asked under a session that is over. */
+export const refusedFor = () => (signOutOwed() ? REFUSED_MS : Math.max(0, refusedUntil - Date.now()));
 
 export function refused() {
   refusedUntil = Date.now() + REFUSED_MS;
@@ -88,11 +90,24 @@ export function refused() {
 export const asksSignIn = (res: Response) => res.status === 401 && /^Cookie\b.*realm="Cratarr"/i.test(res.headers.get('WWW-Authenticate') ?? '');
 
 let leaving = false;
+/** Set by lib/app: whether the sign-in waits, `go` called once it may (decision 0101: in the app, nobody signed in
+ *  still plays Local and other servers' modes, so the sign-in comes only in Cratarr's). */
+let holding: ((go: () => void) => boolean) | null = null;
+export const onSignInAsked = (f: (go: () => void) => boolean) => (holding = f);
 
 /** To Cratarr's sign-in page, once; it comes back here after (the #route too). The background requests wait meanwhile. */
 export function toSignIn() {
   if (leaving) return;
-  leaving = true;
   refusedUntil = Date.now() + REFUSED_MS;
+  // Cratarr says nobody is signed in here (a session that ended, not one out of reach): the name kept is not to open the
+  // stores for whoever signs in next.
+  accountForgotten();
+  if (holding?.(signIn)) return;
+  signIn();
+}
+function signIn() {
+  if (leaving) return;
+  leaving = true;
+  pageGoes();
   location.assign(`/signin?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`);
 }

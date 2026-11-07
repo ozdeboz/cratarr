@@ -55,6 +55,8 @@ class PlayerService : MediaSessionService() {
     private val main = Handler(Looper.getMainLooper())
     private var link: PlayOnLink? = null
     private lateinit var prefs: Prefs
+    /** Whose the queue in the player is ([Who]'s key): it is put by under them, even while another's is on its way. */
+    private var queueWho = Who.NONE
     private lateinit var notifications: NotificationManager
     private lateinit var player: ExoPlayer
     /** Sync play (decision 0037): this device in a group. */
@@ -269,14 +271,16 @@ class PlayerService : MediaSessionService() {
             .build()
         remote = RemotePlayer(this, prefs)
         // Local mode (decision 0052) as it was: its queue again, paused; without Android's permission or a folder turned
-        // on any more, Cratarr's.
+        // on any more, Cratarr's. Each account's own (decision 0101).
+        queueWho = Who.current(this)
         if (prefs.mode == Prefs.MODE_DEVICE) {
-            if (DeviceMusic.on(this)) restore(prefs.savedQueue(Prefs.MODE_DEVICE)) else prefs.mode = Prefs.MODE_CRATARR
+            if (DeviceMusic.on(this)) restore(prefs.savedQueue(Prefs.MODE_DEVICE, queueWho)) else prefs.mode = Prefs.MODE_CRATARR
         }
         // A server's mode (decision 0098) likewise, while it is still signed in to here.
         if (prefs.mode.startsWith(Servers.MODE_PREFIX)) {
-            if (Servers.has(this, prefs.mode.removePrefix(Servers.MODE_PREFIX))) restore(prefs.savedQueue(prefs.mode)) else prefs.mode = Prefs.MODE_CRATARR
+            if (Servers.has(this, prefs.mode.removePrefix(Servers.MODE_PREFIX))) restore(prefs.savedQueue(prefs.mode, queueWho)) else prefs.mode = Prefs.MODE_CRATARR
         }
+        Who.changed.add(whoChanged)
         link = PlayOnLink(this, player, prefs, sync, commands).also { it.start() }
         Ready.ensure(this, "service started")
         applyOutput()
@@ -390,11 +394,40 @@ class PlayerService : MediaSessionService() {
         LinkLog.add(this, "info", "playon", "mode", "to" to if (mode.startsWith(Servers.MODE_PREFIX)) "server" else mode, "why" to why)
         if (mode != Prefs.MODE_CRATARR && sync.leader != null) sync.leave()
         player.pause()
-        prefs.saveQueue(was, snapshot().toString())
+        prefs.saveQueue(was, snapshot().toString(), queueWho)
         prefs.mode = mode
-        restore(prefs.savedQueue(mode))
+        restore(prefs.savedQueue(mode, queueWho))
         link?.modeChanged()
         return true
+    }
+
+    /** Another one's things are this device's ([Who], decision 0101): told on any thread, done on the player's, for
+     *  whoever it is by then: two told close together from two threads may come here the other way round. */
+    private val whoChanged: (String, String) -> Unit = { _, _ -> main.post { whoCame(Who.current(this)) } }
+
+    /**
+     * The queue and the mode of the one who left are put by under them, and the one come's taken up, paused, as at a
+     * switch of modes: the mode they were last in, where it is still there. Nobody signed in has no Cratarr: Local when
+     * it is there. A group is left: it was the one who left's.
+     */
+    private fun whoCame(to: String) {
+        if (to == queueWho) return
+        if (sync.leader != null) sync.leave()
+        player.pause()
+        prefs.saveQueue(prefs.mode, snapshot().toString(), queueWho)
+        prefs.keepModeOf(queueWho, prefs.mode)
+        val last = prefs.modeOf(to)
+        val mode = when {
+            last == Prefs.MODE_DEVICE && DeviceMusic.on(this) -> last
+            last.startsWith(Servers.MODE_PREFIX) && Servers.has(this, last.removePrefix(Servers.MODE_PREFIX)) -> last
+            to == Who.NONE && DeviceMusic.on(this) -> Prefs.MODE_DEVICE
+            else -> Prefs.MODE_CRATARR
+        }
+        LinkLog.add(this, "info", "playon", "account", "to" to if (to == Who.NONE) "nobody" else "an account", "mode" to if (mode.startsWith(Servers.MODE_PREFIX)) "server" else mode)
+        queueWho = to
+        prefs.mode = mode
+        restore(prefs.savedQueue(mode, to))
+        link?.modeChanged()
     }
 
     /** The queue as it is now, for [restore]. */
@@ -426,7 +459,7 @@ class PlayerService : MediaSessionService() {
     }
 
     /** Local mode's queue kept as it goes, for a restart (changes close together as one). */
-    private val saveDevice = Runnable { if (prefs.ownQueue) prefs.saveQueue(prefs.mode, snapshot().toString()) }
+    private val saveDevice = Runnable { if (prefs.ownQueue) prefs.saveQueue(prefs.mode, snapshot().toString(), queueWho) }
 
     /**
      * This device's output as chosen in its sheet (decision 0033, amended 2026-10-19): the player's sound goes there,
@@ -556,7 +589,7 @@ class PlayerService : MediaSessionService() {
          * long it is, and whether it was told as counted, this time it plays. The device's own music is not told
          * (decision 0052).
          */
-        private inner class Hearing(val track: JSONObject, val atMs: Long) {
+        private inner class Hearing(val track: JSONObject, val atMs: Long, val who: String) {
             var heardMs = 0L
             /** What winding passed over (decision 0074: no wind counts as listening): the place less this is heard. */
             var offsetMs = 0L
@@ -573,14 +606,14 @@ class PlayerService : MediaSessionService() {
             val h = hearing ?: return
             hearing = null
             if (h.counted || h.heardMs < 1_000) return
-            if (now) Plays.heard(this@PlayerService, h.track, h.atMs, "stopped", true, h.heardMs, h.lengthMs)
-            else Plays.heard(this@PlayerService, h.track, h.atMs, ended, false, h.heardMs, h.lengthMs)
+            if (now) Plays.heard(this@PlayerService, h.who, h.track, h.atMs, "stopped", true, h.heardMs, h.lengthMs)
+            else Plays.heard(this@PlayerService, h.who, h.track, h.atMs, ended, false, h.heardMs, h.lengthMs)
         }
 
         private val count = object : Runnable {
             override fun run() {
                 if (hearing == null) {
-                    hearing = player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Hearing(it, System.currentTimeMillis()) }
+                    hearing = player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Hearing(it, System.currentTimeMillis(), queueWho) }
                     // A server's track (decision 0098): that server hears that it plays here.
                     hearing?.track?.let { t -> if (t.optString("source").startsWith(Servers.MODE_PREFIX)) Servers.playing(this@PlayerService, t.optString("source"), t.optString("id")) }
                     // Now playing, from this device (decision 0091).
@@ -599,7 +632,7 @@ class PlayerService : MediaSessionService() {
                     if (d > 0) h.lengthMs = d
                     if (!h.counted && d > 0 && heard >= d * Plays.PLAYED_AT) {
                         h.counted = true
-                        Plays.heard(this@PlayerService, h.track, h.atMs, "finished", true, h.heardMs, h.lengthMs)
+                        Plays.heard(this@PlayerService, h.who, h.track, h.atMs, "finished", true, h.heardMs, h.lengthMs)
                     }
                 }
                 if (player.isPlaying) main.postDelayed(this, COUNT_EVERY_MS)
@@ -701,6 +734,7 @@ class PlayerService : MediaSessionService() {
     override fun onDestroy() {
         LinkLog.add(this, "info", "playon", "service stopped")
         DeviceWatch.stop()
+        Who.changed.remove(whoChanged)
         main.removeCallbacksAndMessages(null)
         saveDevice.run()
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)

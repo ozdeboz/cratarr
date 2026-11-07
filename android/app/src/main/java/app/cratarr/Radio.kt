@@ -284,6 +284,7 @@ object Autoplay {
             .put("last", playing?.optString("id") ?: JSONObject.NULL)
             .put("count", BATCH)
         val app = context.applicationContext
+        val who = Who.current(app)
         filling = true
         Scorer.asks.execute {
             val artists = buildSet {
@@ -298,6 +299,8 @@ object Autoplay {
             }
             Scorer.main.post {
                 filling = false
+                // Asked for another's queue: its own account's asks for itself.
+                if (Who.current(app) != who) return@post
                 // Off meanwhile, or asked before favourites were ignored (or no longer): what came is not wanted.
                 if (get(app) == null || SkipFavourites.on(app) != skip || got.length() == 0) {
                     if (SkipFavourites.on(app) != skip) fill(app, player, server, locate)

@@ -19,6 +19,11 @@ object Notices {
     private const val CHANNEL = "requests"
     private const val NOTIFICATION = 11
 
+    /** It spoke to the one signed in, of their requests: not left in the tray for the next to read. */
+    fun forget(context: Context) {
+        context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION)
+    }
+
     fun show(context: Context, text: String) {
         if (inFront || text.isBlank()) return
         val notes = context.getSystemService(NotificationManager::class.java) ?: return
