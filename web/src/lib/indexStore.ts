@@ -31,14 +31,7 @@ function db(who: string): Promise<IDBDatabase | null> {
         r.onupgradeneeded = () => {
           for (const store of [PARTS, COVERS]) if (!r.result.objectStoreNames.contains(store)) r.result.createObjectStore(store);
         };
-        r.onsuccess = () => {
-          // Another tab opening a newer version waits on this connection: it goes, and the next read here opens anew.
-          r.result.onversionchange = () => {
-            r.result.close();
-            if (open.get(who) === d) open.delete(who);
-          };
-          done(r.result);
-        };
+        r.onsuccess = () => done(r.result);
         r.onerror = () => done(null);
         r.onblocked = () => done(null);
       } catch {
@@ -46,8 +39,6 @@ function db(who: string): Promise<IDBDatabase | null> {
       }
     });
     open.set(who, d);
-    // An open that failed is not this page's for good: the next read tries again (the review of 2026-11-07, its sixth finding).
-    void d.then((got) => got === null && open.get(who) === d && open.delete(who));
   }
   return d;
 }

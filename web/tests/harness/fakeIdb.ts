@@ -18,15 +18,6 @@ const refuses = (store: string | string[]) => storage.refused && (storage.only =
 
 const later = (f: () => void) => void setImmediate(f);
 
-/** `refused`: how many opens to come fail, as one does on a transient error or behind another tab's connection. */
-export const opening = { refused: 0 };
-/** The connections open, by database: another tab's upgrade asks each to close (`upgradeElsewhere`). */
-const connections = new Map<string, Set<{ onversionchange?: (() => void) | null }>>();
-/** Another tab opens `name` at a newer version: each connection here is told, as a browser tells it. */
-export const upgradeElsewhere = (name: string) => [...(connections.get(name) ?? [])].forEach((c) => c.onversionchange?.());
-/** How many connections to `name` are open. */
-export const openConnections = (name: string) => connections.get(name)?.size ?? 0;
-
 function request<T>(work: () => T): Handlers {
   const r: Handlers = {};
   later(() => {
@@ -60,18 +51,13 @@ function objectStore(s: Store, refused: () => boolean) {
   };
 }
 
-function database(stores: Map<string, Store>, name: string) {
+function database(stores: Map<string, Store>) {
   let closed = false;
-  const connection = {
-    onversionchange: null as (() => void) | null,
-    get closed() {
-      return closed;
-    },
+  return {
     objectStoreNames: { contains: (n: string) => stores.has(n) },
     createObjectStore: (n: string, o?: { keyPath?: string }) => void stores.set(n, { keyPath: o?.keyPath, rows: new Map() }),
     close() {
       closed = true;
-      connections.get(name)?.delete(connection);
     },
     transaction(names: string | string[], mode?: string) {
       // As a browser refuses it: a write that outlives its database throws, and is not quietly kept.
@@ -89,8 +75,6 @@ function database(stores: Map<string, Store>, name: string) {
       return t;
     },
   };
-  connections.set(name, (connections.get(name) ?? new Set()).add(connection));
-  return connection;
 }
 
 export const fakeIndexedDB = {
@@ -98,15 +82,10 @@ export const fakeIndexedDB = {
   open(name: string) {
     const r: Handlers & { onupgradeneeded?: (() => void) | null; onblocked?: (() => void) | null } = {};
     later(() => {
-      if (opening.refused > 0) {
-        opening.refused--;
-        r.error = new DOMException('The open was refused.', 'UnknownError');
-        return r.onerror?.();
-      }
       const fresh = !databases.has(name);
       const stores = databases.get(name) ?? new Map<string, Store>();
       databases.set(name, stores);
-      r.result = database(stores, name);
+      r.result = database(stores);
       if (fresh) r.onupgradeneeded?.();
       r.onsuccess?.();
     });
