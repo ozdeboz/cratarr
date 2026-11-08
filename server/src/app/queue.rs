@@ -434,9 +434,11 @@ impl Queue {
                 let i = self.place(entry.as_deref(), index)?;
                 return Ok(Command::Jump { index: Some(i), entry: Some(self.tracks[i].entry.clone()) });
             }
-            Command::Stop { moved_to } => {
-                self.tracks.clear();
-                Command::Stop { moved_to }
+            Command::Stop { moved_to, kept } => {
+                if !kept {
+                    self.tracks.clear();
+                }
+                Command::Stop { moved_to, kept }
             }
             other => return Ok(other),
         };
@@ -857,9 +859,21 @@ mod tests {
         let b = q.tracks[1].entry.clone();
         assert_eq!(q.edit(Command::Jump { index: Some(1), entry: None }).unwrap(), Command::Jump { index: Some(1), entry: Some(b) });
         assert_eq!(q.version, 1);
-        q.edit(Command::Stop { moved_to: None }).unwrap();
+        q.edit(Command::Stop { moved_to: None, kept: false }).unwrap();
         assert!(q.tracks.is_empty());
         assert_eq!(q.version, 2);
+    }
+
+    /// Back after its music was handed away while out of reach, a player stops and keeps its queue (the owner, 2026-11-08).
+    #[test]
+    fn a_kept_stop_keeps_the_queue_and_reads_and_writes_as_before_without_it() {
+        let mut q = played(&["a", "b"]);
+        q.edit(Command::Stop { moved_to: Some("tablet".into()), kept: true }).unwrap();
+        assert_eq!(q.tracks.len(), 2, "kept");
+        let kept = Command::Stop { moved_to: Some("tablet".into()), kept: true };
+        assert_eq!(serde_json::to_string(&kept).unwrap(), r#"{"command":"stop","moved_to":"tablet","kept":true}"#);
+        let plain: Command = serde_json::from_str(r#"{"command":"stop"}"#).unwrap();
+        assert_eq!(plain, Command::Stop { moved_to: None, kept: false }, "a stop from before empties, as it did");
     }
 
     #[test]
