@@ -138,6 +138,26 @@ fn a_play_that_did_not_count_is_no_play_a_skip_counts_as_one() {
     assert!(tracks(&mut d, "often", own_order()).is_empty());
 }
 
+/// The app hands in the plays not told yet before every ask: handed in again they count once, more after them count each, and
+/// a list with the first gone (told to Cratarr) counts as it is. At each step, as a device handed that list once.
+#[test]
+fn plays_handed_in_before_every_ask_count_as_the_list_handed_in_once() {
+    let played = vec![Condition::new("plays", false, Value::Range { min: Some(1.0), max: None })];
+    let open = || device_of(Own { crates: vec![crate_of("played", played.clone())], ..Own::default() }, &[Mark { track: 1, plays: 1, last: Some(NOW - 900), ..Mark::default() }]);
+    let counts = |d: &mut Device, plays: &Json| {
+        ask(d, json!({ "ask": "plays", "plays": plays }));
+        let rows = ask(d, json!({ "ask": "rows", "id": "played", "order": "own", "offset": 0, "limit": 10, "now": NOW }));
+        rows["rows"].as_array().unwrap().iter().map(|r| (r["id"].clone(), r["play_count"].clone(), r["last_played"].clone())).collect::<Vec<_>>()
+    };
+    let play = |track: i64, ago: i64| json!({ "track": ids::song(track), "at": (NOW - ago) * 1000 });
+    let (a, b, c, d) = (play(1, 30), play(2, 20), play(1, 10), play(3, 5));
+    let mut held = open();
+    for plays in [json!([a]), json!([a, b]), json!([a, b]), json!([a, b, c, d]), json!([b, c, d]), json!([c, d, a]), json!([d]), json!([])] {
+        assert_eq!(counts(&mut held, &plays), counts(&mut open(), &plays), "{plays}");
+    }
+    assert_eq!(counts(&mut held, &json!([a, b, c])), [(json!("tr-1"), json!(3), json!(NOW - 10)), (json!("tr-2"), json!(1), json!(NOW - 20))]);
+}
+
 #[test]
 fn what_was_left_out_and_excluded_stays_out_of_a_crate() {
     let left = Kept { left_out: vec![2], left: 1, ..crate_of("dub", dub()) };
@@ -492,7 +512,7 @@ fn one_copy_of_a_sound_serves_the_crates_and_radio() {
 fn measured_device_answers_at_34_000_tracks() {
     use std::time::{Duration, Instant};
     let (rows, heard) = crate::index::made_up(34_000, 1);
-    let index = Index::build(1, &rows).unwrap();
+    let index = Arc::new(Index::build(1, &rows).unwrap());
     let sounds = Sounds::build(1, &heard);
     let tracks: Vec<i64> = rows.tracks.iter().map(|t| t.id).collect();
     let marks: Vec<Mark> = tracks.iter().enumerate().map(|(n, t)| Mark { track: *t, fit: Some(n as f64 / 40_000.0), skipped: Some(n as f64 / 90_000.0), plays: (n % 7) as u32, last: Some(NOW - n as i64), ..Mark::default() }).collect();
@@ -508,6 +528,27 @@ fn measured_device_answers_at_34_000_tracks() {
     };
     let bytes = Marks::build(NOW, &marks).with_own(serde_json::to_string(&own).unwrap()).save();
     let marks = Marks::load(&bytes).unwrap();
+    // As the app asks (DeviceAnswers.ask): the plays not told yet handed in before every ask, and the first ask of its kind on a
+    // device just opened making what that kind reads (the similarity, Radio's index). The app's log calls that ask warm.
+    let unsent: Vec<Json> = tracks.iter().step_by(700).map(|t| json!({ "track": ids::song(*t), "at": NOW * 1000, "counts": true })).collect();
+    let plays = json!({ "ask": "plays", "plays": unsent }).to_string();
+    let first_pick = json!({ "ask": "pick", "mode": "radio", "draw": 7, "seed": [seeds[1]], "exclude": [seeds[1]], "last": seeds[1], "count": 5, "now": NOW });
+    for (what, asked) in [("the Crates page", json!({ "ask": "crates", "now": NOW })), ("Pick: radio", first_pick)] {
+        let asked = asked.to_string();
+        let at = Instant::now();
+        let mut d = Device::new(index.clone(), Some(&sounds), &marks);
+        let opened = at.elapsed();
+        let at = Instant::now();
+        d.ask(&plays).unwrap();
+        let told = at.elapsed();
+        let at = Instant::now();
+        d.ask(&asked).unwrap();
+        let first = at.elapsed();
+        let at = Instant::now();
+        d.ask(&plays).unwrap();
+        d.ask(&asked).unwrap();
+        println!("As the app asks, {what}: opened {opened:?}, plays told {told:?}, first ask {first:?}, then plays and ask {:?}", at.elapsed());
+    }
     let at = Instant::now();
     let mut d = Device::new(index, Some(&sounds), &marks);
     println!("opened {:?}, own {} bytes, own's text {} bytes", at.elapsed(), bytes.len(), marks.own().len());
