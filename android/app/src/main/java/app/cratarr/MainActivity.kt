@@ -219,6 +219,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         LinkLog.catchCrashes(this)
+        // A debug build's page can be read with DevTools over adb (D22's timings on the tablet); a release's never.
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
         prefs = Prefs(this)
         openAt = openAtOf(intent)
         frame = FrameLayout(this)
