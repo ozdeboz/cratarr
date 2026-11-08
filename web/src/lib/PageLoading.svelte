@@ -8,9 +8,11 @@
   import MarkLoader from './MarkLoader.svelte';
   import { loaderSizeIn } from './loader';
   import { holdUntil } from './holdPlace.svelte';
+  import { deviceOpening } from './deviceAnswers.svelte';
 
   /** `children`: what goes under the mark, where the work can say how far it is (the owner, 2026-10-24: Discover's
-   *  first look, its progress under the loader at its usual place). */
+   *  first look, its progress under the loader at its usual place). With none, what it waits for where that is the library
+   *  on this device opening (the owner, 2026-11-08: "a standard one, with the progress explaining what it is"). */
   let { children }: { children?: import('svelte').Snippet } = $props();
 
   /** Its size where it is (lib/loader): known once it is placed (its mark shows from then). */
@@ -84,7 +86,7 @@
   style:padding-top={fit ? `${fit.top}px` : null}
 >
   {#if size !== null}<MarkLoader {size} />{/if}
-  {#if children}<div class="under">{@render children()}</div>{/if}
+  {#if children}<div class="under">{@render children()}</div>{:else if deviceOpening.asks > 0}<div class="under"><p class="opening">Opening the library on this device</p></div>{/if}
 </div>
 
 <style>
@@ -98,6 +100,11 @@
     width: min(320px, 100%);
     margin-top: 16px;
     text-align: center;
+  }
+
+  .opening {
+    margin: 0;
+    color: var(--muted);
   }
 
   /* A progress bar under it (lib/Meter, at most 240 px) centred too, under the mark, not at the box's left (the owner,
