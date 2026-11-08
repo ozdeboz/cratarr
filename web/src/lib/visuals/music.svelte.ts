@@ -11,6 +11,7 @@ import { getTrackGain, trackState, type TrackGain } from '../api';
 import { inApp } from '../app.svelte';
 import { levelOn } from '../level.svelte';
 import { prefs } from '../prefs.svelte';
+import { outputNow } from '../outputNow.svelte';
 import { audioTap } from '../localPlayer.svelte';
 import { paused, playing } from '../remote.svelte';
 import { placeAt } from '../trackPlace.svelte';
@@ -127,7 +128,7 @@ const APP_EAR = {} as AudioNode;
 /** What has been heard lately, where the page plays the music (this browser, or the app it runs in, which hears its own
  *  player); null elsewhere. */
 function listen(): LiveNow | null {
-  const tap = inApp ? (prefs.output === 'local' ? { node: APP_EAR, context: null } : null) : port().tap();
+  const tap = inApp ? (outputNow() === 'local' ? { node: APP_EAR, context: null } : null) : port().tap();
   if (!tap) {
     stopLive();
     return null;
