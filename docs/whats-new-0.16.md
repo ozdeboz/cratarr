@@ -98,3 +98,13 @@ own sign-in, on the network its downloads may use. The queue stays.
 - Covers that failed to load while away load again when Cratarr is back, without a reload.
 - A waveform no longer stays flat after the network drops: each analysis request gives up after a minute.
 - While the library on this device opens for the first answer away from Cratarr, the page shows its loader and says so.
+- Away from Cratarr, the app keeps taking the page's commands: taps in the queue, Play and Next work offline, and an offline start opens in seconds instead of waiting for ever.
+- A network that goes silent counts as away within seconds, so the page opens on what the device has.
+- Play from a record's menu in Downloads and in search results works again.
+- Available offline lists albums synced to the device.
+- Space plays and pauses everywhere.
+- A device that comes back to a group it led pauses and keeps its queue, and "This device" brings the other screens along.
+- Every Move, Add and Replace on a record of several copies names the copy it acts on, and the player's Quality and File describe the copy that plays.
+- Search shows its answer in one step, the crate card with the results; artists with tracks only show no album count.
+- An album action's page in Changes to files shows the files it moved, and its Undo.
+- Health's missing tracks say when nothing was kept of them.
