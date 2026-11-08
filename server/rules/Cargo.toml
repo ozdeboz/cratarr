@@ -34,6 +34,9 @@ device = ["dep:serde_json"]
 made-up = []
 
 [dependencies]
+# A quick hash for what a crate looks up by the tens of thousands, a file's line above all: the standard one guards against keys an
+# attacker chose, and these are the library's own (rustc's own FxHash, no_std, wasm32 alike).
+rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
 ts-rs = { version = "12.0.1", optional = true }

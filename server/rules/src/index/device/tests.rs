@@ -321,6 +321,22 @@ fn a_card_says_its_length_what_was_never_played_and_what_came_this_week() {
 }
 
 #[test]
+fn a_cards_genres_go_by_their_first_spelling_and_its_covers_by_size_then_newest() {
+    let mut d = device();
+    for (t, born, genre) in [(1, 100, "Dub"), (2, 300, "dub"), (3, 200, "Dub"), (4, 250, "Jazz")] {
+        let i = d.place[&t];
+        d.facts[i].born = Some(born);
+        d.facts[i].genres = vec![genre.into()];
+    }
+    let of = |d: &Device, t: i64| d.facts[d.place[&t]].clone();
+    let lines: Vec<String> = [1, 2, 3, 4].iter().map(|t| of(&d, *t).rel).collect();
+    let card = d.card(&lines, NOW);
+    assert_eq!(card["genres"], json!(["Dub", "Jazz"]), "dub is Dub, as first spelled");
+    let covers: Vec<&str> = card["covers"].as_array().unwrap().iter().map(|c| c["album_id"].as_str().unwrap()).collect();
+    assert_eq!(covers, [of(&d, 1).album.unwrap().as_ref(), of(&d, 3).album.unwrap().as_ref()], "two tracks each: the newest first");
+}
+
+#[test]
 fn a_sounds_like_lists_its_size_at_its_setting_alone() {
     let like = crates::like_crate("like:week", "Sounds like your week", vec!["tr-1".into()], 3);
     let mut d = device_of(Own { crates: vec![Kept { favourites: Favourites::All, ..crate_of("like:week", like.conditions) }], ..Own::default() }, &[]);

@@ -16,6 +16,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -203,7 +205,7 @@ pub struct Device {
     own: Own,
     /// Each file by its track, and by every line it goes by.
     place: HashMap<i64, usize>,
-    lines: HashMap<String, usize>,
+    lines: FxHashMap<String, usize>,
     /// What the server last said of each track.
     fits: HashMap<i64, f64>,
     skipped: HashMap<i64, f64>,
@@ -502,7 +504,7 @@ impl Device {
         let mine: Vec<String> = without.iter().filter(|k| k.starts_with(&format!("{SOURCE}/"))).cloned().collect();
         let (lines, reasons, all_back, _) = view.select_saying(&shown, &causes, &mine, false);
         let genres = if offset == 0 {
-            let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
+            let chosen: FxHashSet<&str> = lines.iter().map(String::as_str).collect();
             crates::top_genres(self.facts.iter().filter(|f| crates::on_for(&f.folders, &off) && chosen.contains(f.rel.as_str())).map(|f| f.genres.as_slice()), GENRES_SHOWN)
         } else {
             Vec::new()
@@ -521,7 +523,7 @@ impl Device {
         let by = self.by();
         let view = View { files: &self.facts, switched_off: &off, world: self.world(fits.as_ref(), now), by: &by, alike: || self.alike() };
         let lines = view.select(&shown, false);
-        let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
+        let chosen: FxHashSet<&str> = lines.iter().map(String::as_str).collect();
         let bands = crates::tempo_bands(self.facts.iter().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.bpm));
         serde_json::to_value(bands).ok()
     }
@@ -556,25 +558,30 @@ impl Device {
     fn card(&self, lines: &[String], now: i64) -> Json {
         let first_look = self.facts.iter().filter_map(|f| f.born).min().unwrap_or(0) + 86_400;
         let known: Vec<&Facts> = lines.iter().filter_map(|l| Some(&self.facts[*self.lines.get(l)?])).collect();
+        // Each genre counted under its first spelling, in the order first met, found by its letters as `eq_ignore_ascii_case` reads
+        // them: a crate of thousands of tracks is not read once for each.
         let mut genres: Vec<(String, usize)> = Vec::new();
+        let mut genre_at: FxHashMap<String, usize> = FxHashMap::default();
         for g in known.iter().flat_map(|f| &f.genres) {
-            match genres.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(g)) {
-                Some((_, n)) => *n += 1,
-                None => genres.push((g.clone(), 1)),
-            }
+            let at = *genre_at.entry(g.to_ascii_lowercase()).or_insert_with(|| {
+                genres.push((g.clone(), 0));
+                genres.len() - 1
+            });
+            genres[at].1 += 1;
         }
         genres.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
         // Its records: how many of its tracks, and the newest of them.
         let mut albums: Vec<(&str, usize, i64)> = Vec::new();
+        let mut album_at: FxHashMap<&str, usize> = FxHashMap::default();
         for f in &known {
-            let (Some(album), at) = (f.album.as_deref(), f.born.unwrap_or(0)) else { continue };
-            match albums.iter_mut().find(|(a, _, _)| *a == album) {
-                Some((_, n, newest)) => {
-                    *n += 1;
-                    *newest = (*newest).max(at);
-                }
-                None => albums.push((album, 1, at)),
-            }
+            let (Some(album), born) = (f.album.as_deref(), f.born.unwrap_or(0)) else { continue };
+            let at = *album_at.entry(album).or_insert_with(|| {
+                albums.push((album, 0, born));
+                albums.len() - 1
+            });
+            let (_, n, newest) = &mut albums[at];
+            *n += 1;
+            *newest = (*newest).max(born);
         }
         albums.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(b.0)));
         // Never played: by the plays the server last counted and this device's since.
