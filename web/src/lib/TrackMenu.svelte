@@ -275,14 +275,15 @@
   let detailsFailed = $state(false);
   // Read again only for another track: the playing track's view is made anew at every report of the player (its
   // position), and reading on each made the genres' entries come and go (and asked the server again and again).
-  const fileOf = $derived(t ? `${t.source}\n${t.id}` : null);
+  // Of the copy that streams, the playing track's Play from (the owner, testing 0.16.0: the main copy's were shown).
+  const fileOf = $derived(t ? `${t.source}\n${t.id}\n${(forPlaying && np?.from) || ''}` : null);
   $effect(() => {
     const key = fileOf;
     details = null;
     detailsFailed = false;
     if (!key) return;
-    const [source, id] = key.split('\n');
-    trackFile(source, id).then(
+    const [source, id, from] = key.split('\n');
+    trackFile(source, id, from || undefined).then(
       (d) => {
         if (fileOf === key) details = d;
       },

@@ -49,6 +49,8 @@ export type Link = {
 export type NowPlaying = {
   /** The source it came from (covers are looked up there). */
   source: string;
+  /** The page's own player: the copy it streams, its queue's Play from. */
+  from?: string;
   id: string;
   name: string;
   artist: string | null;
@@ -146,6 +148,58 @@ function quietly<T>(path: string, init?: RequestInit): Promise<T> {
   return fetchJson<T>(path, init);
 }
 
+/** A request that has waited `afterMs` for its answer's start asks whether Cratarr answers at all (its health, within `probeMs`):
+ *  a network that drops what is sent never fails a request, it only never answers (0.16.0 on the tablet, 2026-11-08: the app
+ *  opened with Cratarr out of reach and Home loaded for good; in the app no service worker gives up for it). No answer: Cratarr
+ *  is out of reach, the request is let go and the page goes on as away. An answer: Cratarr is there and busy, and it waits on,
+ *  asking again each `afterMs`. */
+export const watch = { afterMs: 5_000, probeMs: 4_000 };
+let probing: Promise<boolean> | null = null;
+/** Whether Cratarr answers now: one health check at a time, however many requests wait. */
+function answers(): Promise<boolean> {
+  probing ??= fetch('/api/health', { cache: 'no-store', signal: AbortSignal.timeout(watch.probeMs) })
+    .then(
+      (r) => !notReached(r.status),
+      () => false,
+    )
+    .finally(() => (probing = null));
+  return probing;
+}
+/** `fetch`, let go where Cratarr turns out not to answer while it waits (`watch`). */
+function watched(path: string, init?: RequestInit): Promise<Response> {
+  const gone = new AbortController();
+  const signal = init?.signal ? AbortSignal.any([init.signal, gone.signal]) : gone.signal;
+  return new Promise<Response>((resolve, reject) => {
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const look = () => {
+      timer = setTimeout(() => {
+        void answers().then((there) => {
+          if (done) return;
+          if (there) return look();
+          done = true;
+          gone.abort();
+          reject(new TypeError('Cratarr does not answer'));
+        });
+      }, watch.afterMs);
+    };
+    look();
+    fetch(path, { ...init, signal }).then(
+      (r) => {
+        done = true;
+        clearTimeout(timer);
+        resolve(r);
+      },
+      (e) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   // A sign-out owed (lib/account): nothing is asked under a session that is over, what one taps either.
   if (signOutOwed()) {
@@ -154,7 +208,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   let res: Response;
   try {
-    res = await fetch(path, init);
+    res = await watched(path, init);
   } catch {
     unreached();
     throw new ApiError(UNREACHED);
@@ -1953,7 +2007,9 @@ export type TrackFile = {
   genres: string[];
   tags: { name: string; value: string }[];
 };
-export const trackFile = (source: string, id: string) => quietly<TrackFile>(`${trackPath(source, id)}/details`);
+/** `from`: the copy that streams, a queue's Play from (lib/localPlayer's `from`), as the stream is asked. */
+export const trackFile = (source: string, id: string, from?: string) =>
+  quietly<TrackFile>(`${trackPath(source, id)}/details${from ? `?from=${encodeURIComponent(from)}` : ''}`);
 
 /** Put the track in the playlist or take it out (the state wanted, as `setMember`). */
 export const setTrackMember = (source: string, id: string, playlistId: string, member: boolean) =>

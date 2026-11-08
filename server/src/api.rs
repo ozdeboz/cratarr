@@ -1494,13 +1494,15 @@ async fn analysis_import(
     Ok(Json(counts))
 }
 
-async fn track_details(ctx: Ctx, Path((source, id)): Path<(String, String)>) -> Response {
+async fn track_details(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Query<NamedCopy>) -> Response {
     let app = ctx.app.clone();
     if source == crate::bandcamp::SOURCE {
         return bandcamp_details(&id).await;
     }
-    // Its tempo as the library serves it (the BPM tag, else the analysis'), of the file shown below.
-    let who = ctx.listener();
+    // Its tempo as the library serves it (the BPM tag, else the analysis'), of the file shown below. That file is the copy that
+    // streams: the one a queue's Play from names, as the stream takes it (the owner, testing 0.16.0: the main copy was shown).
+    let mut who = ctx.listener();
+    who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
     let bpm = served_song(&app, &who, &source, &id).await.and_then(|s| s.bpm);
     let cat = app.library.catalogue();
     // Whose plays these are: the listener's (read here, as the blocking work below has no request of its own).

@@ -139,8 +139,14 @@ class PlayerCommands(
                 // A move's hold: stopped at once, no wind-down (switching devices bypasses every play effect, the owner).
                 link()?.release()
                 startStop.reset()
-                p.stop()
-                p.clearMediaItems()
+                if (m.optBoolean("kept")) {
+                    // Back after its music was handed away while out of reach: stopped, its queue kept to go on with later
+                    // (the owner, 2026-11-08: "Stop it, keep its queue").
+                    p.pause()
+                } else {
+                    p.stop()
+                    p.clearMediaItems()
+                }
                 followMusic(m)
             }
             // Next as the app's own: fast-forward to the end where winding is on, else a skip (0.9.6, Start and stop:

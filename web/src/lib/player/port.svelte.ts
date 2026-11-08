@@ -162,6 +162,7 @@ const nowLocal = $derived.by((): NowPlaying | null => {
     artist: t.artist,
     album: t.album,
     album_id: t.album_id,
+    ...(t.from ? { from: t.from } : {}),
     addable: localState.view?.addable ?? t.addable ?? true,
     progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, starting: local.starting, estimated: false },
     player: outputName(),

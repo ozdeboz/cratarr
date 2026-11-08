@@ -121,6 +121,26 @@ test('Cratarr gone, search finds the library in what the device keeps, says noth
   assert.deepEqual(await page.locator('[role=alert], .toast').allInnerTexts(), [], 'nothing said of what could not be asked');
 });
 
+// The owner, testing 0.16.0: closing the full player brought back the search the record had been opened from, over the record.
+test('the full player closed over a record opened from a search leaves the record: the search stays gone', async () => {
+  const page = d.page;
+  // A phone's width: the player is over the page there, with a step of its own in the history.
+  await page.setViewportSize({ width: 412, height: 915 });
+  const words = () => inModule(page, '/src/lib/pageView.svelte.ts', (m) => m.pageView.query);
+  await page.locator('button.lens').first().click();
+  await page.locator('input[type=search]').fill('first light');
+  await page.locator('button.globe').click({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Open First Light' }).first().click({ timeout: 20_000 });
+  await until(words, (q) => q === '', 'the words gone once the record opened');
+  await inModule(page, '/src/lib/live.svelte.ts', (m) => void (m.player.full = true));
+  await until(() => page.evaluate(() => history.state?.player === true), (on) => on, "the player's step");
+  await inModule(page, '/src/lib/live.svelte.ts', (m) => void (m.player.full = false));
+  await until(() => page.evaluate(() => !history.state?.player), (off) => off, "its step gone");
+  await page.waitForTimeout(1_000);
+  assert.equal(await words(), '', 'the search not back over the record');
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test("a list's covers are asked at the size they are drawn, never whole, and a record's panel asks its own whole", async () => {
   // A browser of its own, so that every cover is asked as it comes, none from what an earlier test left; two device pixels to a
   // CSS one, as a tablet's.

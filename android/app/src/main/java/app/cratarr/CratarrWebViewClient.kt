@@ -92,9 +92,21 @@ class CratarrWebViewClient(
         DeviceWatch.page = DeviceWatch.pageOf(url)
     }
 
+    /** The page's service worker had the app's own copy answer: it asks the network first for a page, and in the app that is
+     *  the copy (MainActivity's service worker client), as with Cratarr away at the app's start. A page load so answered is the
+     *  copy's, as one answered here is (its trust: [PageTrust]). */
+    fun copyAnswered(method: String, url: Uri) {
+        val path = url.path ?: "/"
+        if (method == "GET" && BundledPage.pagePath(path) && !path.substringAfterLast('/').contains('.')) bundled = withoutRoute(url.toString())
+    }
+
     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
         super.onPageStarted(view, url, favicon)
         fromCopy = bundled == withoutRoute(url)
+        // Judged as it starts: the page may talk to the app while it is open if it may now, or if it is the app's own copy
+        // (PageTrust), as it is when the app opens with Cratarr out of reach.
+        val origin = Prefs.originOf(url)
+        PageTrust.loading(origin, origin != null && (fromCopy || Reach.trusts(view.context, origin)))
         bundled = null
     }
 
