@@ -57,9 +57,20 @@ object DeviceAnswers {
     @Synchronized
     private fun ask(context: Context, asked: String): String? {
         val app = context.applicationContext
+        val started = System.nanoTime()
+        val before = held?.device
         val device = device(app) ?: return null
         device.ask(JSONObject().put("ask", "plays").put("plays", Plays.waiting(app)).toString())
-        return device.ask(asked)
+        val said = device.ask(asked)
+        timed(app, asked, (System.nanoTime() - started) / 1_000_000, device !== before)
+        return said
+    }
+
+    /** One line in the link log per answer (D22's measures): what was asked, how long it took all told, and whether the device was
+     *  opened for it (`cold`), so a tablet's own numbers can be read from the file with no DevTools. */
+    private fun timed(app: Context, asked: String, ms: Long, cold: Boolean) {
+        val kind = runCatching { JSONObject(asked).optString("ask") }.getOrNull()?.takeIf { it.isNotEmpty() } ?: "?"
+        LinkLog.add(app, "info", "answers", "answered", "kind" to kind, "ms" to ms, "cold" to cold)
     }
 
     /** What comes next among what plays here, as Cratarr's answer has it; null where nothing is kept to answer from. */

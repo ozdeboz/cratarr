@@ -71,6 +71,16 @@ class DeviceAnswersTest {
     }
 
     @Test
+    fun every_answer_is_timed_in_the_link_log_and_says_whether_the_device_was_opened_for_it() {
+        // D22: a tablet's numbers read from the link log, area answers: what was asked, the whole time, and cold or warm.
+        val ask = source("DeviceAnswers.kt").substringAfter("private fun ask(").substringBefore("fun pick(")
+        assertTrue("timed from before the device is opened", ask.indexOf("System.nanoTime()") < ask.indexOf("device(app)"))
+        assertTrue("to after the answer", ask.indexOf("device.ask(asked)") < ask.indexOf("timed(app,"))
+        assertTrue("cold where the device it answered with is not the one held before", ask.contains("device !== before"))
+        assertTrue(ask.contains("\"answers\", \"answered\", \"kind\" to kind, \"ms\" to ms, \"cold\" to cold"))
+    }
+
+    @Test
     fun plays_not_told_go_with_every_asking() {
         val ask = source("DeviceAnswers.kt").substringAfter("private fun ask(").substringBefore("fun pick(")
         assertTrue(ask.contains("Plays.waiting(app)"))
