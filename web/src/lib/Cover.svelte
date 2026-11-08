@@ -1,11 +1,14 @@
 <script module lang="ts">
   // Covers that failed to load (an album without art answers 404, as does Android's /__device/cover for an album it
   // has none for): every place that shows one shows the stand-in at once, without asking again. Blurred backdrops
-  // check it too, and leave themselves out.
-  const failed = $state<Record<string, true>>({});
+  // check it too, and leave themselves out. Those that failed while Cratarr was out of reach are asked again when it is
+  // back (lib/coverFailures).
+  import { failures } from './coverFailures.svelte';
+  const misses = failures();
+  const failed = misses.failed;
   export const coverBroken = (src: string | null | undefined) => !src || !!failed[src];
   export const coverBroke = (src: string | null | undefined) => {
-    if (src) failed[src] = true;
+    if (src) misses.note(src);
   };
   /** A mosaic's covers as drawn: four while four of them load, else one (the first that loads, or the stand-in), so
    *  failed covers never make a grid of stand-ins. */

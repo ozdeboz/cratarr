@@ -13,7 +13,7 @@ import { untrack } from 'svelte';
 import { canPlayHere, cutForNow, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
 import { rewindNow } from './ramping.svelte';
-import { drivenName, follow, playOn, pointAt } from './playOn.svelte';
+import { drivenName, follow, outputNow, playOn, pointAt } from './playOn.svelte';
 import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -27,7 +27,7 @@ import { reach, whenReached } from './reach.svelte';
 export { isLocal, localNowPlaying, localState, tookLocal } from './player/port.svelte';
 
 /** Whether the music plays in this page (its stream, or the app it runs in). */
-export const playsHere = () => prefs.output === 'local' && canPlayHere;
+export const playsHere = () => outputNow() === 'local' && canPlayHere;
 
 // Leaving the page stops what plays in this browser, so a reload or closing the tab asks first (the browser's own
 // "Leave site?"), but only while this browser is playing, and not once the account's own doing has it going.

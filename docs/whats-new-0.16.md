@@ -91,3 +91,10 @@ own sign-in, on the network its downloads may use. The queue stays.
 <!-- From the commits since v0.15.0 on 632/own-music at 3a3b948d3 (2026-11-08): D21, P4's Sounds like and favourites,
      the offline review's six findings and the fresh start included. D22's tablet numbers, if they change anything,
      come after. -->
+
+## 0.16.1
+
+- With Cratarr out of reach and another player chosen, music plays on this device. Once it has played here, this device stays the chosen player.
+- Covers that failed to load while away load again when Cratarr is back, without a reload.
+- A waveform no longer stays flat after the network drops: each analysis request gives up after a minute.
+- While the library on this device opens for the first answer away from Cratarr, the page shows its loader and says so.

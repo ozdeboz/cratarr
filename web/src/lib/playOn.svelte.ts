@@ -10,14 +10,20 @@ import { outputOfTarget, targetOfOutput } from './player/commands';
 import { on } from './events.svelte';
 import { drive, emptyHere, reportedBy, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
+import { outputNow } from './outputNow.svelte';
 import { measure, speedOf, type Measured } from './drivenCourse';
 
 /** `self`: the name this page is a player under, in a browser (lib/playOnTarget); null in the app or before. `known`:
  *  the players have been read once (until then no "None yet"). */
 export const playOn = $state({ players: [] as PlayOnPlayer[], self: null as string | null, known: false });
 
-/** The player chosen as the output, by name; null when the output is not one of Cratarr's players. */
-export const drivenName = () => (prefs.output.startsWith('player:') ? prefs.output.slice('player:'.length) : null);
+export { outputNow };
+
+/** The player the music goes to now, by name; null when it is not one of Cratarr's players (`outputNow`). */
+export const drivenName = () => {
+  const out = outputNow();
+  return out.startsWith('player:') ? out.slice('player:'.length) : null;
+};
 
 /** The players that can be chosen: connected now, and not the app this page runs in (that one is "This device"). */
 export const choosable = () =>
@@ -28,7 +34,7 @@ export const choosable = () =>
  *  2026-10-16: the follower showed no player at all). Null otherwise. */
 export const followedLeader = () => {
   const me = selfName();
-  if (prefs.output !== 'local' || !me) return null;
+  if (outputNow() !== 'local' || !me) return null;
   const group = playOn.players.find((p) => p.name === me)?.group;
   return group && group !== me ? group : null;
 };
@@ -86,7 +92,7 @@ function fromApp(target: string) {
 
 /** The one of Cratarr's players the page plays on: the one chosen, or this device's own (the app's, or this page's)
  *  playing here. */
-export const head = () => drivenName() ?? (prefs.output === 'local' ? selfName() : null);
+export const head = () => drivenName() ?? (outputNow() === 'local' ? selfName() : null);
 
 /** The players of `name`'s group (decision 0037), its leader first; none while it plays alone. */
 export function groupOf(name: string | null): string[] {
