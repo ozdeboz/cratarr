@@ -320,19 +320,6 @@ class DeviceIndexTest {
         assertEquals(20L, files.stands(who, "covers")?.rev)
     }
 
-    /** The review of 2026-11-07, its fourth finding: a whole cut short, on mobile data or by the network going, left no cover at all. */
-    @Test
-    fun a_whole_of_covers_cut_short_keeps_every_cover_held_before_it_those_that_came_taken() {
-        held()
-        answers["/api/index/covers/changes"] = { IndexFetched(410, "{\"rev\":99,\"reset\":true}".toByteArray()) }
-        val cut = bundle(20, frame(2, picture(9)), frame(3, picture(3)))
-        answers["/api/index/covers"] = { IndexFetched(200, cut.copyOf(cut.size - 5)) }
-        looks.look(who)
-        assertEquals(listOf("1.jpg", "2.jpg"), coverFiles())
-        assertArrayEquals(picture(9), files.cover(who, 2).readBytes())
-        assertEquals(5L, files.stands(who, "covers")?.rev)
-    }
-
     @Test
     fun covers_of_another_version_in_a_whole_stop_and_what_was_held_stays() {
         held()

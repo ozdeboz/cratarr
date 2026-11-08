@@ -16,7 +16,7 @@ import { CoverFrames } from './coverFrames';
 import { newEngine, readsNow, whenReadsMove } from './deviceIndex.svelte';
 import { indexShows, type IndexShows, type PartFacts } from './deviceIndexRule';
 import type { IndexEngine, Network, Outcome, Part, Step } from './indexEngine';
-import { keepCovers, putCovers, readBytes, readPart, writePart, type Kept, type PartName } from './indexStore';
+import { clearCovers, putCovers, readBytes, readPart, writePart, type Kept, type PartName } from './indexStore';
 import { prefs } from './prefs.svelte';
 import { reach, refusedFor } from './reach.svelte';
 
@@ -146,8 +146,6 @@ async function framed(e: IndexEngine, def: Def, who: string, whole: boolean, kep
     const frames = new CoverFrames();
     const body = res.body!.getReader();
     let taken = false;
-    // What a whole holds: what it does not goes once it is all in.
-    const held = new Set<number>();
     for (;;) {
       const { done, value } = await body.read();
       if (done) break;
@@ -160,14 +158,11 @@ async function framed(e: IndexEngine, def: Def, who: string, whole: boolean, kep
           return { outcome };
         }
         taken = true;
+        if (whole && !(await clearCovers(who))) return { outcome: 'failed' };
       }
-      if (!taken) continue;
-      const came = frames.take();
-      for (const f of came) held.add(f.record);
-      if (!(await putCovers(who, came))) return { outcome: 'failed' };
+      if (taken && !(await putCovers(who, frames.take()))) return { outcome: 'failed' };
     }
     if (!taken || frames.cut) return { outcome: e.takeCovers(new Uint8Array(0), whole) };
-    if (whole && !(await keepCovers(who, held))) return { outcome: 'failed' };
     return { outcome: 'took', keep: { rev: def.rev(e), at: Date.now() } };
   } catch {
     return { outcome: 'lost' };

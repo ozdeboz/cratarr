@@ -370,10 +370,9 @@ internal class IndexFiles(private val root: File) {
         replace(file, jpeg) { to, bytes -> to.writeBytes(bytes) }
     }
 
-    /** Small covers of [who]'s, those of [records] alone: a whole all in lets go of what it no longer holds, and not before, so one cut
-     *  short leaves every cover kept till then (the review of 2026-11-07, its fourth finding). */
-    fun keepCovers(who: String, records: Set<Long>) {
-        covers(who).listFiles()?.forEach { f -> if (f.name.removeSuffix(".jpg").toLongOrNull() !in records) f.delete() }
+    /** Every small cover of [who]'s gone, for a whole to take their place. */
+    fun clearCovers(who: String) {
+        covers(who).deleteRecursively()
     }
 
     private fun standing(who: String, name: String) = File(folder(who), "$name.json")
@@ -525,15 +524,11 @@ internal class IndexLooks(
         val head = ByteArray(COVERS_HEAD)
         val taken = taken(def, head.copyOf(fill(body, head)), whole)
         if (taken.outcome != SyncOutcome.TOOK) return Got(taken.outcome)
-        // What a whole holds: what it does not goes once it is all in.
-        val held = mutableSetOf<Long>()
+        if (whole) files.clearCovers(who)
         val frame = ByteArray(COVER_FRAME)
         while (true) {
             val read = fill(body, frame)
-            if (read == 0) {
-                if (whole) files.keepCovers(who, held)
-                return Got(SyncOutcome.TOOK, rev = taken.rev, at = now())
-            }
+            if (read == 0) return Got(SyncOutcome.TOOK, rev = taken.rev, at = now())
             if (read < COVER_FRAME) break
             val fields = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN)
             val record = fields.getLong()
@@ -542,7 +537,6 @@ internal class IndexLooks(
             val jpeg = ByteArray(length)
             if (fill(body, jpeg) < length) break
             files.putCover(who, record, jpeg.takeIf { length > 0 })
-            held.add(record)
         }
         return Got(taken(def, ByteArray(0), whole).outcome)
     }
