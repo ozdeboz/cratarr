@@ -168,7 +168,8 @@ const artistFound = (a: FoundArtist) => ({
   kind: 'artist' as const,
   subject: `artist:${OWN}/${a.name}`,
   title: a.name,
-  sub: a.records === 1 ? '1 album' : `${a.records} albums`,
+  // An artist with tracks and no album of their own: no count, as Cratarr's (app::search).
+  sub: a.records === 0 ? '' : a.records === 1 ? '1 album' : `${a.records} albums`,
   cover: `/api/artists/${a.id}/photo`,
   id: a.id,
   score: a.score,
