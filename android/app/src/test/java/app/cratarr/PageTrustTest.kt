@@ -11,7 +11,7 @@ import java.io.File
  * loaded while it is not trusted is not.
  */
 class PageTrustTest {
-    private val home = "http://192.168.178.5:8081"
+    private val home = "http://192.168.1.5:8081"
     private fun source(name: String) = File("src/main/java/app/cratarr/$name").readText().replace("\r\n", "\n")
 
     @Test
@@ -19,7 +19,7 @@ class PageTrustTest {
         PageTrust.loading(home, trustedNow = true)
         assertTrue("trusted now", PageTrust.trusts(home, trustedNow = true))
         assertTrue("Cratarr out of reach: the page open is the one it trusted", PageTrust.trusts(home, trustedNow = false))
-        assertFalse("another origin is not that page", PageTrust.trusts("http://192.168.178.6:8081", trustedNow = false))
+        assertFalse("another origin is not that page", PageTrust.trusts("http://192.168.1.6:8081", trustedNow = false))
         PageTrust.loading(home, trustedNow = false)
         assertFalse("a page loaded while not trusted is not heard", PageTrust.trusts(home, trustedNow = false))
         assertTrue(PageTrust.trusts(home, trustedNow = true))

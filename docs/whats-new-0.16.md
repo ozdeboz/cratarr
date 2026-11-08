@@ -108,3 +108,7 @@ own sign-in, on the network its downloads may use. The queue stays.
 - Search shows its answer in one step, the crate card with the results; artists with tracks only show no album count.
 - An album action's page in Changes to files shows the files it moved, and its Undo.
 - Health's missing tracks say when nothing was kept of them.
+
+## 0.16.2
+
+- Away from Cratarr, the player names the track that plays: a cover that never came kept the track before named.

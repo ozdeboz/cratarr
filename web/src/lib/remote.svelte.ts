@@ -76,10 +76,14 @@ $effect.root(() => {
 // that fails is skipped (`coverSrc` offers the next candidate). One that has not come in COVER_GIVE_UP_MS gives way to
 // the stand-in (the owner, 2026-10-26: no Retry), and still takes its place if it comes after all.
 const COVER_GIVE_UP_MS = 10_000;
+/** The cover asked for, changing only with it: what waits on it waits on the cover, not on each report of the track's
+ *  place, which every few hundred milliseconds began its wait again, and with the network cut it never ended (the
+ *  tablet, 0.16.1: the track before stayed named, its cover shown, while another played). */
+const coverWanted = $derived(coverSrc());
 const shown = $state<{ src: string | null; coming: string | null; late: boolean }>({ src: null, coming: null, late: false });
 $effect.root(() => {
   $effect(() => {
-    const want = coverSrc();
+    const want = coverWanted;
     if (!want) {
       shown.src = null;
       shown.coming = null;
@@ -121,15 +125,21 @@ export const coverLate = () => shown.late;
 // its ring comes, lib/NowPlaying) the new track shows whole. The track itself plays at once (playing()).
 const TEXT_WAIT_MS = 600;
 let named = $state.raw<NowPlaying | null>(null);
+/** The playing track, changing only when another plays (its reports of its place do not). */
+const playingNow = $derived.by(() => {
+  const np = playing();
+  return np ? `${np.source}/${np.id}` : null;
+});
 /** The cover the playing track is waiting for: its address differs from the one shown, and it has not given way. */
 const coverPending = () => {
-  const want = coverSrc();
+  const want = coverWanted;
   return !!want && want !== shown.src && !shown.late;
 };
 $effect.root(() => {
   $effect(() => {
-    const np = playing();
+    void playingNow;
     const pending = coverPending();
+    const np = untrack(playing);
     const was = untrack(() => named);
     if (!np || !was || was.id === np.id || !pending) return void (named = np);
     const t = setTimeout(() => (named = untrack(playing)), TEXT_WAIT_MS);
