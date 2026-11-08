@@ -95,7 +95,13 @@ shuffled?: boolean, } | { "command": "shuffle", on: boolean, } | { "command": "c
  * What to play inside (decision 0094: a crate, a playlist, a record, an artist or tracks); null plays beyond
  * it again; left out: as it was.
  */
-within?: Within | null, } | { "command": "autoplay", mode: AutoplayMode, albums?: boolean, restart?: boolean, seed?: Array<string>, within?: Within | null, } | { "command": "skip_favourites", on: boolean, } | { "command": "sleep", at_ms: number | null, end_of_track?: boolean, } | { "command": "remove", index?: number, entry?: string, } | { "command": "jump", index?: number, entry?: string, } | { "command": "pause" } | { "command": "resume" } | { "command": "toggle" } | { "command": "stop", moved_to?: string, } | { "command": "next" } | { "command": "previous" } | { "command": "wind", dir: string, phase: string, } | { "command": "direction", dir: string, } | { "command": "level", on?: boolean, unknown?: string, } | { "command": "seek", position_ms?: number, percent?: number | null, by_ms?: number | null, 
+within?: Within | null, } | { "command": "autoplay", mode: AutoplayMode, albums?: boolean, restart?: boolean, seed?: Array<string>, within?: Within | null, } | { "command": "skip_favourites", on: boolean, } | { "command": "sleep", at_ms: number | null, end_of_track?: boolean, } | { "command": "remove", index?: number, entry?: string, } | { "command": "jump", index?: number, entry?: string, } | { "command": "pause" } | { "command": "resume" } | { "command": "toggle" } | { "command": "stop", moved_to?: string, 
+/**
+ * Back after its music was handed away while it was out of reach: stopped, its queue kept to go on with later (the
+ * owner, 2026-11-08: "Stop it, keep its queue"; the tablet, offline in a group it led, came back to an empty queue).
+ * Every other stop empties it.
+ */
+kept?: boolean, } | { "command": "next" } | { "command": "previous" } | { "command": "wind", dir: string, phase: string, } | { "command": "direction", dir: string, } | { "command": "level", on?: boolean, unknown?: string, } | { "command": "seek", position_ms?: number, percent?: number | null, by_ms?: number | null, 
 /**
  * Wound there (decision 0074) whatever the player's own setting, where it plays and it is more than a moment
  * away (0.9.12: a page driving it with its seek winding on).

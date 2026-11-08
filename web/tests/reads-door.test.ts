@@ -51,6 +51,7 @@ const ALLOWED: Record<string, [number, string]> = {
   'lib/localPlayer.svelte.ts': [2, 'whether the queue kept here is ahead of Cratarr'],
   'lib/momentHere.svelte.ts': [2, 'whether the weather may be asked of anyone: only with Cratarr away'],
   'lib/output.svelte.ts': [2, 'what plays: picked from what is on the device'],
+  'lib/outputNow.svelte.ts': [1, 'where music plays: here while Cratarr is away with another player chosen (0.16.1, the owner: "Play here instead")'],
   'lib/play.svelte.ts': [1, 'what plays: picked from what is on the device'],
   'lib/queueHistory.svelte.ts': [1, 'whose list a queue is in'],
   'lib/shelfStore.svelte.ts': [1, 'a poller: not asked while away'],

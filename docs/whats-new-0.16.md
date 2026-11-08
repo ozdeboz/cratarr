@@ -91,3 +91,20 @@ own sign-in, on the network its downloads may use. The queue stays.
 <!-- From the commits since v0.15.0 on 632/own-music at 3a3b948d3 (2026-11-08): D21, P4's Sounds like and favourites,
      the offline review's six findings and the fresh start included. D22's tablet numbers, if they change anything,
      come after. -->
+
+## 0.16.1
+
+- With Cratarr out of reach and another player chosen, music plays on this device. Once it has played here, this device stays the chosen player.
+- Covers that failed to load while away load again when Cratarr is back, without a reload.
+- A waveform no longer stays flat after the network drops: each analysis request gives up after a minute.
+- While the library on this device opens for the first answer away from Cratarr, the page shows its loader and says so.
+- Away from Cratarr, the app keeps taking the page's commands: taps in the queue, Play and Next work offline, and an offline start opens in seconds instead of waiting for ever.
+- A network that goes silent counts as away within seconds, so the page opens on what the device has.
+- Play from a record's menu in Downloads and in search results works again.
+- Available offline lists albums synced to the device.
+- Space plays and pauses everywhere.
+- A device that comes back to a group it led pauses and keeps its queue, and "This device" brings the other screens along.
+- Every Move, Add and Replace on a record of several copies names the copy it acts on, and the player's Quality and File describe the copy that plays.
+- Search shows its answer in one step, the crate card with the results; artists with tracks only show no album count.
+- An album action's page in Changes to files shows the files it moved, and its Undo.
+- Health's missing tracks say when nothing was kept of them.

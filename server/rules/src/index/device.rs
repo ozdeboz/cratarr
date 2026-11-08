@@ -39,7 +39,7 @@ const CARD_GENRES: usize = 3;
 const CARD_COVERS: usize = 4;
 
 /// A play this device has not told yet, as it is kept to be told.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Unsent {
     #[serde(default)]
     source: Option<String>,
@@ -261,18 +261,41 @@ impl Device {
 
     /// What a crate reads of how each track was used: the server's last, and this device's plays since.
     fn count(&mut self) {
-        let mut by_track = self.said.clone();
-        for p in &self.unsent {
-            let Some(track) = p.source.as_deref().is_none_or(|s| s == SOURCE).then(|| ids::track_of(&p.track)).flatten() else { continue };
-            let u = by_track.entry(track).or_default();
-            if p.counts != Some(false) {
-                u.plays += 1;
-                u.last = u.last.max(Some(p.at / 1000));
-            } else if p.ended.as_deref() == Some("skipped") {
-                u.skips += 1;
-            }
+        self.uses = self.said.iter().filter_map(|(track, u)| Some((self.facts[*self.place.get(track)?].rel.clone(), *u))).collect();
+        let unsent = std::mem::take(&mut self.unsent);
+        for p in &unsent {
+            self.add(p);
         }
-        self.uses = by_track.into_iter().filter_map(|(track, u)| Some((self.facts[*self.place.get(&track)?].rel.clone(), u))).collect();
+        self.unsent = unsent;
+    }
+
+    /// One play not told yet, on what a crate reads of its track: a track the server said anything of is in `uses` already.
+    fn add(&mut self, p: &Unsent) {
+        let Some(track) = p.source.as_deref().is_none_or(|s| s == SOURCE).then(|| ids::track_of(&p.track)).flatten() else { return };
+        let Some(&at) = self.place.get(&track) else { return };
+        let u = self.uses.entry(self.facts[at].rel.clone()).or_default();
+        if p.counts != Some(false) {
+            u.plays += 1;
+            u.last = u.last.max(Some(p.at / 1000));
+        } else if p.ended.as_deref() == Some("skipped") {
+            u.skips += 1;
+        }
+    }
+
+    /// The plays not told yet, handed in before every ask (the app's, the page's): what was handed in last with more after it adds
+    /// only the more, and the same again nothing. Counting afresh reads every track, 18 ms of each ask at 34,000 on the PC against a
+    /// pick's 16, and the plays waiting seldom change between two asks; a list with the first gone, told to Cratarr, is counted afresh.
+    fn hand_in(&mut self, plays: Vec<Unsent>) {
+        let held = self.unsent.len();
+        if plays.len() >= held && plays[..held] == self.unsent[..] {
+            for p in &plays[held..] {
+                self.add(p);
+            }
+            self.unsent = plays;
+        } else {
+            self.unsent = plays;
+            self.count();
+        }
     }
 
     /// The answer to what is asked, as JSON; none where it cannot be read, or this device has nothing to say to it: the asker then goes
@@ -280,8 +303,7 @@ impl Device {
     pub fn ask(&mut self, asked: &str) -> Option<String> {
         let answer = match serde_json::from_str::<Asked>(asked).ok()? {
             Asked::Plays { plays } => {
-                self.unsent = plays;
-                self.count();
+                self.hand_in(plays);
                 Some(json!({}))
             }
             // Nothing of the account's held: a list of none would be a wrong answer, and the server always has some.

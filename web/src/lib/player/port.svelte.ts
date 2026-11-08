@@ -40,7 +40,7 @@ import {
   playNow,
 } from '../localPlayer.svelte';
 import { rewindNow } from '../ramping.svelte';
-import { drivenName, outputName } from '../playOn.svelte';
+import { drivenName, outputName, outputNow } from '../playOn.svelte';
 import { prefs } from '../prefs.svelte';
 import { toast } from '../toast.svelte';
 import { holdsQueue } from './commands';
@@ -125,7 +125,7 @@ export type PlayerPort = {
 /** Whether the page holds the queue: it plays here, or on one of Cratarr's players it drives. A browser that cannot
  *  play here (no stream for audio) plays on a player, whatever was chosen elsewhere. */
 export function isLocal() {
-  return holdsQueue(prefs.output, canPlayHere, drivenName());
+  return holdsQueue(outputNow(), canPlayHere, drivenName());
 }
 
 /** The player the page drives now. */
@@ -162,6 +162,7 @@ const nowLocal = $derived.by((): NowPlaying | null => {
     artist: t.artist,
     album: t.album,
     album_id: t.album_id,
+    ...(t.from ? { from: t.from } : {}),
     addable: localState.view?.addable ?? t.addable ?? true,
     progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, starting: local.starting, estimated: false },
     player: outputName(),

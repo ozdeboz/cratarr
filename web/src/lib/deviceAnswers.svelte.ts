@@ -8,6 +8,8 @@ import { openReads } from './deviceIndex.svelte';
 import { OWN } from './deviceReads';
 import type { IndexEngine } from './indexEngine';
 import { readBytes } from './indexStore';
+import { untrack } from 'svelte';
+import { whenReached } from './reach.svelte';
 import type { Crate, CrateFavourites, CrateLook, QueueTrack, TempoBands } from './api';
 
 /** Where the app answers. */
@@ -18,6 +20,27 @@ const APP_ANSWER = '/__device/answer';
 export const heldHere = { plays: (): unknown[] => [], tracks: (): string[] => [] };
 
 const made = new WeakMap<IndexEngine, Promise<boolean>>();
+
+/** How many answers wait on the library on this device being opened (the owner, 2026-11-08: the first answer with Cratarr away
+ *  took 4 to 5 s on the tablet, so the page's loader says what it waits for). Read by lib/PageLoading. */
+export const deviceOpening = $state({ asks: 0 });
+/** Whether the app's copy is open: from its first answer until Cratarr answers again, when the app lets it go (android's
+ *  DeviceAnswers.release at any answer from Cratarr). */
+let appOpen = false;
+whenReached.add(() => (appOpen = false));
+
+/** `ask` run with the loader told, when the library on this device opens for it. Counted untracked: an ask made inside a page's
+ *  own effect would else read the count it writes and run again for good (0.16.1's preview on the tablet, 2026-11-08: the Library
+ *  asked its crates once a second, "Opening the library on this device" never ending, effect_update_depth_exceeded). */
+async function opening<T>(cold: boolean, ask: () => Promise<T>): Promise<T> {
+  if (!cold) return ask();
+  untrack(() => deviceOpening.asks++);
+  try {
+    return await ask();
+  } finally {
+    untrack(() => deviceOpening.asks--);
+  }
+}
 let toldPlays = '[]';
 
 /** The device made ready over this engine's index, once: its sounds and the account's own, what is kept of them. */
@@ -38,12 +61,14 @@ function ready(e: IndexEngine, who: string): Promise<boolean> {
 /** The answer to what is asked; null where this device has none. */
 export async function deviceAsk<T>(asked: Record<string, unknown>): Promise<T | null> {
   if (inApp) {
-    const res = await fetch(`${APP_ANSWER}?ask=${encodeURIComponent(JSON.stringify(asked))}`, { cache: 'no-store' });
-    return res.ok ? ((await res.json()) as T) : null;
+    const res = await opening(!appOpen, () => fetch(`${APP_ANSWER}?ask=${encodeURIComponent(JSON.stringify(asked))}`, { cache: 'no-store' }));
+    if (!res.ok) return null;
+    appOpen = true;
+    return (await res.json()) as T;
   }
   const account = accountKey();
   const held = account === null ? null : await openReads();
-  if (!held || !(await ready(held.engine, whoOf(account)))) return null;
+  if (!held || !(await opening(!made.has(held.engine), () => ready(held.engine, whoOf(account))))) return null;
   const plays = JSON.stringify(heldHere.plays());
   if (plays !== toldPlays) {
     held.engine.ask({ ask: 'plays', plays: heldHere.plays() });

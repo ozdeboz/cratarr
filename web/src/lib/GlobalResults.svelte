@@ -116,6 +116,9 @@
     | { kind: 'artist'; source: string; name: string; cover: string | null }
     | { kind: 'subject'; subject: string };
   let menu = $state<Menu | null>(null);
+  /** The menu as opened, kept while it closes: a tap there closes it and goes on reading what it was opened on (lib/DownloadsPanel). */
+  let opened: Menu | null = null;
+  const shownMenu = $derived((opened = menu ?? opened));
   function menuOf(it: SearchResult & { track?: string }): Menu | null {
     const album = /^album:([^/]+)\/(.+)$/.exec(it.subject);
     // A track's artist, album and length as the server gives them apart from its line (0.12).
@@ -220,7 +223,8 @@
 {#if menu?.kind === 'track'}
   <TrackMenu track={menu.track} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'album'}
-  <AlbumMenu source={menu.source} album={{ id: menu.id, title: menu.title, artist: menu.artist }} onclose={() => (menu = null)} />
+  {@const m = shownMenu as Extract<Menu, { kind: 'album' }>}
+  <AlbumMenu source={m.source} album={{ id: m.id, title: m.title, artist: m.artist }} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'artist'}
   <ArtistRowMenu source={menu.source} name={menu.name} cover={menu.cover} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'subject'}

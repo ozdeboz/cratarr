@@ -146,6 +146,9 @@
 
   /** The album whose Change cover is open (Health's albums without a cover). */
   let coverOf = $state<{ id: string; title: string } | null>(null);
+  /** The record its menu was opened on, kept while it closes: a tap there closes it and goes on reading what it was opened on (lib/DownloadsPanel). */
+  let openedCover: { id: string; title: string } | null = null;
+  const shownCover = $derived((openedCover = coverOf ?? openedCover));
   /** The track whose better copy is being found (a file cut off or breaking off). */
   let betterOf = $state<{ source: string; album: string; track: string } | null>(null);
   /** A missing track being looked for (Albums missing tracks): its album and recording (lib/ReplaceTrackSheet). */
@@ -637,7 +640,8 @@
   </MenuSheet>
 {/if}
 {#if coverOf}
-  <AlbumMenu source="cratarr" album={{ id: coverOf.id, title: coverOf.title, artist: null }} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
+  {@const c = shownCover!}
+  <AlbumMenu source="cratarr" album={{ id: c.id, title: c.title, artist: null }} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
 {/if}
 {#if betterOf}
   <ReplaceTrackSheet source={betterOf.source} album={{ id: betterOf.album, title: '' }} replace={{ source: betterOf.source, id: betterOf.track }} onclose={() => ((betterOf = null), loadHealth())} />

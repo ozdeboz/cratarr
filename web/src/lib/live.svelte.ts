@@ -8,6 +8,7 @@
 import { untrack } from 'svelte';
 import { ApiError, getState, setMember, type NowPlaying, type State } from './api';
 import { prefs } from './prefs.svelte';
+import { outputNow } from './outputNow.svelte';
 import { canPlayHere, local } from './localPlayer.svelte';
 import { panel } from './panel.svelte';
 import { remember } from './sources.svelte';
@@ -89,7 +90,7 @@ $effect.root(() => {
 });
 
 /** Something plays, where the output is (nothing where there is no player to play on, 0.12). */
-const somethingPlays = () => ((prefs.output === 'local' && canPlayHere) || prefs.output.startsWith('player:')) && local.index >= 0;
+const somethingPlays = () => ((outputNow() === 'local' && canPlayHere) || outputNow().startsWith('player:')) && local.index >= 0;
 
 /** The panel shows beside the page (decisions 0018, 0023): with room for it, a viewed playlist, or the player while
  *  something plays and it was not folded. */

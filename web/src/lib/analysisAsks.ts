@@ -8,6 +8,11 @@ export const WAVE = 0;
 export const PLAYING = 1;
 export const NEXT = 2;
 
+/** How long one ask may take, its answer read too: the server waits up to 20 s for its turn and then works it out. Past
+ *  this the request was lost (a network that drops mid-way never says so: 0.16.0, 2026-11-08, one lost ask held every
+ *  waveform after it on the tablet and the ThinkPad until the page was opened again), so it fails and those behind it go on. */
+export const limits = { askMs: 60_000 };
+
 type Ask = { url: string; rank: number; go: () => void };
 const waiting: Ask[] = [];
 let busy = false;
@@ -28,7 +33,7 @@ export function askAnalysis(url: string, rank: number): Promise<Response> {
       url,
       rank,
       go: () =>
-        fetch(url)
+        fetch(url, { signal: AbortSignal.timeout(limits.askMs) })
           .then(resolve, reject)
           .finally(() => {
             busy = false;

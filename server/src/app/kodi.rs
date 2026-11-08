@@ -881,7 +881,7 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
         d.now = d.read().await.unwrap();
         step("pause", &d);
-        d.run(Command::Stop { moved_to: None }).await.unwrap();
+        d.run(Command::Stop { moved_to: None, kept: false }).await.unwrap();
         tokio::time::sleep(Duration::from_secs(1)).await;
         d.now = d.read().await.unwrap();
         step("stop", &d);

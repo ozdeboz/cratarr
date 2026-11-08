@@ -123,7 +123,7 @@ fn to_convert(root: &std::path::Path, dir: &str, rels: &[String], limit: crate::
 }
 
 /// Every file under `dir` (recursively), relative to it, leaving out hidden files and folders.
-fn files_under(dir: &std::path::Path) -> Vec<String> {
+pub(super) fn files_under(dir: &std::path::Path) -> Vec<String> {
     fn walk(root: &std::path::Path, at: &std::path::Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(at) else { return };
         for e in entries.flatten() {

@@ -9,6 +9,7 @@ import { heardAt, placeOf, type Anchor } from './player/clock';
 import { followingNow } from './following.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
+import { failures } from './coverFailures.svelte';
 import { toast } from './toast.svelte';
 import { ramping, rampPressed, rampTurned } from './ramping.svelte';
 import { appInfo, inApp } from './app.svelte';
@@ -25,8 +26,10 @@ export const pending = () => port().pending();
 export const moving = () => port().moving();
 
 // Cover: the library's cover file for a library track; otherwise (or when there is none) the album's image from the
-// server, which also covers music outside the library, such as Incoming. Candidates that fail are skipped.
-const failed = $state<Record<string, boolean>>({});
+// server, which also covers music outside the library, such as Incoming. Candidates that fail are skipped, those that failed
+// while Cratarr was out of reach only until it is back (lib/coverFailures).
+const misses = failures();
+const failed = misses.failed;
 function coverFor(t: { source: string; id: string; album_id: string | null; addable: boolean }): string | null {
   const library = coverUrl(t);
   const album = t.album_id ? albumCoverUrl(t.source, t.album_id) : null;
@@ -37,7 +40,7 @@ export function coverSrc(): string | null {
   const np = playing();
   return np ? coverFor(np) : null;
 }
-export const coverFailed = (src: string) => (failed[src] = true);
+export const coverFailed = (src: string) => misses.note(src);
 
 // Covers ready ahead (the owner, 2026-10-30: Next within an album darkened the cover and turned the ring, though what
 // comes next and what came before are known): the next track's cover and the one before are loaded and decoded while

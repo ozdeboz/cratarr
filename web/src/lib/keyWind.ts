@@ -1,10 +1,12 @@
 // The keyboard's transport (the owner, 2026-10-27): ← and → as Previous and Next, a tap their tap, a hold their hold
 // (winding back or forward for as long as held, lib/holdWind's way), where nothing else takes the arrows: not in a
-// field, on a slider, the seek bar, a list or a menu, nor with a modifier held. Installed once by App.
+// field, on a slider, the seek bar, a list or a menu, nor with a modifier held. Space plays and pauses, the same where
+// (the owner, 2026-11-08: "space should work everywhere"), except on a button or link reached by the keyboard, which
+// Space presses. Installed once by App.
 import { appInfo, inApp } from './app.svelte';
 import { prefs } from './prefs.svelte';
 import { holdsHere } from './holdWind';
-import { playing, send, wind, windTouch } from './remote.svelte';
+import { playPause, playing, send, wind, windTouch } from './remote.svelte';
 
 const HOLD_MS = 350;
 
@@ -15,6 +17,15 @@ function takesArrows(t: EventTarget | null): boolean {
   // A modal sheet's own (the full player, a dialog too but not a modal one, keeps them for the transport).
   return !!t.closest('[role="slider"], [role="listbox"], [role="menu"], [aria-modal="true"], [role="tablist"], [role="radiogroup"], [role="grid"]');
 }
+/** Whether Space is what has the focus's own: a field's and the like, as the arrows; a button or link reached by the keyboard
+ *  presses it. One clicked keeps the focus but not Space, which would press it again (Next, once more). */
+export function keepsSpace(t: EventTarget | null): boolean {
+  if (!(t instanceof Element)) return false;
+  if (takesArrows(t)) return true;
+  const pressable = t.closest('button, a[href], summary, [role="button"], [role="checkbox"], [role="switch"], [role="tab"], [role="option"]');
+  return !!pressable && pressable.matches(':focus-visible');
+}
+
 /** Whether holding that way winds where the music plays (as the player's buttons: lib/holdWind). */
 const winds = (dir: 'back' | 'forward') => holdsHere(dir, playing()?.player);
 
@@ -23,6 +34,7 @@ type Down = { dir: 'back' | 'forward'; timer: ReturnType<typeof setTimeout> | un
 export function installKeyWind(): () => void {
   let down = null as Down | null;
   const press = (e: KeyboardEvent) => {
+    if (e.key === ' ') return space(e);
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || takesArrows(e.target) || !playing()) return;
     // A sheet or a dialog open: its own.
@@ -40,6 +52,14 @@ export function installKeyWind(): () => void {
       d.held = true;
       wind(dir, 'start');
     }, HOLD_MS);
+  };
+  const space = (e: KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || keepsSpace(e.target) || !playing()) return;
+    if (document.querySelector('[aria-modal="true"], dialog[open]')) return;
+    // Not the page scrolled, nor a clicked button pressed again.
+    e.preventDefault();
+    if (e.repeat) return;
+    playPause();
   };
   const lift = (e: KeyboardEvent) => {
     const d = down;

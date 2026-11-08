@@ -409,7 +409,7 @@ class MainActivity : AppCompatActivity() {
         // The page keeps its priority when not in view: it is the player.
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         val app = applicationContext
-        view.webViewClient = CratarrWebViewClient(
+        val client = CratarrWebViewClient(
             origins,
             onError = { cannotReach(url, it) },
             onGone = { show(url) },
@@ -420,6 +420,7 @@ class MainActivity : AppCompatActivity() {
             // other address too; a sign-in page with the other's session at hand takes it and loads again.
             onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },
         )
+        view.webViewClient = client
         // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above. And for a record's
         // small cover with Cratarr away, which it cannot open itself here: the app holds them.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
@@ -428,7 +429,8 @@ class MainActivity : AppCompatActivity() {
             ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
                 override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
                     if (Prefs.originOf(request.url.toString()) !in origins) return null
-                    return request.url.path?.let { DeviceIndex.answer(app, it) } ?: BundledPage.answer(app, request.method, request.url)
+                    return request.url.path?.let { DeviceIndex.answer(app, it) }
+                        ?: BundledPage.answer(app, request.method, request.url)?.also { client.copyAnswered(request.method, request.url) }
                 }
             })
         }
@@ -443,12 +445,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         // `window.CratarrApp`, on Cratarr's pages only: the local address's over plain http only while it answers as
-        // this app's Cratarr on this network (Reach.trusts).
+        // this app's Cratarr on this network (Reach.trusts), or the page loaded while it did (PageTrust).
         if (origins.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             Prefs.withoutRefused(origins) { rules ->
                 WebViewCompat.addWebMessageListener(view, "CratarrApp", rules) { _, message, sourceOrigin, isMainFrame, reply ->
                     val data = message.data
-                    if (isMainFrame && data != null && Reach.trusts(this, sourceOrigin.toString())) onPageMessage(data, reply)
+                    val origin = sourceOrigin.toString()
+                    if (isMainFrame && data != null && PageTrust.trusts(origin, Reach.trusts(this, origin))) onPageMessage(data, reply)
                 }
             } ?: Log.w(TAG, "WebView took none of the app's origins: $origins")
         }

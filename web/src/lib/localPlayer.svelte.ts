@@ -31,6 +31,7 @@ import { commandOf } from './player/commands';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './deckCourse';
+import { outputNow } from './outputNow.svelte';
 import { asksSignIn, notReached, reach, refused as refusedHere, refusedFor, toSignIn, unreached, whenAway, whenReached } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
@@ -2560,7 +2561,7 @@ function readNow(): KeptNow | null {
 /** The queue kept here taken up, paused at the place it reached, where Cratarr cannot give it back or has an older one. The
  *  page has no sound of its own to go on with before it is touched, and away it has only what it keeps. */
 function takeUpKept() {
-  if (!audio || handed() || prefs.output !== 'local' || local.queue.length || accountKey() === null) return;
+  if (!audio || handed() || outputNow() !== 'local' || local.queue.length || accountKey() === null) return;
   const k = readNow();
   if (!k || !(k.ahead || reach.away)) return;
   untold = k.ahead;

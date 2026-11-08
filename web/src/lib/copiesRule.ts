@@ -124,16 +124,18 @@ export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?
 /** An entry of a record's menu that takes a copy somewhere. */
 export type CopyEntry = { key: string; offer: AlbumOffer; to: LibraryInfo; label: string };
 
-/** Two copies that would say the same each name themselves. */
-const toldApart = (entries: CopyEntry[]) => entries.map((e) => (entries.some((x) => x !== e && x.label === e.label) ? { ...e, label: `${e.label} from ${e.offer.name}` } : e));
+/** A record of several copies names the copy each entry acts on (the owner, testing 0.16.0: on Drift, Music's MP3 and Your music's
+ *  FLAC, "Move to lidarr-music" moved Music's copy where the FLAC was meant): every one of them, not only where two would read the
+ *  same. Of one copy there is nothing to tell apart. */
+const named = (offers: AlbumOffer[], entries: CopyEntry[]) => (offers.length > 1 ? entries.map((e) => ({ ...e, label: `${e.label} from ${e.offer.name}` })) : entries);
 const free = (offers: AlbumOffer[]) => offers.filter((o) => o.job === null);
 const entry = (offer: AlbumOffer, to: LibraryInfo, label: string): CopyEntry => ({ key: `${offer.library}>${to.id}`, offer, to, label });
 
 /** Add to and Move to, each copy's targets in turn. */
-export const moveEntries = (offers: AlbumOffer[]) => toldApart(free(offers).flatMap((o) => o.targets.map((to) => entry(o, to, `${adds(o.from, to) ? 'Add' : 'Move'} to ${to.name}`))));
+export const moveEntries = (offers: AlbumOffer[]) => named(offers, free(offers).flatMap((o) => o.targets.map((to) => entry(o, to, `${adds(o.from, to) ? 'Add' : 'Move'} to ${to.name}`))));
 
 /** Replace in, one per main library it can take a copy's place in. */
-export const replaceEntries = (offers: AlbumOffer[]) => toldApart(free(offers).flatMap((o) => o.replaceInto.map((to) => entry(o, to, `Replace in ${to.name}`))));
+export const replaceEntries = (offers: AlbumOffer[]) => named(offers, free(offers).flatMap((o) => o.replaceInto.map((to) => entry(o, to, `Replace in ${to.name}`))));
 
 /** Delete: a record of several copies names the one that goes, even where the viewer may delete only one of them, as
  *  "Delete EP" would read as the whole record. */

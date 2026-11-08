@@ -107,7 +107,7 @@ pub async fn ask(app: &App, ask: Ask) -> Vec<Answer> {
 async fn rows_of(app: &App, item: &Item, without: &[String]) -> Result<(String, Vec<PlaylistRow>), String> {
     let source = Some(item.source.as_str());
     match item.kind {
-        Kind::Album => app.playing.album_view(&item.source, &item.id).await.map(|v| (v.source, v.rows)).map_err(|e| e.to_string()),
+        Kind::Album => app.playing.album_view(&item.source, &item.id).await.map(|v| (v.source, of_album(v.rows, &item.id))).map_err(|e| e.to_string()),
         Kind::Playlist => app.playlists.rows(&item.id, source).await.map_err(|e| e.to_string()),
         Kind::Crate => {
             let without = if crate::crates::home_crate(&item.id) { Vec::new() } else { without.to_vec() };
@@ -116,6 +116,15 @@ async fn rows_of(app: &App, item: &Item, without: &[String]) -> Result<(String, 
         }
         Kind::Artist => app.playing.artist_view(&item.source, &item.id, without).await.map(|v| (v.source, v.rows)).map_err(|e| e.to_string()),
     }
+}
+
+/// An album's rows, each of it: a record's view leaves a row's album out, and the device then knew no album of a track kept
+/// with it (0.16.0 on the tablet, 2026-11-08: Available offline left out a synced album, its tracks' `album_id` null).
+fn of_album(mut rows: Vec<PlaylistRow>, album: &str) -> Vec<PlaylistRow> {
+    for r in &mut rows {
+        r.album_id.get_or_insert_with(|| album.to_string());
+    }
+    rows
 }
 
 /// An item's version: its tracks and their albums (a track whose album becomes known is told to the app again).
@@ -192,6 +201,16 @@ mod tests {
         assert_ne!(version_of("cratarr", &[a, b]), version_of("cratarr", &[b, a]), "the order counts (a cap keeps the first)");
         assert_ne!(version_of("cratarr", &[a, b]), version_of("cratarr", &[a, ("b", None)]), "an album found is told again");
         assert!(lossless(Some("FLAC"), None) && lossless(Some("m4a"), Some(900)) && !lossless(Some("m4a"), Some(256)) && !lossless(Some("mp3"), Some(320)));
+    }
+
+    #[test]
+    fn an_albums_tracks_are_each_of_that_album() {
+        let row = |id: &str, album: Option<&str>| PlaylistRow { id: Some(id.into()), album_id: album.map(String::from), ..Default::default() };
+        let rows = of_album(vec![row("tr-1", None), row("tr-2", Some("al-9"))], "al-7");
+        let albums: Vec<Option<&str>> = rows.iter().map(|r| r.album_id.as_deref()).collect();
+        assert_eq!(albums, [Some("al-7"), Some("al-9")], "named where the view left it out, never over what it said");
+        let t = tracks_of("cratarr", &rows);
+        assert_eq!(t[0].album_id.as_deref(), Some("al-7"), "told to the device so");
     }
 
     #[test]

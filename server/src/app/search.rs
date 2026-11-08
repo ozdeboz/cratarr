@@ -257,6 +257,15 @@ fn matched_rank(close: u8, matched: &[Matched], w: &[String], at: usize, of: usi
     crate::search::ranked(close, crate::search::typos(text, w), crate::search::coverage(text, w), at, of)
 }
 
+/// An artist found: how many albums of their own; one with tracks only, no count (the device's the same, lib/deviceReads).
+fn artist_line(albums: u32) -> String {
+    match albums {
+        0 => String::new(),
+        1 => "1 album".to_string(),
+        c => format!("{c} albums"),
+    }
+}
+
 /// The missing albums the words name (`subject` `missing:<release group>`), the best first, the newest among equals.
 fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: Option<&HashMap<String, super::requests::Mark>>) -> Vec<Item> {
     let n = list.len();
@@ -614,10 +623,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                     duration_secs: None,
                     subject: format!("artist:cratarr/{}", a.name),
                     title: a.name.clone(),
-                    sub: match a.album_count {
-                        1 => "1 album".to_string(),
-                        c => format!("{c} albums"),
-                    },
+                    sub: artist_line(a.album_count),
                     cover: Some(format!("/api/artists/{}/photo", a.id)),
                     track: None,
                     artist: None,
@@ -919,6 +925,13 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An artist found by a word with tracks and no album of their own (the owner, testing 0.16.0: "C Cat Trance" said "0
+    /// albums") says no count.
+    #[test]
+    fn an_artist_with_no_album_of_their_own_says_no_count() {
+        assert_eq!((artist_line(0).as_str(), artist_line(1).as_str(), artist_line(3).as_str()), ("", "1 album", "3 albums"));
+    }
 
     #[test]
     fn a_classical_record_is_found_by_its_composer_whoever_plays() {

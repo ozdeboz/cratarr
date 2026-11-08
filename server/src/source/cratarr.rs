@@ -387,7 +387,7 @@ impl Source for CratarrSource {
                 super::Transport::Previous => Command::Previous,
                 super::Transport::PlayPause => Command::Toggle,
                 super::Transport::Next => Command::Next,
-                super::Transport::Stop => Command::Stop { moved_to: None },
+                super::Transport::Stop => Command::Stop { moved_to: None, kept: false },
             };
             on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(name)

@@ -17,7 +17,7 @@ import { canPlayHere, heardDeckSpeed, local, pageVolume, playOnCommand, queueTol
 import { holdNow, ramping, tapeDir } from './ramping.svelte';
 import { measure, type Measured } from './drivenCourse';
 import { followGroup, leaveGroup, listening } from './groupListen.svelte';
-import { playOn, drivenName, hereAgain } from './playOn.svelte';
+import { playOn, drivenName, hereAgain, outputNow } from './playOn.svelte';
 import { followTo } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { appInfo } from './app.svelte';
@@ -428,7 +428,7 @@ function disconnect() {
  *  screen drives. */
 const want = () => !inApp && canPlayHere;
 /** Its screen drives another player: its own plays nothing meanwhile (`local` holds the other's). */
-const elsewhere = () => drivenName() !== null || prefs.output !== 'local';
+const elsewhere = () => drivenName() !== null || outputNow() !== 'local';
 
 if (typeof window !== 'undefined' && !inApp) {
   $effect.root(() => {
