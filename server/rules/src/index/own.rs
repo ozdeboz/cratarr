@@ -24,12 +24,9 @@ pub struct Kept {
     pub name: String,
     /// As the server makes them (`crate_def`), its words spelled as the library spells them.
     pub conditions: Vec<Condition>,
-    /// A fixed crate's toggles as saved, as it opens and plays where nothing says otherwise; an own crate's are among its conditions.
+    /// A fixed crate's toggles as saved, else all; an own crate's are among its conditions.
     pub favourites: Favourites,
     pub favourite_albums: Favourites,
-    /// A fixed crate's favourites toggle as the Crates page shows it: as saved, else none, as a crate not set yet shows. The server
-    /// plays one of Home's, a genre's or a Sounds like never set with all of them (`crate_favourites`), so the two can differ.
-    pub listed_favourites: Favourites,
     /// The tracks it leaves out by hand, its albums' among them, and how many that is as the list says it.
     pub left_out: Vec<i64>,
     pub left: usize,

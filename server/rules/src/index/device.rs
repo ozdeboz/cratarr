@@ -598,7 +598,7 @@ impl Device {
         for k in self.own.crates.iter().filter(|k| k.listed) {
             let Some(def) = self.def(&k.id) else { continue };
             let fixed = crates::is_fixed(&k.id);
-            let (conditions, tracks, albums) = if fixed { (def.conditions.clone(), k.listed_favourites, def.albums) } else { crates::toggles_apart(&def.conditions) };
+            let (conditions, tracks, albums) = if fixed { (def.conditions.clone(), def.favourites, def.albums) } else { crates::toggles_apart(&def.conditions) };
             let gone: Vec<String> = def.left.iter().chain(&excluded).cloned().collect();
             let shown = |tracks: Favourites| crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&conditions, tracks, albums)));
             let off = self.switched_off(&k.id, without);

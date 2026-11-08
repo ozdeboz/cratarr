@@ -288,13 +288,13 @@ fn listed(d: &mut Device, id: &str) -> Json {
 
 #[test]
 fn the_crates_page_lists_what_is_listed_with_its_size_at_each_setting() {
-    let own = Own { crates: vec![Kept { listed_favourites: Favourites::None, image: true, ..crate_of("genre:Dub", crates::genre_crate("genre:Dub").unwrap().conditions) }, Kept { listed: false, ..crate_of("genre:Jazz", Vec::new()) }], favourites: vec![1], ..Own::default() };
+    let own = Own { crates: vec![Kept { favourites: Favourites::None, image: true, ..crate_of("genre:Dub", crates::genre_crate("genre:Dub").unwrap().conditions) }, Kept { listed: false, ..crate_of("genre:Jazz", Vec::new()) }], favourites: vec![1], ..Own::default() };
     let mut d = device_of(own, &[]);
     let dub = listed(&mut d, "genre:Dub");
     assert_eq!((dub["counts"]["all"].as_u64(), dub["counts"]["only"].as_u64(), dub["counts"]["none"].as_u64()), (Some(4), Some(1), Some(3)));
     assert_eq!((dub["favourites"].as_str(), dub["image"].as_bool(), dub["left_out"].as_u64()), (Some("none"), Some(true), Some(0)));
     assert_eq!(dub["stats"]["tracks"], 3, "as its toggle is set");
-    assert_eq!(tracks(&mut d, "genre:Dub", own_order()).len(), 4, "opened with no toggle said, as it plays: the server's two words for one never set");
+    assert_eq!(tracks(&mut d, "genre:Dub", own_order()).len(), 3, "and it opens so");
     assert_eq!(ask(&mut d, json!({ "ask": "crates", "now": NOW })).as_array().unwrap().len(), 1, "one set something on is not listed");
 }
 

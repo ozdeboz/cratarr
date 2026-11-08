@@ -169,9 +169,9 @@ impl CrateStore {
         Ok(self.stored().await?.crates)
     }
 
-    /// A crate's favourites setting (none until set).
+    /// A crate's favourites setting (all until set: the owner, 2026-11-07, favourites taken in everywhere).
     pub async fn favourites(&self, id: &str) -> Result<Favourites> {
-        Ok(self.stored().await?.favourites.get(id).copied().unwrap_or(Favourites::None))
+        Ok(self.stored().await?.favourites.get(id).copied().unwrap_or(Favourites::All))
     }
 
     /// Every crate's favourites setting that was set.
@@ -435,7 +435,7 @@ mod tests {
         assert!(store.save(None, "rock", rock.clone()).await.is_err(), "names are unique, case ignored");
         assert!(store.save(None, "Unlisted", rock.clone()).await.is_err(), "a permanent crate's name");
         assert_eq!(store.save(Some(&id), "Rock all", rock.clone()).await.unwrap(), id, "a rename keeps the id");
-        assert_eq!(store.favourites(&id).await.unwrap(), Favourites::None, "a new crate shows no favourites");
+        assert_eq!(store.favourites(&id).await.unwrap(), Favourites::All, "a new crate takes them all");
         store.set_favourites(&id, Favourites::Only).await.unwrap();
         store.set_favourites("unlisted", Favourites::All).await.unwrap();
         let again = CrateStore::new(dir.to_str());

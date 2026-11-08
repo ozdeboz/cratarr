@@ -36,10 +36,10 @@ export async function loadCrates() {
 }
 
 // The favourites toggle, one setting per crate, kept on the server (decision 0024, amended): a crate not set yet
-// shows no favourites. A tap shows at once; the setting follows to the server.
+// takes them all (the owner, 2026-11-07). A tap shows at once; the setting follows to the server.
 const pending: Record<string, CrateFavourites> = {};
 let saving: Promise<unknown> = Promise.resolve();
-export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? (wordOf(id) !== null ? 'all' : 'none');
+export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? 'all';
 /** Resolves when every tap so far (on either toggle) is on the server (Make playlist reads the settings there). */
 export const favouritesSaved = () => saving;
 /** How each setting shows, on the panel's toggle and the Crates page's rows: a variation on the heart. */

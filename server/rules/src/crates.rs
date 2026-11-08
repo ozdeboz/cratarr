@@ -437,7 +437,7 @@ pub fn needs_fits(conditions: &[Condition]) -> bool {
 /// The crate panel's favourites toggle (decision 0024, amended): all a crate's tracks, only its favourites, or none of
 /// them. Not part of the crate's definition (its undo, its conditions): one setting per crate, kept beside the crates
 /// in `crates.json` (amended 2026-10-14; it was the browser's), and it adds one condition when the crate is looked at.
-/// A crate not set yet shows no favourites.
+/// A crate not set yet takes them all, as it plays and on the Crates page alike (the owner, 2026-11-07).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Favourites {

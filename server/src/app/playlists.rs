@@ -1748,7 +1748,7 @@ impl PlaylistService {
         let first = self.crate_stores.first.clone();
         let Ok(set) = first.all_favourites().await else { return };
         let needed = crates::permanent().into_iter().chain(first.list().await.unwrap_or_default()).any(|c| {
-            crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::None) != crates::Favourites::All
+            crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::All) != crates::Favourites::All
         });
         if let (true, Ok((sid, source))) = (needed, self.source_of(None)) {
             self.favourite_lines(&sid, &source).await;
@@ -2543,7 +2543,7 @@ impl PlaylistService {
         let artists = self.artists_out().await?;
         let none = crates::LeftOut::default();
         // An own crate's toggles are its conditions (one truth): only a built-in's are kept apart.
-        let favourites_of = |id: &str| if crates::is_fixed(id) { set.get(id).copied().unwrap_or(crates::Favourites::None) } else { crates::Favourites::All };
+        let favourites_of = |id: &str| if crates::is_fixed(id) { set.get(id).copied().unwrap_or(crates::Favourites::All) } else { crates::Favourites::All };
         let albums_of = |id: &str| if crates::is_fixed(id) { albums_set.get(id).copied().unwrap_or(crates::Favourites::All) } else { crates::Favourites::All };
         let needed = own.iter().any(|c| crates::needs_favourites(&c.conditions) || favourites_of(&c.id) != crates::Favourites::All);
         let needed_albums = own.iter().any(|c| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
@@ -2587,7 +2587,7 @@ impl PlaylistService {
         // media server for every favourite is slow, and a list of crates that need none must not wait for it. The
         // other settings' counts are then unknown (null) until it is asked.
         let needed = all.iter().any(|(_, c)| {
-            crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::None) != crates::Favourites::All
+            crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::All) != crates::Favourites::All
         });
         let needed_albums = all.iter().any(|(_, c)| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
         let mut lib = self.crate_library(want, needed, needed_albums, without).await?;
@@ -2623,7 +2623,7 @@ impl PlaylistService {
             .map(|(permanent, mut c)| {
                 // An own crate's toggles are its conditions (one truth): said as its heart and disc, counted per setting.
                 let (favourites, favourite_albums) = if crates::is_fixed(&c.id) {
-                    (set.get(&c.id).copied().unwrap_or(crates::Favourites::None), albums_of(&c.id))
+                    (set.get(&c.id).copied().unwrap_or(crates::Favourites::All), albums_of(&c.id))
                 } else {
                     let (rest, tracks, albums) = crates::toggles_apart(&c.conditions);
                     c.conditions = rest;
@@ -2737,7 +2737,7 @@ impl PlaylistService {
         let artists = self.artists_out().await?;
         let none = crates::LeftOut::default();
         // An own crate's toggles are its conditions (one truth): only a built-in's are kept apart.
-        let favourites_of = |id: &str| if crates::is_fixed(id) { set.get(id).copied().unwrap_or(crates::Favourites::None) } else { crates::Favourites::All };
+        let favourites_of = |id: &str| if crates::is_fixed(id) { set.get(id).copied().unwrap_or(crates::Favourites::All) } else { crates::Favourites::All };
         let albums_of = |id: &str| if crates::is_fixed(id) { albums_set.get(id).copied().unwrap_or(crates::Favourites::All) } else { crates::Favourites::All };
         let needed = all.iter().any(|c| crates::needs_favourites(&c.conditions) || favourites_of(&c.id) != crates::Favourites::All);
         let needed_albums = all.iter().any(|c| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
@@ -3072,7 +3072,6 @@ impl PlaylistService {
                 conditions,
                 favourites: if crates::is_fixed(&id) { self.crate_favourites(&id).await? } else { crates::Favourites::All },
                 favourite_albums: if crates::is_fixed(&id) { store.favourite_albums(&id).await? } else { crates::Favourites::All },
-                listed_favourites: if crates::is_fixed(&id) { saved_tracks.get(&id).copied().unwrap_or(crates::Favourites::None) } else { crates::Favourites::All },
                 left_out: numbers(&left_tracks(left, &album_tracks, &[])),
                 left: left.len(),
                 shelf,
@@ -3386,13 +3385,9 @@ impl PlaylistService {
         Ok(crates::tempo_bands(lib.files().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.bpm)))
     }
 
-    /// A crate's favourites toggle as set; a genre not set shows all its tracks (a crate not set shows no favourites).
+    /// A crate's favourites toggle as set; all of them where it was not, as the Crates page shows it (`CrateStore::favourites`).
     async fn crate_favourites(&self, id: &str) -> Result<crates::Favourites, ToggleError> {
-        match self.own_crates()?.all_favourites().await?.get(id) {
-            Some(f) => Ok(*f),
-            None if crates::genre_crate(id).is_some() || id.starts_with(crates::LIKE) || crates::home_crate(id) => Ok(crates::Favourites::All),
-            None => Ok(self.own_crates()?.favourites(id).await?),
-        }
+        Ok(self.own_crates()?.favourites(id).await?)
     }
 
     /// Sets a crate's favourites toggle (decision 0024, amended): an own crate's is its Favourite condition (the owner,
