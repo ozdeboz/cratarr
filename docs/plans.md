@@ -118,7 +118,10 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
     - **Home Assistant names the playlist** in its voice answer, from `/api/state`'s `name`.
     - **A device's first answer of a kind is quick:** the similarity and Radio's index are built at the first ask after
       the device copy opens (about 0.5 s on a tablet); make them cheaper, build them at open, or keep them.
-    - Later still: one tie-break for search on the server and the device; downloads wholly the device's own, so another
+    - **Offline search finds an exact record title:** "Indiamore" on the device brings up neither the record nor its
+      tracks, only near matches (the server finds both, the record's tracks on top). With it, one tie-break for search on
+      the server and the device.
+    - Later still: downloads wholly the device's own, so another
       server's behave as Cratarr's.
 - **0.18: Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)): a friend's Cratarr as a read-only
   library of your own, its catalogue mirrored with its analysis through 0.16's index and feed, its streams relayed.
