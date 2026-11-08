@@ -120,7 +120,10 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
       the device copy opens (about 0.5 s on a tablet); make them cheaper, build them at open, or keep them.
     - **Offline search finds an exact record title:** "Indiamore" on the device brings up neither the record nor its
       tracks, only near matches (the server finds both, the record's tracks on top). With it, one tie-break for search on
-      the server and the device.
+      the server and the device. The cause, found 2026-11-08: the device does find the record, but ranks a track by its
+      own title alone (`index::find`'s `found()`), so a track found only through its record's exact title comes below a
+      near spelling in another track's title. Rank a track by its best direct match across its other names, below a direct
+      hit on its own name and above a near spelling: one function in the rules crate.
     - Later still: downloads wholly the device's own, so another
       server's behave as Cratarr's.
 - **0.18: Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)): a friend's Cratarr as a read-only
