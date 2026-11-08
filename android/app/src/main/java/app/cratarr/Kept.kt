@@ -709,15 +709,16 @@ internal object KeptFile {
     }
 
     /**
-     * The holders in [file] as [write] puts them, the list there kept first as the last one ([lastHolders]) if it reads: a list that
-     * cannot be read later still tells from it whose each download was. One that cannot be read now never takes the last one's place.
+     * The holders in [file] as [write] puts them, then mirrored as the last one ([lastHolders]): a list that cannot be read later still
+     * tells from it whose each download was, the newest too (P7-REVIEW: one write behind, the newest would go to whoever signed in
+     * next). A write is whole or not at all, so what a mirror copies is what was just written, never a list broken on the disk.
      */
     fun writeHolders(file: File, text: String, put: (File, String) -> Unit = ::onDisk) {
-        if (file.exists() && runCatching { holders(file) }.isSuccess) write(lastOf(file), file.readText(), put)
         write(file, text, put)
+        write(lastOf(file), text, put)
     }
 
-    /** The holders list that read before [file]'s latest; none where there is none, or it cannot be read either. */
+    /** The holders list last written whole; none where there is none, or it cannot be read either. */
     fun lastHolders(file: File): Map<String, Set<String>>? = lastOf(file).takeIf { it.exists() }?.let { runCatching { holders(it) }.getOrNull() }
 
     private fun lastOf(file: File) = File(file.parentFile, "${file.name.removeSuffix(".json")}.last.json")
