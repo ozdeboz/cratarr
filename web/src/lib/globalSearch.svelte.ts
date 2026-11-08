@@ -4,7 +4,8 @@
 // server, the pages and Settings' parts from the browser (lib/everywhere).
 import { hiddenLibraries } from './listFilter.svelte';
 import { ownMode } from './serverMode.svelte';
-import { search, searchBeyond, type BeyondAlbum, type SearchKind, type ServerSearch } from './api';
+import { previewCrate, search, searchBeyond, type BeyondAlbum, type SearchKind, type ServerSearch } from './api';
+import { quickOn } from './quickCrates.svelte';
 import { whenReadsMove } from './deviceIndex.svelte';
 import { pageView } from './pageView.svelte';
 import { isSpotifyView } from './discoverModes';
@@ -13,7 +14,7 @@ import { byRelevance, provided, relevance, words, type SearchResult } from './se
 import { leaveOnArrival, onArrival } from './navStep.svelte';
 import { keep } from './searchKept';
 import { untrack } from 'svelte';
-import { TERM_KINDS, answerOfTerms, crateOfLine, modesFrom, readLine, type Chip, type Found as Finds, type Modes } from './quickCrate';
+import { TERM_KINDS, answerOfTerms, conditionsOf, crateOfLine, modesFrom, readLine, type Chip, type Found as Finds, type Modes } from './quickCrate';
 
 export type Found = SearchResult & { track?: string };
 export type FoundGroup = { kind: string; label: string; items: Found[]; total: number };
@@ -80,11 +81,19 @@ export const globalSearch = $state({
    *  field's dimmed joining words (lib/ContentControls) and the results: its terms, their joins, and what its terms find
    *  (`r`), which the results show instead of what the whole line finds. Null where the words are no crate; the last
    *  one kept while new words are read (its `q` says whose). */
-  crate: null as { q: string; chips: Chip[]; modes: Modes; r: ServerSearch } | null,
+  crate: null as { q: string; chips: Chip[]; modes: Modes; r: ServerSearch; preview?: CardPreview | null } | null,
   /** The words whose reading as a crate has landed, a crate or none, or failed (a page's list holds what it showed
    *  until then: lib/quickCrate listQueries). */
   readFor: null as string | null,
 });
+
+/** A crate card's count and its first records' covers (the server's: the first six records, a crate's own order coming
+ *  a record at a time; a first page of 24 tracks was two albums, fewer than the strip's four, and the card showed no
+ *  covers, the owner 2026-10-31). One track: the card lists none (the server asks one at least). */
+const COVERS = 6;
+export const cardPreview = (chips: readonly Chip[], modes: Modes) =>
+  previewCrate(conditionsOf(chips, undefined, modes), 1, prefs.source || undefined, { without: hiddenLibraries(), covers: COVERS });
+export type CardPreview = Awaited<ReturnType<typeof cardPreview>>;
 
 /** Whether the words' reading as a crate is still on its way: two words or more, not read yet. */
 export const readingPending = (q: string) => words(q).length >= 2 && globalSearch.readFor !== q;
@@ -160,10 +169,15 @@ $effect.root(() => {
     };
     untrack(() =>
       readLine(q, ask).then(
-        (reads) => {
+        async (reads) => {
           if (gone) return;
           const chips = crateOfLine(reads);
-          globalSearch.crate = chips ? { q, chips, modes: modesFrom(reads), r: answerOfTerms(q, chips.map((c) => c.term), answers) as ServerSearch } : null;
+          const modes = modesFrom(reads);
+          // The card's count asked before the words count as read, so the card comes with the results, not after them
+          // pushing them down (the owner, testing 0.16.0: "Trance 90s" came in three steps). Not asked, no card.
+          const preview = chips && quickOn() ? await cardPreview(chips, modes).catch(() => null) : null;
+          if (gone) return;
+          globalSearch.crate = chips ? { q, chips, modes, r: answerOfTerms(q, chips.map((c) => c.term), answers) as ServerSearch, preview } : null;
           globalSearch.readFor = q;
         },
         () => !gone && (globalSearch.readFor = q),
@@ -306,7 +320,12 @@ export const beyondAlbum = (subject: string) =>
   globalSearch.beyond?.albums.find((a) => `beyond:${a.release_group ?? a.discogs ?? `${a.artist}|${a.title}`}` === subject) ?? null;
 
 /** Whether the server has answered these words (else everywhere's count and its "nothing" wait). */
-export const globalAsked = () => globalSearch.found?.q === pageView.query.trim();
+export const globalAsked = () => {
+  const q = pageView.query.trim();
+  // Words that may read as a crate: answered once read, so what the whole line alone finds (often nothing: "Trance 90s")
+  // is never said first (the one loading rule).
+  return globalSearch.found?.q === q && !readingPending(q);
+};
 /** Why the server failed for these words, if it did. */
 export const globalFailed = () => (globalSearch.failed?.q === pageView.query.trim() ? globalSearch.failed.error : null);
 /** The words asked again after a failure: the wait till the answer, not the failure. */

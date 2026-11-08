@@ -24,7 +24,7 @@
   import { untrack } from 'svelte';
   import { coverUrl, previewCrate, search } from './api';
   import CoverCard from './CoverCard.svelte';
-  import { globalSearch } from './globalSearch.svelte';
+  import { cardPreview, globalSearch } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
   import { hiddenLibraries } from './listFilter.svelte';
@@ -42,12 +42,6 @@
   const EACH = 3;
   const ask = (phrase: string): Promise<Found> =>
     search(phrase, [...TERM_KINDS], EACH, 0, hiddenLibraries()).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
-  /** Its count and its first records' covers (the server's: the first six records, a crate's own order coming a record
-   *  at a time; a first page of 24 tracks was two albums, fewer than the strip's four, and the card showed no covers,
-   *  the owner 2026-10-31). One track: the card lists none (the server asks one at least). */
-  const COVERS = 6;
-  const previewOf = (c: readonly Chip[], m: Modes) =>
-    previewCrate(conditionsOf(c, undefined, m), 1, prefs.source || undefined, { without: hiddenLibraries(), covers: COVERS });
 
   /** The crate shown: its terms, joins and first tracks, together, given only once all are in (the last one stays
    *  while the next words are read, so the card is not gone between keystrokes; the owner's no-flash rule). */
@@ -71,15 +65,11 @@
     const line = q;
     if (words(line).length < 2 || c === null) return void (shown = null);
     if (c.q !== line) return;
-    let gone = false;
+    // Its count came with the words' reading (lib/globalSearch), so the card comes with the results.
     untrack(() => {
       changes++;
-      previewOf(c.chips, c.modes).then(
-        (p) => !gone && (shown = crateShows(c.chips, p.total) ? { chips: c.chips, modes: c.modes, preview: p } : null),
-        () => !gone && (shown = null),
-      );
+      shown = c.preview && crateShows(c.chips, c.preview.total) ? { chips: c.chips, modes: c.modes, preview: c.preview } : null;
     });
-    return () => (gone = true);
   });
 
   /** A change made on the card (a pill's menu, a word added): the card shows the changed crate once its tracks are in,
@@ -87,7 +77,7 @@
   function change(next: Chip[], m: Modes = modes) {
     const n = ++changes;
     if (!next.length) return void (shown = null);
-    previewOf(next, m).then(
+    cardPreview(next, m).then(
       (p) => n === changes && (shown = { chips: next, modes: m, preview: p }),
       (e) => n === changes && toast.fail(e, "It couldn't be changed"),
     );
