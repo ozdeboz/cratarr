@@ -895,13 +895,22 @@ pub async fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
         let status = moved_status(app, id, entry.at, &entry.event, entry.undone);
         let folders = app.library.catalogue().folders();
         let place = |(f, rel): &(i64, String)| folders.get(*f).map_or_else(|| rel.clone(), |root| root.join(rel).display().to_string());
-        let (album, title, before, after) = match &entry.event {
-            Event::AlbumAdopted { album_id, title, from_dir, to_dir, .. } => (album_id, title, vec![place(from_dir)], vec![place(to_dir)]),
-            Event::AlbumReplaced { album_id, title, .. } => (album_id, title, Vec::new(), Vec::new()),
-            Event::AlbumRejected { album_id, title, folder, dir, .. } => (album_id, title, vec![place(&(*folder, dir.clone()))], vec!["the trash".to_string()]),
+        let (album, title, before, after, files) = match &entry.event {
+            Event::AlbumAdopted { album_id, title, from_dir, to_dir, moves, .. } => (album_id, title, vec![place(from_dir)], vec![place(to_dir)], moves.len()),
+            Event::AlbumReplaced { album_id, title, moves, .. } => (album_id, title, Vec::new(), Vec::new(), moves.len()),
+            Event::AlbumRejected { album_id, title, folder, dir, token, .. } => {
+                // A delete keeps no list of its files: they are those of its folder in the trash, or back in its place once undone.
+                let lies = folders.get(*folder).map(|root| if entry.undone { root.join(dir) } else { root.join(crate::trash::TRASH_DIR).join(token) });
+                let files = match lies {
+                    Some(at) => tokio::task::spawn_blocking(move || super::incoming::files_under(&at).len()).await?,
+                    None => 0,
+                };
+                (album_id, title, vec![place(&(*folder, dir.clone()))], vec!["the trash".to_string()], files)
+            }
         };
         let fields = if before.is_empty() { Vec::new() } else { vec![FieldView { field: "folder".into(), track: None, library: None, before, after, from: status.what.clone(), certainty: None, options: Vec::new() }] };
-        let record = RecordView { album: album.clone(), title: title.clone(), artist: String::new(), files: 0, fields, written: None, undone: Some(entry.undone), stamp: None };
+        // Every file went at once, so all of them were written: the page shows a record, and its Undo, by what was written.
+        let record = RecordView { album: album.clone(), title: title.clone(), artist: String::new(), files, fields, written: Some(files), undone: Some(entry.undone), stamp: None };
         let sheet = PlanView { kind: status.what.clone(), title: status.title.clone(), records: vec![record], making: false };
         return Ok((status, sheet));
     }
@@ -1654,5 +1663,52 @@ mod tests {
         assert_eq!((r.files, r.written), (2, None));
         let tracks: Vec<(&str, Option<&str>)> = r.fields.iter().map(|f| (f.field.as_str(), f.track.as_deref())).collect();
         assert_eq!(tracks, [("date", Some("A")), ("date", Some("B")), ("releasetype", None)]);
+    }
+
+    /// An album action's page (decision 0092) holds its record with every file it moved, as the page shows a record and
+    /// its Undo only for what was written. An add to someone's own music opened empty in 0.16.0: its record said none.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_album_actions_page_holds_its_record_with_every_file_it_moved() {
+        use crate::journal::{Event, TrackMove};
+        let app = super::super::every_copy::app("album-action-page").await;
+        let root = app.library.catalogue().folders().get(0).cloned().expect("the music folder in use");
+        let moved = |n: usize| (0..n).map(|i| TrackMove { track: Some(i as i64 + 1), from: (0, format!("in/Drift/{i}.flac")), to: (0, format!("A/Drift/{i}.flac")), was: None }).collect::<Vec<_>>();
+        let adopted = Event::AlbumAdopted {
+            source: "cratarr".into(),
+            album_id: "al-1".into(),
+            title: "Drift".into(),
+            from_dir: (0, "in/Drift".into()),
+            to_dir: (0, "A/Drift".into()),
+            moves: moved(3),
+            release_group: None,
+            converted: Vec::new(),
+        };
+        let replaced = Event::AlbumReplaced {
+            source: "cratarr".into(),
+            album_id: "al-2".into(),
+            title: "Drift".into(),
+            from_dir: (0, "in/Drift".into()),
+            to_dir: (0, "A/Drift".into()),
+            moves: moved(2),
+            replaced: moved(2),
+            token: "1/A/Drift".into(),
+            release_group: None,
+            converted: Vec::new(),
+        };
+        let gone = root.join("in/Gone");
+        std::fs::create_dir_all(gone.join("CD 2")).unwrap();
+        for f in ["1.flac", "2.flac", "cover.jpg", "CD 2/1.flac"] {
+            std::fs::write(gone.join(f), b"x").unwrap();
+        }
+        let token = crate::trash::trash(&root, "in/Gone", 1).unwrap();
+        let rejected = Event::AlbumRejected { source: "cratarr".into(), album_id: "al-3".into(), title: "Gone".into(), folder: 0, dir: "in/Gone".into(), token, release_group: None };
+        for (event, files) in [(adopted, 3), (replaced, 2), (rejected, 4)] {
+            let id = app.journal.intend(1, &event).unwrap();
+            app.journal.applied(id).unwrap();
+            let (status, sheet) = run(&app, &format!("{MOVE}{id}")).await.unwrap();
+            assert_eq!(status.undo, Some(format!("{MOVE}{id}")), "{}", status.title);
+            let records: Vec<(usize, Option<usize>)> = sheet.records.iter().map(|r| (r.files, r.written)).collect();
+            assert_eq!(records, [(files, Some(files))], "{}", status.title);
+        }
     }
 }
