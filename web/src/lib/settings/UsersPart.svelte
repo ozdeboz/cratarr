@@ -8,29 +8,41 @@
   //   - a directory's accounts: their name and role set there, read-only here; one who left its music group is
   //     deactivated, their data kept.
   // Both: what they may do beyond listening, and their devices and sign-ins, each to end. Its administrators' only.
+  // Their own music is here too: the one place an administrator deletes in it (the owner, 2026-11-04: "not anywhere else
+  // than in a control panel"); once removed, it moves into a main library or goes altogether (decision 0101 point 7).
   // Acts at once; the server says why it refuses, in a line.
+  import { library, readLibrary } from '../albums.svelte';
+  import { librariesOf } from '../copiesRule';
   import {
     createUser,
+    deleteOwnAlbum,
     endSession,
     getUsers,
+    moveAlbum,
     removable,
     removeDevice,
     setPermissions,
     setUserActive,
     setUserPassword,
     setUserRole,
+    type LibraryInfo,
+    type ListedAlbum,
     type OwnDevice,
     type Permissions,
     type User,
     type UserSession,
   } from '../api';
+  import { plural } from '../insights.svelte';
+  import { fewAtATime } from '../many.svelte';
   import { me } from '../me.svelte';
   import Notice from '../Notice.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
   import PageLoading from '../PageLoading.svelte';
   import Switch from '../Switch.svelte';
   import { nameThing } from '../settingsSections.svelte';
+  import { OWN } from '../sources.svelte';
   import { toast } from '../toast.svelte';
+  import { withUndo } from '../undo.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import FormSheet from './FormSheet.svelte';
   import Group from './Group.svelte';
@@ -137,6 +149,40 @@
   let passwording = $state<User | null>(null);
   let removing = $state<User | null>(null);
 
+  // Their own music, as the Library lists it.
+  $effect(() => {
+    if (open?.own_library && !library.view) readLibrary(false).catch(() => {});
+  });
+  const ownSource = $derived(library.view?.sources.find((s) => s.id === OWN) ?? null);
+  const musicOf = (u: User) => (u.own_library ? (ownSource?.albums ?? []).filter((a) => librariesOf(a).includes(u.own_library!)) : []);
+  const mains = $derived((ownSource?.library_info ?? []).filter((l) => l.kind === 'main'));
+  let deleting = $state<ListedAlbum | null>(null);
+  /** Delete all of a removed account's music: asked twice, as a main library's (decision 0101 point 7). */
+  let deletingAll = $state<0 | 1 | 2>(0);
+  let askedOnce = false;
+  let moving = $state<LibraryInfo | null>(null);
+  const reread = () => readLibrary(true);
+  async function deleteOne(a: ListedAlbum, from: string) {
+    try {
+      const r = await deleteOwnAlbum(OWN, a.id, from);
+      await reread();
+      withUndo(`Deleted ${a.title}.`, [r.undo], { after: reread });
+    } catch (e) {
+      toast.fail(e, 'Could not delete it');
+    }
+  }
+  /** Each of them, with one Undo. */
+  async function forAll(them: ListedAlbum[], each: (a: ListedAlbum) => Promise<string | null>, said: (n: number) => string, failure: string) {
+    const tokens: (string | null)[] = [];
+    await fewAtATime(them, async (a) => void tokens.push(await each(a)), 1);
+    await reread();
+    if (tokens.length) withUndo(said(tokens.length), tokens, { after: reread });
+    if (tokens.length < them.length) toast.fail(null, failure);
+  }
+  const moveAll = (u: User, to: LibraryInfo) =>
+    forAll(musicOf(u), async (a) => (await moveAlbum(OWN, a.id, u.own_library!, to.id)).undo, (n) => `Moved ${plural(n, 'record')} to ${to.name}.`, 'Not all could be moved');
+  const deleteAll = (u: User) => forAll(musicOf(u), async (a) => (await deleteOwnAlbum(OWN, a.id, u.own_library!)).undo, (n) => `Deleted ${plural(n, 'record')}.`, 'Not all could be deleted');
+
   // A new Cratarr account: its name, a password, and its role; the first one there is administers.
   const firstOwn = $derived(!!users && !users.some((u) => !u.directory));
   let adding = $state(false);
@@ -210,6 +256,19 @@
       {/each}
     </Group>
   {/if}
+  {#if musicOf(u).length}
+    <Group title={`${u.name}'s music`} more="Deleting here is the one way to delete from someone else's music. It goes to the trash, with Undo.">
+      {#each musicOf(u) as a (a.id)}
+        <Item name={a.title} line={a.artist}><button onclick={() => (deleting = a)}>Delete</button></Item>
+      {/each}
+    </Group>
+    {#if !u.active}
+      <Group>
+        {#each mains as m (m.id)}<Item name={`Move its music into ${m.name}`} onclick={() => (moving = m)} />{/each}
+        <Item name="Delete its music" kind="danger" onclick={() => (deletingAll = 1)} />
+      </Group>
+    {/if}
+  {/if}
   {#if !u.directory && !isMe(u)}
     <Group>
       {#if u.active}
@@ -254,7 +313,23 @@
 {/if}
 {#if removing}
   {@const u = removing}
-  <ConfirmSheet title={`Remove ${u.name}?`} text="Switched off; their playlists and history are kept." label="Remove" onconfirm={() => activate(u, false)} onclose={() => (removing = null)} />
+  <ConfirmSheet title={`Remove ${u.name}?`} text="Switched off; their music, playlists and history are kept." label="Remove" onconfirm={() => activate(u, false)} onclose={() => (removing = null)} />
+{/if}
+{#if deleting}
+  {@const a = deleting}
+  <ConfirmSheet title={`Delete ${a.title}?`} text={`From ${open?.name}'s music, into the trash.`} label="Delete" onconfirm={() => deleteOne(a, open!.own_library!)} onclose={() => (deleting = null)} />
+{/if}
+{#if moving && open}
+  {@const u = open}
+  {@const to = moving}
+  <ConfirmSheet title={`Move ${plural(musicOf(u).length, 'record')} into ${to.name}?`} label="Move" icon="intoBox" danger={false} onconfirm={() => moveAll(u, to)} onclose={() => (moving = null)} />
+{/if}
+{#if deletingAll === 1 && open}
+  {@const u = open}
+  <ConfirmSheet title={`Delete all of ${u.name}'s music?`} text={`${plural(musicOf(u).length, 'record')} into the trash.`} label="Delete" onconfirm={() => (askedOnce = true)} onclose={() => ((deletingAll = askedOnce ? 2 : 0), (askedOnce = false))} />
+{:else if deletingAll === 2 && open}
+  {@const u = open}
+  <ConfirmSheet title="Really delete it all?" text={`All ${plural(musicOf(u).length, 'record')} of ${u.name}'s music.`} label="Delete it all" onconfirm={() => deleteAll(u)} onclose={() => (deletingAll = 0)} />
 {/if}
 
 <style>

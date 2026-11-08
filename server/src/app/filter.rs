@@ -246,7 +246,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         _ => false,
     };
     let lib = app.playlists.crate_library_for(&all, want, if drawn { &r.without } else { &[] }).await?;
-    let by_line: HashMap<&str, &Facts> = lib.files().map(|f| (f.rel.as_str(), f)).collect();
+    let by_line = crates::by_line(lib.files());
     let none = Facts::default();
     let uses = lib.uses();
     let one = |key: String, line: Option<&str>| Item::of(key, vec![facts_of(&by_line, &none, line)], 0);
@@ -265,11 +265,12 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         List::Crate { .. } => (Items::Tracks, lib.select(&shown).iter().map(|l| one(String::new(), Some(l.as_str()))).collect()),
         List::Playlist { id } => {
             let rows = app.playlists.entries(id).await?;
-            let row = |l: &String| {
-                let f = facts_of(&by_line, &none, Some(l.as_str()));
+            let led = app.playlists.led_entries(id).await?;
+            let row = |(l, at): (&String, &String)| {
+                let f = facts_of(&by_line, &none, Some(at.as_str()));
                 Item::of(l.clone(), vec![f], unless(!on("unplayed") || never_played(f, uses), bit("unplayed")) | unless(!on("missing") || !f.rel.is_empty(), bit("missing")))
             };
-            (Items::Tracks, rows.iter().map(row).collect())
+            (Items::Tracks, rows.iter().zip(&led).map(row).collect())
         }
         List::Playlists => {
             let lists = app.playlists.snapshot().await?;
@@ -305,7 +306,12 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
             // Another server's albums by their folder: its tracks are the files whose lines are in its folder's.
             let mut by_dir: HashMap<&str, Vec<&Facts>> = HashMap::new();
             for f in lib.files() {
-                by_dir.entry(f.rel.rsplit_once('/').map_or("", |(d, _)| d)).or_default().push(f);
+                for line in f.every_line() {
+                    let tracks = by_dir.entry(line.rsplit_once('/').map_or("", |(d, _)| d)).or_default();
+                    if !tracks.last().is_some_and(|t| std::ptr::eq(*t, f)) {
+                        tracks.push(f);
+                    }
+                }
             }
             let tracks_of = |a: &Listed| match own.get(&a.id) {
                 Some(files) => files.clone(),
@@ -356,7 +362,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         return Ok((answer, verdicts));
     }
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|i| i.tracks.as_slice()).collect();
-    let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
+    let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses(), super::moment::now_secs());
     // The Library's Type axis counts records by their types (a record under each it has: the counts overlap).
     if let Some(kinds) = &record_kinds
         && let Some(axis) = axes.iter_mut().find(|a| a.key == "type")
@@ -403,7 +409,7 @@ fn by_album<'a>(files: impl Iterator<Item = &'a Facts>, album_of: &HashMap<Strin
 async fn row_lines(app: &Arc<App>, source: &str, rows: Vec<super::playlists::PlaylistRow>) -> Vec<(String, Option<String>)> {
     let (c, sid, ids) = (app.library.catalogue(), source.to_string(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
     let lines: Vec<Option<String>> = tokio::task::spawn_blocking(move || {
-        ids.iter().map(|id| c.track_of_source(&sid, id).and_then(|t| c.file_of(t)).and_then(|(f, rel)| c.line_of(f, &rel))).collect()
+        ids.iter().map(|id| c.track_of_source(&sid, id).and_then(|t| c.row_line(t))).collect()
     })
     .await
     .unwrap_or_default();
@@ -430,7 +436,11 @@ async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> (Ve
     let cat = app.library.catalogue();
     let folders = cat.folders();
     let album_artists = |artist: Option<String>, artists: Vec<String>| -> Vec<String> { if artists.is_empty() { artist.into_iter().collect() } else { artists } };
-    let (on, off): (Vec<_>, Vec<_>) = s.albums.into_iter().partition(|a| a.library.as_ref().is_none_or(|l| !without.contains(&format!("{source}/{l}"))));
+    // On while any copy is: a record's list entry names the copy that plays, and that one can be the library switched off.
+    let (on, off): (Vec<_>, Vec<_>) = s.albums.into_iter().partition(|a| {
+        let held = a.libraries();
+        held.is_empty() || held.iter().any(|l| !without.contains(&format!("{source}/{l}")))
+    });
     let listed = on
         .into_iter()
         .map(|a| {
@@ -569,7 +579,7 @@ fn artists_of<'a>(source: &str, albums: &[AlbumItem<'a>], look: &ArtistLook) -> 
 /// Where an album's folder is in the catalogue (folder, its path there), from the server's path for it: the server's
 /// root for it exchanged for the folder Cratarr sees there (`Placement::roots`), or the path as it is (Cratarr's own
 /// library names its folders as Cratarr sees them).
-fn folder_of(roots: &[crate::placement::FolderRoot], folders: &[std::path::PathBuf], path: &str) -> Option<(i64, String)> {
+fn folder_of(roots: &[crate::placement::FolderRoot], folders: &crate::catalogue::InUse, path: &str) -> Option<(i64, String)> {
     let path = path.replace('\\', "/");
     let path = path.trim_end_matches('/');
     let seen = roots
@@ -580,9 +590,9 @@ fn folder_of(roots: &[crate::placement::FolderRoot], folders: &[std::path::PathB
         })
         .unwrap_or_else(|| path.to_string());
     let seen = std::path::Path::new(&seen);
-    folders.iter().enumerate().find_map(|(i, f)| {
+    folders.iter().find_map(|(i, f)| {
         let rel = seen.strip_prefix(f).ok()?.to_string_lossy().replace('\\', "/");
-        (!rel.is_empty()).then_some((i as i64, rel))
+        (!rel.is_empty()).then_some((i, rel))
     })
 }
 
@@ -621,7 +631,7 @@ mod tests {
         assert_eq!(passing(&[row(false, &["Album"]), row(true, &["Compilation"])]), [0, 1, 4]);
         assert_eq!(passing(&[row(false, &["Broadcast"])]), [5]);
         // The Type axis counts each record under every type it has, and says each value's layer.
-        let mut axis = crates::list_axes(&[], &[], None, None).into_iter().find(|a| a.key == "type").unwrap();
+        let mut axis = crates::list_axes(&[], &[], None, None, 0).into_iter().find(|a| a.key == "type").unwrap();
         kind_axis(&mut axis, &records);
         let at = |v: &str| axis.values.iter().position(|x| x == v).map(|i| (axis.counts[i], axis.layers[i]));
         assert_eq!((at("Album"), at("Live"), at("Classical"), at("Broadcast")), (Some((4, 1)), Some((2, 2)), Some((1, 3)), Some((1, 1))));
@@ -736,7 +746,7 @@ mod tests {
     #[test]
     fn an_albums_folder_is_found_through_the_servers_root() {
         let roots = [crate::placement::FolderRoot { folder: "/media/Music".into(), root: "/data/music/".into() }];
-        let folders = ["/media/Music", "/media/lidarr-music"].map(std::path::PathBuf::from);
+        let folders: crate::catalogue::InUse = [(0, "/media/Music"), (1, "/media/lidarr-music")].into_iter().map(|(i, p)| (i, std::path::PathBuf::from(p))).collect();
         assert_eq!(folder_of(&roots, &folders, "/data/music/A/B (2020)/"), Some((0, "A/B (2020)".into())));
         assert_eq!(folder_of(&roots, &folders, "/media/lidarr-music/X/New"), Some((1, "X/New".into())), "Cratarr's own: as it is");
         assert_eq!(folder_of(&roots, &folders, "/data/musical/A"), None, "a root is a whole folder");

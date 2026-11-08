@@ -8,8 +8,11 @@
 //   stretch of it with its own bins, against its own loudest: one gain per track, from the whole track.
 // - The bars stand on one grid, `span` apart from an origin `o`: a span of the stretch shown over n. At one zoom the
 //   grid stands in the music (the slide moves the bars, never their heights); as the zoom moves, the grid is scaled
-//   about the middle of what shows (bars widen and narrow from there, none rushing past), and, nearing the track's own
-//   view, its grid comes into line with that view's, so the hold hands over to the plain waveform without a step.
+//   about the place that stays where it is on the waveform (steadyAt), so the bars stand still and the music goes
+//   through them (0.16, the owner: "Every change in waveform properties or zoom should have no effect on the number of
+//   sections displayed in the entire waveform region"; scaled about the middle, past 16× they slid at the middle's pace,
+//   half a bar a frame by a wall, each frame's bars between the last frame's). Let go and nearing the track's own view,
+//   the grid comes into line with that view's, so the hold hands over to the plain waveform without a step.
 // - A bar's height is the music's envelope at its middle, at a scale matched to its span: the loudest of a window as
 //   wide as the bar, sliding, and taken between the window sizes either side (a pyramid of maxima, interpolated in time
 //   and in size). It moves on continuously with the zoom; a single loud moment fades in and out as a bar's edge
@@ -17,8 +20,9 @@
 
 /** How much wider than the stretch shown a strip is drawn. */
 export const STRIP_SPAN = 3;
-/** How far the bars shown may drift from n (a share of a bar across the waveform) before a strip is drawn anew. */
-export const SPAN_SLACK = 0.25;
+/** How far the bars shown may drift from n (a share of a bar across the waveform) before a strip is drawn anew. A moving
+ *  zoom draws anew each frame anyway: this is what a zoom coming to rest may leave. */
+export const SPAN_SLACK = 0.05;
 
 /** A track of a hold's view: where it starts in the frame and how long it is (the frame's units), its bins (null: not
  *  known yet), and what it is (its colour's key). */
@@ -171,14 +175,28 @@ export function stripSource(tracks: readonly StripTrack[], s: GridStrip): string
     .join(',');
 }
 
-/** The grid's origin as the zoom moves from `had` to `span`: scaled about the middle of what shows (`mid`), and as the
- *  span nears the track's own view's (`home`), drawn into line with that view's grid (its start on a bar's edge). */
-export function originFor(had: { span: number; o: number }, span: number, mid: number, home: { from: number; to: number } | null, n: number): number {
-  const o = mid - (mid - had.o) * (span / had.span);
-  if (!home) return o;
-  const own = (home.to - home.from) / Math.max(1, n);
-  // How near the track's own view the zoom is: nothing below half its span, all of it there.
-  const u = Math.min(1, Math.max(0, (span / own - 0.5) / 0.5));
+/** The place that stays where it is on the waveform as the stretch shown goes from `was` to `from`..`to`: what the zoom
+ *  goes about, the bars standing still around it. Where the stretch moves on more than it scales that place is outside
+ *  it: its edge nearest there, whose music moves least, the bars going with that as they go with the slide. */
+export function steadyAt(was: { from: number; to: number }, from: number, to: number): number {
+  const w = was.to - was.from;
+  const grew = to - from - w;
+  if (grew === 0) return (from + to) / 2;
+  return Math.min(to, Math.max(from, was.from + (w * (was.from - from)) / grew));
+}
+
+/** The grid's origin as the zoom moves from `had` to `span`, scaled about `at`: its place among the bars stays. */
+export function originFor(had: { span: number; o: number }, span: number, at: number): number {
+  return at - (at - had.o) * (span / had.span);
+}
+
+/** `o` as what shows (`from`..`to`) comes back to the track's own view (`home`): drawn into line with that view's grid
+ *  (its start on a bar's edge), by how near the view is: nothing with an edge a quarter of the track away, all of it
+ *  there. Only there: from further off the track's start lands somewhere else among the bars at every span, and
+ *  followed it moved them up to half a bar a frame. */
+export function linedUp(o: number, span: number, from: number, to: number, home: { from: number; to: number }): number {
+  const off = Math.max(Math.abs(from - home.from), Math.abs(to - home.to)) / Math.max(1e-9, home.to - home.from);
+  const u = 1 - Math.min(1, 4 * off);
   if (u <= 0) return o;
   const lined = home.from + Math.round((o - home.from) / span) * span;
   return o + (lined - o) * u * u * (3 - 2 * u);
@@ -188,7 +206,8 @@ export function originFor(had: { span: number; o: number }, span: number, mid: n
  * The strip to show for the stretch `from`..`to` in `n` bars, from the one shown (`had`): it, where it still covers the
  * stretch, was drawn from the same tracks and its bars across the stretch are still n (within SPAN_SLACK); its grid
  * drawn anew for the stretch where only the coverage or the tracks changed (the same bars where it had them); else a
- * grid of the stretch's own span. `home`: the track's own view, whose grid the zoom comes into line with.
+ * grid of the stretch's own span. `home`: the track's own view, whose grid the zoom comes into line with (null while a
+ * hold is held: it goes by the zoom alone). `was`: the stretch shown a frame ago (none: the zoom goes about the middle).
  */
 export function planStrip<S extends GridStrip & { src: string }>(
   had: S | null,
@@ -197,6 +216,7 @@ export function planStrip<S extends GridStrip & { src: string }>(
   to: number,
   n: number,
   home: { from: number; to: number } | null,
+  was: { from: number; to: number } | null = null,
 ): S | (GridStrip & { src: string }) {
   const span = (to - from) / Math.max(1, n);
   const make = (sp: number, o: number) => {
@@ -214,11 +234,12 @@ export function planStrip<S extends GridStrip & { src: string }>(
       return make(own, lined);
     }
   }
-  // Counted in bars across (n wide), as the slack is: its span's ratio would let one more than a quarter bar through.
+  // Counted in bars across (n wide), as the slack is: its span's ratio would let more through.
   const near = Math.abs(span / had.span - 1) * Math.max(1, n) <= SPAN_SLACK;
   if (near) {
     if (covers(had, from, to) && had.src === stripSource(tracks, had)) return had;
     return make(had.span, had.o);
   }
-  return make(span, originFor(had, span, (from + to) / 2, home, n));
+  const o = originFor(had, span, was ? steadyAt(was, from, to) : (from + to) / 2);
+  return make(span, home ? linedUp(o, span, from, to, home) : o);
 }

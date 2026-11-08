@@ -284,8 +284,12 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
     if due.is_empty() {
         return Ok(());
     }
+    // No songs is a library being built (a new layout drops them all at the first start), not every song gone: its plays
+    // wait, or the ones kept safe through an outage would go here unsent. A device's plays name themselves.
+    let lib = serve.library.clone();
+    let building = tokio::task::spawn_blocking(move || lib.counts()).await??.0 == 0;
     let mut groups: BTreeMap<(String, String), Vec<Queued>> = BTreeMap::new();
-    for q in due {
+    for q in due.into_iter().filter(|q| !building || q.named.is_some()) {
         groups.entry((q.user.clone(), q.target.clone())).or_default().push(q);
     }
     for ((user, target), rows) in groups {
@@ -518,6 +522,58 @@ mod tests {
         assert!(take_pending(&code).is_some_and(|p| p.account == "me" && p.app));
         assert!(take_pending(&code).is_none(), "used");
         assert!(take_pending("not a code").is_none());
+    }
+
+    fn served_with_a_service(secret: &str) -> Arc<Serve> {
+        let serve = Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.userdata.set_scrobble_target("me", LISTENBRAINZ, "me", secret).unwrap();
+        serve
+    }
+
+    /// A counted play of `song`, queued as `record` queues it.
+    fn played(serve: &Serve, song: &str) {
+        serve.userdata.record("me", (song, "pid"), "al-1", &[], &crate::userdata::Heard::counted(now() - 60)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_plays_of_a_library_being_built_wait_in_the_queue() {
+        let serve = served_with_a_service(r#"{"token":"t"}"#);
+        played(&serve, "tr-1");
+        pass(&serve).await.unwrap();
+        let left = serve.userdata.due_scrobbles(now(), 500).unwrap();
+        assert_eq!(left.iter().map(|q| q.song.as_str()).collect::<Vec<_>>(), ["tr-1"], "not scrobbled with nothing sent");
+        assert_eq!(left[0].tries, 0, "and no failure: nothing was tried");
+    }
+
+    #[tokio::test]
+    async fn a_devices_plays_go_on_while_the_library_is_built() {
+        // No token: the pass gets as far as sending, which stops the service, and that is what shows it went on.
+        let serve = served_with_a_service("{}");
+        played(&serve, "tr-1");
+        let named = crate::userdata::scrobbles::Named {
+            id: "d1".into(),
+            at: now() - 60,
+            artist: "Air".into(),
+            title: "Talisman".into(),
+            album: "Moon Safari".into(),
+            album_artist: None,
+            duration_secs: Some(256),
+            mbid: None,
+        };
+        assert_eq!(serve.userdata.hand_over("me", &[named], now()).unwrap().queued, 1);
+        pass(&serve).await.unwrap();
+        assert_eq!(serve.userdata.scrobble_targets("me").unwrap()[0].broken.as_deref(), Some("ListenBrainz has no token"));
+    }
+
+    #[tokio::test]
+    async fn a_song_gone_from_a_library_that_has_songs_still_leaves_the_queue() {
+        let serve = served_with_a_service(r#"{"token":"t"}"#);
+        let tags = [("title", "One"), ("artist", "Air"), ("album", "Moon Safari"), ("tracknumber", "1")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let row = crate::catalogue::ServedRow { rel: "Air/01.flac".into(), track: Some(1), size: 1, mtime: 1, tags, ..Default::default() };
+        serve.library.refresh(&[crate::serve::library::FolderRows { folder: 0, root: "/music".into(), rows: vec![row] }], &Default::default()).unwrap();
+        played(&serve, "tr-gone");
+        pass(&serve).await.unwrap();
+        assert!(serve.userdata.due_scrobbles(now(), 500).unwrap().is_empty(), "there is nothing to name it by");
     }
 
     #[test]

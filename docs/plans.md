@@ -77,8 +77,33 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   device, and crates and the queue on the device** (offline first's fourth and fifth steps, one version: the owner,
   2026-11-02, "17 sounds like 16 work"); settled in [0101](decisions/0101-own-music-one-track-id-library-on-the-device.md). Then all servers in one library, on the device (below), as a view over the
   modes' indexes.
+- **0.17: seven ideas from reading Kima Hub** (the owner, 2026-11-04, picked one by one; Kima Hub,
+  github.com/Chevron7Locked/kima-hub, GPL-3.0):
+  - **Library safety.** A missing track waits in Health for the owner's call (moved, replaced or really gone) instead
+    of being retired after a day; recognised moves stay automatic. Nothing is retired when more than a tenth of the
+    library, and at least ten tracks, goes missing at once: that is a dropped mount, not a deletion.
+  - **Requests and fetches that survive a restart.** The intake's searches and fetches and the bulk queue (0080) are
+    kept on disk, one row per track and step. A source that refuses for its rate limit pauses alone until its deadline
+    (no attempt used, nothing marked failed) instead of failing the job.
+  - **QR pairing.** An app pairs by scanning a short-lived code on the page, and gets a key of its own (0043, 0051).
+  - **The update check.** The server asks GitHub for releases once a day; a dot on the version opens that release's
+    What's New.
+  - **Whole-stack health.** `/api/health` fails when a part Cratarr needs is broken (which parts count: to design).
+  - **An untagged album identified by vote:** the release that more than half of its songs' AcoustID answers agree on.
+  - **Soulseek searches that start simple** (with Soulseek in Cratarr, below): artist and title first, then the title,
+    album and title, then all; classical titles without movement and catalogue numbers.
+  The track map (below) comes after these: the least important of the ideas (the owner, 2026-11-04).
+  - **Audiobooks' first part** (the owner, later on 2026-11-04): Cratarr's own players keep each book's place, every
+    so often and on pause, with a Continue listening row on Home; a speed per book and ±30 s skips; books kept out of
+    music's shuffle, Radio, sounds-like, crates, statistics and scrobbling.
+- **0.18: Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)): a friend's Cratarr as a read-only
+  library of your own, its catalogue mirrored with its analysis through 0.16's index and feed, its streams relayed.
+  Then playlists, offline, a bounded cache and a record shown once (0.19); iroh's tickets after a trial.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
+- **Genre aliases from MusicBrainz** (the owner, 2026-11-07): its whole genre list and each genre's aliases, asked again
+  every 90 days and joined to the hand-kept list in search's matching. Built once on a branch of 2026-10-30, never
+  merged: done again on the code as it stands.
 - **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
   own pages (0.11, done); Downloads an offline shelf, and nothing done offline lost, playlist edits included (0.12,
   done); the whole library's index on the device, and crates and the queue on the device (0.16).
@@ -183,7 +208,8 @@ anything in without the owner's tick (0080); never a chat room.
 
 ## External library
 
-Taken up for 0.12 as modes per server (the runway above). What follows is the plan as it stood.
+Taken up for 0.12 as modes per server (the runway above). What follows is the plan as it stood. A friend's Cratarr is
+the exception since 2026-11-04: a library of your own server, shape A below ([0103](decisions/0103-cratarr-peers.md)).
 
 Another music server's library played in Cratarr's app directly: an OpenSubsonic server, a Jellyfin, through the same
 kind of adapters Cratarr's own sources use (0005).
@@ -426,6 +452,163 @@ Decided (the owner, 2026-10-24): a playlist's genres come from its tracks' genre
 MusicBrainz's genres, not AudioMuse's styles); the territories are a switch on the Map, off until turned on; the top
 six genres are drawn, each its own colour (the palette's categorical order), the rest no territory.
 
+## The track map (explored 2026-11-04)
+
+The owner, 2026-11-04, after a screenshot of Kima Hub's vibe map: "I really like this concept." Every track in the
+library drawn as a point, close to the tracks it sounds and feels like, so the library can be seen and walked through.
+Insights › Map (0065) draws the playlists today, with genre territories (0.9.8); `plans.md`'s "One similarity" entry
+already names "the closeness graph" as what is left. Not decided and not being built: each step below becomes a
+decision when the owner takes it up. When: first "probably 0.17 work" (the owner, 2026-11-04), then, the same night,
+"the least important" of the ideas: 0.17 took others (the runway above), and the map comes later.
+
+**Learned from Kima Hub** (github.com/Chevron7Locked/kima-hub, GPL-3.0, read 2026-11-04;
+`backend/src/services/matching/map.ts`, `mapLayout.ts`, `mapCompute.ts`): the map's neighbours are its similar-tracks
+formula's own (15 per track), laid out by UMAP in 3-D from a start on the data's main axes with a fixed seed; the
+library is laid out once, when its analysis has settled; after that each new track is placed among the others by
+umap-learn's transform rule and nothing that has a place moves; a full layout again only when the formula's version
+changes. Colour comes from turning the map onto calm–energetic and sad–happy, averaged over each track's 50 nearest.
+Its weak spot: it never lays out again for growth, so a library that changes a lot drifts away from its first layout.
+
+### What holds the map together
+
+- **One similarity.** The map's neighbours come from `similarity` (server/src/similarity.rs), the radio's and Sounds
+  like's own signals, so tracks drawn together are tracks the radio would play together.
+- **A real map** (the owner, 2026-10-26, of the playlists' map: "no node movement, a real map"). Positions are stored
+  on the server. Nothing moves except in a redraw the owner asks for, and a redraw is turned to fit the last one, so
+  places stay where they were remembered (the "mental map", Misue et al. 1995).
+- **The map is for looking, the similarity for choosing.** Distances across a UMAP map are not reliable (Chari &
+  Pachter 2023; Distill's "How to Use t-SNE Effectively"): what plays (Song Path, Blend, a region's crate) is chosen by
+  the similarity, with the map only saying where to look.
+- **The server works it out, the page only draws it** (as Kima, as the playlists' map).
+
+### Steps, each useful on its own
+
+**0. Spike, nothing for the page.** On the dev instance, from production's data (0093):
+- The 15 nearest neighbours of each track with a sound vector (AudioMuse's 200 numbers, 0054, plus feel and genres
+  as `similarity` weighs them). Time and memory measured on the server (one core, lowest priority) and on a desktop
+  beside AudioMuse. Scoring every pair of 30,000 tracks is about 450 million pairs; if it is too slow, an approximate
+  index (HNSW, Malkov & Yashunin) or NN-descent (Dong et al. 2011, what umap-learn uses).
+- UMAP layouts in 2-D and 3-D, written to a file and drawn as still pictures, with the genre territories over them,
+  beside AudioMuse's own map (`app_map.py`) as a baseline. The owner looks at them.
+- How stable it is: the same layout with five seeds, and with 2 % of the tracks taken out, each turned onto the first
+  (orthogonal Procrustes, Schönemann 1966). Two numbers: how many of each track's 15 neighbours on the map stay the
+  same, and how far points move after turning. They decide whether turning is enough or a redraw must start from the
+  old places (below).
+- The layout code: umap-learn's method (McInnes et al. 2018) step for step, as Kima did in about 600 lines; a Rust
+  crate if one is sound and deterministic. Kima's code may be adapted with credit (GPL-3.0 into AGPL-3.0, 0029).
+
+**1. The map, stored.** Server only.
+- The catalogue keeps each track's place (x, y, and z if 3-D), whether it was laid out or placed, and the layout it
+  belongs to; a layout keeps its version, seed, date, size and colour frame. `MAP_VERSION` is raised when the
+  arithmetic changes, as `READER_VERSION` is for tags.
+- First layout once the analysis has settled. A new track with a sound vector is placed at once: it starts at the mean
+  of its neighbours' places and is settled among them, the others fixed (umap-learn's *Transforming new data*).
+- A track with no sound vector yet (new music before AudioMuse's next pass) gets a provisional place near its
+  album's and artist's tracks, marked as such, and moves to its real place once AudioMuse has heard it.
+- A gone track keeps its place until the owner has reviewed it in Health (the owner, 2026-11-04: missing tracks are
+  for manual review only).
+- **Redraw, only when asked.** Health says how much of the map was placed since it was drawn ("4,100 of 35,800 tracks
+  placed since the map was drawn"), and offers Redraw once 20 % of it was placed after the layout. A redraw starts
+  from the old places (the idea of umap-learn's *AlignedUMAP*; Kobak & Linderman 2021: the start decides the big
+  shape), is turned onto the old layout, and the old layout is kept for Undo (0026).
+- `GET /api/map`: places, colour and the few fields a point needs, compact.
+
+**2. Tracks on Insights › Map.** Tracks beside Playlists. 2-D first, drawn in WebGL (the visuals' engine, 0057) so
+30,000+ points stay smooth on a tablet; 3-D later.
+- Colour by feel (Kima's turn onto calm–energetic and sad–happy), by genre territories (lib/territories, drawn around
+  tracks instead of playlists), by energy, era, or listening.
+- Each mood's or genre's name at its densest pocket. Search flies to a track; the playing track is marked; tap opens
+  the track's card.
+
+**3. Tools on the map**, each its own step. First Song Path and Layers; the others after:
+- **A region is a crate.** Drawn around part of the map, it is an unsaved crate (0061), and can be kept; a kept one
+  keeps the region, so new tracks placed inside it join.
+- **Every queue on the map.** Cratarr holds the queues (0033): each player's queue drawn as a line from track to track
+  (Kima draws only its own), so listening along (0079) and sync play's groups can be seen.
+- **Song Path.** Two tracks, and a path of tracks between them: evenly spaced steps along the way, each filled by the
+  closest unplayed track by the similarity, an artist never twice in a row; as a queue, a playlist or a crate. Cratarr's
+  own tempo and key could keep the steps smooth.
+- **Blend.** "Like these, not like those": 0088's Sounds like seeds with a "not like" side, as a crate rule.
+- **Layers.** What was played over the period; parts of the library never visited; Incoming albums placed where they
+  would land, before Keep; each user's own music (0084).
+- **Words.** CLAP text search lighting up a region (already "Yes, later", design talk first). Needs CLAP's text model:
+  on a desktop with AudioMuse, or on the server within its memory (to measure).
+- **A visual.** A module that flies the map to the playing track.
+
+### Not taken
+
+- Downloading music for the map or for Discover (nothing reaches the library without being heard first: Incoming, 0013).
+- A redraw nobody asked for.
+- Map distances choosing music.
+
+### Decided (the owner, 2026-11-04)
+
+- **2-D first**, 3-D later. The spike still makes a 3-D layout to look at.
+- **A provisional place** for a track with no sound vector yet: near its album's and artist's tracks, marked
+  provisional, moved to its real place once AudioMuse has heard it.
+- **Redraw offered at 20 %**: once a fifth of the map's tracks were placed after its layout. Never by itself.
+- **A region crate keeps the region**: new tracks placed inside it join.
+- **First tools: Song Path and Layers.** Region crates, queues on the map, Blend, words and the visual wait.
+- **Where the neighbour pass runs: measured first.** The spike times it on the server and on a desktop; the server
+  if it fits at lowest priority within its memory limit, else the desktop beside AudioMuse.
+
+### Sources
+
+- McInnes, Healy & Melville, *UMAP* (arXiv 1802.03426); umap-learn's documentation: *Transforming new data*,
+  *AlignedUMAP*, *Parametric UMAP*, *Reproducibility*.
+- Kobak & Linderman, *Initialization is critical for preserving global data structure in both t-SNE and UMAP* (Nature
+  Biotechnology, 2021).
+- Schönemann, *A generalized solution of the orthogonal Procrustes problem* (Psychometrika, 1966).
+- Misue, Eades, Lai & Sugiyama, *Layout adjustment and the mental map* (1995).
+- Chari & Pachter, *The specious art of single-cell genomics* (PLOS Comp. Biol., 2023); Wattenberg, Viégas & Johnson,
+  *How to Use t-SNE Effectively* (Distill, 2016).
+- Dong, Charikar & Li, *NN-Descent* (WWW 2011); Malkov & Yashunin, *HNSW* (arXiv 1603.09320).
+- Pampalk, *Islands of Music* (2001): the classic music-library map.
+- Kima Hub's map code (above); AudioMuse-AI's `app_map.py`.
+
+## One index for the whole library (explored 2026-11-07)
+
+A server browsed on a library of 34,000 tracks holds about 490 MB, and 262 MB of that has a name: the crates' facts,
+Spotify's matcher, radio's index, the alike list and the words. Each keeps its own copy of the whole library, an entry a
+track, however few rows a page shows, so paging changes nothing here. At this size the trouble is not how fast a search
+is, it is holding the library several times over. The figures below are estimates: each step is measured when it is built.
+
+The steps, the biggest first:
+
+- **One index.** Built once per library build and read by crates, radio, similarity and matching. Each keeps ids into it,
+  not rows of its own.
+- **Compact rows.** Words and names as integer ids from one table, the rows in one block rather than many small
+  allocations, bitmaps for "the tracks with this tag". Fewer small allocations may also be what lets the allocator give
+  memory back.
+- **The bulky parts on disk.** The sound vectors in a flat, memory-mapped file: the system caches it and can drop it under
+  pressure, so it counts far less against a memory limit. As 8-bit values, about a quarter of the size.
+- **What SQLite can answer stays in SQLite.** Filters and text search, from its indexes and FTS.
+- **Letting go.** What has gone quiet is dropped after some minutes, and one whole-library read runs at a time.
+- **A budget.** A target for resident memory after browsing a library of a given size, checked on every preview. A setting
+  for the quiet minutes only if a small server needs one.
+
+Not taken: an approximate vector index such as HNSW, which adds memory where a plain scan of 34,000 vectors should take
+milliseconds; a separate search engine; paging.
+
+## Decisions out of the app (2026-11-07)
+
+The app's Kotlin holds no decisions (`docs/architecture.md`), and today it still holds some. Each moves to the rules crate when
+other work touches it, not as a project of its own: refactoring as part of the work, old and new side by side until the old goes.
+Before a decision moves, shared cases pin what it does now, and both sides must answer them alike. One at a time. From now on
+nothing new is decided in Kotlin, so the list only shrinks.
+
+| When | What moves | Why then |
+|---|---|---|
+| 0.16, preview 2 | The rules in every app build, then `Radio.kt`'s top-up and inserts and `Repeat.kt`'s next round | Offline Radio and Autoplay need them in the rules crate anyway |
+| When the tape engine's gate passes | `StartStop.kt` retires for `deck.rs` | It can't go before the engine has proved itself: the two stand side by side until then |
+| 0.17 | `Levelling.kt` | Small, and it belongs with the Sound door once the engine is settled |
+| 0.17 | The storage budget in `Kept.kt` and `Downloads.kt`, and scrobbling held against the page's | They go with the "no mobile data" setting, which touches the same logic |
+
+## The References door (2026-11-07)
+
+In 0.17, with the references work: MusicBrainz, Discogs, Bandcamp and AcoustID behind one door, as `docs/architecture.md` has it.
+Today only MusicBrainz's turn goes through one, and the services are mostly called one by one.
+
 ## Parked
 
 Liked, not taken up:
@@ -433,5 +616,15 @@ Liked, not taken up:
 - The visuals' VJ ideas: fused passes, a blur pyramid, the loop at a lower resolution, layers at half rate, an A/B
   crossfade between racks, ISF shaders, a meter of each module's cost.
 - Discover's Weekly (a handful of records each week) and a pick of the day.
+- A measured seek ("beat jump"): a seek snaps to its place in the measure, only where the beat grid (0049) passed its
+  confidence gate, with bars from the downbeats and the time signature. Elsewhere, a plain seek.
+- An equalizer behind the auto-gain button.
+- The full-screen player's spacing: on some devices the waveform sits too close to the play row, so the cover gets
+  smaller, with care.
+- Giving back to MusicBrainz, very far down the line: a record Cratarr knows that has no entry there is offered back
+  through MusicBrainz's own form, filled in for a person to check and send. Nothing writes to it unattended.
+- The visuals' touch work, for their next round: a cable picked by touch (the canvas does not pan, and the one picked shows
+  a finger-sized grip), a module's view listing its outputs and where each cable goes, and a line on a snapshot saying
+  what it is. Begun on a branch of 2026-10-20.
 
 Shelved by the owner: a live DJ mix between tracks (Auto DJ), and an MCP server in the desktop app.

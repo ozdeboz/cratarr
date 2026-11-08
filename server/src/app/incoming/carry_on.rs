@@ -14,6 +14,7 @@ use std::sync::Arc;
 use super::{IncomingService, Told, tell_moved};
 use crate::app::library::Library;
 use crate::journal::Event;
+use crate::serve::listener::Listener;
 
 /// How long to wait for the server to have the moved files: the player is stopped meanwhile. A server that takes
 /// longer has stopped processing changes (Jellyfin did, 2026-10-13).
@@ -38,10 +39,19 @@ pub(super) struct Playing {
     /// The player it plays on, as the source named it: stopped, looked at and carried on on, whichever is followed by
     /// then (0.9.8: stopped on the Salon tablet, it went on on Bedroom).
     player: Option<String>,
+    /// Who hears it: which copy it plays from after the move is theirs to hear.
+    who: Listener,
 }
 
 fn now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// Who a player plays for, as a stream of it was told: its owner.
+fn listening_on(player: Option<&str>) -> Listener {
+    let Some(served) = crate::serve::instance() else { return Listener::default() };
+    let owner = player.and_then(|name| crate::app::playon::PlayOn::instance()?.owner_of(name));
+    served.listener(owner.as_deref())
 }
 
 impl IncomingService {
@@ -64,13 +74,19 @@ impl IncomingService {
     }
 
     /// What plays from an album about to move: `order` is its tracks in album order as known after the move,
-    /// `before` maps each id a playing file may have now to its id after. `None` when none of them plays.
-    pub(super) async fn playing_among(&self, order: &[i64], before: &[(i64, i64)]) -> Option<Playing> {
+    /// `before` maps each id a playing file may have now to its id after, `leaving` is the files about to go. `None` when none
+    /// of them plays: a record's copies hold one track, and what plays from a copy that stays goes on undisturbed.
+    pub(super) async fn playing_among(&self, order: &[i64], before: &[(i64, i64)], leaving: &[(i64, String)]) -> Option<Playing> {
         let c = self.lib.catalogue();
         for (source, s) in self.lib.connected_sources() {
             let Ok(Some(p)) = s.now_playing().await else { continue };
             let Some(after) = before_ids(before, c.track_of_source(&source, &p.track.id)) else { continue };
             let Some(at) = order.iter().position(|t| *t == after) else { continue };
+            let who = listening_on(p.player.as_deref());
+            let (cat, heard, asked, item, files) = (c.clone(), who.clone(), source.clone(), p.track.id.clone(), leaving.to_vec());
+            if !tokio::task::spawn_blocking(move || heard.hears_one_of(&cat, &asked, &item, &files)).await.unwrap_or(true) {
+                continue;
+            }
             let progress = p.progress.as_ref();
             return Some(Playing {
                 source,
@@ -82,6 +98,7 @@ impl IncomingService {
                 duration_secs: progress.and_then(|g| g.duration_secs),
                 rest: order[at..].to_vec(),
                 player: p.player.clone(),
+                who,
             });
         }
         None
@@ -89,14 +106,14 @@ impl IncomingService {
 }
 
 /// A track's id on its source after the move: a server's new one, once it has the file; Cratarr's own the same, once
-/// its library has the file where it now is.
-fn id_after(c: &crate::catalogue::Catalogue, source: &str, track: i64) -> Option<String> {
+/// the file `who` hears is where the library says, which with another copy to play from is at once.
+fn id_after(c: &crate::catalogue::Catalogue, who: &Listener, source: &str, track: i64) -> Option<String> {
     if source != crate::source::cratarr::KIND.id {
         return c.source_id_of(source, track);
     }
     let song = crate::serve::ids::song(track);
     let s = crate::serve::instance()?;
-    let (folder, rel) = s.library.file_of(&song).ok()??;
+    let (folder, rel) = s.library.file_for(&song, &[], who).ok()??;
     let root = s.library.roots().into_iter().find(|(f, _)| *f == folder)?.1;
     std::path::Path::new(&root).join(rel).exists().then_some(song)
 }
@@ -139,7 +156,7 @@ async fn follow(lib: &Arc<Library>, p: &Playing) {
             let c = lib.catalogue();
             // Cratarr's own tracks keep their ids (0.9.6: waiting for a new one flagged it as stuck, its player stopped).
             let own = p.source == crate::source::cratarr::KIND.id;
-            let new = id_after(&c, &p.source, p.track).filter(|n| own || *n != p.old_item);
+            let new = id_after(&c, &p.who, &p.source, p.track).filter(|n| own || *n != p.old_item);
             if let Ok(Some(now_playing)) = s.now_playing_on(p.player.as_deref()).await {
                 let id = now_playing.track.id;
                 if !own && Some(&id) == new.as_ref() {
@@ -157,7 +174,7 @@ async fn follow(lib: &Arc<Library>, p: &Playing) {
                 rest.remove(0);
                 position = 0.0;
             }
-            let ids: Vec<String> = rest.iter().filter_map(|t| id_after(&c, &p.source, *t)).collect();
+            let ids: Vec<String> = rest.iter().filter_map(|t| id_after(&c, &p.who, &p.source, *t)).collect();
             if ids.is_empty() {
                 return;
             }

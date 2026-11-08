@@ -59,7 +59,7 @@ pub fn import_batch(cat: &Catalogue, folder: i64, lines: &[Vec<u8>], counts: &mu
 /// The folder an import is for, by its path as the server sees it (`/media/Music`, a trailing slash or not).
 pub fn folder_of(cat: &Catalogue, path: &str) -> Option<i64> {
     let want = path.trim_end_matches('/');
-    cat.folders().iter().position(|p| p.to_string_lossy().trim_end_matches('/') == want).map(|i| i as i64)
+    cat.folders().iter().find(|(_, p)| p.to_string_lossy().trim_end_matches('/') == want).map(|(id, _)| id)
 }
 
 #[cfg(test)]

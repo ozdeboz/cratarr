@@ -23,6 +23,7 @@ mod collection;
 mod error;
 mod events;
 pub mod filter;
+mod first_start;
 mod follow;
 pub mod health;
 pub mod length_fixes;
@@ -48,6 +49,8 @@ pub mod words;
 pub mod harvest;
 pub mod fixes;
 pub mod fix_plans;
+#[cfg(test)]
+mod every_copy;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;
@@ -90,6 +93,8 @@ pub mod covers;
 pub mod cover_cache;
 pub mod renumber;
 pub mod describe;
+pub mod device_covers;
+pub mod device_index;
 pub mod musicbrainz;
 pub mod switches;
 pub mod reach;
@@ -106,7 +111,7 @@ pub use collection::{CollectionService, CollectionView};
 pub use error::{ToggleError, plain};
 pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
 pub use insights::InsightsService;
-pub use library::{Library, SourceTab};
+pub use library::{FreshIds, Library, SourceTab};
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateLook, CrateOrder, CratePage, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, OpsAnswer, PlayResult, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats};
 pub use playon::{Command as PlayOnCommand, FollowTarget, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, Report as PlayerReport, whose as whose_players};
@@ -173,7 +178,13 @@ pub struct App {
 impl App {
     pub async fn new(cfg: Config, saved: Saved, origin: Origin, served: Option<Arc<crate::serve::Serve>>) -> Result<Arc<Self>> {
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
-        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming).await?;
+        // The playlists are kept in Cratarr's own library's user data (decision 0101); a test without one keeps them in
+        // memory.
+        let playlists_db = match &served {
+            Some(s) => s.userdata.clone(),
+            None => Arc::new(crate::userdata::UserData::open(None)?),
+        };
+        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming, playlists_db).await?;
         let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
         let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
         let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);

@@ -9,11 +9,12 @@ import { local, pageVolume, setSnippetDuck } from './localPlayer.svelte';
 import { playsHere } from './output.svelte';
 import { clockText } from './remote.svelte';
 import { reach } from './reach.svelte';
-import { DUCK, FADE_MS, SNIPPET_S, duckGain, snippetGain, snippetOf, type Stretch } from './snippet';
+import { DUCK, FADE_MS, SNIPPET_S, duckGain, snippetAsk, snippetGain, snippetOf, snippetStream, type Stretch } from './snippet';
 import { decode } from './visuals/beats';
 import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
 
-export type SnippetTrack = { source: string; id: string; name?: string | null; duration_secs?: number | null };
+/** `from`: the library of the copy to hear (lib/snippet); none, the copy that plays. */
+export type SnippetTrack = { source: string; id: string; from?: string | null; name?: string | null; duration_secs?: number | null };
 
 /** The snippet asked for (`key`: its track's `source/id`), its stretch (s) once known, where it is (s), and whether it
  *  sounds now. */
@@ -139,11 +140,11 @@ export function toggleSnippet(t: SnippetTrack) {
 
 function sound(t: SnippetTrack, s: Stretch) {
   if (inApp) {
-    toApp({ type: 'snippet', play: { source: t.source, id: t.id, from_ms: Math.round(s.from * 1000), to_ms: Math.round(s.to * 1000), fade_ms: FADE_MS, duck: DUCK } });
+    toApp({ type: 'snippet', play: snippetAsk(t, s) });
     snippet.sounding = true;
     return;
   }
-  const a = new Audio(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}?from_ms=${Math.round(s.from * 1000)}&mp3_from=1`);
+  const a = new Audio(snippetStream(t, s.from * 1000));
   a.volume = 0;
   a.preload = 'auto';
   element = a;

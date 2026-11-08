@@ -2,8 +2,8 @@
 //! (decision 0039), an API key (`Authorization: Bearer cratarr_…`, made in Settings → Authentication or on the server),
 //! or a signed link (for players that cannot send a header: Kodi's playlist and the group's sound). Open to anyone: the
 //! sign-in page and what it shows, the health check, the proxy's check, and the Subsonic API, which checks its own
-//! logins. While the requirement is off (an install from before it, until it is switched on), or while Cratarr has no
-//! account yet (a new install's first account is made on its page), everything passes.
+//! logins. While the requirement is off (Settings' switch, with the password), or while Cratarr has no account yet (a
+//! new install's first account is made on its page), everything passes.
 //!
 //! Switching the requirement and making a key need the account's password again (as Change password does): someone
 //! at a page left open, or on the home network before the requirement is on, cannot turn it off or keep a key of their
@@ -255,9 +255,29 @@ pub fn administering() -> bool {
     }
 }
 
+/// Whether the running request came with a sign-in and not a key: an account's passwords take one (decision 0051: "never
+/// a key or an app"), or a key could set itself a way in as that account. No one: only while signing in is off.
+pub fn signed_in() -> bool {
+    current().is_none_or(|w| w.scope == Scope::Full)
+}
+
 /// The administrators' routes.
 pub async fn admin(request: Request, next: Next) -> Response {
     if administering() {
+        return next.run(request).await;
+    }
+    (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This is for administrators." }))).into_response()
+}
+
+/// The administrators' routes that Home Assistant calls as well (decision 0030: its voice commands review Incoming and
+/// tag albums). Its key acts for the owner, and `admin` holds every key back, so these let an administrator's key through
+/// if it may control; a key that reads, and anyone who is no administrator, stay out. No one: as `administering`.
+pub async fn admin_or_key(request: Request, next: Next) -> Response {
+    let let_in = match current() {
+        Some(w) => w.admin && w.scope != Scope::Read,
+        None => administering(),
+    };
+    if let_in {
         return next.run(request).await;
     }
     (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This is for administrators." }))).into_response()
@@ -276,7 +296,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
 }
 
 /// The account's password again (the account signed in here, else the owner): the sign-in's own check and throttle.
-async fn reauthenticate(serve: &Serve, headers: &HeaderMap, password: &str) -> Result<String, Response> {
+pub(super) async fn reauthenticate(serve: &Serve, headers: &HeaderMap, password: &str) -> Result<String, Response> {
     let Some(name) = session_of(serve, headers).map(|s| s.user).or_else(|| serve.users.owner()) else {
         return Err((StatusCode::CONFLICT, axum::Json(json!({ "error": "Cratarr has no account yet." }))).into_response());
     };
@@ -286,16 +306,13 @@ async fn reauthenticate(serve: &Serve, headers: &HeaderMap, password: &str) -> R
         r.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait));
         return Err(r);
     }
-    match serve.sign_in(&name, password).await {
-        Some(user) => {
-            serve.throttle.succeeded(&keys);
-            Ok(user)
-        }
-        None => {
-            serve.throttle.failed(&keys, now());
-            tracing::warn!(target: "signin", user = %name, status = 403u16, "wrong password in Settings");
-            Err((StatusCode::FORBIDDEN, axum::Json(json!({ "error": "Wrong password." }))).into_response())
-        }
+    if serve.password_of(&name, password).await {
+        serve.throttle.succeeded(&keys);
+        Ok(name)
+    } else {
+        serve.throttle.failed(&keys, now());
+        tracing::warn!(target: "signin", user = %name, status = 403u16, "wrong password in Settings");
+        Err((StatusCode::FORBIDDEN, axum::Json(json!({ "error": "Wrong password." }))).into_response())
     }
 }
 
@@ -555,7 +572,43 @@ mod tests {
         assert_eq!(send_json(&s, "PUT", "/api/me/password", json!({ "current": "pw", "password": "x" })).await.0, StatusCode::NO_CONTENT);
         assert!(s.users.sign_in("me", "x").is_some());
         // A Cratarr account's app password is its password.
-        assert_eq!(send_json(&s, "PUT", "/api/me/subsonic-password", json!({ "password": "y" })).await.0, StatusCode::CONFLICT);
+        assert_eq!(send_json(&s, "PUT", "/api/me/subsonic-password", json!({ "current": "x", "password": "y" })).await.0, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn a_password_takes_a_sign_in_never_a_key_and_an_app_password_the_password_too() {
+        let s = served(true);
+        // A directory's administrator, with a key that controls for her, as Home Assistant's does. No directory here, so
+        // what she signs in with is this.
+        s.users.from_directory("ann", true, None).unwrap();
+        s.users.set_app_password("ann", "old").unwrap();
+        let (token, _) = s.sessions.create("ann", "d", now()).unwrap();
+        let (hers, _) = s.sessions.new_key("Home Assistant", Some("ann"), "control", None, now()).unwrap();
+        let by_session = ("cookie", format!("{COOKIE}={token}"));
+        let by_key = ("authorization", format!("Bearer {hers}"));
+        let send = |by: &(&str, String), method: &str, uri: &str, body: serde_json::Value| {
+            HttpRequest::builder().method(method).uri(uri).header("content-type", "application/json").header(by.0, by.1.as_str()).body(Body::from(body.to_string())).unwrap()
+        };
+        let set = |by: &(&str, String), current: &str, password: &str| send(by, "PUT", "/api/me/subsonic-password", json!({ "current": current, "password": password }));
+        assert_eq!(status(&s, set(&by_key, "old", "new")).await.0, StatusCode::FORBIDDEN, "a key, even with the password");
+        assert_eq!(status(&s, set(&by_session, "wrong", "new")).await.0, StatusCode::FORBIDDEN, "a page left open");
+        assert!(s.users.sign_in("ann", "old").is_some(), "neither changed it");
+        assert_eq!(status(&s, set(&by_session, "old", "new")).await.0, StatusCode::NO_CONTENT);
+        assert!(s.users.sign_in("ann", "new").is_some());
+
+        // Cratarr's own account, by the key of its owner, who knows the password.
+        let (mine, _) = s.sessions.new_key("A script", Some("me"), "control", None, now()).unwrap();
+        let by_mine = ("authorization", format!("Bearer {mine}"));
+        assert_eq!(status(&s, send(&by_mine, "PUT", "/api/me/password", json!({ "current": "pw", "password": "x" }))).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(status(&s, send(&by_mine, "POST", "/api/subsonic/password", json!({ "username": "me", "current": "pw", "password": "x" }))).await.0, StatusCode::FORBIDDEN);
+        assert!(s.users.sign_in("me", "pw").is_some(), "the other road to the same password");
+
+        // An account with no password yet gives none as its current one: the fence above stands on this road too.
+        s.users.from_directory("bo", false, None).unwrap();
+        let (token, _) = s.sessions.create("bo", "d", now()).unwrap();
+        let by_bo = ("cookie", format!("{COOKIE}={token}"));
+        assert_eq!(status(&s, send(&by_bo, "POST", "/api/subsonic/password", json!({ "username": "bo", "current": "", "password": "x" }))).await.0, StatusCode::BAD_REQUEST);
+        assert!(s.users.get("bo").unwrap().password.is_empty());
     }
 
     #[tokio::test]
@@ -737,6 +790,47 @@ mod tests {
         assert_eq!(status(&s, mcp).await.0, StatusCode::OK);
         let made = s.sessions.keys().unwrap().into_iter().find(|k| k.name == "Claude Code").unwrap();
         assert_eq!((made.purpose.as_deref(), made.scope.as_str()), (Some("mcp"), "read"));
+    }
+
+    #[tokio::test]
+    async fn a_lost_sessions_file_leaves_signing_in_required() {
+        let dir = std::env::temp_dir().join(format!("cratarr-lost-sessions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = Serve::open(Some(&dir), Rules::default(), &|_| None).unwrap();
+        s.users.set("me", "pw").unwrap();
+        let (key, _) = s.sessions.new_key("Home Assistant", None, "control", Some(HOME_ASSISTANT), now()).unwrap();
+        drop(s);
+        // The accounts stay: left out of a restore, or deleted because it was corrupt.
+        for file in ["sessions.sqlite", "sessions.sqlite-wal", "sessions.sqlite-shm"] {
+            let _ = std::fs::remove_file(dir.join(file));
+        }
+        let s = Serve::open(Some(&dir), Rules::default(), &|_| None).unwrap();
+        assert!(s.sign_in_required());
+        assert_eq!(status(&s, get_("/api/library")).await.0, StatusCode::UNAUTHORIZED, "not the owner, as anyone");
+        let keyed = HttpRequest::get("/api/library").header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
+        assert_eq!(status(&s, keyed).await.0, StatusCode::UNAUTHORIZED, "a key it no longer knows");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The environment makes an account, and leaves its password to it: set at every start, one changed in Account came back.
+    #[test]
+    fn the_environments_password_makes_an_account_and_changes_none() {
+        let dir = std::env::temp_dir().join(format!("cratarr-env-password-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let env = |key: &str| match key {
+            "CRATARR_SUBSONIC_USER" => Some("ann".to_string()),
+            "CRATARR_SUBSONIC_PASSWORD" => Some("from the environment".to_string()),
+            _ => None,
+        };
+        let s = Serve::open(Some(&dir), Rules::default(), &env).unwrap();
+        assert_eq!(s.users.get("ann").unwrap().password, "from the environment", "made");
+        s.users.set("ann", "chosen").unwrap();
+        drop(s);
+        let s = Serve::open(Some(&dir), Rules::default(), &env).unwrap();
+        assert_eq!(s.users.get("ann").unwrap().password, "chosen", "and left as it is");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -107,10 +107,10 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
     let (s, a) = (served.clone(), album.to_string());
     let (rec, mbid, matched, discogs, heard, chosen, types) = tokio::task::spawn_blocking(move || -> Result<_> {
         let rec = s.library.album(&a)?.context("No such album in Cratarr's own library")?;
-        let mbid = s.library.album_place(&a)?.and_then(|p| p.2).filter(|m| super::discogs::is_mbid(m));
+        let mbid = s.library.album_names(&a)?.and_then(|p| p.0).filter(|m| super::discogs::is_mbid(m));
         let matched: Option<super::matching::Match> = s.userdata.album_matches(std::slice::from_ref(&a))?.remove(&a).and_then(|(_, j)| serde_json::from_str(&j?).ok());
         let discogs = super::discogs_facts::album_kept(&s, &a).ok().flatten();
-        let heard: Option<super::intake_card::Heard> = s.userdata.intake_heard(&a)?.and_then(|(_, j)| serde_json::from_str(&j).ok());
+        let heard: Option<super::intake_card::Heard> = s.userdata.intake_heard(&a, None)?.and_then(|(_, j)| serde_json::from_str(&j).ok());
         let chosen = chosen_of(&s, &a)?;
         let types = s.userdata.release_types()?;
         Ok((rec, mbid, matched, discogs, heard, chosen, types))
@@ -307,8 +307,7 @@ pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<Ref
                 facts.push(("year".into(), Some(serde_json::json!(y))));
             }
             if !facts.is_empty() {
-                let base = s.library.album_base(&a)?.context("That record is not in the library.")?;
-                s.userdata.set_overrides(&[base], &facts, super::moment::now_secs())?;
+                s.userdata.set_overrides(std::slice::from_ref(&a), &facts, super::moment::now_secs())?;
                 s.refresh()?;
             }
         }
@@ -324,7 +323,7 @@ pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<Ref
 /// matched with every track, or named by the files; a link pasted), none chosen, not checked by hand. Blocking.
 pub fn unreferenced(served: &crate::serve::Serve) -> Result<Vec<(String, String, String)>> {
     let mut out = Vec::new();
-    let ids: Vec<String> = served.library.album_places()?.into_iter().map(|(id, ..)| id).collect();
+    let ids = served.library.album_ids()?;
     let matches = served.userdata.album_matches(&ids)?;
     let chosen = served.userdata.all_record_references()?;
     for id in ids {
@@ -333,7 +332,7 @@ pub fn unreferenced(served: &crate::serve::Serve) -> Result<Vec<(String, String,
         {
             continue;
         }
-        let Some((_, _, mbid, artist, name)) = served.library.album_place(&id)? else { continue };
+        let Some((mbid, artist, name)) = served.library.album_names(&id)? else { continue };
         if mbid.as_deref().is_some_and(super::discogs::is_mbid) {
             continue;
         }

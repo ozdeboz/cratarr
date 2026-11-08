@@ -16,6 +16,9 @@
   import OutputSheet from '../OutputSheet.svelte';
   import { outputName } from '../playOn.svelte';
   import { allowDeviceMusic, askFolders, device, deviceMusicSettings, setFolder } from '../deviceMusic.svelte';
+  import { askForPlace } from '../momentHere.svelte';
+  import { indexWord } from '../deviceIndexRule';
+  import { indexSync, tryIndexAgain } from '../deviceSync.svelte';
   import { plural } from '../insights.svelte';
   import { switchable } from '../deviceMusic.svelte';
   import { ownMode } from '../serverMode.svelte';
@@ -104,6 +107,28 @@
 
 <!-- The visuals by themselves (0.10): this device's, not in local mode (no visuals there, decision 0052). -->
 {#if !ownMode()}<VisualsAutoGroup />{/if}
+
+<!-- The moment's weather (decision 0101, point 18; lib/momentHere): the one thing here that sends where the device is. -->
+<Group title="Away from Cratarr">
+  <!-- The library kept here (lib/deviceSync). Only what waits on someone can be tapped. -->
+  <Item
+    name="Library on this device"
+    value={indexWord(indexSync.shows, indexSync.at, (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))}
+    onclick={indexSync.shows === 'wifi' || indexSync.shows === 'stopped' ? tryIndexAgain : null}
+  />
+  <Item
+    name="Weather for the moment crate"
+    line="Sends a rough location to Open-Meteo"
+    more="While Cratarr can't be reached and the internet can, every half hour at most. Never to Cratarr. Off, the moment goes by the time and day alone."
+    toggle={{
+      checked: prefs.momentWeather,
+      onchange: (on) => {
+        prefs.momentWeather = on;
+        if (on) askForPlace();
+      },
+    }}
+  />
+</Group>
 
 {#if inApp}
   <Group title="Local music">

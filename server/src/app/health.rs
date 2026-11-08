@@ -14,9 +14,11 @@ use super::App;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
-    /// The owner has to act (critical; called "needs you" until the owner renamed it, 2026-10-23).
+    /// Broken or blind (the owner, 2026-11-04, for 0.16): the music can't play right, or Cratarr can't see (called
+    /// "needs you" until the owner renamed it, 2026-10-23; "the owner has to act" until 0.16).
     Critical,
-    /// Something is wrong and may right itself.
+    /// Something is wrong but the music plays: data that is incomplete, what retries by itself, a decision waiting on
+    /// the owner.
     Warning,
     /// Worth knowing.
     Info,
@@ -94,6 +96,9 @@ pub struct Item {
     /// track replacement).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    /// Since when it stands so (epoch s, `library:missing`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
 }
 
 /// At most this many files an item names.
@@ -126,6 +131,28 @@ pub(crate) fn short_cause(path: &std::path::Path, heard: i64) -> &'static str {
         Some(_) => "files:cut-short",
         None => "files:length-guessed",
     }
+}
+
+/// Health's Missing list (A4): what Cratarr knows of and has no file for, none of it forgotten by itself. A library out of use, and the
+/// tracks with no file to play: those with files gone a while, and of those retired, the ones `held` says an account has something on,
+/// as the rest is nobody's loss. A track's row says where it lay, and takes a person's word for what it is now (`Catalogue::reconnect`).
+fn missing_list(m: crate::catalogue::Missing, held: &std::collections::HashSet<String>) -> Option<Finding> {
+    let track = |t: crate::catalogue::MissingTrack| {
+        let by: Vec<String> = [t.artist, t.album].into_iter().flatten().collect();
+        let title = t.title.or_else(|| t.rel.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string())).unwrap_or_else(|| crate::serve::ids::song(t.track));
+        Item { title, line: (!by.is_empty()).then(|| by.join(" · ")), files: t.rel.into_iter().collect(), track: Some(crate::serve::ids::song(t.track)), since: Some(t.since), ..Item::default() }
+    };
+    let libraries = m.parked.into_iter().map(|l| Item { line: Some(n(l.files, "file, its library out of use", "files, their library out of use")), since: l.since, title: l.path, ..Item::default() });
+    let retired = m.retired.into_iter().filter(|t| held.contains(&crate::serve::ids::song(t.track)));
+    let items: Vec<Item> = libraries.chain(m.gone.into_iter().chain(retired).map(track)).collect();
+    if items.is_empty() {
+        return None;
+    }
+    let count = items.len() as u64;
+    let mut f = finding("library", "library:missing", Level::Info, count, n(count, "thing is missing", "things are missing"));
+    f.detail = Some("Libraries out of use, files gone, and tracks that hold plays or favourites with no file to play. Nothing here is forgotten by itself.".into());
+    f.items = items;
+    Some(f)
 }
 
 /// A length as a clock: m:ss, or h:mm:ss.
@@ -215,6 +242,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "library:discs" => ("Disc numbers", "off"),
         "library:incomplete" => ("Tracks", "missing"),
         "library:references" => ("References", "missing"),
+        "library:missing" => ("Music", "missing"),
         "library:rules" => ("Names", "set by a rule"),
         "files:broken" => ("Files", "unreadable"),
         "files:cut-short" => ("Files", "cut off"),
@@ -235,6 +263,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "server:slow" => ("Responses", "slow"),
         "server:settings-file" => ("Settings file", "unreadable"),
         "servers:lidarr" => ("Lidarr", "unreachable"),
+        "library:ids-lost" => ("Track ids", "lost"),
         "requests:waiting" => ("Requests", "waiting"),
         "words:genre" => ("Genres", "differ in the files"),
         "words:style" => ("Styles", "differ in the files"),
@@ -269,6 +298,7 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "library:musicbrainz" => "Missing MusicBrainz ids",
         "library:incomplete" => "Records missing tracks",
         "library:references" => "References",
+        "library:missing" => "Missing music",
         "library:rules" => "Named otherwise by a rule",
         "incoming:upgrades" => "Quality replacements",
         "incoming:duplicates" => "Duplicates",
@@ -313,10 +343,11 @@ fn thousands(count: u64) -> String {
     out
 }
 
-/// A check's answer: its findings, or the one that says it could not look.
+/// A check's answer: its findings, or the one that says it could not look: critical, as Cratarr is blind there (the
+/// owner, 2026-11-04: a library that could not be checked is no warning).
 fn or_failed(domain: &'static str, r: anyhow::Result<Vec<Finding>>) -> Vec<Finding> {
     r.unwrap_or_else(|e| {
-        let mut f = finding(domain, format!("{domain}:check"), Level::Warning, 1, format!("The {domain} could not be checked"));
+        let mut f = finding(domain, format!("{domain}:check"), Level::Critical, 1, format!("The {domain} could not be checked"));
         f.detail = Some(format!("{e:#}"));
         vec![f]
     })
@@ -359,8 +390,9 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 
 /// The library's albums lacking what it requires, a finding for each kind, each album opening its panel: the cover,
 /// the year, the genre, the album artist and the track numbers are warnings; the MusicBrainz id, which many lack and
-/// which only some things use (Lidarr, Discover, exact imports), is told. A cover missing is critical (the owner,
-/// 2026-10-25). No share of all the albums (0.9.7, the owner: a bar is for something good, not for what is wrong).
+/// which only some things use (Lidarr, Discover, exact imports), is told. A cover missing is a warning too: the record
+/// plays (the owner, 2026-11-04, "broken or blind"; critical from 2026-10-25 until then). No share of all the albums
+/// (0.9.7, the owner: a bar is for something good, not for what is wrong).
 /// Track numbers (0.9.6): `numbering`'s
 /// albums whose numbers are off (twice, missing, none), each with what is off; Renumber fixes them.
 /// Disc numbers (0.13): `discs`' albums that lost theirs (numbers starting again, or fewer discs than the release that
@@ -368,7 +400,7 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], discs: &[(String, String, String, String)]) -> Vec<Finding> {
     type Pick = fn(&crate::serve::library::Lacks) -> bool;
     let kinds: [(&str, Level, &str, &str, Pick); 5] = [
-        ("cover", Level::Critical, "record without a cover", "records without a cover", |r| r.cover),
+        ("cover", Level::Warning, "record without a cover", "records without a cover", |r| r.cover),
         ("year", Level::Warning, "record without a year", "records without a year", |r| r.year),
         ("genre", Level::Warning, "record without a genre", "records without a genre", |r| r.genre),
         ("album-artist", Level::Warning, "record without an album artist", "records without an album artist", |r| r.album_artist),
@@ -422,11 +454,11 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     let mut out = Vec::new();
     if upgrades > 0 {
         // Said as what the library holds (the owner, 2026-10-25: duplicates on an artist's page went unnoticed under
-        // "duplicates waiting").
-        out.push(finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
+        // "duplicates waiting"). Both are decisions waiting on the owner, so warnings (the owner, 2026-11-04).
+        out.push(finding("incoming", "incoming:upgrades", Level::Warning, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
     }
     if duplicates > 0 {
-        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "record is in two libraries at once", "records are in two libraries at once")));
+        out.push(finding("incoming", "incoming:duplicates", Level::Warning, duplicates, n(duplicates, "record is in two libraries at once", "records are in two libraries at once")));
     }
     if failed > 0 {
         out.push(finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed")));
@@ -463,23 +495,21 @@ fn agreed_total(totals: &[u32]) -> u32 {
     by.iter().rev().find(|(_, n)| **n >= 2).map_or(0, |(t, _)| *t)
 }
 
-/// A better copy Replace can take: an upgrade of Music's album (`incoming`'s upgrades; any other verdict is an album in
-/// two libraries at once).
+/// A better copy Replace can take: an upgrade of a main library's album (`incoming`'s upgrades; any other verdict is an
+/// album in two libraries at once).
 fn replaces(v: &super::incoming::VerdictView) -> bool {
-    v.kind == "upgrade" && v.replaceable
+    v.kind == "upgrade" && v.main_folder.is_some()
 }
 
 /// Where a verdict's other copy is, for an item's line: Music, else its library as named.
 fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums::LibraryView]) -> &'a str {
-    if v.replaceable {
-        return "Music";
-    }
     v.library_id.as_ref().and_then(|id| libraries.iter().find(|l| &l.id == id)).map_or("another library", |l| l.name.as_str())
 }
 
 /// The connections failing (0.9.6, the owner: each one's signal): a service Cratarr calls out to that failed a few
-/// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. MusicBrainz is
-/// critical (the background pass and Find more music stop), the rest a warning.
+/// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. Each a warning:
+/// it retries by itself (the owner, 2026-11-04, "broken or blind"; MusicBrainz was critical until then, as the
+/// background pass and Find more music stop while it fails).
 fn check_connections(at: i64) -> Vec<Finding> {
     let tz = super::moment::tz(super::moment::told(at).as_ref());
     let clock = |t: i64| {
@@ -496,8 +526,7 @@ fn check_connections(at: i64) -> Vec<Finding> {
         .into_iter()
         .filter(|(name, _)| !switched_off(name))
         .map(|(name, s)| {
-            let level = if name == "musicbrainz" { Level::Critical } else { Level::Warning };
-            let mut f = finding("connections", format!("connections:{name}"), level, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
+            let mut f = finding("connections", format!("connections:{name}"), Level::Warning, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
             f.name = super::reach::label(name).to_string();
             (f.thing, f.state) = (Some(f.name.clone()), Some("failing".into()));
             f.detail = s.last_error.map(|(_, why)| why);
@@ -515,6 +544,54 @@ fn name_static(name: &str) -> &'static str {
     }
 }
 
+/// Whether two paths name one folder as two containers mount it: the same, or the longer ending with the shorter at
+/// a folder's edge (Lidarr's `/data/media/lidarr-music`, Cratarr's `/media/lidarr-music`: the paths differ in front, as
+/// lib/incoming's `incoming_dir` has it).
+fn same_folder(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim_end_matches('/'), b.trim_end_matches('/'));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    long == short || (long.ends_with(short) && (short.starts_with('/') || long.as_bytes()[long.len() - short.len() - 1] == b'/'))
+}
+
+/// Lidarr's root folder `root` (one of `roots`, its root folders) as against `folders`, those of `incoming` (Lidarr's
+/// Incoming library): none when it is one of them. Else where it is dealt with: Connections' Lidarr page, choosing
+/// the root folder that is Incoming's where Lidarr has one, else adding one in Lidarr.
+fn lidarr_root_finding(root: &str, roots: &[String], incoming: &str, folders: &[String]) -> Option<Finding> {
+    if folders.iter().any(|f| same_folder(root, f)) {
+        return None;
+    }
+    let mut f = finding("servers", "servers:lidarr-root", Level::Warning, 1, format!("Lidarr adds albums outside {incoming}"));
+    f.thing = Some("Lidarr".into());
+    f.state = Some(format!("outside {incoming}"));
+    let shown = root.trim_end_matches('/');
+    f.detail = Some(match roots.iter().find(|r| folders.iter().any(|x| same_folder(r, x))) {
+        Some(fit) => format!("Its root folder is {shown}, not {incoming}'s folder, so what it fetches skips Incoming. Choose {} as its root folder.", fit.trim_end_matches('/')),
+        None => format!("Its root folder is {shown}, and none of its root folders is {incoming}'s folder. Add that folder in Lidarr, then choose it here."),
+    });
+    f.open = Some(Open { page: "settings", switch: None, thing: Some("lidarr") });
+    Some(f)
+}
+
+/// The catalogue's track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while
+/// the user data remembers another. No new ids until it is restored from the nightly backup, or an administrator starts
+/// afresh (`POST /api/catalogue/fresh-ids`).
+pub fn track_ids(lost: bool) -> Option<Finding> {
+    if !lost {
+        return None;
+    }
+    // No count: they are lost or not ("Track ids · lost"; the page leaves a 0 out).
+    let mut f = finding("library", "library:ids-lost", Level::Critical, 0, "The track ids were lost");
+    f.detail = Some(
+        "catalogue.sqlite was made anew, so no new track ids are given out. Restore it from the nightly backup, or start the \
+         track ids afresh: what named an old track then shows it missing."
+            .into(),
+    );
+    Some(f)
+}
+
 /// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
 fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let Some(serve) = served else { return Ok(Vec::new()) };
@@ -527,6 +604,31 @@ fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Fi
     f.open = Some(Open { page: "requests", switch: None, thing: None });
     f.items = waiting.into_iter().map(|r| Item { title: r.album, line: Some(format!("{} · asked by {}", r.artist, r.user)), ..Item::default() }).collect();
     Ok(vec![f])
+}
+
+/// A record's files' own problems, of every copy, each by its kind: a file wrong in one copy is that record's, whichever
+/// plays. Blocking.
+pub(super) fn files_wrong(served: &crate::serve::Serve, id: &str) -> anyhow::Result<Vec<(String, Item)>> {
+    let (tracks, files) = (served.library.album_tracks(id)?, served.library.files_of_record(id)?);
+    let folders: std::collections::BTreeSet<i64> = files.iter().map(|f| f.1).collect();
+    let mut out = Vec::new();
+    for folder in folders {
+        let rels: Vec<String> = files.iter().filter(|f| f.1 == folder).map(|f| f.2.clone()).collect();
+        for p in served.catalogue().problems_in(folder, &rels)? {
+            let Some((song, ..)) = files.iter().find(|f| f.1 == folder && f.2 == p.rel) else { continue };
+            let file = p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string();
+            let item = Item {
+                title: tracks.iter().find(|t| t.0 == *song).map_or_else(|| file.clone(), |t| t.3.clone()),
+                line: p.detail,
+                album: Some((crate::source::cratarr::KIND.id.to_string(), id.to_string())),
+                files: vec![file],
+                track: Some(song.clone()),
+                ..Item::default()
+            };
+            out.push((p.kind, item));
+        }
+    }
+    Ok(out)
 }
 
 impl App {
@@ -551,6 +653,7 @@ impl App {
         }
         findings.extend(self.check_players());
         checked.insert("players", at);
+        findings.extend(or_failed("library", self.check_missing().await));
         for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
@@ -570,30 +673,18 @@ impl App {
         let mut wrong = Vec::new();
         // Its files' problems: only the own library's records have files Cratarr read.
         if let Some(served) = self.served.clone().filter(|_| source == crate::source::cratarr::KIND.id) {
-            let (c, id) = (self.library.catalogue(), album.to_string());
-            wrong = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(String, Item)>> {
-                let Some((folder, ..)) = served.library.album_place(&id)? else { return Ok(Vec::new()) };
-                let tracks = served.library.album_tracks(&id)?;
-                let rels: Vec<String> = tracks.iter().map(|t| t.1.clone()).collect();
-                let mut out = Vec::new();
-                for p in c.problems_in(folder, &rels)? {
-                    let Some((song, _, title, ..)) = tracks.iter().find(|t| t.1 == p.rel) else { continue };
-                    let file = p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string();
-                    let item = Item {
-                        title: title.clone(),
-                        line: p.detail,
-                        album: Some((crate::source::cratarr::KIND.id.to_string(), id.clone())),
-                        files: vec![file],
-                        track: Some(song.clone()),
-                        ..Item::default()
-                    };
-                    out.push((p.kind, item));
-                }
-                Ok(out)
-            })
-            .await??;
+            let id = album.to_string();
+            wrong = tokio::task::spawn_blocking(move || files_wrong(&served, &id)).await??;
         }
         Ok(record(&found, &(source.to_string(), album.to_string()), &wrong))
+    }
+
+    /// Health's Missing list, the report's alone: a record's own page has no use for it (`record_health`).
+    async fn check_missing(&self) -> anyhow::Result<Vec<Finding>> {
+        let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
+        let (c, ud) = (self.library.catalogue(), served.userdata.clone());
+        let (missing, held) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((c.missing()?, ud.songs_held()?)) }).await??;
+        Ok(missing_list(missing, &held).into_iter().collect())
     }
 
     async fn check_files(&self) -> anyhow::Result<Vec<Finding>> {
@@ -662,7 +753,7 @@ impl App {
         let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
         let (rows, numbering, matched, released) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            Ok((lib.lacking()?, lib.numbering(None)?, ud.renumber_matched()?, ud.album_discs()?))
+            Ok((lib.lacking()?, lib.numbering()?, ud.renumber_matched()?, ud.album_discs()?))
         })
         .await??;
         // Disc numbers lost (0.13) first: such an album's numbers twice are that, not Track numbers.
@@ -675,7 +766,8 @@ impl App {
                 off.push((id, name, artist, line));
             }
         }
-        let mut out = library(&rows, &off, &discs);
+        let mut out: Vec<Finding> = track_ids(served.catalogue().ids_lost()).into_iter().collect();
+        out.extend(library(&rows, &off, &discs));
         out.extend(self.check_incomplete(&served).await?);
         out.extend(self.check_references(&served).await?);
         // Each kind of word the Catalogue sheet writes (0.15, decision 0097): the records whose files differ.
@@ -699,7 +791,7 @@ impl App {
             let items = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Item>> {
                 let mut items = Vec::new();
                 for a in &ruled {
-                    if let Some((_, _, _, artist, name)) = s.library.album_place(a)? {
+                    if let Some((_, artist, name)) = s.library.album_names(a)? {
                         items.push(Item { title: name, line: Some(artist), album: Some((crate::source::cratarr::KIND.id.to_string(), a.clone())), ..Item::default() });
                     }
                 }
@@ -723,14 +815,14 @@ impl App {
             for (album, json) in s.userdata.albums_incomplete()? {
                 let Ok(i) = serde_json::from_str::<super::incomplete::Incomplete>(&json) else { continue };
                 // One the library no longer has is left out.
-                let Some((_, _, _, artist, name)) = s.library.album_place(&album)? else { continue };
+                let Some((_, artist, name)) = s.library.album_names(&album)? else { continue };
                 found.push((album, name, artist, i));
             }
             // Gaps in the numbers where no release was held against the album (no MusicBrainz id, no match yet).
             let checked = s.userdata.album_complete_at()?;
             let totals = s.library.track_totals()?;
             let mut gaps = Vec::new();
-            for (id, name, artist, numbers) in s.library.numbering(None)? {
+            for (id, name, artist, numbers) in s.library.numbering()? {
                 if checked.contains_key(&id) {
                     continue;
                 }
@@ -926,8 +1018,30 @@ impl App {
             f.detail = l.error.clone();
             f.open = settings();
             out.push(f);
+        } else if let Some(f) = self.check_lidarr_root().await? {
+            out.push(f);
         }
         Ok(out)
+    }
+
+    /// Lidarr's root folder (0101 point 10: Connections' choice, else its artists', else its first) against the folder
+    /// of Lidarr's Incoming, the library it fetches into: what it fetches comes to Incoming only from there. Nothing to
+    /// say while Lidarr is off or no library is Lidarr's.
+    async fn check_lidarr_root(&self) -> anyhow::Result<Option<Finding>> {
+        let (cfg, client) = self.incoming.lidarr_state();
+        let (Some(cfg), Some(client)) = (cfg.filter(|c| c.enabled), client) else { return Ok(None) };
+        let live = self.library.live();
+        let incoming = live.iter().find_map(|a| {
+            let id = a.cfg.libraries.fetched_by("lidarr")?;
+            a.placement.libraries.iter().find(|l| l.id == id).map(|l| (l.name.clone(), l.folders.clone()))
+        });
+        let Some((name, folders)) = incoming else { return Ok(None) };
+        let roots = client.options().await?.roots;
+        let root = match cfg.root_folder.clone() {
+            Some(r) => Some(r),
+            None => client.artists_root().await?,
+        };
+        Ok(root.and_then(|root| lidarr_root_finding(&root, &roots, &name, &folders)))
     }
 
     /// Cratarr's own players: a sound held back, and one of the app's not heard from for a day (but within a month:
@@ -1035,6 +1149,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lidarr_adding_outside_its_incoming_is_said_with_the_root_folder_to_choose() {
+        // The containers see one folder by different paths.
+        assert!(same_folder("/data/media/lidarr-music/", "/media/lidarr-music"));
+        assert!(same_folder("/media/lidarr-music", "/media/lidarr-music/"));
+        assert!(!same_folder("/data/media/lidarr-music", "/media/music"), "another folder");
+        assert!(!same_folder("/data/media/old-lidarr-music", "lidarr-music"), "only at a folder's edge");
+        let (incoming, folders) = ("Lidarr", vec!["/media/lidarr-music".to_string()]);
+        let roots = vec!["/data/media/Music/".to_string(), "/data/media/lidarr-music/".to_string()];
+        assert_eq!(lidarr_root_finding("/data/media/lidarr-music/", &roots, incoming, &folders), None, "into its Incoming");
+        let f = lidarr_root_finding("/data/media/Music/", &roots, incoming, &folders).unwrap();
+        assert_eq!((f.key.as_str(), f.level), ("servers:lidarr-root", Level::Warning));
+        assert_eq!(f.open, Some(Open { page: "settings", switch: None, thing: Some("lidarr") }), "Connections' Lidarr page");
+        assert!(f.detail.as_deref().unwrap().ends_with("Choose /data/media/lidarr-music as its root folder."), "{:?}", f.detail);
+        let none = lidarr_root_finding("/data/media/Music/", &roots[..1], incoming, &folders).unwrap();
+        assert!(none.detail.unwrap().contains("Add that folder in Lidarr"), "Lidarr has no root folder there");
+    }
+
+    #[test]
     fn counts_are_grouped_by_thousands() {
         assert_eq!((thousands(7), thousands(2264), thousands(31263), thousands(1_000_000)), ("7".into(), "2,264".into(), "31,263".into(), "1,000,000".into()));
     }
@@ -1055,6 +1187,30 @@ mod tests {
         let f = finding("library", "library:cover", Level::Warning, 3, "3 records without a cover");
         assert_eq!((f.thing.as_deref(), f.state.as_deref()), (Some("Covers"), Some("missing")));
         assert_eq!(label_of("files:something-new"), None, "the page falls back on the name");
+    }
+
+    fn a_track(track: i64, title: Option<&str>) -> crate::catalogue::MissingTrack {
+        crate::catalogue::MissingTrack { track, title: title.map(str::to_string), artist: Some("A".into()), album: Some("B".into()), rel: Some("A - B/01 One.flac".into()), since: 100 }
+    }
+
+    /// A4: a library, a track gone and a retired one that holds something, each with where it lay and since when. A retired track nobody
+    /// holds anything on is nobody's loss, and with nothing left the list is no finding.
+    #[test]
+    fn the_missing_list_holds_what_someone_would_miss() {
+        use crate::catalogue::{Missing, ParkedLibrary};
+        let m = Missing {
+            parked: vec![ParkedLibrary { path: "/media/drive".into(), since: Some(50), files: 3 }],
+            gone: vec![a_track(1, Some("Gone"))],
+            retired: vec![a_track(2, Some("Heard")), a_track(3, Some("Nobody's")), a_track(4, None)],
+        };
+        let held = ["tr-2".to_string(), "tr-4".to_string()].into();
+        let f = missing_list(m, &held).expect("a finding");
+        assert_eq!((f.key.as_str(), f.domain, f.level, f.count), ("library:missing", "library", Level::Info, 4));
+        assert_eq!(f.items.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["/media/drive", "Gone", "Heard", "01 One.flac"], "a library, then tracks; one with no title by its file");
+        let row = &f.items[2];
+        assert_eq!((row.track.as_deref(), row.since, row.line.as_deref(), row.files.as_slice()), (Some("tr-2"), Some(100), Some("A · B"), &["A - B/01 One.flac".to_string()][..]));
+        assert_eq!((f.items[0].track.clone(), f.items[0].since), (None, Some(50)), "a library has no track to reconnect");
+        assert!(missing_list(Missing { retired: vec![a_track(3, None)], ..Missing::default() }, &["tr-2".to_string()].into()).is_none());
     }
 
     #[test]
@@ -1087,12 +1243,11 @@ mod tests {
 
     #[test]
     fn every_librarys_albums_are_found_each_opening_its_own_record() {
-        // An Incoming album (folder 1, its id its own: `serve::ids::album`) beside Music's of the same name.
-        let lacks = |id: &str, folder: i64| crate::serve::library::Lacks {
+        // An Incoming album (its id its own: `serve::ids::album`) beside Music's of the same name.
+        let lacks = |id: &str| crate::serve::library::Lacks {
             id: id.into(),
             name: "Zebra".into(),
             artist: "Arp".into(),
-            folder,
             cover: true,
             year: false,
             genre: false,
@@ -1101,7 +1256,7 @@ mod tests {
             musicbrainz: false,
         };
         let numbers = [("al-in".to_string(), "Heads".to_string(), "Ott".to_string(), "01 twice".to_string())];
-        let found = library(&[lacks("al-music", 0), lacks("al-in", 1)], &numbers, &[]);
+        let found = library(&[lacks("al-music"), lacks("al-in")], &numbers, &[]);
         assert_eq!(found.iter().map(|f| (f.key.as_str(), f.title.as_str())).collect::<Vec<_>>(), [("library:cover", "2 records without a cover"), ("library:track-numbers", "1 record with track numbers off")]);
         let opens = |f: &Finding| f.items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
         assert_eq!(opens(&found[0]), ["al-music", "al-in"]);
@@ -1112,7 +1267,7 @@ mod tests {
     fn a_records_health_is_its_own_findings_and_files_and_no_other_records() {
         let own = ("cratarr".to_string(), "al-own".to_string());
         let item = |album: &str, title: &str| Item { title: title.into(), album: Some(("cratarr".into(), album.into())), ..Item::default() };
-        let mut cover = finding("library", "library:cover", Level::Critical, 2, "2 records without a cover");
+        let mut cover = finding("library", "library:cover", Level::Warning, 2, "2 records without a cover");
         cover.items = vec![item("al-other", "Other"), item("al-own", "Own")];
         let mut genre = finding("library", "library:genre", Level::Warning, 1, "1 record without a genre");
         genre.items = vec![item("al-other", "Other")];
@@ -1130,8 +1285,8 @@ mod tests {
             rows,
             [
                 ("files:cut-short", Some("Files"), Some("cut off"), vec!["Three"]),
-                ("library:cover", Some("Covers"), Some("missing"), vec!["Own"]),
                 ("files:damaged_tag", Some("Tags"), Some("damaged"), vec!["One"]),
+                ("library:cover", Some("Covers"), Some("missing"), vec!["Own"]),
                 ("files:no_length", Some("Lengths"), Some("missing"), vec!["Two"]),
             ]
         );
@@ -1162,9 +1317,24 @@ mod tests {
             library: "Arp/Zebra".into(),
             why: String::new(),
             library_id: library_id.map(Into::into),
-            replaceable,
+            main_folder: replaceable.then_some(0),
+            replaceable_into: if replaceable { library_id.map(Into::into).into_iter().collect() } else { Vec::new() },
         };
-        let libraries = [crate::app::albums::LibraryView { id: "new".into(), name: "New music".into(), use_: "incoming", colour: None, quality: crate::settings::Quality::None }];
+        let library = |id: &str, name: &str, kind: &'static str| crate::app::albums::LibraryView {
+            id: id.into(),
+            name: name.into(),
+            kind,
+            fetcher: None,
+            owner: None,
+            mine: false,
+            colour: None,
+            quality: crate::settings::Quality::None,
+            seen: true,
+            seen_why: None,
+            naming: None,
+        };
+        // Libraries are equal (0101 point 1): a main library is named by its own name, as any other.
+        let libraries = [library("music", "Music", "main"), library("new", "New music", "incoming")];
         assert!(replaces(&v("upgrade", Some("music"), true)));
         assert!(!replaces(&v("upgrade", Some("new"), false)), "a better copy of another Incoming library's: in two libraries at once");
         assert!(!replaces(&v("duplicate", Some("music"), true)));

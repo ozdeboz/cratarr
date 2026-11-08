@@ -27,17 +27,17 @@ fn parse<T: serde::de::DeserializeOwned>(kept: Option<(i64, Option<String>)>) ->
     kept.and_then(|(_, f)| f).and_then(|f| serde_json::from_str(&f).ok())
 }
 
-/// An album's subject: its Music-form id, as its words are kept.
-fn album_subject(served: &crate::serve::Serve, album: &str) -> Result<String> {
-    Ok(format!("album:{}", served.library.album_base(album)?.unwrap_or_else(|| album.to_string())))
+/// An album's subject, as its words are kept.
+fn album_subject(album: &str) -> String {
+    format!("album:{album}")
 }
 
 /// An album's facts as kept, not asked for. Blocking.
 pub fn album_kept(served: &crate::serve::Serve, album: &str) -> Result<Option<AlbumFacts>> {
-    Ok(parse(served.userdata.discogs_facts(&album_subject(served, album)?)?))
+    Ok(parse(served.userdata.discogs_facts(&album_subject(album))?))
 }
 
-/// Every album's labels as kept from Discogs, by its Music-form id (0.11, quick crates: the crates' Label where an
+/// Every album's labels as kept from Discogs, by its id (0.11, quick crates: the crates' Label where an
 /// album's files name none): what the rounds kept so far, never asked for here. Blocking.
 pub fn kept_labels(served: &crate::serve::Serve) -> Result<HashMap<String, Vec<String>>> {
     #[derive(serde::Deserialize)]
@@ -47,10 +47,10 @@ pub fn kept_labels(served: &crate::serve::Serve) -> Result<HashMap<String, Vec<S
     }
     let mut out = HashMap::new();
     for (subject, json) in served.userdata.discogs_facts_of("album:")? {
-        let (Some(base), Ok(kept)) = (subject.strip_prefix("album:"), serde_json::from_str::<Labelled>(&json)) else { continue };
+        let (Some(album), Ok(kept)) = (subject.strip_prefix("album:"), serde_json::from_str::<Labelled>(&json)) else { continue };
         let names = label_names(&kept.labels);
         if !names.is_empty() {
-            out.insert(base.to_string(), names);
+            out.insert(album.to_string(), names);
         }
     }
     Ok(out)
@@ -73,16 +73,16 @@ fn label_names(labels: &[super::discogs::Label]) -> Vec<String> {
 /// its artist and name).
 pub async fn album(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Option<AlbumFacts>> {
     let (s, a) = (served.clone(), album.to_string());
-    let (subject, kept, place) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let subject = album_subject(&s, &a)?;
-        Ok((subject.clone(), s.userdata.discogs_facts(&subject)?, s.library.album_place(&a)?))
+    let (subject, kept, names) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let subject = album_subject(&a);
+        Ok((subject.clone(), s.userdata.discogs_facts(&subject)?, s.library.album_names(&a)?))
     })
     .await??;
     let now = super::moment::now_secs();
     if !due(kept.as_ref(), now) {
         return Ok(parse(kept));
     }
-    let Some((_, _, release, artist, name)) = place else { return Ok(None) };
+    let Some((release, artist, name)) = names else { return Ok(None) };
     let group = match release.filter(|r| super::discogs::is_mbid(r)) {
         Some(r) => super::discogs::release_group_of(&super::discover::http()?, &r).await.ok().flatten(),
         None => None,
@@ -147,7 +147,7 @@ pub fn fill(served: Arc<crate::serve::Serve>, albums: Vec<String>) {
             let now = super::moment::now_secs();
             let mut out = Vec::new();
             for a in albums {
-                if due(s.userdata.discogs_facts(&album_subject(&s, &a)?)?.as_ref(), now) {
+                if due(s.userdata.discogs_facts(&album_subject(&a))?.as_ref(), now) {
                     out.push(a);
                 }
                 if out.len() == ROUND {

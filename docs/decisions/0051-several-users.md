@@ -135,3 +135,16 @@ with LLDAP"; of the proposal, "Yes, we do it the way you proposed."
     update_role, update_password, setup), with its notice.
   - Navidrome's user screens (GPL-3.0-or-later) are the checklist of rules.
   - Jellyfin's Users panel (GPL-2.0-only) is the design only: no code.
+
+## Amendment, 2026-11-05: the fences the audit found open
+
+The audit's findings 4, 18, 19 and 20, and the tag routes. The rules above stood; these routes did not keep them.
+
+- **What Home Assistant does for the owner.** Reviewing an Incoming album and changing an album's tags take an administrator,
+  signed in or through a key that may control: Home Assistant's voice commands are what those routes are for. They are the one
+  exception to "an administrator's routes take an administrator signed in, never a key or an app".
+- **An app password is for apps.** While a directory is on, its accounts sign in through it alone. An app password is set with a
+  sign-in and the password it signs in with, and no key changes a password.
+- **Sharing a playlist in a batch** is the administrators', as one at a time is.
+- **A group's sound over HTTP** is heard as on the sync port: through a player of one's own, or shared at home, that plays in
+  that group. A Kodi's signed link goes by its group.

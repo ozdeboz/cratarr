@@ -1,6 +1,5 @@
-//! Playlist sync (decisions 0012, 0014): each playlist is one `.m3u` file in `Music/.playlists`, out of the media
-//! server's reach (it skips hidden folders), and has an editable copy in accounts on the server, each kept in step both
-//! ways. Nothing is set per playlist but whether it is shared:
+//! Playlist sync (decisions 0012, 0014): each playlist is kept in Cratarr's own database (decision 0101), out of the
+//! media server's reach, and has an editable copy in accounts on the server, each kept in step both ways. Nothing is set per playlist but whether it is shared:
 //! - **your account** (per server: its setting, else the server's administrator) has every playlist, and every
 //!   playlist made there (in Finamp) comes into Cratarr;
 //! - **a shared playlist** is in every account; someone else taking it out of their account takes it out for them
@@ -13,11 +12,11 @@
 //! Every step is safe to repeat and to interrupt (the next pass finishes or undoes it, never guesses):
 //! - a link is matched by the server copy's id, and remembers both agreed names, so a rename made on either side is
 //!   told apart from a deletion even when the pass that carried it out was cut short;
-//! - a rename made in Cratarr is recorded before the file is renamed;
+//! - a rename made in Cratarr is recorded before the playlist is renamed;
 //! - a listing on either side that suddenly lacks most linked playlists is not believed (no mass deletion);
-//! - a file edited while a pass merged is left for the next pass;
+//! - a playlist edited while a pass merged is left for the next pass;
 //! - a server copy made but not yet remembered is found again by its name, not made twice;
-//! - a file deleted because its server copy went can be restored in Cratarr;
+//! - a playlist deleted because its server copy went can be restored in Cratarr;
 //! - one playlist's problem is its own: the others go on, and the page shows it on that playlist's copy.
 
 use std::collections::{BTreeSet, HashMap};
@@ -133,6 +132,11 @@ impl SyncService {
                 tracing::warn!("playlist sync: {e:#}");
                 return;
             }
+        }
+        // A track a copy took since is the same track, not one gone and another come.
+        if let Err(e) = self.lib.catalogue().moved_tracks().and_then(|moved| self.state.follow_tracks(&moved)) {
+            tracing::warn!("playlist sync: {e:#}");
+            return;
         }
         match self.state.make_native() {
             Ok(Some(n)) => tracing::info!("playlist sync: {n} shared copies in Music are replaced by copies in your account"),
@@ -323,7 +327,19 @@ impl SyncService {
     pub(super) fn links(&self) -> HashMap<String, Vec<LinkView>> {
         let last = self.last.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let owners = self.owners.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        let targets = self.state.targets().unwrap_or_default();
+        // A copy on a server switched off is not waiting for anything: left out (the owner, 2026-11-04: every playlist
+        // said "Waiting to sync" for a Jellyfin switched off for good). One switched on but not answering still waits.
+        let on: std::collections::HashSet<String> = self.lib.live().iter().filter(|a| a.cfg.enabled).map(|a| a.cfg.id.clone()).collect();
+        let targets: Vec<_> = self
+            .state
+            .targets()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| match &t.kind {
+                Kind::User { source, .. } => on.contains(source),
+                Kind::Shared => true,
+            })
+            .collect();
         // Which copies exist: every account's links, read once.
         let mut made: std::collections::HashSet<(String, String, String)> = Default::default();
         let accounts: BTreeSet<(String, String)> = targets
@@ -443,21 +459,20 @@ impl SyncService {
         Ok(())
     }
 
-    /// Adopt the playlists in Music (decision 0014), once: each is copied into `.playlists` (unless already there);
-    /// the file in Music, which the server imported, is retired once the playlist's copy in your account exists.
+    /// Adopt the playlists in Music (decision 0014), once: the store brought them in (decision 0101); each file in
+    /// Music, which the server imported, is retired once the playlist's copy in your account exists.
     async fn adopt(&self) -> Result<()> {
         if self.state.meta(ADOPTED).is_some() {
             return Ok(());
         }
         let Some(music) = self.lib.music() else { return Ok(()) };
         let m = PathBuf::from(&music);
-        let names = blocking(move || crate::playlists::adopt_into_playlist_dir(&m)).await??;
+        let names = blocking(move || crate::playlists::music_playlists(&m)).await??;
         for name in &names {
             self.state.put_retire(name, name)?;
         }
         self.state.set_meta(ADOPTED, &epoch_now().to_string())?;
-        self.lib.reopen_store();
-        tracing::info!("adopted {} playlist(s) from Music into {}", names.len(), crate::playlists::PLAYLIST_DIR);
+        tracing::info!("adopted {} playlist(s) from Music", names.len());
         Ok(())
     }
 
@@ -534,8 +549,8 @@ type Away = HashMap<i64, String>;
 struct Translate {
     cat: Arc<Catalogue>,
     source: String,
-    /// The catalogue's folders; 0 is the Music folder, which playlist lines are relative to.
-    folders: Vec<PathBuf>,
+    /// The catalogue's folders; the first in use is the Music folder, which playlist lines are relative to.
+    folders: crate::catalogue::InUse,
 }
 
 impl Translate {
@@ -551,20 +566,22 @@ impl Translate {
 
     /// A track's playlist line: its path relative to the Music folder.
     fn line(&self, track: i64) -> Option<String> {
-        let (folder, rel) = self.cat.file_of(track)?;
-        if folder == 0 {
+        self.cat.row_line(track)
+    }
+
+    /// A file's playlist line: relative to the Music folder (the first in use).
+    fn line_at(&self, folder: i64, rel: String) -> Option<String> {
+        let (first, root) = self.folders.first()?;
+        if folder == first {
             return Some(rel);
         }
-        relative_to(self.folders.first()?, &self.folders.get(folder as usize)?.join(rel))
+        relative_to(root, &self.folders.get(folder)?.join(rel))
     }
 
     /// A track's playlist line also while its file is away (where it was last seen).
     fn line_any(&self, track: i64) -> Option<String> {
         let (folder, rel) = self.cat.file_of_any(track)?;
-        if folder == 0 {
-            return Some(rel);
-        }
-        relative_to(self.folders.first()?, &self.folders.get(folder as usize)?.join(rel))
+        self.line_at(folder, rel)
     }
 
     /// `items` with the agreed tracks whose file is away for now put back (`with_vanished_kept`).
@@ -572,11 +589,14 @@ impl Translate {
         with_vanished_kept(base, items, |t| if self.line(t).is_some() { None } else { Some(self.line_any(t)) })
     }
 
-    fn lines(&self, items: &[Item]) -> Vec<String> {
+    /// `items` as lines. A track still in `was`, the playlist as it stands, keeps its line there: on another copy that line
+    /// is as good as the row copy's, and a sync must not rewrite a playlist that says the same.
+    fn lines(&self, items: &[Item], was: &[String]) -> Vec<String> {
+        let kept: HashMap<i64, &String> = self.items(was).into_iter().zip(was).filter_map(|(i, l)| if let Item::Track(t) = i { Some((t, l)) } else { None }).collect();
         items
             .iter()
             .filter_map(|i| match i {
-                Item::Track(t) => self.line(*t),
+                Item::Track(t) => kept.get(t).map(|l| (*l).clone()).or_else(|| self.line(*t)),
                 Item::Missing(l) => Some(l.clone()),
             })
             .collect()
@@ -785,7 +805,7 @@ pub(super) async fn sync_server(
                             Err(e) => bail!("cannot restore it: {e:?}"),
                         }
                         let (t, back) = (tr.clone(), tracks.clone());
-                        let new_lines = blocking(move || t.lines(&back.into_iter().map(Item::Track).collect::<Vec<_>>())).await?;
+                        let new_lines = blocking(move || t.lines(&back.into_iter().map(Item::Track).collect::<Vec<_>>(), &[])).await?;
                         // Into the empty file just made (a file made meanwhile is left as it is, for the next pass).
                         store.set_entries_if(&l.name, &[], &new_lines).await.map_err(|e| anyhow::anyhow!("cannot restore it: {e:?}"))?;
                         state.revive_targets(&l.name)?;
@@ -1025,8 +1045,8 @@ async fn sync_content(
     // Reordered on both sides: the server's order.
     let newer = if server_changed { Newer::Server } else { Newer::File };
     let merged = if once { merge_once(&link.base, &items, &server_tracks, newer) } else { merge(&link.base, &items, &server_tracks, newer) };
-    let (t, m, aw) = (tr.clone(), merged.clone(), away.clone());
-    let (new_lines, on_server) = blocking(move || (t.lines(&m), t.on_server(&m, &aw))).await?;
+    let (t, m, aw, was) = (tr.clone(), merged.clone(), away.clone(), lines.to_vec());
+    let (new_lines, on_server) = blocking(move || (t.lines(&m, &was), t.on_server(&m, &aw))).await?;
     let on_server = if once {
         let mut seen = std::collections::HashSet::new();
         on_server.into_iter().filter(|(x, _)| seen.insert(*x)).collect()
@@ -1225,8 +1245,8 @@ mod tests {
     /// is its error.
     async fn run(store: &Store, cat: &Arc<Catalogue>, srv: &Fake, state: &SyncState) -> Result<()> {
         let linked: Vec<String> = state.targets().unwrap().into_iter().map(|t| t.playlist).collect();
-        for p in store.view(None).await.unwrap().into_iter().filter(|p| !linked.contains(&p.id)) {
-            let t = Target { playlist: p.id, kind: me(), copy: None };
+        for p in store.view(None).await.unwrap().into_iter().filter(|p| !linked.contains(&p.name)) {
+            let t = Target { playlist: p.name, kind: me(), copy: None };
             state.put_target(&t).unwrap();
         }
         let undone = sync_server(store, cat.clone(), srv, state, "srv", "me", true, Verify::None).await?;
@@ -1346,15 +1366,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn files_that_suddenly_vanished_do_not_delete_the_server_copies() {
+    async fn playlists_that_suddenly_went_do_not_delete_the_server_copies() {
         let (d, cat, store) = library();
         let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
         for n in ["A1", "A2", "A3", "A4"] {
             store.create(n).await.unwrap();
         }
         run(&store, &cat, &srv, &state).await.unwrap();
+        // Gone from under the links at once, as a store opened before its playlists were brought in shows them.
         for n in ["A1", "A2", "A3"] {
-            std::fs::remove_file(d.join(format!("{n}.m3u"))).unwrap();
+            store.delete(n).await.unwrap();
         }
         assert!(run(&store, &cat, &srv, &state).await.is_err());
         assert_eq!(srv.lists.lock().unwrap().len(), 4);
@@ -1716,6 +1737,33 @@ mod tests {
         sync().await.unwrap();
         assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3"]));
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_line_on_another_copy_stays_through_a_sync() {
+        let (d, cat, store) = library();
+        // The first track's other copy, in a library beside Music, and a playlist that names it there.
+        let other = d.with_file_name(format!("{}-other", d.file_name().unwrap().to_string_lossy()));
+        std::fs::create_dir_all(other.join("A")).unwrap();
+        std::fs::write(other.join("A/01.mp3"), "track 1").unwrap();
+        cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        cat.give_track_for_tests(1, "A/01.mp3", cat.track_of(0, "A/01.mp3").unwrap());
+        let there = format!("../{}/A/01.mp3", other.file_name().unwrap().to_string_lossy());
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        store.create("Chill").await.unwrap();
+        store.set_entries("Chill", &lines(&[there.as_str(), "A/02.mp3"])).await.unwrap();
+        let sync = || run(&store, &cat, &srv, &state);
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s2"]), "one track, whichever copy the line names");
+        // Added on the server: the list is written here, and the line that was there stays as it was.
+        srv.edit("Chill", |v| v.push("s3".into()));
+        sync().await.unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&[there.as_str(), "A/02.mp3", "A/03.mp3"]));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::remove_dir_all(&other).ok();
     }
 
     #[tokio::test]

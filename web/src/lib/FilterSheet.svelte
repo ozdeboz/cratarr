@@ -17,10 +17,10 @@
   import { activeConditions, filterChange, filterOf, filtersOn, hiddenLibraries, inView, resetFilter, setConditions, setSwitch, switchOn } from './listFilter.svelte';
   import { SWITCHES } from './pageView.svelte';
   import { startCrate, withoutFor } from './crates.svelte';
-  import { filterList, getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
-  import { me } from './me.svelte';
+  import { filterList, getCrateAxes, getLibraries, getStatus, notAnswered, type LibrariesView, type LibraryUse } from './api';
   import Icon from './Icon.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
+  import { keepWhile } from './keepWhile.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import { prefs, type PanelKind } from './prefs.svelte';
   import { known, libraryShown, noChoice, remember, showLibrary } from './sources.svelte';
@@ -42,6 +42,12 @@
     counted?: { shown: number; total: number; pending?: boolean } | null;
     onclose: () => void;
   } = $props();
+
+  // The count stays as it is while a changed filter's answer comes; a slow one dims it, the sign after it (lib/loader).
+  const countWait = keepWhile(
+    () => null,
+    () => !!counted?.pending,
+  );
 
   // Discover's Spotify lists filter as their own kind (lib/spotify).
   const list = $derived(page === 'discover' && inSpotify() ? SPOTIFY_FILTER : (page ?? kind ?? ''));
@@ -95,7 +101,8 @@
       (a) => (axes = a),
       (e) => {
         axes ??= [];
-        toast.fail(e, "The filter's conditions couldn't be loaded");
+        // Away from Cratarr its switches work all the same, Available offline among them, and the page says so already.
+        if (!notAnswered(e)) toast.fail(e, "The filter's conditions couldn't be loaded");
       },
     );
   });
@@ -112,12 +119,12 @@
   // Each server's own name and its libraries, as Settings → Libraries reads them. The cards show without them until
   // they come: the list of servers alone is enough to choose one, but unnamed (not its kind first, then its own name
   // over the kind: the owner, 2026-10-24). `settingsKnown`: read, or could not be (then the kind is the name).
-  // (An administrator reads them from the server's settings; anyone else from the libraries, decision 0051.)
+  // (Everyone reads them from the libraries, decision 0051: someone's own music is there, not in the settings.)
   let settings = $state<LibrariesView | null>(null);
   let settingsKnown = $state(false);
   $effect(() => {
     let gone = false;
-    (me.admin ? getSettings() : getLibraries()).then(
+    getLibraries().then(
       (s) => {
         if (gone) return;
         settings = s;
@@ -126,7 +133,7 @@
       (e) => {
         if (gone) return;
         settingsKnown = true;
-        toast.fail(e, "The servers' libraries couldn't be loaded");
+        if (!notAnswered(e)) toast.fail(e, "The servers' libraries couldn't be loaded");
       },
     );
     return () => (gone = true);
@@ -134,8 +141,8 @@
 
   // A use by the icon of the page that shows it (Collection shows Music, Incoming its own), so a chip needs no second
   // word; the word is still there for screen readers.
-  const USE_ICON = { music: 'library', incoming: 'incoming' } as const;
-  const USE_WORD: Record<LibraryUse, string> = { music: 'Music', incoming: 'Incoming', unused: 'Not used' };
+  const USE_ICON = { main: 'library', incoming: 'incoming', own: 'user' } as const;
+  const USE_WORD: Record<LibraryUse, string> = { main: 'Main library', incoming: 'Incoming', own: 'Own music', unused: 'Not used' };
 
   const cards = $derived(
     known.list.map((s) => {
@@ -147,7 +154,7 @@
       const libraries = (view?.server_libraries ?? []).map((l) => ({
         id: l.id,
         name: l.name,
-        use: (view!.libraries.music.includes(l.id) ? 'music' : view!.libraries.incoming.includes(l.id) ? 'incoming' : 'unused') as LibraryUse,
+        use: (view!.libraries.find((x) => x.id === l.id)?.kind ?? 'unused') as LibraryUse,
       }));
       const name = own ?? (twin ? `${s.label} (${s.id})` : s.label);
       return { id: s.id, name: settingsKnown ? name : '', said: name, kind: own ? s.label : null, playing: s.playing, libraries };
@@ -174,10 +181,10 @@
   {onclose}
 >
   <div class="cards">
-    <!-- While a changed filter's answer is on its way: the last count, dimmed, the loading sign after it (the owner,
-         2026-10-27: it took long with nothing saying so). -->
-    {#if counted && filtersOn(list)}<p class="count" class:pending={counted.pending} aria-busy={counted.pending}>
-        {counted.shown.toLocaleString()} of {counted.total.toLocaleString()}{#if counted.pending}<MarkLoader size={18} />{/if}
+    <!-- While a changed filter's answer is on its way: the last count, at 300 ms dimmed with the loading sign after it
+         (the owner, 2026-10-27: it took long with nothing saying so). -->
+    {#if counted && filtersOn(list)}<p class="count" class:pending={countWait.loader} aria-busy={counted.pending}>
+        {counted.shown.toLocaleString()} of {counted.total.toLocaleString()}{#if countWait.loader}<MarkLoader size={18} />{/if}
       </p>{/if}
     {#if conditioned}
       <div>

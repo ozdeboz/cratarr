@@ -89,7 +89,7 @@ pub struct Snippets {
     pub end: i64,
 }
 
-/// What hearing a record found, kept per record (`intake_heard`).
+/// What hearing a record's copy found, kept per copy (`intake_heard`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Heard {
     pub tracks: Vec<HeardTrack>,
@@ -121,6 +121,8 @@ pub struct HeardTrack {
 struct Track {
     id: String,
     path: PathBuf,
+    /// Its catalogue folder and its path in it.
+    place: (i64, String),
     file: String,
     title: String,
     ms: i64,
@@ -128,13 +130,16 @@ struct Track {
     no: Option<u32>,
 }
 
-fn tracks_of(album: &str) -> Result<(Vec<Track>, String, String)> {
-    let (tracks, _, artist, title) = super::renumber::tracks_of(album)?;
-    Ok((
-        tracks.into_iter().map(|t| Track { id: t.id, file: t.file, title: t.title, ms: i64::from(t.secs) * 1000, disc: t.disc, no: t.track, path: t.path }).collect(),
-        artist,
-        title,
-    ))
+impl std::convert::From<super::renumber::Track> for Track {
+    fn from(t: super::renumber::Track) -> Self {
+        Track { id: t.id, file: t.file, title: t.title, ms: i64::from(t.secs) * 1000, disc: t.disc, no: t.track, path: t.path, place: t.place }
+    }
+}
+
+/// The tracks a card is about: its copy's, at (catalogue folder, folder in it), whichever copy of the record plays.
+fn tracks_of(album: &str, at: Option<&(i64, String)>) -> Result<(Vec<Track>, String, String)> {
+    let (tracks, _, artist, title) = super::renumber::tracks_in(album, at)?;
+    Ok((tracks.into_iter().map(Track::from).collect(), artist, title))
 }
 
 /// A record's format, as its files are: each kind once ("FLAC 24/96 · MP3 320").
@@ -329,25 +334,21 @@ async fn soulseek_user(files: &[String]) -> Option<String> {
     best.map(|(_, u)| u)
 }
 
-/// A record's card. `album`: Cratarr's own album id; `library`, `verdict`: Incoming's for it. The hearing is started
-/// where it was never done.
-pub async fn card(app: &Arc<super::App>, album: &str, library: Option<String>, verdict: Option<&super::incoming::VerdictView>) -> Result<Card> {
+/// A record's card. `album`: Cratarr's own album id; `at`: its copy waiting, as (catalogue folder, folder in it), which is what
+/// the card reads and hears, whichever copy plays; `library`, `verdict`: Incoming's for it. The hearing is started where it
+/// was never done.
+pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>, library: Option<String>, verdict: Option<&super::incoming::VerdictView>) -> Result<Card> {
     let served = app.served.clone().context("Cratarr's own library is not open")?;
     let a = album.to_string();
-    let (s, a2) = (served.clone(), a.clone());
+    let (s, a2, at2) = (served.clone(), a.clone(), at.clone());
     #[allow(clippy::type_complexity)]
     let (tracks, artist, title, tags, waves, heard, discogs): (Vec<Track>, String, String, Vec<crate::catalogue::tags::FileTags>, Vec<Vec<u8>>, Option<Heard>, Option<super::discogs::AlbumFacts>) =
         tokio::task::spawn_blocking(move || -> Result<_> {
-            let (tracks, artist, title) = tracks_of(&a2)?;
+            let (tracks, artist, title) = tracks_of(&a2, at2.as_ref())?;
             let tags = tracks.iter().map(|t| crate::catalogue::tags::read(&t.path).map(|(f, _)| f).unwrap_or_default()).collect();
             let cat = s.catalogue();
-            let waves = tracks
-                .iter()
-                .map(|t| {
-                    s.library.song_file(&t.id).ok().flatten().and_then(|(folder, rel, ..)| cat.analysis_of(folder, &rel)).map(|an| an.waveform).unwrap_or_default()
-                })
-                .collect();
-            let heard = s.userdata.intake_heard(&a2)?.and_then(|(_, j)| serde_json::from_str(&j).ok());
+            let waves = tracks.iter().map(|t| cat.analysis_of(t.place.0, &t.place.1).map(|an| an.waveform).unwrap_or_default()).collect();
+            let heard = s.userdata.intake_heard(&a2, at2.as_ref().map(|p| p.0))?.and_then(|(_, j)| serde_json::from_str(&j).ok());
             let discogs = super::discogs_facts::album_kept(&s, &a2).ok().flatten();
             Ok((tracks, artist, title, tags, waves, heard, discogs))
         })
@@ -355,7 +356,7 @@ pub async fn card(app: &Arc<super::App>, album: &str, library: Option<String>, v
     let matched = super::matching::kept_or_find(&served, vec![a.clone()]).await?.into_iter().next().map(|(_, m)| m);
     let looking = matched.is_none() && super::tasks::tasks().of(&served.current_user().unwrap_or_default()).iter().any(|t| t.kind == super::matching::KIND && t.finished.is_none());
     if heard.is_none() {
-        hear(app, &a);
+        hear(app, &a, at);
     }
     let files: Vec<String> = tracks.iter().map(|t| t.file.clone()).collect();
     let folder = tracks.first().and_then(|t| t.path.parent()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -440,9 +441,9 @@ pub async fn waiting(app: &Arc<super::App>) -> Vec<Waiting> {
     out
 }
 
-/// Hears a record in the background, once (one task at a time for the account; another asked meanwhile waits for its
-/// next card): each track decoded whole and its recordings asked of AcoustID, kept.
-pub fn hear(app: &Arc<super::App>, album: &str) {
+/// Hears a record's copy in the background, once (one task at a time for the account; another asked meanwhile waits for its
+/// next card): each track decoded whole and its recordings asked of AcoustID, kept under that copy.
+pub fn hear(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>) {
     let Some(served) = app.served.clone() else { return };
     let Some(account) = served.current_user() else { return };
     if super::tasks::tasks().of(&account).iter().any(|t| t.kind == KIND && t.finished.is_none()) {
@@ -451,8 +452,8 @@ pub fn hear(app: &Arc<super::App>, album: &str) {
     let album = album.to_string();
     let _ = super::tasks::spawn(KIND, &account, false, move |h| async move {
         let (tracks, ..) = tokio::task::spawn_blocking({
-            let a = album.clone();
-            move || tracks_of(&a)
+            let (a, at) = (album.clone(), at.clone());
+            move || tracks_of(&a, at.as_ref())
         })
         .await??;
         let ud = served.userdata.clone();
@@ -480,7 +481,8 @@ pub fn hear(app: &Arc<super::App>, album: &str) {
             heard.tracks.push(one);
         }
         let (ud, json, a) = (served.userdata.clone(), serde_json::to_string(&heard)?, album.clone());
-        tokio::task::spawn_blocking(move || ud.set_intake_heard(&a, super::moment::now_secs(), &json)).await??;
+        let folder = at.map(|p| p.0);
+        tokio::task::spawn_blocking(move || ud.set_intake_heard(&a, folder, super::moment::now_secs(), &json)).await??;
         anyhow::Ok(())
     });
 }
@@ -488,6 +490,21 @@ pub fn hear(app: &Arc<super::App>, album: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A copy that does not play has no rows in `songs`: all there is of it is its files, and a card about it must list those,
+    /// in the order their own tags give.
+    #[test]
+    fn the_card_lists_its_copys_files() {
+        let (root, cat, lib) = crate::serve::listener::tests::built("card", &[("Kept/1.flac", "Album", "One"), ("Kept/2.flac", "Album", "Two"), ("Other/1.flac", "Else", "Three")]);
+        let album = lib.album_in(0, "Kept").unwrap().unwrap();
+        cat.tag_for_tests(0, "Kept/1.flac", &[("album", "Album"), ("title", "One, by its tag"), ("tracknumber", "2/9"), ("discnumber", "1")]);
+        cat.tag_for_tests(0, "Kept/2.flac", &[("album", "Album"), ("title", "Two, by its tag"), ("tracknumber", "1/9"), ("discnumber", "1")]);
+        lib.db().execute("DELETE FROM songs WHERE rel LIKE 'Kept/%'", []).unwrap();
+        let tracks: Vec<Track> = super::super::renumber::copy_tracks(&lib, &cat, &album, 0, "Kept").unwrap().into_iter().map(Track::from).collect();
+        assert_eq!(tracks.iter().map(|t| (t.place.1.as_str(), t.title.as_str(), t.no)).collect::<Vec<_>>(), [("Kept/2.flac", "Two, by its tag", Some(1)), ("Kept/1.flac", "One, by its tag", Some(2))]);
+        assert_eq!(tracks[0].path, root.join("Kept/2.flac"));
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn where_to_hear_a_track() {
@@ -516,7 +533,7 @@ mod tests {
 
     #[test]
     fn the_folder_and_the_tags_say_one_record() {
-        let t = |path: &str| Track { id: "s".into(), path: path.into(), file: "f".into(), title: "t".into(), ms: 0, disc: None, no: None };
+        let t = |path: &str| Track { id: "s".into(), path: path.into(), place: (0, path.into()), file: "f".into(), title: "t".into(), ms: 0, disc: None, no: None };
         let tags = |album: &str| crate::catalogue::tags::FileTags { items: vec![("ALBUM".into(), Some("album"), album.into())], ..Default::default() };
         let c = file_checks(&[t("/in/Air - Moon Safari (1998)/1.flac"), t("/in/Air - Moon Safari (1998)/2.flac")], &[tags("Moon Safari"), tags("Moon Safari")]);
         assert_eq!(c.iter().map(|c| (c.key, c.state)).collect::<Vec<_>>(), [("one_record", "green"), ("folder_name", "green")]);

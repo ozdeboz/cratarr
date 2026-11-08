@@ -28,9 +28,10 @@ class Jobs {
     return this.list.filter(open);
   }
 
-  /** The album's job while it waits or converts. */
-  of(source: string, album: string): Job | undefined {
-    return this.list.find((j) => j.source === source && j.album_id === album && open(j));
+  /** A record's job while it waits or converts: of its copy in `library`, as its other copies go on as they are; with
+   *  none named, of any copy (a row's meter). */
+  of(source: string, album: string, library?: string): Job | undefined {
+    return this.list.find((j) => j.source === source && j.album_id === album && open(j) && (!library || !j.from || j.from === library));
   }
 
   async #refresh() {
@@ -96,11 +97,11 @@ function tell(ended: Job[]) {
   }
   const done = ended.filter((j) => j.undo);
   if (!done.length) return;
-  const verb = done.every((j) => j.action === 'keep') ? 'Kept' : done.every((j) => j.action === 'replace') ? 'Replaced' : 'Moved';
+  const verb = done.every((j) => j.action === 'keep') ? 'Added' : done.every((j) => j.action === 'replace') ? 'Replaced' : 'Moved';
   const what = done.length === 1 ? done[0].title : `${done.length} albums`;
   withUndo(
-    `${verb} ${what} ${verb === 'Moved' ? 'into' : 'in'} Music.`,
+    `${verb} ${what}.`,
     done.map((j) => j.undo),
-    { undone: `${what} ${done.length === 1 ? 'is' : 'are'} back in Incoming.`, after: () => jobs.finished++ },
+    { undone: `${what} ${done.length === 1 ? 'is' : 'are'} back where ${done.length === 1 ? 'it was' : 'they were'}.`, after: () => jobs.finished++ },
   );
 }

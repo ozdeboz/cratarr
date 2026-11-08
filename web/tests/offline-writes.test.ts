@@ -4,7 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { outcomeOf, headersOf, mergeOps, opsFrom, stale, STALE_MS, ours, outlived, stamped, OTHERS_MS } = await import('../src/lib/outbox.ts');
+(globalThis as Record<string, unknown>).$state = <T>(v: T) => v;
+const { outcomeOf, headersOf, mergeOps, opsFrom, stale, STALE_MS, ours, outlived, OTHERS_MS, turnedAway, worded } = await import('../src/lib/outbox.ts');
 const { readChanges, favouriteOf } = await import('../src/lib/changeLog.ts');
 const { opsFor, applyOps } = await import('../src/lib/playlistOps.ts');
 
@@ -21,6 +22,19 @@ test('what an answer means for the change at the head', () => {
   assert.equal(outcomeOf(401, false, notReached), 'wait');
   assert.equal(outcomeOf(503, false, notReached), 'wait');
   assert.equal(outcomeOf(500, false, notReached), 'wait');
+});
+
+test("a 403 in Cratarr's own words is turned down; a proxy's bare one is out of reach", async () => {
+  const { notReached: reachRule } = await import('../src/lib/reach.svelte.ts');
+  assert.equal(outcomeOf(403, false, reachRule), 'wait');
+  assert.equal(outcomeOf(403, false, reachRule, false), 'wait');
+  assert.equal(outcomeOf(403, false, reachRule, true), 'refused');
+  // Words change nothing else: a server's failure waits, whatever it says.
+  assert.equal(outcomeOf(503, false, reachRule, true), 'wait');
+  assert.equal(outcomeOf(401, false, reachRule, true), 'wait');
+  const answer = (body: string) => new Response(body, { status: 403 });
+  assert.equal(await worded(answer('{"error":"Only its owner changes it: copy it into your own."}')), true);
+  for (const bare of ['', '<html>Forbidden</html>', '{"message":"Forbidden"}', '{"error":403}', 'null']) assert.equal(await worded(answer(bare)), false, bare);
 });
 
 test('a change goes with its op id and its time, first try and resend alike', () => {
@@ -45,9 +59,17 @@ test('a list read back: only well-formed changes', () => {
   assert.deepEqual(opsFrom([op('a', 1), { key: 2 }, null, 'x']).map((x) => x.key), ['a']);
 });
 
-test('a week waiting is let go', () => {
-  assert.equal(stale(op('a', 0), STALE_MS), false);
-  assert.equal(stale(op('a', 0), STALE_MS + 1), true);
+test('a week from its first refusal, not from when it was made: waiting is no refusal', () => {
+  assert.equal(stale({ ...op('a', 0), tried: 100 }, 100 + STALE_MS), false);
+  assert.equal(stale({ ...op('a', 0), tried: 100 }, 100 + STALE_MS + 1), true);
+  assert.equal(stale(op('a', 0), STALE_MS * 10), false, 'never turned away: only waiting');
+});
+
+test('an answer turns a change away; one not reached, or not signed in, says nothing of the change', () => {
+  assert.equal(turnedAway(503), true);
+  assert.equal(turnedAway(403), true);
+  assert.equal(turnedAway(null), false);
+  assert.equal(turnedAway(401), false);
 });
 
 test("whose (0.13): only the account signed in's are sent; another's are kept, a month at most", () => {
@@ -65,30 +87,15 @@ test("whose (0.13): only the account signed in's are sent; another's are kept, a
   // Not known yet: nothing is ours, none sent.
   assert.equal(ours(ann, null), false);
   assert.equal(ours(op('d', 0), null), false);
-  // A change carrying no account is no one's until stamped.
+  // A change carrying no account is no one's.
   assert.equal(ours(op('d', 0), 'ann'), false);
 });
 
-test('whose (0.13): those carrying no account take the one known, the others keep theirs', () => {
-  const list = [op('a', 1), { ...op('b', 2), account: 'bob' }, { ...op('c', 3), account: '' }];
-  const s = stamped(list, 'ann');
-  assert.deepEqual(
-    s.map((x) => x.account),
-    ['ann', 'bob', ''],
-  );
-  assert.deepEqual(
-    s.map((x) => x.key),
-    ['a', 'b', 'c'],
-    'in the order made',
-  );
-  assert.equal(list[0].account, undefined, 'a copy');
-  // A play stamps alike.
-  assert.deepEqual(stamped([{ id: 'p', at: 5 }], '')[0], { id: 'p', at: 5, account: '' });
-});
-
-test('whose (0.13): a list read back keeps the account, and turns down one that is not a name', () => {
+test('whose (0.13): a list read back keeps the account and its first refusal, and turns down what is neither', () => {
   assert.deepEqual(opsFrom([{ ...op('a', 1), account: 'ann' }])[0].account, 'ann');
   assert.deepEqual(opsFrom([{ ...op('a', 1), account: 7 }]), []);
+  assert.equal(opsFrom([{ ...op('a', 1), tried: 9 }])[0].tried, 9);
+  assert.deepEqual(opsFrom([{ ...op('a', 1), tried: 'soon' }]), []);
   assert.deepEqual(headersOf({ ...op('k', 5), account: 'ann' }), { 'Idempotency-Key': 'k', 'X-Cratarr-At': '5' }, 'the account is not sent');
 });
 

@@ -76,3 +76,6 @@ servers, the most common source people move from; (3) Last.fm; (4) files.
   undone per kind. Playlists: `.m3u`/`.m3u8` (`#EXTINF` "Artist - Title", else the path's folders and file name),
   `.xspf`, Exportify's CSV; each becomes a new playlist of the tracks found ("a playlist from these tracks"), named as the
   file names it and free among one's own, undone as any playlist made is.
+- **ListenBrainz's own import on the one routine (2026-11-06, the audit's finding 17).** It wrote its rows itself, so every
+  listen Cratarr had sent there came back as a second play at the same second. Now it goes through `import::into_history`
+  like the others, its preview too. Rows an earlier import doubled stay until that import is undone and run again.

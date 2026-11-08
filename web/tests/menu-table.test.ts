@@ -102,7 +102,7 @@ test('out of reach: what works offline shows, what needs Cratarr is left out, an
   for (const e of ['favourite', 'rating', 'excludeEverywhere', 'excludeArtist', 'notInCrate', 'addToPlaylist', 'rename', 'removeFromDevice', 'queues', 'clearQueue', 'webSearch'] as const)
     assert.equal(offeredAway(e, true), true, e);
   // Cratarr's: it streams, finds, makes, deletes or shares them.
-  for (const e of ['soundsLike', 'otherVersions', 'discover', 'download', 'keep', 'share', 'info', 'saveAsPlaylist', 'startCrate', 'edit', 'deletePlaylist', 'deleteCrate', 'deleteAlbum', 'sync'] as const)
+  for (const e of ['soundsLike', 'otherVersions', 'discover', 'download', 'keep', 'share', 'info', 'saveAsPlaylist', 'startCrate', 'edit', 'deletePlaylist', 'deleteCrate', 'deleteAlbum', 'sync', 'playFrom'] as const)
     assert.equal(offeredAway(e, true), false, e);
   // A track's menu out of reach keeps its feelings and its playlists, not its Go to Sounds like.
   const track = MENUS.track.cards.flatMap((c) => c.entries).filter((e) => offeredAway(e, true));

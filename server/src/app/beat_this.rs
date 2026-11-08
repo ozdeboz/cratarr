@@ -101,7 +101,7 @@ pub fn write_wanted(cat: &Catalogue, data: &Path) -> Result<Option<usize>> {
     let folders = cat.folders();
     let mut text = String::new();
     for (folder, rel, _, size, mtime) in &rows {
-        let Some(root) = usize::try_from(*folder).ok().and_then(|i| folders.get(i)) else { continue };
+        let Some(root) = folders.get(*folder) else { continue };
         let line = serde_json::json!({ "folder": root.to_string_lossy(), "rel": rel, "size": size, "mtime": mtime });
         text.push_str(&line.to_string());
         text.push('\n');

@@ -15,10 +15,12 @@
 //!   2026's unattended batches cannot happen again). The folder's tracks come in one batch from its user.
 //! - **The next folder when a user fails** (the owner, 2026-11-03): refused, offline, an error, or queued over 30
 //!   minutes; the user is remembered as failed for the record, and the next best folder is fetched without asking
-//!   again. A read of slskd that fails once is not the end of a fetch.
+//!   again. A read of slskd that fails once is not the end of a fetch, and slskd itself away is no failed user: the
+//!   record stays as it is, a fetch under way keeps its batch, and it is taken up again (`hold`).
 //! - **Every file gated** (single-track intake's gate, 0080: decoded whole, the recording's length, its sound, AcoustID).
 //!   A folder with a file that fails is set aside whole with why per file (the owner, 2026-11-03), its user remembered,
-//!   and the next folder tried. Only a whole, checked record goes on.
+//!   and the next folder tried. Only a whole, checked record goes on. AcoustID that could not be asked is no failed file:
+//!   the record is held at its check with its folder, its tick and its user, and asked about again (`hold`).
 //! - **Into its own Incoming library** (the owner, 2026-11-03): the Incoming library whose fetcher is "soulseek"
 //!   (decision 0096), as Artist/Record (Year), for the intake card. Never straight into Music.
 //! - **Kept on disk** (`soulseek.json` in the data folder), so a restart forgets nothing: a fetch under way is followed
@@ -32,10 +34,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::track_fetch::{ReleaseTrack, ReleaseView};
-use crate::slskd::{Answer, Offered, Slskd};
+use super::track_fetch::{NotAsked, ReleaseTrack, ReleaseView};
+use crate::slskd::{Answer, Away, Offered, Slskd};
 
-/// The fetcher's name in a library's policy (`settings::LibraryPolicy::fetcher`).
+/// The fetcher's name in a library's setting (`settings::LibrarySetting::fetcher`).
 pub const FETCHER: &str = "soulseek";
 /// Between two searches: gentle with Soulseek.
 const PACE: Duration = Duration::from_secs(5);
@@ -47,6 +49,10 @@ const QUEUED_FOR: Duration = Duration::from_secs(30 * 60);
 const FETCH_AT_MOST: Duration = Duration::from_secs(4 * 3600);
 /// Reads of slskd that may fail in a row before a fetch is given up.
 const READS: u32 = 15;
+/// Between two such reads.
+const READ_AGAIN: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 4 });
+/// A record held for slskd is tried again after this long.
+const SLSKD_AGAIN: i64 = 300;
 /// Folders a record shows, best first.
 const SHOWN: usize = 5;
 /// The most approved Requests read.
@@ -55,6 +61,8 @@ const REQUESTS_AT_MOST: usize = 1000;
 const ROUND_AT_LEAST: i64 = 15 * 60;
 /// A file's length may be this far from its track's.
 const LENGTH_SLACK_MS: i64 = crate::slskd::LENGTH_SLACK_MS;
+/// A record held at its check is checked again after this long: each time decodes a file to ask AcoustID about it.
+const CHECK_AGAIN: i64 = 15 * 60;
 
 // ---- What is kept
 
@@ -138,7 +146,7 @@ pub struct Item {
     /// Rounds of searches that found nothing in a row.
     #[serde(default)]
     pub misses: u32,
-    /// When it is searched again (epoch s); 0 or unreadable: due.
+    /// When it is searched again (epoch s); 0 or unreadable: due. Held (`hold`), when it is taken up again.
     #[serde(default)]
     pub due: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -241,10 +249,11 @@ fn stripped(title: &str) -> String {
     out.trim().to_string()
 }
 
-/// The first artist credited ("Air feat. Beck", "Air & Beck", "Air, Beck" → "Air").
-fn main_artist(artist: &str) -> String {
-    let lower = artist.to_lowercase();
-    let cut = [" feat.", " feat ", " ft.", " featuring ", " & ", " and ", ", ", " x ", " vs. ", " vs ", " with "]
+/// The first artist credited ("Air feat. Beck", "Air & Beck", "Air, Beck", "Air / Beck" → "Air").
+pub fn main_artist(artist: &str) -> String {
+    // ASCII only: a letter that grows when lowered would move the cut off the artist's own bytes.
+    let lower = artist.to_ascii_lowercase();
+    let cut = [" feat.", " feat ", " ft.", " featuring ", " & ", " and ", ", ", " / ", " x ", " vs. ", " vs ", " with "]
         .iter()
         .filter_map(|s| lower.find(s))
         .min()
@@ -390,6 +399,22 @@ fn on_failed(i: &mut Item, user: &str, why: String) -> bool {
     }
 }
 
+/// A record held: what had to be asked could not be, which says nothing of its folder or its user. It stays as it is, its
+/// tick, its folders and its batch with it, and is taken up again at `due`; `why` says what it waits for. Not Waiting,
+/// which is the search's: searched again it would be Found, asking for a tick, and what it fetched would lie forgotten.
+fn hold(i: &mut Item, why: String, wait: i64) {
+    (i.why, i.due) = (Some(why), now() + wait);
+}
+
+/// Whether its fetch is at work: one held at its check is not, until it is due.
+fn fetched(i: &Item, now: i64) -> bool {
+    match i.state {
+        State::Fetching => true,
+        State::Checking => i.due <= now,
+        _ => false,
+    }
+}
+
 // ---- The service
 
 /// What the page shows: every record, the running worker's state.
@@ -433,16 +458,25 @@ pub fn search_now(app: &Arc<super::App>, id: &str) -> View {
     view(app)
 }
 
-/// A record taken off the list (not while it is fetched): its Request is not taken in again.
-pub fn drop_item(app: &Arc<super::App>, id: &str) -> View {
-    kept(|k| {
-        if let Some(i) = k.items.iter().find(|i| i.id == id && !matches!(i.state, State::Fetching | State::Checking)) {
-            let r = i.record.request;
-            k.dropped.push(r);
-        }
-        k.items.retain(|i| i.id != id || matches!(i.state, State::Fetching | State::Checking));
-    });
+/// A record taken off the list (not while it is fetched): its Request is not taken in again. What it fetched goes with
+/// it: nothing else looks in a batch's folder.
+pub async fn drop_item(app: &Arc<super::App>, id: &str) -> View {
+    if let Some(batch) = dropped(id, now())
+        && let Ok((_, folder)) = super::track_fetch::slskd_ready().await
+    {
+        std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(batch)).ok();
+    }
     view(app)
+}
+
+/// The record off the list, unless it is fetched; its batch, where it has one.
+fn dropped(id: &str, now: i64) -> Option<String> {
+    kept(|k| {
+        let at = k.items.iter().position(|i| i.id == id && !fetched(i, now))?;
+        let i = k.items.remove(at);
+        k.dropped.push(i.record.request);
+        i.batch
+    })
 }
 
 /// The placed records cleared from the list.
@@ -462,7 +496,7 @@ fn library() -> Result<PathBuf> {
 /// `library` in these settings.
 fn library_in(saved: &crate::settings::Saved) -> Option<PathBuf> {
     let c = saved.sources.iter().find(|c| c.enabled && c.kind == crate::source::cratarr::KIND.id)?;
-    c.libraries.incoming.iter().find(|l| c.libraries.policies.get(*l).and_then(|p| p.fetcher.as_deref()) == Some(FETCHER)).map(PathBuf::from)
+    c.libraries.fetched_by(FETCHER).map(PathBuf::from)
 }
 
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
@@ -581,15 +615,20 @@ fn next_search() -> Option<String> {
     })
 }
 
-/// The next record to fetch: one whose fetch a restart left under way first, then the approved.
+/// The next record to fetch: one whose fetch a restart left under way first, then the approved; one held waits for its
+/// time.
 fn next_fetch() -> Option<String> {
-    kept(|k| {
-        k.items
-            .iter()
-            .find(|i| matches!(i.state, State::Fetching | State::Checking) && i.batch.is_some())
-            .or_else(|| k.items.iter().find(|i| i.state == State::Approved))
-            .map(|i| i.id.clone())
-    })
+    let t = now();
+    kept(|k| next_of(&k.items, t))
+}
+
+/// [`next_fetch`]'s choice: pure.
+fn next_of(items: &[Item], now: i64) -> Option<String> {
+    let due = || items.iter().filter(|i| i.due <= now);
+    due()
+        .find(|i| matches!(i.state, State::Fetching | State::Checking) && i.batch.is_some())
+        .or_else(|| due().find(|i| i.state == State::Approved))
+        .map(|i| i.id.clone())
 }
 
 /// The release a record is judged by: its own where it names one, else the release group's first official one with
@@ -627,17 +666,22 @@ async fn search(id: &str) {
             Err(e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Stuck, Some(format!("{e:#}")), now() + wait_after(3))),
         }
     }
-    let Some(it) = item(id) else { return };
     let slskd = match super::track_fetch::slskd_ready().await {
         Ok((s, _)) => s,
         Err(e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
     };
+    search_through(id, &slskd).await;
+}
+
+/// The ladder's rungs in turn, through this slskd, until one finds folders.
+async fn search_through(id: &str, slskd: &Slskd) {
+    let Some(it) = item(id) else { return };
     let mut why = None;
     for (n, q) in ladder(&it.record).iter().enumerate() {
         if n > 0 {
             tokio::time::sleep(PACE).await;
         }
-        match answers(&slskd, q).await {
+        match answers(slskd, q).await {
             Ok(a) => {
                 let found = folders_of(&a, &it.tracks, &it.failed);
                 if !found.is_empty() {
@@ -647,6 +691,8 @@ async fn search(id: &str) {
                     });
                 }
             }
+            // slskd away says nothing of the record: no miss, or a week's wait would meet it when slskd came back.
+            Err(e) if e.is::<Away>() => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
             Err(e) => why = Some(format!("{e:#}")),
         }
     }
@@ -671,16 +717,21 @@ async fn answers(slskd: &Slskd, q: &str) -> Result<Vec<Answer>> {
 /// One approved record fetched (or a fetch a restart left followed again), gated and placed; a failed user's next
 /// folder after it.
 async fn fetch(id: &str) {
-    let Some(it) = item(id) else { return };
     let (slskd, folder) = match super::track_fetch::slskd_ready().await {
         Ok(s) => s,
-        Err(e) => {
-            // Waits for slskd: tried again in a while.
-            with_item(id, |i| i.why = Some(format!("{e:#}")));
-            tokio::time::sleep(Duration::from_secs(300)).await;
-            return;
-        }
+        // Waits for slskd: tried again in a while.
+        Err(e) => return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN)),
     };
+    fetch_from(id, &slskd, &folder, |file, track| async move { super::track_fetch::gate_track(&file, &track).await }).await;
+}
+
+/// [`fetch`], through this slskd and its completed-downloads folder, each file gated by `gate` (the tests' stands in).
+async fn fetch_from<G, Fut>(id: &str, slskd: &Slskd, folder: &Path, gate: G)
+where
+    G: Fn(PathBuf, ReleaseTrack) -> Fut,
+    Fut: std::future::Future<Output = Result<f32>>,
+{
+    let Some(it) = item(id) else { return };
     let Some(f) = it.chosen.and_then(|c| it.folders.get(c)).cloned() else {
         return with_item(id, |i| (i.state, i.chosen, i.due) = (State::Waiting, None, 0));
     };
@@ -691,6 +742,7 @@ async fn fetch(id: &str) {
                 with_item(id, |i| (i.state, i.batch, i.percent, i.why) = (State::Fetching, Some(b.clone()), 0.0, None));
                 b
             }
+            Err(e) if e.is::<Away>() => return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN)),
             Err(e) => {
                 with_item(id, |i| {
                     on_failed(i, &f.user, format!("{e:#}"));
@@ -699,24 +751,41 @@ async fn fetch(id: &str) {
             }
         },
     };
-    let got = follow(&slskd, id, &batch).await;
-    let ts = match got {
-        Ok(t) => t,
-        Err(e) => {
-            for t in slskd.transfers(&batch).await.unwrap_or_default() {
-                slskd.drop_transfer(&f.user, &t.id).await;
+    // At its check its files are in (one held, or one a restart cut): slskd's list decides nothing, and may have let them
+    // go, which `follow` would hold against the user.
+    let ts = if it.state == State::Checking {
+        slskd.transfers(&batch).await.unwrap_or_default()
+    } else {
+        match follow(slskd, id, &batch).await {
+            Ok(t) => t,
+            // Its batch stays: slskd may well finish it, and it is followed again rather than left to run with no one to
+            // clean its folder.
+            Err(e) if e.is::<Away>() => {
+                tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "held for slskd");
+                return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN));
             }
-            tracing::info!(target: "soulseek", user = %f.user, reason = %format!("{e:#}"), "a user failed; the next folder");
-            return with_item(id, |i| {
-                on_failed(i, &f.user, format!("{e:#}"));
-            });
+            Err(e) => {
+                for t in slskd.transfers(&batch).await.unwrap_or_default() {
+                    slskd.drop_transfer(&f.user, &t.id).await;
+                }
+                tracing::info!(target: "soulseek", user = %f.user, reason = %format!("{e:#}"), "a user failed; the next folder");
+                return with_item(id, |i| {
+                    on_failed(i, &f.user, format!("{e:#}"));
+                });
+            }
         }
     };
     with_item(id, |i| (i.state, i.percent) = (State::Checking, 100.0));
     let dir = folder.join(crate::slskd::FOLDER).join(&batch);
     let release: Vec<ReleaseTrack> =
         it.tracks.iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, &t.recording)).collect();
-    let checked = check(&dir, &f, &release).await;
+    let checked = match check(&dir, &f, &release, &gate).await {
+        Ok(verdict) => verdict,
+        Err(why) => {
+            tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %why, "held at its check");
+            return with_item(id, |i| hold(i, why, CHECK_AGAIN));
+        }
+    };
     for t in ts {
         slskd.drop_transfer(&f.user, &t.id).await;
     }
@@ -756,9 +825,9 @@ async fn follow(slskd: &Slskd, id: &str, batch: &str) -> Result<Vec<crate::slskd
             other => {
                 failed_reads += 1;
                 if failed_reads >= READS {
-                    bail!("slskd could not be read: {}", other.err().map_or("no transfers".to_string(), |e| format!("{e:#}")));
+                    return Err(other.map_or_else(|e| e.context("slskd could not be read"), |_| anyhow::anyhow!("slskd could not be read: no transfers")));
                 }
-                tokio::time::sleep(Duration::from_secs(4)).await;
+                tokio::time::sleep(READ_AGAIN).await;
                 continue;
             }
         };
@@ -780,9 +849,16 @@ async fn follow(slskd: &Slskd, id: &str, batch: &str) -> Result<Vec<crate::slskd
     }
 }
 
-/// Every file of the fetched folder gated against its track: the files in the release's order, or why each that
-/// failed did (by its name).
-async fn check(dir: &Path, f: &Folder, release: &[ReleaseTrack]) -> std::result::Result<Vec<PathBuf>, BTreeMap<String, String>> {
+/// What the check of a fetched folder found: its files in the release's order, or why each that failed did (by its name).
+type Verdict = std::result::Result<Vec<PathBuf>, BTreeMap<String, String>>;
+
+/// Every file of the fetched folder gated against its track (by `gate`): the verdict, or, where AcoustID could not be
+/// asked and no file has failed so far, none: what it said, as nothing is known yet.
+async fn check<G, Fut>(dir: &Path, f: &Folder, release: &[ReleaseTrack], gate: &G) -> std::result::Result<Verdict, String>
+where
+    G: Fn(PathBuf, ReleaseTrack) -> Fut,
+    Fut: std::future::Future<Output = Result<f32>>,
+{
     let on_disk = files_under(dir);
     let mut out = Vec::new();
     let mut why = BTreeMap::new();
@@ -792,14 +868,18 @@ async fn check(dir: &Path, f: &Folder, release: &[ReleaseTrack]) -> std::result:
             why.insert(name, "It is not in slskd's folder".into());
             continue;
         };
-        match super::track_fetch::gate_track(&path, track).await {
+        match gate(path.clone(), track.clone()).await {
             Ok(_) => out.push(path),
+            // None after it is asked about: AcoustID would not answer them either, and each would be decoded whole to find
+            // out. A file failed already settles the folder.
+            Err(e) if e.is::<NotAsked>() && why.is_empty() => return Err(format!("{e:#}")),
+            Err(e) if e.is::<NotAsked>() => break,
             Err(e) => {
                 why.insert(name, format!("{e:#}"));
             }
         }
     }
-    if why.is_empty() { Ok(out) } else { Err(why) }
+    Ok(if why.is_empty() { Ok(out) } else { Err(why) })
 }
 
 /// The files anywhere under `dir`.
@@ -901,6 +981,9 @@ mod tests {
         // Nothing to strip and one artist: two rungs fall together.
         assert_eq!(ladder(&record("Boards of Canada", "Geogaddi", None)), ["Boards of Canada Geogaddi", "*oards of Canada Geogaddi"]);
         assert_eq!(main_artist("Simon & Garfunkel"), "Simon");
+        assert_eq!(main_artist("Grouch / Grouch In Dub"), "Grouch");
+        assert_eq!(main_artist("AC/DC"), "AC/DC");
+        assert_eq!(main_artist("İlhan Mimaroğlu & Freddie Hubbard"), "İlhan Mimaroğlu");
     }
 
     #[test]
@@ -971,6 +1054,201 @@ mod tests {
         assert_eq!(i.failed, ["a", "b"]);
     }
 
+    /// A record with two folders and two tracks, put on the list under `id`.
+    fn listed(id: &str, state: State, batch: Option<&str>) {
+        let f = |user: &str| Folder {
+            user: user.into(),
+            dir: "d".into(),
+            format: "flac".into(),
+            lossless: true,
+            free_slot: true,
+            queue: 0,
+            speed: 1,
+            extra: 0,
+            files: vec![file(r"d\01 One.flac", 100), file(r"d\02 Two.flac", 200)],
+        };
+        let i = Item {
+            id: id.into(),
+            record: record("Air", "Moon Safari", Some(1998)),
+            state,
+            tracks: vec![track(1, "One", 100), track(2, "Two", 200)],
+            folders: vec![f("a"), f("b")],
+            chosen: Some(0),
+            failed: Vec::new(),
+            misses: 0,
+            due: 0,
+            why: None,
+            batch: batch.map(Into::into),
+            percent: 0.0,
+            placed: None,
+            set_aside: Vec::new(),
+        };
+        kept(|k| k.items.push(i));
+    }
+
+    /// slskd at a local address, answering as `app` does.
+    async fn slskd_at(app: axum::Router) -> Slskd {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Slskd::new(&url, "key").unwrap()
+    }
+
+    /// One that says every batch is in.
+    fn all_in() -> axum::Router {
+        let done = serde_json::json!({ "transfers": [{ "id": "t1", "filename": "x", "state": "Completed, Succeeded", "percentComplete": 100.0 }] });
+        axum::Router::new().route("/api/v0/transfers/downloads/batches/{id}", axum::routing::get(move || std::future::ready(axum::Json(done.clone()))))
+    }
+
+    /// slskd's completed-downloads folder, a batch's files in it.
+    fn fetched_to(name: &str, batch: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-{name}-{}", std::process::id()));
+        let at = d.join(crate::slskd::FOLDER).join(batch);
+        std::fs::create_dir_all(&at).unwrap();
+        std::fs::write(at.join("01 One.flac"), b"x").unwrap();
+        std::fs::write(at.join("02 Two.flac"), b"x").unwrap();
+        d
+    }
+
+    fn acoustid_away() -> anyhow::Error {
+        NotAsked("AcoustID could not be reached".into()).into()
+    }
+
+    #[tokio::test]
+    async fn a_check_acoustid_cannot_answer_holds_the_record_and_holds_it_against_nobody() {
+        let (id, batch) = ("ss-held", "b-held");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("held", batch);
+        let slskd = slskd_at(all_in()).await;
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let gate = |_, _| {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(Err(acoustid_away()))
+        };
+        fetch_from(id, &slskd, &d, gate).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.batch.as_deref(), i.chosen, i.folders.len()), (State::Checking, Some(batch), Some(0), 2), "it stays where it is, its tick and folders with it");
+        assert!(i.failed.is_empty() && i.set_aside.is_empty(), "no user failed, nothing set aside");
+        assert_eq!(i.why.as_deref(), Some("AcoustID could not be reached"));
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1, "one file decoded to find out, not the whole folder");
+        assert!(d.join(crate::slskd::FOLDER).join(batch).join("01 One.flac").exists(), "what it fetched waits where it is");
+        // No next folder under the same tick: nothing until its time, then it is this record again.
+        assert!(i.due > now());
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due - 1), None);
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due), Some(id.to_string()));
+        // AcoustID back, slskd having let go of the transfers meanwhile: on from the check, with no user failed.
+        let forgot = slskd_at(axum::Router::new()).await;
+        fetch_from(id, &forgot, &d, |_, _| std::future::ready(Ok(0.97))).await;
+        let i = item(id).unwrap();
+        assert!(i.failed.is_empty() && i.set_aside.is_empty());
+        assert_eq!(i.state, State::Stuck, "passed: only the library a test has not set up stops it");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_file_that_failed_settles_the_folder_with_acoustid_away() {
+        let d = fetched_to("settled", "b");
+        let dir = d.join(crate::slskd::FOLDER).join("b");
+        let f = Folder { user: "a".into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: vec![file(r"d\01 One.flac", 100), file(r"d\02 Two.flac", 200)] };
+        let release: Vec<ReleaseTrack> = [(1, "One"), (2, "Two")].iter().map(|(n, t)| super::super::track_fetch::track_for(1, *n, t, "Air", None, "r")).collect();
+        let first = |file: PathBuf, _| std::future::ready(if file.ends_with("01 One.flac") { Err(anyhow::anyhow!("2 frames would not decode")) } else { Err(acoustid_away()) });
+        let why = check(&dir, &f, &release, &first).await.unwrap().unwrap_err();
+        assert_eq!(why.into_iter().collect::<Vec<_>>(), [("01 One.flac".to_string(), "2 frames would not decode".to_string())]);
+        // The other way round nothing has failed yet: no verdict, though a file after it might.
+        let second = |file: PathBuf, _| std::future::ready(if file.ends_with("01 One.flac") { Err(acoustid_away()) } else { Err(anyhow::anyhow!("2 frames would not decode")) });
+        assert_eq!(check(&dir, &f, &release, &second).await.unwrap_err(), "AcoustID could not be reached");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A slskd nothing is listening at.
+    async fn slskd_gone() -> Slskd {
+        let gone = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+        Slskd::new(&format!("http://{gone}"), "key").unwrap()
+    }
+
+    fn never_gated(_: PathBuf, _: ReleaseTrack) -> std::future::Ready<Result<f32>> {
+        panic!("nothing was fetched to check")
+    }
+
+    #[tokio::test]
+    async fn slskd_gone_leaves_an_approved_record_as_it_is_and_blames_no_user() {
+        let id = "ss-away";
+        listed(id, State::Approved, None);
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-away-{}", std::process::id()));
+        fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.chosen, i.folders.len(), i.batch.clone()), (State::Approved, Some(0), 2, None), "its tick and its folders stay");
+        assert!(i.failed.is_empty(), "no user failed");
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("slskd could not be reached")), "{:?}", i.why);
+        // Not taken again at once, which is what went through every folder in seconds.
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due - 1), None);
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due), Some(id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_user_who_refuses_still_hands_the_record_to_the_next_folder() {
+        let id = "ss-refused";
+        listed(id, State::Approved, None);
+        let refused = axum::Router::new().route("/api/v0/transfers/downloads/batches", axum::routing::post(|| std::future::ready(axum::http::StatusCode::NOT_FOUND)));
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-refused-{}", std::process::id()));
+        fetch_from(id, &slskd_at(refused).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.chosen, i.failed.clone(), i.folders[0].user.as_str(), i.why.as_deref()), (State::Approved, Some(0), vec!["a".to_string()], "b", Some("a is offline")));
+    }
+
+    #[tokio::test]
+    async fn a_fetch_slskd_stops_answering_keeps_its_batch_and_is_followed_again() {
+        let (id, batch) = ("ss-reads", "b-reads");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("reads", batch);
+        fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.batch.as_deref(), i.chosen, i.folders.len()), (State::Fetching, Some(batch), Some(0), 2), "the batch kept, for slskd may well finish it");
+        assert!(i.failed.is_empty());
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("slskd could not be read: slskd could not be reached")), "{:?}", i.why);
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due - 1), None);
+        // Back, with the batch finished meanwhile: followed from where it was, and on to its check.
+        with_item(id, |i| i.due = 0);
+        fetch_from(id, &slskd_at(all_in()).await, &d, |_, _| std::future::ready(Err(acoustid_away()))).await;
+        assert_eq!(item(id).unwrap().state, State::Checking, "followed to its end");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_batch_slskd_answers_it_does_not_know_is_a_fetch_gone_and_held_for_nothing() {
+        let (id, batch) = ("ss-gone", "b-gone");
+        listed(id, State::Fetching, Some(batch));
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-gone-{}", std::process::id()));
+        fetch_from(id, &slskd_at(axum::Router::new()).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.batch.clone(), i.failed.clone()), (State::Approved, None, vec!["a".to_string()]), "the next folder: holding it would wait for ever");
+    }
+
+    #[tokio::test]
+    async fn a_search_slskd_could_not_make_is_no_miss() {
+        let id = "ss-search";
+        listed(id, State::Searching, None);
+        with_item(id, |i| i.misses = 3);
+        search_through(id, &slskd_gone().await).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.misses), (State::Waiting, 3), "the ladder's waits are for records not found");
+        assert!(i.due <= now() + ROUND_AT_LEAST, "searched again soon");
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("slskd could not be reached")), "{:?}", i.why);
+    }
+
+    #[test]
+    fn a_record_held_at_its_check_can_leave_the_list_and_one_at_work_cannot() {
+        listed("ss-work", State::Checking, Some("b-work"));
+        assert_eq!(dropped("ss-work", now()), None, "being checked");
+        assert!(item("ss-work").is_some());
+        with_item("ss-work", |i| hold(i, "AcoustID is not set up".into(), CHECK_AGAIN));
+        assert_eq!(dropped("ss-work", now()).as_deref(), Some("b-work"), "its batch, for its folder to go");
+        assert!(item("ss-work").is_none());
+        listed("ss-coming", State::Fetching, Some("b-coming"));
+        with_item("ss-coming", |i| hold(i, "slskd could not be reached".into(), CHECK_AGAIN));
+        assert_eq!(dropped("ss-coming", now()), None, "its files may still be coming");
+    }
+
     #[test]
     fn a_record_goes_in_as_artist_and_record_with_its_year_a_number_where_taken() {
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-{}", std::process::id()));
@@ -985,14 +1263,18 @@ mod tests {
 
     #[test]
     fn the_library_is_the_incoming_one_whose_fetcher_is_soulseek() {
-        use crate::settings::{LibraryPolicy, Roles, Saved, SourceConfig};
-        let roles = Roles { music: vec!["/music".into()], incoming: vec!["/lidarr".into(), "/soulseek".into()], ..Roles::default() };
+        use crate::settings::{Libraries, LibraryKind, LibrarySetting, Saved, SourceConfig};
+        let libraries = Libraries(vec![
+            LibrarySetting::new("/music", LibraryKind::Main),
+            LibrarySetting::new("/lidarr", LibraryKind::Incoming),
+            LibrarySetting::new("/soulseek", LibraryKind::Incoming),
+        ]);
         let mut saved = Saved {
-            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: roles, values: Default::default() }],
+            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries, values: Default::default() }],
             ..Default::default()
         };
         assert_eq!(library_in(&saved), None, "none chosen: none");
-        saved.sources[0].libraries.policies.insert("/soulseek".into(), LibraryPolicy { fetcher: Some(FETCHER.into()), ..Default::default() });
+        saved.sources[0].libraries.0[2].fetcher = Some(FETCHER.into());
         assert_eq!(library_in(&saved), Some(PathBuf::from("/soulseek")));
     }
 

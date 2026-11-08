@@ -4,7 +4,8 @@
 //!
 //! Pure: no I/O, no clock, no randomness of its own. The caller seeds the [`Rng`]: a seed gives the same answer
 //! everywhere (tests/vectors holds cases with their answers, for the other implementations to check against).
-//! Everything works on plain data: places in a list, a track's lane, a queue entry's key; the caller keeps the tracks.
+//! Everything works on plain data handed in: places in a list, a track's lane, a queue entry's key, a library's facts; the
+//! caller keeps the tracks and their files.
 //!
 //! - **Picking** ([`pick`]): which of a collection's tracks go in a queue, at most [`QUEUE_MOST`], and which plays
 //!   first.
@@ -14,11 +15,29 @@
 //! - **A let-go's brake** ([`brake`], decision 0075): its length, speed and way, for the page through WebAssembly too.
 //! - **Finding a name** ([`matcher`], 0.12): how a query meets a name (exact, alias, prefix, fuzzy), for the server's
 //!   search and the page's through WebAssembly alike.
+//! - **Crates** ([`crates`], decisions 0024 and 0101's point 17): conditions, the facts they test and how a crate is
+//!   worked out over a library ([`crates::View`]), on the server and on a device alike. Keeping them is the caller's.
+//! - **What makes music alike** ([`similarity`], the one similarity): for Sounds like and Radio alike.
+//! - **Radio's picker** ([`radio`], decisions 0036, amended, and 0101's point 19): which tracks come next, for Radio's
+//!   inserts and Autoplay's modes.
+//! - **The library on a device** ([`index`], decisions 0085 and 0101's points 16 to 19): its tracks, records, artists and
+//!   copies in packed arrays, loaded from bytes, changed by the server's feed and saved as bytes, for all the above to run on
+//!   with no server; what a device reads of it, and when it fetches what ([`index::sync`]).
+//! - **What those lean on**: what an id says by its shape ([`ids`]), a name's loose key ([`names`]) and the artists
+//!   excluded everywhere ([`excluded_artists`]). How a library makes its ids is the caller's.
 
 use serde::{Deserialize, Serialize};
 
 pub mod brake;
+pub mod crates;
+pub mod excluded_artists;
+pub mod fresh;
+pub mod ids;
+pub mod index;
 pub mod matcher;
+pub mod names;
+pub mod radio;
+pub mod similarity;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 

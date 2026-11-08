@@ -10,8 +10,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A score at or over this is four on the floor.
-pub const FOUR_ON_THE_FLOOR: f32 = 0.55;
 /// The low band's top (Hz).
 const LOW: f32 = 120.0;
 /// Hundredths of a second.
@@ -185,6 +183,7 @@ impl Biquad {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cratarr_rules::crates::FOUR_ON_THE_FLOOR;
 
     const RATE: u32 = 22_050;
 

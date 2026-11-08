@@ -15,6 +15,7 @@ import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.database.ContentObserver
 import android.graphics.drawable.Icon
+import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -110,6 +111,12 @@ class MainActivity : AppCompatActivity() {
     /** The folder turned on before Android's permission was there: on once it is given. */
     private var folderAsked: String? = null
 
+    /** The moment's weather: Android's permission for a rough place, as its switch in This device is turned on. */
+    private val locationAsk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /** Android's permission for notifications, asked as the app starts: once, whatever the answer. */
+    private val notificationsAsk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { prefs.notificationsAsked = true }
+
     /** Android's index of the device's music changed: the page is told once things settle (a copy is many changes). */
     private val deviceMusicChanged = object : ContentObserver(Handler(Looper.getMainLooper())) {
         private val tell = Runnable { page?.postMessage(JSONObject().put("type", "device-library-changed").toString()) }
@@ -131,11 +138,13 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         Notices.inFront = true
+        DeviceIndex.shown(this)
         live()
     }
 
     override fun onStop() {
         Notices.inFront = false
+        DeviceIndex.hidden()
         LiveSound.listener = null
         super.onStop()
     }
@@ -165,7 +174,7 @@ class MainActivity : AppCompatActivity() {
             reply.postMessage(ExportSave.message(token, "cancelled").toString())
             return@registerForActivityResult
         }
-        ExportSave.start(this, ExportSave.Job(doc, token, message.optString("name")))
+        ExportSave.start(this, ExportSave.Job(doc, token, message.optString("name"), Who.current(this)))
     }
 
     /** Where the first page opens, past the server's address: Settings (the launcher's Settings shortcut), or a
@@ -210,6 +219,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         LinkLog.catchCrashes(this)
+        // A debug build's page can be read with DevTools over adb (D22's timings on the tablet); a release's never.
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
         prefs = Prefs(this)
         openAt = openAtOf(intent)
         frame = FrameLayout(this)
@@ -265,8 +276,14 @@ class MainActivity : AppCompatActivity() {
         Downloads.manager(this).addListener(downloadsChanged)
         // Kept on this device (decision 0038): in step now, and every few hours from here on.
         Kept.onChange = { runOnUiThread { tellKept() } }
+        // 0.16's one fresh start, where it is due, and what each account had fetched again (decision 0101 point 23).
+        FreshStart.look(this)
         Kept.schedule(this)
         Kept.sync(this)
+        // The library on this device (PREVIEW2's D15): in step from here on, the page in view or not.
+        DeviceIndex.onChange = { runOnUiThread { page?.postMessage(DeviceIndex.report(this).toString()) } }
+        DeviceIndex.schedule(this)
+        DeviceIndex.start(this)
         // A download being saved reports to the page in view, whichever page asked for it.
         ExportSave.onReport = { m -> runOnUiThread { page?.postMessage(m) } }
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(inUseChanged)
@@ -278,6 +295,7 @@ class MainActivity : AppCompatActivity() {
         network = NetState.Watch(this) { page?.postMessage(it.toString()) }
         Plays.onPlayedHere = { runOnUiThread { page?.postMessage(Plays.playedHere(this).toString()) } }
         Scrobblers.onChanged = { runOnUiThread { page?.postMessage(Scrobblers.here(this).toString()) } }
+        Who.changed.add(whoChanged)
         // The device's music changed (decision 0052): the page asks for it again when it shows it.
         contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, deviceMusicChanged)
     }
@@ -308,7 +326,12 @@ class MainActivity : AppCompatActivity() {
             // reach); without a network, at once. An answer later from the other address moves the page there.
             shown == null -> lifecycleScope.launch {
                 if (NetState.connected(this@MainActivity)) {
-                    val looking = lifecycleScope.async(Dispatchers.IO) { Reach.check(this@MainActivity) }
+                    val looking = lifecycleScope.async(Dispatchers.IO) {
+                        Reach.check(this@MainActivity)
+                        // The page opens as [Who] says, from the app's own copy with no server in front of it: a session that
+                        // ended with the app closed is found out now, and what opens shows nothing of the account.
+                        Plays.look(this@MainActivity)
+                    }
                     withTimeoutOrNull(FIRST_LOOK_MS) { looking.await() }
                 } else {
                     Reach.checkSoon(this@MainActivity)
@@ -323,12 +346,30 @@ class MainActivity : AppCompatActivity() {
         PlayerService.ready(this)
     }
 
+    /** Another one's things are this device's ([Who], decision 0101): the page is told what is theirs, and their kept
+     *  items are brought in step. */
+    private val whoChanged: (String, String) -> Unit = { _, _ ->
+        runOnUiThread {
+            page?.let { p ->
+                p.postMessage(appMessage())
+                tellServers(p)
+                p.postMessage(Scrobblers.here(this).toString())
+                p.postMessage(Plays.playedHere(this).toString())
+            }
+            tellDownloads(now = true)
+            tellKept(now = true)
+            webView?.let(::keepPagePrefs)
+        }
+    }
+
     override fun onDestroy() {
+        Who.changed.remove(whoChanged)
         LiveSound.listener = null
         outputs?.stop()
         network?.stop()
         Plays.onPlayedHere = null
         ExportSave.onReport = null
+        DeviceIndex.onChange = null
         contentResolver.unregisterContentObserver(deviceMusicChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(modeChanged)
@@ -374,17 +415,21 @@ class MainActivity : AppCompatActivity() {
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
             serverCover = { server, cover, size -> Servers.cover(app, server, cover, size) },
+            deviceIndex = { DeviceIndex.answer(app, it) },
             // One sign-in for both addresses (0.12, the owner 2026-10-30): the session a page loaded with goes to the
             // other address too; a sign-in page with the other's session at hand takes it and loads again.
             onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },
         )
-        // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above.
+        // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above. And for a record's
+        // small cover with Cratarr away, which it cannot open itself here: the app holds them.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
             WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)
         ) {
             ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
-                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? =
-                    if (Prefs.originOf(request.url.toString()) in origins) BundledPage.answer(app, request.method, request.url) else null
+                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
+                    if (Prefs.originOf(request.url.toString()) !in origins) return null
+                    return request.url.path?.let { DeviceIndex.answer(app, it) } ?: BundledPage.answer(app, request.method, request.url)
+                }
             })
         }
         view.webChromeClient = CratarrWebChromeClient { intent, callback ->
@@ -400,10 +445,12 @@ class MainActivity : AppCompatActivity() {
         // `window.CratarrApp`, on Cratarr's pages only: the local address's over plain http only while it answers as
         // this app's Cratarr on this network (Reach.trusts).
         if (origins.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            WebViewCompat.addWebMessageListener(view, "CratarrApp", origins) { _, message, sourceOrigin, isMainFrame, reply ->
-                val data = message.data
-                if (isMainFrame && data != null && Reach.trusts(this, sourceOrigin.toString())) onPageMessage(data, reply)
-            }
+            Prefs.withoutRefused(origins) { rules ->
+                WebViewCompat.addWebMessageListener(view, "CratarrApp", rules) { _, message, sourceOrigin, isMainFrame, reply ->
+                    val data = message.data
+                    if (isMainFrame && data != null && Reach.trusts(this, sourceOrigin.toString())) onPageMessage(data, reply)
+                }
+            } ?: Log.w(TAG, "WebView took none of the app's origins: $origins")
         }
         frame.addView(view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         webView = view
@@ -418,7 +465,7 @@ class MainActivity : AppCompatActivity() {
     /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`
      *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
      *  `address`, `open` (a link outside), `export-save` (Download…: an export saved as its one file), `snippet` (a
-     *  track's snippet, 0.12). */
+     *  track's snippet, 0.12), `index-look` and `index-again` (the library on this device). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -436,6 +483,7 @@ class MainActivity : AppCompatActivity() {
                 // The network as it is, and the device music played here (0.9.15, offline).
                 reply.postMessage(NetState.now(this).toString())
                 reply.postMessage(Plays.playedHere(this).toString())
+                reply.postMessage(DeviceIndex.report(this).toString())
                 player?.report(withQueue = true)
                 // A download being saved: where it is.
                 ExportSave.latest?.let { reply.postMessage(it) }
@@ -444,6 +492,37 @@ class MainActivity : AppCompatActivity() {
                 followSession()
             }
             "network" -> reply.postMessage(NetState.now(this).toString())
+            // The library on this device: the page's word that it moved, or that the person answered; its row tapped.
+            "index-look" -> DeviceIndex.look(this, message.optBoolean("told"))
+            "index-again" -> DeviceIndex.tryAgain(this)
+            // Whose this device's things are (decision 0101): the account the page learnt from `/api/me` (`""` with
+            // signing in off), at once rather than at the app's own next ask.
+            "account" -> {
+                val name = message.optString("name", "")
+                // One sent before a sign-out began names the session ending.
+                if (!Sessions.signingOut) lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, name) }
+            }
+            // Cratarr told the page no one is signed in, and in Local or a server's mode the page stays: no sign-in page for
+            // [Sessions.loaded] to see.
+            "nobody" -> lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, null) }
+            // The page signing out: what waits of the account's goes first (a few seconds at most), its downloads go
+            // when asked, then nobody's things show; answered, so the page signs out after.
+            "sign-out" -> {
+                val remove = message.optBoolean("remove")
+                // First of all: the flush alone takes seconds, and an answer landing in them must not sign her back in. The
+                // page ends its session with a request, no page load for the client to see, and then opens the app's own
+                // page: that load ends both addresses' (0.12), or the other's, still good, would sign it back in.
+                Sessions.signOutAsked()
+                lifecycleScope.launch(Dispatchers.IO) {
+                    Plays.flush(this@MainActivity)
+                    Scrobblers.flush(this@MainActivity)
+                    if (remove) Kept.releaseAccount(this@MainActivity, Who.current(this@MainActivity))
+                    Who.set(this@MainActivity, null)
+                    withContext(Dispatchers.Main) { reply.postMessage(JSONObject().put("type", "signed-out").toString()) }
+                }
+            }
+            // This device's Remove for an account's share (decision 0101), by its name as the kept report gives it.
+            "account-downloads-remove" -> Kept.releaseAccount(this, Who.keyOf(message.optString("account", "")))
             "device-plays" -> reply.postMessage(Plays.playedHere(this).toString())
             "player" -> player?.handle(message) ?: waiting.add(message)
             // A track's snippet (0.12): played beside the music by the player service. Before the player is connected
@@ -555,9 +634,14 @@ class MainActivity : AppCompatActivity() {
                 )
                 Reach.checkSoon(this@MainActivity)
             }
-            "page-prefs" -> message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }?.let {
-                prefs.pagePrefs = it
-                webView?.let(::keepPagePrefs)
+            // The device's settings, and the person's own under whose they are (decision 0101).
+            "page-prefs" -> {
+                val device = message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }
+                val who = message.optString("who")
+                val mine = message.optString("mine").takeIf { it.isNotEmpty() && who.isNotEmpty() && it != prefs.pagePrefsOf(who) }
+                device?.let { prefs.pagePrefs = it }
+                mine?.let { prefs.keepPagePrefsOf(who, it) }
+                if (device != null || mine != null) webView?.let(::keepPagePrefs)
             }
             "device-set" -> {
                 message.optString("player").trim().takeIf { it.isNotEmpty() }?.let { prefs.playerName = it }
@@ -576,11 +660,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 message.optString("downloadQuality").takeIf { it.isNotEmpty() }?.let { prefs.downloadQuality = it }
                 if (message.has("levelling")) prefs.levelling = message.optBoolean("levelling")
-                // Spike B (0.11): the players' rules from Rust, off by default.
-                if (message.has("rustRules")) {
-                    prefs.rustRules = message.optBoolean("rustRules")
-                    RustRules.set(this, prefs.rustRules)
-                }
                 message.optString("levelUnknown").takeIf { it.isNotEmpty() }?.let { prefs.levelUnknown = it }
                 // Start and stop (0.9.6): the page's This device setting, kept here for the app's own player.
                 message.optJSONObject("startStop")?.let { s ->
@@ -606,7 +685,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 // The addresses as typed (empty local: none), and whether the local one is preferred. Each is kept where
                 // Cratarr answers ([Reach.find]: `https://` first when no scheme is typed), so a stray edit does not take
-                // the app off Cratarr; a local network address where nothing answers too (away from home, it cannot).
+                // the app off Cratarr; a local network address where nothing answers too (away from home, it cannot), if
+                // it is one at all: it needs an origin ([Prefs.origin]), and `htp://nas` answers nothing anywhere.
                 // One not kept is named back to the page, whose field shows the address kept again.
                 fun same(typed: String, kept: String?) = typed == kept || Prefs.normalise(typed) == kept
                 val local = if (message.has("local")) message.optString("local").trim().takeUnless { same(it, prefs.localAddress) } else null
@@ -622,11 +702,8 @@ class MainActivity : AppCompatActivity() {
                                 prefs.localAddress = null
                             } else {
                                 val (found, answered) = withContext(Dispatchers.IO) { Reach.find(this@MainActivity, local) }
-                                when {
-                                    found != null -> prefs.localAddress = found
-                                    !answered -> prefs.localAddress = Prefs.normalise(local)
-                                    else -> refused = local
-                                }
+                                val kept = found ?: Prefs.normalise(local).takeUnless { answered }
+                                if (kept != null && Prefs.originOf(kept) != null) prefs.localAddress = kept else refused = local
                             }
                         }
                         prefs.preferLocal = preferLocal
@@ -659,6 +736,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "kept-sync" -> Kept.sync(this, retryFailed = true)
+            "kept-start-again" -> Kept.startAgain(this)
             // Download… (0.10): Cratarr prepared the export and named its download (a zip, or the one file); the user
             // says where it is saved, in Android's save dialog with that name.
             "export-save" -> {
@@ -688,6 +766,12 @@ class MainActivity : AppCompatActivity() {
             // The Background switch (the owner, 2026-10-25): on asks Android's dialog; off opens this app's page, its
             // "App battery usage" one tap away (Android's list of every app made the user look for Cratarr in it).
             "battery" -> if (message.optString("op") == "settings") openAppSettings() else askToRunInBackground()
+            // The moment's weather (decision 0101, point 18): the permission as its switch is turned on, then the rough place.
+            "location" -> if (message.optString("op") == "ask") {
+                if (!CoarseLocation.granted(this)) locationAsk.launch(CoarseLocation.PERMISSION)
+            } else {
+                CoarseLocation.now(this, ::tellPlace)
+            }
             "address" -> askForAddress()
             "open" -> message.optString("url").takeIf { it.isNotEmpty() }?.let { openOutside(it) }
             // Share (a menu's): Android's share sheet, as the WebView has no navigator.share. `text` holds the link.
@@ -760,7 +844,6 @@ class MainActivity : AppCompatActivity() {
         .put("syncBudgetGb", prefs.syncBudgetGb)
         .put("syncOnlyCharging", prefs.syncOnlyCharging)
         .put("levelling", prefs.levelling)
-        .put("rustRules", prefs.rustRules)
         .put("levelUnknown", prefs.levelUnknown)
         .put(
             "startStop",
@@ -813,6 +896,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Where the device roughly is, for the page to ask the weather of; none: no place in it. */
+    private fun tellPlace(place: Location?) {
+        val m = JSONObject().put("type", "location")
+        if (place != null) m.put("lat", CoarseLocation.coarse(place.latitude)).put("lon", CoarseLocation.coarse(place.longitude))
+        page?.postMessage(m.toString())
+    }
+
     /** Android's own dialog: let the app run in the background (left out of battery optimisation). */
     private fun askToRunInBackground() {
         try {
@@ -854,14 +944,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address. */
+    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address:
+     *  whose the page is, as each address's storage may have an older word for it (the one signed in now, nobody, decision
+     *  0101), the device's settings, and the person's own. */
     private fun keepPagePrefs(view: WebView) {
         pageScript?.remove()
         pageScript = null
-        val saved = prefs.pagePrefs ?: return
         val origins = prefs.origins()
         if (origins.isEmpty() || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
-        pageScript = WebViewCompat.addDocumentStartJavaScript(view, "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}) } catch (e) {}", origins)
+        val who = Who.current(this)
+        val device = prefs.pagePrefs?.let { "localStorage.setItem('cratarr-prefs', ${JSONObject.quote(it)});" }.orEmpty()
+        val mine = prefs.pagePrefsOf(who)?.let { "localStorage.setItem(${JSONObject.quote("cratarr-prefs$who")}, ${JSONObject.quote(it)});" }.orEmpty()
+        val script = "try { localStorage.setItem('cratarr-who', ${JSONObject.quote(Who.forPage(who))}); $device $mine } catch (e) {}"
+        pageScript = Prefs.withoutRefused(origins) { WebViewCompat.addDocumentStartJavaScript(view, script, it) }
     }
 
     /** Cratarr's address, asked for: kept where Cratarr answers ([Reach.find]); else asked again, [refused] named. */
@@ -935,9 +1030,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun askForNotifications() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || prefs.notificationsAsked) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
-        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        notificationsAsk.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private companion object {

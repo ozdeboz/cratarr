@@ -13,7 +13,7 @@ export type KeptItem = {
   key: string;
   kind: KeptKind;
   source: string;
-  /** An album's or a crate's id, a playlist's name, an artist's name. */
+  /** An album's or a crate's id, a playlist's id (its name today), an artist's name. */
   id: string;
   /** Shown in the sheet. */
   name: string;
@@ -38,13 +38,22 @@ export const kept = $state({
   /** Bytes on the device in all (kept and downloaded), and the budget (null: no limit). */
   used: 0,
   budget: null as number | null,
+  /** Each account's share of them (decision 0101; a file two hold counts in both), `here`: the one signed in; none
+   *  while nobody is. */
+  accounts: [] as { account: string; bytes: number; here: boolean }[],
   /** What holds the work back: Wi-Fi, charging, no connection; null when nothing does. */
   waiting: null as 'wifi' | 'charging' | 'network' | null,
   /** The track downloading now, as "artist – name". */
   current: null as string | null,
   /** The app's sync job under way, from its start to its end, as the app says (held back by its rules too). */
   running: false,
+  /** Its list cannot be read: nothing is kept in step until it starts again (`startKeptAgain`). */
+  unreadable: false,
 });
+
+/** Whether This device shows each account's share: more than one, or one who is not here, whose files fill this one's limit
+ *  for a reason it would not otherwise see, and whose Remove is the only way to it. */
+export const sharesShow = () => kept.accounts.length > 1 || kept.accounts.some((a) => !a.here);
 
 export const keptKey = (kind: KeptKind, source: string, id: string) => `${kind}:${source}/${id}`;
 
@@ -58,7 +67,9 @@ export const keptBusy = () => kept.running;
 
 /** Keep an item on the device, or not (`name` for the sheet). The app answers with the whole list again. */
 export function setKept(kind: KeptKind, source: string, id: string, on: boolean, name: string = id) {
-  if (!inApp) return;
+  // A list that cannot be read takes nothing until it starts again (Downloads says so): the app leaves it as it is, so the page
+  // would show an item syncing that never does.
+  if (!inApp || kept.unreadable) return;
   // At once in the page; the app's report follows.
   const key = keptKey(kind, source, id);
   if (on && !kept.items.some((i) => i.key === key)) {
@@ -67,6 +78,11 @@ export function setKept(kind: KeptKind, source: string, id: string, on: boolean,
     kept.items = kept.items.filter((i) => i.key !== key);
   }
   toApp({ type: 'kept-set', kind, source, id, name, on });
+}
+
+/** A list that cannot be read, started again by the app; what is on the device stays. */
+export function startKeptAgain() {
+  if (inApp) toApp({ type: 'kept-start-again' });
 }
 
 /** Asks the app for the list and its progress again. */
@@ -110,9 +126,11 @@ if (inApp) {
     kept.items = Array.isArray(m.items) ? (m.items as KeptItem[]) : [];
     kept.used = typeof m.used === 'number' ? m.used : 0;
     kept.budget = typeof m.budget === 'number' ? m.budget : null;
+    kept.accounts = Array.isArray(m.accounts) ? (m.accounts as typeof kept.accounts).filter((a) => typeof a?.account === 'string' && typeof a.bytes === 'number') : [];
     kept.waiting = m.waiting === 'wifi' || m.waiting === 'charging' || m.waiting === 'network' ? m.waiting : null;
     kept.current = typeof m.current === 'string' ? m.current : null;
     kept.running = m.running === true;
+    kept.unreadable = m.unreadable === true;
     kept.known = true;
     // A sync asked for by hand: ended once the job has (held back by the rules counts as its end).
     if (asked) {

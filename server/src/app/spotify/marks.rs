@@ -55,13 +55,6 @@ impl Library {
     }
 }
 
-impl Library {
-    /// Whether the library has an album by its title and artist (0076: Beyond marks what is here already).
-    pub fn has_album(&self, title: &str, artist: &str) -> bool {
-        self.matcher.find_album(title, Some(artist)).is_some()
-    }
-}
-
 /// What MusicBrainz answered, as kept (`store::mb`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Release {

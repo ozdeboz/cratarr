@@ -19,6 +19,8 @@ RUN pnpm build
 FROM rust:1.99.0-alpine@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 AS source
 # cmake: libopus is built from its bundled source (the downloads' smaller copies, decision 0033).
 RUN apk add --no-cache musl-dev build-base cmake
+# The page's target, for the test stage. Here and not there, as `COPY server/` below would fetch it again at every commit.
+RUN rustup target add wasm32-unknown-unknown
 ARG CARGO_BUILD_JOBS
 WORKDIR /app
 COPY server/ server/
@@ -44,17 +46,19 @@ COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
 # Unoptimised (the owner, 2026-10-26): the tests are their own compile whatever is done, and this one is the quicker.
 # The end-to-end suite runs after them on the same compile (0.14, faster previews: as a stage of its own after the
-# tests it compiled the server's own crates a second time).
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace && cargo test --locked --workspace -- --ignored fixtures:: types_and_years_into_the_files_end_to_end --nocapture
+# tests it compiled the server's own crates a second time). The rules crate for the page goes first (`cargo check-wasm`):
+# seconds, and nothing else compiles it for that target until the next module for a player is built.
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo check-wasm && cargo test --locked --workspace && cargo test --locked --workspace -- --ignored fixtures:: end_to_end --nocapture
 
 # The end-to-end suite (decision 0093): the real server binary on a fresh copy of the fixture library, driven through
-# its API. The test stage runs it too; this stage runs it alone: `docker build --target e2e .`.
+# its API. The test stage runs it too; this stage runs it alone: `docker build --target e2e .`. Rust filters by name, so
+# `end_to_end` is every test of that suite (each ends its name so): no list here to forget one on.
 FROM source AS e2e
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
 # Unoptimised and on the test stage's cache, as the tests are; its sources freshly timed as theirs are, so run after
 # the tests it compiles the server's own crates again (a preview build runs it alone, before the image).
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace -- --ignored fixtures:: types_and_years_into_the_files_end_to_end --nocapture
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace -- --ignored fixtures:: end_to_end --nocapture
 
 # The binary alone, to take out (the test server runs on it, with CRATARR_WEB_DIR at a built web/dist).
 FROM scratch AS binary

@@ -6,9 +6,12 @@
 import { hiddenLibraries } from './listFilter.svelte';
 import { ApiError, albumView, artistView, crateRows, playlistRows, type Picked, type Picking, type PlayHow, type PlaylistRow } from './api';
 import { downloads, inApp, onApp } from './app.svelte';
+import { heldHere } from './deviceAnswers.svelte';
+import { reads } from './deviceIndex.svelte';
 import { DEVICE } from './deviceMusic.svelte';
+import { OWN } from './deviceReads';
 import { offline } from './offline.svelte';
-import { reach, unreached } from './reach.svelte';
+import { networkSaid, reach } from './reach.svelte';
 import { shuffled } from './shuffle';
 
 export const NOT_HERE = 'Not on this device';
@@ -22,7 +25,7 @@ if (inApp)
     network.online = typeof m.online === 'boolean' ? m.online : null;
     network.validated = typeof m.validated === 'boolean' ? m.validated : null;
     network.kind = typeof m.kind === 'string' ? m.kind : null;
-    if (network.online === false) unreached();
+    networkSaid(network.online !== false);
   });
 
 /** Each track on the device (`source/id`), and how many of each album's (`source/album_id`). */
@@ -38,16 +41,21 @@ const onDevice = $derived.by(() => {
   return { tracks, albums };
 });
 
+heldHere.tracks = () => [...onDevice.tracks].flatMap((key) => (key.startsWith(`${OWN}/`) ? [key.slice(OWN.length + 1)] : []));
+
 /** Out of reach: only what is on the device plays. */
 export const away = () => reach.away;
 /** A track is on this device. */
 export const here = (source: string, id: string | null | undefined) => !!id && (source === DEVICE || onDevice.tracks.has(`${source}/${id}`));
 /** How many of an album's tracks are on this device. */
 export const albumHere = (source: string, album: string) => onDevice.albums.get(`${source}/${album}`) ?? 0;
-/** Out of reach, and none of the album on the device: it cannot play (its card dimmed, its Play gone). */
-export const albumAway = (source: string, album: string) => reach.away && source !== DEVICE && albumHere(source, album) === 0;
-/** Out of reach, and none of these tracks on the device. */
-export const rowsAway = (source: string, ids: (string | null | undefined)[]) => reach.away && !ids.some((id) => here(source, id));
+/** Every record with something on this device, by its id. */
+export const albumsHere = () => new Set([...onDevice.albums.keys()].map((k) => k.slice(k.indexOf('/') + 1)));
+/** Reads from the device, and none of the album on it: it cannot play (its card dimmed, its Play gone). As reads go, not as the first
+ *  failed request goes: a blip dims nothing. */
+export const albumAway = (source: string, album: string) => reads.from === 'device' && source !== DEVICE && albumHere(source, album) === 0;
+/** Reads from the device, and none of these tracks on it. */
+export const rowsAway = (source: string, ids: (string | null | undefined)[]) => reads.from === 'device' && !ids.some((id) => here(source, id));
 
 /** The collection's rows as last read (its kept copy, the server out of reach), with their source. */
 async function rowsOf(what: Picking, source: string | undefined): Promise<{ source: string; rows: PlaylistRow[] } | null> {

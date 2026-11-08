@@ -4,7 +4,7 @@
   // line says why), and its album menu (lib/AlbumMenu), where Keep, Replace and Delete are, as everywhere; a failed conversion is tried again
   // there.
   import { offers } from './capabilities.svelte';
-  import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
+  import AlbumMenu from './AlbumMenu.svelte';
   import { library, readLibrary } from './albums.svelte';
   import { albumCoverUrl, type ListedAlbum } from './api';
   import Cover from './Cover.svelte';
@@ -17,7 +17,7 @@
   let { source, album, ongone }: { source: string; album: string; ongone: () => void } = $props();
 
   $effect(() => {
-    if (!library.view) void readLibrary(false);
+    if (!library.view) readLibrary(false).catch(() => {});
   });
   const s = $derived(library.view?.sources.find((x) => x.id === source) ?? null);
   const a = $derived(s?.albums.find((x) => x.id === album) ?? null);
@@ -51,18 +51,15 @@
   <!-- Cratarr's own: its intake card, checks on top, tracks under (lib/IntakeCard). -->
   {#if source === 'cratarr'}<IntakeCard {source} {album} />{/if}
   <!-- What its tags would get before it comes in: reviewed on the sheet, written as a run (decision 0092, 0.14). -->
-  {#if offers('intake_check') && source === 'cratarr'}<button class="act" onclick={() => openRecordPlan('intake', album)}>Before Keep<Icon name="chevronRight" size={18} /></button>{/if}
-  <button class="act" onclick={() => (menu = true)}>Keep, replace or delete<Icon name="chevronRight" size={18} /></button>
+  {#if offers('intake_check') && source === 'cratarr'}<button class="act" onclick={() => openRecordPlan('intake', album)}>Before adding<Icon name="chevronRight" size={18} /></button>{/if}
+  <button class="act" onclick={() => (menu = true)}>Add, replace or delete<Icon name="chevronRight" size={18} /></button>
   {#if menu}
     <AlbumMenu
       {source}
       album={a}
-      offer={offerIn(s, a)}
-      trashDays={library.view.trash_days}
-      music={library.view.music ?? 'Music'}
       onclose={() => (menu = false)}
       ongone={() => {
-        void readLibrary(true);
+        readLibrary(true).catch(() => {});
         loadHealth();
         ongone();
       }}

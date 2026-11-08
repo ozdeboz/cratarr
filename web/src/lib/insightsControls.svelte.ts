@@ -41,7 +41,8 @@ function libraryGroup(): ControlGroup[] {
   const sid = prefs.source || known.list[0]?.id;
   const view = libraries.view?.sources.find((s) => s.id === sid);
   if (!sid || !view) return [];
-  const used = view.server_libraries.filter((l) => view.libraries.music.includes(l.id) || view.libraries.incoming.includes(l.id));
+  const kindOf = (id: string) => view.libraries.find((l) => l.id === id)?.kind;
+  const used = view.server_libraries.filter((l) => kindOf(l.id));
   const on = used.filter((l) => libraryShown(sid, l.id)).length;
   return [
     {
@@ -49,7 +50,7 @@ function libraryGroup(): ControlGroup[] {
       controls: used.map((l) => ({
         kind: 'toggle',
         name: l.name,
-        line: view.libraries.incoming.includes(l.id) ? 'Incoming' : 'Music',
+        line: ({ incoming: 'Incoming', own: 'Own music', main: 'Main library' } as const)[kindOf(l.id) ?? 'main'],
         get: () => libraryShown(sid, l.id),
         set: (v: boolean) => showLibrary(sid, l.id, v),
         disabled: on === 1 && libraryShown(sid, l.id),

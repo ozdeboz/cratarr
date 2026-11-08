@@ -1,6 +1,7 @@
 // Scrobbling, the account's way (decision 0091): from each device (the start) or through the server. This device's
 // own sign-ins and, in a browser, its queue and its sending (lib/scrobbleDevice); in the apps, their own code does the
 // sending with the sign-ins the app keeps (the page asks it: `scrobblers`). Never sent to Cratarr's server.
+import { accountKey, perAccount, whenAccount, whenLearnt, whenLeaving, whoOf } from './account';
 import { getScrobbles } from './api';
 import { inApp, onApp, toApp } from './app.svelte';
 import { mine, setScrobbleWay } from './mySettings.svelte';
@@ -31,20 +32,18 @@ export const scrobbling = $state({
 });
 
 /** The way read again (and, through the server, its services' state is the Listening services' own). */
-// Read once the page has an account, and what waits from before sent then.
+// Read at every open, once Cratarr has said whose the page is, and what waits from before sent then: with no way known a
+// browser's plays go nowhere, neither sent nor queued.
 if (typeof window !== 'undefined')
-  queueMicrotask(() =>
-    import('./account').then(({ whenAccount }) =>
-      whenAccount.add(() => {
-        void readWay().then(send);
-        readHere();
-      }),
-    ),
-  );
+  whenLeaving.add(send);
+whenLearnt.add(() => {
+    void readWay().then(send);
+    readHere();
+  });
 export async function readWay() {
   try {
     const r = (await getScrobbles()) as { way?: Way };
-    scrobbling.way = r.way === 'device' ? 'device' : 'server';
+    scrobbling.way = r.way === 'server' ? 'server' : 'device';
   } catch {
     // As it was.
   }
@@ -56,25 +55,31 @@ export async function setWay(way: Way) {
   await readWay();
 }
 
-// The sign-ins: the app's, or this browser's own storage.
+// The sign-ins: the app's, or this browser's own storage, each account's apart (decision 0101), as its queue.
 type Kept = { listenbrainz?: { token: string; name: string; broken?: string | null }; lastfm?: { key: string; secret: string; session: string; name: string; broken?: string | null } };
 const KEPT = 'cratarr.scrobblers';
 const QUEUE = 'cratarr.scrobbleQueue';
+const PENDING = 'cratarr.lastfmPending';
 function read<T>(k: string, none: T): T {
   try {
-    const v = localStorage.getItem(k);
+    const v = localStorage.getItem(perAccount(k));
     return v ? (JSON.parse(v) as T) : none;
   } catch {
     return none;
   }
 }
-function write(k: string, v: unknown) {
+/** `who` (lib/account's whoOf): the one signed in, or whose a send still going is. */
+function write(k: string, v: unknown, who = whoOf(accountKey())) {
   try {
-    localStorage.setItem(k, JSON.stringify(v));
+    localStorage.setItem(k + who, JSON.stringify(v));
   } catch {
     // Kept for this page only.
   }
 }
+// Another account signed in: its own shown.
+whenAccount.add(() => {
+  if (!inApp) readHere();
+});
 function shown(k: Kept) {
   scrobbling.here = {
     listenbrainz: k.listenbrainz ? { name: k.listenbrainz.name, broken: k.listenbrainz.broken ?? null } : null,
@@ -110,7 +115,7 @@ export async function keepListenBrainz(token: string) {
  *  app, back through its own link (`cratarr://connected/lastfm-device`), the app then trading it for the session. */
 export function signInLastFm(key: string, secret: string) {
   if (inApp) return toApp({ type: 'scrobblers', op: 'lastfm', key, secret });
-  write('cratarr.lastfmPending', { key, secret });
+  write(PENDING, { key, secret });
   const back = `${location.origin}${location.pathname}#/settings?view=${encodeURIComponent('settings:tracking/lastfm')}`;
   location.assign(`https://www.last.fm/api/auth/?api_key=${encodeURIComponent(key)}&cb=${encodeURIComponent(back)}`);
 }
@@ -118,7 +123,7 @@ export function signInLastFm(key: string, secret: string) {
 export async function lastFmBack(): Promise<string | null> {
   if (inApp) return null;
   const token = /[?&]token=([^&#]+)/.exec(location.href)?.[1];
-  const pending = read<{ key: string; secret: string } | null>('cratarr.lastfmPending', null);
+  const pending = read<{ key: string; secret: string } | null>(PENDING, null);
   if (!token || !pending) return null;
   try {
     const { session, name } = await lastFmSession(pending.key, pending.secret, decodeURIComponent(token));
@@ -129,7 +134,7 @@ export async function lastFmBack(): Promise<string | null> {
     return e instanceof Error ? e.message : 'Last.fm refused the sign-in';
   } finally {
     try {
-      localStorage.removeItem('cratarr.lastfmPending');
+      localStorage.removeItem(perAccount(PENDING));
     } catch {
       // Gone with the page.
     }
@@ -173,6 +178,8 @@ export async function send() {
   if (inApp || sending) return;
   if (!mine.tracking) return write(QUEUE, { plays: [], sent: { listenbrainz: [], lastfm: [] } });
   sending = true;
+  // Its sign-ins and its queue are the account's it began for, whoever has signed in by the time it answers.
+  const who = whoOf(accountKey());
   try {
     const k = read<Kept>(KEPT, {});
     const q = read<Queued>(QUEUE, { plays: [], sent: { listenbrainz: [], lastfm: [] } });
@@ -186,7 +193,7 @@ export async function send() {
           else await lastFmScrobble(k.lastfm!.key, k.lastfm!.secret, k.lastfm!.session, batch);
           q.sent[s] = [...q.sent[s], ...batch.map((p) => p.id)];
         } catch (e) {
-          if (e instanceof ScrobbleError && e.signedOut) (k[s]!.broken = e.message), write(KEPT, k);
+          if (e instanceof ScrobbleError && e.signedOut) (k[s]!.broken = e.message), write(KEPT, k, who);
           break;
         }
       }
@@ -194,7 +201,7 @@ export async function send() {
     const sent = { listenbrainz: new Set(q.sent.listenbrainz), lastfm: new Set(q.sent.lastfm) };
     const left = remaining(q.plays, services, sent, now());
     const ids = new Set(left.map((p) => p.id));
-    write(QUEUE, { plays: left, sent: { listenbrainz: q.sent.listenbrainz.filter((id) => ids.has(id)), lastfm: q.sent.lastfm.filter((id) => ids.has(id)) } });
+    write(QUEUE, { plays: left, sent: { listenbrainz: q.sent.listenbrainz.filter((id) => ids.has(id)), lastfm: q.sent.lastfm.filter((id) => ids.has(id)) } }, who);
     readHere();
   } finally {
     sending = false;

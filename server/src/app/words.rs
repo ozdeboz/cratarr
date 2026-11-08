@@ -138,30 +138,29 @@ pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, fa
             })
             .push(i);
     }
-    // The services' words and the household's tags, by the records they are said of (an artist's: each of theirs).
-    let mut base_of: HashMap<String, String> = HashMap::new();
-    let mut by_base: HashMap<String, Vec<String>> = HashMap::new();
+    // The services' words and the household's tags, by the records they are said of (an artist's: each of theirs). What is
+    // said of a record no album holds now reaches nothing.
+    let mut albums: HashSet<String> = HashSet::new();
     let mut by_artist: HashMap<String, Vec<String>> = HashMap::new();
-    for (id, base, artist, _) in serve.library.album_word_inputs()? {
-        by_base.entry(base.clone()).or_default().push(id.clone());
+    for (id, artist, _) in serve.library.album_word_inputs()? {
         by_artist.entry(artist).or_default().push(id.clone());
-        base_of.insert(id, base);
+        albums.insert(id);
     }
     let mut said: HashMap<String, Vec<Said>> = HashMap::new();
     for (subject, source, word, raw_kind, weight) in serve.userdata.all_words()? {
         let Some(source) = Source::of(&source) else { continue };
-        let (held, share) = match subject.split_once(':') {
-            Some(("album", base)) => (by_base.get(base), 1.0),
-            Some(("artist", artist)) => (by_artist.get(artist), ARTIST_SHARE),
+        let (held, share): (&[String], f32) = match subject.split_once(':') {
+            Some(("album", album)) => (albums.get(album).map_or(&[], std::slice::from_ref), 1.0),
+            Some(("artist", artist)) => (by_artist.get(artist).map_or(&[], Vec::as_slice), ARTIST_SHARE),
             _ => continue,
         };
-        for a in held.into_iter().flatten() {
+        for a in held {
             said.entry(a.clone()).or_default().push(Said { source, word: word.clone(), raw_kind: raw_kind.clone(), weight: weight as f32 * share });
         }
     }
-    for (base, tag) in serve.userdata.all_album_tags()? {
-        for a in by_base.get(&base).into_iter().flatten() {
-            said.entry(a.clone()).or_default().push(Said { source: Source::Household, word: tag.clone(), raw_kind: "tag".into(), weight: 1.0 });
+    for (album, tag) in serve.userdata.all_album_tags()? {
+        if albums.contains(&album) {
+            said.entry(album).or_default().push(Said { source: Source::Household, word: tag, raw_kind: "tag".into(), weight: 1.0 });
         }
     }
     let overrides = serve.userdata.overrides()?;
@@ -195,7 +194,7 @@ pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, fa
                     }
                 })
                 .collect();
-            let hand = base_of.get(id).and_then(|b| overrides.get(b)).map(hand_of).unwrap_or_default();
+            let hand = overrides.get(id).map(hand_of).unwrap_or_default();
             RecordIn { id: id.clone(), tracks, said: said.remove(id).unwrap_or_default(), hand }
         })
         .collect();
@@ -243,7 +242,7 @@ fn hand_of(o: &crate::userdata::overrides::Overrides) -> HashMap<store::Kind, Ve
 pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>, off: &HashSet<i64>) -> Vec<(&'static str, String, usize)> {
     let mut by: HashMap<(&'static str, String), (HashMap<String, usize>, HashSet<&str>)> = HashMap::new();
     // Of the libraries switched on (`off`: the folders of those switched off): what a word's crate holds.
-    for f in facts.iter().filter(|f| !off.contains(&f.folder)) {
+    for f in facts.iter().filter(|f| crate::crates::on_for(&f.folders, off)) {
         let Some(album) = f.track.and_then(|t| album_of.get(&crate::serve::ids::song(t))) else { continue };
         for (kind, list) in [("genre", &f.genres), ("style", &f.styles), ("mood", &f.moods), ("tag", &f.tags), ("label", &f.labels)] {
             for w in list {
@@ -288,4 +287,39 @@ pub fn search_index(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalog
     let made = Arc::new(index(&facts, &serve.library.song_album_map()?, off));
     *INDEX.lock().unwrap_or_else(|e| e.into_inner()) = Some((of.0, of.1, folders, made.clone()));
     Ok(made)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalogue::ServedRow;
+    use crate::crates::Facts;
+    use crate::serve::library::FolderRows;
+    use crate::userdata::words::RawWord;
+
+    const OLD: &str = "al-5vcUvYmuWJAgyxLXEUmaPz";
+
+    fn track(id: i64, record: i64, title: &str) -> ServedRow {
+        let tags = [("title", title), ("album", title), ("albumartist", "Artist"), ("artist", "Artist")].map(|(n, v)| (n.to_string(), v.to_string()));
+        ServedRow { rel: format!("{title}/01 {title}.flac"), track: Some(id), record: Some(record), format: Some("FLAC".to_string()), tags: tags.to_vec(), ..ServedRow::default() }
+    }
+
+    /// C32: what a service said, a tag and what is set by hand are the record's, by its id. One still under a hash from before the
+    /// first start names nothing here: the move left it because it matched nothing, so it reaches no album.
+    #[test]
+    fn words_follow_the_record() {
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let folder = FolderRows { folder: 0, root: "/music".to_string(), rows: vec![track(1, 7, "Said"), track(2, 8, "Set")] };
+        serve.library.refresh(&[folder], &crate::catalogue::Rules::default()).unwrap();
+        let said = |subject: &str, word: &str| serve.userdata.set_words(subject, "discogs", &[RawWord { word: word.to_string(), kind: "genre".to_string(), weight: 1.0 }], true, 1).unwrap();
+        said("album:al-7", "Electronic");
+        said(&format!("album:{OLD}"), "Rock");
+        serve.userdata.add_tag("al-7", "evening").unwrap();
+        serve.userdata.add_tag(OLD, "morning").unwrap();
+        serve.userdata.set_overrides(&["al-8".to_string()], &[("genres".to_string(), Some(serde_json::json!(["Jazz"])))], 1).unwrap();
+        let mut facts: Vec<Facts> = [1, 2].map(|track| Facts { rel: format!("line {track}"), track: Some(track), ..Facts::default() }).to_vec();
+        build(&serve, &serve.library.song_album_map().unwrap(), &mut facts).unwrap();
+        assert_eq!((facts[0].genres.as_slice(), facts[0].tags.as_slice()), (["Electronic".to_string()].as_slice(), ["evening".to_string()].as_slice()));
+        assert_eq!(facts[1].genres, ["Jazz"], "set by hand");
+    }
 }

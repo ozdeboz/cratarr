@@ -208,6 +208,12 @@ impl Snapcast {
         let _ = INSTANCE.set(me);
     }
 
+    /// How many groups' streams there are.
+    #[cfg(test)]
+    pub fn streams_held(&self) -> usize {
+        self.streams.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
     /// From a chunk's stamp to its sound (ms).
     pub fn buffer_ms(&self) -> u32 {
         self.buffer_ms
@@ -240,7 +246,8 @@ impl Snapcast {
         }
     }
 
-    /// A group's stream, made (with its clock) when first asked for.
+    /// A group's stream, made (with its clock) when first asked for. Whoever feeds it or hears it holds it, and its clock
+    /// ends it once no one does (`let_go`): each leader ever used would go on ticking otherwise, 200 times a second.
     fn stream(self: &Arc<Self>, leader: &str) -> Arc<Stream> {
         let mut streams = self.streams.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(s) = streams.get(leader) {
@@ -248,19 +255,33 @@ impl Snapcast {
         }
         let s = Arc::new(Stream::new(self.buffer_ms));
         streams.insert(leader.to_string(), s.clone());
-        let (me, stream) = (Arc::downgrade(self), Arc::downgrade(&s));
+        let (me, stream, leader) = (Arc::downgrade(self), Arc::downgrade(&s), leader.to_string());
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_millis(5));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
                 let (Some(me), Some(stream)) = (me.upgrade(), stream.upgrade()) else { return };
+                if me.let_go(&leader, &stream) {
+                    return;
+                }
                 for o in stream.release(me.now()) {
                     let _ = stream.out.send(o);
                 }
             }
         });
         s
+    }
+
+    /// Takes `leader`'s stream away if nothing but the list and its clock (which hands it here) holds it. Under the
+    /// list's lock, the only way to a new hold, so none can come in between. A leader that comes back gets a new stream.
+    fn let_go(&self, leader: &str, stream: &Arc<Stream>) -> bool {
+        let mut streams = self.streams.lock().unwrap_or_else(|p| p.into_inner());
+        if Arc::strong_count(stream) > 2 {
+            return false;
+        }
+        streams.remove(leader);
+        true
     }
 
     async fn connection(self: Arc<Self>, sock: TcpStream) -> std::io::Result<()> {
@@ -428,6 +449,53 @@ mod tests {
     const F: Format = Format { rate: 50_000, bits: 16, channels: 2 };
     /// 20 ms of F.
     const CHUNK: usize = 50_000 * 4 / 50;
+
+    /// No groups: what a stream's own life needs of Play On is nothing.
+    pub(super) struct NoOne;
+
+    impl Groups for NoOne {
+        fn leader_of(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn volume_of(&self, _: &str) -> u8 {
+            100
+        }
+        fn latency_of(&self, _: &str) -> i32 {
+            0
+        }
+        fn admits(&self, _: &str, _: &str) -> bool {
+            false
+        }
+    }
+
+    /// Waits for `what`, two seconds at most.
+    pub(super) async fn until(what: impl Fn() -> bool) -> bool {
+        for _ in 0..400 {
+            if what() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn a_stream_lasts_while_something_holds_it_and_its_clock_goes_with_it() {
+        let snap = Snapcast::new(Arc::new(NoOne), 1000);
+        let one = snap.stream("lead");
+        let other = snap.stream("lead");
+        assert!(Arc::ptr_eq(&one, &other), "a group has one");
+        let gone = Arc::downgrade(&one);
+        drop(other);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(snap.streams_held(), 1, "something still feeds it or hears it");
+        drop(one);
+        assert!(until(|| snap.streams_held() == 0).await, "nothing does");
+        assert!(until(|| gone.upgrade().is_none()).await, "its clock stopped holding it");
+        let again = snap.stream("lead");
+        assert_eq!(snap.streams_held(), 1, "a leader coming back gets a new one");
+        assert!(gone.upgrade().is_none() && Arc::strong_count(&again) >= 2);
+    }
 
     /// Only a player with its secret listens or leads; anyone else's connection is closed at its hello.
     #[tokio::test]

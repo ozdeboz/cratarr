@@ -47,26 +47,35 @@ fn on_path(_: &Fix) -> bool {
 fn title_of(kind: &str) -> String {
     match kind.split_once(':') {
         Some((FIX, finding)) => super::health::name_of(finding).to_string(),
-        _ => "Before Keep".to_string(),
+        _ => "Before adding".to_string(),
     }
 }
 
-/// The fixes a plan proposes, and whether more are still being looked for (a match with MusicBrainz).
-async fn fixes_of(app: &super::App, kind: &str) -> Result<(Vec<Fix>, bool)> {
+/// The copy an intake's plan is about, as (catalogue folder, folder in it): in library `from`, else the record's copy waiting.
+/// With one id for every copy, the record's rows would be the kept copy's files. None for any other plan.
+async fn copy_of(app: &super::App, kind: &str, from: Option<&str>) -> Result<Option<(i64, String)>> {
+    let Some((INTAKE, album)) = kind.split_once(':') else { return Ok(None) };
+    let (served, album, from) = (app.served.clone().context("Cratarr's own library is not open")?, album.to_string(), from.map(str::to_string));
+    tokio::task::spawn_blocking(move || served.waiting_copy(&album, from.as_deref())).await?
+}
+
+/// The fixes a plan proposes (`at`: for this copy alone), and whether more are still being looked for (a match with
+/// MusicBrainz).
+async fn fixes_of(app: &super::App, kind: &str, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
     let (k, rest) = kind.split_once(':').context("Not a plan")?;
     let (fixes, making) = match k {
         FIX => {
             let making = matches!(rest, "library:album-artist" | "library:musicbrainz") && crate::serve::who::current().is_some_and(|w| super::matching::running(&w.user));
             (super::fixes::of_finding(app, rest).await?, making)
         }
-        _ => super::fixes::of_album(app, rest).await?,
+        _ => super::fixes::of_album(app, rest, at).await?,
     };
     Ok((fixes.into_iter().filter(on_path).collect(), making))
 }
 
 /// What a plan's sheet shows of its fields besides old → new: how sure each is, and a genre's choices.
 #[derive(Debug, Default)]
-struct Notes {
+pub(super) struct Notes {
     /// (album, tag) → certain or likely.
     certainty: HashMap<(String, String), &'static str>,
     /// album → a genre's choices.
@@ -75,36 +84,37 @@ struct Notes {
 
 /// The fixes as a proposal: each track's tags now (read again from its file) → what its fixes give, said where from.
 /// Blocking.
-fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+pub(super) fn proposal(served: &crate::serve::Serve, kind: &str, fixes: &[Fix], at: Option<&(i64, String)>) -> Result<(Proposal, Notes)> {
     let mut p = Proposal { kind: kind.to_string(), title: title_of(kind), ..Proposal::default() };
     let mut notes = Notes::default();
     let mut by_album: Vec<(String, Vec<&Fix>)> = Vec::new();
     for f in fixes {
-        // A cover's: its folder's picture and its tracks', fetched once ticked (`apply`).
+        // A cover's: each copy's folder's picture and its tracks', fetched once ticked (`apply`).
         if f.field == "cover" {
-            let Some((_, _, _, artist, title)) = served.library.album_place(&f.album)? else { continue };
+            let Some((_, artist, title)) = served.library.album_names(&f.album)? else { continue };
             if !p.records.iter().any(|r| r.album == f.album) {
                 p.records.push(RunRecord { album: f.album.clone(), title, artist });
             }
             notes.certainty.insert((f.album.clone(), "cover".into()), f.certainty);
-            p.files.push(FileWrite {
-                album: f.album.clone(),
-                path: super::renumber::tracks_of(&f.album)?.0.first().and_then(|t| t.path.parent().map(std::path::Path::to_path_buf)).unwrap_or_default(),
-                track: None,
-                before: vec![("cover".into(), f.from.clone().into_iter().collect())],
-                after: vec![("cover".into(), vec![f.to.clone()])],
-                from: vec![("cover".into(), f.source.clone())],
-                undone: false,
-                whole: Some(crate::journal::Whole { op: "cover".into(), ms: None, kept: None, planned: String::new(), wrote: None }),
-            });
+            for copy in super::covers::copies(served, &f.album, at)? {
+                p.files.push(FileWrite {
+                    album: f.album.clone(),
+                    path: copy.dir,
+                    track: None,
+                    before: vec![("cover".into(), f.from.clone().into_iter().collect())],
+                    after: vec![("cover".into(), vec![f.to.clone()])],
+                    from: vec![("cover".into(), f.source.clone())],
+                    undone: false,
+                    whole: Some(crate::journal::Whole { op: "cover".into(), ms: None, kept: None, planned: String::new(), wrote: None }),
+                });
+            }
             continue;
         }
         // A length's: its file written whole.
         if super::length_fixes::FIELDS.contains(&f.field) {
-            if let Some(w) = super::length_fixes::file_write(&served, f)? {
+            if let Some(w) = super::length_fixes::file_write(served, f)? {
                 if !p.records.iter().any(|r| r.album == w.album)
-                    && let Some((_, _, _, artist, title)) = served.library.album_place(&w.album)?
+                    && let Some((_, artist, title)) = served.library.album_names(&w.album)?
                 {
                     p.records.push(RunRecord { album: w.album.clone(), title, artist });
                 }
@@ -119,8 +129,8 @@ fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
         }
     }
     for (album, fixes) in by_album {
-        let Some((_, _, _, artist, title)) = served.library.album_place(&album)? else { continue };
-        let names: HashMap<std::path::PathBuf, String> = super::renumber::tracks_of(&album).map(|t| t.0.into_iter().map(|t| (t.path, t.title)).collect()).unwrap_or_default();
+        let Some((_, artist, title)) = served.library.album_names(&album)? else { continue };
+        let names: HashMap<std::path::PathBuf, String> = super::renumber::files_in(served, &album, at).map(|t| t.into_iter().map(|t| (t.path, t.title)).collect()).unwrap_or_default();
         // Per file, every fix's tags, in the order the fixes come.
         let mut files: Vec<(std::path::PathBuf, Vec<(String, Vec<String>)>, Vec<(String, String)>)> = Vec::new();
         for f in &fixes {
@@ -173,10 +183,11 @@ fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
 
 /// The review sheet of a plan: its records' fields, how sure each is, a genre's choices; `making` while a match is still
 /// looked for (the sheet asks again).
-pub async fn plan(app: &super::App, kind: &str) -> Result<PlanView> {
-    let (fixes, making) = fixes_of(app, kind).await?;
-    let k = kind.to_string();
-    let (p, notes) = tokio::task::spawn_blocking(move || proposal(&k, &fixes)).await??;
+pub async fn plan(app: &super::App, kind: &str, from: Option<&str>) -> Result<PlanView> {
+    let at = copy_of(app, kind, from).await?;
+    let (fixes, making) = fixes_of(app, kind, at.clone()).await?;
+    let (k, served) = (kind.to_string(), app.served.clone().context("Cratarr's own library is not open")?);
+    let (p, notes) = tokio::task::spawn_blocking(move || proposal(&served, &k, &fixes, at.as_ref())).await??;
     let mut view = file_runs::view(&p.kind, &p.title, &p.records, &p.files, false);
     for r in &mut view.records {
         for f in &mut r.fields {
@@ -192,10 +203,11 @@ pub async fn plan(app: &super::App, kind: &str) -> Result<PlanView> {
 
 /// The ticked records written (an administrator's yes on the sheet): only the fields ticked of each, a genre as chosen,
 /// each record set aside where it is no longer what the sheet showed (its stamp). A run on the one path.
-pub async fn apply(app: &Arc<super::App>, kind: &str, albums: Vec<String>, stamps: Option<HashMap<String, String>>, chosen: Chosen) -> Result<file_runs::Status> {
+pub async fn apply(app: &Arc<super::App>, kind: &str, from: Option<&str>, albums: Vec<String>, stamps: Option<HashMap<String, String>>, chosen: Chosen) -> Result<file_runs::Status> {
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
     anyhow::ensure!(!file_runs::busy(kind), "Already writing");
-    let (fixes, _) = fixes_of(app, kind).await?;
+    let at = copy_of(app, kind, from).await?;
+    let (fixes, _) = fixes_of(app, kind, at.clone()).await?;
     // A genre's words, each among those its fix offered.
     for (album, words) in &chosen.genres {
         let offered: Vec<&str> =
@@ -204,27 +216,39 @@ pub async fn apply(app: &Arc<super::App>, kind: &str, albums: Vec<String>, stamp
             anyhow::bail!("{w} was not found for it");
         }
     }
-    let k = kind.to_string();
+    let (k, served, copy) = (kind.to_string(), app.served.clone().context("Cratarr's own library is not open")?, at.clone());
+    let s = served.clone();
     let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
-        let (p, _) = proposal(&k, &fixes)?;
+        let (p, _) = proposal(&s, &k, &fixes, copy.as_ref())?;
         let mut p = file_runs::ticked(p, &albums, stamps.as_ref());
         choose(&mut p, &chosen);
         Ok(p)
     })
     .await??;
     let mut p = p;
-    // A cover ticked: its picture fetched and kept now, for the run to write (one that cannot be is set aside).
+    // A cover ticked: its picture fetched once and kept now for each copy, for the run to write (a record's that cannot be is
+    // set aside).
+    let is_cover = |f: &FileWrite| f.whole.as_ref().is_some_and(|w| w.op == "cover");
+    let mut wanted: Vec<(String, String)> = Vec::new();
+    for f in p.files.iter().filter(|f| is_cover(f)) {
+        let asked = (f.album.clone(), f.after.first().and_then(|(_, v)| v.first()).cloned().unwrap_or_default());
+        if !wanted.contains(&asked) {
+            wanted.push(asked);
+        }
+    }
     let mut set_aside = Vec::new();
-    for f in p.files.iter_mut().filter(|f| f.whole.as_ref().is_some_and(|w| w.op == "cover")) {
-        let url = f.after.first().and_then(|(_, v)| v.first()).cloned().unwrap_or_default();
-        match super::covers::prepared(&f.album, &url).await {
-            Ok((keep, said)) => {
-                f.after = vec![("cover".into(), vec![said])];
-                if let Some(w) = f.whole.as_mut() {
-                    w.kept = Some(keep);
+    for (album, url) in wanted {
+        match super::covers::prepared(&served, &album, &url, at.as_ref()).await {
+            Ok((kept, said)) => {
+                for f in p.files.iter_mut().filter(|f| f.album == album && is_cover(f)) {
+                    f.after = vec![("cover".into(), vec![said.clone()])];
+                    let keep = kept.iter().find(|(dir, _)| *dir == f.path).map(|(_, keep)| keep.clone());
+                    if let Some(w) = f.whole.as_mut() {
+                        w.kept = keep;
+                    }
                 }
             }
-            Err(e) => set_aside.push(crate::journal::RunFailed { album: f.album.clone(), title: None, artist: None, file: None, why: super::plain(format!("{e:#}")) }),
+            Err(e) => set_aside.push(crate::journal::RunFailed { album, title: None, artist: None, file: None, why: super::plain(format!("{e:#}")) }),
         }
     }
     p.files.retain(|f| !set_aside.iter().any(|x| x.album == f.album && f.whole.as_ref().is_some_and(|w| w.op == "cover")));
@@ -283,7 +307,7 @@ mod tests {
         };
         let mut p = Proposal {
             kind: "intake:al-1".into(),
-            title: "Before Keep".into(),
+            title: "Before adding".into(),
             records: vec![RunRecord { album: "al-1".into(), title: "A".into(), artist: "B".into() }, RunRecord { album: "al-2".into(), title: "C".into(), artist: "D".into() }],
             files: vec![
                 file("al-1", vec![("date".into(), s(&["1998"])), ("genre".into(), s(&["Rock"]))]),

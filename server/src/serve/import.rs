@@ -16,7 +16,6 @@
 //! background, one page after the other with a pause between them, so the server goes on answering everyone else.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -280,12 +279,12 @@ fn parts(path: &str) -> Vec<String> {
 
 impl AlbumPlaces {
     /// `places`: (album id, catalogue folder, path in it); `roots`: the catalogue's folders as Cratarr sees them.
-    pub fn new(places: Vec<(String, i64, String)>, roots: &[PathBuf]) -> Self {
+    pub fn new(places: Vec<(String, i64, String)>, roots: &crate::catalogue::InUse) -> Self {
         let mut by_leaf: HashMap<String, Vec<(String, Vec<String>, usize)>> = HashMap::new();
         for (id, folder, dir) in places {
             let own = parts(&dir);
             // An album lying loose in a catalogue folder has no folder of its own to be found by.
-            let (Some(leaf), Some(root)) = (own.last().cloned(), roots.get(folder as usize)) else { continue };
+            let (Some(leaf), Some(root)) = (own.last().cloned(), roots.get(folder)) else { continue };
             let mut all = parts(&root.to_string_lossy());
             let n = own.len();
             all.extend(own);
@@ -313,7 +312,8 @@ impl AlbumPlaces {
             }
             match best {
                 Some((b, _)) if shared < b => {}
-                Some((b, _)) if shared == b => tie = true,
+                // Two copies of one record are one answer: only another record makes it a tie.
+                Some((b, found)) if shared == b => tie |= found != id.as_str(),
                 _ => {
                     best = Some((shared, id.as_str()));
                     tie = false;
@@ -466,11 +466,9 @@ fn groups(serve: &Serve, req: &Request, g: crate::source::FavoriteGroups) -> Res
     }
     for (a, at) in g.artists {
         listed.entry(Kind::Artist).or_default().insert(a.id.clone());
-        let id = ids::artist(&a.name);
-        if serve.library.has_artist(&id)? {
-            found.push((Kind::Artist, id, a.id, at));
-        } else {
-            counts.skipped += 1;
+        match serve.artist_id(&a.name)? {
+            Some(id) if serve.library.has_artist(&id)? => found.push((Kind::Artist, id, a.id, at)),
+            _ => counts.skipped += 1,
         }
     }
     for kind in [Kind::Album, Kind::Artist] {
@@ -765,6 +763,8 @@ pub async fn undo(State(serve): State<Arc<Serve>>, axum::Json(w): axum::Json<Who
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::catalogue::{Catalogue, Rules, ServedRow};
     use crate::serve::library::FolderRows;
@@ -804,7 +804,7 @@ mod tests {
 
     #[test]
     fn albums_are_found_by_the_folders_they_share_with_the_servers_path() {
-        let roots = vec![PathBuf::from("/media/Music"), PathBuf::from("/media/lidarr-music")];
+        let roots: crate::catalogue::InUse = [(0, PathBuf::from("/media/Music")), (1, PathBuf::from("/media/lidarr-music"))].into_iter().collect();
         let places = AlbumPlaces::new(
             vec![
                 ("al-music".into(), 0, "Björk/Homogenic (1997)".into()),
@@ -820,6 +820,18 @@ mod tests {
         assert_eq!(places.find("/srv/Björk/Homogenic (1997)"), None, "as near to both: neither");
         assert_eq!(places.find("/srv/Homogenic (1997)"), None, "the album's own folders must all match");
         assert_eq!(places.find("/data/media/Music/Nobody/Nothing"), None);
+    }
+
+    /// `album_places` gives a row per copy, so a record's two copies are two candidates with one id: as near to both is
+    /// still that record, where two records are nothing to go on.
+    #[test]
+    fn two_copies_of_one_record_do_not_tie() {
+        let roots: crate::catalogue::InUse = [(0, PathBuf::from("/media/Music")), (1, PathBuf::from("/media/lidarr-music"))].into_iter().collect();
+        let dir = "Björk/Homogenic (1997)";
+        let copies = AlbumPlaces::new(vec![("al-7".into(), 0, dir.into()), ("al-7".into(), 1, dir.into())], &roots);
+        assert_eq!(copies.find("/srv/Björk/Homogenic (1997)"), Some("al-7"));
+        let records = AlbumPlaces::new(vec![("al-7".into(), 0, dir.into()), ("al-7".into(), 1, dir.into()), ("al-8".into(), 1, dir.into())], &roots);
+        assert_eq!(records.find("/srv/Björk/Homogenic (1997)"), None, "a third row of another record ties them");
     }
 
     /// A media server whose data the tests change between imports. Tracks come two to a page.
@@ -905,6 +917,7 @@ mod tests {
         cat.record_links("jf", "lib", &links, 1).unwrap();
         let tracks = files.map(|f| cat.track_of(0, f).unwrap());
         let serve = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        serve.library.set_artists(cat.artists_for(&["Björk".to_string(), "The Orb".to_string()].into()).unwrap());
         serve.attach_catalogue(cat);
         let tagged = |i: usize, artist: &str, album: &str, date: &str| ServedRow {
             rel: files[i].into(),
@@ -920,6 +933,7 @@ mod tests {
         let rows = vec![tagged(0, "Björk", "Homogenic", "1997"), tagged(1, "Björk", "Homogenic", "1997"), tagged(2, "The Orb", "Adventures", "1991")];
         serve.library.refresh(&[FolderRows { folder: 0, root: d.display().to_string(), rows }], &Rules::default()).unwrap();
         serve.users.set("me", "pw").unwrap();
+        serve.sessions.set_required(false).unwrap();
         (d, serve, tracks.map(ids::song))
     }
 
@@ -990,7 +1004,7 @@ mod tests {
         assert!(song(&serve, &clouds).starred_at.is_some());
         let (homogenic, a) = album(&serve, "Homogenic");
         assert_eq!((a.play_count, a.play_date, a.starred_at), (7, Some(300), Some(50)), "the songs' plays count on their album");
-        let bjork = ids::artist("Björk");
+        let bjork = serve.artist_id("Björk").unwrap().unwrap();
         assert!(serve.userdata.get("me", Kind::Artist, &[bjork.clone()]).unwrap()[&bjork].starred_at.is_some());
         let (adventures, _) = album(&serve, "Adventures");
         assert_eq!(serve.userdata.added().unwrap(), [(homogenic, 1_000), (adventures, 2_000)].into());

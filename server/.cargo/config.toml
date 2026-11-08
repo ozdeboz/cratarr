@@ -3,3 +3,9 @@
 [env]
 TS_RS_EXPORT_DIR = { value = "../web/src/lib/generated", relative = true }
 TS_RS_LARGE_INT = "number"
+
+# The rules as the page loads them, every module of scripts/rules-wasm.sh in one compile. The server's build cannot
+# stand in for it: that one is 64-bit, and turns on more of the crates the rules use than the rules ask for. The
+# target comes first, once: `rustup target add wasm32-unknown-unknown`.
+[alias]
+check-wasm = "check --locked -p cratarr-rules --no-default-features --features wasm-brake,wasm-matcher,wasm-spread,wasm-index --target wasm32-unknown-unknown"

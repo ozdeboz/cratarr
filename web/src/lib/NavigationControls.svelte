@@ -37,7 +37,7 @@
   // whole while the search is open (the owner, 2026-11-03). One decision for the row: nothing here measures the pill.
 </script>
 
-<span class="lead" bind:this={el} {@attach glassPart({ radius: 26 })}>
+<span class="lead glass-part" bind:this={el} {@attach glassPart({ radius: 26 })}>
   <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
   {#if left}
     {@render left()}
@@ -54,14 +54,12 @@
   /* One height whatever it holds (the owner, 2026-10-26: the glass moved a few pixels between the Library, with its
      picker, and Home, without). */
   .lead {
-    position: relative;
-    isolation: isolate;
     display: flex;
     align-items: center;
     gap: 10px;
     min-width: 0;
-    /* As tall as the pill's glass (lib/ContentControls: its 44 px buttons and 2 px), back's 2 px its own. */
-    min-height: 48px;
+    /* As tall as the pill's glass (lib/ContentControls): a button and the glass's room round it. */
+    min-height: calc(var(--glass-button) + 2 * var(--glass-pad));
     padding: 0;
   }
 
@@ -70,40 +68,23 @@
     padding-left: 12px;
   }
 
-  /* Two parts (the owner, 2026-11-02): the buttons and the glass behind them. A title or a picker beside back is that
+  /* Two parts (the owner, 2026-11-02): the buttons and the glass behind them (app.css's .glass-part: the thin glass,
+     which an extension is; the owner, 2026-11-03: "thin glass, one part"). A title or a picker beside back is that
      glass stretched, never a glass of its own beside the button's: it grows out of the button and shrinks back into it
      (lib/glassMotion), its colour the button's throughout ("I don't want this button to change the color when the
      extension removes"). Hidden only where nothing is in it. */
   .lead > .glass,
   .lead > .shade {
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    border-radius: 26px;
     opacity: 0;
-    pointer-events: none;
-  }
-
-  /* The part's back layer is the thin glass, which an extension is (the owner, 2026-11-03: "thin glass, one part");
-     the main buttons have the glass over it (below). */
-  .lead > .glass {
-    background: var(--float-thin-bg);
-    -webkit-backdrop-filter: var(--float-thin-blur);
-    backdrop-filter: var(--float-thin-blur);
-  }
-
-  .lead > .shade {
-    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   /* A panel's left part (`left`) is not this file's markup: matched as anyone's. */
-  .lead:has(> :global(:not(.glass, .shade, [data-glass-ghost]))) > :is(.glass, .shade) {
+  .lead:has(> :global(:not(.glass, .shade))) > :is(.glass, .shade) {
     opacity: 1;
   }
 
-  /* A title in it: the glass stretched past it. Not a fading copy's (lib/glassMotion), nor a title given way (its row's
-     decision, lib/glassRow). */
-  .lead:has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *, [data-row-gone], [data-row-gone] *))) {
+  /* A title in it: the glass stretched past it. Not a title given way (its row's decision, lib/glassRow). */
+  .lead:has(:global(:is(.page-name, .crumbs, .title, .views):not([data-row-gone], [data-row-gone] *))) {
     padding-right: 18px;
   }
 
@@ -112,7 +93,7 @@
      goes ("I don't want this button to change the color when the extension removes"). */
   .lead :global(.navpill) {
     flex: none;
-    border-radius: 26px;
+    border-radius: var(--glass-round);
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
@@ -144,19 +125,19 @@
   .navpill {
     display: flex;
     flex: none;
-    padding: 2px;
-    border-radius: 26px;
+    padding: var(--glass-pad);
+    border-radius: var(--glass-round);
   }
 
   .navpill button {
     display: grid;
     flex: none;
     place-items: center;
-    width: 44px;
-    height: 44px;
+    width: var(--glass-button);
+    height: var(--glass-button);
     padding: 0;
     border: 0;
-    border-radius: 22px;
+    border-radius: calc(var(--glass-button) / 2);
     background: none;
     color: inherit;
     cursor: pointer;

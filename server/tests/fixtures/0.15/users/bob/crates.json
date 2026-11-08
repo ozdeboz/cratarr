@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "crates": [
+    {
+      "id": "c-rooms",
+      "name": "Like the rooms",
+      "conditions": [
+        {
+          "axis": "like",
+          "not": false,
+          "value": {
+            "kind": "like",
+            "of": [
+              "al-7ATEPHL21gflZtRCnZNzGM",
+              "ar-2e3jjYJ6JRxCOcLSRKg8qj"
+            ],
+            "count": 20
+          }
+        }
+      ]
+    }
+  ],
+  "favourites": {}
+}

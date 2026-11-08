@@ -111,15 +111,36 @@ pub fn trash_file(folder: &Path, rel: &str, now_epoch: i64) -> Result<String> {
     Ok(token)
 }
 
-/// Put a trashed track back where it was; its path relative to the folder.
-pub fn restore_file(folder: &Path, token: &str) -> Result<String> {
+/// A trashed track's token as its path relative to the folder, where it lies in the trash, and where it goes back to.
+fn trashed_file<'a>(folder: &Path, token: &'a str) -> Result<(&'a str, PathBuf, PathBuf)> {
     let (stamp, rel) = token.split_once('/').context("not an undo token")?;
     if stamp.is_empty() || !stamp.bytes().all(|b| b.is_ascii_digit()) {
         bail!("not an undo token");
     }
     let rel_path = checked(rel)?;
-    let src = folder.join(TRASH_DIR).join(stamp).join(&rel_path);
-    let dest = folder.join(&rel_path);
+    Ok((rel, folder.join(TRASH_DIR).join(stamp).join(&rel_path), folder.join(&rel_path)))
+}
+
+/// Why `restore_file` would refuse, once `leaving` (relative to the folder: the track that took its place, and may have
+/// its name) is gone. Moves nothing, so a caller can ask before it takes anything away.
+pub fn can_restore_file(folder: &Path, token: &str, leaving: &str) -> Result<()> {
+    let (rel, src, dest) = trashed_file(folder, token)?;
+    let taken = dest.exists() && rel != leaving;
+    if !src.exists() && taken && dest.is_file() {
+        return Ok(());
+    }
+    if !src.is_file() {
+        bail!("{rel} is no longer in the trash");
+    }
+    if taken {
+        bail!("{rel} exists again; not overwriting it");
+    }
+    Ok(())
+}
+
+/// Put a trashed track back where it was; its path relative to the folder.
+pub fn restore_file(folder: &Path, token: &str) -> Result<String> {
+    let (rel, src, dest) = trashed_file(folder, token)?;
     if !src.exists() && dest.is_file() {
         return Ok(rel.to_string());
     }

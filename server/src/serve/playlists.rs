@@ -1,6 +1,7 @@
 //! Cratarr's playlists as the OpenSubsonic API shows them (decision 0030): the `.m3u` files, through the playlist
-//! service, so an edit from a Subsonic app is an edit of the file with its undo and its sync to other servers. A
-//! playlist's id is `pl-` and its name. Lines are turned into songs through the catalogue, and songs into lines the
+//! service, so an edit from a Subsonic app is an edit of the playlist with its undo and its sync to other servers. A
+//! playlist's id is its own (decision 0101: `pl-` and 12 hex digits, kept through renames); one a client kept from
+//! before 0.16 (`pl-` and its name then) still leads to it. Lines are turned into songs through the catalogue, and songs into lines the
 //! way the playlist sync does (a track's path relative to the Music folder), never from what a client sent. Lines
 //! whose file is missing stay in the file and are not shown; positions a client sends count the shown songs only.
 
@@ -9,11 +10,11 @@ use crate::catalogue::Catalogue;
 
 pub const PLAYLIST: &str = "pl-";
 
-pub fn id_of(name: &str) -> String {
-    format!("{PLAYLIST}{name}")
-}
-
+/// What a Subsonic id names: a playlist's id, or (`pl-` and its key, from before 0.16) that key.
 pub fn name_of(id: &str) -> Option<&str> {
+    if crate::userdata::playlists::is_id(id) {
+        return Some(id);
+    }
     id.strip_prefix(PLAYLIST).filter(|n| !n.is_empty())
 }
 
@@ -23,11 +24,9 @@ pub fn song_of_line(cat: &Catalogue, line: &str) -> Option<String> {
     cat.track_of(folder, &rel).map(ids::song)
 }
 
-/// A song's playlist line: its path relative to the Music folder (as `app::sync`'s `line`).
+/// A song's playlist line: its row copy's path relative to the Music folder (as `app::sync`'s `line`).
 pub fn line_of_song(cat: &Catalogue, song: &str) -> Option<String> {
-    let track: i64 = song.strip_prefix(ids::SONG)?.parse().ok()?;
-    let (folder, rel) = cat.file_of(track)?;
-    cat.line_of(folder, &rel)
+    cat.row_line(song.strip_prefix(ids::SONG)?.parse().ok()?)
 }
 
 /// The lines of a playlist after removing the shown songs at `remove` (positions among the shown songs) and adding
@@ -187,8 +186,8 @@ mod tests {
 
     #[test]
     fn ids_and_names() {
-        assert_eq!(id_of("Chill"), "pl-Chill");
-        assert_eq!(name_of("pl-Chill"), Some("Chill"));
+        assert_eq!(name_of("pl-0123456789ab"), Some("pl-0123456789ab"), "a playlist's own id");
+        assert_eq!(name_of("pl-Chill"), Some("Chill"), "one from before 0.16: its name then");
         assert_eq!(name_of("pl-"), None);
         assert_eq!(new_name("Chill", &s(&["chill"])), "Chill 2");
         assert_eq!(new_name("a/b", &[]), "a-b");

@@ -11,8 +11,8 @@
 //! again.
 //!
 //! One file is decoded at a time, whoever asked (`HEAVY`): the pass, a page's visuals, a play's waveform, the look ahead.
-//! And only with room for it (`memwatch::room`, the audit's memory budget): the pass waits; one asked for now is not
-//! made then.
+//! And only with room for it (`memwatch::room`, the audit's memory budget): the pass waits; one asked for now or looked
+//! ahead to is not made then.
 //! The turn is held by the work itself, so a page that stops waiting (a skip, a timeout) cannot let a second decode in
 //! beside one still running: one decode for the visuals takes about half a gigabyte for a moment, and two at once, or
 //! one beside an import, went over the NAS's 768 MB (eighteen restarts, 2026-10-23/24).
@@ -453,8 +453,9 @@ const AHEAD: usize = 2;
 
 /// Look-ahead (decision 0046, amended): the next tracks in each playing or paused player's queue get their signals
 /// worked out before they play, so the visuals have them at once. On every change of a player (a queue being built
-/// settles first) and once a minute; only on a free turn, as a page waiting for a decode comes first.
-pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>) {
+/// settles first) and once a minute; only on a free turn, as a page waiting for a decode comes first, and with room for
+/// one: what finds none waits for the next look.
+pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>, served: Option<Arc<crate::serve::Serve>>) {
     tokio::spawn(async move {
         let mut changes = play_on.subscribe();
         loop {
@@ -467,15 +468,19 @@ pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>)
                 .list()
                 .into_iter()
                 .filter(|p| p.playing || p.state == "paused")
-                .filter_map(|p| play_on.get(&p.name))
-                .map(|v| (v.index, v.queue.unwrap_or_default().into_iter().map(|t| (t.source, t.id)).collect::<Vec<_>>()))
+                .filter_map(|p| Some((play_on.owner_of(&p.name), play_on.get(&p.name)?)))
+                .map(|(owner, v)| (owner, v.index, v.queue.unwrap_or_default().into_iter().map(|t| (t.source, t.id)).collect::<Vec<_>>()))
                 .collect::<Vec<_>>();
-            for (source, id) in upcoming(&queues) {
-                let c = cat.clone();
-                let Ok(Some((folder, rel))) = tokio::task::spawn_blocking(move || c.track_of_source(&source, &id).and_then(|t| c.file_of(t))).await else {
-                    continue;
-                };
-                ahead(cat.clone(), folder, rel).await;
+            for (owner, index, tracks) in queues {
+                // The file its owner will hear, or the beats worked out are another copy's.
+                let who = served.as_ref().map_or_else(Default::default, |s| s.listener(owner.as_deref()));
+                for (source, id) in upcoming(&[(index, tracks)]) {
+                    let (c, w) = (cat.clone(), who.clone());
+                    let Ok(Some((folder, rel))) = tokio::task::spawn_blocking(move || w.place(&c, &source, &id)).await else {
+                        continue;
+                    };
+                    ahead(cat.clone(), folder, rel).await;
+                }
             }
         }
     });
@@ -495,7 +500,8 @@ fn upcoming(queues: &[(i64, Vec<(String, String)>)]) -> Vec<(String, String)> {
     out
 }
 
-/// One track's beats and signals ahead of its turn, when they are not kept yet and no page is waiting for a decode.
+/// One track's beats and signals ahead of its turn, when they are not kept yet, no page is waiting for a decode and
+/// there is room for one: the log saw this decode start at 500 MB resident, where every other path refuses.
 async fn ahead(cat: Arc<Catalogue>, folder: i64, rel: String) {
     let (c, r) = (cat.clone(), rel.clone());
     let Ok((beats, signals)) = tokio::task::spawn_blocking(move || kept(&c, folder, &r)).await else { return };
@@ -503,6 +509,9 @@ async fn ahead(cat: Arc<Catalogue>, folder: i64, rel: String) {
         return;
     }
     let Ok(turn) = HEAVY.try_acquire() else { return };
+    if !crate::memwatch::room() {
+        return;
+    }
     let r = rel.clone();
     match tokio::task::spawn_blocking(move || {
         let _turn = turn;
@@ -581,6 +590,36 @@ mod tests {
         assert!(GATE.try_acquire().is_err(), "a second decode got in beside the first");
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(GATE.try_acquire().is_ok(), "the turn ends with the decode");
+    }
+
+    #[tokio::test]
+    async fn a_look_ahead_waits_while_there_is_no_room_and_decodes_once_there_is() {
+        let d = std::env::temp_dir().join(format!("cratarr-ahead-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let clicks: Vec<f64> = (0..12).map(|k| 0.25 + 0.5 * k as f64).collect();
+        let made = crate::analysis::tests::click_track("ahead", 6.0, &clicks, |_| 1.0);
+        std::fs::rename(&made, d.join("next.wav")).unwrap();
+        let cat = Arc::new(Catalogue::open(None, vec![d.clone()]).unwrap());
+        cat.walk_all();
+        let decodes = || DECODED.lock().unwrap().iter().filter(|p| p.starts_with(&d)).count();
+
+        // The turn free first: held by a test beside this one, it would turn the look away for another reason.
+        crate::memwatch::FULL.set(true);
+        drop(HEAVY.acquire().await.unwrap());
+        ahead(cat.clone(), 0, "next.wav".into()).await;
+        crate::memwatch::FULL.set(false);
+        assert_eq!(decodes(), 0, "no room: not decoded");
+        assert_eq!(kept(&cat, 0, "next.wav"), (None, None));
+
+        // A look finds the turn held now and then, here by a test beside this one: the look after it decodes.
+        let until = Instant::now() + Duration::from_secs(60);
+        while decodes() == 0 && Instant::now() < until {
+            ahead(cat.clone(), 0, "next.wav".into()).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(decodes(), 1, "room again: the next look decodes it");
+        assert!(kept(&cat, 0, "next.wav").0.is_some());
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

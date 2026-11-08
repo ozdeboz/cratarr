@@ -46,11 +46,15 @@ export function againIn(due: number, now: number): string | null {
   return d <= 1 ? 'again tomorrow' : `again in ${d} days`;
 }
 
+/** Held on its way: slskd or AcoustID could not be asked, and it is tried again at `due` (the server's `hold`). */
+const held = (i: SoulseekItem, now: number) => !!i.why && i.due > now && (i.state === 'approved' || i.state === 'fetching' || i.state === 'checking');
+
 /** Its row's line: the artist and year, then where it stands. */
 export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): string {
   const head = [i.record.artist, i.record.year ? String(i.record.year) : null];
   const best = i.folders[i.chosen ?? 0];
   const where = ((): (string | null)[] => {
+    if (held(i, now)) return [i.why ?? null, againIn(i.due, now)];
     switch (i.state) {
       case 'waiting':
         return i.misses ? ['Not found', i.misses > 1 ? `${i.misses} times` : null, againIn(i.due, now)] : ['Waiting to be searched'];
@@ -78,8 +82,9 @@ export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): 
 export const tickable = (i: SoulseekItem) => i.state === 'found' && i.folders.length > 0;
 /** Search now: one waiting for its next search, or stuck. */
 export const searchable = (i: SoulseekItem) => i.state === 'waiting' || i.state === 'stuck';
-/** Its row's tone: stuck said so; not found yet, a warning. */
-export const itemTone = (i: SoulseekItem): 'bad' | 'warn' | null => (i.state === 'stuck' ? 'bad' : i.state === 'waiting' && i.misses ? 'warn' : null);
+/** Its row's tone: stuck said so; not found yet, or held, a warning. */
+export const itemTone = (i: SoulseekItem, now = Math.floor(Date.now() / 1000)): 'bad' | 'warn' | null =>
+  i.state === 'stuck' ? 'bad' : (i.state === 'waiting' && i.misses) || held(i, now) ? 'warn' : null;
 
 /** The list's parts, in this order: found (to tick), on its way, not found yet, stuck, placed. */
 export const GROUPS: { title: string; states: SoulseekState[] }[] = [
@@ -95,5 +100,6 @@ export function approvePayload(items: readonly SoulseekItem[], ticked: ReadonlyS
   return items.filter((i) => ticked.has(i.id) && tickable(i)).map((i) => (i.id in picks ? { id: i.id, folder: picks[i.id] } : { id: i.id }));
 }
 
-/** Whether the list is asked again soon: a search or a fetch under way. */
-export const underWay = (v: SoulseekView | null) => !!v?.items.some((i) => i.state === 'searching' || i.state === 'approved' || i.state === 'fetching' || i.state === 'checking');
+/** Whether the list is asked again soon: a search or a fetch under way. One held has nothing to show until its time. */
+export const underWay = (v: SoulseekView | null, now = Math.floor(Date.now() / 1000)) =>
+  !!v?.items.some((i) => (i.state === 'searching' || i.state === 'approved' || i.state === 'fetching' || i.state === 'checking') && !held(i, now));

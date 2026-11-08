@@ -8,7 +8,11 @@
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
   import { playQueue } from './localPlayer.svelte';
-  import { forgetOffline, offline, type KeptTrack } from './offline.svelte';
+  import { forgetOffline, offline, startOfflineAgain, type KeptTrack } from './offline.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
+  import { toast } from './toast.svelte';
   import Row from './Row.svelte';
   import { downloadedSize } from './settings/editor.svelte';
   import { matchesSearch, searchNone } from './pageView.svelte';
@@ -38,10 +42,29 @@
   );
   // The page's words leaving none of it (decision 0095): the pill says so from the magnifier.
   searchNone(() => !shown.length && { n: groups.length, one: 'download' });
+  /** The kept list that cannot be read: starting it again is asked first. */
+  let startingAgain = $state(false);
   const play = (g: Group) => playQueue(g.tracks.map(({ source, id, name, artist, album, album_id, duration_secs }) => ({ source, id, name, artist, album, album_id, duration_secs })), 0, g.title);
 </script>
 
-{#if !groups.length}
+{#if offline.unreadable}
+  <!-- The kept list that cannot be read (the owner, 2026-11-07): said, with its way out, as the app's. -->
+  <Group><Item lead="bad" name="Kept list can't be read"><button class="retry" onclick={() => (startingAgain = true)}>Start again</button></Item></Group>
+  {#if startingAgain}
+    <ConfirmSheet
+      title="Start the kept list again?"
+      text="Downloads stay."
+      label="Start again"
+      icon="reset"
+      danger={false}
+      onconfirm={() => {
+        startingAgain = false;
+        startOfflineAgain().catch((e) => toast.fail(e, "The kept list couldn't start again"));
+      }}
+      onclose={() => (startingAgain = false)}
+    />
+  {/if}
+{:else if !groups.length}
   <p class="empty">Nothing kept in this browser yet. Download…, in an album's or a playlist's menu, keeps it here.</p>
 {:else}
   <ul>
@@ -73,6 +96,18 @@
     height: 48px;
     overflow: hidden;
     border-radius: 4px;
+  }
+
+  .retry {
+    flex: none;
+    padding: 8px 14px;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+    color: var(--danger-ink);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
   }
 
   .icon {

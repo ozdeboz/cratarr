@@ -4,8 +4,8 @@
 # Cratarr
 
 A self-hosted music server for the music you own. It plays your library in its web app, its Android and desktop
-apps and any OpenSubsonic app, moves the music between them, and finds more to play in what you already have. Your
-playlists stay plain `.m3u` files beside your music.
+apps and any OpenSubsonic app, moves the music between them, and finds more to play in what you already have. Every
+playlist is also written out as a plain `.m3u` file in its data folder.
 
 ## Try it
 
@@ -27,8 +27,7 @@ run). Make it before the server can be reached from outside your home.
 
 The Android app and the desktop app are built from [android/](android) and [desktop/](desktop) (each folder says how);
 give them your server's address. Once releases are published, each will carry a ready image (amd64 and arm64,
-`ghcr.io/ozdeboz/cratarr`), the Android app, the desktop app for Linux (also from an APT repository) and
-`SHA256SUMS` of them all.
+`ghcr.io/ozdeboz/cratarr`), the Android app and `SHA256SUMS` of them all; the desktop app is built where it is used.
 
 ## What it does
 
@@ -159,9 +158,9 @@ few settings Settings can change later (what Settings saves wins):
 | `CRATARR_ANALYSIS` | `keep` | The server's own analysis of the music (waveforms, tempo, loudness, the visuals' signals): `keep` analyses new music once half the library has an analysis (a first pass elsewhere, or all of it here), `all` analyses everything here, `off` none. Also in Settings → Libraries. |
 | `CRATARR_PROXIES` | local addresses | The proxies whose forwarded client address is believed, as addresses or ranges, comma-separated (`172.19.0.0/16, 192.168.1.5`). Unset: a proxy on a local address (loopback, private ranges, link-local, IPv6 unique local); one elsewhere must be named. Also in Settings → Authentication. |
 | `CRATARR_PLAYLIST_DIR` | none | The playlists' folder until a music folder is chosen in Settings. |
-| `CRATARR_SUBSONIC_USER`, `CRATARR_SUBSONIC_PASSWORD` | none | An account made (or its password set) at every start. |
+| `CRATARR_SUBSONIC_USER`, `CRATARR_SUBSONIC_PASSWORD` | none | An account made at the first start with them. Its password is then the account's: changed in Account, it stays. |
 | `JELLYFIN_URL`, `JELLYFIN_API_KEY`, `CRATARR_PLAYER_CLIENT` | none | A Jellyfin source on the first start, until one is saved in Settings. |
-| `LIDARR_URL`, `LIDARR_API_KEY` | none | Lidarr on the first start, until it is saved in Settings. |
+| `LIDARR_URL`, `LIDARR_API_KEY` | none | Lidarr until it is saved or removed in Settings. |
 | `RUST_LOG` | `info` | What the server logs. Settings → Diagnostics can log more for a while. |
 
 ### Apps
@@ -169,8 +168,9 @@ few settings Settings can change later (what Settings saves wins):
 - **Web**: every page of Cratarr. It plays by itself, and over HTTPS it installs as an app.
 - **Android**: [android/](android), a thin app around Cratarr's pages that plays the music itself (built from its folder;
   its APK will come with each release). It also plays the phone's own music (Local mode, [0052](docs/decisions/0052-local-library.md)).
-- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own, for Linux (an APT repository once releases
-  are published). A Windows installer is prepared but not yet built or tried.
+- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own, for Linux, built from its folder and
+  installed with apt; it carries its own copy of the page. A Windows installer can be built the same way but has not
+  been built or tried.
 - **Subsonic apps**: point them at Cratarr's address and sign in with your Cratarr account.
 - **Kodi**: added in Settings → Players, it becomes one of Cratarr's players over Kodi's own remote control ("Allow
   remote control via HTTP"), with nothing installed on Kodi.

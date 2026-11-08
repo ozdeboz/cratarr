@@ -99,10 +99,51 @@ pub struct JobView {
     /// The library it moves into (`source/library`), where known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
+    /// The library it comes from: which of a record's copies this is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Its catalogue folder and its folder there, which tell two folders of one library apart. Not the page's.
+    #[serde(skip)]
+    pub place: (i64, String),
     /// Once done: pass to undo.
     pub undo: Option<String>,
     /// Once failed: why.
     pub why: Option<String>,
+}
+
+impl JobView {
+    /// Whether it is yet to finish.
+    pub fn at_work(&self) -> bool {
+        matches!(self.state, State::Waiting | State::Converting)
+    }
+
+    /// A Keep of this copy being converted, for what reads the queue.
+    #[cfg(test)]
+    pub fn converting(id: u64, source: &str, album: &str, from: &str, folder: i64, dir: &str) -> Self {
+        JobView {
+            id,
+            source: source.into(),
+            album_id: album.into(),
+            title: album.into(),
+            action: Action::Keep,
+            state: State::Converting,
+            done: 0,
+            part: 0.0,
+            total: 1,
+            folder: dir.into(),
+            library: None,
+            from: Some(from.into()),
+            place: (folder, dir.into()),
+            undo: None,
+            why: None,
+        }
+    }
+
+    /// That job, done.
+    #[cfg(test)]
+    pub fn done(self) -> Self {
+        JobView { state: State::Done, ..self }
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -248,9 +289,9 @@ impl Queue {
         self.update(id, |j| j.event = Some(event));
     }
 
-    /// Whether an album waits or is being converted.
-    pub(super) fn busy(&self, album_id: &str) -> bool {
-        self.lock().list.iter().any(|j| j.album.id == album_id && matches!(j.state, State::Waiting | State::Converting))
+    /// Whether a record's copy in catalogue folder `folder` waits or is being converted.
+    pub(super) fn busy(&self, album_id: &str, folder: i64) -> bool {
+        self.lock().list.iter().any(|j| j.album.id == album_id && j.folder == folder && matches!(j.state, State::Waiting | State::Converting))
     }
 
     /// The next job to work on: one cut short first, else the oldest waiting.
@@ -282,6 +323,8 @@ fn views(jobs: &Jobs, now: i64) -> Vec<JobView> {
             total: j.files.len(),
             folder: j.to.clone(),
             library: j.library.clone(),
+            from: j.album.library.clone(),
+            place: (j.folder, j.dir.clone()),
             undo: j.undo.clone(),
             why: j.why.clone(),
         })
@@ -302,7 +345,7 @@ impl IncomingService {
     pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, limit: crate::convert::Limit, to: String, target: i64) -> KeepResult {
         let title = at.album.title.clone();
         // The library its target folder is, as the pages key it.
-        let into = self.lib.catalogue().folders().get(target as usize).cloned();
+        let into = self.lib.catalogue().folders().get(target).cloned();
         let library = self.lib.live().iter().find(|a| a.cfg.id == source_id).and_then(|a| {
             let l = a.placement.libraries.iter().find(|l| into.as_ref().is_some_and(|p| l.folders.iter().any(|f| PathBuf::from(f) == *p)))?;
             Some(format!("{source_id}/{}", l.id))
@@ -353,11 +396,11 @@ impl IncomingService {
     pub async fn cancel(&self, id: u64) -> Result<(), super::ToggleError> {
         let job = self.queue.get(id).ok_or_else(|| super::ToggleError::Refused("that conversion is over".into()))?;
         if job.swap.is_some() || !matches!(job.state, State::Waiting | State::Converting) {
-            return Err(super::ToggleError::Refused(format!("{} is already going into Music", job.album.title)));
+            return Err(super::ToggleError::Refused(format!("{} is already going into {}", job.album.title, self.library_name(&job.source, job.target))));
         }
         self.queue.change(|jobs| jobs.list.retain(|j| j.id != id));
         if job.state == State::Waiting
-            && let Some(root) = self.lib.catalogue().folders().get(job.folder as usize).cloned()
+            && let Some(root) = self.lib.catalogue().folders().get(job.folder).cloned()
         {
             let dir = job.dir.clone();
             let _ = tokio::task::spawn_blocking(move || clear_staging(&root, &dir)).await;
@@ -404,7 +447,7 @@ impl IncomingService {
     }
 
     async fn run_job(&self, job: Job) -> Outcome {
-        let Some(root) = self.lib.catalogue().folders().get(job.folder as usize).cloned() else {
+        let Some(root) = self.lib.catalogue().folders().get(job.folder).cloned() else {
             return Outcome::Failed("that Incoming folder is not in use any more".into());
         };
         // Cut short after its action was intended: the journal knows whether it happened.
@@ -471,15 +514,23 @@ impl IncomingService {
         // The swap: originals into the trash, converted files in their place.
         let converted = conversions(&job.dir, &job.files, stamp);
         let steps = swap_steps(&root, &job.dir, &job.files, &converted);
-        let files = self.files.clone();
+        let moving = self.lib.catalogue().copies_moving();
+        let (files, held) = (self.files.clone(), moving.clone());
         let swap = steps.clone();
-        let swapped = tokio::task::spawn_blocking(move || files.move_all(&swap)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r);
+        let swapped = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&swap)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|r| r);
         if let Err(e) = swapped {
             let (r, d) = (root.clone(), job.dir.clone());
             let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
             return Outcome::Failed(format!("the converted files could not take the originals' place: {e:#}"));
         }
         self.rename_rows(job.folder, &converted, false).await;
+        drop(moving);
         *self.owned.lock().await = None;
         // The action, on what is now a CD-format album.
         let at = Located {
@@ -490,7 +541,8 @@ impl IncomingService {
         };
         let done = match job.action {
             Action::Keep => self.keep_now(&at, job.target, job.year.as_deref(), converted.clone(), Some(job.id)).await,
-            Action::Replace => self.replace_now(&at, job.year.as_deref(), converted.clone(), Some(job.id)).await,
+            // The copy that was previewed, not whichever a match finds now.
+            Action::Replace => self.replace_now(&at, job.target, job.year.as_deref(), converted.clone(), Some(job.id)).await,
         };
         let outcome = match done {
             Ok(r) => Outcome::Done(r.undo),
@@ -538,6 +590,13 @@ impl IncomingService {
 mod tests {
     use super::*;
 
+    /// The fixture's store is what 0.15 left, or a move proved on it proves nothing: the queue reads it.
+    #[test]
+    fn the_jobs_of_0_15_are_read_as_the_queue_reads_them() {
+        let jobs: Jobs = serde_json::from_str(include_str!("../../../tests/fixtures/0.15/convert-queue.json")).unwrap();
+        assert_eq!((jobs.next, jobs.list[0].album.id.as_str(), jobs.list[0].state), (2, "al-5CBklbfbpDtbwWYNnJiHHl", State::Done));
+    }
+
     #[test]
     fn a_swap_moves_the_originals_out_before_the_converted_files_take_their_names() {
         let root = std::env::temp_dir().join(format!("cratarr-queue-{}", std::process::id()));
@@ -561,7 +620,7 @@ mod tests {
         assert_eq!(std::fs::read(root.join("X/A/02.flac")).unwrap(), b"cd flac 2");
         assert!(!root.join("X/A/02.wav").exists());
         assert_eq!(std::fs::read(root.join(".cratarr-trash/100/X/A/01.flac")).unwrap(), b"hi-res flac");
-        // Undo (as `undo_steps` does it): converted files to the trash under the next stamp, originals back.
+        // A conversion undone where its files still are: converted files to the trash under the next stamp, originals back.
         let at = |rel: &str| (root.clone(), rel.to_string());
         let mut back: Vec<Step> = converted.iter().map(|c| Step { from: at(&c.converted), to: at(&converted_trash(c).unwrap()) }).collect();
         back.extend(converted.iter().map(|c| Step { from: at(&c.trashed), to: at(&c.original) }));
@@ -573,6 +632,234 @@ mod tests {
         clear_staging(&root, "X/A");
         assert!(!root.join(STAGING_DIR).exists(), "an empty staging folder goes");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Converting the Incoming copy must not block a Delete of the kept one beside it.
+    #[test]
+    fn a_job_keeps_only_its_own_copy_busy() {
+        let album = source::Album {
+            id: "al-1".into(),
+            title: "A".into(),
+            artist: None,
+            year: None,
+            added: None,
+            path: None,
+            tracks: 1,
+            format: None,
+            bitrate_kbps: None,
+            duration_secs: None,
+            tags: Vec::new(),
+            library: Some("/in".into()),
+            copies: Vec::new(),
+            artists: Vec::new(),
+            release: Default::default(),
+        };
+        let job = Job {
+            id: 1,
+            source: "cratarr".into(),
+            album,
+            folder: 2,
+            dir: "A/Album".into(),
+            release_group: None,
+            action: Action::Keep,
+            year: None,
+            files: vec!["1.flac".into()],
+            limit: cd(),
+            done: 0,
+            part: 0.0,
+            state: State::Waiting,
+            to: "A/Album".into(),
+            target: 0,
+            swap: None,
+            event: None,
+            undo: None,
+            why: None,
+            finished: None,
+            by: None,
+            library: None,
+        };
+        let queue = Queue::open(None);
+        queue.change(|jobs| jobs.list.push(job));
+        assert!(queue.busy("al-1", 2));
+        assert!(!queue.busy("al-1", 0), "the record's copy in Music");
+        assert!(!queue.busy("al-2", 2));
+        assert_eq!(queue.views()[0].place, (2, "A/Album".to_string()), "the page's job says which copy");
+    }
+
+    fn folder(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-undo-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn put(root: &Path, rel: &str, body: &[u8]) {
+        std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(root.join(rel), body).unwrap();
+    }
+
+    fn read(root: &Path, rel: &str) -> Vec<u8> {
+        std::fs::read(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
+    }
+
+    fn moved(from: (i64, String), to: (i64, String)) -> crate::journal::TrackMove {
+        crate::journal::TrackMove { track: None, from, to, was: None }
+    }
+
+    /// An album of Incoming's (folder 1) converted as `run_job` does it: `X/A/01.flac` and `X/A/02.wav`, each hi-res, in
+    /// the trash under stamp 100, their converted files in their place. Its moves into `Y`, its cover's too.
+    fn converted_album(inc: &Path) -> (Vec<Converted>, Vec<crate::journal::TrackMove>) {
+        put(inc, "X/A/01.flac", b"hi-res flac");
+        put(inc, "X/A/02.wav", b"hi-res wav");
+        put(inc, "X/A/cover.jpg", b"cover");
+        let files = vec!["01.flac".to_string(), "02.wav".to_string()];
+        put(inc, &staged("X/A", "01.flac"), b"cd flac 1");
+        put(inc, &staged("X/A", "02.wav"), b"cd flac 2");
+        let converted = conversions("X/A", &files, 100);
+        crate::moves::apply(&swap_steps(inc, "X/A", &files, &converted)).unwrap();
+        clear_staging(inc, "X/A");
+        let to = |n: &str| (0, format!("Y/{n}"));
+        let moves = vec![
+            moved((1, "X/A/01.flac".into()), to("01 One.flac")),
+            moved((1, "X/A/02.flac".into()), to("02 Two.flac")),
+            moved((1, "X/A/cover.jpg".into()), to("cover.jpg")),
+        ];
+        (converted, moves)
+    }
+
+    fn adopted(converted: Vec<Converted>, moves: Vec<crate::journal::TrackMove>) -> crate::journal::Event {
+        crate::journal::Event::AlbumAdopted {
+            source: "cratarr".into(),
+            album_id: "al-1".into(),
+            title: "A".into(),
+            from_dir: (1, "X/A".into()),
+            to_dir: (0, "Y".into()),
+            moves,
+            release_group: None,
+            converted,
+        }
+    }
+
+    /// Written down and moved by its own steps, as Keep and Replace do it: what an Undo finds. Its undo key.
+    fn done(svc: &IncomingService, event: &crate::journal::Event) -> String {
+        let id = svc.journal.intend(100, event).unwrap();
+        crate::moves::apply(&svc.steps(event).unwrap()).unwrap();
+        svc.journal.applied(id).unwrap();
+        id.to_string()
+    }
+
+    #[tokio::test]
+    async fn undo_of_a_keep_that_converted_puts_the_originals_back() {
+        let (music, inc) = (folder("keep-music"), folder("keep-inc"));
+        let svc = super::super::tests::on_disk(&music, &inc).await;
+        let (converted, moves) = converted_album(&inc);
+        let key = done(&svc, &adopted(converted, moves));
+        assert_eq!(read(&music, "Y/01 One.flac"), b"cd flac 1");
+
+        svc.undo(&key).await.unwrap();
+        assert_eq!(read(&inc, "X/A/01.flac"), b"hi-res flac", "the original takes back the name its converted file had");
+        assert_eq!(read(&inc, "X/A/02.wav"), b"hi-res wav");
+        assert_eq!(read(&inc, "X/A/cover.jpg"), b"cover");
+        assert!(!inc.join("X/A/02.flac").exists());
+        assert!(!music.join("Y").exists(), "nothing is left in the library");
+        assert_eq!(read(&inc, ".cratarr-trash/101/X/A/01.flac"), b"cd flac 1", "the converted files wait in the trash");
+        assert_eq!(read(&inc, ".cratarr-trash/101/X/A/02.flac"), b"cd flac 2");
+        assert!(!inc.join(".cratarr-trash/100").exists(), "the originals' place in the trash is empty");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn undo_of_a_replace_that_converted_puts_both_albums_back() {
+        let (music, inc) = (folder("replace-music"), folder("replace-inc"));
+        let svc = super::super::tests::on_disk(&music, &inc).await;
+        let (converted, moves) = converted_album(&inc);
+        // The old album's first track has the name the new one takes.
+        put(&music, "Y/01 One.flac", b"old one");
+        put(&music, "Y/02 Two.mp3", b"old two");
+        let replaced = ["01 One.flac", "02 Two.mp3"].map(|n| moved((0, format!("Y/{n}")), (0, format!(".cratarr-trash/100/Y/{n}")))).to_vec();
+        let event = crate::journal::Event::AlbumReplaced {
+            source: "cratarr".into(),
+            album_id: "al-1".into(),
+            title: "A".into(),
+            from_dir: (1, "X/A".into()),
+            to_dir: (0, "Y".into()),
+            moves,
+            replaced,
+            token: "100/Y".into(),
+            release_group: None,
+            converted,
+        };
+        let key = done(&svc, &event);
+        assert_eq!(read(&music, "Y/01 One.flac"), b"cd flac 1");
+
+        svc.undo(&key).await.unwrap();
+        assert_eq!(read(&music, "Y/01 One.flac"), b"old one");
+        assert_eq!(read(&music, "Y/02 Two.mp3"), b"old two");
+        assert_eq!(read(&inc, "X/A/01.flac"), b"hi-res flac");
+        assert_eq!(read(&inc, "X/A/02.wav"), b"hi-res wav");
+        assert_eq!(read(&inc, ".cratarr-trash/101/X/A/02.flac"), b"cd flac 2");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Why relaxing `apply`'s look alone would not do: a step that reached the trash must read as done.
+    #[tokio::test]
+    async fn an_undo_cut_short_after_a_converted_file_went_is_finished_by_another() {
+        let (music, inc) = (folder("cut-music"), folder("cut-inc"));
+        let svc = super::super::tests::on_disk(&music, &inc).await;
+        let (converted, moves) = converted_album(&inc);
+        let event = adopted(converted, moves);
+        let key = done(&svc, &event);
+        let steps = svc.undo_steps(&event).unwrap();
+        crate::moves::apply(&steps[..2]).unwrap();
+        assert_eq!(read(&inc, ".cratarr-trash/101/X/A/02.flac"), b"cd flac 2");
+
+        svc.undo(&key).await.unwrap();
+        assert_eq!(read(&inc, "X/A/01.flac"), b"hi-res flac");
+        assert_eq!(read(&inc, "X/A/02.wav"), b"hi-res wav");
+        assert!(!music.join("Y").exists());
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn undo_after_the_trash_was_emptied_says_so_and_moves_nothing() {
+        let (music, inc) = (folder("gone-music"), folder("gone-inc"));
+        let svc = super::super::tests::on_disk(&music, &inc).await;
+        let (converted, moves) = converted_album(&inc);
+        let key = done(&svc, &adopted(converted, moves));
+        std::fs::remove_dir_all(inc.join(".cratarr-trash/100")).unwrap();
+
+        assert!(svc.undo(&key).await.is_err());
+        assert_eq!(read(&music, "Y/01 One.flac"), b"cd flac 1");
+        assert_eq!(read(&music, "Y/02 Two.flac"), b"cd flac 2");
+        assert_eq!(read(&music, "Y/cover.jpg"), b"cover");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// What waits finds its album by its id when its turn comes, and a job's Undo finds the job by it.
+    #[test]
+    fn a_job_waiting_keeps_its_album_after_the_move() {
+        let d = std::env::temp_dir().join(format!("cratarr-queue-moved-job-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let album = serde_json::json!({ "id": "al-old", "title": "T", "tracks": 1, "tags": [] });
+        let job = serde_json::json!({
+            "id": 1, "source": "cratarr", "album": album, "folder": 1, "dir": "X", "action": "keep", "files": ["01.flac"], "done": 0, "state": "waiting", "to": "X - T",
+        });
+        std::fs::write(d.join("convert-queue.json"), serde_json::json!({ "next": 2, "list": [job] }).to_string()).unwrap();
+        let moved = crate::moved::Moved { ids: [("al-old".to_string(), "al-7".to_string())].into(), ..Default::default() };
+        let report = moved.stores(&d).unwrap();
+        let q = Queue::open(Some(d.join("convert-queue.json")));
+        assert_eq!(q.lock().list.iter().map(|j| j.album.id.as_str()).collect::<Vec<_>>(), ["al-7"], "read as a server reads it");
+        assert_eq!(report.table_named("convert-queue.json").unwrap().before, 1);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -596,6 +883,7 @@ mod tests {
                 duration_secs: None,
                 tags: Vec::new(),
                 library: None,
+                copies: Vec::new(),
                 artists: Vec::new(),
                 release: Default::default(),
             },
@@ -630,7 +918,7 @@ mod tests {
         let q = Queue::open(Some(file));
         assert_eq!(q.views().iter().map(|v| v.id).collect::<Vec<_>>(), vec![1, 2], "the old finished job is gone");
         assert_eq!(q.next(), Some(2), "a job cut short goes first");
-        assert!(q.busy("a1") && q.busy("a2") && !q.busy("a3"));
+        assert!(q.busy("a1", 1) && q.busy("a2", 1) && !q.busy("a3", 1));
         let mut rx = q.subscribe();
         q.update(1, |j| j.done = 1);
         assert_eq!(rx.try_recv().unwrap().iter().find(|v| v.id == 1).map(|v| v.done), Some(1), "every change is told, whole");

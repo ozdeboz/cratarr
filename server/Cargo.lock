@@ -439,14 +439,16 @@ dependencies = [
 name = "cratarr-rules"
 version = "0.1.0"
 dependencies = [
+ "rustc-hash",
  "serde",
  "serde_json",
+ "ts-rs",
  "unicode-normalization",
 ]
 
 [[package]]
 name = "cratarr-server"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "alac-encoder",
  "anyhow",

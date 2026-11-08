@@ -6,9 +6,11 @@ import { type Area, areaOf, DOMAINS, iconOf } from './health';
 import type { IconName } from './Icon.svelte';
 
 /** `error`: the files' problems could not be read; `reportError`: the report could not (the owner, 2026-11-02: errors
- *  are never shown as nothing, so never "All good." after either failed). */
-export const health = $state<{ findings: HealthFinding[]; loaded: boolean; problems: FileProblem[] | null; error: string | null; reportError: string | null }>({
+ *  are never shown as nothing, so never "All good." after either failed). `checked`: when each domain was last checked
+ *  (epoch s), as the report says. */
+export const health = $state<{ findings: HealthFinding[]; checked: Record<string, number>; loaded: boolean; problems: FileProblem[] | null; error: string | null; reportError: string | null }>({
   findings: [],
+  checked: {},
   loaded: false,
   problems: null,
   error: null,
@@ -25,7 +27,7 @@ const settle = (which: keyof typeof settled) => {
 export function loadHealth() {
   settled = { report: false, files: false };
   getHealthReport().then(
-    (r) => ((health.findings = r.findings), (health.reportError = null), settle('report')),
+    (r) => ((health.findings = r.findings), (health.checked = r.checked ?? {}), (health.reportError = null), settle('report')),
     (e) => ((health.reportError = e instanceof Error ? e.message : 'Unexpected error'), settle('report')),
   );
   getFileProblems().then(

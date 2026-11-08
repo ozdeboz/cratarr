@@ -71,7 +71,7 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// The albums (their Music-form ids) carrying a tag, most recently tagged first.
+    /// The albums carrying a tag, most recently tagged first.
     pub fn albums_tagged(&self, tag: &str) -> Result<Vec<String>> {
         let Some(tag) = clean(tag) else { return Ok(Vec::new()) };
         let db = self.db();

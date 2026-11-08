@@ -19,7 +19,7 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [dependencies]
-cratarr-rules = { path = "../rules" }
+cratarr-rules = { path = "../rules", features = ["device"] }
 uniffi = { version = "0.29", features = ["cli"] }
 
 [profile.release]
@@ -28,3 +28,12 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# A device runs the library's index for every crate and pick: built for speed, the rest for size, or it runs at the size setting's
+# speed (the numbers of preview 2's spike, D03, were measured so).
+[profile.release.package.cratarr-rules]
+opt-level = 3
+# This crate too: the rules' generics are compiled here (a crate's `View`), and the link-time pass runs at the level of the crate
+# that links. Left at "z" it cost a pick and a Sounds like about a tenth, on a release build on a PC.
+[profile.release.package.cratarr-rules-ffi]
+opt-level = 3

@@ -161,6 +161,35 @@ pub struct AddWith {
     pub root: Option<String>,
 }
 
+/// What became of an album wanted: what was done, in words, and its release group (found by its names where it came with
+/// none).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Handed {
+    pub said: String,
+    pub release_group: String,
+}
+
+/// What to look an album up by, in turn, none twice: as asked, by its main artist, by its name alone. On a real Lidarr
+/// (2026-11-06) "Grouch / Grouch In Dub Rare Specimens" found other albums and "Grouch Rare Specimens" that one, and one
+/// term answered 503 where the album's name alone found it.
+fn terms(artist: &str, main: &str, album: &str) -> Vec<String> {
+    let mut out = vec![format!("{artist} {album}")];
+    for term in [format!("{main} {album}"), album.to_string()] {
+        if !out.contains(&term) {
+            out.push(term);
+        }
+    }
+    out
+}
+
+/// The album among `found` with this name, by the artist as credited, else by the main one: a name alone is not enough,
+/// as other artists have albums of that name.
+fn pick(found: &[serde_json::Value], artist: &str, main: &str, album: &str) -> Option<serde_json::Value> {
+    let k = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    let by = |name: &str| found.iter().find(|v| v["title"].as_str().is_some_and(|t| k(t) == k(album)) && v["artist"]["artistName"].as_str().is_some_and(|a| k(a) == k(name)));
+    by(artist).or_else(|| by(main)).cloned()
+}
+
 /// Lidarr's profiles and root folders, for the choices on its page in Connections.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Options {
@@ -222,6 +251,16 @@ impl Lidarr {
         Ok(())
     }
 
+    /// The root folder Lidarr adds an album's artist to when none is chosen in Connections: its artists' (the first
+    /// one's, as Want takes), else its first root folder; none when it has neither.
+    pub async fn artists_root(&self) -> Result<Option<String>> {
+        let artists: Vec<serde_json::Value> = self.get("/api/v1/artist", &[]).await?;
+        if let Some(root) = artists.first().and_then(|a| a["rootFolderPath"].as_str()) {
+            return Ok(Some(root.to_string()));
+        }
+        Ok(self.options().await?.roots.into_iter().next())
+    }
+
     /// Lidarr's quality and metadata profiles and its root folders, by id and name.
     pub async fn options(&self) -> Result<Options> {
         #[derive(Deserialize)]
@@ -243,41 +282,69 @@ impl Lidarr {
         })
     }
 
-    /// Discover's Want (decision 0069): Lidarr fetches the album into Incoming. One it knows, as Seerr does with
-    /// Radarr: left alone when it has it already, monitored when it is not, searched for when it is out (one not out yet
-    /// waits for Lidarr's own watch). One it does not know is looked up (by its release group, else by its artist and
-    /// name) and added, with its artist where Lidarr has not got them (their other albums not monitored), with `with`'s
-    /// profiles and root folder (else as the artists it has), and searched for. What was done, in words.
-    pub async fn want(&self, with: &AddWith, release_group: Option<&str>, artist: &str, album: &str) -> Result<String> {
-        if let Some(rg) = release_group {
-            let known = self.albums(rg).await?;
-            if !known.is_empty() {
-                if known.iter().any(AlbumRow::has_files) {
-                    return Ok("Lidarr has it already".into());
+    /// Discover's Want (decision 0069): Lidarr fetches the album into Incoming. One without a release group is found by
+    /// its names first (`by_name`): Lidarr may hold it already, and it refuses to add an album twice.
+    pub async fn want(&self, with: &AddWith, release_group: Option<&str>, artist: &str, album: &str) -> Result<Handed> {
+        let (release_group, named) = match release_group {
+            Some(rg) => (rg.to_string(), None),
+            None => {
+                let found = self.by_name(artist, album).await?;
+                (found["foreignAlbumId"].as_str().context("Lidarr's album had no id")?.to_string(), Some(found))
+            }
+        };
+        let said = self.fetch(with, &release_group, named, artist, album).await?;
+        Ok(Handed { said, release_group })
+    }
+
+    /// The album Lidarr's lookup finds by these names (`terms`, `pick`). A term that fails is passed over for the next;
+    /// that failure is what is told if no term finds it.
+    async fn by_name(&self, artist: &str, album: &str) -> Result<serde_json::Value> {
+        let main = crate::app::soulseek::main_artist(artist);
+        let mut failed = None;
+        for term in terms(artist, &main, album) {
+            match self.get::<Vec<serde_json::Value>>("/api/v1/album/lookup", &[("term", term.as_str())]).await {
+                Ok(found) => {
+                    if let Some(album) = pick(&found, artist, &main, album) {
+                        return Ok(album);
+                    }
                 }
-                let off: Vec<i64> = known.iter().filter(|a| !a.monitored).map(|a| a.id).collect();
-                self.set_monitored(&off, true).await?;
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-                let out: Vec<i64> = known.iter().filter(|a| a.out(now)).map(|a| a.id).collect();
-                if out.is_empty() {
-                    return Ok("Lidarr will fetch it when it comes out".into());
-                }
-                self.search(&out).await?;
-                return Ok("Lidarr is looking for it".into());
+                Err(e) => failed = Some(e),
             }
         }
-        let term = match release_group {
-            Some(rg) => format!("lidarr:{rg}"),
-            None => format!("{artist} {album}"),
-        };
-        let found: Vec<serde_json::Value> = self.get("/api/v1/album/lookup", &[("term", term.as_str())]).await?;
-        let want = |v: &serde_json::Value| -> bool {
-            release_group.is_some() || {
-                let k = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
-                v["title"].as_str().is_some_and(|t| k(t) == k(album)) && v["artist"]["artistName"].as_str().is_some_and(|a| k(a) == k(artist))
+        match failed {
+            Some(e) => Err(e),
+            None => bail!("Lidarr does not know {album} by {artist}"),
+        }
+    }
+
+    /// One Lidarr knows, as Seerr does with Radarr: left alone when it has it already, monitored when it is not, searched
+    /// for when it is out (one not out yet waits for Lidarr's own watch). One it does not know (`named`, else looked up by
+    /// its release group) is added, with its artist where Lidarr has not got them (their other albums not monitored), with
+    /// `with`'s profiles and root folder (else as the artists it has), and searched for. What was done, in words.
+    async fn fetch(&self, with: &AddWith, release_group: &str, named: Option<serde_json::Value>, artist: &str, album: &str) -> Result<String> {
+        let known = self.albums(release_group).await?;
+        if !known.is_empty() {
+            if known.iter().any(AlbumRow::has_files) {
+                return Ok("Lidarr has it already".into());
+            }
+            let off: Vec<i64> = known.iter().filter(|a| !a.monitored).map(|a| a.id).collect();
+            self.set_monitored(&off, true).await?;
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+            let out: Vec<i64> = known.iter().filter(|a| a.out(now)).map(|a| a.id).collect();
+            if out.is_empty() {
+                return Ok("Lidarr will fetch it when it comes out".into());
+            }
+            self.search(&out).await?;
+            return Ok("Lidarr is looking for it".into());
+        }
+        let mut found = match named {
+            Some(found) => found,
+            None => {
+                let term = format!("lidarr:{release_group}");
+                let found: Vec<serde_json::Value> = self.get("/api/v1/album/lookup", &[("term", term.as_str())]).await?;
+                found.into_iter().next().with_context(|| format!("Lidarr does not know {album} by {artist}"))?
             }
         };
-        let Some(mut found) = found.into_iter().find(want) else { bail!("Lidarr does not know {album} by {artist}") };
         // As chosen on its page in Connections; what is not chosen as the artists it has are kept (the first one's
         // profiles and root folder), else Lidarr's first of each.
         let artists: Vec<serde_json::Value> = self.get("/api/v1/artist", &[]).await?;
@@ -427,5 +494,127 @@ impl Lidarr {
             bail!("Lidarr answered {status}");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Query;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use axum::routing::{get, post, put};
+    use axum::{Json, Router};
+    use serde_json::Value;
+    use std::future::ready;
+    use std::sync::{Arc, Mutex};
+
+    type Calls = Arc<Mutex<Vec<String>>>;
+
+    fn album(title: &str, artist: &str, id: &str) -> Value {
+        json!({ "title": title, "artist": { "artistName": artist }, "foreignAlbumId": id })
+    }
+
+    /// Lidarr at a local address: `look` answers its lookup (none: 503), `known` its albums of a release group, and each
+    /// call is written down.
+    async fn lidarr_at(look: fn(&str) -> Option<Value>, known: Value) -> (Lidarr, Calls) {
+        let calls = Calls::default();
+        let (a, b, c, d) = (calls.clone(), calls.clone(), calls.clone(), calls.clone());
+        let lookup = get(move |Query(q): Query<HashMap<String, String>>| {
+            let term = q["term"].clone();
+            a.lock().unwrap().push(format!("lookup {term}"));
+            ready(look(&term).map_or_else(|| StatusCode::SERVICE_UNAVAILABLE.into_response(), |v| Json(v).into_response()))
+        });
+        let albums = get(move |Query(q): Query<HashMap<String, String>>| {
+            b.lock().unwrap().push(format!("albums {}", q["foreignAlbumId"]));
+            ready(Json(known.clone()))
+        })
+        .post(move || {
+            c.lock().unwrap().push("add".to_string());
+            ready(Json(json!({})))
+        });
+        let e = d.clone();
+        let monitor = put(move || {
+            d.lock().unwrap().push("monitor".to_string());
+            ready(Json(json!({})))
+        });
+        let search = post(move || {
+            e.lock().unwrap().push("search".to_string());
+            ready(Json(json!({})))
+        });
+        let artists = get(|| ready(Json(json!([{ "qualityProfileId": 1, "metadataProfileId": 1, "rootFolderPath": "/music" }]))));
+        let app = Router::new()
+            .route("/api/v1/album/lookup", lookup)
+            .route("/api/v1/album/monitor", monitor)
+            .route("/api/v1/album", albums)
+            .route("/api/v1/command", search)
+            .route("/api/v1/artist", artists);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (Lidarr::new(&url, "key").unwrap(), calls)
+    }
+
+    #[test]
+    fn an_album_is_looked_up_as_asked_by_its_main_artist_and_by_its_name_none_twice() {
+        assert_eq!(terms("Grouch / Grouch In Dub", "Grouch", "Rare Specimens"), ["Grouch / Grouch In Dub Rare Specimens", "Grouch Rare Specimens", "Rare Specimens"]);
+        assert_eq!(terms("Air", "Air", "Moon Safari"), ["Air Moon Safari", "Moon Safari"]);
+    }
+
+    #[test]
+    fn the_album_is_its_name_and_its_artist_the_whole_credit_first() {
+        let found = [album("At TreePeople", "Saul Williams", "main"), album("At TreePeople", "Someone Else", "other")];
+        assert_eq!(pick(&found, "Saul Williams, Carlos Niño & Friends", "Saul Williams", "At TreePeople").unwrap()["foreignAlbumId"], "main");
+        let found = [album("Air & Beck", "Air", "main"), album("Air & Beck", "Air & Beck", "whole")];
+        assert_eq!(pick(&found, "Air & Beck", "Air", "Air & Beck").unwrap()["foreignAlbumId"], "whole");
+        assert!(pick(&[album("Cartouche", "Georges Delerue", "other")], "The Funky Lowlives", "The Funky Lowlives", "Cartouche").is_none());
+    }
+
+    #[tokio::test]
+    async fn one_lidarr_holds_is_found_by_its_main_artist_and_monitored_not_added_again() {
+        fn look(term: &str) -> Option<Value> {
+            let other = album("Grouch in Dub", "Grouch", "rg-dub");
+            Some(if term == "Grouch Rare Specimens" { json!([other, album("Rare Specimens", "Grouch", "rg-rare")]) } else { json!([other]) })
+        }
+        let (lidarr, calls) = lidarr_at(look, json!([{ "id": 7, "monitored": false }])).await;
+        let handed = lidarr.want(&AddWith::default(), None, "Grouch / Grouch In Dub", "Rare Specimens").await.unwrap();
+        assert_eq!(handed, Handed { said: "Lidarr is looking for it".into(), release_group: "rg-rare".into() });
+        assert_eq!(*calls.lock().unwrap(), ["lookup Grouch / Grouch In Dub Rare Specimens", "lookup Grouch Rare Specimens", "albums rg-rare", "monitor", "search"]);
+    }
+
+    #[tokio::test]
+    async fn a_term_that_fails_is_passed_over_and_one_lidarr_lacks_is_added() {
+        fn look(term: &str) -> Option<Value> {
+            (!term.contains("Ross From Friends")).then(|| json!([album("Love Divide / The Knife", "Ross From Friends", "rg-love")]))
+        }
+        let (lidarr, calls) = lidarr_at(look, json!([])).await;
+        let handed = lidarr.want(&AddWith::default(), None, "Ross From Friends", "Love Divide / The Knife").await.unwrap();
+        assert_eq!(handed, Handed { said: "Lidarr added it and is looking for it".into(), release_group: "rg-love".into() });
+        assert_eq!(*calls.lock().unwrap(), ["lookup Ross From Friends Love Divide / The Knife", "lookup Love Divide / The Knife", "albums rg-love", "add"]);
+    }
+
+    #[tokio::test]
+    async fn found_by_no_term_it_says_so_and_a_failure_is_told_as_one() {
+        fn another(_: &str) -> Option<Value> {
+            Some(json!([album("Cartouche", "Georges Delerue", "rg-other")]))
+        }
+        let (lidarr, calls) = lidarr_at(another, json!([])).await;
+        let e = lidarr.want(&AddWith::default(), None, "The Funky Lowlives", "Cartouche").await.unwrap_err();
+        assert_eq!(e.to_string(), "Lidarr does not know Cartouche by The Funky Lowlives");
+        assert!(!calls.lock().unwrap().iter().any(|c| c == "add"), "another artist's album of that name is not added");
+        let (lidarr, _) = lidarr_at(|_| None, json!([])).await;
+        let e = lidarr.want(&AddWith::default(), None, "The Funky Lowlives", "Cartouche").await.unwrap_err();
+        assert_eq!(e.to_string(), "Lidarr answered 503 Service Unavailable");
+    }
+
+    #[tokio::test]
+    async fn a_release_group_goes_to_lidarr_as_it_is_with_no_search_by_name() {
+        fn look(_: &str) -> Option<Value> {
+            Some(json!([album("Moon Safari", "Air", "rg-1")]))
+        }
+        let (lidarr, calls) = lidarr_at(look, json!([])).await;
+        let handed = lidarr.want(&AddWith::default(), Some("rg-1"), "Air", "Moon Safari").await.unwrap();
+        assert_eq!(handed, Handed { said: "Lidarr added it and is looking for it".into(), release_group: "rg-1".into() });
+        assert_eq!(*calls.lock().unwrap(), ["albums rg-1", "lookup lidarr:rg-1", "add"]);
     }
 }

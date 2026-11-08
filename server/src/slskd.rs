@@ -14,8 +14,32 @@ use serde_json::json;
 
 /// The folder under slskd's completed downloads that Cratarr's fetches go into.
 pub const FOLDER: &str = "cratarr";
-/// How long slskd listens for answers (its own default).
-const LISTEN_SECS: u64 = 15;
+/// How long slskd listens for answers (its own default), in milliseconds, as its API counts: 15 ended every search at
+/// once with no answers (slskd 0.26, seen 2026-11-06).
+const LISTEN_MS: u64 = 15_000;
+
+/// slskd itself could not be asked: it did not answer, would not take Cratarr's key, or says it is not up. Nothing a user
+/// did, so nothing to hold against one (`soulseek::fetch_from`, `track_intake::fetch`). Reads as the failure it carries.
+#[derive(Debug)]
+pub struct Away(String);
+
+impl std::fmt::Display for Away {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Away {}
+
+fn unreached(e: reqwest::Error) -> Away {
+    Away(format!("slskd could not be reached: {:#}", anyhow::Error::new(e)))
+}
+
+/// Whether an answer is slskd's own trouble, whoever was asked for: its key refused, its limit, or a proxy saying it is
+/// not up.
+fn its_own(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 401 | 403 | 429 | 502 | 503 | 504)
+}
 
 /// slskd at an address, with its API key.
 #[derive(Clone)]
@@ -124,8 +148,11 @@ impl Slskd {
     }
 
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let r = self.http.get(self.at(path)).header("X-API-Key", &self.key).send().await.context("slskd could not be reached")?;
+        let r = self.http.get(self.at(path)).header("X-API-Key", &self.key).send().await.map_err(unreached)?;
         let status = r.status();
+        if its_own(status) {
+            return Err(Away(format!("slskd answered {status}")).into());
+        }
         if !status.is_success() {
             bail!("slskd answered {status}");
         }
@@ -157,11 +184,12 @@ impl Slskd {
     /// Starts a search; its id.
     pub async fn search(&self, text: &str) -> Result<String> {
         let id = uuid();
-        let body = json!({ "id": id, "searchText": text, "searchTimeout": LISTEN_SECS, "filterResponses": true, "minimumResponseFileCount": 1 });
-        let r = self.http.post(self.at("searches")).header("X-API-Key", &self.key).json(&body).send().await.context("slskd could not be reached")?;
+        let body = json!({ "id": id, "searchText": text, "searchTimeout": LISTEN_MS, "filterResponses": true, "minimumResponseFileCount": 1 });
+        let r = self.http.post(self.at("searches")).header("X-API-Key", &self.key).json(&body).send().await.map_err(unreached)?;
         let status = r.status();
         if !status.is_success() {
-            bail!("slskd would not search: {status} {}", r.text().await.unwrap_or_default());
+            let said = format!("slskd would not search: {status} {}", r.text().await.unwrap_or_default());
+            return Err(self.turned_down(status, said).await);
         }
         Ok(id)
     }
@@ -173,6 +201,21 @@ impl Slskd {
 
     pub async fn answers(&self, id: &str) -> Result<Vec<Answer>> {
         self.get(&format!("searches/{id}/responses")).await
+    }
+
+    /// What slskd saying no comes to. A 500 is how it says both "that user failed" and "I am not on Soulseek": there it is
+    /// asked which, as a slskd just back and not signed in yet would otherwise fail every user in a moment.
+    async fn turned_down(&self, status: reqwest::StatusCode, said: String) -> anyhow::Error {
+        if its_own(status) || self.off_soulseek().await { Away(said).into() } else { anyhow::anyhow!(said) }
+    }
+
+    /// Whether slskd says it is not signed in to Soulseek, or does not answer. Its word as far as it goes: any other shape
+    /// of answer says nothing, and what it said stands.
+    async fn off_soulseek(&self) -> bool {
+        match self.get::<serde_json::Value>("application").await {
+            Ok(v) => v["server"]["isLoggedIn"] == false,
+            Err(e) => e.is::<Away>(),
+        }
     }
 
     /// The search gone from slskd's list.
@@ -189,13 +232,14 @@ impl Slskd {
             "files": [{ "filename": file.filename, "size": file.size }],
             "options": { "destination": format!("{FOLDER}/{batch}") },
         });
-        let r = self.http.post(self.at("transfers/downloads/batches")).header("X-API-Key", &self.key).json(&body).send().await.context("slskd could not be reached")?;
+        let r = self.http.post(self.at("transfers/downloads/batches")).header("X-API-Key", &self.key).json(&body).send().await.map_err(unreached)?;
         let status = r.status();
         if status.as_u16() == 404 {
             bail!("{user} is offline");
         }
         if !status.is_success() {
-            bail!("slskd would not fetch it: {status} {}", r.text().await.unwrap_or_default());
+            let said = format!("slskd would not fetch it: {status} {}", r.text().await.unwrap_or_default());
+            return Err(self.turned_down(status, said).await);
         }
         let e: Enqueued = r.json().await.context("slskd's answer could not be read")?;
         if let Some(f) = e.failures.first() {
@@ -213,13 +257,14 @@ impl Slskd {
         let batch = uuid();
         let listed: Vec<serde_json::Value> = files.iter().map(|f| json!({ "filename": f.filename, "size": f.size })).collect();
         let body = json!({ "id": batch, "username": user, "files": listed, "options": { "destination": format!("{FOLDER}/{batch}") } });
-        let r = self.http.post(self.at("transfers/downloads/batches")).header("X-API-Key", &self.key).json(&body).send().await.context("slskd could not be reached")?;
+        let r = self.http.post(self.at("transfers/downloads/batches")).header("X-API-Key", &self.key).json(&body).send().await.map_err(unreached)?;
         let status = r.status();
         if status.as_u16() == 404 {
             bail!("{user} is offline");
         }
         if !status.is_success() {
-            bail!("slskd would not fetch them: {status} {}", r.text().await.unwrap_or_default());
+            let said = format!("slskd would not fetch them: {status} {}", r.text().await.unwrap_or_default());
+            return Err(self.turned_down(status, said).await);
         }
         let e: Enqueued = r.json().await.context("slskd's answer could not be read")?;
         if let Some(f) = e.failures.first() {
@@ -358,6 +403,78 @@ pub fn candidates(answers: Vec<Answer>, length_ms: Option<i64>) -> Vec<Candidate
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// slskd at a local address: its batches answered `status` and `body`, its own state `state`.
+    async fn answering(status: u16, body: serde_json::Value, state: serde_json::Value) -> Slskd {
+        let code = axum::http::StatusCode::from_u16(status).unwrap();
+        let app = axum::Router::new()
+            .route("/api/v0/transfers/downloads/batches", axum::routing::post(move || std::future::ready((code, axum::Json(body.clone())))))
+            .route("/api/v0/application", axum::routing::get(move || std::future::ready(axum::Json(state.clone()))));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Slskd::new(&url, "key").unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_search_listens_for_fifteen_seconds_which_slskd_counts_in_milliseconds() {
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
+        let kept = sent.clone();
+        let app = axum::Router::new().route(
+            "/api/v0/searches",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                *kept.lock().unwrap() = body;
+                std::future::ready(axum::Json(serde_json::json!({})))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Slskd::new(&url, "key").unwrap().search("Air Moon Safari").await.unwrap();
+        assert_eq!(sent.lock().unwrap()["searchTimeout"], 15_000);
+    }
+
+    fn offered() -> Vec<Offered> {
+        vec![Offered { filename: "d\\01.flac".into(), size: 1, extension: None, bit_rate: None, bit_depth: None, sample_rate: None, length: None, is_locked: false }]
+    }
+
+    /// Whether a fetch of `slskd`'s failed for slskd's sake, and what it said.
+    async fn failure_of(slskd: &Slskd) -> (bool, String) {
+        let e = slskd.fetch_many("ann", &offered()).await.unwrap_err();
+        let single = slskd.fetch("ann", &offered()[0]).await.unwrap_err();
+        assert_eq!(single.is::<Away>(), e.is::<Away>(), "one file alike");
+        (e.is::<Away>(), format!("{e:#}"))
+    }
+
+    #[tokio::test]
+    async fn a_fetch_slskd_itself_could_not_make_is_told_from_a_user_who_refused_it() {
+        let on = serde_json::json!({ "server": { "isLoggedIn": true } });
+        let off = serde_json::json!({ "server": { "isLoggedIn": false } });
+        let null = serde_json::Value::Null;
+        // The user's: offline, or slskd saying they would not send.
+        assert_eq!(failure_of(&answering(404, null.clone(), on.clone()).await).await, (false, "ann is offline".to_string()));
+        let refused = serde_json::json!({ "batch": null, "failures": [{ "message": "queue full" }] });
+        assert_eq!(slskd_says(&answering(200, refused, on.clone()).await).await, "ann would not send them: queue full");
+        // An error, with slskd well: the user's, as the owner has it. Of another shape, what it said stands.
+        assert!(!failure_of(&answering(500, null.clone(), on.clone()).await).await.0);
+        assert!(!failure_of(&answering(500, null.clone(), serde_json::json!({ "version": "x" })).await).await.0);
+        // slskd's: not signed in to Soulseek yet, its key refused, a proxy saying it is not up.
+        assert!(failure_of(&answering(500, null.clone(), off).await).await.0);
+        for status in [401, 403, 429, 502, 503, 504] {
+            assert!(failure_of(&answering(status, null.clone(), on.clone()).await).await.0, "{status}");
+        }
+        // Nothing listening.
+        let gone = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+        let (away, said) = failure_of(&Slskd::new(&format!("http://{gone}"), "key").unwrap()).await;
+        assert!(away);
+        assert!(said.starts_with("slskd could not be reached: "), "{said}");
+    }
+
+    async fn slskd_says(slskd: &Slskd) -> String {
+        let e = slskd.fetch_many("ann", &offered()).await.unwrap_err();
+        assert!(!e.is::<Away>());
+        format!("{e:#}")
+    }
 
     fn file(name: &str, secs: i64, locked: bool) -> Offered {
         Offered { filename: name.into(), size: 1000, extension: None, bit_rate: Some(320), bit_depth: None, sample_rate: None, length: Some(secs), is_locked: locked }

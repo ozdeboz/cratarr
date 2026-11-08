@@ -18,8 +18,9 @@ import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 import { keep, readKept } from './keptStore';
-import { accountKey, whenAccount } from './account';
-import { ours, outlived, stamped } from './outbox';
+import { accountKey, pageGoing, whenAccount, whenLeaving } from './account';
+import { heldHere } from './deviceAnswers.svelte';
+import { playsToTell } from './playsToTell';
 import { reach, whenReached } from './reach.svelte';
 
 // Which player the page drives, and what this device's queue shows of what plays: the port's (lib/player/port).
@@ -29,9 +30,9 @@ export { isLocal, localNowPlaying, localState, tookLocal } from './player/port.s
 export const playsHere = () => prefs.output === 'local' && canPlayHere;
 
 // Leaving the page stops what plays in this browser, so a reload or closing the tab asks first (the browser's own
-// "Leave site?"), but only while this browser is playing.
+// "Leave site?"), but only while this browser is playing, and not once the account's own doing has it going.
 addEventListener('beforeunload', (e) => {
-  if (!playsHere() || local.index < 0 || local.paused) return;
+  if (pageGoing() || !playsHere() || local.index < 0 || local.paused) return;
   e.preventDefault();
   e.returnValue = '';
 });
@@ -73,58 +74,24 @@ const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
 /** The queue place being heard (index and track), from when, how far it got, and whether it was told as counted. */
 type Hearing = { at: string; track: LocalTrack; started: number; heard: number; length: number | null; counted: boolean };
 let hearing: Hearing | null = null;
-/** Reports not yet taken (the server away): kept on this device (lib/keptStore; 0.12, decision 0085 step 3: no play
- *  lost when the page is closed meanwhile) and sent again with the next one or when Cratarr answers again; the latest
- *  500 kept. Each has its id: Cratarr counts a report sent twice once. `telling`: those on their way. Each carries the
- *  account it was heard under and is told only while that account is signed in (0.13, lib/account); another's wait for
- *  it, a month at most. */
+/** A report and whose it is: those not yet taken wait on this device (lib/playsToTell). */
 type Unsent = HeardEvent & { account?: string };
-let unsent: Unsent[] = [];
-let telling: Unsent[] = [];
 const PLAYS = 'plays';
-const keepPlays = () => void keep(PLAYS, [...telling, ...unsent].slice(-500));
-/** The account known: the reports carrying none take it (lib/outbox's `stamped`). */
-function stampPlays() {
-  const account = accountKey();
-  if (account !== null) unsent = stamped(unsent, account);
-}
-function tellNow() {
-  const account = accountKey();
-  if (telling.length || account === null) return;
-  unsent = unsent.filter((e) => !outlived(e, account, Date.now()));
-  telling = unsent.filter((e) => ours(e, account)).slice(-500);
-  if (!telling.length) return;
-  unsent = unsent.filter((e) => !ours(e, account));
-  let taken = false;
-  reportPlays(telling.map(({ account: _, ...e }) => e))
-    .then(
-      (r) => {
-        taken = true;
-        unsent = [...telling.filter((e) => !r.done.includes(e.id)), ...unsent];
-      },
-      () => (unsent = [...telling, ...unsent]),
-    )
-    .finally(() => {
-      telling = [];
-      keepPlays();
-      if (taken && unsent.length) tellNow();
-    });
-}
+const plays = playsToTell<Unsent>(
+  (told) => reportPlays(told.map(({ account: _, ...e }) => e)),
+  accountKey,
+  (list) => void keep(PLAYS, list),
+);
+heldHere.plays = () => plays.waiting().filter((p) => p.account === accountKey());
 if (typeof window !== 'undefined') {
   readKept<Unsent[]>(PLAYS).then((v) => {
     if (!Array.isArray(v) || !v.length) return;
-    const have = new Set([...telling, ...unsent].map((e) => e.id));
-    unsent = [...v.filter((e) => !have.has(e.id)), ...unsent];
-    stampPlays();
-    keepPlays();
-    if (!reach.away) tellNow();
+    plays.took(v);
+    if (!reach.away) plays.tell();
   });
-  whenReached.add(tellNow);
-  whenAccount.add(() => {
-    stampPlays();
-    keepPlays();
-    tellNow();
-  });
+  whenReached.add(plays.tell);
+  whenAccount.add(plays.tell);
+  whenLeaving.add(plays.tell);
 }
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
 const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -142,7 +109,7 @@ function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
   const id = reportId();
   // From each device (decision 0091): the play counted is scrobbled from here too, by the same id.
   if (counts && h.track.artist) playedHere(asScrobble(h, id));
-  unsent.push({
+  plays.add({
     id,
     source: h.track.source,
     track: h.track.id,
@@ -155,8 +122,6 @@ function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
     context: keptHere.id ? `queue:${keptHere.id}` : null,
     ...(account === null ? {} : { account }),
   });
-  keepPlays();
-  tellNow();
 }
 $effect.root(() => {
   $effect(() => {
@@ -237,7 +202,9 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
   // id, several as their tracks, each once, in their order (the owner, 2026-10-23: a playlist's and a multi-select's
   // Play and Shuffle too).
   const { playCollection } = await import('./play.svelte');
-  if (ids.length === 1) return playCollection({ kind: 'playlist', id: ids[0] }, mode, ids[0]);
+  // The queue is named by the playlists' names, never their ids (decision 0101: an id is its own, `pl-` and digits).
+  const nameOf = (id: string) => shownPlaylists().find((p) => p.id === id)?.name ?? id;
+  if (ids.length === 1) return playCollection({ kind: 'playlist', id: ids[0] }, mode, nameOf(ids[0]));
   let source = '';
   const seen = new Set<string>();
   const all: string[] = [];
@@ -247,7 +214,7 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
     for (const t of r.ids) if (!seen.has(t)) seen.add(t) && all.push(t);
   }
   if (!all.length) throw new Error('None of their tracks can be found.');
-  await playCollection({ kind: 'tracks', source, ids: all }, mode, ids.join(', '));
+  await playCollection({ kind: 'tracks', source, ids: all }, mode, ids.map(nameOf).join(', '));
 }
 
 /** Plays a playlist from one of its tracks (a tap on a row of its view, decision 0023): these tracks from `index`, here
@@ -255,8 +222,9 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
 export const playPlaylistFrom = async (name: string, source: string, tracks: LocalTrack[], index: number, position = 0) => port().playFrom(name, source, tracks, index, position);
 
 /** Plays an album here when the output is this browser. Whether its tracks can go in a playlist (in Music, not
- *  Incoming) the server says with each track's state. */
-export async function playAlbumHere(source: string, album: string, title?: string): Promise<boolean> {
+ *  Incoming) the server says with each track's state. `copy`: the library each of its tracks is heard from, in this
+ *  queue alone (`LocalTrack.from`). */
+export async function playAlbumHere(source: string, album: string, title?: string, copy?: string): Promise<boolean> {
   if (!port().holdsQueue) return false;
   // Out of reach (lib/away): its tracks on this device alone. A server's own (decision 0098) is reached by the app.
   if (away() && !isServerSource(source)) {
@@ -268,7 +236,7 @@ export async function playAlbumHere(source: string, album: string, title?: strin
   const r = source === DEVICE ? deviceAlbumView(album) : isServerSource(source) ? await serverAlbumView(source, album) : await albumView(source, album);
   if (!r.rows.length) throw new Error('That album has no tracks.');
   playQueue(
-    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, duration_secs: x.duration_secs })),
+    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, duration_secs: x.duration_secs, ...(copy ? { from: copy } : {}) })),
     0,
     title ?? r.title,
   );

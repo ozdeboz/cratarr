@@ -27,7 +27,7 @@
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
   import { viewFor, viewOver } from './panel.svelte';
-  import { libraryDot } from './albums.svelte';
+  import { libraryDots } from './albums.svelte';
   import { pageView } from './pageView.svelte';
   import { quickOn } from './quickCrates.svelte';
   import { leaveOnArrival } from './navStep.svelte';
@@ -54,12 +54,12 @@
   // then the loader in their place.
   const kept = keepWhile(() => groups, () => !!q && !asked && !failed, () => q);
   const shownGroups = $derived(kept.loader ? [] : kept.value);
-  // An album's or a track's library, as a dot before its title, as the Library's lists show it (0.9.5): from its
-  // album's subject (`album:<source>/<id>`), the Library's list knowing which library each is in.
-  function dotOf(it: SearchResult) {
-    if (it.kind !== 'album' && it.kind !== 'track') return null;
+  // An album's or a track's libraries, as dots after its title, as the Library's lists show them (0.9.5): from its
+  // album's subject (`album:<source>/<id>`), the Library's list knowing which libraries hold each.
+  function dotsOfResult(it: SearchResult) {
+    if (it.kind !== 'album' && it.kind !== 'track') return [];
     const m = /^album:([^/]+)\/(.+)$/.exec(it.subject);
-    return m ? libraryDot(m[1], { id: m[2] }) : null;
+    return m ? libraryDots(m[1], { id: m[2] }) : [];
   }
 
   // A tap: a page or a part where it shows (the words kept, so it narrows to them), an album not in the library on
@@ -157,7 +157,7 @@
     {#if it.kind === 'work'}{@render work(it)}{:else}
     <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={has ? press(it) : undefined}>
       {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if (it.kind === 'missing' && finding === it.subject.slice('missing:'.length)) || (it.kind === 'beyond' && finding === it.subject.slice('beyond:'.length))}<CoverBusy small />{/if}</span>{/if}{/snippet}
-      {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
+      {#snippet badges()}{#each dotsOfResult(it) as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{/snippet}
       {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if matchLine(it.matched, it.kind)}<span class="why">{it.sub ? ' · ' : ''}{matchLine(it.matched, it.kind)}</span>{/if}{/snippet}
       {#snippet action()}{#if has}<button class="icon" aria-label={`Menu of ${it.title}`} title="More" onclick={() => (menu = menuOf(it))}><Icon name="moreVert" size={22} /></button>{/if}{/snippet}
     </Row>
@@ -290,7 +290,7 @@
     cursor: pointer;
   }
 
-  /* The library's dot, as the Library's lists have it. */
+  /* A library's dot, as the Library's lists have it. */
   .dot {
     flex: none;
     width: 8px;

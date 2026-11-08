@@ -267,6 +267,41 @@ pub struct ComposerRef {
     pub name: String,
 }
 
+/// One copy of a record as the page sees it: one folder's files of it (docs/records-and-copies.md). `AlbumCopy` in the
+/// page's `lib/api.ts` is this shape; `lib/copiesRule.ts` reads it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
+pub struct AlbumCopy {
+    /// The library it lies in, as `Album.library`.
+    pub library: String,
+    pub format: Option<String>,
+    pub kbps: Option<u32>,
+    /// A lossless copy's; none where one of its files is not read yet.
+    pub bits: Option<u32>,
+    pub rate: Option<u32>,
+    /// What the viewer may do with this copy: rights go by library, so two copies of a record can differ.
+    pub deletable: bool,
+    pub keepable: bool,
+    pub keep_to: Option<String>,
+    /// What it lacks of what the library requires: an Incoming copy's, marked before it is added.
+    pub lacks: Vec<String>,
+    /// The one the server plays them, as their libraries were switched when the list was read.
+    pub plays: bool,
+    /// When its first file came, epoch seconds.
+    pub added: Option<i64>,
+    /// Its files' bytes, added up.
+    pub size: Option<u64>,
+    /// How many of the record's tracks it holds: fewer than the record is a copy short of tracks, still arriving or for good.
+    #[serde(default)]
+    pub tracks: u32,
+    /// The conversion at work on it, `JobView.id`.
+    pub job: Option<u64>,
+    /// Its catalogue folder and its folder in it: what tells it from the record's other copies here, not the page's.
+    #[serde(skip)]
+    pub folder: i64,
+    #[serde(skip)]
+    pub dir: String,
+}
+
 /// An album as a source sees it. Paths are the source's own (see `placement`).
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Album {
@@ -291,12 +326,39 @@ pub struct Album {
     /// The library it was listed from (the album pages' library switches filter by it); none outside a listing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
+    /// Cratarr's own record in the Library's one list: every copy of it, in the order they would play for the viewer, off
+    /// or not. Left out of a list with no libraries, and for another server's album, which has its `library` alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copies: Vec<AlbumCopy>,
     /// Its artists one by one, when the source credits several (the menu's Go to each); empty: `artist` alone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artists: Vec<String>,
     /// Its release type (0.9.6): `type`, `type_from`, `secondary`.
     #[serde(flatten, default)]
     pub release: ReleaseType,
+}
+
+impl Album {
+    /// The libraries holding it: its copies', else the one it was listed from. None from a list with no libraries.
+    pub fn libraries(&self) -> Vec<&str> {
+        match self.copies.is_empty() {
+            true => self.library.iter().map(String::as_str).collect(),
+            false => self.copies.iter().map(|c| c.library.as_str()).collect(),
+        }
+    }
+
+    /// One of its copies as that copy's library alone would list it: what acts on a copy takes it so, and a record listed
+    /// once says of itself only the copy that plays.
+    pub fn as_copy(&self, c: &AlbumCopy) -> Album {
+        Album {
+            library: Some(c.library.clone()),
+            path: Some(format!("{}/{}", c.library.trim_end_matches('/'), c.dir)),
+            format: c.format.clone(),
+            bitrate_kbps: c.kbps,
+            copies: vec![c.clone()],
+            ..self.clone()
+        }
+    }
 }
 
 /// What a source knows of an artist (the artist panel, decided 2026-10-16, as Symfonium's): the albums credited to them
@@ -452,6 +514,12 @@ pub trait Source: Send + Sync {
     /// libraries: without it, the mounted folder a library's tracks are found in counts as its folder.
     fn library_roots<'a>(&'a self, _library_id: &'a str) -> Fut<'a, Vec<String>> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Whether the source's paths are Cratarr's own: a library's folder is then where Cratarr sees it, with tracks in it
+    /// or none yet. Another server's only say where a library lies through its tracks.
+    fn paths_are_cratarrs(&self) -> bool {
+        false
     }
 
     /// What is playing now, following the player chosen in the settings when the plugin has that notion.

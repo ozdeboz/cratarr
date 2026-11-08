@@ -6,13 +6,15 @@
   // Their Spotify (decision 0073; the owner, 2026-10-27: each connects here): a row opening its own page
   // (`thing`: `spotify`, lib/settings/SpotifyPart).
   import { changeOwnPassword, endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
-  import { accountForgotten } from '../account';
+  import { downloads, inApp } from '../app.svelte';
+  import MenuEntry from '../MenuEntry.svelte';
+  import MenuSheet from '../MenuSheet.svelte';
   import { loadMe, me } from '../me.svelte';
+  import { signOut } from '../signOut.svelte';
   import { toast } from '../toast.svelte';
   import FormSheet from './FormSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import ValueSheet from './ValueSheet.svelte';
   import { when } from './when';
   import { openThing } from '../panel.svelte';
   import { loadSpotify, spotify } from '../spotify.svelte';
@@ -26,27 +28,36 @@
   );
 
   // This device's own Sign out, with who is signed in (the owner, 2026-10-29: where one looks for it): only where the
-  // page came with a sign-in of its own (an API key's or the app's address alone has none to end).
-  let signOutForm = $state<HTMLFormElement | null>(null);
+  // page came with a sign-in of its own (an API key's or the app's address alone has none to end). With downloads of
+  // the account here, a sheet first: they stay hidden for its next sign-in, or go (decision 0101; lib/signOut).
   const signedInHere = $derived(!!me.sessions?.some((s) => s.current));
+  let signingOut = $state(false);
+  const out = (remove: boolean) => void signOut(remove);
 
-  let setting = $state(false);
-  async function savePassword(password: string) {
-    try {
-      await setAppPassword(password);
-      await loadMe();
-    } catch (e) {
-      toast.fail(e, 'Could not set the password');
-      throw e;
-    }
-  }
-
-  // A Cratarr account's own password: the current one and a new one.
+  // A Cratarr account's own password: the current one and a new one. A directory's app password: the one they sign in
+  // with and a new one.
   let changing = $state(false);
+  let setting = $state(false);
   let current = $state('');
   let next = $state('');
   let busy = $state(false);
   let error = $state<string | null>(null);
+  async function savePassword() {
+    busy = true;
+    error = null;
+    try {
+      await setAppPassword(current, next);
+      await loadMe();
+      setting = false;
+      current = '';
+      next = '';
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function change() {
     busy = true;
     error = null;
@@ -93,10 +104,10 @@
       name="App password"
       more="OpenSubsonic apps sign in with your name and this password, never your directory password."
       value={me.app_password ? 'Set' : 'Not set'}
-      onclick={() => (setting = true)}
+      onclick={() => ((error = null), (setting = true))}
     />
   {/if}
-  {#if signedInHere}<Item name="Sign out" kind="danger" onclick={() => (accountForgotten(), signOutForm?.requestSubmit())} />{/if}
+  {#if signedInHere}<Item name="Sign out" kind="danger" onclick={() => (inApp && downloads.any ? (signingOut = true) : out(false))} />{/if}
 </Group>
 
 <Group>
@@ -123,9 +134,13 @@
   </Group>
 {/if}
 
-<!-- Signing out clears this browser's cookie too. After the cards, never between two (the owner, 2026-11-02: the
-     cards stuck together, lib/settings/Group's space being one card's after another's). -->
-<form method="post" action="/signout" bind:this={signOutForm} hidden></form>
+{#if signingOut}
+  <MenuSheet label="Sign out" icon="user" title="Sign out?" onclose={() => (signingOut = false)}>
+    <MenuEntry icon="user" label="Sign out" onclick={() => ((signingOut = false), out(false))} />
+    <MenuEntry icon="trash" label="Remove this account's downloads" danger onclick={() => ((signingOut = false), out(true))} />
+    <MenuEntry icon="close" label="Cancel" onclick={() => (signingOut = false)} />
+  </MenuSheet>
+{/if}
 
 {/if}
 
@@ -137,5 +152,9 @@
   </FormSheet>
 {/if}
 {#if setting}
-  <ValueSheet title="App password" type="password" value="" placeholder="New password" allowEmpty={false} saveLabel="Save" onsave={savePassword} onclose={() => (setting = false)} />
+  <FormSheet title="App password" submitLabel="Save" canSubmit={!!current && !!next} {busy} {error} onsubmit={savePassword} onclose={() => ((setting = false), (current = ''), (next = ''), (error = null))}>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Your password<input type="password" bind:value={current} autocomplete="current-password" autofocus /></label>
+    <label>App password<input type="password" bind:value={next} autocomplete="new-password" /></label>
+  </FormSheet>
 {/if}

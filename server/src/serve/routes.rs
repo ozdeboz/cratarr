@@ -126,8 +126,11 @@ struct NewPassword {
     password: String,
 }
 
-/// One's own account's (an administrator's: any, knowing its password).
+/// One's own account's (an administrator's: any, knowing its password). With a sign-in, as `/api/me/password`.
 async fn change_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json(p): axum::Json<NewPassword>) -> Response {
+    if !super::access::signed_in() {
+        return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This takes a sign-in, not a key." }))).into_response();
+    }
     if !super::access::administering() && serve.current_user().as_deref() != Some(p.username.as_str()) {
         return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "Only your own account's." }))).into_response();
     }
@@ -204,6 +207,16 @@ fn folder_of(p: &Params) -> Option<i64> {
     p.number("musicFolderId").filter(|n| *n > 0).map(|n| n - 1)
 }
 
+/// A music folder's name for `user`: own music by whose it is (0101 point 9), any other by its folder.
+fn folder_name(folder: &std::path::Path, own: Option<&std::path::Path>, user: &str) -> String {
+    let name = folder.file_name().map_or_else(|| folder.display().to_string(), |n| n.to_string_lossy().to_string());
+    match own {
+        Some(_) if folder.parent() == own && name == user => crate::settings::YOUR_MUSIC.to_string(),
+        Some(_) if folder.parent() == own => format!("{name}'s music"),
+        _ => name,
+    }
+}
+
 pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, headers: &HeaderMap) -> Result<Answer, Failed> {
     let s = serve.clone();
     let me = user.name.clone();
@@ -216,20 +229,23 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             { "name": "playbackReport", "versions": [1] },
         ] }))),
         // Its roles as its permissions say (decision 0051): keeping tracks offline, playlists, public share links.
-        "getUser" => Ok(Answer::Json(json!({ "user": {
-            "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
-            "downloadRole": user.permissions.offline, "playlistRole": user.permissions.playlists, "coverArtRole": true,
-            "commentRole": false, "podcastRole": false, "shareRole": user.permissions.links, "jukeboxRole": false,
-            "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
-            "folder": (0..serve.catalogue().folders().len()).map(|i| i + 1).collect::<Vec<_>>(),
-        } }))),
+        "getUser" => {
+            Ok(Answer::Json(json!({ "user": {
+                "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
+                "downloadRole": user.permissions.offline, "playlistRole": user.permissions.playlists, "coverArtRole": true,
+                "commentRole": false, "podcastRole": false, "shareRole": user.permissions.links, "jukeboxRole": false,
+                "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
+                "folder": serve.catalogue().folders().ids().map(|i| i + 1).collect::<Vec<_>>(),
+            } })))
+        }
         "getMusicFolders" => {
+            // Every library: the Library page's filter is that page's (the owner, 2026-11-07), and an app has its own.
+            let own = serve.own_music();
             let folders: Vec<Value> = serve
                 .catalogue()
                 .folders()
                 .iter()
-                .enumerate()
-                .map(|(i, f)| json!({ "id": i + 1, "name": f.file_name().map_or_else(|| f.display().to_string(), |n| n.to_string_lossy().to_string()) }))
+                .map(|(i, f)| json!({ "id": i + 1, "name": folder_name(f, own.as_deref(), &me) }))
                 .collect();
             Ok(Answer::Json(json!({ "musicFolders": { "musicFolder": folders } })))
         }
@@ -451,6 +467,8 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                     _ => song_ids.push(id),
                 }
             }
+            // An app's saved list can hold an old id: left on it, a heart sits where no list shows it.
+            let song_ids = blocking(move || Ok(song_ids.iter().map(|id| s.song_now(id)).collect::<Vec<_>>())).await?;
             serve.userdata.set_starred(&me, Kind::Song, &song_ids, on)?;
             serve.userdata.set_starred(&me, Kind::Album, &album_ids, on)?;
             serve.userdata.set_starred(&me, Kind::Artist, &artist_ids, on)?;
@@ -464,18 +482,19 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             Ok(Answer::Json(json!({})))
         }
         "setRating" => {
-            let id = p.get("id").ok_or_else(|| missing("id"))?;
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
             let rating = p.number("rating").ok_or_else(|| missing("rating"))?.clamp(0, 5) as u8;
             let kind = match id.get(..3) {
                 Some(super::ids::ALBUM) => Kind::Album,
                 Some(super::ids::ARTIST) => Kind::Artist,
                 _ => Kind::Song,
             };
-            serve.userdata.set_rating(&me, kind, id, rating)?;
+            let id = if kind == Kind::Song { blocking(move || Ok(s.song_now(&id))).await? } else { id };
+            serve.userdata.set_rating(&me, kind, &id, rating)?;
             let named = match kind {
-                Kind::Album => Some(("album", id.to_string())),
-                Kind::Artist => serve.library.artist_name(id).ok().flatten().map(|n| ("artist", n)),
-                _ => Some(("track", id.to_string())),
+                Kind::Album => Some(("album", id)),
+                Kind::Artist => serve.library.artist_name(&id).ok().flatten().map(|n| ("artist", n)),
+                _ => Some(("track", id)),
             };
             if let Some((what, id)) = named {
                 mark_now(serve, &me, ChangeKind::Rating, &item_id(what, CRATARR, &id), Op::of(rating > 0));
@@ -536,7 +555,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         "createPlaylist" | "updatePlaylist" | "deletePlaylist" if !user.permissions.playlists => Err(not_permitted("change playlists")),
         "stream" | "download" => {
             let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
-            let path = serve.song_path(&id).await?.ok_or_else(|| not_found("Song"))?;
+            let path = serve.song_path(&id, Some(&user.name)).await?.ok_or_else(|| not_found("Song"))?;
             Ok(Answer::Raw(super::files::serve_file(&path, headers, method == "download").await))
         }
         "getCoverArt" => {
@@ -551,17 +570,17 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             for (name, lines, _) in all {
                 let lines = serve.held.shown(&held_key(&service, &name)?, lines);
                 let songs = shown_songs(serve, &lines).await?;
-                out.push(playlist_json(serve, &service, &name, &lines, &songs)?);
+                out.push(playlist_json(&service, &name, &songs)?);
             }
             Ok(Answer::Json(json!({ "playlists": { "playlist": out } })))
         }
         "getPlaylist" => {
             let service = playlist_service(serve)?;
-            let (name, lines) = playlist_named(serve, &service, p.get("id")).await?;
+            let (name, lines) = playlist_named(&service, p.get("id")).await?;
             let lines = serve.held.shown(&held_key(&service, &name)?, lines);
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
-            let mut body = playlist_json(serve, &service, &name, &lines, &songs)?;
+            let mut body = playlist_json(&service, &name, &songs)?;
             // Asked by a name it had: answered under that id, the one the client keeps (its next listing has the new).
             body["id"] = p.get("id").unwrap_or_default().into();
             body["entry"] = serde_json::to_value(&songs)?;
@@ -573,7 +592,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let name = match p.get("playlistId") {
                 // With an id: the playlist's songs become these (lines of missing files stay).
                 Some(id) => {
-                    let (name, lines) = playlist_named(serve, &service, Some(id)).await?;
+                    let (name, lines) = playlist_named(&service, Some(id)).await?;
                     // Its songs replaced: an emptying held for it comes to the same.
                     serve.held.take(&held_key(&service, &name)?);
                     let shown = shown_flags(serve, &lines).await?;
@@ -586,27 +605,27 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 }
                 None => {
                     let wanted = p.get("name").filter(|n| !n.trim().is_empty()).ok_or_else(|| missing("name"))?;
-                    let taken: Vec<String> = service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).collect();
+                    let taken = service.own_names().await.map_err(toggle_failed)?;
                     let name = super::playlists::new_name(wanted, &taken);
                     service.create_with(&name, &add).await.map_err(toggle_failed)?;
-                    serve.userdata.playlist_made(&held_key(&service, &name)?)?;
-                    name
+                    service.id_of_name(&name).map_err(toggle_failed)?
                 }
             };
             let lines = service.entries(&name).await.map_err(toggle_failed)?;
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
-            let mut body = playlist_json(serve, &service, &name, &lines, &songs)?;
+            let mut body = playlist_json(&service, &name, &songs)?;
             body["entry"] = serde_json::to_value(&songs)?;
             Ok(Answer::Json(json!({ "playlist": body })))
         }
         "updatePlaylist" => {
             let service = playlist_service(serve)?;
-            let (name, _) = playlist_named(serve, &service, p.get("playlistId")).await?;
+            let (name, _) = playlist_named(&service, p.get("playlistId")).await?;
             let key = held_key(&service, &name)?;
             let remove: Vec<usize> = p.all("songIndexToRemove").iter().filter_map(|i| i.trim().parse().ok()).collect();
             let add = lines_of_songs(serve, &p.all("songIdToAdd")).await?;
-            let renamed = p.get("name").filter(|n| !n.trim().is_empty() && *n != name);
+            let current = service.reach(&name).map_err(toggle_failed)?.name;
+            let renamed = p.get("name").filter(|n| !n.trim().is_empty() && *n != current);
             if !remove.is_empty() || !add.is_empty() {
                 let lines = service.entries(&name).await.map_err(toggle_failed)?;
                 let emptied = serve.held.take(&key).filter(|e| e.before == lines).map(|e| e.after);
@@ -622,10 +641,9 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 write_held(&service, &name, serve.held.take(&key)).await;
             }
             if let Some(wanted) = renamed {
-                let taken: Vec<String> =
-                    service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).filter(|n| *n != name).collect();
+                let taken: Vec<String> = service.own_names().await.map_err(toggle_failed)?.into_iter().filter(|n| *n != current).collect();
                 let new_name = super::playlists::new_name(wanted, &taken);
-                if new_name != name {
+                if new_name != current {
                     service.rename(&name, &new_name).await.map_err(toggle_failed)?;
                 }
             }
@@ -633,11 +651,9 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         }
         "deletePlaylist" => {
             let service = playlist_service(serve)?;
-            let (name, _) = playlist_named(serve, &service, p.get("id")).await?;
-            let key = held_key(&service, &name)?;
-            serve.held.take(&key);
+            let (name, _) = playlist_named(&service, p.get("id")).await?;
+            serve.held.take(&held_key(&service, &name)?);
             service.delete(&name).await.map_err(toggle_failed)?;
-            serve.userdata.playlist_gone(&key)?;
             Ok(Answer::Json(json!({})))
         }
         _ => Err(Failed(501, format!("{method} is not implemented"))),
@@ -686,14 +702,13 @@ async fn write_held(service: &crate::app::PlaylistService, name: &str, held: Opt
     }
 }
 
-/// The playlist a client means by an id, with its lines: by its name, else by a name it had (clients keep a playlist's
-/// id across a rename).
-async fn playlist_named(serve: &Serve, service: &crate::app::PlaylistService, id: Option<&str>) -> Result<(String, Vec<String>), Failed> {
+/// The playlist a client means by an id, with its lines: by its id; one kept from before 0.16 by the name it had then,
+/// else (renamed since: clients keep a playlist's id across a rename) by where that name leads.
+async fn playlist_named(service: &crate::app::PlaylistService, id: Option<&str>) -> Result<(String, Vec<String>), Failed> {
     let name = playlist_name(id)?;
     match service.entries(&name).await {
         Err(crate::app::ToggleError::UnknownPlaylist) => {
-            let was = held_key(service, &name)?;
-            let now = service.id_of_key(&serve.userdata.playlist_alias(&was)?.ok_or_else(|| not_found("Playlist"))?);
+            let now = service.moved(&name).ok_or_else(|| not_found("Playlist"))?;
             let lines = service.entries(&now).await.map_err(toggle_failed)?;
             Ok((now, lines))
         }
@@ -742,13 +757,11 @@ async fn lines_of_songs(serve: &Arc<Serve>, songs: &[String]) -> Result<Vec<Stri
 
 /// A playlist as OpenSubsonic shows it (`id`: as the asking account knows it): whose it is, shared (`public`) or not,
 /// and read-only when it is another's (decision 0051).
-fn playlist_json(serve: &Serve, service: &crate::app::PlaylistService, id: &str, lines: &[String], songs: &[Song]) -> Result<Value, Failed> {
-    use md5::Digest;
+fn playlist_json(service: &crate::app::PlaylistService, id: &str, songs: &[Song]) -> Result<Value, Failed> {
     let r = service.reach(id).map_err(toggle_failed)?;
-    let print = format!("{:x}", md5::Md5::digest(lines.join("\n").as_bytes()));
-    let (created, changed) = serve.userdata.playlist_seen(&r.key(), &print)?;
+    let (created, changed) = r.store.dates(&r.name).unwrap_or_default();
     let mut v = json!({
-        "id": super::playlists::id_of(id), "name": r.name, "owner": r.owner, "public": r.shared,
+        "id": r.key(), "name": r.name, "owner": r.owner, "public": r.shared,
         "songCount": songs.len(), "duration": songs.iter().map(|s| s.duration).sum::<u64>(),
         "created": api::iso(created), "changed": api::iso(changed), "readonly": !r.mine,
     });
@@ -824,6 +837,7 @@ mod tests {
             mtime: 1,
             tags: tags.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
             analysis: None,
+            ..ServedRow::default()
         }
     }
 
@@ -843,6 +857,7 @@ mod tests {
         };
         serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![t(1, "Hunter"), t(2, "Jóga")] }], &Rules::default()).unwrap();
         serve.users.set("me", "pw").unwrap();
+        serve.sessions.set_required(false).unwrap();
         let me = serve.users.check(Some("me"), None, None, Some("pw")).unwrap();
         (serve, me)
     }

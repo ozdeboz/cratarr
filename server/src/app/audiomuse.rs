@@ -73,6 +73,9 @@ fn parse(cat: &Catalogue, text: &str) -> (Vec<AudioMuseRow>, Counts) {
     use base64::Engine;
     let mut counts = Counts::default();
     let mut rows = Vec::new();
+    // AudioMuse heard the file under the id it had: a line on an id a record's track took is that track's, or the next file
+    // from the PC would take back what the take moved. A track's own line goes first, heard under the id it has.
+    let mut taken: Vec<AudioMuseRow> = Vec::new();
     for raw in text.lines() {
         let raw = raw.trim();
         if raw.is_empty() {
@@ -91,9 +94,12 @@ fn parse(cat: &Catalogue, text: &str) -> (Vec<AudioMuseRow>, Counts) {
             (k, _) => k,
         };
         let embedding = line.embedding.and_then(|e| base64::engine::general_purpose::STANDARD.decode(e).ok()).filter(|e| e.len() % 4 == 0 && !e.is_empty());
-        rows.push(AudioMuseRow { track, energy: line.energy, key, style: line.style, moods: line.moods, embedding });
-        counts.kept += 1;
+        let row = AudioMuseRow { track, energy: line.energy, key, style: line.style, moods: line.moods, embedding };
+        if crate::serve::ids::track_of(&line.track) == Some(track) { rows.push(row) } else { taken.push(row) }
     }
+    let mut held: std::collections::HashSet<i64> = rows.iter().map(|r| r.track).collect();
+    rows.extend(taken.into_iter().filter(|r| held.insert(r.track)));
+    counts.kept = rows.len() as u64;
     (rows, counts)
 }
 
@@ -200,6 +206,45 @@ mod tests {
         assert_eq!(d["style"], Value::Null);
         assert_eq!(d["mood"].as_array().map(|m| m.iter().map(|x| x["name"].clone()).collect::<Vec<_>>()), Some(vec![json!("happy")]));
         assert_eq!(details(None, &bars)["energy"], Value::Null);
+    }
+
+    /// CR5: the export holds the id AudioMuse heard a file under. A track a record's track took is that track's now, or the
+    /// next file from the PC would count it unknown and `replace_audiomuse` would drop what the take moved. Where the track
+    /// that stays was heard itself, its own line comes first, wherever it lies in the file.
+    #[test]
+    fn a_line_on_a_taken_id_is_the_tracks_that_took_it() {
+        use crate::catalogue::AlbumCopy;
+        use crate::catalogue::identity::{Listed, RecordFacts};
+        let dirs = ["kept", "second"].map(|n| std::env::temp_dir().join(format!("cratarr-audiomuse-{n}-{}", std::process::id())));
+        for d in &dirs {
+            std::fs::remove_dir_all(d).ok();
+            std::fs::create_dir_all(d.join("A")).unwrap();
+            std::fs::write(d.join("A/01 x.flac"), b"some sound").unwrap();
+            std::fs::write(d.join("A/02 y.flac"), b"more sound").unwrap();
+        }
+        let cat = Catalogue::open(None, dirs.to_vec()).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let rels = ["A/01 x.flac", "A/02 y.flac"];
+        let copy = |folder: i64| AlbumCopy {
+            facts: RecordFacts { release: None, artist: "a".into(), title: "b".into(), tracks: vec![Listed::of("X", 200_000), Listed::of("Y", 200_000)] },
+            tracks: rels.iter().map(|rel| (cat.track_of(folder, rel).unwrap(), None, None)).collect(),
+            files: rels.iter().map(|rel| (folder, rel.to_string())).collect(),
+            ..Default::default()
+        };
+        let (one, two) = (cat.track_of(0, rels[0]).unwrap(), cat.track_of(0, rels[1]).unwrap());
+        let (went_one, went_two) = (cat.track_of(1, rels[0]).unwrap(), cat.track_of(1, rels[1]).unwrap());
+        cat.assign_records(&[copy(0), copy(1)]).unwrap();
+        assert_eq!(cat.track_of(1, rels[0]), Some(one), "taken");
+        let line = |track: i64, energy: f64| format!(r#"{{"track":"{}","energy":{energy}}}"#, crate::serve::ids::song(track));
+        let file = dirs[0].join("audiomuse.jsonl");
+        std::fs::write(&file, [line(went_one, 0.1), line(one, 0.7), line(went_two, 0.2)].join("\n")).unwrap();
+        let counts = import_if_changed(&cat, &file).unwrap().unwrap();
+        assert_eq!(counts, Counts { kept: 2, unknown: 0, bad: 0 }, "one line a track");
+        assert_eq!(cat.audiomuse_of(one).and_then(|r| r.energy), Some(0.7), "its own line");
+        assert_eq!(cat.audiomuse_of(two).and_then(|r| r.energy), Some(0.2), "heard under the id that went");
+        dirs.iter().for_each(|d| drop(std::fs::remove_dir_all(d)));
     }
 
     #[test]

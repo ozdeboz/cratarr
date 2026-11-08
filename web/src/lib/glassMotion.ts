@@ -6,14 +6,19 @@
 // - the glass: its clip-path from the old outline to the new (the layer drawn as large as both meanwhile);
 // - the shade: its edges from the old outline to the new (its own layout only, an empty layer: never stretched, so its
 //   round ends stay round);
-// - a child that stays: moved from where it was (translate); one that comes: faded in; one that goes: a copy of it
-//   where it was, faded out. Each is clipped to the glass's outline as it moves, so nothing shows past the glass: each
-//   frame, to the outline shown then, from where it is then (`confine`; the owner, 2026-11-02: "unconfined content in
-//   animations! Structural fix is required app wide"), never a clip foretold at the move's start that a child coming
-//   mid-move, a badge or a second change could outrun.
+// - a child that stays: moved from where it was (translate); one that comes: faded in where it rests, once the glass
+//   has reached it (the move's second half); one that goes: gone at once, never a copy of it sliding or fading (the
+//   owner, 2026-11-04, one rule for every glass: the search's field went as a copy sliding under the magnifier, its ✕
+//   past the glass's end, its words turned to its placeholder; the top-left's title leaves at once). So nothing ever
+//   slides across a button. Each child is clipped to the glass's outline as it moves, so nothing shows past the glass
+//   (the owner, 2026-11-02: "unconfined content in animations! Structural fix is required app wide"): its clip is part
+//   of its own move, on the same clock and curve as the glass's outline, so the two can never drift apart (the owner,
+//   2026-11-04: "some drift somewhere"; a clip worked out each frame in script trailed the glass by up to 28 px, and
+//   the moving magnifier showed as a sliver). A change during a move (a child coming, a badge) moves again from where
+//   everything is seen then.
 // Nothing in the page's flow animates a size or a place, so no step of it lays the page out again. A blur inside a clipped element sees only that element (a backdrop
 // root), so a child that is a glass of its own (the round back button) is never clipped by an ancestor here: each child
-// gets its own clip. A child hidden (display: none) goes as one removed: its copy shows as it was.
+// gets its own clip. A child hidden (display: none) goes as one removed: at once.
 import { decelerate, DECELERATE_CSS, reducedMotion } from './motion';
 import { between, grownTo, insetOf, rectIn, sameRect, union, type Rect } from './glassShape';
 
@@ -35,19 +40,17 @@ type Part = {
   /** The box and each child where they are at rest (in the frame), and the glass's opacity. */
   at: Rect | null;
   kids: Map<Element, Rect>;
-  /** How each child is displayed, for its copy when it is hidden. */
-  shows: Map<Element, string>;
   seen: number;
   /** The move under way: from, to, and the glass's animation, whose own clock says how far it got. */
   run: { from: Rect; to: Rect; clock: Animation } | null;
   anims: Animation[];
   window: string;
-  /** The clipping each frame (confine) runs. */
-  confining: boolean;
 };
 
-const GHOST = 'data-glass-ghost';
-const isLayer = (p: Part, el: Element) => el === p.glass || el === p.shade || el === p.main || el.hasAttribute(GHOST);
+/** The children fading in now (their arrival under way): a move that takes over goes on from how far they got. */
+const arriving = new WeakSet<Element>();
+
+const isLayer = (p: Part, el: Element) => el === p.glass || el === p.shade || el === p.main;
 const kidsOf = (p: Part) => [...p.box.children].filter((el) => !isLayer(p, el));
 /** The window's width: a change of it (turning the phone, a window resized) is laid out at once, not moved. Not its
  *  height, which the keyboard changes as the search opens (the owner, 2026-11-01: after the first search it no longer
@@ -73,19 +76,16 @@ function measure(p: Part) {
   const f = p.frame();
   const at = rectIn(p.box.getBoundingClientRect(), f);
   const kids = new Map<Element, Rect>();
-  const shows = new Map<Element, string>();
   for (const el of kidsOf(p)) {
-    const display = getComputedStyle(el).display;
-    if (display === 'none') continue;
+    if (getComputedStyle(el).display === 'none') continue;
     kids.set(el, rectIn(el.getBoundingClientRect(), f));
-    shows.set(el, display);
   }
   let mainIn: [number, number, number, number] | null = null;
   if (p.main) {
     const m = rectIn(p.main.getBoundingClientRect(), f);
     mainIn = [m.y - at.y, at.x + at.w - (m.x + m.w), at.y + at.h - (m.y + m.h), m.x - at.x];
   }
-  return { at, kids, shows, glass: Number(getComputedStyle(p.glass).opacity), mainIn };
+  return { at, kids, glass: Number(getComputedStyle(p.glass).opacity), mainIn };
 }
 
 /** A box's outline less the main glass's insets. */
@@ -142,13 +142,15 @@ function play(p: Part) {
   const from = shownNow(p);
   // Where each child that was there is seen now: its rest, moved by what it is still moving.
   const was = new Map<Element, Rect>();
+  /** How far each one coming had faded in, where a move is taken over. */
+  const shown = new Map<Element, number>();
   for (const [el, r] of p.kids) {
     // Read only while a move is under way: at rest there is none, and the read costs the tap's task a style pass.
     const [dx, dy] = p.run && el.isConnected ? offsetNow(el) : [0, 0];
     was.set(el, { ...r, x: r.x + dx, y: r.y + dy });
+    if (p.run && el.isConnected && arriving.has(el)) shown.set(el, Number(getComputedStyle(el).opacity));
   }
   const glassWas = p.seen;
-  const showed = p.shows;
   for (const a of p.anims) stop(a);
   p.anims = [];
   p.glass.style.inset = '';
@@ -161,7 +163,6 @@ function play(p: Part) {
   const settle = () => {
     p.at = after.at;
     p.kids = after.kids;
-    p.shows = after.shows;
     p.seen = after.glass;
     p.mainIn = after.mainIn;
     p.run = null;
@@ -228,74 +229,53 @@ function play(p: Part) {
         timing,
       ),
     );
-  // A child that comes or goes where its neighbour that stays passes over it (the one before it, else after it) moves
-  // with that neighbour: the field comes in with the magnifier it opens from, and goes with it, rather than lying still
-  // as the magnifier slides over it (the owner, 2026-11-02: the lens came apart from its glass). One the neighbour does
-  // not pass (a button at the pill's still end) fades where it is.
-  const order = [...was.keys()];
-  const moveOf = (box: Rect, near: Element[]): [number, number] => {
-    const k = near.find((n) => was.has(n) && after.kids.has(n));
-    if (!k) return [0, 0];
-    const [a, b] = [was.get(k)!, after.kids.get(k)!];
-    const swept = union(a, b);
-    if (box.x >= swept.x + swept.w || box.x + box.w <= swept.x) return [0, 0];
-    return [b.x - a.x, b.y - a.y];
-  };
-  const kidsNow = [...after.kids.keys()];
+  // Each child: one move on the glass's clock and curve, its clip the glass's outline seen from where it is, from the
+  // old outline to the new (both move along the same curve, so the clip between them is the outline all the way). One
+  // that stays moves from where it was seen (the magnifier gliding as the field opens and shuts). One that comes fades
+  // in where it rests: once the glass is halfway there, or, where one that stays will pass over its place, only as that
+  // one arrives (the owner, 2026-11-04: "the glass glides open first and the field fades in", nothing sliding across
+  // another); one that was fading in goes on from how far it got. One that went is gone already, at once (the owner,
+  // 2026-11-04: as the top-left's title leaves).
+  const sweeps = kept.map((el) => union(was.get(el)!, after.kids.get(el)!));
+  const passed = (k: Rect) => sweeps.some((s) => k.x < s.x + s.w && k.x + k.w > s.x && k.y < s.y + s.h && k.y + k.h > s.y);
+  // The extension is the thin glass beyond the foreground glass (the main layer; where a part has none, its own round
+  // buttons, a glass of their own: back, a panel's ✕). What the extension holds is clipped to the extension itself, cut
+  // where the foreground begins, at each end of the move and so all the way between: it is never drawn in front of the
+  // foreground (the owner, 2026-11-04: "the content of the extension should always be contained by the extension
+  // itself").
+  const own = (kids: Map<Element, Rect>) => [...kids].find(([el]) => el.matches('.navpill'))?.[1] ?? null;
+  const fg0 = p.main && mainWas ? within(from, mainWas) : own(was);
+  const fg1 = p.main && after.mainIn ? within(to, after.mainIn) : own(after.kids);
+  /** The outline, less the foreground on `side` of it. */
+  const beyond = (out: Rect, fg: Rect, side: 'left' | 'right'): Rect =>
+    side === 'left' ? { ...out, w: Math.max(0, fg.x - out.x) } : { ...out, x: fg.x + fg.w, w: Math.max(0, out.x + out.w - (fg.x + fg.w)) };
   for (const [el, k1] of after.kids) {
-    const k0 = was.get(el);
-    let frames: Keyframe[];
-    if (k0) {
-      frames = [{ translate: `${k0.x - k1.x}px ${k0.y - k1.y}px` }, { translate: '0px 0px' }];
-    } else {
-      const i = kidsNow.indexOf(el);
-      const [dx, dy] = moveOf(k1, [...kidsNow.slice(0, i).reverse(), ...kidsNow.slice(i + 1)]);
-      frames = [
-        { opacity: 0, translate: `${-dx}px ${-dy}px` },
-        { opacity: 1, translate: '0px 0px' },
-      ];
+    const k0 = was.get(el) ?? k1;
+    const fading = was.has(el) ? shown.get(el) : 0;
+    const side = fg0 && fg1 && !el.matches('.navpill') ? (k1.x + k1.w <= fg1.x + 0.5 ? 'left' : k1.x >= fg1.x + fg1.w - 0.5 ? 'right' : null) : null;
+    const [out0, out1] = side && fg0 && fg1 ? [beyond(from, fg0, side), beyond(to, fg1, side)] : [from, to];
+    const frames: Keyframe[] = [
+      { translate: `${k0.x - k1.x}px ${k0.y - k1.y}px`, clipPath: insetOf(out0, k0, r) },
+      { translate: '0px 0px', clipPath: insetOf(out1, k1, r) },
+    ];
+    if (fading !== undefined && fading < 1) {
+      frames[0].opacity = fading;
+      frames[1].opacity = 1;
+      // One that comes: unseen until the glass is halfway there, or until what passes over it has nearly arrived.
+      if (!was.has(el)) frames.splice(1, 0, { opacity: 0, offset: passed(k1) ? 0.97 : 0.5 });
     }
     p.anims.push(begin(el as HTMLElement, frames, timing));
-  }
-  // What went: a copy where it was, fading as the glass leaves it, moving with its neighbour.
-  for (const [el, k0] of was) {
-    if (after.kids.has(el)) continue;
-    const i = order.indexOf(el);
-    const move = moveOf(k0, [...order.slice(0, i).reverse(), ...order.slice(i + 1)]);
-    const ghost = el.cloneNode(true) as HTMLElement;
-    ghost.setAttribute(GHOST, '');
-    ghost.setAttribute('aria-hidden', 'true');
-    ghost.inert = true;
-    Object.assign(ghost.style, {
-      position: 'absolute',
-      left: `${k0.x - to.x}px`,
-      top: `${k0.y - to.y}px`,
-      width: `${k0.w}px`,
-      height: `${k0.h}px`,
-      margin: '0',
-      display: showed.get(el) ?? '',
-      translate: 'none',
-      pointerEvents: 'none',
-    });
-    p.box.append(ghost);
-    const a = begin(
-      ghost,
-      [
-        { opacity: 1, translate: '0px 0px' },
-        { opacity: 0, translate: `${move[0]}px ${move[1]}px` },
-      ],
-      { ...timing, fill: 'forwards' },
-    );
-    const gone = () => ghost.remove();
-    a.finished.then(gone, gone);
+    if (fading !== undefined && fading < 1) {
+      arriving.add(el);
+      const done = () => arriving.delete(el);
+      p.anims[p.anims.length - 1].finished.then(done, done);
+    }
   }
   p.at = to;
   p.kids = after.kids;
-  p.shows = after.shows;
   p.seen = after.glass;
   p.mainIn = after.mainIn;
   p.run = { from, to, clock };
-  confine(p);
   const anims = p.anims;
   Promise.all(anims.map((a) => a.finished)).then(
     () => {
@@ -308,25 +288,6 @@ function play(p: Part) {
   );
 }
 
-/** What the glass holds kept inside its outline while it moves: each frame, each child and each copy of one going is
- *  clipped to the outline shown then (shownNow, the glass's own clock), from where it is then (its translate in it).
- *  Measured, not foretold, so nothing that changes during the move can show past the glass. Cleared as the move ends. */
-function confine(p: Part) {
-  if (p.confining) return;
-  p.confining = true;
-  const step = () => {
-    const out = p.run ? shownNow(p) : null;
-    const f = out ? p.frame() : null;
-    for (const el of p.box.children) {
-      if (el === p.glass || el === p.shade || el === p.main || !(el instanceof HTMLElement)) continue;
-      if (out && f) el.style.clipPath = insetOf(out, rectIn(el.getBoundingClientRect(), f), p.radius);
-      else el.style.removeProperty('clip-path');
-    }
-    if (out) requestAnimationFrame(step);
-    else p.confining = false;
-  };
-  step();
-}
 
 /** Makes `box` a glass part (an attachment: `{@attach glassPart({ radius: 26 })}`): its first children of class `glass`,
  *  `shade` and `main` are its layers. Its motion is its own from then on, whatever changes it. */
@@ -345,17 +306,14 @@ export function glassPart({ radius, still = () => false }: { radius: number; sti
       frame: frameOf(box),
       at: null,
       kids: new Map(),
-      shows: new Map(),
       seen: 1,
       run: null,
       anims: [],
       window: windowNow(),
-      confining: false,
     };
     const first = measure(p);
     p.at = first.at;
     p.kids = first.kids;
-    p.shows = first.shows;
     p.seen = first.glass;
     p.mainIn = first.mainIn;
     // A change to its children or words: played before the frame is drawn (animation frames come before layout).
@@ -363,7 +321,7 @@ export function glassPart({ radius, still = () => false }: { radius: number; sti
     const ask = () => {
       if (!asked) asked = requestAnimationFrame(() => ((asked = 0), play(p)));
     };
-    const ours = (n: Node) => n instanceof Element && (n.hasAttribute(GHOST) || n === p.glass || n === p.shade || n === p.main);
+    const ours = (n: Node) => n instanceof Element && (n === p.glass || n === p.shade || n === p.main);
     const changes = new MutationObserver((list) => {
       if (list.some((m) => !(ours(m.target) || (m.type === 'childList' && [...m.addedNodes, ...m.removedNodes].every(ours))))) ask();
     });

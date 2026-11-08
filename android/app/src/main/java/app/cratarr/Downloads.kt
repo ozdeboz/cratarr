@@ -34,6 +34,15 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 
+/** A download as the page is told it. Finished with its bytes gone from the store, a card taken out or the folder emptied, it is no copy
+ *  any more (Finamp's A4): failed, so it shows as not here and can be fetched again. It would read as playing, and not play. */
+internal fun stateOf(download: Int, stored: Long, bytes: Long): String = when (download) {
+    Download.STATE_COMPLETED -> if (stored >= bytes) "done" else "failed"
+    Download.STATE_FAILED -> "failed"
+    Download.STATE_DOWNLOADING -> "downloading"
+    else -> "waiting"
+}
+
 @OptIn(UnstableApi::class)
 object Downloads {
     private const val TAG = "CratarrDownloads"
@@ -134,24 +143,27 @@ object Downloads {
             DownloadService.sendAddDownload(context, CratarrDownloadService::class.java, request, false)
             held.add(key)
         }
-        // The owner's from now on, whatever kept item also holds them (decision 0038).
+        // The account's from now on, whatever kept item also holds them (decisions 0038, 0101).
         Kept.holdManual(context, held)
     }
 
-    /** The owner's downloads go; a track a kept item holds stays (decision 0038). */
+    /** The account's downloads go; a track a kept item or another account holds stays (decisions 0038, 0101). */
     fun remove(context: Context, ids: List<String>) = Kept.releaseManual(context, ids, all = false)
 
     fun removeAll(context: Context) = Kept.releaseManual(context, emptyList(), all = true)
 
-    /** The owner's downloads, for the page: each track as it was given, with `download` (its id, state, size). */
+    /** The account signed in's downloads, for the page (decision 0101: an account sees only what it holds): each track
+     *  as it was given, with `download` (its id, state, size). */
     fun list(context: Context): JSONObject {
         val found = mutableListOf<JSONObject>()
         var bytes = 0L
         val albums = Kept.albumIds(context)
-        val manual = Kept.manualKeys(context)
+        val held = Kept.heldHere(context)
+        val store = cache(context)
         manager(context).downloadIndex.getDownloads().use { c ->
             while (c.moveToNext()) {
                 val d = c.download
+                val manual = held[d.request.id] ?: continue
                 val t = try {
                     JSONObject(String(d.request.data))
                 } catch (e: Exception) {
@@ -159,21 +171,16 @@ object Downloads {
                 }
                 // An older request without its album: the kept item's track has it (Kept.albumIds).
                 if (t.isNull("album_id")) albums[d.request.id]?.let { t.put("album_id", it) }
-                val state = when (d.state) {
-                    Download.STATE_COMPLETED -> "done"
-                    Download.STATE_FAILED -> "failed"
-                    Download.STATE_DOWNLOADING -> "downloading"
-                    else -> "waiting"
-                }
-                // Downloaded once by the owner, or there only for what is synced (decision 0038).
-                t.put("manual", manual(d.request.id))
+                val state = stateOf(d.state, store.getCachedBytes(d.request.customCacheKey ?: d.request.id, 0, d.bytesDownloaded), d.bytesDownloaded)
+                // Downloaded once by the account, or there only for what it syncs (decision 0038).
+                t.put("manual", manual)
                 t.put("download", JSONObject().put("id", d.request.id).put("state", state).put("bytes", d.bytesDownloaded).put("percent", d.percentDownloaded.toDouble()))
                 found.add(t)
                 bytes += d.bytesDownloaded
             }
         }
         val tracks = JSONArray(found.sortedBy { it.optLong("added") })
-        return JSONObject().put("type", "downloads").put("tracks", tracks).put("bytes", bytes)
+        return JSONObject().put("type", "downloads").put("tracks", tracks).put("bytes", bytes).put("who", Who.current(context))
     }
 
     /** A track's item, its file from the store when it was downloaded whole, else from Cratarr (`server`): kept ahead
@@ -182,6 +189,9 @@ object Downloads {
     fun locate(context: Context, item: MediaItem, server: String?): MediaItem {
         val key = item.mediaId
         if (Previews.isPreview(key)) return if (server == null) item else item.buildUpon().setUri(fileUri(server, key, false)).build()
+        // A copy named by Play from comes from Cratarr, whatever is kept: what the store holds goes by the track's name,
+        // and may be another copy. With no cache key of the track's, the store has nothing to answer with.
+        copyOf(item)?.let { copy -> return if (server == null) item else item.buildUpon().setUri(fileUri(server, key, Net.metered(context), copy)).build() }
         val done = try {
             manager(context).downloadIndex.getDownload(key)?.takeIf { it.state == Download.STATE_COMPLETED }
         } catch (e: Exception) {
@@ -202,8 +212,12 @@ object Downloads {
         return b.build()
     }
 
-    /** A track's file from Cratarr: as it is, or its smaller copy (kept under its own name, `#opus`). */
-    private fun fileUri(server: String, key: String, opus: Boolean) = "$server/api/file/$key" + if (opus) "?as=opus" else ""
+    /** A track's file from Cratarr: as it is, or its smaller copy (kept under its own name, `#opus`). [copy]: of the copy
+     *  Play from names. Never `/api/stream`, which a native player cannot seek in: a FLAC there is an MP4 with no index. */
+    internal fun fileUri(server: String, key: String, opus: Boolean, copy: String? = null): String {
+        val asked = listOfNotNull("as=opus".takeIf { opus }, copy?.let(::copyParam))
+        return "$server/api/file/$key" + if (asked.isEmpty()) "" else asked.joinToString("&", "?")
+    }
 
     /**
      * Keeps the next tracks of the queue on the device, one after the other, and lets go of those played some time
@@ -212,7 +226,8 @@ object Downloads {
     fun keepAhead(context: Context, queue: List<MediaItem>, playing: Int) {
         val app = context.applicationContext
         val server = Prefs(app).serverUrl?.trimEnd('/') ?: return
-        val wanted = queue.drop(playing.coerceAtLeast(0)).take(UP_NEXT + 1).map { it.mediaId }.filterNot(Previews::isPreview)
+        // Not a copy Play from names: it would be kept under the track's name, which is the best copy's.
+        val wanted = queue.drop(playing.coerceAtLeast(0)).take(UP_NEXT + 1).filter { copyOf(it) == null }.map { it.mediaId }.filterNot(Previews::isPreview)
         // Near ones are kept in either form (the connection may have changed since).
         val keep = queue.drop((playing - KEEP_PLAYED).coerceAtLeast(0)).take(KEEP_PLAYED + UP_NEXT + 1)
             .flatMap { listOf(it.mediaId, "${it.mediaId}#opus") }.toSet()

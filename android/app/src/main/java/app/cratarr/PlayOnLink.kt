@@ -66,6 +66,8 @@ class PlayOnLink(
     /** The announcement it plays or last played (Announcer), as reported. */
     private var announcing: Announcer.State? = null
     private var queueSent = false
+    /** What the player holds has not all reached Cratarr ([QueueKept]). */
+    val ahead: Boolean get() = QueueKept.aheadNow(reportsThrough, queueSent)
     /** The queue's version in the last command from Cratarr: reports say it, so Cratarr knows what they have seen. */
     private var version = -1L
     private var reportPending = false
@@ -229,6 +231,7 @@ class PlayOnLink(
                 if (code != 200) throw java.io.IOException("HTTP $code")
                 opened = true
                 LinkLog.add(service, "info", "playon", "connected", "address" to address, "conn" to id, "failed_before" to failed.takeIf { it > 0 })
+                main.post(service::cratarrAnswered)
                 // Ready for what Cratarr sends: in the foreground (Stay ready), where Android lets the music start.
                 if (prefs.stayReady) Ready.ensure(service, "connected")
                 connectedSince = System.currentTimeMillis()
@@ -258,15 +261,18 @@ class PlayOnLink(
                 main.post { report() }
             }
             if (!running) return
-            // Out of reach there: perhaps the other address answers.
-            if (!opened) Reach.checkSoon(service, failed = true)
+            // Out of reach there: perhaps the other address answers, and what is kept here plays meanwhile.
+            if (!opened) {
+                Reach.checkSoon(service, failed = true)
+                main.post(service::cratarrAway)
+            }
             val held = address?.let { Net.heldUntil(service, it) }
             if (held != null && held > System.currentTimeMillis()) {
                 // Refused there: its requests wait out the refusal (Net), so the connection does too.
                 if (waitWhy != "refused") LinkLog.add(service, "warn", "playon", "waiting", "until" to held, "why" to "refused")
                 waitUntil = held
                 waitWhy = "refused"
-                sleep((held - System.currentTimeMillis()).coerceIn(wait, Net.REFUSED_MS))
+                waitOutRefusal(address, wait)
                 continue
             }
             waitUntil = System.currentTimeMillis() + wait
@@ -334,6 +340,16 @@ class PlayOnLink(
                 }
             }
         }
+    }
+
+    /**
+     * Until [address]'s refusal is over, or a sign-in ended it: it is the session that was refused, so the new one is let in
+     * at once. Nothing wakes this thread, so it looks again every [REFUSAL_LOOK_MS]. Slept through in one go, an app opened
+     * before its sign-in stayed off Play On for ten minutes, its reports getting through all the while.
+     */
+    private fun waitOutRefusal(address: String?, atLeast: Long) {
+        sleep(atLeast)
+        while (running && (address?.let { Net.heldUntil(service, it) } ?: 0L) > System.currentTimeMillis()) sleep(REFUSAL_LOOK_MS)
     }
 
     private fun sleep(ms: Long) {
@@ -672,7 +688,12 @@ class PlayOnLink(
         if (reports.isShutdown) return
         reports.execute {
             val sent = put("$base/state", body)
-            if (withQueue && sent) main.post { queueSent = true }
+            if (withQueue && sent) {
+                main.post {
+                    queueSent = true
+                    service.queueTold()
+                }
+            }
         }
     }
 
@@ -727,6 +748,8 @@ class PlayOnLink(
     }
 
     private companion object {
+        /** How often a refused link looks whether a sign-in has ended the refusal. */
+        const val REFUSAL_LOOK_MS = 2_000L
         const val TAG = "CratarrPlayOn"
         const val HEARTBEAT_MS = 30_000L
         /** A ducked player plays at this part of its volume. */

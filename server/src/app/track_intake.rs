@@ -205,6 +205,14 @@ fn on_failed(i: &mut Item, why: String) -> bool {
     }
 }
 
+/// AcoustID could not be asked about the file, or slskd for it: nothing is known of it or its user, so no user failed,
+/// and no next candidate is fetched by itself. The item stops here and says why; Search now takes it up again. A fetch
+/// lives in memory, and fetching the file again on a timer would be just the unattended fetching this queue exists not to
+/// do.
+fn on_no_verdict(i: &mut Item, why: String) {
+    (i.state, i.why, i.fetch) = (State::Failed, Some(why), None);
+}
+
 /// The albums' missing tracks (those of their release no file holds) queued, each once; the queue as it is now.
 pub async fn add_albums(app: &std::sync::Arc<super::App>, albums: &[String]) -> Result<View> {
     let _ = APP.set(app.clone());
@@ -351,6 +359,7 @@ async fn fetch(id: &str) {
     with_item(id, |i| i.state = State::Fetching);
     let fid = match super::track_fetch::fetch(&sid, candidate).await {
         Ok(f) => f,
+        Err(e) if e.is::<crate::slskd::Away>() => return with_item(id, |i| on_no_verdict(i, format!("{e:#}"))),
         // The user refused it or is offline: the next candidate.
         Err(e) => {
             return with_item(id, |i| {
@@ -375,9 +384,13 @@ async fn fetch(id: &str) {
         }
     };
     // Refused before the check: the user failed (refused, an error, queued too long); after it: the file did, and is
-    // set aside with why. Either way the next candidate.
+    // set aside with why. Either way the next candidate. For want of an answer, neither did.
     if let Some(v) = done.as_ref().filter(|v| v.state == Fetching::Refused) {
         let why = v.why.clone().unwrap_or_else(|| "It failed".into());
+        if v.no_verdict {
+            super::track_fetch::drop_fetch(&fid);
+            return with_item(id, |i| on_no_verdict(i, why));
+        }
         let aside = if checked { super::track_fetch::set_aside(&fid, &why) } else { None };
         super::track_fetch::drop_fetch(&fid);
         return with_item(id, |i| {
@@ -406,6 +419,13 @@ async fn fetch(id: &str) {
 mod tests {
     use super::*;
 
+    /// The fixture's store is what 0.15 left, or a move proved on it proves nothing: the queue reads it.
+    #[test]
+    fn the_tracks_waiting_in_0_15_are_read_as_the_queue_reads_them() {
+        let queue: Queue = serde_json::from_str(include_str!("../../tests/fixtures/0.15/track-intake.json")).unwrap();
+        assert_eq!((queue.next, queue.items[0].album.id.as_str(), queue.items[0].state), (2, "al-2c5BBHDvIsL51C4yFB1p80", State::Refused));
+    }
+
     fn item(id: &str, state: State) -> Item {
         Item {
             id: id.into(),
@@ -428,6 +448,23 @@ mod tests {
         }
     }
 
+    /// What waits finds its album by its id when its turn comes.
+    #[test]
+    fn a_track_waiting_keeps_its_album_after_the_move() {
+        let d = std::env::temp_dir().join(format!("cratarr-intake-moved-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let q = Queue { running: false, next: 2, items: vec![item("a", State::Queued)] };
+        std::fs::write(d.join("track-intake.json"), serde_json::to_vec(&q).unwrap()).unwrap();
+        let moved = crate::moved::Moved { ids: [("al-1".to_string(), "al-7".to_string())].into(), ..Default::default() };
+        let report = moved.stores(&d).unwrap();
+        let back: Queue = serde_json::from_slice(&std::fs::read(d.join("track-intake.json")).unwrap()).unwrap();
+        assert_eq!((back.items[0].album.id.as_str(), back.next), ("al-7", 2));
+        let t = report.table_named("track-intake.json").unwrap();
+        assert_eq!((t.before, t.moved), (1, 1));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn an_approved_file_goes_before_the_next_search_and_finished_ones_wait() {
         let items = [item("a", State::Added), item("b", State::Queued), item("c", State::Approved), item("d", State::Queued)];
@@ -446,9 +483,8 @@ mod tests {
         assert_eq!(next_of(&[none, item("q", State::Queued)], 5_000), Some(Next::Search("q".into())), "the queued first");
     }
 
-    #[test]
-    fn a_failed_user_hands_the_track_to_its_next_candidate_of_another_user() {
-        let c = |id: usize, user: &str| Candidate {
+    fn candidate(id: usize, user: &str) -> Candidate {
+        Candidate {
             id,
             user: user.into(),
             file: "f.flac".into(),
@@ -463,9 +499,25 @@ mod tests {
             queue: 0,
             speed: 1,
             offered: crate::slskd::Offered { filename: "f.flac".into(), size: 1, extension: None, bit_rate: None, bit_depth: None, sample_rate: None, length: None, is_locked: false },
-        };
+        }
+    }
+
+    #[test]
+    fn a_fetch_with_no_verdict_blames_no_user_and_fetches_nothing_more() {
+        let mut i = item("v", State::Checking);
+        i.candidates = vec![candidate(0, "a"), candidate(1, "b")];
+        i.chosen = Some(0);
+        i.fetch = Some("f1".into());
+        on_no_verdict(&mut i, "AcoustID could not be reached".into());
+        assert_eq!((i.state, i.why.as_deref(), i.fetch.as_deref()), (State::Failed, Some("AcoustID could not be reached"), None));
+        assert!(i.failed.is_empty() && i.set_aside.is_empty() && i.candidates.len() == 2, "no user held to it");
+        assert_eq!(next_of(std::slice::from_ref(&i), i64::MAX), None, "nothing fetched by itself");
+    }
+
+    #[test]
+    fn a_failed_user_hands_the_track_to_its_next_candidate_of_another_user() {
         let mut i = item("a", State::Fetching);
-        (i.candidates, i.chosen) = (vec![c(0, "x"), c(1, "x"), c(2, "y")], Some(0));
+        (i.candidates, i.chosen) = (vec![candidate(0, "x"), candidate(1, "x"), candidate(2, "y")], Some(0));
         assert!(on_failed(&mut i, "x is offline".into()));
         assert_eq!((i.state, i.chosen, i.failed.clone(), i.candidates.len()), (State::Approved, Some(2), vec!["x".to_string()], 1), "x's other file too");
         assert!(!on_failed(&mut i, "queued too long".into()));

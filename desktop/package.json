@@ -17,10 +17,12 @@
   },
   "scripts": {
     "icons": "node copy-icons.js",
-    "start": "npm run icons && electron .",
+    "page": "node copy-page.js",
+    "start": "npm run icons && npm run page && electron .",
     "check": "node check-no-house.js",
-    "dist": "umask 022 && npm run icons && npm run check && electron-builder --linux deb --publish never",
-    "dist:win": "npm run icons && npm run check && electron-builder --win nsis --publish never"
+    "test": "node --test page.test.js",
+    "dist": "umask 022 && npm run icons && npm run page && npm run check && electron-builder --linux deb --publish never",
+    "dist:win": "npm run icons && npm run page && npm run check && electron-builder --win nsis --publish never"
   },
   "build": {
     "appId": "org.cratarr.desktop",
@@ -29,21 +31,20 @@
     "afterAllArtifactBuild": "./check-deb.js",
     "files": [
       "main.js",
+      "page.js",
       "preload.js",
       "setup.html",
       "icons/**"
     ],
+    "extraResources": [
+      {
+        "from": "page",
+        "to": "page"
+      }
+    ],
     "directories": {
       "output": "dist"
     },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "ozdeboz",
-        "repo": "cratarr",
-        "releaseType": "release"
-      }
-    ],
     "win": {
       "icon": "icons/icon-512.png"
     },
@@ -77,8 +78,5 @@
   "devDependencies": {
     "electron": "45.1.0",
     "electron-builder": "26.18.0"
-  },
-  "dependencies": {
-    "electron-updater": "6.8.11"
   }
 }

@@ -79,6 +79,11 @@ pub struct QueueTrack {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub asked_by: Option<String>,
+    /// The copy it is heard from, a library's id: Play from's queue names it on every track and every stream of it asks for it,
+    /// so it lives as long as the queue does, and a track added names none. Nothing else keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub from: Option<String>,
 }
 
 /// An announcement as a player reports it (Command::Announce).
@@ -1963,6 +1968,19 @@ impl PlayOn {
         }
     }
 
+    /// Whether the running request may hear `leader`'s group as player `name` (decision 0051: "Listening is private",
+    /// "Sync play admits only its own players"): `name` plays in that group, and the request reaches it. What a player's
+    /// secret is on the sync port, here over HTTP. A signed link reaches every player (`whose`), so a Kodi's goes by its
+    /// group alone.
+    pub fn hears(&self, leader: &str, name: &str) -> bool {
+        self.heard_by(whose().as_deref(), away(), leader, name)
+    }
+
+    fn heard_by(&self, user: Option<&str>, away: bool, leader: &str, name: &str) -> bool {
+        let first = first_owner();
+        self.entries().get(name).is_some_and(|e| e.leader.as_deref() == Some(leader) && user.is_none_or(|u| reach(e, u, first.as_deref(), away).is_ok()))
+    }
+
     /// Whether player `name` is the running request's own, or the request an administrator's: its settings, its log
     /// and its sharing are theirs only. A shared one of another's is refused as one not theirs (it is seen, so it says
     /// so); one not seen at all, as if there were none.
@@ -2817,20 +2835,22 @@ impl PlayOn {
             (a.map(|a| a.mode).unwrap_or_default(), a.is_some_and(|a| a.albums), q.is_some_and(|q| q.skip_favourites))
         };
         let ask = super::radio::NextRequest {
-            mode: super::radio::Mode::of(mode),
-            seed: seed.clone(),
-            exclude: seed.clone(),
-            last: None,
-            count: Some(RADIO_START),
+            ask: super::radio::Ask {
+                mode: mode.asks(),
+                seed: seed.clone(),
+                exclude: seed.clone(),
+                last: None,
+                count: Some(RADIO_START),
+                albums,
+                by: RadioBy::default(),
+                skip_favourites,
+                // Its account's "Similar by": a start from Home Assistant or another of Cratarr's own has no listener.
+                similar_by: self.account_of(name).and_then(|u| super::radio::similar_by_of(&u)),
+                folders: None,
+            },
             within: None,
-            albums,
-            by: RadioBy::default(),
-            skip_favourites,
-            // Its account's "Similar by": a start from Home Assistant or another of Cratarr's own has no listener.
-            similar_by: self.account_of(name).and_then(|u| super::radio::similar_by_of(&u)),
             // Its account's More music choice (0.9.5), as for its "Similar by".
             account: self.account_of(name),
-            folders: None,
         };
         let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) else { return Err(ToggleError::Refused("Cratarr is starting.".into())) };
         let first = super::radio::next(&app, ask).await?;
@@ -3517,6 +3537,60 @@ fn write_private(path: &std::path::Path, body: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// The fixture's store is what 0.15 left, or a move proved on it proves nothing: a player reads it.
+    #[test]
+    fn the_queues_of_0_15_are_read_as_a_player_reads_them() {
+        let saved: HashMap<String, Saved> = serde_json::from_str(include_str!("../../tests/fixtures/0.15/queues.json")).unwrap();
+        let player = &saved["a player"];
+        assert_eq!((player.queue.tracks.len(), player.kept.len(), player.position_ms), (2, 1, 1500));
+        assert_eq!(player.kept[0].queue.autoplay.as_ref().and_then(|a| a.within.clone()), Some(Within::Crate { id: "like:al-4Jx9dQszNKgnbo4mZtic7y@50".into(), without: Vec::new() }));
+    }
+
+    /// A queue is what plays on: each track by its id, its album for its cover, what its Autoplay stays close to and inside,
+    /// and the queues it left behind. The store goes through the mover as JSON and comes back as a server reads it.
+    #[test]
+    fn a_queue_keeps_playing_after_the_move() {
+        const OLD: &str = "al-5vcUvYmuWJAgyxLXEUmaPz";
+        let d = std::env::temp_dir().join(format!("cratarr-queue-moved-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let track = |id: &str, entry: &str| QueueTrack { source: "cratarr".into(), id: id.into(), album_id: Some(OLD.into()), entry: entry.into(), ..QueueTrack::default() };
+        let queue = |within| Queue {
+            tracks: vec![track("tr-9", "e1"), track("tr-2", "e2")],
+            autoplay: Some(Autoplay { seed: vec!["tr-9".into()], within: Some(within), ..Autoplay::default() }),
+            ..Queue::default()
+        };
+        let source = "cratarr".to_string();
+        let saved = Saved {
+            queue: queue(Within::Album { source: source.clone(), id: OLD.into() }),
+            entry: Some("e1".into()),
+            position_ms: 5000,
+            playing: true,
+            kept: vec![
+                Kept { queue: queue(Within::Crate { id: format!("like:{OLD}@50"), without: Vec::new() }), ..Kept::default() },
+                Kept { queue: queue(Within::Tracks { source: source.clone(), ids: vec!["tr-9".into(), "tr-2".into()] }), ..Kept::default() },
+            ],
+            ..Saved::default()
+        };
+        std::fs::write(d.join("queues.json"), serde_json::to_vec(&HashMap::from([("Kitchen".to_string(), saved)])).unwrap()).unwrap();
+        let moved = crate::moved::Moved { ids: [(OLD, "al-7"), ("tr-9", "tr-4")].map(|(a, b)| (a.to_string(), b.to_string())).into(), ..Default::default() };
+        let report = moved.stores(&d).unwrap();
+        let back: HashMap<String, Saved> = serde_json::from_slice(&std::fs::read(d.join("queues.json")).unwrap()).unwrap();
+        let kitchen = &back["Kitchen"];
+        let ids = |q: &Queue| q.tracks.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&kitchen.queue), ["tr-4", "tr-2"]);
+        assert!(kitchen.queue.tracks.iter().all(|t| t.album_id.as_deref() == Some("al-7")), "a cover found by its album");
+        assert_eq!((kitchen.entry.as_deref(), kitchen.position_ms, kitchen.playing), (Some("e1"), 5000, true), "where it stood, by its entry");
+        let autoplay = |q: &Queue| q.autoplay.clone().unwrap();
+        assert_eq!(autoplay(&kitchen.queue).seed, ["tr-4"]);
+        assert_eq!(autoplay(&kitchen.queue).within, Some(Within::Album { source: source.clone(), id: "al-7".into() }));
+        assert_eq!(ids(&kitchen.kept[0].queue), ["tr-4", "tr-2"], "a queue left behind too");
+        assert_eq!(autoplay(&kitchen.kept[0].queue).within, Some(Within::Crate { id: "like:al-7@50".into(), without: Vec::new() }));
+        assert_eq!(autoplay(&kitchen.kept[1].queue).within, Some(Within::Tracks { source, ids: vec!["tr-4".into(), "tr-2".into()] }));
+        assert_eq!(report.table_named("queues.json").unwrap().before, 1);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn a_webhook_failure_is_logged_with_its_causes() {
         #[derive(Debug, thiserror::Error)]
@@ -3712,7 +3786,7 @@ mod tests {
         static N: AtomicU64 = AtomicU64::new(0);
         let d = std::env::temp_dir().join(format!("cratarr-playon-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
-        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None).await.unwrap();
+        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap())).await.unwrap();
         let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
@@ -3809,6 +3883,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_group_is_heard_through_one_s_own_player_in_it_and_no_other_way() {
+        let p = play_on().await;
+        p.serve_sync_play(1704, 1000, None);
+        let (_tablet, _page, _his) = (p.connect("tablet").unwrap(), p.connect_browser("page", Some("tab-1")).unwrap(), p.connect("his").unwrap());
+        p.own("tablet", "ann");
+        p.own("page", "ann");
+        p.own("his", "bob");
+        p.command("page", Command::Join { to: "tablet".into() }).await.unwrap();
+        let hears = |user: &str, leader: &str, player: &str| p.heard_by(Some(user), false, leader, player);
+        assert!(hears("ann", "tablet", "page"));
+        assert!(hears("ann", "tablet", "tablet"), "the leader is in its own group");
+        assert!(!hears("bob", "tablet", "page"), "another account's player in the group");
+        assert!(!hears("bob", "tablet", "his"), "his own player, not in the group");
+        assert!(!hears("ann", "tablet", "made up"), "no such player");
+        assert!(!hears("ann", "made up", "page"), "no such group");
+        assert!(!hears("ann", "page", "page"), "a follower leads nothing");
+        // A Kodi's signed link is no one's: it goes by the group alone.
+        assert!(p.heard_by(None, false, "tablet", "page"));
+        assert!(!p.heard_by(None, false, "tablet", "his"));
+        // Shared with everyone, a player is theirs to use at home, and so is what it hears.
+        p.entries().get_mut("page").unwrap().shared = true;
+        assert!(hears("bob", "tablet", "page"));
+        assert!(!p.heard_by(Some("bob"), true, "tablet", "page"), "away from home");
+    }
+
+    #[tokio::test]
     async fn a_browser_is_a_player_while_open_and_follows_a_group_but_never_leads_one() {
         let p = play_on().await;
         let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
@@ -3902,6 +4002,36 @@ mod tests {
         // As the page sends it; the player is told a position only.
         let c: Command = serde_json::from_str(r#"{"command":"seek","by_ms":-30000}"#).unwrap();
         assert_eq!(c, by(-30_000));
+    }
+
+    /// Play from: a queue's tracks name the copy they are heard from, and that lasts as long as the queue. A player is told it,
+    /// reports it with the rest and is given it back: a field `QueueTrack` lacks is lost at any of the three.
+    #[tokio::test]
+    async fn a_queue_keeps_the_copy_its_tracks_are_heard_from_through_a_report_and_back() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let mut tablet = p.connect("tablet").unwrap();
+        said(&mut tablet);
+        p.command("tablet", Command::play(vec![QueueTrack { from: Some("/media/incoming".into()), ..t("tr-1") }, t("tr-2")], 0, 0)).await.unwrap();
+        let first = told(&mut tablet);
+        let play = first.iter().find(|m| m["command"] == "play").expect("told to play");
+        assert_eq!(play["tracks"][0]["from"], "/media/incoming");
+        assert_eq!(play["tracks"][1].get("from"), None, "a track that names none");
+
+        // As a player reports its queue, by what it was told.
+        let queue: Vec<QueueTrack> = serde_json::from_value(play["tracks"].clone()).unwrap();
+        let version = p.get("tablet").unwrap().queue_version;
+        p.report("tablet", Report { index: 0, version: Some(version), queue: Some(queue), ..Report::default() }).unwrap();
+
+        // Its app is updated: back without a queue, it is given Cratarr's.
+        drop(tablet);
+        let mut tablet = p.connect("tablet").unwrap();
+        said(&mut tablet);
+        p.report("tablet", Report { index: -1, ..Report::default() }).unwrap();
+        let back = told(&mut tablet);
+        let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
+        assert_eq!(play["tracks"][0]["from"], "/media/incoming", "whole");
+        assert_eq!(play["tracks"][1].get("from"), None);
     }
 
     #[tokio::test]

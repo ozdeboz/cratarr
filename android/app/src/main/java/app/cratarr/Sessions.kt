@@ -68,6 +68,10 @@ object Sessions {
         if (secure(origin)) "$HTTPS_NAME=$token; Path=/; Max-Age=$MAX_AGE; Secure; HttpOnly; SameSite=Lax"
         else "$HTTP_NAME=$token; Path=/; Max-Age=$MAX_AGE; HttpOnly; SameSite=Lax"
 
+    /** Whether a 401's `WWW-Authenticate` is Cratarr's own (access.rs), as the page reads it (lib/reach). Any other is something
+     *  on the way, which says nothing of who is signed in. */
+    fun asksSignIn(challenge: String?): Boolean = challenge?.let { it.trim().startsWith("Cookie", ignoreCase = true) && "realm=\"Cratarr\"" in it } == true
+
     /** [origin]'s session cookie gone: expired, with the same attributes (a `__Host-` cookie is only replaced so). */
     fun clearFor(origin: String): String =
         if (secure(origin)) "$HTTPS_NAME=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
@@ -84,11 +88,16 @@ object Sessions {
         else -> Step.NOTHING
     }
 
+    /** Whether a page loaded at [path] after [step] says nobody is signed in: Cratarr's sign-in page, with no session of
+     *  the other address's taken for it. Whoever signs in there is not known yet, and must not open on the one before's. */
+    fun nobodyAfter(path: String, step: Step): Boolean = path == SIGN_IN && step != Step.TAKE
+
     /** Whether an address about to be used ([here] its session) should take the other's ([there]) first. */
     fun lacking(here: String?, there: String?): Boolean = here == null && there != null
 
     /** The page asked to sign out ([signOutAsked]): its next load ends the session on both addresses. */
-    @Volatile private var signingOut = false
+    @Volatile var signingOut = false
+        private set
     /** Per address: the other's session taken for its sign-in page, so the same one is never taken twice. */
     private val tried = ConcurrentHashMap<String, String>()
 
@@ -159,7 +168,8 @@ object Sessions {
         if (here !in prefs.origins()) return false
         val there = other(prefs, here)
         val theirs = there?.let(::token)
-        val step = afterLoad(Uri.parse(url).path.orEmpty(), token(here), theirs, tried[here], signingOut)
+        val path = Uri.parse(url).path.orEmpty()
+        val step = afterLoad(path, token(here), theirs, tried[here], signingOut)
         when (step) {
             Step.CLEAR -> {
                 signingOut = false
@@ -172,6 +182,7 @@ object Sessions {
             }
             Step.NOTHING -> {}
         }
+        if (nobodyAfter(path, step)) Who.set(context, null)
         return false
     }
 }

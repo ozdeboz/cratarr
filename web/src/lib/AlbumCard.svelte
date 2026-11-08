@@ -13,7 +13,7 @@
   import Cover from './Cover.svelte';
   import { longpress } from './longpress';
   import { albumSubject, viewOver } from './panel.svelte';
-  import { albumPlay, libraryDot, playListedAlbum } from './albums.svelte';
+  import { albumPlay, libraryDots, playListedAlbum } from './albums.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import { albumAway } from './away.svelte';
   import { DEVICE } from './deviceMusic.svelte';
@@ -41,8 +41,8 @@
     request?: RequestMark | null;
   } = $props();
   let menu = $state(false);
-  // Its library, as a dot before its title (0.9.3): as the Library's lists show it.
-  const dot = $derived(libraryDot(source, album));
+  // Its libraries, as dots before its title (0.9.3): as the Library's lists show them.
+  const dots = $derived(libraryDots(source, album));
   /** The library's album: it plays from its cover, and opens in the panel. */
   const own = $derived(!onopen && cover === undefined && source !== BANDCAMP);
   /** Out of reach, none of it on this device (lib/away): dimmed, no Play; it still opens, as last seen. */
@@ -64,14 +64,14 @@
       subject={own ? albumSubject(source, album.id) : null}
     /></span
   >
-  <span class="title">{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{album.title}</span>
+  <span class="title">{#each dots as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{album.title}</span>
   {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else if album.year}<span class="year">{album.year}</span>{/if}
 </button>
 {#if own && !gone}<CoverPlay label={album.title} album={album.id} busy={albumPlay.starting === album.id} disabled={albumPlay.starting !== null} onplay={() => playListedAlbum(source, album)} />{/if}
 </div>
 
 <style>
-  /* The library's dot, as an album list's tile has it. */
+  /* A library's dot, as an album list's tile has it. */
   .dot {
     display: inline-block;
     width: 8px;

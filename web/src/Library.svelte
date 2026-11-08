@@ -9,8 +9,9 @@
   import { ApiError, type AlbumsSource, type ListedAlbum, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
-  import AlbumMenu, { offerIn, type AlbumOffer } from './lib/AlbumMenu.svelte';
+  import AlbumMenu from './lib/AlbumMenu.svelte';
   import { library, readLibrary } from './lib/albums.svelte';
+  import { whenReadsMove } from './lib/deviceIndex.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
@@ -18,8 +19,9 @@
   import { on, stream } from './lib/events.svelte';
   import { pageView } from './lib/pageView.svelte';
   import { filterBlocked, passing } from './lib/listFilter.svelte';
-  import { libraryShown } from './lib/sources.svelte';
-  import { untrack } from 'svelte';
+  import { recordOn } from './lib/copiesRule';
+  import { shownIn } from './lib/sources.svelte';
+  import { onMount, untrack } from 'svelte';
   import { me } from './lib/me.svelte';
   import ComposerList from './lib/ComposerList.svelte';
   import ComposerWorks from './lib/ComposerWorks.svelte';
@@ -31,21 +33,14 @@
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
-  const trashDays = $derived(library.view?.trash_days ?? 14);
   /** The primary library, by its own name. */
   const music = $derived(library.view?.music ?? 'Music');
 
   // An album's menu (lib/AlbumMenu), the same as everywhere.
   // Closing it hides it and keeps its album: what the menu does after it closes (Play, Share, a chosen cover) still
   // reads it.
-  let menu = $state<{ source: string; a: ListedAlbum; offer: AlbumOffer } | null>(null);
+  let menu = $state<{ source: string; a: ListedAlbum } | null>(null);
   let menuShown = $state(false);
-
-  // The album left its library (moved, replaced, deleted): gone at once, before the list is read again.
-  function gone(source: string, id: string) {
-    const v = library.view;
-    if (v) v.sources = v.sources.map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== id) } : s));
-  }
 
   // A server's list could not be read while albums are shown (they stay): one toast says so, not a line that comes and
   // goes; it goes when the list reads again. With nothing to show, the page says it in place.
@@ -66,6 +61,12 @@
     }
     tellReadError();
   }
+  // A list that could not be read may be read now: the device may have it (with one on the page, lib/albums reads it again itself).
+  onMount(() => {
+    const again = () => void (error && load(true));
+    whenReadsMove.add(again);
+    return () => whenReadsMove.delete(again);
+  });
   // One read for several changes told at once (an action changes Incoming's list and Music's).
   let soon: ReturnType<typeof setTimeout> | null = null;
   const reload = () => {
@@ -115,11 +116,11 @@
     };
   });
 
-  // An album's menu: what its library allows depends on the library and what Cratarr may do there.
+  // An album's menu.
   function openMenu(shelf: ShelfSource, a: ListedAlbum) {
     const s = sources?.find((x) => x.id === shelf.id);
     if (!s) return;
-    menu = { source: s.id, a, offer: offerIn(s, a) };
+    menu = { source: s.id, a };
     menuShown = true;
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
@@ -179,7 +180,7 @@
   // How many albums the filter lets through, of how many (the Filter sheet's count): of the libraries switched on, as
   // the shelf shows them (it said 605 of 2,861 with Music switched off).
   $effect(() => {
-    const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.filter((a) => !a.library || libraryShown(s.id, a.library)).length, 0);
+    const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.filter((a) => recordOn(a, shownIn(s.id))).length, 0);
     pageView.counted = sources ? { shown: count(shown), total: count(sources), pending: pass.pending } : null;
     return () => (pageView.counted = null);
   });
@@ -234,11 +235,7 @@
   <AlbumMenu
     source={m.source}
     album={m.a}
-    offer={m.offer}
-    {trashDays}
-    {music}
     onclose={() => (menuShown = false)}
-    ongone={() => gone(m.source, m.a.id)}
     onundone={reload}
   />
 {/if}

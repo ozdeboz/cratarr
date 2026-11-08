@@ -214,7 +214,8 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0077: Macros are the rack's face; the dice play the face](0077-macros-the-racks-face.md): accepted. Every level of a
   rack has a few macros that reach one level down, and the dice roll macros only; supersedes 0057's Track Look.
 - [0078: A desktop app: Cratarr's pages in a window of their own, Linux first](0078-a-desktop-app.md): accepted. A thin
-  Electron app shows the server's pages in a window of its own, Linux first as a .deb from an APT repository.
+  Electron app shows the server's pages in a window of its own, Linux first as a .deb; amended 2026-11-04: it carries
+  its own copy of the page, and is built and installed locally, never published.
 - [0079: Listening along: following another listener, asking for a track, and a guest
   page](0079-follow-and-queue-requests.md): accepted. One may follow another user's player, opted in, from anywhere,
   kept in step by Cratarr; followers and guests at home ask for tracks the leader accepts or declines.
@@ -302,9 +303,13 @@ by a later record that says so in its header. A new decision takes the next numb
   accepted, for 0.16; libraries in list order, requests through Incoming into one's own music, the catalogue's track id
   served once switched, downloads with a holder per account and caches hidden at sign-out, the whole index with vectors
   and fits offline, Radio's picker in the rules crate; one migration at first start, rehearsed; two previews. Where it
-  meets 0084, 0085 and 0091, open for later.
+  met 0084, 0085 and 0091, settled by the owner 2026-11-04.
   Amended 2026-11-03: 0102's tape engine joins 0.16 and the rules crate's move.
 - [0102: The tape engine on the device](0102-the-tape-engine-on-the-device.md): accepted, for 0.16; every wind's sound
   made where it is heard, from the track decoded in memory (the playing track only), the engine's arithmetic in the
   rules crate (0101); a streamed track's file fetched whole as it starts; the app and the page together; the server's
   wind, rewind and brake streams retired.
+- [0103: Cratarr peers](0103-cratarr-peers.md): accepted, step 1 for 0.18; a friend's Cratarr as a library of your own
+  server through a peer account and its key, its catalogue mirrored with its analysis, its streams relayed; read-only,
+  dimmed while away, your plays and favourites kept by your own ids. Reverses "modes only" for Cratarr peers; Jellyfin
+  and Navidrome stay modes. Then playlists, offline, a bounded cache and a record shown once; iroh after a trial.

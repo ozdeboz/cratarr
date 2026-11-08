@@ -65,7 +65,7 @@ data class Deck(val index: Int, val ms: Long, val speed: Double, val accel: Doub
  * tape is where it says.
  */
 data class Plan(val t0: Long, val index: Int, val ms: Long, val sign: Int, val v0: Double, val to: Double, val brakeMs: Long) {
-    /** Its speed [t] ms after it was let go (×): Rust's when the device's switch says so (Spike B, [RustRules]). */
+    /** Its speed [t] ms after it was let go (×): Rust's, once the library has loaded ([RustRules]). */
     fun v(t: Long): Double =
         if (RustRules.on) app.cratarr.rules.brakeV(v0, to, brakeMs.toDouble(), t.toDouble()) else kotlinV(t)
 
@@ -77,7 +77,7 @@ data class Plan(val t0: Long, val index: Int, val ms: Long, val sign: Int, val v
     fun accel(t: Long): Double =
         if (RustRules.on) app.cratarr.rules.brakeAccel(v0, to, brakeMs.toDouble(), t.toDouble()) else kotlinAccel(t)
 
-    /** The app's own speed (×), until Spike B is judged. */
+    /** The app's own speed (×), where the library is not ([RustRules]). */
     fun kotlinV(t: Long): Double {
         if (t >= brakeMs) return to
         return to + (v0 - to) * (1 + kotlin.math.cos(Math.PI * t.coerceAtLeast(0L) / brakeMs)) / 2

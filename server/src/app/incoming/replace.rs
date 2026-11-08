@@ -1,13 +1,14 @@
-//! Replace (decision 0013): an upgrade in Incoming takes the place of its album in Music. Each old track is paired
-//! with a new file, which takes over its track id (playlists and play data follow); the old files go to the trash in
-//! the Incoming folder. Refused when an old track has no match. Write-ahead like Keep and Delete; Undo puts it all back.
+//! Replace (decision 0013): an upgrade in Incoming takes the place of its album in a main library, the one that album
+//! is in (0101 point 2). Each old track is paired with a new file, which takes over its track id (playlists and play
+//! data follow); the old files go to that library's own trash. Refused when an old track has no match. Write-ahead
+//! like Keep and Delete; Undo puts it all back.
 
 use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::Serialize;
 
-use super::{IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayData, files_under, queue, verdicts};
+use super::{IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayData, files_under, queue, verdicts, whole_copy};
 use crate::app::ToggleError;
 use crate::app::library::epoch_now;
 use crate::incoming::{AlbumFile, ReplacePlan, ReplaceRefusal};
@@ -17,22 +18,22 @@ use crate::journal::{Entry, Event, TrackMove};
 #[derive(Debug, Serialize)]
 pub struct ReplacePreview {
     pub title: String,
-    /// The album in Music it replaces (its folder).
+    /// The album it replaces (its folder, in its main library).
     pub old: String,
-    /// Where the new album goes in Music, when it can go ahead.
+    /// Where the new album goes in that library, when it can go ahead.
     pub folder: Option<String>,
     /// Old tracks the new files take over.
     pub tracks: usize,
     /// New tracks the old album does not have.
     pub added: usize,
     pub refused: Option<ReplaceRefused>,
-    /// Lossless files above Music's quality limit, converted first (Replace then waits in the queue).
+    /// Lossless files above that library's quality limit, converted first (Replace then waits in the queue).
     pub convert: usize,
     /// Whether a Lidarr is set, to be told to stop fetching the album; without one it may fetch it again.
     pub acquisition: bool,
-    /// Both covers, side by side for the choice (0.9.5): the album's in Music and the new copy's.
+    /// Both covers, side by side for the choice (0.9.5): the old album's and the new copy's.
     pub covers: ReplaceCovers,
-    /// How the new copy's tags differ from the album's in Music, the differences only (0.9.7, the owner): album-wide
+    /// How the new copy's tags differ from the old album's, the differences only (0.9.7, the owner): album-wide
     /// once (`track` none), else by track.
     pub diff: Vec<TagDiff>,
     /// What the new copy lacks that the album had ("Year", "MusicBrainz ids", "4 fewer tags").
@@ -86,8 +87,8 @@ fn named(path: &std::path::Path) -> Named {
     out
 }
 
-/// The differences of each pair (the old file in Music, the new one in Incoming), what the new copy loses, and what
-/// carrying over brings. Blocking: it reads every file's tags.
+/// The differences of each pair (the old file in its main library, the new one in Incoming), what the new copy loses,
+/// and what carrying over brings. Blocking: it reads every file's tags.
 fn compare(pairs: &[(PathBuf, PathBuf)], keep_cover: bool) -> (Vec<TagDiff>, Vec<String>, Vec<String>) {
     let read: Vec<(String, Named, Named)> =
         pairs.iter().map(|(o, n)| (n.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(), named(o), named(n))).collect();
@@ -157,28 +158,34 @@ fn carry_over(pairs: &[(PathBuf, PathBuf)]) {
     }
 }
 
-/// Each old track in Music with the new file taking it over, as paths.
+/// Each old track in its main library (at `music`) with the new file taking it over, as paths.
 fn pairs_of(music: &std::path::Path, old_dir: &str, at: &Located, plan: &ReplacePlan) -> Vec<(PathBuf, PathBuf)> {
     plan.takes_over.iter().map(|(o, n)| (music.join(old_dir).join(o), at.root.join(&at.dir.dir).join(n))).collect()
 }
 
 
-/// The two covers Replace chooses between (0.9.5): `keep` the one in Music, or take the `new` copy's.
+/// The two covers Replace chooses between (0.9.5): `keep` the old album's, or take the `new` copy's.
 #[derive(Debug, Default, Serialize)]
 pub struct ReplaceCovers {
     pub current: Option<String>,
     pub new: Option<String>,
 }
 
-/// The cover of the album in Music at `old_dir` and of the new copy, as the page shows covers.
-fn covers_of(source_id: &str, album_id: &str, old_dir: &str) -> ReplaceCovers {
-    let current = crate::serve::instance()
-        .and_then(|s| s.library.album_in(0, old_dir).ok().flatten())
-        .map(|id| format!("/api/albums/{}/{id}/cover", crate::source::cratarr::KIND.id));
-    ReplaceCovers { current, new: Some(format!("/api/albums/{source_id}/{album_id}/cover")) }
+/// An album's cover as the page asks for it, of its copy in `library`: two copies of a record have one id, and the address
+/// alone can tell their pictures apart.
+fn cover_at(source_id: &str, album_id: &str, library: Option<&str>) -> String {
+    let named = library.map_or_else(String::new, |l| format!("?from={}", crate::api::form_urlencoded_segment(l)));
+    format!("/api/albums/{source_id}/{album_id}/cover{named}")
 }
 
-/// The Music album's cover written into the new copy's folder before Replace (0.9.5, `cover: keep`): its cover file
+/// The cover of the album at `old_dir` in the main library in catalogue folder `main` (`old`, its library's id), and of
+/// the new copy (`new`, its library's id), as the page shows covers.
+fn covers_of(source_id: &str, album_id: &str, new: Option<&str>, main: i64, old: Option<&str>, old_dir: &str) -> ReplaceCovers {
+    let current = crate::serve::instance().and_then(|s| s.library.album_in(main, old_dir).ok().flatten()).map(|id| cover_at(crate::source::cratarr::KIND.id, &id, old));
+    ReplaceCovers { current, new: Some(cover_at(source_id, album_id, new)) }
+}
+
+/// The old album's cover written into the new copy's folder before Replace (0.9.5, `cover: keep`): its cover file
 /// (else the picture inside its first track) beside the new tracks and inside each, the copy's own cover file set aside
 /// in the data folder. Never stops Replace: what could not be done is logged.
 fn keep_cover(old: &std::path::Path, new: &std::path::Path) {
@@ -230,9 +237,13 @@ pub enum ReplaceRefused {
     Other(String),
 }
 
-/// Replace worked out: the album in Music it replaces and what moves.
+/// Replace worked out: the album it replaces, in a main library, and what moves.
 struct Planned {
-    /// The old album's folder, relative to Music.
+    /// The catalogue folder of the main library the old album is in: the new copy goes there (0101 point 2).
+    main: i64,
+    /// That folder on disk.
+    root: PathBuf,
+    /// The old album's folder, relative to it.
     old_dir: String,
     /// Every file of the old album (music and others), relative to its folder.
     old_files: Vec<String>,
@@ -254,7 +265,8 @@ fn album_files(c: &crate::catalogue::Catalogue, folder: i64, dir: &str) -> Resul
 }
 
 /// The catalogue rows follow Replace's moves (or their Undo, `back`): the old files' rows into the trash and the new
-/// files' into Music, then the new files hold the old tracks' ids and the old files let go (back: each its own again).
+/// files' into the main library, then the new files hold the old tracks' ids and the old files let go (back: each its
+/// own again).
 /// In the files' order, a row moving only while its place is free: safe to repeat, also when a new file has an old
 /// one's name. Blocking.
 fn rows_follow(c: &crate::catalogue::Catalogue, moves: &[TrackMove], replaced: &[TrackMove], token: &str, back: bool) -> Result<()> {
@@ -300,21 +312,49 @@ fn refused(r: ReplaceRefused) -> ToggleError {
 }
 
 impl IncomingService {
-    /// Work out Replace for an album: the album it replaces and what moves, or why not. Changes nothing.
-    async fn plan_replace(&self, at: &Located, year: Option<&str>) -> Result<Result<Planned, ReplaceRefused>, ToggleError> {
-        let music = PathBuf::from(self.lib.music().ok_or_else(|| ToggleError::Refused("no Music library is set".into()))?);
-        let (libraries, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        // Only an album matched in Music is replaced (one matched in another library is only told).
-        let old_dir = verdicts(std::slice::from_ref(&at.album), &libraries, &incoming, |_| None)
+    /// The main library `to` names for Replace, as its catalogue folder (0101 point 2: any main library); none named, none.
+    fn replaced_in(&self, source_id: &str, to: Option<&str>) -> Result<Option<i64>, ToggleError> {
+        let Some(to) = to else { return Ok(None) };
+        let (folder, _) = self.target_of(source_id, to)?;
+        if !self.lib.main_folders().contains(&folder) {
+            return Err(ToggleError::Refused("Replace takes the place of a copy in a main library".into()));
+        }
+        Ok(Some(folder))
+    }
+
+    /// The album Replace takes the place of: its main library's catalogue folder and its folder there. Named (`into`, the
+    /// library the page chose or the job was planned for), the record's copy there, else what is matched there; else the
+    /// first match. Only an album matched in a main library is replaced (one matched in another library is only told).
+    async fn replaced_copy(&self, at: &Located, into: Option<i64>) -> Result<(i64, String), ToggleError> {
+        if let Some(folder) = into
+            && let Some(dir) = super::copy_dir_in(&at.album.id, folder).await
+        {
+            return Ok((folder, dir));
+        }
+        let (libraries, main, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        verdicts(std::slice::from_ref(&at.album), &libraries, &main, &incoming, |_| None)
             .remove(&at.album.id)
-            .filter(|v| v.replaceable)
-            .map(|v| v.library)
-            .ok_or_else(|| ToggleError::Refused(format!("{} is not in Music", at.album.title)))?;
+            .and_then(|v| Some((v.main_folder?, v.library)))
+            .filter(|(folder, _)| into.is_none_or(|i| i == *folder))
+            .ok_or_else(|| ToggleError::Refused(format!("{} is not in a main library", at.album.title)))
+    }
+
+    /// Work out Replace for an album: the album it replaces and what moves, or why not. Changes nothing.
+    async fn plan_replace(&self, at: &Located, into: Option<i64>, year: Option<&str>) -> Result<Result<Planned, ReplaceRefused>, ToggleError> {
+        let (main, old_dir) = self.replaced_copy(at, into).await?;
+        let (music, name) = (self.root_of(main)?, self.library_name(&at.source, main));
         let (c, folder, dir, root, year, template) =
             (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string), self.lib.template());
         tokio::task::spawn_blocking(move || -> Result<Result<Planned, ReplaceRefused>> {
+            // The old album's folder goes to the trash whole, so what else lies in it must not.
+            if let Some(served) = crate::serve::instance()
+                && let Some(old) = served.library.album_in(main, &old_dir)?
+                && !whole_copy(&old, main, &music, &old_dir)?
+            {
+                return Ok(Err(ReplaceRefused::Other("Cratarr cannot see that album's folder".into())));
+            }
             let new = album_files(&c, folder, &dir)?;
-            let old = album_files(&c, 0, &old_dir)?;
+            let old = album_files(&c, main, &old_dir)?;
             let new_others: Vec<String> = files_under(&root.join(&dir)).into_iter().filter(|f| !new.iter().any(|m| &m.rel == f)).collect();
             let plan = match crate::incoming::plan_replace(&template, &old, &new, &new_others, year.as_deref()) {
                 Ok(p) => {
@@ -327,13 +367,13 @@ impl IncomingService {
                 Err(e) => return Ok(Err(ReplaceRefused::Other(e.to_string()))),
             };
             if plan.folder != old_dir && music.join(&plan.folder).exists() {
-                return Ok(Err(ReplaceRefused::Other(format!("Music already has a folder named {}", plan.folder))));
+                return Ok(Err(ReplaceRefused::Other(format!("{name} already has a folder named {}", plan.folder))));
             }
             // Ids the new files take over must exist: a track still being read has none yet.
-            if plan.takes_over.iter().any(|(o, _)| c.track_of(0, &format!("{old_dir}/{o}")).is_none()) {
-                return Ok(Err(ReplaceRefused::Other("Cratarr is still reading the album in Music; try again in a minute".into())));
+            if plan.takes_over.iter().any(|(o, _)| c.track_of(main, &format!("{old_dir}/{o}")).is_none()) {
+                return Ok(Err(ReplaceRefused::Other(format!("Cratarr is still reading the album in {name}; try again in a minute"))));
             }
-            Ok(Ok(Planned { old_files: files_under(&music.join(&old_dir)), old_dir, plan }))
+            Ok(Ok(Planned { main, old_files: files_under(&music.join(&old_dir)), root: music, old_dir, plan }))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
@@ -341,20 +381,22 @@ impl IncomingService {
     }
 
     /// What Replace would do with an album, for the page to show before asking. Changes nothing.
-    pub async fn replace_preview(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<ReplacePreview, ToggleError> {
-        let at = self.locate(source_id, album_id).await?;
-        let (libraries, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        let old = verdicts(std::slice::from_ref(&at.album), &libraries, &incoming, |_| None).remove(&at.album.id).filter(|v| v.replaceable).map(|v| v.library).unwrap_or_default();
-        // Converted above Music's quality limit, as Keep's (the owner, 2026-11-02: a library's format holds).
-        let convert = self.to_convert(&at, self.music_quality(source_id)).await.len();
+    pub async fn replace_preview(&self, source_id: &str, album_id: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>) -> Result<ReplacePreview, ToggleError> {
+        let at = self.locate(source_id, album_id, from).await?;
+        let into = self.replaced_in(source_id, to)?;
+        let (main, old) = self.replaced_copy(&at, into).await?;
+        // Converted above the target's quality limit, as Keep's (the owner, 2026-11-02: a library's format holds).
+        let convert = self.to_convert(&at, self.quality_at(source_id, main)).await.len();
         let acquisition = self.acquisition().is_some();
-        let music = PathBuf::from(self.lib.music().unwrap_or_default());
-        Ok(match self.plan_replace(&at, year).await? {
+        // Two copies of a record have one id: each picture is asked of its library. Another server's has its own id.
+        let own = !at.album.copies.is_empty();
+        let (new, kept) = (at.album.library.clone().filter(|_| own), self.library_at(source_id, main).filter(|_| own));
+        Ok(match self.plan_replace(&at, into, year).await? {
             Ok(p) => {
-                let pairs = pairs_of(&music, &p.old_dir, &at, &p.plan);
+                let pairs = pairs_of(&p.root, &p.old_dir, &at, &p.plan);
                 let (diff, lost, carry) = tokio::task::spawn_blocking(move || compare(&pairs, true)).await.unwrap_or_default();
                 ReplacePreview {
-                    covers: covers_of(source_id, album_id, &p.old_dir),
+                    covers: covers_of(source_id, album_id, new.as_deref(), p.main, kept.as_deref(), &p.old_dir),
                     title: at.album.title,
                     old: p.old_dir,
                     folder: Some(p.plan.folder),
@@ -369,7 +411,7 @@ impl IncomingService {
                 }
             }
             Err(r) => ReplacePreview {
-                covers: covers_of(source_id, album_id, &old),
+                covers: covers_of(source_id, album_id, new.as_deref(), main, kept.as_deref(), &old),
                 title: at.album.title,
                 old,
                 folder: None,
@@ -385,22 +427,24 @@ impl IncomingService {
         })
     }
 
-    /// Replace (decision 0013): the old album's files go to Music's own trash (each library keeps its own, 2026-10-16;
-    /// before, Incoming's), the new ones into Music
-    /// named per the library's template, each taking over its old track's id. Lidarr stops fetching the album and the
-    /// old tracks' play data goes to the new server items (handlers). Undo puts it all back.
-    /// Lossless files above Music's quality limit are converted first, in the queue: the plan is checked now, so a
-    /// refusal shows at once.
-    pub async fn replace(&self, source_id: &str, album_id: &str, year: Option<&str>, keep: bool, carry: bool) -> Result<KeepResult, ToggleError> {
-        self.refuse_if_queued(album_id)?;
-        let at = self.locate(source_id, album_id).await?;
-        let planned = self.plan_replace(&at, year).await?.map_err(refused)?;
-        let music = PathBuf::from(self.lib.music().unwrap_or_default());
+    /// Replace (decision 0013): the old album's files go to its main library's own trash (each library keeps its own,
+    /// 2026-10-16; before, Incoming's), the new ones into that library (0101 point 2) named per the library's template,
+    /// each taking over its old track's id. Lidarr stops fetching the album and the old tracks' play data goes to the
+    /// new server items (handlers). Undo puts it all back.
+    /// Lossless files above that library's quality limit are converted first, in the queue: the plan is checked now,
+    /// so a refusal shows at once.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn replace(&self, source_id: &str, album_id: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>, keep: bool, carry: bool) -> Result<KeepResult, ToggleError> {
+        let at = self.locate(source_id, album_id, from).await?;
+        self.refuse_if_queued(album_id, at.dir.folder)?;
+        let into = self.replaced_in(source_id, to)?;
+        let planned = self.plan_replace(&at, into, year).await?.map_err(refused)?;
+        let music = planned.root.clone();
         if !self.can_write(&at.root).await || !self.can_write(&music).await {
-            return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
+            return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
         }
-        // The cover in Music kept (0.9.5, the owner's choice in the ask): written into the new copy first, so it moves
-        // in with it (a conversion's tracks get it inside again from the cover file).
+        // The old album's cover kept (0.9.5, the owner's choice in the ask): written into the new copy first, so it
+        // moves in with it (a conversion's tracks get it inside again from the cover file).
         if keep {
             let (old, new) = (music.join(&planned.old_dir), at.root.join(&at.dir.dir));
             if let Err(e) = tokio::task::spawn_blocking(move || keep_cover(&old, &new)).await {
@@ -414,35 +458,30 @@ impl IncomingService {
                 tracing::warn!("replace: {e}");
             }
         }
-        let quality = self.music_quality(source_id);
+        let quality = self.quality_at(source_id, planned.main);
         let convert = self.to_convert(&at, quality).await;
         if let (false, Some(limit)) = (convert.is_empty(), quality.limit()) {
-            return Ok(self.enqueue(source_id, at, queue::Action::Replace, year, convert, limit, planned.plan.folder, 0));
+            return Ok(self.enqueue(source_id, at, queue::Action::Replace, year, convert, limit, planned.plan.folder, planned.main));
         }
-        self.replace_now(&at, year, Vec::new(), None).await
+        self.replace_now(&at, planned.main, year, Vec::new(), None).await
     }
 
-    /// Replace, its files ready (`converted`: what conversion did just before). `job`: the queued job doing it, told
-    /// the event's id as soon as it is intended.
+    /// Replace, its files ready (`converted`: what conversion did just before), of the copy in catalogue folder `into`, the
+    /// one that was previewed. `job`: the queued job doing it, told the event's id as soon as it is intended.
     /// Replace, told on Health's list of changes to files as it goes, as Keep is (`keep_now`): moving, then adding until
     /// the server has read the album, then done.
     pub(super) async fn replace_now(
         &self,
         at: &Located,
+        into: i64,
         year: Option<&str>,
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
         let run = crate::app::file_runs::track("replace", format!("Replaced: {}", at.album.title));
-        let done = self.replacing(at, year, converted, job).await;
+        let done = self.replacing(at, into, year, converted, job).await;
         match &done {
-            Ok(k) => {
-                let (lib, journal, source, album) = (self.lib.clone(), self.journal.clone(), at.source.clone(), at.album.id.clone());
-                run.moved(k.undo.clone(), move || {
-                    let (lib, journal, source, album) = (lib.clone(), journal.clone(), source.clone(), album.clone());
-                    async move { matches!(super::fate_of(&lib, &journal, &source, &album).await, Some(super::AlbumFate::Moved(_))) }
-                });
-            }
+            Ok(k) => run.moved(k.undo.clone(), self.read_in(at, into)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
         }
         done
@@ -452,15 +491,15 @@ impl IncomingService {
     async fn replacing(
         &self,
         at: &Located,
+        into: i64,
         year: Option<&str>,
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
         self.complete_covers(at).await;
-        let Planned { old_dir, old_files, plan } = self.plan_replace(at, year).await?.map_err(refused)?;
-        let music = PathBuf::from(self.lib.music().unwrap_or_default());
+        let Planned { main, root: music, old_dir, old_files, plan } = self.plan_replace(at, Some(into), year).await?.map_err(refused)?;
         if !self.can_write(&at.root).await || !self.can_write(&music).await {
-            return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
+            return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
         }
         let c = self.lib.catalogue();
         let now = epoch_now();
@@ -471,10 +510,10 @@ impl IncomingService {
             .map(|rel| {
                 let from = format!("{old_dir}/{rel}");
                 TrackMove {
-                    track: c.track_of(0, &from),
-                    from: (0, from),
-                    // Into Music's own trash: each library keeps its own (the owner, 2026-10-16).
-                    to: (0, format!("{}/{token}/{rel}", crate::trash::TRASH_DIR)),
+                    track: c.track_of(main, &from),
+                    from: (main, from),
+                    // Into its library's own trash: each library keeps its own (the owner, 2026-10-16).
+                    to: (main, format!("{}/{token}/{rel}", crate::trash::TRASH_DIR)),
                     was: None,
                 }
             })
@@ -485,25 +524,26 @@ impl IncomingService {
             .map(|(rel, to)| {
                 let from = format!("{dir}/{rel}");
                 let own = c.track_of(inc, &from);
-                let old = plan.takes_over.iter().find(|(_, n)| n == rel).and_then(|(o, _)| c.track_of(0, &format!("{old_dir}/{o}")));
-                TrackMove { track: old.or(own), from: (inc, from), to: (0, to.clone()), was: old.and(own) }
+                let old = plan.takes_over.iter().find(|(_, n)| n == rel).and_then(|(o, _)| c.track_of(main, &format!("{old_dir}/{o}")));
+                TrackMove { track: old.or(own), from: (inc, from), to: (main, to.clone()), was: old.and(own) }
             })
             .collect();
         // Before anything moves: what users did with the old tracks' server items (the server forgets them after);
         // the new items get it once they exist (the play-data handler).
         // Both copies count: the old album's tracks and their upgrades in Incoming (played while deciding), each
-        // user's data on the two combined into one for the track that lives on.
+        // user's data on the two combined into one for the track that lives on. Cratarr's own item is the track, which stays.
         let mut play: Vec<PlayData> = Vec::new();
         let kept: Vec<&TrackMove> = replaced.iter().filter(|r| r.track.is_some() && moves.iter().any(|m| m.track == r.track)).collect();
-        for (source, s) in self.lib.connected_sources() {
+        for (source, s) in self.lib.connected_sources().into_iter().filter(|(source, _)| source != crate::source::cratarr::KIND.id) {
             let old_rels: Vec<String> = kept.iter().map(|r| r.from.1.clone()).collect();
-            let old_items = c.track_ids(&source, 0, &old_rels).unwrap_or_default();
+            let old_items = c.track_ids(&source, main, &old_rels).unwrap_or_default();
             let new_rels: Vec<String> = moves.iter().map(|m| m.from.1.clone()).collect();
             let new_items = c.track_ids(&source, inc, &new_rels).unwrap_or_default();
             let olds = kept.iter().map(|r| r.track).zip(old_items);
             let news = moves.iter().map(|m| m.track).zip(new_items);
             for (track, item) in olds.chain(news) {
                 let (Some(track), Some(item)) = (track, item) else { continue };
+                let Some(to) = moves.iter().find(|m| m.track == Some(track)).map(|m| m.to.clone()) else { continue };
                 let users = match s.user_data(&item).await {
                     Ok(u) => u,
                     Err(e) => {
@@ -514,7 +554,7 @@ impl IncomingService {
                 for (user, data) in users {
                     match play.iter_mut().find(|p| p.source == source && p.track == track && p.user == user) {
                         Some(p) => p.data = s.combine_user_data(&p.data, &data),
-                        None => play.push(PlayData { source: source.clone(), track, old_item: item.clone(), user, data }),
+                        None => play.push(PlayData { source: source.clone(), track, old_item: item.clone(), to: to.clone(), user, data }),
                     }
                 }
             }
@@ -524,41 +564,48 @@ impl IncomingService {
             album_id: at.album.id.clone(),
             title: at.album.title.clone(),
             from_dir: (inc, dir),
-            to_dir: (0, plan.folder.clone()),
+            to_dir: (main, plan.folder.clone()),
             moves,
             replaced,
             token,
             release_group: at.dir.release_group.clone(),
             converted,
         };
-        let id = self.journal.intend(now, &event)?;
+        let underway = self.intend(now, &event)?;
+        let id = underway.id();
         if let Some(job) = job {
             self.queue.intended(job, id);
         }
         self.journal.done(id, PLAYDATA_PLAN, now, &serde_json::to_value(&play).map_err(anyhow::Error::from)?)?;
         // Playing from either copy: carried on with the new one after the move (the old items go). A file of the old
         // album is known by the id its upgrade takes over; a file of the upgrade by its own id until then.
-        let (order, before): (Vec<i64>, Vec<(i64, i64)>) = match &event {
-            Event::AlbumReplaced { moves, .. } => (
+        let (order, before, leaving): (Vec<i64>, Vec<(i64, i64)>, Vec<(i64, String)>) = match &event {
+            Event::AlbumReplaced { moves, replaced, .. } => (
                 moves.iter().filter_map(|m| m.track).collect(),
                 moves.iter().filter_map(|m| m.track.map(|t| (m.was.unwrap_or(t), t))).chain(moves.iter().filter_map(|m| m.track.map(|t| (t, t)))).collect(),
+                moves.iter().chain(replaced).map(|m| m.from.clone()).collect(),
             ),
-            _ => (Vec::new(), Vec::new()),
+            _ => Default::default(),
         };
-        let mut playing = self.playing_among(&order, &before).await;
+        let mut playing = self.playing_among(&order, &before, &leaving).await;
         if let Some(p) = playing.as_mut() {
             self.hold(p).await;
         }
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
-        let files = self.files.clone();
-        let moved = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
+        let (files, held) = (self.files.clone(), underway.clone());
+        let moved = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&steps)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"));
         if let Err(e) = moved.and_then(|r| r) {
             self.journal.forget(id)?;
             return Err(ToggleError::Refused(format!("{e:#}")));
         }
         self.finish_replace(&event, false, playing.is_some()).await;
         self.journal.applied(id)?;
-        self.hidden.lock().await.insert(at.album.id.clone());
+        self.hidden.lock().await.insert(super::hidden_key(&at.album));
         *self.owned.lock().await = None;
         c.poke();
         if let Some(p) = playing {
@@ -590,21 +637,25 @@ impl IncomingService {
     /// Undo a Replace: the new files back into Incoming with their own ids, the old ones back from the trash with
     /// theirs, Lidarr fetching as before.
     pub(super) async fn undo_replace(&self, entry: &Entry) -> Result<String, ToggleError> {
-        let Event::AlbumReplaced { album_id, title, .. } = &entry.event else { unreachable!() };
+        let Event::AlbumReplaced { source, album_id, title, from_dir, .. } = &entry.event else { unreachable!() };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back in Incoming")));
         }
         let steps = self.undo_steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
-        let files = self.files.clone();
-        tokio::task::spawn_blocking(move || files.move_all(&steps))
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        let moving = self.lib.catalogue().copies_moving();
+        let (files, held) = (self.files.clone(), moving.clone());
+        tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&steps)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         self.finish_replace(&entry.event, true, false).await;
         self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
         self.resume_fetching(entry.id, title).await;
-        self.hidden.lock().await.remove(album_id);
+        self.unhide(source, album_id, from_dir.0).await;
         *self.owned.lock().await = None;
         self.lib.catalogue().poke();
         Ok(title.clone())

@@ -1146,7 +1146,7 @@ mod tests {
         let folders = cat.folders();
         let place = |line: &str| {
             let (folder, rel) = cat.place_of_line(line)?;
-            Some((folders.get(folder as usize)?.clone(), rel))
+            Some((folders.get(folder)?.clone(), rel))
         };
         let all = lines(&["A/01 One.flac", "../lidarr-music/X/01 New.flac", "../secret.mp3", "A/../../secret.mp3"]);
         let p = plan(vec![("Mixed".into(), all)], place, facts).unwrap();

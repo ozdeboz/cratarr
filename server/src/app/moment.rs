@@ -67,7 +67,15 @@ pub fn tz(w: Option<&Weather>) -> i64 {
     w.and_then(|w| w.tz).or_else(|| *PAGE_TZ.lock().unwrap_or_else(|e| e.into_inner())).unwrap_or(0)
 }
 
+/// The time a proof runs at (`radio::proof`), when not 0: two runs compared must not differ for when they ran.
+#[cfg(test)]
+pub static PINNED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 pub fn now_secs() -> i64 {
+    #[cfg(test)]
+    if let pinned @ 1.. = PINNED.load(std::sync::atomic::Ordering::Relaxed) {
+        return pinned;
+    }
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 

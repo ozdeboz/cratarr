@@ -7,6 +7,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.UUID
 
 /**
@@ -51,6 +52,15 @@ fun trackOf(item: MediaItem): JSONObject? = item.mediaMetadata.extras?.getString
     }
 }
 
+/** The copy a track of a Play from queue is heard from, a library's id; null: the one that plays for whoever asks. */
+fun copyNamed(t: JSONObject?): String? = t?.optString("from")?.takeIf { it.isNotEmpty() && it != "null" }
+
+/** An item's copy, as [copyNamed]. */
+fun copyOf(item: MediaItem): String? = copyNamed(trackOf(item))
+
+/** A copy as Cratarr's addresses ask for it. A library's id holds `/`, which must arrive whole. */
+fun copyParam(library: String) = "from=" + URLEncoder.encode(library, "UTF-8").replace("+", "%20")
+
 /** An item's entry in the queue. */
 fun entryOf(item: MediaItem): String? =
     item.mediaMetadata.extras?.getString(TRACK)?.let { JSONObject(it).optString("entry") }?.takeIf { it.isNotEmpty() }
@@ -69,9 +79,9 @@ fun queueOf(player: Player, thin: Boolean = false): JSONArray {
     return queue
 }
 
-/** What makes a queue entry what it is, whatever Cratarr says of its track: its entry, lane and place, the track, and
- *  who asked for it (a queue request accepted, 0.10). */
-private val IDENTITY = listOf("entry", "lane", "n", "source", "id", "asked_by")
+/** What makes a queue entry what it is, whatever Cratarr says of its track: its entry, lane and place, the track, who
+ *  asked for it (a queue request accepted, 0.10), and the copy it is heard from (Play from). */
+private val IDENTITY = listOf("entry", "lane", "n", "source", "id", "asked_by", "from")
 
 /** A track's identity: what the queue is told when Cratarr describes it. */
 fun identityOf(t: JSONObject): JSONObject = JSONObject().apply { for (k in IDENTITY) if (t.has(k)) put(k, t.get(k)) }

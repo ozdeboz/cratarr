@@ -8,11 +8,12 @@
   import { albumCoverUrl, getFilePlan, getFileRun, type FileChosen, type FileField, type FilePlan, type FileRecord, type FileRun } from './api';
   import GenrePick from './GenrePick.svelte';
   import Asking from './Asking.svelte';
-  import { asideOf, changeOf, fieldLabel, runGroups, runLine, type SetAside } from './fileChangeRules';
-  import { library } from './albums.svelte';
+  import { asideOf, changeOf, fieldLabel, rowLabel, runGroups, runLine, type SetAside } from './fileChangeRules';
+  import { library, readLibrary } from './albums.svelte';
   import { apply, changesView, fileRuns, keptOf, keptRun, loadRuns, openRun, sent, undoRun } from './fileRuns.svelte';
   import { plural } from './insights.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
+  import { OWN } from './sources.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
   import SaveBar from './settings/SaveBar.svelte';
@@ -23,6 +24,11 @@
   const v = $derived(changesView(thing));
 
   $effect(() => loadRuns());
+
+  // A row's library goes by the name the Library's list gives it, read here if nothing has yet: a review can be the
+  // first thing opened.
+  if (!library.view) readLibrary(false).catch(() => {});
+  const libraries = $derived(library.view?.sources.find((s) => s.id === OWN)?.library_info ?? []);
 
   // A plan: every record ticked to begin with; a long one shown a part at a time.
   const STEP = 100;
@@ -178,7 +184,7 @@
             <button class="tick small" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${fieldLabel(f.field)}`} onclick={() => tickField(r.album, f)}
               ><ChoiceMark kind="several" on={on} /></button
             >
-          {/if}{f.track ?? fieldLabel(f.field)}
+          {/if}{rowLabel(f, libraries)}
         </dt>
         <dd>
           {#if fieldTick && f.options?.length}

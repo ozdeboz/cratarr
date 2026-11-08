@@ -1,10 +1,12 @@
 <script lang="ts">
   // Sync (decision 0038): how this device keeps music: the storage budget, over which network, only while charging,
   // and in which quality. This device's own; it acts at once. Only in the app. Its Reset: all four back to their
-  // defaults (lib/settings/reset); what is kept stays.
+  // defaults (lib/settings/reset); what is kept stays. With more than one account's downloads here (decision 0101: one
+  // budget for the device, a file two hold stored once), each account's share, and its Remove.
   import ChoiceRow from './ChoiceRow.svelte';
-  import { appInfo, inApp, setDevice } from '../app.svelte';
-  import { kept } from '../kept.svelte';
+  import ConfirmSheet from './ConfirmSheet.svelte';
+  import { appInfo, inApp, setDevice, toApp } from '../app.svelte';
+  import { kept, sharesShow } from '../kept.svelte';
   import { downloadedSize } from './editor.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -29,13 +31,15 @@
     inApp
       ? [
           { name: 'Storage', now: () => appInfo.syncBudgetGb, def: 20, set: (v: number) => setDevice({ syncBudgetGb: v }), say: (v: number) => BUDGETS.find((b) => b.value === String(v))?.label ?? `${v} GB` },
-          { name: 'Quality', now: () => appInfo.downloadQuality, def: 'original', set: (v: string) => setDevice({ downloadQuality: v }), say: (v: string) => (v === 'original' ? 'Original' : v) },
+          { name: 'Quality', now: () => appInfo.downloadQuality, def: 'smaller', set: (v: string) => setDevice({ downloadQuality: v }), say: (v: string) => (v === 'original' ? 'Original' : v) },
           { name: 'Download over mobile data', now: () => !!appInfo.downloadOverMobile, def: false, set: (v: boolean) => setDevice({ downloadOverMobile: v }) },
           { name: 'Only while charging', now: () => !!appInfo.syncOnlyCharging, def: false, set: (v: boolean) => setDevice({ syncOnlyCharging: v }) },
         ]
       : null,
   );
   let choosingStorage = $state(false);
+  let removing = $state<string | null>(null);
+  const accountName = (a: string) => a || 'This server';
 </script>
 
 {#if inApp}
@@ -58,6 +62,19 @@
     <Item name="Download over mobile data" toggle={{ checked: appInfo.downloadOverMobile, onchange: (on) => setDevice({ downloadOverMobile: on }) }} />
     <Item name="Only while charging" toggle={{ checked: appInfo.syncOnlyCharging, onchange: (on) => setDevice({ syncOnlyCharging: on }) }} />
   </Group>
+  {#if sharesShow()}
+    <Group title="By account">
+      {#each kept.accounts as a (a.account)}
+        <Item name={accountName(a.account)} line={a.here ? 'Signed in here' : null} value={downloadedSize(a.bytes)}>
+          <button onclick={() => (removing = a.account)}>Remove</button>
+        </Item>
+      {/each}
+    </Group>
+  {/if}
+{/if}
+{#if removing !== null}
+  {@const a = removing}
+  <ConfirmSheet title={`Remove ${accountName(a)}'s downloads?`} label="Remove" onconfirm={() => toApp({ type: 'account-downloads-remove', account: a })} onclose={() => (removing = null)} />
 {/if}
 {#if !inApp && installed}
   <!-- The installed page's own downloads (0.9.8, lib/offline): what it holds, and in which quality (the owner,

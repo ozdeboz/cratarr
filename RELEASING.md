@@ -23,4 +23,7 @@ For maintainers. How a version is made; where and how a maintainer runs it is th
 1. What changed, for people: `docs/whats-new-X.Y.md`, from the decisions and plans it closes.
 2. The version: `scripts/version.sh X.Y.Z` (plain X.Y.Z; a fix after it is the next patch).
 3. The checks of a preview, again.
-4. The tag `vX.Y.Z` on the release branch, and the image built from it.
+4. The release on GitHub's `main` as one commit, the tag `vX.Y.Z` on that commit, and the image built from it. Only
+   that commit and that tag are pushed, the tag by its name, never with `git push --tags`, and never a tag on `trunk` or
+   a release branch: everything a tag reaches is published, the whole development history with it, and a pushed
+   history cannot be taken back.

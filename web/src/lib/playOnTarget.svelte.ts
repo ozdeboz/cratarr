@@ -13,7 +13,7 @@ import { desktop } from './desktop';
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
-import { canPlayHere, heardDeckSpeed, local, pageVolume, playOnCommand, rewindNow, sought, stop } from './localPlayer.svelte';
+import { canPlayHere, heardDeckSpeed, local, pageVolume, playOnCommand, queueTold, rewindNow, sought, stop } from './localPlayer.svelte';
 import { holdNow, ramping, tapeDir } from './ramping.svelte';
 import { measure, type Measured } from './drivenCourse';
 import { followGroup, leaveGroup, listening } from './groupListen.svelte';
@@ -260,6 +260,7 @@ async function sendReport(withQueue = false) {
             id: q.id,
             ...(describing.server ? {} : { name: q.name, artist: q.artist, album: q.album, album_id: q.album_id }),
             ...(q.lane ? { lane: q.lane } : {}),
+            ...(q.from ? { from: q.from } : {}),
           })),
         }
       : {}),
@@ -271,6 +272,7 @@ async function sendReport(withQueue = false) {
       body: JSON.stringify(body),
     });
     if (res.ok && queue) sentQueue = key;
+    if (res.ok) queueTold();
     if (asksSignIn(res)) toSignIn();
     else if (res.status === 403 || res.status === 401) refused();
     reported(res.ok, `HTTP ${res.status}`);

@@ -19,7 +19,8 @@
   import { everywhere } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import MoreInfo from './MoreInfo.svelte';
-  import { albumCoverUrl, getRecordHealth, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
+  import { albumCoverUrl, freshTrackIds, getRecordHealth, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { plural } from './insights.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -35,6 +36,7 @@
   import HealthEvents from './HealthEvents.svelte';
   import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
+  import HealthReconnect from './HealthReconnect.svelte';
   import HealthRenumber from './HealthRenumber.svelte';
   import RecordReferences from './RecordReferences.svelte';
   import { FIXABLE } from './fixes.svelte';
@@ -151,6 +153,16 @@
   const onward = (x: HealthItem) =>
     x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => viewOver(x.playlist!) } : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  /** When its domain was last checked: the time today, else its day and time. */
+  const checkedAt = (t: number) => {
+    const d = new Date(t * 1000);
+    return d.toDateString() === new Date().toDateString()
+      ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  };
+  /** A check that could not be made (the server's `<domain>:check`): what went wrong is said in the panel itself, not
+   *  only behind its (i) (the owner, 2026-11-04: it said that the library could not be checked, and nothing more). */
+  const unchecked = $derived(!!f && f.key === `${f.domain}:check`);
   const clock = (ms: number | null) => (ms ? `${Math.floor(ms / 60000)}:${String(Math.round((ms / 1000) % 60)).padStart(2, '0')}` : '');
 
   /** Tracks are looked for here: an administrator, where the server can. */
@@ -330,6 +342,26 @@
   /** The finding the problem is (a files kind's page key `files-<kind>` is its finding `files:<kind>`). */
   const findingKey = $derived(problem.startsWith('files-') ? `files:${problem.slice('files-'.length)}` : problem);
   const fixable = $derived(me.admin && FIXABLE.has(findingKey));
+  /** The track ids lost: the fresh start asked, and its report (the tables still naming old tracks, by their words). */
+  let freshAsk = $state(false);
+  let freshDone = $state<{ from: number; references: [string, number][] } | null>(null);
+  const TABLES: Record<string, string> = {
+    annotation: 'Plays, ratings and favourites',
+    plays: 'Listening history',
+    app_queue: 'Queues',
+    play_queue: 'Queues',
+    playlist_item: 'Playlist entries',
+    bookmark: 'Bookmarks',
+    scrobble_queue: 'Scrobbles waiting',
+  };
+  async function startFresh() {
+    try {
+      freshDone = await freshTrackIds();
+    } catch (e) {
+      toast.fail(e, "The track ids weren't started afresh");
+    }
+    loadHealth();
+  }
   // Every problem and Changes to files, in Health's areas, each area's most urgent first (as the page lists them).
   const parts = $derived([
     ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.name }))),
@@ -395,6 +427,8 @@
   {@const on = onward(x)}
   <div class="opened">
     {#if x.playlist}<div class="tool"><HealthMissing playlist={x.playlist} /></div>{/if}
+    <!-- A track of Missing music: what it is now, by a person's word (lib/HealthReconnect). -->
+    {#if problem === 'library:missing' && x.track}<div class="tool"><HealthReconnect track={x.track} title={x.title} ongone={gone} /></div>{/if}
     {#if incoming && x.album}<div class="tool"><HealthIncoming source={x.album[0]} album={x.album[1]} ongone={gone} /></div>{/if}
     <!-- Track numbers off (unnumbered ones too), disc numbers: renumbered as a release has them (lib/HealthRenumber). -->
     {#if RENUMBERS.has(problem) && x.album?.[0] === 'cratarr' && offers('renumber')}<div class="tool"><HealthRenumber album={x.album[1]} title={x.title} ongone={gone} /></div>{/if}
@@ -457,9 +491,14 @@
       <!-- How it stands, and what it means behind its (i). -->
       <p class="state" class:urgent={p.urgent}>
         <Icon name={p.icon} size={20} />
-        <span>{f ? LEVEL[f.level] : p.urgent ? 'Critical' : 'Warning'}{#if f?.since}<span class="muted"> · since {since(f.since)}</span>{/if}</span>
-        {#if f?.detail || p.hint}<MoreInfo label={p.name} text={(f?.detail ?? p.hint)!} />{/if}
+        <span
+          >{f ? LEVEL[f.level] : p.urgent ? 'Critical' : 'Warning'}{#if f?.since}<span class="muted"> · since {since(f.since)}</span>{/if}{#if f && health.checked[f.domain]}<span
+              class="muted"> · checked {checkedAt(health.checked[f.domain])}</span
+            >{/if}</span
+        >
+        {#if (f?.detail && !unchecked) || p.hint}<MoreInfo label={p.name} text={(f?.detail ?? p.hint)!} />{/if}
       </p>
+      {#if unchecked && f?.detail}<Notice text={f.detail} />{/if}
       <!-- How much. -->
       {#if f && f.of && !record}
         <div class="meter" role="meter" aria-valuemin="0" aria-valuemax={f.of} aria-valuenow={f.count} aria-label={p.title}>
@@ -546,7 +585,7 @@
               {:else if x.album}
                 <ReleaseRow cover={albumCoverUrl(x.album[0], x.album[1])} title={x.title} line={x.line ?? null} expanded={open} onclick={() => toggle(x)} />
               {:else}
-                <Item name={x.title} line={x.line ?? null} expanded={open} onclick={() => toggle(x)} />
+                <Item name={x.title} line={[x.line, x.since ? `since ${since(x.since)}` : null].filter(Boolean).join(' · ') || null} expanded={open} onclick={() => toggle(x)} />
               {/if}
               {#if open}{@render opened(x)}{/if}
             {/if}
@@ -556,6 +595,10 @@
       <!-- The way to deal with it. -->
       {#if f?.open}
         <Group><Item name={WHERE[f.open.page] ?? 'Open'} onclick={() => f && openFinding(f)} /></Group>
+      {/if}
+      <!-- The track ids lost (decision 0101): an administrator's fresh start, asked by sheet, its report after. -->
+      {#if f?.key === 'library:ids-lost' && me.admin}
+        <Group><Item name="Start the track ids afresh" onclick={() => (freshAsk = true)} /></Group>
       {/if}
     {/if}
     {#if elsewhere.length}
@@ -575,6 +618,24 @@
   </div>
 </div>
 
+{#if freshAsk}
+  <ConfirmSheet
+    title="Start the track ids afresh?"
+    text="Every old track id becomes missing for good: the plays, favourites, playlist entries and queues that name one show it missing. Restoring catalogue.sqlite from the nightly backup keeps them."
+    label="Start afresh"
+    onconfirm={startFresh}
+    onclose={() => (freshAsk = false)}
+  />
+{/if}
+{#if freshDone}
+  <MenuSheet label="Track ids started afresh" title="Track ids started afresh" onclose={() => (freshDone = null)}>
+    <Group>
+      {#each freshDone.references as [table, n] (table)}<Item name={TABLES[table] ?? table} value={`${n.toLocaleString()} name old tracks`} />{:else}<Item
+          name="Nothing names an old track"
+        />{/each}
+    </Group>
+  </MenuSheet>
+{/if}
 {#if coverOf}
   <AlbumMenu source="cratarr" album={{ id: coverOf.id, title: coverOf.title, artist: null }} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
 {/if}

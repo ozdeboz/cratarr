@@ -122,7 +122,7 @@ pub enum Change {
     Crate { before: Option<crate::crates::CrateDef>, after: Option<crate::crates::CrateDef> },
     /// A crate's tracks and albums left out by hand (decision 0024, amended 2026-10-19): its list before and after.
     LeftOut { crate_id: String, before: crate::crates::LeftOut, after: crate::crates::LeftOut },
-    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19): their lines before and after.
+    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19): their song ids before and after.
     Excluded { before: Vec<String>, after: Vec<String> },
     /// The conditions an account added to a fixed crate (decision 0083: Not in this crate), by its kept id: before and
     /// after.
@@ -148,6 +148,10 @@ pub struct FileRun {
     /// The files not written, and why.
     #[serde(default)]
     pub failed: Vec<RunFailed>,
+    /// The records whose `files` are what was planned, not what was written: those of a run still writing, or of one a stop
+    /// cut off, until its files have been read (`file_runs::settle`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planned: Vec<String>,
 }
 
 /// A record of a run: its album id, title and artist.
@@ -274,6 +278,8 @@ pub struct Journal {
     tell: tokio::sync::broadcast::Sender<EventId>,
     /// Events just undone, for handlers that put their work back (`subscribe_undone`).
     tell_undone: tokio::sync::broadcast::Sender<EventId>,
+    /// Runs still writing, by id (`run_writing`).
+    writing: Mutex<Vec<EventId>>,
 }
 
 impl Journal {
@@ -291,7 +297,7 @@ impl Journal {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
             }
         }
-        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0 })
+        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default() })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -490,6 +496,32 @@ impl Journal {
         Ok(())
     }
 
+    /// The kept changes as they must read after the move (`Moved::change`, Q25): what a day's Undo holds against the stores.
+    /// `events` and `file_runs` are left: an old link to a gone album finds "was deleted" by its old id, and a run's ids only
+    /// match each other. Both are in the report, as left. Blocking.
+    pub fn move_changes(&self, moved: &crate::moved::Moved) -> Result<crate::moved::Report> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let rows: Vec<(i64, String)> = tx.prepare("SELECT id, change FROM changes")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let (n, mut walk) = (rows.len() as u64, crate::moved::Walk::default());
+        for (id, text) in rows {
+            let mut change: serde_json::Value = serde_json::from_str(&text)?;
+            let was = change.clone();
+            moved.change(&mut change, &mut walk);
+            if change != was {
+                tx.execute("UPDATE changes SET change = ?2 WHERE id = ?1", params![id, change.to_string()])?;
+            }
+        }
+        let mut report = crate::moved::Report::default();
+        report.walked("journal: changes", n, walk);
+        for table in ["events", "file_runs"] {
+            let held: i64 = tx.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
+            report.table(&format!("journal: {table} (left)"), held as u64, held as u64, 0);
+        }
+        tx.commit()?;
+        Ok(report)
+    }
+
     /// Keep a run of changes to the library's files (decision 0092) of `account`'s; runs older than `keep` seconds (the
     /// trash's days) are forgotten on the way.
     pub fn record_run(&self, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
@@ -516,15 +548,36 @@ impl Journal {
         Ok(())
     }
 
-    /// The runs kept since `since` (epoch seconds), newest first: id, when, the run, whether all of it was undone.
+    /// A run kept before it wrote, and writing now: told as it goes, so `file_runs_since` leaves it out until `run_ended`.
+    /// In memory: after a restart nothing is writing, and a run cut off is listed.
+    pub fn run_writing(&self, id: EventId) {
+        self.writing.lock().unwrap_or_else(|p| p.into_inner()).push(id);
+    }
+
+    /// A run writing no more.
+    pub fn run_ended(&self, id: EventId) {
+        self.writing.lock().unwrap_or_else(|p| p.into_inner()).retain(|w| *w != id);
+    }
+
+    /// A run that came to nothing: it wrote no file and set none aside.
+    pub fn forget_run(&self, id: EventId) -> Result<()> {
+        self.db().execute("DELETE FROM file_runs WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// The runs kept since `since` (epoch seconds), newest first, those writing left out: id, when, the run, whether all of
+    /// it was undone.
     pub fn file_runs_since(&self, since: i64) -> Result<Vec<(EventId, i64, FileRun, bool)>> {
+        let writing = self.writing.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let db = self.db();
         let mut st = db.prepare_cached("SELECT id, at, run, undone_at FROM file_runs WHERE at >= ?1 ORDER BY id DESC")?;
         let rows = st.query_map([since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<i64>>(3)?)))?;
         let mut out = Vec::new();
         for row in rows {
             let (id, at, run, undone) = row?;
-            out.push((id, at, serde_json::from_str(&run)?, undone.is_some()));
+            if !writing.contains(&id) {
+                out.push((id, at, serde_json::from_str(&run)?, undone.is_some()));
+            }
         }
         Ok(out)
     }
@@ -541,6 +594,53 @@ impl Journal {
 mod change_tests {
     use super::*;
 
+    /// Q25: `changes` read as the stores will, by the same mapper, from what 0.15 kept: a left-out list's `lines`, the excluded
+    /// lines, conditions, a crate's id. `events` and `file_runs` stay, and the report says so.
+    #[test]
+    fn a_change_from_before_the_move_reads_as_the_move_left_it() {
+        use crate::crates::{Condition, LeftOut, Value};
+        let j = Journal::open(None).unwrap();
+        let like = |of: &str| serde_json::json!({ "axis": "like", "not": false, "value": { "kind": "like", "of": [of], "count": 5 } });
+        let kept = [
+            serde_json::json!({ "kind": "left_out", "crate_id": "like:al-old", "before": { "lines": [], "albums": [] }, "after": { "lines": ["A/1.flac", "Gone.flac"], "albums": ["al-old"] } }),
+            serde_json::json!({ "kind": "excluded", "before": [], "after": ["A/1.flac"] }),
+            serde_json::json!({ "kind": "crate", "before": null, "after": { "id": "c1", "name": "One", "conditions": [like("al-old")] } }),
+            serde_json::json!({ "kind": "added", "crate_id": "like:al-old@50", "before": [], "after": [like("ar-old")] }),
+            serde_json::json!({ "kind": "renamed", "from": "al-old", "to": "b" }),
+        ];
+        let ids: Vec<i64> = kept
+            .iter()
+            .map(|c| {
+                let db = j.db();
+                db.execute("INSERT INTO changes (at, change) VALUES (1, ?1)", [c.to_string()]).unwrap();
+                db.last_insert_rowid()
+            })
+            .collect();
+        j.db().execute("INSERT INTO events (at, event) VALUES (1, '{}')", []).unwrap();
+        let moved = crate::moved::Moved {
+            ids: [("al-old", "al-7"), ("ar-old", "ar-3")].map(|(a, b)| (a.to_string(), b.to_string())).into(),
+            lines: [("A/1.flac".to_string(), "tr-1".to_string())].into(),
+        };
+        let report = j.move_changes(&moved).unwrap();
+        let change = |n: usize| j.change(ids[n]).unwrap().unwrap().0;
+        assert_eq!(
+            change(0),
+            Change::LeftOut { crate_id: "like:al-7".into(), before: LeftOut::default(), after: LeftOut { tracks: vec!["tr-1".into(), "Gone.flac".into()], albums: vec!["al-7".into()] } }
+        );
+        assert_eq!(change(1), Change::Excluded { before: Vec::new(), after: vec!["tr-1".to_string()] });
+        let seeds = |c: &[Condition]| crate::crates::named_ids(c);
+        assert!(matches!(change(2), Change::Crate { after: Some(def), .. } if seeds(&def.conditions) == ["al-7"]));
+        assert!(matches!(change(3), Change::Added { crate_id, after, .. } if crate_id == "like:al-7@50" && seeds(&after) == ["ar-3"]));
+        assert_eq!(change(4), Change::Renamed { from: "al-old".into(), to: "b".into() }, "a playlist's name is no id");
+        assert!(matches!(&change(2), Change::Crate { after: Some(def), .. } if matches!(def.conditions[0].value, Value::Like { .. })));
+        let row = |name: &str| report.table_named(name).map(|t| (t.before, t.after, t.moved));
+        assert_eq!(row("journal: changes"), Some((5, 5, 7)));
+        assert_eq!((row("journal: events (left)"), row("journal: file_runs (left)")), (Some((1, 1, 0)), Some((0, 0, 0))));
+        assert_eq!(report.unmatched_count(), 1, "the line no track holds");
+        let again = j.move_changes(&moved).unwrap();
+        assert_eq!(again.table_named("journal: changes").unwrap().moved, 0, "safe to repeat");
+    }
+
     #[test]
     fn a_file_run_is_kept_while_the_trash_keeps_and_undone_once() {
         let j = Journal::open(None).unwrap();
@@ -554,7 +654,7 @@ mod change_tests {
             undone: false, whole: None,
         };
         let record = RunRecord { album: "al-1".into(), title: "Skylon".into(), artist: "Ott".into() };
-        let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new() };
+        let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new(), planned: Vec::new() };
         let old = j.record_run(1_000, &run, None, 100).unwrap();
         let id = j.record_run(2_000, &run, Some("ann"), 100).unwrap();
         assert_eq!(j.file_run(old).unwrap(), None, "older than the trash keeps: forgotten");

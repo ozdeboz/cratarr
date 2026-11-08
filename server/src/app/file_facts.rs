@@ -131,19 +131,21 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
         let db = serve.library.db();
         let mut st = db.prepare(
             "SELECT a.id, a.name, a.artist, a.release_type, a.secondary, a.type_from, a.type_why, a.year, a.set_fields,
-               s.folder, s.rel, s.title
-             FROM albums a JOIN songs s ON s.album_id = a.id ORDER BY a.n, s.disc_no, s.track_no, s.rel",
+               c.folder, c.rel, s.title
+             FROM albums a JOIN copy_files c ON c.album = a.id LEFT JOIN songs s ON s.id = c.song ORDER BY a.n, s.id IS NULL, s.disc_no, s.track_no, c.rel",
         )?;
         let rows = st.query_map([], |r| {
             Ok((
                 (r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?),
                 (r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?),
                 (r.get::<_, Option<i64>>(7)?, r.get::<_, String>(8)?),
-                (r.get::<_, i64>(9)?, r.get::<_, String>(10)?, r.get::<_, String>(11)?),
+                (r.get::<_, i64>(9)?, r.get::<_, String>(10)?, r.get::<_, Option<String>>(11)?),
             ))
         })?;
         for row in rows {
-            let ((id, title, artist), (kind, secondary, from, why), (year, set), file) = row?;
+            let ((id, title, artist), (kind, secondary, from, why), (year, set), (folder, rel, track)) = row?;
+            // A copy with tracks of its own has no `songs` row, and is written all the same: the record's facts are its too.
+            let file = (folder, rel.clone(), track.unwrap_or_else(|| super::renumber::file_name(&rel)));
             if albums.is_some_and(|a| !a.contains(&id)) {
                 continue;
             }
@@ -166,7 +168,7 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
     for (h, files) in held {
         let mut any = false;
         for (folder, rel, track) in files {
-            let Some(root) = usize::try_from(folder).ok().and_then(|i| roots.get(i)) else { continue };
+            let Some(root) = roots.get(folder) else { continue };
             let (before, after, from) = track_plan(&h, values.get(&(folder, rel.clone())).unwrap_or(&none));
             if !after.is_empty() {
                 any = true;
@@ -285,6 +287,33 @@ mod tests {
         // Not classical: its genres untouched, a "Classical" there kept.
         let (_, a, _) = track_plan(&held(&[], None, false, false), &has(&[("genre", &["Classical"])]));
         assert!(a.is_empty());
+    }
+
+    /// A record's files are every file it is served from: `songs` holds one per track, and a fact is written to each.
+    #[test]
+    fn a_plan_reaches_a_file_with_no_row_in_songs() {
+        let dir = std::env::temp_dir().join(format!("cratarr-file-facts-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("A")).unwrap();
+        std::fs::write(dir.join("A/1.mp3"), b"x").unwrap();
+        let cat = std::sync::Arc::new(crate::catalogue::Catalogue::open(None, vec![dir.clone()]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(cat);
+        serve.refresh().unwrap();
+        serve
+            .library
+            .db()
+            .execute_batch(
+                "INSERT INTO copy_files SELECT folder, 'B/1.mp3', 'B', song, album, src, size, suffix, kbps, duration_ms, bpm,
+                   rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak FROM copy_files",
+            )
+            .unwrap();
+        let mut paths: Vec<std::path::PathBuf> = proposal(&serve, None).unwrap().files.into_iter().map(|f| f.path).collect();
+        paths.sort();
+        assert_eq!(paths, [dir.join("A/1.mp3"), dir.join("B/1.mp3")]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -54,8 +54,9 @@
      *  LEVEL_WAIT_MS), so the waveform never shows the guess and then the level (the owner, 2026-10-28). */
     heardKnown?: boolean;
     /** A stretch of the track shown (0..1, `from` to `to`), its bars remapped onto the same pieces: a hold's zoom on the
-     *  playhead (lib/SeekWave). Its goal reaches every piece at once (the owner, 2026-10-28: a non-staggered goal). */
-    view?: { from: number; to: number } | null;
+     *  playhead (lib/SeekWave). Its goal reaches every piece at once (the owner, 2026-10-28: a non-staggered goal).
+     *  `held`: its hold still held, the bars going by the zoom alone (let go, they come into line with the track's). */
+    view?: { from: number; to: number; held?: boolean } | null;
     /** Difference (Level the volume › Waveform): the heard part ahead of the playhead in its own tint, between the
      *  paused playing colour and the rest (the owner, 2026-10-28). */
     ahead?: boolean;
@@ -72,8 +73,8 @@
     /** The tracks around this one (lib/SeekWave's wide view: a hold's look-ahead in another track), each with its own
      *  bins (lib/waveStrip), the stretch shown (`from`..`to`), this track's place in it (`cur0`..`cur1`) and the
      *  boundaries between them (`marks`), all in s of the hold's frame; each track's colour (`colours`, by its place in
-     *  `tracks`). Places given in this track are drawn where it stands. */
-    wide?: { tracks: StripTrack[]; from: number; to: number; cur0: number; cur1: number; marks: number[]; colours?: (string | null)[] } | null;
+     *  `tracks`). Places given in this track are drawn where it stands. `held`: as `view`'s. */
+    wide?: { tracks: StripTrack[]; from: number; to: number; cur0: number; cur1: number; marks: number[]; colours?: (string | null)[]; held?: boolean } | null;
     onflat?: () => void;
   } = $props();
 
@@ -158,14 +159,15 @@
   // track against its own loudest, the level as heard kept from the hold's start (each track's own came in as the tape
   // reached it and rescaled them all), drawn in place (never a strip swapped for another, nor one shown blank).
   /** The stretch shown, in its frame: a track's share of itself (a zoom), or s of the hold's frame through the queue (a
-   *  wide view); the tracks in it, and the playing track's own view there (`home`: its grid the zoom comes back to). */
+   *  wide view); the tracks in it, and once let go the playing track's own view there (`home`: its grid the zoom comes
+   *  back to). */
   const stretch = $derived(
     want !== 'wave'
       ? null
       : wide
-        ? { tracks: wide.tracks, from: wide.from, to: wide.to, marks: wide.marks, home: { from: wide.cur0, to: wide.cur1 } }
+        ? { tracks: wide.tracks, from: wide.from, to: wide.to, marks: wide.marks, home: wide.held ? null : { from: wide.cur0, to: wide.cur1 } }
         : bins && view
-          ? { tracks: [{ key: '', start: 0, d: 1, bins }], from: view.from, to: view.to, marks: [] as number[], home: { from: 0, to: 1 } }
+          ? { tracks: [{ key: '', start: 0, d: 1, bins }], from: view.from, to: view.to, marks: [] as number[], home: view.held ? null : { from: 0, to: 1 } }
           : null,
   );
   /** A strip as drawn (lib/waveStrip's GridStrip): what it was drawn from (`src`), its paths as made and as heard (at
@@ -176,6 +178,8 @@
   let shownStrip = $state<Strip | null>(null);
   /** The level as heard while a hold's strips show: the one it began with (null: none showing). */
   let holdLevel: number | null = null;
+  /** The stretch shown a frame ago: how it moved says what the zoom goes about (lib/waveStrip's steadyAt). */
+  let wasShown: { from: number; to: number } | null = null;
   let strips = 0;
   /** A strip's piece, open and risen to its height (the plain draw's at gap 1), at `level`. */
   const piece = (i: number, rise: number, level: number) => {
@@ -213,11 +217,13 @@
         // the strip since it began, on the track it began on).
         if (shownStrip) settlePlain(holdLevel ?? level);
         holdLevel = null;
+        wasShown = null;
         shownStrip = null;
         return;
       }
       holdLevel ??= level;
-      const plan = planStrip(shownStrip, s.tracks, s.from, s.to, pieces, s.home);
+      const plan = planStrip(shownStrip, s.tracks, s.from, s.to, pieces, s.home, wasShown);
+      wasShown = { from: s.from, to: s.to };
       if (plan !== shownStrip) shownStrip = drawStrip(plan, s.tracks, s.marks, holdLevel!);
     });
   });

@@ -41,11 +41,25 @@ pub fn range(header: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
     Ok(Some((first, last)))
 }
 
+/// A file's validator: its time and size, and which file it is. One address can come to mean another file, as a track's file
+/// is whichever copy plays for the asker now: a copy named, a library switched off or a copy deleted mid-track. A seek must not then
+/// get the other file's bytes for the same place.
+fn validator(path: &Path, modified: std::time::SystemTime, len: u64) -> String {
+    let time = crate::covers::etag(modified, len);
+    format!("\"{:08x}-{}", crate::opus_copy::crc32(path.to_string_lossy().as_bytes()), &time[1..])
+}
+
+/// Whether a range may be answered: with `If-Range` only for the file it names. An `If-Range` by date cannot say which
+/// file, so it counts as another.
+fn range_stands(headers: &HeaderMap, etag: &str) -> bool {
+    headers.get(header::IF_RANGE).is_none_or(|asked| asked.to_str().is_ok_and(|a| a.trim() == etag))
+}
+
 pub async fn serve_file(path: &Path, headers: &HeaderMap, download: bool) -> Response {
     let Ok(meta) = tokio::fs::metadata(path).await else { return StatusCode::NOT_FOUND.into_response() };
     let len = meta.len();
     let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-    let etag = crate::covers::etag(modified, len);
+    let etag = validator(path, modified, len);
     let suffix = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let mut out = HeaderMap::new();
     out.insert(header::CONTENT_TYPE, HeaderValue::from_static(super::api::content_type(suffix)));
@@ -59,7 +73,7 @@ pub async fn serve_file(path: &Path, headers: &HeaderMap, download: bool) -> Res
             out.insert(header::CONTENT_DISPOSITION, v);
         }
     }
-    let wanted = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let wanted = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).filter(|_| range_stands(headers, &etag));
     let (status, first, last) = match range(wanted, len) {
         Ok(Some((a, b))) => {
             if let Ok(v) = HeaderValue::from_str(&format!("bytes {a}-{b}/{len}")) {
@@ -119,6 +133,35 @@ mod tests {
         assert_eq!(range(Some("bytes=100-"), 100), Err(()), "past the end");
         assert_eq!(range(Some("bytes=5-2"), 100), Err(()));
         assert_eq!(range(Some("bytes=0-1,5-6"), 100), Ok(None), "several: the whole file");
+    }
+
+    /// A player seeks with the validator of the file it began. If that address now means another copy, the two can agree in
+    /// size and time, and a range of the other file would splice two recordings in one track: it gets the whole new file.
+    #[tokio::test]
+    async fn a_seek_never_gets_another_files_bytes() {
+        let dir = std::env::temp_dir().join(format!("cratarr-files-seek-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (one, other) = (dir.join("one.mp3"), dir.join("other.mp3"));
+        std::fs::write(&one, [1u8; 100]).unwrap();
+        std::fs::write(&other, [2u8; 100]).unwrap();
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        for f in [&one, &other] {
+            std::fs::File::options().write(true).open(f).unwrap().set_modified(time).unwrap();
+        }
+        let tag = |r: &Response| r.headers()[header::ETAG].to_str().unwrap().to_string();
+        let began = tag(&serve_file(&one, &HeaderMap::new(), false).await);
+        assert_ne!(began, tag(&serve_file(&other, &HeaderMap::new(), false).await), "one size, one time, two files");
+
+        let mut seek = HeaderMap::new();
+        seek.insert(header::RANGE, HeaderValue::from_static("bytes=10-19"));
+        seek.insert(header::IF_RANGE, HeaderValue::from_str(&began).unwrap());
+        assert_eq!(serve_file(&one, &seek, false).await.status(), StatusCode::PARTIAL_CONTENT, "the same file: the range");
+        let moved = serve_file(&other, &seek, false).await;
+        assert_eq!(moved.status(), StatusCode::OK, "another file: all of it, from its start");
+        assert_eq!(axum::body::to_bytes(moved.into_body(), 1000).await.unwrap().to_vec(), [2u8; 100]);
+        seek.insert(header::IF_RANGE, HeaderValue::from_static("Wed, 21 Oct 2015 07:28:00 GMT"));
+        assert_eq!(serve_file(&one, &seek, false).await.status(), StatusCode::OK, "a date cannot say which file");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

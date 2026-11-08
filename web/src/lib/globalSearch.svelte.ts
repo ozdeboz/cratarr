@@ -5,6 +5,7 @@
 import { hiddenLibraries } from './listFilter.svelte';
 import { ownMode } from './serverMode.svelte';
 import { search, searchBeyond, type BeyondAlbum, type SearchKind, type ServerSearch } from './api';
+import { whenReadsMove } from './deviceIndex.svelte';
 import { pageView } from './pageView.svelte';
 import { isSpotifyView } from './discoverModes';
 import { prefs } from './prefs.svelte';
@@ -99,6 +100,13 @@ const beyondKept = new Map<string, BeyondAlbum[]>();
  *  a search, everywhere's results came back only after a while): back shows them at once, asked again behind them. */
 const foundKept = new Map<string, ServerSearch>();
 const allKept = new Map<string, NonNullable<typeof globalSearch.allFound>>();
+
+// What was found came from the other place, or failed on the way: asked of this one. Show all's is its kind's, kept under its words.
+whenReadsMove.add(() => {
+  foundKept.clear();
+  allKept.clear();
+  globalSearch.again++;
+});
 
 $effect.root(() => {
   // Asked a moment after the words stop changing; nothing for no words. No words: back to the page's own.

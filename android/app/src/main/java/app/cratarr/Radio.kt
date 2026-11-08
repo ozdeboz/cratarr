@@ -5,8 +5,10 @@
  *   right after it and its run of tracks added by hand, in the "radio" lane; off drops those not yet played.
  * - Autoplay appends: when fewer than three tracks are left ahead, the next five by its mode (lane "autoplay"). Stop
  *   drops those not yet played. (Its Restart, the queue's own tracks again, is no more: the owner, 2026-10-24.)
- * Cratarr's scorer chooses (`POST /api/radio/next`); without a connection, this device's downloads (the playing and seed
- * artists first). Autoplay and repeat all exclude each other; radio lives with both.
+ * Cratarr's scorer chooses (`POST /api/radio/next`); without a connection this device answers for itself, by the same rules, among
+ * what plays here ([DeviceAnswers]), with no notice of what cannot. With nothing kept to answer from, its downloads. When to ask and
+ * where what comes goes are the rules crate's too: Kotlin holds no decisions. Autoplay and repeat all exclude each other; radio lives
+ * with both.
  */
 package app.cratarr
 
@@ -16,9 +18,24 @@ import android.os.Looper
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import app.cratarr.rules.KeptPick
+import app.cratarr.rules.QueueLane
+import app.cratarr.rules.autoplayBatch
+import app.cratarr.rules.autoplayDue
+import app.cratarr.rules.picksFromKept
+import app.cratarr.rules.radioPlace
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executors
+import kotlin.random.Random
+
+/** A queue's lanes as the rules crate names them. */
+internal fun laneOf(track: JSONObject?): QueueLane = when (track?.optString("lane")) {
+    "next" -> QueueLane.NEXT
+    "radio" -> QueueLane.RADIO
+    "autoplay" -> QueueLane.AUTOPLAY
+    else -> QueueLane.OWN
+}
 
 /** What both ask of Cratarr, and how they choose without it. */
 private object Scorer {
@@ -44,18 +61,28 @@ private object Scorer {
         null
     }
 
-    /** Without a connection: from the downloads not in the queue, `artists` first (`any`: in any order), at most `count`,
-     *  in `lane`. */
-    fun offline(context: Context, queue: List<JSONObject>, artists: Set<String>, any: Boolean, count: Int, lane: String): JSONArray {
-        val inQueue = queue.map { "${it.optString("source")}/${it.optString("id")}" }.toSet()
+    /** Cratarr's own library, the one a device holds. */
+    private const val CRATARR = "cratarr"
+
+    private fun keyOf(track: JSONObject) = "${track.optString("source")}/${track.optString("id")}"
+
+    /** Without a connection: what this device answers for `ask` among what plays here; with nothing kept to answer from, of the downloads
+     *  not in the queue, `artists` first (`any`: in any order), at most `count`, in `lane`. No rules library: nothing. */
+    fun offline(context: Context, ask: JSONObject, queue: List<JSONObject>, artists: Set<String>, any: Boolean, count: Int, lane: String): JSONArray {
         val downloaded = Downloads.list(context).optJSONArray("tracks") ?: JSONArray()
-        val candidates = (0 until downloaded.length())
+        val kept = (0 until downloaded.length())
             .mapNotNull { downloaded.optJSONObject(it) }
             .filter { it.optJSONObject("download")?.optString("state") == "done" }
-            .filter { "${it.optString("source")}/${it.optString("id")}" !in inQueue }
-            .shuffled()
-        val ordered = if (any) candidates else candidates.sortedBy { if (it.optString("artist") in artists) 0 else 1 }
-        return JSONArray(ordered.take(count).map { JSONObject(it.toString()).apply { remove("download"); remove("added"); remove("entry"); remove("n"); remove("asked_by"); put("lane", lane) } })
+        return try {
+            val here = kept.filter { it.optString("source") == CRATARR }.map { it.optString("id") }
+            DeviceAnswers.pick(context, ask, here) ?: run {
+                val picks = picksFromKept(kept.map { KeptPick(keyOf(it), it.optString("artist").ifEmpty { null }) }, queue.map(::keyOf), artists.toList(), any, count.toUInt(), Random.nextLong(Long.MAX_VALUE shr 11).toULong())
+                JSONArray(picks.map { JSONObject(kept[it.toInt()].toString()).apply { remove("download"); remove("added"); remove("entry"); remove("n"); remove("asked_by"); put("lane", lane) } })
+            }
+        } catch (e: LinkageError) {
+            Log.w(TAG, "radio: no rules library: $e")
+            JSONArray()
+        }
     }
 
     fun tracksOf(player: Player) = (0 until player.mediaItemCount).mapNotNull { trackOf(player.getMediaItemAt(it)) }
@@ -154,7 +181,6 @@ object Radio {
         val count = player.mediaItemCount
         if (c < 0 || c >= count) return
         val playing = trackOf(player.getMediaItemAt(c)) ?: return
-        if (playing.optString("lane").isNotEmpty()) return
         val key = playing.optString("entry").ifEmpty { "$c" }
         if (asking == key || placeFor(player) == null) return
         val queue = Scorer.tracksOf(player)
@@ -175,7 +201,7 @@ object Radio {
             val got = if (mix != null) {
                 Servers.mix(app, mix, playing.optString("id"), n, queue.map { it.optString("id") }.toSet(), LANE)
             } else {
-                server?.let { Scorer.ask(app, it, ask) } ?: Scorer.offline(app, queue, artists, false, n, LANE)
+                server?.let { Scorer.ask(app, it, ask) } ?: Scorer.offline(app, ask, queue, artists, false, n, LANE)
             }
             Scorer.main.post {
                 if (asking == key) asking = null
@@ -189,19 +215,16 @@ object Radio {
         }
     }
 
-    /** Where the playing track's inserts go: after it and its run of tracks added by hand; null when they are there. */
-    private fun placeFor(player: Player): Int? {
-        val count = player.mediaItemCount
-        var at = player.currentMediaItemIndex + 1
-        while (at < count && trackOf(player.getMediaItemAt(at))?.optString("lane") == "next") at++
-        return if (at < count && trackOf(player.getMediaItemAt(at))?.optString("lane") == LANE) null else at
+    /** Where the playing track's inserts go; null where none do. */
+    private fun placeFor(player: Player): Int? = try {
+        radioPlace((0 until player.mediaItemCount).map { laneOf(trackOf(player.getMediaItemAt(it))) }, player.currentMediaItemIndex.toUInt())?.toInt()
+    } catch (e: LinkageError) {
+        null
     }
 }
 
 object Autoplay {
     const val LANE = "autoplay"
-    private const val BATCH = 5
-    private const val LOW = 3
 
     /** On with its mode (similar, artist, era, random, taste), whole albums, restarting playlists, its seed (empty: the
      *  queue's own tracks) and what it stays inside (decision 0094: the server's `{kind, …}`, kept as its JSON text);
@@ -269,7 +292,13 @@ object Autoplay {
         val mix = mode.takeIf { it.startsWith(Servers.MODE_PREFIX) }
         val count = player.mediaItemCount
         val c = player.currentMediaItemIndex
-        if (filling || count == 0 || count - c - 1 >= LOW) return
+        if (filling || c < 0) return
+        val batch = try {
+            if (!autoplayDue(count.toUInt(), c.toUInt())) return
+            autoplayBatch().toInt()
+        } catch (e: LinkageError) {
+            return
+        }
         val queue = Scorer.tracksOf(player)
         val own = queue.filter { it.optString("lane").isEmpty() }
         val playing = queue.getOrNull(c)
@@ -282,8 +311,9 @@ object Autoplay {
             .put("within", a.within?.let { JSONObject(it) } ?: JSONObject.NULL)
             .put("exclude", JSONArray(queue.map { it.optString("id") }))
             .put("last", playing?.optString("id") ?: JSONObject.NULL)
-            .put("count", BATCH)
+            .put("count", batch)
         val app = context.applicationContext
+        val who = Who.current(app)
         filling = true
         Scorer.asks.execute {
             val artists = buildSet {
@@ -292,12 +322,14 @@ object Autoplay {
             }
             val got = if (mix != null) {
                 val from = playing?.optString("id")?.ifEmpty { null } ?: own.lastOrNull()?.optString("id")
-                from?.let { Servers.mix(app, mix, it, BATCH, queue.map { t -> t.optString("id") }.toSet(), LANE) } ?: JSONArray()
+                from?.let { Servers.mix(app, mix, it, batch, queue.map { t -> t.optString("id") }.toSet(), LANE) } ?: JSONArray()
             } else {
-                server?.let { Scorer.ask(app, it, ask) } ?: Scorer.offline(app, queue, artists, a.mode == "random", BATCH, LANE)
+                server?.let { Scorer.ask(app, it, ask) } ?: Scorer.offline(app, ask, queue, artists, a.mode == "random", batch, LANE)
             }
             Scorer.main.post {
                 filling = false
+                // Asked for another's queue: its own account's asks for itself.
+                if (Who.current(app) != who) return@post
                 // Off meanwhile, or asked before favourites were ignored (or no longer): what came is not wanted.
                 if (get(app) == null || SkipFavourites.on(app) != skip || got.length() == 0) {
                     if (SkipFavourites.on(app) != skip) fill(app, player, server, locate)

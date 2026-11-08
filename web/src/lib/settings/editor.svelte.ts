@@ -21,6 +21,7 @@ import {
   type ImportSource,
   type ImportWhat,
   type Kind,
+  type LibrarySetting,
   type LibraryUse,
   type LidarrView,
   type NamingView,
@@ -58,8 +59,8 @@ export const count = (n: number) => n.toLocaleString();
 export const downloadedSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
 export const since = (epoch: number) => new Date(epoch * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-export const USES: { id: LibraryUse; label: string }[] = [
-  { id: 'music', label: 'Music' },
+export const USES: { id: Exclude<LibraryUse, 'own'>; label: string }[] = [
+  { id: 'main', label: 'Main library' },
   { id: 'incoming', label: 'Incoming' },
   { id: 'unused', label: 'Not used' },
 ];
@@ -143,7 +144,7 @@ class SettingsEditor {
   /** The saved key is only reused for the same address. */
   lidarrKeyNeeded = $derived(!!this.s?.lidarr?.key_set && this.lid.url.trim().replace(/\/+$/, '') !== this.s.lidarr.url && this.lid.url.trim() !== '');
   /** Lidarr only matters to Incoming. */
-  showLidarr = $derived(!!this.s?.lidarr || this.drafts.some((d) => d.enabled && d.libraries.incoming.length > 0));
+  showLidarr = $derived(!!this.s?.lidarr || this.drafts.some((d) => d.enabled && d.libraries.some((l) => l.kind === 'incoming')));
   /** The colours to choose from (none from a server before it sent them: only the system's picker then). */
   palette = $derived(this.s?.palette ?? []);
 
@@ -342,19 +343,40 @@ class SettingsEditor {
   kindOf = (d: { kind: string }): Kind | undefined => this.s?.kinds.find((k) => k.id === d.kind);
   saved = (d: Draft) => this.s?.sources.find((v) => v.id === d.id && v.kind === d.kind);
 
-  /** What is sent: blank secrets are left out, so the saved ones are kept (where the server allows). */
+  /** What is sent: blank secrets are left out, so the saved ones are kept (where the server allows). The libraries in
+   *  the order Libraries lists them (the owner, 2026-11-04: lean on that order), so the first main library there takes
+   *  every fallback. */
   payload = (d: Draft): SourceConfig => {
     const values = { ...d.values };
     for (const [k, v] of Object.entries(d.secrets)) if (v.trim()) values[k] = v.trim();
-    return { id: d.id, kind: d.kind, enabled: d.enabled, libraries: clone(d.libraries), values };
+    const order = this.libraryOrder(d);
+    const at = (id: string) => (order.indexOf(id) < 0 ? order.length : order.indexOf(id));
+    const libraries = clone(d.libraries).sort((x, y) => at(x.id) - at(y.id));
+    return { id: d.id, kind: d.kind, enabled: d.enabled, libraries, values };
   };
 
-  useOf = (d: Draft, id: string): LibraryUse => (d.libraries.music.includes(id) ? 'music' : d.libraries.incoming.includes(id) ? 'incoming' : 'unused');
+  /** A server's libraries in the order Libraries lists them: Cratarr's own folders as chosen (decision 0044), another
+   *  server's as it has them. */
+  libraryOrder = (d: Draft): string[] =>
+    d.kind === 'cratarr' && Array.isArray(d.values.folders) ? (d.values.folders as string[]) : (d.view?.server_libraries.map((l) => l.id) ?? []);
 
-  setUse = (d: Draft, id: string, use: LibraryUse) => {
-    d.libraries.music = d.libraries.music.filter((x) => x !== id);
-    d.libraries.incoming = d.libraries.incoming.filter((x) => x !== id);
-    if (use !== 'unused') d.libraries[use].push(id);
+  useOf = (d: Draft, id: string): Exclude<LibraryUse, 'own'> => d.libraries.find((l) => l.id === id)?.kind ?? 'unused';
+
+  /** A library's settings while it is not used, for this visit: switched on again, it has them back. */
+  private setAside = new Map<string, LibrarySetting>();
+  setUse = (d: Draft, id: string, use: Exclude<LibraryUse, 'own'>) => {
+    const was = d.libraries.find((l) => l.id === id);
+    if (use === 'unused') {
+      if (was) this.setAside.set(`${d.id}/${id}`, was);
+      d.libraries = d.libraries.filter((l) => l.id !== id);
+    } else if (was) was.kind = use;
+    else d.libraries.push({ ...this.setAside.get(`${d.id}/${id}`), id, kind: use });
+    // A fetcher and Add to's default are an Incoming library's, and Add to's default is a main library.
+    const mains = d.libraries.filter((l) => l.kind === 'main').map((l) => l.id);
+    for (const l of d.libraries) {
+      if (l.kind === 'main') l.fetcher = l.keep_to = null;
+      else if (l.keep_to && !mains.includes(l.keep_to)) l.keep_to = null;
+    }
   };
 
   // A used library's own settings (decision 0034): its quality limit (the owner, 2026-11-02: only lossless files above
@@ -367,11 +389,14 @@ class SettingsEditor {
     name: null as string | null,
     /** An Incoming library's fetcher (decision 0099's amendment): whose records come into it; none: nobody's. */
     fetcher: null as Fetcher | null,
+    /** An Incoming library's Add to by default (0101 point 2): a main library; none: the first. */
+    keep_to: null as string | null,
     ...d.view?.policies?.[id],
-    ...d.libraries.policies?.[id],
+    ...Object.fromEntries(Object.entries(d.libraries.find((l) => l.id === id) ?? {}).filter(([k, v]) => k !== 'id' && k !== 'kind' && v !== undefined)),
   });
-  setPolicy = (d: Draft, id: string, change: { quality?: Quality; colour?: string; name?: string | null; fetcher?: Fetcher | null }) => {
-    d.libraries.policies = { ...(d.libraries.policies ?? {}), [id]: { ...this.policyOf(d, id), ...change } };
+  setPolicy = (d: Draft, id: string, change: { quality?: Quality; colour?: string; name?: string | null; fetcher?: Fetcher | null; keep_to?: string | null }) => {
+    const l = d.libraries.find((x) => x.id === id);
+    if (l) Object.assign(l, change);
   };
 
   checkLidarr = async () => {
@@ -426,7 +451,7 @@ class SettingsEditor {
     if (!k) return;
     let id = k.id;
     for (let n = 2; this.drafts.some((d) => d.id === id); n++) id = `${k.id}-${n}`;
-    this.drafts.push({ id, kind: k.id, enabled: true, libraries: { music: [], incoming: [] }, values: {}, secrets: {}, view: null, busy: false });
+    this.drafts.push({ id, kind: k.id, enabled: true, libraries: [], values: {}, secrets: {}, view: null, busy: false });
   };
 
   save = async () => {

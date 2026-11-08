@@ -1,6 +1,8 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
+import { untrack } from 'svelte';
 import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
+import { whenReadsMove } from './deviceIndex.svelte';
 import { noteChange } from './lastChange.svelte';
 import { port } from './player/port.svelte';
 import { dropFromQueue, local } from './localPlayer.svelte';
@@ -15,6 +17,9 @@ import { withUndo } from './undo.svelte';
 
 export const crates = $state<{ list: Crate[] | null; error: string | null }>({ list: null, error: null });
 
+// What a page showed came from the other place.
+whenReadsMove.add(() => void (crates.list && loadCrates()));
+
 export async function loadCrates() {
   try {
     const list = await getCrates(prefs.source || undefined, hiddenLibraries());
@@ -25,17 +30,16 @@ export async function loadCrates() {
       ...(c.id in pendingAlbums ? { favourite_albums: pendingAlbums[c.id] } : {}),
     }));
     crates.error = null;
-    await moveBrowserSettings(list);
   } catch (e) {
     crates.error = e instanceof Error ? e.message : 'Unexpected error';
   }
 }
 
 // The favourites toggle, one setting per crate, kept on the server (decision 0024, amended): a crate not set yet
-// shows no favourites. A tap shows at once; the setting follows to the server.
+// takes them all (the owner, 2026-11-07). A tap shows at once; the setting follows to the server.
 const pending: Record<string, CrateFavourites> = {};
 let saving: Promise<unknown> = Promise.resolve();
-export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? (wordOf(id) !== null ? 'all' : 'none');
+export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? 'all';
 /** Resolves when every tap so far (on either toggle) is on the server (Make playlist reads the settings there). */
 export const favouritesSaved = () => saving;
 /** How each setting shows, on the panel's toggle and the Crates page's rows: a variation on the heart. */
@@ -122,30 +126,6 @@ function saved(to: CrateFavourites, shown: Record<CrateFavourites, { label: stri
   withUndo(`${shown[to].label}.`, [undo], { after: () => loadCrates() });
 }
 
-// Before the setting was the server's (2026-10-14), each browser kept its own: sent once, then forgotten here.
-const OLD_KEY = 'cratarr-crate-favourites';
-async function moveBrowserSettings(list: Crate[]) {
-  let read: unknown = null;
-  try {
-    read = JSON.parse(localStorage.getItem(OLD_KEY) ?? 'null');
-    localStorage.removeItem(OLD_KEY);
-  } catch {
-    return;
-  }
-  if (!read || typeof read !== 'object') return;
-  const old = read as Record<string, CrateFavourites>;
-  const moved = list.filter((c) => old[c.id] && old[c.id] !== c.favourites);
-  for (const c of moved) {
-    try {
-      await setCrateFavourites(c.id, old[c.id]);
-      const shown = crates.list?.find((x) => x.id === c.id);
-      if (shown && !(c.id in pending)) shown.favourites = old[c.id];
-    } catch {
-      /* the server's setting stays */
-    }
-  }
-}
-
 /** A crate's id in the panel's address (`?view=crate:unlisted`), and back. */
 export const CRATE = 'crate:';
 export const crateOf = (viewed: string | null) => (viewed?.startsWith(CRATE) ? viewed.slice(CRATE.length) : null);
@@ -157,8 +137,8 @@ export const EDIT_CRATE = 'crate-edit:';
 export const builderOf = (viewed: string | null): { id: string | null } | null =>
   viewed === NEW_CRATE ? { id: null } : viewed?.startsWith(EDIT_CRATE) ? { id: viewed.slice(EDIT_CRATE.length) } : null;
 
-/** A crate being made or changed, kept in this browser under its own address until Save or Cancel (it survives the
- *  player over it, a page change and a reload). */
+/** A crate being made or changed, kept under its own address until Save or Cancel (it survives the player over it, a
+ *  page change and a reload), on the account with the other preferences (lib/accountPrefs). */
 /** `names`: the server's for the ids its conditions hold (0.13, decision 0088). A crate grabbed (0.13, lib/quickCrates):
  *  `sentence` its terms as they were read, `words` words still to read into it. */
 export type CrateDraft = {
@@ -168,28 +148,22 @@ export type CrateDraft = {
   sentence?: { chips: import('./quickCrate').Chip[]; min: number; modes: import('./quickCrate').Modes };
   words?: string;
 };
-const draftKey = (id: string | null) => `cratarr-crate-draft:${id ?? 'new'}`;
+const draftKey = (id: string | null) => id ?? 'new';
+// Each account's own, as the rest of its preferences here (lib/prefs' PERSONAL, decision 0101), hidden while another is
+// signed in. The builder reads and keeps its draft inside its effects: untracked, as a draft kept, here or from the
+// account, is no reason to start the builder over or to keep it again.
 export function keptDraft(id: string | null): CrateDraft | null {
-  try {
-    const kept = JSON.parse(localStorage.getItem(draftKey(id)) ?? 'null');
-    return kept && Array.isArray(kept.conditions) ? kept : null;
-  } catch {
-    return null;
-  }
+  const kept = untrack(() => prefs.crateDrafts[draftKey(id)]);
+  return kept ? $state.snapshot(kept) : null;
 }
 export function keepDraft(id: string | null, draft: CrateDraft) {
-  try {
-    localStorage.setItem(draftKey(id), JSON.stringify(draft));
-  } catch {
-    /* not kept */
-  }
+  untrack(() => (prefs.crateDrafts = { ...prefs.crateDrafts, [draftKey(id)]: draft }));
 }
 export function forgetDraft(id: string | null) {
-  try {
-    localStorage.removeItem(draftKey(id));
-  } catch {
-    /* nothing kept */
-  }
+  untrack(() => {
+    const { [draftKey(id)]: _, ...rest } = prefs.crateDrafts;
+    prefs.crateDrafts = rest;
+  });
 }
 /** A crate's name, or null while it is not known yet (the crates not read, a Sounds like crate's name not asked):
  *  a header shows nothing rather than its id first. */
@@ -272,11 +246,7 @@ export const seeded = (crate: string | null) => wordOf(crate) !== null || likeOf
  *  only with its Save (a crate without conditions would hold the whole library). `conditions`: what it starts from (a
  *  genre's own, from the genre's view). */
 export function startCrate(name: string, conditions: Condition[] = [], more: Omit<CrateDraft, 'name' | 'conditions'> = {}) {
-  try {
-    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions, ...more }));
-  } catch {
-    /* the builder starts empty */
-  }
+  keepDraft(null, { name, conditions, ...more });
   viewOver(NEW_CRATE);
 }
 

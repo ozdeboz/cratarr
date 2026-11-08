@@ -31,9 +31,18 @@ class CratarrWebViewClient(
     private val deviceCover: (String) -> ByteArray?,
     /** A server's cover (decision 0098): its server's id, its cover's, the size; its type and bytes, null for none. */
     private val serverCover: (String, String, Int) -> Pair<String, ByteArray>? = { _, _, _ -> null },
+    /** What is kept of the library, by its address, for the page to read ([DeviceIndex.answer]); asked for off the main thread. */
+    private val deviceIndex: (String) -> WebResourceResponse? = { null },
     /** A page of Cratarr's finished loading (its URL): the session follows it ([Sessions.loaded]). */
     private val onLoaded: (WebView, String) -> Unit = { _, _ -> },
 ) : WebViewClientCompat() {
+
+    /** The page the app's own copy just answered as the main frame (its address without the #route), taken by the load
+     *  it starts ([onPageStarted]); whether the load under way is one; and the last page loaded again, once
+     *  ([onPageFinished]). */
+    @Volatile private var bundled: String? = null
+    private var fromCopy = false
+    private var reloaded: String? = null
 
     /** Local mode's covers (decision 0052): `/__device/cover/{album_id}` on Cratarr's pages, from Android; a server's
      *  (decision 0098) `/__server/cover/{server}/{cover}?size=`, fetched by the app with the sign-in it keeps; the page's
@@ -45,6 +54,8 @@ class CratarrWebViewClient(
         // ends once it has loaded (0.12: one sign-in for both addresses, the owner 2026-10-30). Not cleared here: the
         // request still carries the session, so Cratarr ends it.
         if (request.isForMainFrame && url.path == Sessions.SIGN_OUT) Sessions.signOutAsked()
+        url.path?.let(deviceIndex)?.let { return it }
+        if (url.path == DeviceAnswers.PAGE_PATH) return DeviceAnswers.answer(view.context, url.getQueryParameter("ask"))
         url.path?.takeIf { it.startsWith(SERVER_COVER) }?.removePrefix(SERVER_COVER)?.let { rest ->
             val parts = rest.split('/', limit = 2)
             val got = if (parts.size == 2) serverCover(Uri.decode(parts[0]), Uri.decode(parts[1]), url.getQueryParameter("size")?.toIntOrNull() ?: 600) else null
@@ -52,7 +63,9 @@ class CratarrWebViewClient(
                 ?: WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
         }
         val album = url.path?.takeIf { it.startsWith(DEVICE_COVER) }?.removePrefix(DEVICE_COVER)
-            ?: return BundledPage.answer(view.context, request.method, url)
+            ?: return BundledPage.answer(view.context, request.method, url)?.also {
+                if (request.isForMainFrame) bundled = withoutRoute(url.toString())
+            }
         val jpeg = deviceCover(album) ?: return WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
         return WebResourceResponse("image/jpeg", null, 200, "OK", mapOf("Cache-Control" to "max-age=86400"), ByteArrayInputStream(jpeg))
     }
@@ -74,10 +87,36 @@ class CratarrWebViewClient(
         return true
     }
 
+    override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+        super.doUpdateVisitedHistory(view, url, isReload)
+        DeviceWatch.page = DeviceWatch.pageOf(url)
+    }
+
+    override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+        super.onPageStarted(view, url, favicon)
+        fromCopy = bundled == withoutRoute(url)
+        bundled = null
+    }
+
     override fun onPageFinished(view: WebView, url: String) {
         super.onPageFinished(view, url)
-        if (Prefs.originOf(url) in origins) onLoaded(view, url)
+        if (Prefs.originOf(url) !in origins) return
+        // A page reached through Cratarr's redirect (the sign-in's, back to the page) is never asked of this client
+        // (WebView does not intercept a redirect's target), so it came from Cratarr while the app's own copy is the one
+        // to show (seen on the tablet, 2026-11-04: Cratarr's older page after signing in): loaded again, once, it comes
+        // from the app's copy.
+        val page = withoutRoute(url)
+        val path = Uri.parse(url).path ?: "/"
+        if (BundledPage.pagePath(path) && !fromCopy && reloaded != page && BundledPage.serves(view.context)) {
+            reloaded = page
+            view.reload()
+            return
+        }
+        if (fromCopy) reloaded = null
+        onLoaded(view, url)
     }
+
+    private fun withoutRoute(url: String) = url.substringBefore('#')
 
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceErrorCompat) {
         if (!request.isForMainFrame) return
@@ -103,7 +142,7 @@ class CratarrWebViewClient(
     }
 
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-        Log.w(TAG, "the page's renderer is gone (crashed: ${detail.didCrash()})")
+        DeviceWatch.rendererGone(view.context, detail.didCrash(), detail.rendererPriorityAtExit())
         onGone()
         return true
     }

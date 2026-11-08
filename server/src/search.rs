@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use cratarr_rules::matcher;
 use cratarr_rules::matcher::aliases;
+// The order results come in, the rules crate's: a device with no Cratarr to ask finds in the same one (`index::find`).
+pub use cratarr_rules::matcher::{closeness, coverage, rank, ranked};
 
 /// The words of a query, as every search reads them (the rules crate's `matcher::words`, 0.12).
 pub fn words(q: &str) -> Vec<String> {
@@ -128,62 +130,6 @@ pub fn typos(text: &str, words: &[String]) -> Option<usize> {
     matcher::typos(text, words)
 }
 
-/// How well a text matches the words, for ranking (higher is better): the whole text the query, 3; every word whole,
-/// 2; some words only as a start, 1 (Navidrome's lesson: a whole name above a prefix); not at all, 0. Separators don't
-/// count (0.12): "hiphop" is all of Hip Hop (3); the query's letters beginning the text's from one of its words on
-/// ("hiph"), 1.
-pub fn closeness(text: &str, words: &[String]) -> u8 {
-    let have = self::words(text);
-    if words.is_empty() {
-        return 0;
-    }
-    if have == words || have.concat() == words.concat() {
-        return 3;
-    }
-    if words.iter().all(|w| have.iter().any(|h| h.starts_with(w.as_str()))) {
-        return if words.iter().all(|w| have.contains(w)) { 2 } else { 1 };
-    }
-    let q = words.concat();
-    u8::from((0..have.len()).any(|k| have[k..].concat().starts_with(&q)))
-}
-
-/// How much of a name the words make up (0.9.7, the owner: "player" is all of a setting called Player, a small part
-/// of a long track title): their letters over the name's, at most 1.
-pub fn coverage(text: &str, words: &[String]) -> f32 {
-    let name: usize = self::words(text).iter().map(|w| w.chars().count()).sum();
-    let asked: usize = words.iter().map(|w| w.chars().count()).sum();
-    if name == 0 { 0.0 } else { (asked as f32 / name as f32).min(1.0) }
-}
-
-/// A result's rank within its group (0.9.7), higher first: a direct hit (its own name holds every word) before one
-/// whose name holds them with typos (the fewer first), and both before any found through what it holds; among direct
-/// hits the closer (`closeness`), then the more of its name the words make up (`coverage`); then the place its source
-/// gave it (`at` of `of`).
-///
-/// What only the matcher's trigrams find (0.12, `matches`) ranks between the two: from 0.5, by its score, below every
-/// hit within its typos and above every one found through what it holds.
-pub fn rank(text: &str, words: &[String], at: usize, of: usize) -> f32 {
-    let r = ranked(closeness(text, words), typos(text, words), coverage(text, words), at, of);
-    if r >= 1.0 {
-        return r;
-    }
-    match matcher::score(&words.join(" "), text) {
-        Some((s, _)) => r.max(0.5 + 0.4 * s + 0.09 * (1.0 - at as f32 / of.max(1) as f32)),
-        None => r,
-    }
-}
-
-/// `rank` from its parts: direct hits from 3, those with typos from 1 to 2, the rest below 1 (as a playlist found by
-/// its tracks scores).
-pub fn ranked(close: u8, typos: Option<usize>, covered: f32, at: usize, of: usize) -> f32 {
-    let order = 0.09 * (1.0 - at as f32 / of.max(1) as f32);
-    match typos {
-        Some(0) if close > 0 => 2.0 + f32::from(close) + 0.9 * covered + order,
-        Some(t) if t > 0 => 1.0 + 0.9 / (1 + t) as f32 + order,
-        _ => order,
-    }
-}
-
 /// Every index term a query's word meets with typos (`meet`), the fewest first, at most `TYPO_TERMS`: what the FTS
 /// query adds for it (`fts_with`). `terms` are the index's terms beginning with the word's first letter.
 ///
@@ -277,19 +223,6 @@ mod tests {
         assert!(rank("Kraftwerk", &words("kraftwrek"), 0, 1) > rank("Kraftwerk", &words("kraftwrekk"), 0, 1), "fewer typos first");
     }
 
-    #[test]
-    fn a_direct_hit_ranks_first_then_the_closer_then_the_more_of_its_name() {
-        let w = words("player");
-        let setting = rank("Player", &w, 4, 5);
-        let long = rank("The Player of the Long Night Remastered", &w, 0, 5);
-        let deep = rank("Night Songs", &w, 0, 5);
-        assert!(setting > long, "all of its name before a small part, whatever the order given");
-        assert!(long > deep, "a direct hit before one found through what it holds");
-        assert!(rank("Players", &w, 0, 5) < setting, "a start ranks below the whole word");
-        assert!((coverage("Player", &w) - 1.0).abs() < f32::EPSILON);
-        assert_eq!(coverage("", &w), 0.0);
-    }
-
     #[derive(serde::Deserialize)]
     struct Example {
         q: String,
@@ -326,12 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn a_whole_name_ranks_above_whole_words_above_a_start() {
-        let q = words("air");
-        assert_eq!(closeness("Air", &q), 3);
-        assert_eq!(closeness("Air Supply", &q), 2);
-        assert_eq!(closeness("Airbag", &q), 1);
-        assert_eq!(closeness("Hair", &q), 0, "a word's start only, never inside it");
+    fn a_text_holds_the_words_as_words_or_their_starts_in_any_order() {
         assert!(matches("Sigur Rós", &words("ros sig")) && !matches("Sigur Rós", &words("rosa")));
     }
 

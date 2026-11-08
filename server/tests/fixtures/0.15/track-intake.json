@@ -1,0 +1,15 @@
+{
+  "next": 2,
+  "items": [
+    {
+      "id": "i1",
+      "album": { "source": "cratarr", "id": "al-2c5BBHDvIsL51C4yFB1p80", "title": "Partial Shore", "artist": "Glass Harbour" },
+      "disc": 1,
+      "position": 3,
+      "title": "Tideline",
+      "recording": "00000000-0000-4000-8000-000000000501",
+      "state": "refused",
+      "why": "no one holds it"
+    }
+  ]
+}

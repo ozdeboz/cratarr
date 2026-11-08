@@ -24,6 +24,25 @@ export const DUCK = 0.2;
 export const FADE_MS = 300;
 export type Stretch = { from: number; to: number };
 
+/** A track heard by its stream. `from`: the library of the copy to hear, for what is about one copy whichever plays (an
+ *  intake card): a track of a record is the same id in every copy, and the stream alone would give the copy that plays. */
+type Heard = { source: string; id: string; from?: string | null };
+
+/** The address of `t`'s stream from `fromMs` on: it begins there. */
+export const snippetStream = (t: Heard, fromMs: number) =>
+  `/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}?from_ms=${Math.round(fromMs)}&mp3_from=1${t.from ? `&from=${encodeURIComponent(t.from)}` : ''}`;
+
+/** What the app is asked to play: the same stretch of the same copy (Snippets.kt). */
+export const snippetAsk = (t: Heard, s: Stretch) => ({
+  source: t.source,
+  id: t.id,
+  ...(t.from ? { from: t.from } : {}),
+  from_ms: Math.round(s.from * 1000),
+  to_ms: Math.round(s.to * 1000),
+  fade_ms: FADE_MS,
+  duck: DUCK,
+});
+
 /** The first lively SNIPPET_S of a track `duration` s long whose waveform is `bins` (null: none stored, then from FIXED_AT
  *  of it). */
 export function pickSnippet(bins: ArrayLike<number> | null, duration: number): Stretch {

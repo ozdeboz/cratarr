@@ -123,19 +123,17 @@ impl PlaylistService {
         let (store, name) = self.own(id)?;
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let me = serve.current_user().unwrap_or_default();
-        let key = store.key(&name);
         let lines = self.lines_added(&ops).await;
         let _one = ONE_AT_A_TIME.lock().await;
         let ids: Vec<String> = ops.iter().map(|o| o.op_id().to_string()).collect();
         let (ud, who) = (serve.userdata.clone(), me.clone());
         let applied = tokio::task::spawn_blocking(move || ud.ops_applied(&who, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-        // Read, merged and written while the file is as read; changed meanwhile (another edit), read again.
+        // Read, merged and written while the playlist is as read; changed meanwhile (another edit), read again.
         let mut tries = 0;
         let entries = loop {
             tries += 1;
-            let before = store.entries(&name).await?;
-            let (ud, k, b) = (serve.userdata.clone(), key.clone(), before.clone());
-            let mut entries = tokio::task::spawn_blocking(move || ud.entries_of(&k, &b)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            let mut entries = store.entries_with_ids(&name).await?.0;
+            let before = entries.lines();
             let now = now_ms();
             let mut done: Vec<(String, Option<String>)> = Vec::new();
             for (i, op) in ops.iter().enumerate() {
@@ -160,17 +158,16 @@ impl PlaylistService {
                 entries.apply(&one, op.at(), now);
                 done.push((op.op_id().to_string(), None));
             }
-            let after = entries.lines();
-            if after != before {
-                match store.replace_entries_if(&name, &before, &after).await? {
-                    Some(edit) => {
-                        self.tell_sources(&store, vec![(name.clone(), PlaylistChange::Edited)]);
-                        // Kept for its undo as every edit (the page's Undo is not offered for these).
-                        let _ = self.keep_texts(vec![edit]);
-                    }
-                    None if tries < 3 => continue,
-                    None => return Err(ToggleError::Refused("The playlist kept changing meanwhile: send it again.".into())),
+            // Written with the operations' ids, while the playlist is as read; changed meanwhile, read again.
+            match store.put_entries_if(&name, &before, &entries, &me, &done).await? {
+                Some(edit) if edit.before != edit.after => {
+                    self.tell_sources(&store, vec![(name.clone(), PlaylistChange::Edited)]);
+                    // Kept for its undo as every edit (the page's Undo is not offered for these).
+                    let _ = self.keep_texts(vec![edit]);
                 }
+                Some(_) => {}
+                None if tries < 3 => continue,
+                None => return Err(ToggleError::Refused("The playlist kept changing meanwhile: send it again.".into())),
             }
             // Refused before (sent again) and now, in the order sent.
             let refused: Vec<RefusedOp> = ops
@@ -183,8 +180,6 @@ impl PlaylistService {
                     Some(RefusedOp { op_id: op.op_id().to_string(), why })
                 })
                 .collect();
-            let (ud, k, e, who) = (serve.userdata.clone(), key.clone(), entries.clone(), me.clone());
-            tokio::task::spawn_blocking(move || ud.keep_entries(&k, &e, &who, &done)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
             break (entries, refused);
         };
         let (entries, refused) = entries;
@@ -204,7 +199,7 @@ impl PlaylistService {
     /// Each add's line, from its track as a connected server and the catalogue give it (never a path a page sent), or
     /// why there is none; `None` for every other operation.
     async fn lines_added(&self, ops: &[PlaylistOp]) -> Vec<Option<Result<String, &'static str>>> {
-        let folders = self.lib.folders();
+        let folders = self.lib.catalogue().folders();
         let sources = self.lib.connected();
         let mut out = Vec::with_capacity(ops.len());
         for op in ops {

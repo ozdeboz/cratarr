@@ -543,7 +543,7 @@
             onclick={coverTap}
             oncontextmenu={(e) => (e.preventDefault(), openMenu(e))}
           >
-            <Cover {src} lazy={false} onfail={coverFailed} />
+            <Cover {src} lazy={false} whole onfail={coverFailed} />
             {#if overview}<CoverOverview track={np} />{/if}
           </button>
         {/key}

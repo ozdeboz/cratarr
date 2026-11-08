@@ -9,6 +9,7 @@
   // into… (its spelling, everywhere: the kind's spellings in Catalogue), and, opened from a record's words (`from`),
   // Remove from this record (the record's words of that kind set by hand without it).
   import { hiddenLibraries } from './listFilter.svelte';
+  import Asking from './Asking.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import { crateRows, getCrate, getCrateAxes, setAlbumOverrides, type WordSource } from './api';
@@ -71,6 +72,7 @@
   const wordAdmin = $derived(me.admin && kindWord !== null);
   let typed = $state('');
   let known = $state<string[]>([]);
+  let knownWait = $state(false);
   function openRename() {
     typed = kindWord?.word ?? '';
     step = 'rename';
@@ -80,10 +82,13 @@
     step = 'merge';
     const k = kindWord?.kind;
     if (!k || known.length) return;
-    getCrateAxes(prefs.source || undefined).then(
-      (axes) => (known = axes.find((x) => x.key === k)?.values ?? []),
-      () => {},
-    );
+    knownWait = true;
+    getCrateAxes(prefs.source || undefined)
+      .then(
+        (axes) => (known = axes.find((x) => x.key === k)?.values ?? []),
+        () => {},
+      )
+      .finally(() => (knownWait = false));
   }
   const mergeChips = $derived.by(() => {
     const q = typed.trim().toLowerCase();
@@ -243,7 +248,7 @@
   {step}
 >
   {#if step === 'download'}
-    {#if all}<DownloadStep what={{ kind: 'tracks', name, tracks: all.map((t) => ({ source: t.source, id: t.id })) }} tracks={all} {onclose} />{/if}
+    {#if all}<DownloadStep what={{ kind: 'tracks', name, tracks: all.map((t) => ({ source: t.source, id: t.id })) }} tracks={all} {onclose} />{:else}<Asking />{/if}
   {:else if step === 'rename'}
     <div class="step field">
       <!-- svelte-ignore a11y_autofocus -->
@@ -254,11 +259,15 @@
     <div class="step field">
       <input type="search" placeholder="Find a word" aria-label="Find a word" bind:value={typed} />
     </div>
-    <div class="step chips">
-      {#each mergeChips as w (w)}
-        <button class="chip" disabled={working} onclick={() => void spellAs(w)}>{w}</button>
-      {/each}
-    </div>
+    {#if knownWait}
+      <Asking />
+    {:else}
+      <div class="step chips">
+        {#each mergeChips as w (w)}
+          <button class="chip" disabled={working} onclick={() => void spellAs(w)}>{w}</button>
+        {/each}
+      </div>
+    {/if}
   {:else}
     <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
     <MenuTable {kind} {entry} />

@@ -282,6 +282,12 @@ fn page_html(next: &str, user: &str, error: Option<&str>, nonce: &str) -> String
   const next = document.querySelector('input[name=next]');
   if (location.hash && !next.value.includes('#')) next.value += location.hash;
   if (navigator.brave) document.querySelector('input[name=browser]').value = 'Brave';
+  // This page goes only to a device with no live session: nobody's, whatever name the app's page kept, and with no sign-out
+  // left to tell (web/src/lib/account.ts). The page reads that name before it can ask anything, so it is said here.
+  try {{
+    localStorage.setItem('cratarr-who', 'null');
+    localStorage.removeItem('cratarr-sign-out-owed');
+  }} catch {{}}
 </script>
 </body>
 </html>
@@ -464,6 +470,7 @@ mod tests {
     fn served() -> Arc<Serve> {
         let s = Serve::open(None, Rules::default(), &|_| None).unwrap();
         s.users.set("me", "pw").unwrap();
+        s.sessions.set_required(false).unwrap();
         s
     }
 

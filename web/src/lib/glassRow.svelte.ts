@@ -15,9 +15,9 @@ type Entry = { el: HTMLElement; spec: Spec };
 const GONE = 'data-row-gone';
 const rows = new WeakMap<Element, Row>();
 
-/** In the flow of its box: not hidden by the row, not laid over it (a glass's layers, a leaving copy). */
+/** In the flow of its box: not hidden by the row, not laid over it (a glass's layers). */
 function inFlow(c: Element): c is HTMLElement {
-  if (!(c instanceof HTMLElement) || c.matches('[data-glass-ghost], .glass, .shade')) return false;
+  if (!(c instanceof HTMLElement) || c.matches('.glass, .shade, .main')) return false;
   const s = getComputedStyle(c);
   return s.display !== 'none' && s.position !== 'absolute' && s.position !== 'fixed';
 }

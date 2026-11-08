@@ -13,6 +13,8 @@
 //!
 //! Pure as the rest of the crate: no I/O, no clock; aliases come as data (genre aliases in [`aliases`]).
 
+use std::borrow::Borrow;
+
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "nfkd")]
 use unicode_normalization::UnicodeNormalization;
@@ -44,7 +46,12 @@ pub fn fold(text: &str) -> String {
 /// A text's words (`fold`ed; everything but letters and digits a gap): what every search reads a query as (decision
 /// 0072; web/tests/fixtures/search-words.json).
 pub fn words(text: &str) -> Vec<String> {
-    fold(text).split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    words_in(&fold(text)).map(str::to_string).collect()
+}
+
+/// The words of a text [`fold`]ed already: what reads many texts at every search folds each once.
+pub fn words_in(folded: &str) -> impl Iterator<Item = &str> {
+    folded.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty())
 }
 
 /// A text's letters and digits run together: what separators don't count leaves ("Hip-Hop", "hip hop": "hiphop").
@@ -101,10 +108,11 @@ pub fn meet(w: &str, h: &str) -> Option<usize> {
         return Some(0);
     }
     let most = typo_budget(w);
-    let (w, h): (Vec<char>, Vec<char>) = (w.chars().collect(), h.chars().collect());
-    if most == 0 || w.first() != h.first() {
+    // Most pairs end here, and with nothing made: a library's names are all read at a search on a device.
+    if most == 0 || w.chars().next() != h.chars().next() {
         return None;
     }
+    let (w, h): (Vec<char>, Vec<char>) = (w.chars().collect(), h.chars().collect());
     let mut lengths = [h.len(), w.len().saturating_sub(1), w.len(), w.len() + 1];
     lengths.sort_unstable();
     let best = lengths.iter().filter(|&&k| k > 1 && k <= h.len()).map(|&k| edits(&w, &h[..k], most)).min().unwrap_or(most + 1);
@@ -118,16 +126,88 @@ pub fn typos(text: &str, words: &[String]) -> Option<usize> {
     typos_in(&self::words(text), words)
 }
 
-fn typos_in(have: &[String], words: &[String]) -> Option<usize> {
+/// [`typos`] of a text's words.
+pub fn typos_in<S: Borrow<str>>(have: &[S], words: &[String]) -> Option<usize> {
     if words.is_empty() || have.is_empty() {
         return None;
     }
-    let apart: Option<usize> = words.iter().map(|w| have.iter().filter_map(|h| meet(w, h)).min()).sum();
+    let apart: Option<usize> = words.iter().map(|w| have.iter().filter_map(|h| meet(w, h.borrow())).min()).sum();
     let q = words.concat();
-    let together = (0..have.len()).filter_map(|k| meet(&q, &have[k..].concat())).min();
+    // `meet` wants the first letter right, so only those are put together.
+    let first = q.chars().next();
+    let together = (0..have.len()).filter(|&k| have[k].borrow().chars().next() == first).filter_map(|k| meet(&q, &have[k..].concat())).min();
     match (apart, together) {
         (Some(a), Some(t)) => Some(a.min(t)),
         (a, t) => a.or(t),
+    }
+}
+
+/// How well a text matches the words, for ranking (higher is better): the whole text the query, 3; every word whole,
+/// 2; some words only as a start, 1 (Navidrome's lesson: a whole name above a prefix); not at all, 0. Separators don't
+/// count (0.12): "hiphop" is all of Hip Hop (3); the query's letters beginning the text's from one of its words on
+/// ("hiph"), 1.
+pub fn closeness(text: &str, words: &[String]) -> u8 {
+    closeness_in(&self::words(text), words)
+}
+
+fn closeness_in<S: Borrow<str>>(have: &[S], words: &[String]) -> u8 {
+    if words.is_empty() {
+        return 0;
+    }
+    let same = have.len() == words.len() && have.iter().zip(words).all(|(h, w)| h.borrow() == w);
+    if same || have.concat() == words.concat() {
+        return 3;
+    }
+    if words.iter().all(|w| have.iter().any(|h| h.borrow().starts_with(w.as_str()))) {
+        return if words.iter().all(|w| have.iter().any(|h| h.borrow() == w)) { 2 } else { 1 };
+    }
+    let q = words.concat();
+    u8::from((0..have.len()).any(|k| have[k..].concat().starts_with(&q)))
+}
+
+/// How much of a name the words make up (0.9.7, the owner: "player" is all of a setting called Player, a small part
+/// of a long track title): their letters over the name's, at most 1.
+pub fn coverage(text: &str, words: &[String]) -> f32 {
+    coverage_in(&self::words(text), words)
+}
+
+fn coverage_in<S: Borrow<str>>(have: &[S], words: &[String]) -> f32 {
+    let name: usize = have.iter().map(|w| w.borrow().chars().count()).sum();
+    let asked: usize = words.iter().map(|w| w.chars().count()).sum();
+    if name == 0 { 0.0 } else { (asked as f32 / name as f32).min(1.0) }
+}
+
+/// A result's rank within its group (0.9.7), higher first: a direct hit (its own name holds every word) before one
+/// whose name holds them with typos (the fewer first), and both before any found through what it holds; among direct
+/// hits the closer (`closeness`), then the more of its name the words make up (`coverage`); then the place its source
+/// gave it (`at` of `of`).
+///
+/// What only the matcher's trigrams find (0.12, `matches`) ranks between the two: from 0.5, by its score, below every
+/// hit within its typos and above every one found through what it holds.
+pub fn rank(text: &str, words: &[String], at: usize, of: usize) -> f32 {
+    let r = rank_in(&self::words(text), words, at, of);
+    if r >= 1.0 {
+        return r;
+    }
+    match score(&words.join(" "), text) {
+        Some((s, _)) => r.max(0.5 + 0.4 * s + 0.09 * (1.0 - at as f32 / of.max(1) as f32)),
+        None => r,
+    }
+}
+
+/// [`rank`] of a name's words, without the trigrams.
+pub fn rank_in<S: Borrow<str>>(have: &[S], words: &[String], at: usize, of: usize) -> f32 {
+    ranked(closeness_in(have, words), typos_in(have, words), coverage_in(have, words), at, of)
+}
+
+/// `rank` from its parts: direct hits from 3, those with typos from 1 to 2, the rest below 1 (as a playlist found by
+/// its tracks scores).
+pub fn ranked(close: u8, typos: Option<usize>, covered: f32, at: usize, of: usize) -> f32 {
+    let order = 0.09 * (1.0 - at as f32 / of.max(1) as f32);
+    match typos {
+        Some(0) if close > 0 => 2.0 + f32::from(close) + 0.9 * covered + order,
+        Some(t) if t > 0 => 1.0 + 0.9 / (1 + t) as f32 + order,
+        _ => order,
     }
 }
 
@@ -578,5 +658,61 @@ mod tests {
         assert_eq!(typos("HipHop", &words("hip hop")), Some(0));
         assert_eq!(typos("Aphex Twin", &words("aphx twin")), Some(1));
         assert_eq!(typos("Trip Hop", &words("hiphop")), None);
+    }
+
+    #[test]
+    fn a_direct_hit_ranks_first_then_the_closer_then_the_more_of_its_name() {
+        let w = words("player");
+        let setting = rank("Player", &w, 4, 5);
+        let long = rank("The Player of the Long Night Remastered", &w, 0, 5);
+        let deep = rank("Night Songs", &w, 0, 5);
+        assert!(setting > long, "all of its name before a small part, whatever the order given");
+        assert!(long > deep, "a direct hit before one found through what it holds");
+        assert!(rank("Players", &w, 0, 5) < setting, "a start ranks below the whole word");
+        assert!((coverage("Player", &w) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(coverage("", &w), 0.0);
+    }
+
+    #[test]
+    fn a_whole_name_ranks_above_whole_words_above_a_start() {
+        let q = words("air");
+        assert_eq!(closeness("Air", &q), 3);
+        assert_eq!(closeness("Air Supply", &q), 2);
+        assert_eq!(closeness("Airbag", &q), 1);
+        assert_eq!(closeness("Hair", &q), 0, "a word's start only, never inside it");
+        assert_eq!(closeness("Hip Hop", &words("hiphop")), 3, "separators don't count");
+        assert_eq!(closeness("Hip Hop Classics", &words("hiph")), 1);
+    }
+
+    /// What reads many names folds each once and splits it once: it must come to what a name read whole comes to.
+    #[test]
+    fn a_names_words_read_once_find_and_rank_as_the_name_does() {
+        let names = ["Player", "The Player of the Long Night", "Hip Hop", "Kraftwerk", "Sigur Rós", "Ｐｌａｙｅｒ", "Night Songs"];
+        for q in ["player", "hiphop", "kraftwrek", "ros sig", "hip hop", "night"] {
+            let w = words(q);
+            for name in names {
+                let folded = fold(name);
+                let have: Vec<&str> = words_in(&folded).collect();
+                assert_eq!(have, words(name), "{name}");
+                assert_eq!(typos_in(&have, &w), typos(name, &w), "{q} in {name}");
+                if rank(name, &w, 1, 3) >= 1.0 {
+                    assert_eq!(rank_in(&have, &w, 1, 3), rank(name, &w, 1, 3), "{q} in {name}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_word_meets_only_a_word_of_its_first_letter_but_by_its_start() {
+        assert_eq!(meet("kraftwrek", "kraftwerk"), Some(1));
+        assert_eq!(meet("rkaftwerk", "kraftwerk"), None, "no typo in the first letter");
+        assert_eq!(meet("", "anything"), Some(0));
+        assert_eq!(meet("kraftwerk", ""), None);
+        assert_eq!(typos_in(&["lo", "fi"], &words("lofi")), Some(0), "the words run together, from a word of its first letter");
+    }
+
+    #[test]
+    fn how_much_of_a_name_the_words_make_up_counts_letters() {
+        assert!((coverage("Мир", &words("ми")) - 2.0 / 3.0).abs() < 1e-6, "not bytes: a letter here is two");
     }
 }

@@ -188,8 +188,9 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("durationMs", length)
             .put("paused", !c.playWhenReady || c.playbackState == Player.STATE_ENDED)
             // A play from rest not sounding yet (0.9.14, as Play On's `starting`).
-            .put("starting", StartStop.starting)
-            .put("error", c.playerError?.let(::describe) ?: JSONObject.NULL)
+            .put("starting", StartStop.starting || (Holding.now && c.playWhenReady))
+            // Held for Cratarr: waiting, no failure to tell.
+            .put("error", c.playerError?.takeUnless { Holding.now }?.let(::describe) ?: JSONObject.NULL)
             .put("repeat", Repeat.mode(context))
             .put("sleep", Sleep.json(context, "atMs", "endOfTrack"))
             .put("radio", Radio.on(context))

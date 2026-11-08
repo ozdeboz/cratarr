@@ -1,9 +1,13 @@
 // Display preferences: per browser, kept in localStorage (which may be unavailable; then defaults apply and nothing
-// is remembered). Server-wide settings live on the server, see Settings.svelte.
+// is remembered). Server-wide settings live on the server, see Settings.svelte. The person's own of them ([PERSONAL],
+// decision 0101: pinned items, libraries switched off, filters, Home's rows, Radio's last choice…) are kept per account
+// on the device, hidden while another is signed in, and taken up when another signs in; the rest are the device's.
 
+import { accountKey, whenAccount, whoOf } from './account';
 import { HOME_LISTS, type HomeList } from './servers/server';
 import { inApp, toApp } from './app.svelte';
 import { RECORD_ORDER_KEYS, type CrateView, type RecordOrder } from './crateRecords';
+import type { CrateDraft } from './crates.svelte';
 import { LIST_WIDTHS } from './pageView.svelte';
 import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
@@ -171,6 +175,14 @@ export type Prefs = {
   coverColourPlayer: boolean;
   /** Opening a track's menu plays its snippet (0.12, lib/snippet): this device's own; on unless switched off. */
   snippetsInMenus: boolean;
+  /** With Cratarr out of reach, the moment's weather from Open-Meteo, for where the device roughly is (lib/momentHere): the
+   *  only way that place leaves the device, so off unless switched on. */
+  momentWeather: boolean;
+  /** The app asked at its start for what playing in the background needs (lib/askAtStart): once, whatever the answer. */
+  backgroundAsked: boolean;
+  /** What was said of fetching the library whole on mobile data, and whether the browser was asked to keep it (lib/deviceSync). */
+  indexMobile: 'unasked' | 'yes' | 'no';
+  storageAsked: boolean;
   /** Shuffle (the owner, 2026-10-27): the ticked ones take turns behind the flows, in place of the one chosen. */
   flowShuffle: boolean;
   /** The ones ticked for Shuffle. */
@@ -305,6 +317,9 @@ export type Prefs = {
   crateRecordSort: { key: RecordOrder; down: boolean };
   /** Every list's filter, per kind of list (a page's id, or a panel kind; decisions 0060 and 0061). */
   filters: Partial<Record<string, ListFilter>>;
+  /** Crates being made or changed, by crate (a new one: `new`), until Save or Cancel (lib/crates): on the account, so
+   *  one begun on a phone goes on on the tablet (decision 0101 point 14). */
+  crateDrafts: Record<string, CrateDraft>;
 };
 
 export type AlbumLayout = 'rows' | 'grid' | 'table' | 'flow';
@@ -459,6 +474,10 @@ export const DEFAULTS: Prefs = {
   coverColourMini: true,
   coverColourPlayer: true,
   snippetsInMenus: true,
+  momentWeather: false,
+  backgroundAsked: false,
+  indexMobile: 'unasked',
+  storageAsked: false,
   flowShuffle: false,
   flowShuffled: [...FLOW_BACKDROPS.filter((b) => b !== 'own')],
   flowShuffleWhen: 'flow',
@@ -525,12 +544,40 @@ export const DEFAULTS: Prefs = {
   crateViews: {},
   crateRecordSort: { key: 'bestMatch', down: false },
   filters: {},
+  crateDrafts: {},
 };
 
+/** The person's own (decision 0101): about their music, their players, their crates, never this device's look. */
+const PERSONAL = ['pinned', 'hiddenLibraries', 'filters', 'crateViews', 'crateDrafts', 'homeParts', 'homeCrates', 'serverHome', 'radioLast', 'discoverMode', 'output', 'source'] as const;
+
+/** The device's settings as kept, with those of [PERSONAL] the account's (`who`, lib/account's whoOf) on top. */
+// Fields as JSON.parse's: each is checked by read().
+function savedOf(who: string): Record<string, any> | null {
+  const device = JSON.parse(localStorage.getItem(KEY) ?? 'null');
+  const theirs = JSON.parse(localStorage.getItem(KEY + who) ?? 'null');
+  if (!device && !theirs) return null;
+  const out: Record<string, any> = device && typeof device === 'object' ? { ...device } : {};
+  for (const k of PERSONAL) delete out[k];
+  if (theirs && typeof theirs === 'object') for (const k of PERSONAL) if (k in theirs) out[k] = theirs[k];
+  return out;
+}
+
 function read(): Prefs {
-  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {}, groupLast: {} } as Prefs;
+  let kept: string | null = null;
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
+    kept = JSON.stringify(savedOf(whoOf(accountKey())));
+  } catch {
+    /* defaults */
+  }
+  return parse(kept);
+}
+
+/** The preferences in `kept` (JSON: this device's copy, or one of them from the account, `fromSaved`), each as
+ *  understood: one missing, or not understood, is its default. */
+function parse(kept: string | null): Prefs {
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {}, groupLast: {}, crateDrafts: {} } as Prefs;
+  try {
+    const saved = JSON.parse(kept ?? 'null');
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
@@ -579,6 +626,10 @@ function read(): Prefs {
       if (typeof saved.flowShuffle === 'boolean') p.flowShuffle = saved.flowShuffle;
       for (const k of ['coverColourGlass', 'coverColourMini', 'coverColourPlayer'] as const) if (typeof saved[k] === 'boolean') p[k] = saved[k];
       if (typeof saved.snippetsInMenus === 'boolean') p.snippetsInMenus = saved.snippetsInMenus;
+      if (typeof saved.momentWeather === 'boolean') p.momentWeather = saved.momentWeather;
+      if (typeof saved.backgroundAsked === 'boolean') p.backgroundAsked = saved.backgroundAsked;
+      if (saved.indexMobile === 'yes' || saved.indexMobile === 'no') p.indexMobile = saved.indexMobile;
+      if (typeof saved.storageAsked === 'boolean') p.storageAsked = saved.storageAsked;
       if (Array.isArray(saved.flowShuffled)) {
         const ticked = saved.flowShuffled.filter((b: unknown): b is FlowBackdrop => FLOW_BACKDROPS.includes(b as FlowBackdrop));
         if (ticked.length) p.flowShuffled = ticked;
@@ -650,6 +701,8 @@ function read(): Prefs {
       if (output) p.output = output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');
       if (Array.isArray(saved.hiddenLibraries)) p.hiddenLibraries = saved.hiddenLibraries.filter((x: unknown): x is string => typeof x === 'string');
+      if (saved.crateDrafts && typeof saved.crateDrafts === 'object')
+        for (const [k, v] of Object.entries<CrateDraft | null>(saved.crateDrafts)) if (v && Array.isArray(v.conditions)) p.crateDrafts[k] = v;
       if (saved.crateViews && typeof saved.crateViews === 'object')
         for (const [k, v] of Object.entries(saved.crateViews)) if (v === 'records' || v === 'tracks') p.crateViews[k] = v;
       if (RECORD_ORDER_KEYS.includes(saved.crateRecordSort?.key) && typeof saved.crateRecordSort?.down === 'boolean')
@@ -692,9 +745,13 @@ function read(): Prefs {
 
 export const prefs = $state<Prefs>(read());
 
-/** Back to the default look; the followed source and the pins are not display matters and stay. */
+/** One preference as kept elsewhere (the account's, lib/accountPrefs), as understood; not understood, or none
+ *  (`undefined`): its default. */
+export const fromSaved = <K extends keyof Prefs>(key: K, value: unknown): Prefs[K] => parse(JSON.stringify({ [key]: value }))[key];
+
+/** Back to the default look; the followed source, the pins and crates being made are not display matters and stay. */
 export function resetPrefs() {
-  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, hiddenLibraries: prefs.hiddenLibraries, pinned: prefs.pinned, panelSorts: {}, filters: {} });
+  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, hiddenLibraries: prefs.hiddenLibraries, pinned: prefs.pinned, crateDrafts: prefs.crateDrafts, panelSorts: {}, filters: {} });
 }
 
 /** Pin a playlist to the top of the Playlists page (after those pinned before it), or unpin it. */
@@ -702,17 +759,43 @@ export function togglePin(id: string) {
   prefs.pinned = prefs.pinned.includes(id) ? prefs.pinned.filter((p) => p !== id) : [...prefs.pinned, id];
 }
 
+/** Whose the person's own in [prefs] are now (lib/account's whoOf): saved under them, even while another's come in. */
+let prefsWho = whoOf(accountKey());
+
+/** [prefs] as kept: the device's, and the person's own of [prefsWho]. */
+function save() {
+  const all = JSON.parse(JSON.stringify(prefs));
+  const theirs: Record<string, unknown> = {};
+  for (const k of PERSONAL) {
+    theirs[k] = all[k];
+    delete all[k];
+  }
+  const device = JSON.stringify(all);
+  const own = JSON.stringify(theirs);
+  try {
+    localStorage.setItem(KEY, device);
+    localStorage.setItem(KEY + prefsWho, own);
+  } catch {
+    /* not remembered */
+  }
+  // In the app the same settings go to it too: it hands them to its pages on either of its two addresses (Network).
+  if (inApp) toApp({ type: 'page-prefs', prefs: device, mine: own, who: prefsWho });
+}
+
+// Another account signed in, or nobody: the one leaving's own are kept, and the one come's taken up.
+whenAccount.add(() => {
+  const who = whoOf(accountKey());
+  if (who === prefsWho) return;
+  save();
+  prefsWho = who;
+  const now = read();
+  Object.assign(prefs, Object.fromEntries(PERSONAL.map((k) => [k, now[k]])));
+});
+
 // Remember every change and apply the theme (app.css reads data-theme; no attribute = follow the system).
 $effect.root(() => {
   $effect(() => {
-    const snapshot = JSON.stringify(prefs);
-    try {
-      localStorage.setItem(KEY, snapshot);
-    } catch {
-      /* not remembered */
-    }
-    // In the app the same settings go to it too: it hands them to its pages on either of its two addresses (Network).
-    if (inApp) toApp({ type: 'page-prefs', prefs: snapshot });
+    save();
     if (prefs.theme === 'auto') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.dataset.theme = prefs.theme;
     if (prefs.animations) document.documentElement.removeAttribute('data-motion');

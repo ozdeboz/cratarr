@@ -31,3 +31,13 @@ Security rules:
 
 - A replaced cover shows up after the browser's cache expires (up to a day) or on the next ETag check.
 - Large covers are sent as they are; the 10 MB cap bounds memory use.
+
+## Amended (2026-11-07): lists and grids get sized covers
+
+"No resizing" was about the playing track's cover. A grid of a hundred records fetched each whole, up to 10 MB each in the
+server's memory, and a 3000 by 3000 picture is 36 MB decoded on a tablet (finding 86). The owner's call: lists and grids ask a
+size, the player and a panel keep the whole one. The page asks the least of a few sizes that fills the box a cover is drawn in,
+in the device's pixels (`lib/coverSize`, `lib/Cover`'s `whole` for the player and a panel's own). Cratarr makes each size once
+and keeps it in decision 0030's disk cache, which Subsonic clients' sizes share, and answers a size no larger than a device's
+small covers (D13) with those. A size made before costs no read of the picture. Only a size made now reads it, one at a time,
+so asks waiting their turn hold nothing.

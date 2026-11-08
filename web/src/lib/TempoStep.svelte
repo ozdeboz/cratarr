@@ -5,7 +5,7 @@
   import { askIfMany } from './many.svelte';
   import { plural } from './insights.svelte';
   import { adjustTempo, getTempo, type TempoAdjust, type TrackTempo } from './api';
-  import MarkLoader from './MarkLoader.svelte';
+  import Asking from './Asking.svelte';
   import { refresh } from './live.svelte';
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
@@ -80,7 +80,7 @@
 {:else if failed}
   <p class="failed">The tempo can't be read.</p>
 {:else}
-  <div class="loading"><MarkLoader size={40} /></div>
+  <Asking />
 {/if}
 
 <style>
@@ -150,11 +150,5 @@
   .failed {
     padding: 0 16px 12px;
     color: var(--danger-ink);
-  }
-
-  .loading {
-    display: grid;
-    place-items: center;
-    padding: 16px 0;
   }
 </style>

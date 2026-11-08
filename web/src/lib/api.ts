@@ -1,3 +1,4 @@
+import { signOutOwed } from './account';
 import { track } from './progress.svelte';
 import { keepAndTry, laterKey } from './later.svelte';
 import { cue } from './queueCue.svelte';
@@ -6,6 +7,8 @@ import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
+import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick } from './deviceAnswers.svelte';
+import { deviceAlbums, deviceArtist, deviceRecord, deviceSearch, readsNow } from './deviceIndex.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
 import type { PlaylistOp } from './playlistOps';
@@ -128,6 +131,8 @@ export class ApiError extends Error {
     super(message);
   }
 }
+/** It failed for no other reason than that Cratarr did not answer. */
+export const notAnswered = (e: unknown) => e instanceof ApiError && e.message === UNREACHED;
 
 /** A request the user is waiting for: counted for the progress bar (lib/progress.svelte.ts). */
 function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -142,6 +147,11 @@ function quietly<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  // A sign-out owed (lib/account): nothing is asked under a session that is over, what one taps either.
+  if (signOutOwed()) {
+    unreached();
+    throw new ApiError(UNREACHED);
+  }
   let res: Response;
   try {
     res = await fetch(path, init);
@@ -169,11 +179,23 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     reached();
     throw message ? new ApiError(message, false, res.status) : new ApiError(`Server returned ${res.status}`, true, res.status);
   }
-  // Its last copy, the server out of reach (public/sw.js): shown, and said to be offline.
+  // Its last copy, the server out of reach (public/sw.js): shown, and said to be offline. The album list's copy shown at once says
+  // nothing either way: taken for an answer, it would undo every look that found Cratarr gone.
   if (res.headers.get('X-Cratarr-Kept')) keptAnswer();
-  else reached();
+  else if (!res.headers.get('X-Cratarr-Copy')) reached();
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/** The one door for what a page reads (docs/architecture.md: Reads): from Cratarr, or from this device once lib/deviceIndex says so,
+ *  and no page asks which. `fromDevice` answers null where the device has nothing to say: the read then goes where any other
+ *  read goes, to a last copy or the one out of reach line. */
+export async function read<T>(fromServer: () => Promise<T>, fromDevice: () => Promise<T | null>): Promise<T> {
+  if (readsNow().from === 'device') {
+    const here = await fromDevice().catch(() => null);
+    if (here !== null) return here;
+  }
+  return fromServer();
 }
 
 /** A change through the outbox (lib/later, decision 0085 step 3): kept on this device first, then tried with its op id
@@ -185,7 +207,7 @@ async function later<T>(path: string, init: RequestInit, answer: () => T): Promi
   const r = await keepAndTry(
     op,
     (headers) => fetchJson<T>(path, { ...init, headers }),
-    (e) => e instanceof ApiError && e.message === UNREACHED,
+    notAnswered,
   );
   return r ? r.value : answer();
 }
@@ -461,7 +483,11 @@ function crateQuery(q: URLSearchParams, source?: string, look: CrateLook = {}) {
   return t ? `?${t}` : '';
 }
 export const getCrateAxes = (source?: string, without?: string[]) => quietly<Axis[]>(`/api/crates/axes${crateQuery(new URLSearchParams(), source, { without })}`);
-export const getCrate = (id: string) => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`);
+export const getCrate = (id: string) =>
+  read(
+    () => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`),
+    () => deviceCrate<CrateDef>(id),
+  );
 /** An artist left out (0.10, decision 0083): by the server's key (the name loosely) and as named. */
 export type ExcludedArtist = { key: string; name: string; at?: number };
 /** An artist left out of one crate, or taken back: the crate's list after it, and the undo. Through the outbox (lib/later,
@@ -575,7 +601,11 @@ export const filterList = (list: FilterList, conditions: Condition[], source?: s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ list, conditions, ...(switches?.length ? { switches } : {}), ...(without?.length ? { without } : {}), ...(explain ? { explain: true } : {}) }),
   });
-export const getCrates = (source?: string, without?: string[]) => quietly<Crate[]>(`/api/crates${crateQuery(new URLSearchParams(), source, { without })}`);
+export const getCrates = (source?: string, without?: string[]) =>
+  read(
+    () => quietly<Crate[]>(`/api/crates${crateQuery(new URLSearchParams(), source, { without })}`),
+    () => deviceCrates(source, without),
+  );
 /** A page of a crate's rows (newest first) and the crate's size. */
 /** A crate's own picture (kept as JPEG within 800 px); `round` reads it again after a change. */
 export const crateImageUrl = (id: string, round = 0) => `/api/crates/${encodeURIComponent(id)}/image${round ? `?v=${round}` : ''}`;
@@ -606,8 +636,10 @@ export const crateRows = (
     for (const w of explain.q) q.append('q', w);
   }
   // `limit`: the most rows the page could hold (the server serves 500 at most a page); a page with fewer is the last.
-  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; word?: WordOf }>(
-    `/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`,
+  type Page = { source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; word?: WordOf };
+  return read(
+    () => quietly<Page>(`/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`),
+    () => deviceCrateRows<Page>(id, offset, limit, source, favourites, favouriteAlbums, look),
   );
 };
 /** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
@@ -635,7 +667,10 @@ export const crateTempo = (id: string, source?: string, favourites?: CrateFavour
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
-  return quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo${crateQuery(q, source, look)}`);
+  return read(
+    () => quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo${crateQuery(q, source, look)}`),
+    () => deviceCrateTempo(id, source, favourites, favouriteAlbums, look),
+  );
 };
 /** A playlist's facts for the Playlists page's table (decision 0042): its length, top genres, how much the owner never
  *  played (null: no owner account) and when they last played any of it, and when its file last changed (epoch s). */
@@ -764,7 +799,10 @@ export const radioNext = (ask: {
   /** Leave the owner's favourites out. */
   skip_favourites?: boolean;
 }) =>
-  post<{ tracks: QueueTrack[] }>('/api/radio/next', ask).then(({ tracks }) => ({
+  read(
+    () => post<{ tracks: QueueTrack[] }>('/api/radio/next', ask),
+    () => devicePick(ask),
+  ).then(({ tracks }) => ({
     // Bandcamp's (Discover's suggestions, 0.9.5): previews, never in a playlist (decision 0071).
     tracks: tracks.map((t) => (t.source === 'bandcamp' ? { ...t, addable: false } : t)),
   }));
@@ -785,6 +823,12 @@ export const undo = (tokens: string[]) => post<{ redo: string[]; restored: strin
 
 
 export const createPlaylist = (name: string) => post<{ playlist: string } & Undo>('/api/playlists', { name });
+/** The track ids started afresh, the catalogue lost (decision 0101): the first new id, and the rows of each table that
+ *  still name old tracks (shown missing from now on). An administrator's. */
+export const freshTrackIds = () => post<{ from: number; references: [string, number][] }>('/api/catalogue/fresh-ids', {});
+/** What 0.15 knew each playlist this account sees by (its name, `owner/name` another's) and its id since (decision
+ *  0101). */
+export const getMovedPlaylists = () => quietly<Record<string, string>>('/api/playlists/moved');
 
 /** What to export (decision 0007): playlists by name, with their tracks or not, the tracks in one folder or the
  *  library's, and the playlists as they are or combined into one of this name. */
@@ -907,8 +951,11 @@ export const playlistOps = (id: string, ops: PlaylistOp[]) =>
   );
 
 /** What changed since `since` (decision 0087, lib/changes), of these kinds. */
-export const getChanges = (since: number, kinds: readonly string[]) =>
-  quietly<ChangesAnswer>(`/api/changes?${new URLSearchParams({ since: String(since), kinds: kinds.join(',') })}`);
+/** `index`: where this device's index stands, for the log's word on the library (lib/deviceSync): a device with none asks none. */
+export const getChanges = (since: number, kinds: readonly string[], index?: number | null) =>
+  quietly<ChangesAnswer>(
+    `/api/changes?${new URLSearchParams({ since: String(since), ...(typeof index === 'number' ? { kinds: [...kinds, 'index'].join(','), index: String(index) } : { kinds: kinds.join(',') }) })}`,
+  );
 
 /** Lists like a list, of its kind (the one similarity): the closest first, each with how alike (0 to 100). */
 export type Alike = { id: string; alike: number };
@@ -919,7 +966,7 @@ export const similarCrates = (id: string) => quietly<Alike[]>(`/api/crates/${enc
 export const playlistCovers = (id: string) =>
   quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>
-  laterJson<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to }, () => ({ playlist: to, undo: null }));
+  laterJson<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to }, () => ({ playlist: id, undo: null }));
 export const deletePlaylist = (id: string) =>
   request<{ deleted: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** Shares one's own playlist with the other users, or stops (decision 0051): they see it, play it and copy it. */
@@ -990,17 +1037,27 @@ export type SourceStatus = {
 
 export type Values = Record<string, string | string[]>;
 
-/** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
-/** What a server's libraries are used for, by library id (decision 0009). Libraries in neither list are not used. */
 /** A library's quality limit on the way in (decision 0096's amendment): lossless files above it become FLAC at it as
  *  they move in or are kept into it; `none`: as they are; `hr96`, `hr48`: up to 24-bit/96 or 48 kHz; `cd`: 16/44.1. */
 export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
-/** A library's own settings (decision 0034): its quality limit, its dot's colour and its name. */
-/** `fetcher`: an Incoming library's, whose records come into it (decision 0096: one Incoming library per fetcher). */
-export type LibraryPolicy = { quality?: Quality; colour?: string | null; name?: string | null; fetcher?: Fetcher | null };
-export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
+/** A library in use, as Settings keeps it (decision 0101 point 1: no roles), in the list's order: the first main library
+ *  takes every fallback. A main library is the household's music, every one equal; an Incoming one, a fetcher's new
+ *  music waiting to be heard and added. Own music is no setting (its folder's, 0101 point 9). Its own settings
+ *  (decision 0034): its quality limit, its dot's colour and its name; an Incoming library's fetcher, whose records come
+ *  into it (decision 0096: one Incoming library per fetcher), and where Add to puts them by default (`keep_to`, a main
+ *  library; none: the first; 0101 point 2). */
+export type LibrarySetting = {
+  id: string;
+  kind: 'main' | 'incoming';
+  quality?: Quality;
+  colour?: string | null;
+  name?: string | null;
+  fetcher?: Fetcher | null;
+  keep_to?: string | null;
+};
 
-export type LibraryUse = 'music' | 'incoming' | 'unused';
+/** A server library as it is used: its kind in the list, someone's own music, or not used. */
+export type LibraryUse = LibrarySetting['kind'] | 'own' | 'unused';
 
 /** A server's music library and where Cratarr sees its files. */
 export type ServerLibrary = {
@@ -1014,7 +1071,8 @@ export type ServerLibrary = {
   read_only: boolean;
 };
 
-export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: Roles; values: Values };
+/** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
+export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: LibrarySetting[]; values: Values };
 
 export type SourceView = SourceConfig & {
   label: string;
@@ -1024,7 +1082,7 @@ export type SourceView = SourceConfig & {
   choices: Record<string, Choice[]>;
   server_libraries: ServerLibrary[];
   error: string | null;
-  /** Each used library's settings as they apply (its own, else its use's and the palette's). */
+  /** Each used library's settings as they apply (its own, else its kind's and the palette's). */
   policies?: Record<string, { quality: Quality; colour: string | null }>;
 };
 
@@ -1135,6 +1193,9 @@ export const setTrackWords = (source: string, id: string, words: TrackWords) =>
 export type FileField = {
   field: string;
   track?: string;
+  /** The library it is in, as a record's `copies` name it, only where that tells two rows apart: a track's copies, or a
+   *  cover's, changing differently. */
+  library?: string;
   before: string[];
   after: string[];
   from: string;
@@ -1277,6 +1338,16 @@ export type Me = {
   sessions?: UserSession[];
 };
 export const getMe = () => quietly<Me>('/api/me');
+/** A preference kept on the account (decision 0101 point 14, lib/accountPrefs): its value, and when it was changed
+ *  (epoch ms). */
+export type HeldPreference = { value: unknown; changed: number };
+/** The account's preferences, those the server holds. */
+export const getPreferences = () => quietly<{ values: Record<string, HeldPreference> }>('/api/me/preferences').then((r) => r.values);
+/** A preference as changed on this device at `changed`: the server keeps it if that is later than what it holds (per
+ *  preference the latest change wins, the whole value; one ahead of its clock counts as now), and answers what it
+ *  holds then. */
+export const putPreference = (key: string, value: unknown, changed: number) =>
+  quietly<HeldPreference>(`/api/me/preferences/${key}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, changed }) });
 /** What this server can do (0.11, lib/capabilities): the names of what it has configured and what its code supports. */
 export const getCapabilities = () => quietly<import('./generated/Capabilities').Capabilities>('/api/capabilities');
 /** Ends one of one's own sign-ins, or takes one of one's own devices away. */
@@ -1309,15 +1380,16 @@ export const putMySettings = (base: number, settings: Record<string, unknown>) =
 /** Each server's own name and libraries, and what each library is used as, for everyone (the filter): the part of the
  *  server's settings that is not its administrators' alone. */
 export type LibrariesView = {
-  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: { music: string[]; incoming: string[] } }[];
+  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: (Pick<LibrarySetting, 'id'> & { kind: LibrarySetting['kind'] | 'own' })[] }[];
 };
 export const getLibraries = () => quietly<LibrariesView>('/api/libraries');
-/** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it). */
-export const setAppPassword = (password: string) =>
-  request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+/** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it): set with
+ *  the password they sign in with (`current`), a lasting way in being more than a page left open may make. */
+export const setAppPassword = (current: string, password: string) =>
+  request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current, password }) });
 /** Every user, for the administrators' Users panel: their profile, permissions, devices, sign-ins. `directory`: an
  *  account from the directory (its name and role set there); else Cratarr's own (decision 0051, amended 2026-10-19). */
-export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[] };
+export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[]; own_library?: string | null };
 export const getUsers = () => request<{ users: User[] }>('/api/users').then((r) => r.users);
 const putJson = (url: string, body: unknown) => request<void>(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const userUrl = (name: string, what: string) => `/api/users/${encodeURIComponent(name)}/${what}`;
@@ -1550,9 +1622,13 @@ export type HealthItem = {
   request?: RequestMark | null;
   /** A track's own (2026-10-28: a file cut off or breaking off): its song id in `album`, for a better copy of it. */
   track?: string;
+  /** Since when it stands so (epoch seconds, Missing music). */
+  since?: number;
 };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
+/** A track on Health's Missing music is `to` (A5): for good, so what names it follows it. */
+export const reconnectTrack = (track: string, to: string) => post<unknown>('/api/missing/reconnect', { track, to });
 /** A record's own Health problems (0.14, `/api/albums/{source}/{id}/health`): each finding that names it, worst first, by
  *  its kind (the report's key) and row, with only the record's items; its tracks' file problems as `files:{kind}`
  *  findings, an item for each track (`track`, `files`, the problem in `line`). */
@@ -1622,6 +1698,28 @@ export const setReferences = (album: string, choice: { counting?: ReferenceSourc
     body: JSON.stringify(choice),
   });
 
+/** One copy of a record: one folder's files of it (docs/records-and-copies.md). `format` and `kbps` are as `ListedAlbum`'s,
+ *  `bits` and `rate` a lossless copy's, null where one of its files is not read. `deletable`, `keepable`, `keep_to` and
+ *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `plays`: the
+ *  one the server would play them. `size`: its files' bytes, null where not known. `tracks`: how many of the record's it
+ *  holds. `job`: the conversion at work on this copy, `Job.id`. */
+export type AlbumCopy = {
+  library: string;
+  format: string | null;
+  kbps: number | null;
+  bits: number | null;
+  rate: number | null;
+  deletable: boolean;
+  keepable: boolean;
+  keep_to: string | null;
+  lacks: string[];
+  plays: boolean;
+  added: number | null;
+  size: number | null;
+  tracks: number;
+  job: number | null;
+};
+
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {
   /** Not the library's (a Bandcamp album): asked for, where it stands (lib/CoverStatus). */
@@ -1642,6 +1740,10 @@ export type ListedAlbum = {
   tags: string[];
   /** The library it was listed from (the filter's library switches). */
   library?: string;
+  /** Its copies, in the order the server would play them for the viewer; `format` and `bitrate_kbps` are the one that
+   *  plays. None from a list with no libraries; from a server of another kind, `library` alone. lib/copiesRule reads
+   *  these. */
+  copies?: AlbumCopy[];
   /** Its artists one by one, when the source credits several; absent: `artist` alone. */
   artists?: string[];
   /** Its length (s), its tracks' together; null where one of them is not known (0.10; a server before it gives none). */
@@ -1681,14 +1783,29 @@ export type ShelfSource = {
   library_info?: LibraryInfo[];
 };
 
-/** A used library of a server (decision 0034): the dot on its albums (none for the primary, Music), and its quality
- *  limit on the way in. */
-export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming'; colour: string | null; quality: Quality };
+/** A used library of a server, as the page shows it (decision 0101 point 1: no roles; the list's order is the default,
+ *  the first main library taking every fallback): a main library, an Incoming (its fetcher's), or someone's own music
+ *  (`owner`; `mine`: the viewer's). `colour`: the dot on its albums (decision 0034); `quality`: its limit on the way in.
+ *  `seen`: whether Cratarr sees its files (`seen_why` when not). `naming`: a main library's template, Keep and Move
+ *  renaming by the target's. */
+export type LibraryInfo = {
+  id: string;
+  name: string;
+  kind: 'main' | 'incoming' | 'own';
+  fetcher: 'lidarr' | 'soulseek' | 'uploads' | null;
+  owner: string | null;
+  mine: boolean;
+  colour: string | null;
+  quality: Quality;
+  seen: boolean;
+  seen_why?: string;
+  naming?: string;
+};
 
-/** An album of a library other than Music, as it stands to the other used libraries (decision 0034, Music's first): an
- *  upgrade of an album there, or a duplicate. `library` is that album's folder, `library_id` the library it is in;
- *  `replaceable` only when it is in Music (Replace is Music's alone). */
-export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable: boolean };
+/** An album as it stands to the other used libraries (decision 0034): an upgrade of an album there, or a duplicate.
+ *  `library` is that album's folder, `library_id` the library it is in; `replaceable_into` the main libraries it can
+ *  replace the other copy in (decision 0101 point 2). */
+export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable_into: string[] };
 
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
@@ -1700,12 +1817,19 @@ export type AlbumsSource = ShelfSource & {
    *  duplicates it. */
   waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
   deletable: string[];
+  /** The Incoming albums the viewer may Keep, and where each goes by default (decision 0101 point 2). */
+  keepable: string[];
+  keep_to: Record<string, string>;
 };
 export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: string | null };
 
 /** Every album of each server's used libraries (the Library page). `fresh` asks past the service worker's copy (which
  *  answers at once, see sw.js) for the server's latest. */
-export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>(`/api/albums${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
+export const getAlbums = (source?: string, fresh = false) =>
+  read(
+    () => quietly<AlbumsView>(`/api/albums${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined),
+    () => deviceAlbums(source),
+  );
 
 // Classical (0.10): its composers, each one's records, a record's mark, and a track's other versions (the library's
 // recordings of the same work, by MusicBrainz's work links).
@@ -1935,8 +2059,8 @@ export const artistPicks = (name: string, without?: string[]) =>
 /** Home's moment (the owner, 2026-10-23): named after the weather Home Assistant tells and the time of day ("Music for a Rainy
  *  Evening"), a few albums near it (Cratarr's ids); its radio plays inside the crate `like:now`. */
 /** `sky`: the canvas Home paints (sunny, clear, fewclouds, cloudy, foggy, rainy, stormy, snowy, windy, hot, plain); `dark`
- *  after sunset. */
-export type Moment = { name: string; sky: string; dark: boolean; albums: string[] };
+ *  after sunset. `timeOnly`: worked out on this device with no weather (lib/momentHere). */
+export type Moment = { name: string; sky: string; dark: boolean; albums: string[]; timeOnly?: boolean };
 export const getMoment = (source?: string, without?: string[]) =>
   quietly<Moment>(
     `/api/home/moment?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}), tz: String(-new Date().getTimezoneOffset() * 60) })}`,
@@ -2330,7 +2454,10 @@ export const search = (q: string, kinds: SearchKind[] = [], limit = 20, offset =
   if (server) return serverSearch(serverSource(server.id), q, kinds, limit);
   const u = new URLSearchParams({ q, ...(kinds.length ? { kinds: kinds.join(',') } : {}), limit: String(limit), ...(offset ? { offset: String(offset) } : {}) });
   for (const w of without ?? []) u.append('without', w);
-  return quietly<ServerSearch>(`/api/search?${u}`);
+  return read(
+    () => quietly<ServerSearch>(`/api/search?${u}`),
+    () => deviceSearch(q, kinds, limit, offset, without),
+  );
 };
 /** An album found beyond what Cratarr knows (decision 0076): MusicBrainz's and Discogs' live search, merged; where. */
 export type BeyondAlbum = {
@@ -2371,7 +2498,10 @@ export async function searchBeyond(q: string, limit = 20, offset = 0): Promise<B
 export const windMap = (url: string) =>
   quietly<{ map: [number, number, number][]; speed: number; length_ms: number }>(`${url}${url.includes('?') ? '&' : '?'}map=1`);
 export const albumView = (source: string, album: string) =>
-  quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
+  read(
+    () => quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`),
+    () => deviceRecord(source, album),
+  );
 /** An artist as their panel shows them (decided 2026-10-16, as Symfonium's), by name as the albums credit them: their
  *  albums and the albums they appear on, newest first, and their tracks album by album with the plays. */
 export type ArtistView = {
@@ -2389,7 +2519,10 @@ export type ArtistView = {
 export const artistView = (source: string, name: string, without?: string[]) => {
   const u = new URLSearchParams({ name });
   for (const w of without ?? []) u.append('without', w);
-  return quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?${u}`);
+  return read(
+    () => quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?${u}`),
+    () => deviceArtist(source, name, without),
+  );
 };
 /** Whether an artist is a favourite (the heart on an album's artist chip); null where the server keeps none. */
 export const artistFavorite = (source: string, name: string) =>
@@ -2422,19 +2555,24 @@ export type KeepPreview = {
 /** What a move or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
 export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
 const albumPath = (source: string, album: string) => `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
-/** What moving an album into library `to` would do (decision 0034): its folder there, or why it can't. */
-export const movePreview = (source: string, album: string, to: string, year?: string) =>
-  request<KeepPreview>(`${albumPath(source, album)}/move?to=${encodeURIComponent(to)}${year ? `&year=${encodeURIComponent(year)}` : ''}`);
-/** Move an album into another used library of its server, named and converted that library's way (Undo brings it
- *  back); with lossless files above that library's quality limit it is queued. */
-export const moveAlbum = (source: string, album: string, to: string, year?: string) =>
-  request<AlbumMoved>(`${albumPath(source, album)}/move`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(year ? { to, year } : { to }),
-  });
-/** Delete an album of any library, into that library's trash (Undo brings it back). */
-export const deleteAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, { method: 'POST' });
+/** What a preview's address says of a copy: a library's id holds `/`, so each value is encoded. */
+const copyQuery = (asked: Record<string, string | undefined>) =>
+  Object.entries(asked)
+    .flatMap(([k, v]) => (v ? `${k}=${encodeURIComponent(v)}` : []))
+    .join('&');
+const asJson = (body: unknown) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+/** What moving a record's copy in library `from` into library `to` would do (decision 0034): its folder there, or why it
+ *  can't. `from`, here and below: which copy, a library's id; one copy needs none, and with several the server refuses. */
+export const movePreview = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
+  request<KeepPreview>(`${albumPath(source, album)}/move?${copyQuery({ from, to, year })}`);
+/** Move a copy into another used library of its server, named and converted that library's way (Undo brings it back);
+ *  with lossless files above that library's quality limit it is queued. */
+export const moveAlbum = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
+  request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year }));
+/** Delete a copy, into its library's trash (Undo brings it back). The record stays while another copy does. */
+export const deleteAlbum = (source: string, album: string, from: string | undefined) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, asJson({ from }));
+/** Delete a record's copy in someone's own music from the Users panel: an administrator's, only there. */
+export const deleteOwnAlbum = (source: string, album: string, from: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete-own`, asJson({ from }));
 
 /** What Replace would do with an upgrade: the album in Music it replaces, how many of its tracks the new files take
  * over, new tracks, and where it goes; or why not (`unmatched`: old tracks without a match, by title). */
@@ -2460,15 +2598,12 @@ export type ReplacePreview = {
 };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
-export const replacePreview = (source: string, album: string, year?: string) =>
-  request<ReplacePreview>(`${replacePath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
-/** Replace the album in Music with an upgrade: the old files go to the trash (Undo brings them back). */
-export const replaceIncoming = (source: string, album: string, year?: string, cover?: 'keep' | 'new', carry = false) =>
-  request<AlbumMoved>(replacePath(source, album), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...(year ? { year } : {}), ...(cover ? { cover } : {}), ...(carry ? { carry: true } : {}) }),
-  });
+/** `to`: the main library whose copy it takes the place of. */
+export const replacePreview = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
+  request<ReplacePreview>(`${replacePath(source, album)}?${copyQuery({ from, to, year })}`);
+/** Replace a main library's copy with an upgrade: the old files go to the trash (Undo brings them back). */
+export const replaceIncoming = (source: string, album: string, from: string | undefined, to: string, year?: string, cover?: 'keep' | 'new', carry = false) =>
+  request<AlbumMoved>(replacePath(source, album), asJson({ from, to, year, cover, carry }));
 
 /** An album in the conversion queue: waiting, converting (`done` of `total` files), or just finished. */
 export type Job = {
@@ -2487,6 +2622,8 @@ export type Job = {
   why: string | null;
   /** The library it goes into, as a library switched off is kept (`<source>/<library>`); none on a job from before. */
   library?: string;
+  /** The library it comes from: which of a record's copies it works on. */
+  from?: string;
 };
 export const getJobs = () => quietly<Job[]>('/api/incoming/jobs');
 /** Take an album out of the queue while it waits or converts. */
@@ -2606,7 +2743,9 @@ export type Proximity = {
   /** `focus`: how concentrated its genres are, 0..1 (null without genre tags). */
   /** `shares` (0.9.8): each genre's share of its tracks' genres (the rules' aliases applied, 0.05 and up), for the
    *  Map's genre territories. */
-  playlists: { name: string; tracks: number; genres: string[]; focus: number | null; shares?: Record<string, number> }[];
+  /** Each playlist by its name, and by its id where the server says it (0.16: a playlist's id apart from its name; today
+   *  the two are the same, lib/insights's `pidOf`). */
+  playlists: { id?: string; name: string; tracks: number; genres: string[]; focus: number | null; shares?: Record<string, number> }[];
   links: {
     a: number;
     b: number;

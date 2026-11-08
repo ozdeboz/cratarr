@@ -70,7 +70,7 @@
   {@const discs = new Set(c.tracks.map((t) => t.disc ?? 1)).size > 1}
   <p class="from">{[c.from.said, c.format].filter(Boolean).join(' · ')}</p>
   <Group>
-    {#if c.suggested === 'keep'}<Item lead="on" name="Keep suggested" line="Every check agrees" />{/if}
+    {#if c.suggested === 'keep'}<Item lead="on" name="Adding suggested" line="Every check agrees" />{/if}
     {#each c.checks as x (x.key)}
       <Item lead={LEAD[x.state]} name={NAME[x.key] ?? x.key} line={x.said} tone={x.state === 'red' ? 'bad' : x.state === 'amber' ? 'warn' : null} busy={x.state === 'waiting'} wrap />
     {/each}
@@ -78,7 +78,8 @@
   <Group title={plural(c.tracks.length, 'track')}>
     <ol class="tracks">
       {#each c.tracks as t (t.id)}
-        {@const heard = { source: c.source, id: t.id, name: t.title, duration_secs: t.length_ms ? t.length_ms / 1000 : null }}
+        <!-- The copy waiting is what the card is about, whichever plays. -->
+        {@const heard = { source: c.source, id: t.id, from: c.library, name: t.title, duration_secs: t.length_ms ? t.length_ms / 1000 : null }}
         <li>
           <span class="num">{number(t, discs)}</span>
           <span class="name">{t.title}</span>

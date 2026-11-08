@@ -6,6 +6,7 @@
   import { untrack } from 'svelte';
   import { hiddenLibraries } from './listFilter.svelte';
   import { coverUrl, crateLeftOut, getCrateAxes, getCrateFit, putBackInCrate, setCrateFit, traitLabel, type Axis, type CrateFit, type PlaylistRow, albumCoverUrl, type ExcludedAlbum } from './api';
+  import Asking from './Asking.svelte';
   import ConditionList from './ConditionList.svelte';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -22,6 +23,8 @@
   let axes = $state<Axis[] | null>(null);
   let down = $state<{ source: string; rows: PlaylistRow[]; albums: ExcludedAlbum[] } | null>(null);
   let busy = $state(false);
+  /** Its fit could not be read (said in a toast): nothing is waited for any more. */
+  let unread = $state(false);
   /** The rules as last kept. */
   let saving = '';
 
@@ -33,6 +36,7 @@
       saving = JSON.stringify(f.rules);
       down = { source: l.source, rows: l.rows, albums: l.albums ?? [] };
     } catch (e) {
+      unread = true;
       toast.fail(e, "The crate's fit couldn't be read");
     }
   }
@@ -154,6 +158,8 @@
         {/each}
       </ol>
     {/if}
+  {:else if !unread}
+    <Asking />
   {/if}
 </MenuSheet>
 

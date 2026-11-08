@@ -129,9 +129,14 @@ fn signed(path: &str) -> String {
     url.strip_prefix(BASE).map(str::to_string).unwrap_or(url)
 }
 
+/// A track as a guest may read it: not the copy it is heard from, as a library's id is a place on the disk.
+fn for_a_guest(t: &QueueTrack) -> QueueTrack {
+    QueueTrack { from: None, ..t.clone() }
+}
+
 /// A track as a guest sees it: QueueTrack's fields and its cover, signed.
 fn track_view(t: &QueueTrack) -> Value {
-    let mut v = serde_json::to_value(t).unwrap_or_default();
+    let mut v = serde_json::to_value(for_a_guest(t)).unwrap_or_default();
     v["cover"] = signed(&format!("/api/cover/{}/{}", seg(&t.source), seg(&t.id))).into();
     v
 }
@@ -252,7 +257,8 @@ async fn now(State(p): State<Portal>, headers: HeaderMap) -> Response {
     match view {
         Some(v) => {
             let cover = v.track.as_ref().map(|t| track_view(t)["cover"].clone());
-            Json(json!({ "track": v.track, "playing": v.playing, "position_ms": v.position_ms, "position_at": v.position_at, "cover": cover })).into_response()
+            let track = v.track.as_ref().map(for_a_guest);
+            Json(json!({ "track": track, "playing": v.playing, "position_ms": v.position_ms, "position_at": v.position_at, "cover": cover })).into_response()
         }
         None => Json(json!({ "track": null, "playing": false, "position_ms": 0, "position_at": at, "cover": null })).into_response(),
     }
@@ -384,6 +390,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             analysis: None,
+            ..crate::catalogue::ServedRow::default()
         };
         let folders = [super::super::library::FolderRows { folder: 0, root: "/music".into(), rows: vec![row(1, "01", "So What"), row(2, "02", "Freddie Freeloader")] }];
         s.library.refresh(&folders, &crate::catalogue::Rules::default()).unwrap();
@@ -418,7 +425,7 @@ mod tests {
         let on = PlayOn::for_tests().await;
         let _salon = on.connect("Salon").unwrap();
         on.own("Salon", "ann");
-        let track = QueueTrack { source: "cratarr".into(), id: so_what.clone(), name: "So What".into(), ..QueueTrack::default() };
+        let track = QueueTrack { source: "cratarr".into(), id: so_what.clone(), name: "So What".into(), from: Some("/media/incoming".into()), ..QueueTrack::default() };
         on.command("Salon", crate::app::PlayOnCommand::play(vec![track], 0, 0)).await.unwrap();
         let version = on.get("Salon").unwrap().queue_version;
         on.report("Salon", crate::app::PlayerReport { index: 0, version: Some(version), position_ms: 60_000, playing: true, ..Default::default() }).unwrap();
@@ -446,6 +453,7 @@ mod tests {
         // What plays.
         let (status, _, now) = send(&app, "GET", "/api/guest/now", HOME, me, None).await;
         assert_eq!((status, now["track"]["id"].as_str(), now["playing"].as_bool()), (StatusCode::OK, Some(so_what.as_str()), Some(true)));
+        assert_eq!(now["track"].get("from"), None, "a library's id is a place on the disk");
         assert!(now["position_ms"].as_u64().unwrap() >= 60_000);
         assert!(now["cover"].as_str().unwrap().starts_with("/api/cover/cratarr/"));
 

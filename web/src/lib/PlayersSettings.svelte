@@ -20,6 +20,7 @@
   import { playOn } from './playOn.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
+  import { me } from './me.svelte';
   import { toast } from './toast.svelte';
 
   let { thing = null }: { thing?: string | null } = $props();
@@ -111,8 +112,10 @@
       toast.fail(e, `${name} wasn't removed`);
     }
   }
-  // Playing in step's address (lib/serverRuntime).
-  loadRuntime();
+  // Playing in step's address (lib/serverRuntime): the administrators', as a Kodi is. Anyone else sees their own devices here.
+  $effect(() => {
+    if (me.admin) loadRuntime();
+  });
   let editingHost = $state(false);
   const STEP_HOST_MORE =
     'Players in a group (and a Kodi box) reach Cratarr at this address on your home network. Empty: the address the page is opened at, which a proxy on a public name may not be.';
@@ -144,9 +147,9 @@
     {#each apps as p (p.name)}{@render row(p)}{:else}{#if playOn.known}<Item name="No apps yet" />{/if}{/each}
   </Group>
 {/if}
-<KodiSettings {thing} delay={delayRow} />
+{#if me.admin}<KodiSettings {thing} delay={delayRow} />{/if}
 <!-- Playing in step's address (0.9.8: the environment's until then; lib/serverRuntime). -->
-{#if !thing && runtime.value}
+{#if !thing && me.admin && runtime.value}
   {@const r = runtime.value}
   <Group title="Playing in step" more={STEP_HOST_MORE}>
     <Item

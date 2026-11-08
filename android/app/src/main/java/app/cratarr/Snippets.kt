@@ -2,7 +2,8 @@
  * Track snippets (0.12, snippets: the owner chose them, 2026-10-30): a track menu's "Play snippet from …" plays 20 s
  * of it (opening the menu plays nothing: the owner, 2026-10-31), and the music that plays meanwhile goes down under it.
  * The page picks the stretch (the first one about as lively as its liveliest) and asks (`{"type": "snippet",
- * "play": {source, id, from_ms, to_ms, fade_ms, duck}}` or `{"type": "snippet", "stop": true}`); a small player of its
+ * "play": {source, id, from?, from_ms, to_ms, fade_ms, duck}}` or `{"type": "snippet", "stop": true}`; `from`: the library
+ * of the copy to hear, an intake card's, which is the record's track id with a file of its own); a small player of its
  * own plays it from Cratarr's stream, faded in and out, while the app's own player is eased to `duck` by volume (a
  * factor [PlayOnLink.applyVolume] multiplies in, beside levelling and Start and stop's), never by audio focus: a focus
  * request would pause the music (the player's focus loss), so the snippet player asks for none. The queue, Play On's
@@ -36,9 +37,13 @@ import kotlin.math.pow
 
 /** What the page asks of a snippet: a stretch of a track to play, or to stop. */
 sealed class SnippetAsk {
-    /** [fromMs] to [toMs] of the track, faded in and out over [fadeMs]; the music at [duck] of its volume meanwhile. */
-    data class Play(val source: String, val id: String, val fromMs: Long, val toMs: Long, val fadeMs: Long, val duck: Float) : SnippetAsk() {
+    /** [fromMs] to [toMs] of the track, faded in and out over [fadeMs]; the music at [duck] of its volume meanwhile.
+     *  [library]: the copy to hear; none, the copy that plays. */
+    data class Play(val source: String, val id: String, val fromMs: Long, val toMs: Long, val fadeMs: Long, val duck: Float, val library: String? = null) : SnippetAsk() {
         val lengthMs get() = toMs - fromMs
+
+        /** The stream's word for that copy. */
+        val copyQuery get() = library?.let { "&${copyParam(it)}" }.orEmpty()
     }
 
     object Stop : SnippetAsk()
@@ -60,7 +65,7 @@ sealed class SnippetAsk {
             // Its fades meet in the middle at the most.
             val fade = p.optLong("fade_ms", DEFAULT_FADE_MS).coerceIn(0L, (to - from) / 2)
             val duck = p.optDouble("duck", DEFAULT_DUCK).let { if (it.isNaN()) DEFAULT_DUCK else it }.coerceIn(0.0, 1.0)
-            return Play(source, id, from, to, fade, duck.toFloat())
+            return Play(source, id, from, to, fade, duck.toFloat(), text("from"))
         }
     }
 }
@@ -232,7 +237,7 @@ class Snippets(private val context: Context, private val prefs: Prefs, private v
         }
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
         val opus = if (Net.metered(context)) "&as=opus" else ""
-        return MediaItem.fromUri("$server/api/stream/${Uri.encode(ask.source)}/${Uri.encode(ask.id)}?from_ms=${ask.fromMs}&mp3_from=1$opus") to 0L
+        return MediaItem.fromUri("$server/api/stream/${Uri.encode(ask.source)}/${Uri.encode(ask.id)}?from_ms=${ask.fromMs}&mp3_from=1$opus${ask.copyQuery}") to 0L
     }
 
     /** Ended, stopped or replaced: silent and empty. [last]: nothing follows, so the page hears `null`, the music comes

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use super::{Album, AlbumDetails, AlbumTrack, Choice, Field, Fut, Kind, Library, LibraryScan, Listed, PlaylistEvent, Source, Status, Track, TrackInfo, TrackPage, Values};
+use super::{Album, AlbumCopy, AlbumDetails, AlbumTrack, Choice, Field, Fut, Kind, Library, LibraryScan, Listed, PlaylistEvent, Source, Status, Track, TrackInfo, TrackPage, Values};
 use crate::app::{PlayOn, PlayOnCommand as Command};
 use crate::serve::Serve;
 use crate::userdata::{Annotation, Kind as Item};
@@ -29,13 +29,29 @@ fn fields() -> Vec<Field> {
 }
 
 fn connect(values: &Values, _partial: bool) -> Result<Box<dyn Source>> {
-    Ok(Box::new(CratarrSource { folders: folders_of(values) }))
+    Ok(Box::new(CratarrSource { folders: folders_of(values), own_music: super::text(values, crate::settings::OWN_MUSIC).map(PathBuf::from) }))
 }
 
 /// The chosen folders (decision 0044), in their order: `values["folders"]`, a list of paths. None before any are chosen
 /// (an install from before has them filled once, at load, from `found_folders`).
 fn folders_of(values: &Values) -> Vec<PathBuf> {
     super::list(values, "folders").into_iter().filter(|x| !x.trim().is_empty()).map(PathBuf::from).collect()
+}
+
+/// Each account's own music (0101 point 9): the subfolders of the own-music folder, by name; a hidden one is no account.
+fn own_libraries(own: &Path) -> Vec<Library> {
+    let mut found: Vec<PathBuf> = std::fs::read_dir(own)
+        .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).collect())
+        .unwrap_or_default();
+    found.sort();
+    found
+        .into_iter()
+        .map(|p| {
+            let id = p.display().to_string();
+            let account = p.file_name().map_or_else(|| id.clone(), |n| n.to_string_lossy().into_owned());
+            Library { id: id.clone(), name: format!("{account}'s music"), paths: vec![id] }
+        })
+        .collect()
 }
 
 /// Audio file extensions a library is recognised by.
@@ -132,6 +148,8 @@ fn suggest(found: Vec<PathBuf>, chosen: &[String]) -> Vec<PathBuf> {
 struct CratarrSource {
     /// The chosen folders, in their order (decision 0044).
     folders: Vec<PathBuf>,
+    /// The own-music folder (0101 point 9).
+    own_music: Option<PathBuf>,
 }
 
 /// The player Cratarr follows, by name (any online one when none has anything loaded).
@@ -194,6 +212,7 @@ pub fn card(a: crate::serve::api::Album) -> Album {
         duration_secs: None,
         tags: Vec::new(),
         library: None,
+        copies: Vec::new(),
         artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
         release: a.release,
         id: a.id,
@@ -262,7 +281,7 @@ impl Source for CratarrSource {
     fn libraries(&self) -> Fut<'_, Vec<Library>> {
         // The chosen folders, as they are: answered also while the server starts (the app asks first thing). A chosen
         // folder that is missing now (unmounted) is still listed, so its use and policy stay; Settings shows it missing.
-        let libraries = self
+        let mut libraries: Vec<Library> = self
             .folders
             .iter()
             .map(|p| {
@@ -271,6 +290,7 @@ impl Source for CratarrSource {
                 Library { id: id.clone(), name, paths: vec![id] }
             })
             .collect();
+        libraries.extend(self.own_music.iter().flat_map(|own| own_libraries(own)));
         Box::pin(async move { Ok(libraries) })
     }
 
@@ -283,6 +303,10 @@ impl Source for CratarrSource {
 
     fn library_roots<'a>(&'a self, library_id: &'a str) -> Fut<'a, Vec<String>> {
         Box::pin(async move { Ok(vec![library_id.to_string()]) })
+    }
+
+    fn paths_are_cratarrs(&self) -> bool {
+        true
     }
 
     // --- What plays and the commands: Cratarr's own players (Play On, decision 0031), the one it follows. ---
@@ -472,12 +496,14 @@ impl Source for CratarrSource {
             let s = server()?;
             let Some(folder) = folder_of(&s, library_id) else { return Ok(Vec::new()) };
             let (lib, ud) = (s.library.clone(), s.userdata.clone());
-            let root = library_id.trim_end_matches('/').to_string();
+            let (root, library) = (library_id.trim_end_matches('/').to_string(), library_id.to_string());
             blocking(move || {
                 let mut out = Vec::new();
-                for (a, dir, format, kbps, secs) in lib.albums_in(folder, limit)? {
-                    let base = lib.album_base(&a.id)?.unwrap_or_else(|| a.id.clone());
+                for c in lib.albums_in(folder, limit)? {
+                    let (a, dir) = (c.album, c.dir);
                     let stamp = format!("{} {} {}", a.song_count, a.created.as_deref().unwrap_or(""), dir);
+                    // This library's copy: `App::albums` says what the viewer may do with it, and folds a record's together.
+                    let copy = AlbumCopy { library: library.clone(), bits: c.bits, rate: c.rate, added: c.added, size: Some(c.size), tracks: c.tracks, folder, dir: dir.clone(), ..AlbumCopy::default() };
                     out.push(Listed {
                         album: Album {
                             added: a.created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
@@ -486,11 +512,12 @@ impl Source for CratarrSource {
                             year: a.year,
                             path: Some(format!("{root}/{dir}")),
                             tracks: a.song_count,
-                            format,
-                            bitrate_kbps: kbps,
-                            duration_secs: secs,
-                            tags: ud.tags_of(&base)?,
+                            format: c.format,
+                            bitrate_kbps: c.kbps,
+                            duration_secs: c.secs,
+                            tags: ud.tags_of(&a.id)?,
                             library: None,
+                            copies: vec![copy],
                             artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
                             release: a.release,
                             id: a.id,
@@ -528,13 +555,13 @@ impl Source for CratarrSource {
         })
     }
 
-    // An artist is their name's id (as Subsonic apps see them): the albums crediting it, the songs crediting it. Plays
-    // and the heart are the owner's.
+    // An artist by name, as the page asks: the albums crediting them, the songs crediting them. A name with no id is
+    // credited on nothing, so the empty id finds nothing. Plays and the heart are the owner's.
     fn artist_works<'a>(&'a self, name: &'a str) -> Fut<'a, Option<super::ArtistWorks>> {
         Box::pin(async move {
             let s = server()?;
             let o = owner(&s)?;
-            let id = crate::serve::ids::artist(name);
+            let id = s.artist_id(name)?.unwrap_or_default();
             let (lib, aid) = (s.library.clone(), id.clone());
             let (own, on, songs) = blocking(move || lib.artist_works(&aid)).await?;
             let ids: Vec<String> = songs.iter().map(|t| t.id.clone()).collect();
@@ -574,7 +601,9 @@ impl Source for CratarrSource {
         Box::pin(async move {
             let s = server()?;
             let o = owner(&s)?;
-            s.userdata.set_starred(&o, Item::Artist, &[crate::serve::ids::artist(name)], on)?;
+            // Any name: a heart on someone no file credits yet is theirs once one does, so they get their id now.
+            let id = crate::serve::ids::artist(s.catalogue().artist_for(name)?);
+            s.userdata.set_starred(&o, Item::Artist, &[id], on)?;
             Ok(on)
         })
     }
@@ -584,7 +613,7 @@ impl Source for CratarrSource {
             let s = server()?;
             let o = owner(&s)?;
             // As artist_works reads it: the same name, the same id.
-            let id = crate::serve::ids::artist(name);
+            let Some(id) = s.artist_id(name)? else { return Ok(Some(false)) };
             Ok(Some(s.userdata.get(&o, Item::Artist, std::slice::from_ref(&id))?.get(&id).is_some_and(|a| a.starred_at.is_some())))
         })
     }
@@ -674,8 +703,9 @@ impl Source for CratarrSource {
     fn track_info<'a>(&'a self, track: &'a str) -> Fut<'a, Option<TrackInfo>> {
         Box::pin(async move {
             let s = server()?;
-            let (lib, id) = (s.library.clone(), track.to_string());
-            let Some(song) = blocking(move || Ok(lib.songs_by_id(std::slice::from_ref(&id))?.pop())).await? else { return Ok(None) };
+            // The codec and bitrate shown are the file that plays for whoever asks.
+            let (who, cat, id) = (s.listener(s.current_user().as_deref()), s.catalogue().clone(), track.to_string());
+            let Some(song) = blocking(move || Ok(who.song(&cat, KIND.id, &id))).await? else { return Ok(None) };
             let plays = match owner(&s) {
                 Ok(o) => s.userdata.get(&o, Item::Song, std::slice::from_ref(&song.id))?.get(&song.id).map(|a| a.play_count),
                 Err(_) => None,
@@ -801,18 +831,7 @@ impl Source for CratarrSource {
 
     /// Plays added up (all and one's own), the later last-played, the better rating, a star when either has one.
     fn combine_user_data(&self, a: &serde_json::Value, b: &serde_json::Value) -> serde_json::Value {
-        let (a, b) = (annotation_of(a), annotation_of(b));
-        annotation_json(&Annotation {
-            play_count: a.play_count + b.play_count,
-            play_date: a.play_date.max(b.play_date),
-            own_count: a.own_count + b.own_count,
-            own_date: a.own_date.max(b.own_date),
-            rating: a.rating.max(b.rating),
-            starred_at: match (a.starred_at, b.starred_at) {
-                (Some(x), Some(y)) => Some(x.min(y)),
-                (x, y) => x.or(y),
-            },
-        })
+        annotation_json(&annotation_of(a).combined(&annotation_of(b)))
     }
 
     fn set_user_data<'a>(&'a self, item: &'a str, user: &'a str, data: &'a serde_json::Value) -> Fut<'a, ()> {
@@ -898,6 +917,21 @@ mod tests {
         assert!(none.libraries().await.unwrap().is_empty(), "none chosen yet: no libraries (the load fills them once)");
     }
 
+    #[tokio::test]
+    async fn each_accounts_own_music_is_a_library_after_the_chosen_ones() {
+        let own = std::env::temp_dir().join(format!("cratarr-own-{}", std::process::id()));
+        for f in ["bo", "ann", ".trash"] {
+            std::fs::create_dir_all(own.join(f)).unwrap();
+        }
+        std::fs::write(own.join("a-file"), b"x").unwrap();
+        let values: Values = [("folders".to_string(), serde_json::json!(["/music"])), (crate::settings::OWN_MUSIC.to_string(), serde_json::json!(own.display().to_string()))].into();
+        let libs = connect(&values, false).unwrap().libraries().await.unwrap();
+        let names: Vec<&str> = libs.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["music", "ann's music", "bo's music"]);
+        assert_eq!(libs[1].id, own.join("ann").display().to_string());
+        std::fs::remove_dir_all(&own).ok();
+    }
+
     #[test]
     fn suggestions_leave_out_the_chosen_and_what_overlaps_them() {
         let found = ["/media/Music", "/media/Incoming", "/media/lidarr-music", "/music"].map(PathBuf::from).to_vec();
@@ -907,7 +941,7 @@ mod tests {
 
     #[test]
     fn combined_play_data_adds_up() {
-        let s = CratarrSource { folders: Vec::new() };
+        let s = CratarrSource { folders: Vec::new(), own_music: None };
         let a = serde_json::json!({ "play_count": 2, "play_date": 100, "rating": 0, "starred_at": null });
         let b = serde_json::json!({ "play_count": 3, "play_date": 50, "rating": 4, "starred_at": 7 });
         let c = annotation_of(&s.combine_user_data(&a, &b));

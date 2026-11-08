@@ -6,6 +6,7 @@ import { pageQueries, type Chip } from './quickCrate';
 import { ownOrderOf } from './crateRecords';
 import { keepWhile, type Kept } from './keepWhile.svelte';
 import { matches } from './search';
+import { isLossless } from './copiesRule';
 import { untrack } from 'svelte';
 import type { IconName } from './Icon.svelte';
 import type { AlbumLayout, CollectionOrder, ComposerOrder, CrateOrder, PanelKind } from './prefs.svelte';
@@ -69,9 +70,8 @@ export const COMPOSER_ORDERS: OrderField<ComposerOrder>[] = [
 ];
 /** The orders by how you used the albums (lib/albums albumUses): read when chosen. */
 export const USE_ORDERS: readonly CollectionOrder[] = ['plays', 'played', 'rating'];
+export { isLossless };
 /** An album's quality, to order by: lossless above lossy, then its lowest bit rate (decision 0060). */
-const LOSSLESS = new Set(['FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV', 'WAVPACK', 'DSF', 'DFF']);
-export const isLossless = (format: string | null | undefined) => !!format && LOSSLESS.has(format.toUpperCase());
 export const qualityOf = (a: { format: string | null; bitrate_kbps: number | null }) =>
   (isLossless(a.format) ? 100_000 : 0) + (a.bitrate_kbps ?? 0);
 
@@ -128,11 +128,14 @@ const TRACK_SWITCHES: ListSwitch[] = [
   { key: 'unplayed', label: 'Unplayed only' },
   { key: 'missing', label: 'Hide missing tracks' },
 ];
+/** The switch only this device can answer: what it holds is no word of Cratarr's (lib/listFilter). */
+export const HERE = 'here';
 export const SWITCHES: Record<string, ListSwitch[]> = {
   library: [
     { key: 'favourites', label: 'Favourites only' },
     { key: 'unplayed', label: 'Unplayed only' },
     { key: 'topRated', label: '4 stars and up' },
+    { key: HERE, label: 'Available offline' },
     // Not Lossless only, Upgrades waiting or Duplicates waiting (the owner, 2026-10-24: not filter options).
   ],
   playlists: [

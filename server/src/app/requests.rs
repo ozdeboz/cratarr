@@ -161,14 +161,24 @@ async fn connected(lidarr: bool) -> Vec<&'static str> {
 
 /// An approved request handed to every fetcher connected (decision 0099's amendment): Lidarr told to want it, Soulseek
 /// woken to take it in (it reads the approved Requests itself; one without a release group it cannot judge); what each
-/// said (or why it could not), kept on the request.
+/// said (or why it could not), kept on the request. A release group Lidarr found by the album's names is kept on it too:
+/// its state can be read from then on, and Soulseek can judge it.
 async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
     let lidarr = fetcher(app);
     let soulseek = super::soulseek::connected().await;
+    let mut release_group = r.release_group.clone();
     let mut said = Vec::new();
     if let Some(f) = lidarr {
         said.push(match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
-            Ok(said) => said,
+            Ok(handed) => {
+                if release_group.is_none() {
+                    if let Err(e) = serve.userdata.set_request_release_group(r.id, &handed.release_group) {
+                        tracing::warn!("request {}: its release group was not kept: {e:#}", r.id);
+                    }
+                    release_group = Some(handed.release_group);
+                }
+                handed.said
+            }
             Err(e) => {
                 // In the log too (0.9.6: a Lidarr timeout the owner saw left no trace to follow).
                 tracing::warn!("request {}: not handed to Lidarr: {e:#}", r.id);
@@ -177,7 +187,7 @@ async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
         });
     }
     if soulseek {
-        said.push(if r.release_group.is_some() {
+        said.push(if release_group.is_some() {
             super::soulseek::wake();
             "Soulseek searches for it".to_string()
         } else {
@@ -333,6 +343,18 @@ pub async fn marks(app: &super::App, serve: &Serve) -> Result<Arc<HashMap<String
     Ok(m)
 }
 
+/// An album's key among `requesters`.
+pub fn requested(artist: &str, album: &str) -> String {
+    format!("{}|{}", super::import::key(artist), super::import::key(album))
+}
+
+/// Who asked for each approved request, by its artist and album (`requested`): an Incoming record goes into its
+/// requester's own music by default, and is theirs to add or delete (0101 point 2). The newest asker of an album.
+pub fn requesters(serve: &Serve) -> HashMap<String, String> {
+    let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
+    approved.into_iter().rev().map(|r| (requested(&r.artist, &r.album), r.user)).collect()
+}
+
 /// An album's mark, by its release group, else by its artist's and its name's key (a Bandcamp album's Want).
 pub fn mark_of(marks: &HashMap<String, Mark>, release_group: Option<&str>, artist: &str, album: &str) -> Option<Mark> {
     release_group
@@ -371,7 +393,7 @@ pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
 /// reading shared by those asking at once and kept until the library is built again (`Matcher::library_albums`;
 /// 0.11.1: /api/discover's memory, 2026-10-30: each Discover request read every song of the library here, twice, some
 /// 70 MB each time on the NAS).
-async fn library(serve: &Serve) -> Option<Arc<Matcher>> {
+pub(crate) async fn library(serve: &Serve) -> Option<Arc<Matcher>> {
     let (dir, built) = (serve.data_dir.clone()?, serve.built_at());
     tokio::task::spawn_blocking(move || Matcher::library_albums(&dir.join("library.sqlite"), Some(built)).ok()).await.ok().flatten()
 }

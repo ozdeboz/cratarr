@@ -20,6 +20,9 @@ object BundledPage {
     /** Cratarr's own, never the page's: its API, Subsonic's, the sign-in, the guest page, the device's covers. */
     private val CRATARRS = listOf("/api", "/rest", "/signin", "/signout", "/guest", "/__device")
 
+    /** Whether a path is the page's (one of its own routes or files), not Cratarr's. */
+    fun pagePath(path: String): Boolean = CRATARRS.none { path == it || path.startsWith("$it/") }
+
     /** A page's build: its release (X.Y.Z) and its build (its main script's hash). */
     data class Build(val version: String, val build: String)
 

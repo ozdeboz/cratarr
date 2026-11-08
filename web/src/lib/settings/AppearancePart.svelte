@@ -2,7 +2,7 @@
   // Appearance (the owner, 2026-10-25: Display's concerns apart): this browser's look, acting at once: Light or Dark as
   // two pictures with Automatic under them (lib/settings/AppearancePicker), and Animations; Home's header (the owner,
   // 2026-10-25): a personal greeting in place of the moment's name, and a picture of one's own in place of the
-  // weather's sky, kept on this device (lib/localCovers).
+  // weather's sky, on the account (lib/localCovers).
   import { slide } from 'svelte/transition';
   import { inApp } from '../app.svelte';
   import { prefs } from '../prefs.svelte';
@@ -13,7 +13,7 @@
   import ChoiceSheet from './ChoiceSheet.svelte';
   import Item from './Item.svelte';
   import { offerReset, pref } from './reset.svelte';
-  import { HOME_HEADER, HOME_HEADER_PX, localCovers, removeLocalPicture, setLocalPicture } from '../localCovers.svelte';
+  import { chooseHomePicture, dropHomePicture, HOME_HEADER, localCovers } from '../localCovers.svelte';
   import { toast } from '../toast.svelte';
 
   // What Reset puts back (lib/settings/reset): each as its row names it, its default the prefs'.
@@ -28,7 +28,7 @@
     pref('flowBackdrop', 'Backdrop', (v) => BACKDROPS.find((b) => b.value === v)?.label ?? (v === 'own' ? 'Yours' : String(v))),
     pref('flowShuffle', 'Shuffle'),
     pref('flowPictureOnHome', 'Also on Home'),
-    { name: 'Your picture', now: () => !!localCovers[HOME_HEADER], def: false, set: () => removeLocalPicture(HOME_HEADER), say: (v) => (v ? 'On this device' : 'None') },
+    { name: 'Your picture', now: () => !!localCovers[HOME_HEADER], def: false, set: () => dropHomePicture(), say: (v) => (v ? 'On your account' : 'None') },
   ]);
 
   const SHUFFLE_WHEN: { value: typeof prefs.flowShuffleWhen; label: string }[] = [
@@ -42,7 +42,7 @@
   let busy = $state(false);
   /** One's own picture gone: the default photo again where it stood behind the flows. */
   function dropOwn() {
-    void removeLocalPicture(HOME_HEADER);
+    void dropHomePicture();
     if (prefs.flowBackdrop === 'own') prefs.flowBackdrop = DEFAULT_BACKDROP;
   }
   async function pick(e: Event) {
@@ -52,7 +52,7 @@
     if (!file) return;
     busy = true;
     try {
-      await setLocalPicture(HOME_HEADER, file, HOME_HEADER_PX);
+      await chooseHomePicture(file);
       // Chosen, it is what stands behind the flows.
       prefs.flowBackdrop = 'own';
     } catch (err) {
@@ -111,7 +111,7 @@
       {/if}
     </div>
   {/if}
-  <Item name="Your picture" line={localCovers[HOME_HEADER] ? 'On this device' : 'One of your own, kept on this device'}>
+  <Item name="Your picture" line={localCovers[HOME_HEADER] ? 'On your account' : 'One of your own, on your account'}>
     <span class="pick">
       <label class="button" class:busy>{localCovers[HOME_HEADER] ? 'Change' : 'Choose a picture'}<input type="file" accept="image/*" hidden disabled={busy} onchange={pick} /></label>
       {#if localCovers[HOME_HEADER]}<button onclick={dropOwn}>Remove</button>{/if}

@@ -1,7 +1,7 @@
 # Every push and pull request is tested (the audit, 2026-10-29: release.yml ran on version tags only, so nothing tested
 # an ordinary push): the server's tests in the Dockerfile's own test stage (as a release builds them), the page's tests
-# and type check, the app's JVM tests, and one version everywhere (scripts/version.sh). A release still builds from a
-# version tag only (release.yml).
+# and type check, the app's JVM tests, the desktop app's tests and its check for house addresses, and one version
+# everywhere (scripts/version.sh). A release still builds from a version tag only (release.yml).
 name: CI
 
 on:
@@ -63,3 +63,19 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew --console=plain testDebugUnitTest
+
+  desktop:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run check

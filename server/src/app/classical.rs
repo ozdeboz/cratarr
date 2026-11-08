@@ -38,8 +38,8 @@ use super::works::{Person, Stored};
 use crate::serve::read::{WorkAlbum, WorkSong};
 use crate::source::ComposerRef;
 
-/// The kind as the filter's Type axis and the page name it.
-pub const CLASSICAL: &str = "Classical";
+pub use cratarr_rules::crates::CLASSICAL;
+
 /// What the passes found counts at most this late (a mark, and a build, at once).
 const FACTS_EVERY: Duration = Duration::from_secs(60);
 
@@ -141,7 +141,7 @@ pub struct Inputs {
     pub discogs_names: HashMap<u64, Vec<String>>,
     /// Discogs' genres by a verified link (`release:<id>`, `master:<id>`).
     pub discogs_genres: HashMap<String, Vec<String>>,
-    /// By the record's Music-form id.
+    /// By the record.
     pub marks: HashMap<String, Mark>,
     /// Every composer key given out: (name, the key it is now).
     pub keys: HashMap<String, (String, Option<String>)>,
@@ -778,7 +778,7 @@ pub fn build(i: &Inputs) -> Index {
                 opened,
                 works,
                 performed: stored.is_some_and(|s| s.performed),
-                mark: i.marks.get(&a.base).copied(),
+                mark: i.marks.get(&a.id).copied(),
                 artists,
             }
         })
@@ -1134,7 +1134,6 @@ mod tests {
     fn album(id: &str, artist: &str, mbid: Option<&str>, genres: &[&str], release: Option<&str>) -> WorkAlbum {
         WorkAlbum {
             id: id.into(),
-            base: id.into(),
             name: format!("{id} record"),
             artist: artist.into(),
             year: Some(1990),
@@ -1514,7 +1513,7 @@ mod tests {
         // The Type axis offers it, with its count.
         let items: Vec<[&Facts; 1]> = facts.iter().map(|f| [f]).collect();
         let lists: Vec<&[&Facts]> = items.iter().map(|i| i.as_slice()).collect();
-        let axes = crate::crates::list_axes(&lists, &[], None, None);
+        let axes = crate::crates::list_axes(&lists, &[], None, None, 0);
         let t = axes.iter().find(|a| a.key == "type").unwrap();
         let at = t.values.iter().position(|v| v == "Classical").unwrap();
         assert_eq!(t.counts[at], 1);
@@ -1544,6 +1543,7 @@ mod tests {
             duration_secs: None,
             tags: Vec::new(),
             library: None,
+            copies: Vec::new(),
             artists: Vec::new(),
             release: Default::default(),
         };

@@ -50,6 +50,7 @@
     viewPlaylist(serverPlaylistSubject(serverSrc, id));
   }
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
+  import { followMoved } from './lib/follow.svelte';
   import { endSelect, pickWhich, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
   import SelectSheet from './lib/SelectSheet.svelte';
   import Row, { type Cell } from './lib/Row.svelte';
@@ -65,6 +66,8 @@
   const view = $derived(live.view);
   // The favourites' hearts on the chips (decision 0023).
   $effect(() => void loadPlaylistFavorites());
+  // What this page kept by the playlists' 0.15 keys, to their ids (decision 0101).
+  $effect(() => void followMoved());
   const error = $derived(live.error);
   /** The filter section's Favourites toggle: only favourite playlists. */
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.

@@ -4,6 +4,7 @@
   // (lib/RecordEdit, its steps lib/WordsStep). A kind it has none of its own of shows its record's, "As its record";
   // "As its record" in a step takes its own back. Save sends only the kinds changed, once.
   import { albumView, setTrackWords, type TrackWords, type WordKind } from './api';
+  import Asking from './Asking.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
@@ -82,6 +83,8 @@
             <Item name={k.name} line={s.own ? 'Its own' : RECORD} value={listed(s.words)} onclick={() => (step = k.kind)} />
           {/each}
         </Group>
+      {:else}
+        <Asking />
       {/if}
     </div>
   {:else}

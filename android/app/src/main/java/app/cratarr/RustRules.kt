@@ -2,33 +2,31 @@ package app.cratarr
 
 import android.content.Context
 import android.os.SystemClock
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Spike B (0.11; the owner, 2026-10-30): the players' rules from the shared Rust crate (server/rules, through UniFFI:
- * server/rules-ffi), in place of this app's own Kotlin, so the app, the page and the server keep one implementation.
- * Behind the device's `rustRules` switch, off by default. An app built without the library
- * (scripts/rules-android.sh) or a device where it does not load keeps the Kotlin, and says so once in the link log.
- * Only the brake so far ([Plan]).
+ * The players' rules from the shared Rust crate (server/rules, through UniFFI: server/rules-ffi), in place of this app's own
+ * Kotlin, so the app, the page and the server keep one implementation. The library is in every build of the app (Gradle's
+ * `rulesLibrary`). Only the brake so far ([Plan]). The Kotlin beside it serves the unit tests, which have no library, and a
+ * device where it does not load, which says so once in the link log: the app ships no library for 32-bit ARM.
  */
 object RustRules {
-    /** The switch, as set ([Prefs.rustRules]). */
-    @Volatile var wanted = false
+    /** The library loaded and answers as the Kotlin does. */
+    @Volatile var on = false
+        private set
 
-    /** The library loaded and answered; null until first asked. */
-    @Volatile private var loaded: Boolean? = null
+    private val asked = AtomicBoolean(false)
 
-    /** Rust's rules are used: switched on, and the library is here. */
-    val on: Boolean get() = wanted && (loaded ?: false)
-
-    /** Takes the switch; switched on, loads the library once and compares it with the Kotlin (in the link log). */
-    fun set(context: Context, on: Boolean) {
-        wanted = on
-        if (on && loaded == null) loaded = check(context)
+    /** Loads the library, once a process, away from the caller's thread: JNA takes over 100 ms to bind it, a frame 16. */
+    fun load(context: Context) {
+        if (!asked.compareAndSet(false, true)) return
+        val app = context.applicationContext
+        Thread({ on = check(app) }, "cratarr-rules").apply { isDaemon = true }.start()
     }
 
-    /** The library against the Kotlin over brakes like the tape's, and how long a call takes. */
+    /** The library against the Kotlin over brakes like the tape's, in the link log. */
     private fun check(context: Context): Boolean = try {
-        // The first call loads the library (JNA): timed apart from a warm call.
+        // The first call loads the library (JNA): timed apart from the rest.
         val loading = SystemClock.elapsedRealtimeNanos()
         app.cratarr.rules.brakeLengthMs(16.0, 1.0, 250.0)
         val loadMs = (SystemClock.elapsedRealtimeNanos() - loading) / 1e6
@@ -39,7 +37,7 @@ object RustRules {
             val rust = app.cratarr.rules.brakeLengthMs(v0, to, 250.0).toLong()
             check(rust == length) { "length $v0→$to: Rust $rust, Kotlin $length" }
             val plan = Plan(0L, 0, 0L, 1, v0, to, length)
-            for (t in 0L..length + 100L step 10L) {
+            for (t in 0L..length + 100L step 50L) {
                 val d = length.toDouble()
                 val tt = t.toDouble()
                 worst = maxOf(
@@ -51,20 +49,7 @@ object RustRules {
                 calls += 3
             }
         }
-        // A warm call against the Kotlin: as a brake's frame asks.
-        var sink = 0.0
-        val n = 20_000
-        val rustStart = SystemClock.elapsedRealtimeNanos()
-        for (i in 0 until n) sink += app.cratarr.rules.brakeWay(64.0, 1.0, 1000.0, (i % 1000).toDouble())
-        val rustNs = (SystemClock.elapsedRealtimeNanos() - rustStart).toDouble() / n
-        val plan = Plan(0L, 0, 0L, 1, 64.0, 1.0, 1000L)
-        val kotlinStart = SystemClock.elapsedRealtimeNanos()
-        for (i in 0 until n) sink += plan.kotlinWay((i % 1000).toLong())
-        val kotlinNs = (SystemClock.elapsedRealtimeNanos() - kotlinStart).toDouble() / n
-        LinkLog.add(
-            context, "info", "rules", "rust rules loaded",
-            "calls" to calls, "worst" to worst, "load_ms" to loadMs, "rust_ns" to rustNs, "kotlin_ns" to kotlinNs, "sink" to sink,
-        )
+        LinkLog.add(context, "info", "rules", "rust rules loaded", "calls" to calls, "worst" to worst, "load_ms" to loadMs)
         worst < 1e-9
     } catch (e: Throwable) {
         LinkLog.add(context, "warn", "rules", "rust rules not used", "error" to e.toString())

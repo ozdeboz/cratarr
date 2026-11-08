@@ -1,0 +1,367 @@
+<!doctype html>
+<!--
+  The measuring page for the page's part of decision 0102's gate (amended a third time: one engine, measured first).
+  Served by Vite's dev server only (never built into the page): on a phone it is opened as http://localhost through
+  `adb reverse` over wireless debugging, since the engine's AudioWorklet runs only in a secure context and a cable would
+  charge the phone. Today's page head (lib/tape) plays one track at a steady 1x, round and round, three ways:
+    - "engine": the head straight to the speaker;
+    - "element": the head through an <audio> element (a MediaStreamAudioDestinationNode), for background play and
+      the lock screen;
+    - "plain": the browser's own <audio> playing the same file, the baseline.
+  What it keeps (in localStorage, and shown): sound heard against the clock's time (gaps with the screen off), the
+  context's and the page's states, Media Session presses, the battery, the time to first sound; and, measured with the
+  microphone, how much later the element's path is heard than the engine's own.
+  The track: ?track=<source>/<id> (Cratarr's own file through the dev server's proxy), else a generated one.
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Engine measuring</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.4 system-ui, sans-serif; }
+  body { margin: 0 auto; max-width: 40rem; padding: 16px; }
+  button { font: inherit; padding: 0.5rem 0.9rem; margin: 0 0.4rem 0.4rem 0; }
+  button[aria-pressed='true'] { outline: 2px solid currentColor; }
+  pre { white-space: pre-wrap; font-size: 13px; }
+</style>
+<h1>Engine measuring</h1>
+<p id="track"></p>
+<p>
+  <button data-mode="engine">Engine</button><button data-mode="element">Through an element</button
+  ><button data-mode="plain">Plain audio</button>
+</p>
+<p><button id="start">Start</button><button id="stop">Stop</button><button id="delay">Measure the element's delay</button></p>
+<p><button id="copy">Copy the report</button><button id="clear">Clear</button></p>
+<pre id="report"></pre>
+<audio id="el" playsinline></audio>
+<script type="module">
+  import * as tape from '/src/lib/tape/tape.svelte.ts';
+
+  const $ = (id) => document.getElementById(id);
+  const el = $('el');
+  const KEY = 'cratarr-measure-engine';
+  const SAMPLE_MS = 1000;
+  /** Less sound than time by this much in one sample is a gap (s). */
+  const GAP_S = 0.25;
+
+  // The track: Cratarr's own file, or a generated one (a tone that drifts, so a gap would be heard).
+  const asked = new URLSearchParams(location.search).get('track');
+  const cut = asked ? asked.indexOf('/') : -1;
+  const trackUrl = cut > 0 ? `/api/file/${encodeURIComponent(asked.slice(0, cut))}/${encodeURIComponent(asked.slice(cut + 1))}` : generated(180, 44100);
+  $('track').textContent = cut > 0 ? `Track ${asked}` : 'A generated track (3 min)';
+
+  /** A WAV of `seconds` at `rate`, 16-bit stereo: a tone gliding between 220 and 330 Hz. */
+  function generated(seconds, rate) {
+    const frames = Math.round(seconds * rate);
+    const b = new DataView(new ArrayBuffer(44 + frames * 4));
+    const text = (at, s) => [...s].forEach((c, i) => b.setUint8(at + i, c.charCodeAt(0)));
+    text(0, 'RIFF');
+    b.setUint32(4, 36 + frames * 4, true);
+    text(8, 'WAVE');
+    text(12, 'fmt ');
+    b.setUint32(16, 16, true);
+    b.setUint16(20, 1, true);
+    b.setUint16(22, 2, true);
+    b.setUint32(24, rate, true);
+    b.setUint32(28, rate * 4, true);
+    b.setUint16(32, 4, true);
+    b.setUint16(34, 16, true);
+    text(36, 'data');
+    b.setUint32(40, frames * 4, true);
+    let phase = 0;
+    for (let i = 0; i < frames; i++) {
+      const f = 275 + 55 * Math.sin((2 * Math.PI * i) / (rate * 20));
+      phase += (2 * Math.PI * f) / rate;
+      const s = Math.round(Math.sin(phase) * 9000);
+      b.setInt16(44 + i * 4, s, true);
+      b.setInt16(46 + i * 4, s, true);
+    }
+    return URL.createObjectURL(new Blob([b.buffer], { type: 'audio/wav' }));
+  }
+
+  // --- What is kept ---
+  const blank = () => ({ mode: null, started: null, elapsedS: 0, soundS: 0, gaps: [], loops: 0, firstSoundMs: null, fetchMs: null, contextStates: [], visibility: [], presses: [], battery: null, delay: null });
+  let log = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(KEY) ?? 'null') ?? blank();
+    } catch {
+      return blank();
+    }
+  })();
+  const keep = () => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(log));
+    } catch {
+      /* private window: shown only */
+    }
+    show();
+  };
+  const at = () => new Date().toLocaleTimeString();
+
+  // --- Playing ---
+  let mode = log.mode ?? 'engine';
+  let running = false;
+  let clock = null;
+  let last = null;
+  let streamOut = null;
+
+  function pick(m) {
+    if (running) return;
+    mode = m;
+    for (const b of document.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
+  }
+  for (const b of document.querySelectorAll('[data-mode]')) b.onclick = () => pick(b.dataset.mode);
+  pick(mode);
+
+  /** Where the sound heard is now (s into the track), whichever way it plays. */
+  const heard = () => (mode === 'plain' ? el.currentTime : (tape.heardMs() ?? NaN) / 1000);
+
+  /** The head routed to the speaker, or through the element. */
+  function route() {
+    const o = tape.tapeOutput();
+    if (!o) return;
+    o.node.disconnect();
+    if (mode === 'element') {
+      streamOut ??= o.context.createMediaStreamDestination();
+      o.node.connect(streamOut);
+      el.srcObject = streamOut.stream;
+      void el.play();
+    } else {
+      o.node.connect(o.context.destination);
+      el.srcObject = null;
+    }
+  }
+
+  function headFrom(ms) {
+    tape.start('measure', ms, { kind: 'steady', v: 1 }, 1, (why) => {
+      // Round and round: at the track's end, again from its start.
+      if (running && why === 'end') {
+        log.loops++;
+        headFrom(0);
+      }
+    }, () => {});
+  }
+
+  /** Plays; `fresh`: a new measurement (Start), else on in the same one (Play on the lock screen after a pause). */
+  async function start(fresh = true) {
+    if (running) return;
+    if (fresh || !log.started) {
+      log = blank();
+      log.mode = mode;
+      log.started = new Date().toISOString();
+    }
+    running = true;
+    // Sound against the clock from its first sound on (the wait before it is the time to first sound, not a gap).
+    last = null;
+    const t0 = performance.now();
+    if (mode === 'plain') {
+      el.srcObject = null;
+      el.src = trackUrl;
+      el.loop = true;
+      el.onplaying = () => {
+        log.firstSoundMs ??= Math.round(performance.now() - t0);
+        last ??= { wall: performance.now(), heard: heard() };
+      };
+      await el.play();
+    } else {
+      const error = await tape.load('measure', trackUrl);
+      if (error) {
+        running = false;
+        log.error = error;
+        return keep();
+      }
+      log.fetchMs = Math.round(performance.now() - t0);
+      const o = tape.tapeOutput();
+      o.context.onstatechange = () => {
+        log.contextStates.push({ t: at(), state: o.context.state });
+        keep();
+      };
+      route();
+      headFrom(0);
+      // Heard once the place moves on from its first reading: an output just woken says its first block and then stands
+      // for as long as its device takes (half a second on a PC's first start), which is no sound, and no gap either.
+      const first = (was) => {
+        if (!running) return;
+        const now = tape.heardMs();
+        if (was > 0 && now > was) {
+          log.firstSoundMs = Math.round(performance.now() - t0);
+          last = { wall: performance.now(), heard: heard() };
+        } else setTimeout(() => first(now), 10);
+      };
+      first();
+    }
+    session();
+    clock = setInterval(sample, SAMPLE_MS);
+    keep();
+  }
+
+  function stop() {
+    if (!running) return;
+    running = false;
+    clearInterval(clock);
+    sample();
+    tape.stop();
+    el.pause();
+    navigator.mediaSession && (navigator.mediaSession.playbackState = 'paused');
+    keep();
+  }
+
+  /** Sound heard against the clock since the last sample: a gap where less was heard than the time that went by (a
+   *  loop round is counted from the track's start). Timers run once a minute in a hidden page: the gap then is over
+   *  that minute. */
+  function sample() {
+    if (!last) return;
+    const now = performance.now();
+    const h = heard();
+    const wall = (now - last.wall) / 1000;
+    let gone = h - last.heard;
+    if (gone < -1) gone += lengthS();
+    if (!Number.isFinite(gone)) gone = 0;
+    log.elapsedS += wall;
+    log.soundS += Math.max(0, Math.min(gone, wall + GAP_S));
+    if (running && wall - gone > GAP_S) log.gaps.push({ t: at(), missingS: Math.round((wall - gone) * 10) / 10, hidden: document.hidden });
+    last = { wall: now, heard: h };
+    keep();
+  }
+  const lengthS = () => (mode === 'plain' ? el.duration || 0 : (tape.tape.lengthMs ?? 0) / 1000);
+
+  // --- The lock screen, the headset, Bluetooth ---
+  function session() {
+    const s = navigator.mediaSession;
+    if (!s) return;
+    s.metadata = new MediaMetadata({ title: 'Engine measuring', artist: mode, album: 'Cratarr' });
+    s.playbackState = 'playing';
+    for (const a of ['play', 'pause', 'stop', 'nexttrack', 'previoustrack', 'seekbackward', 'seekforward']) {
+      try {
+        s.setActionHandler(a, () => {
+          log.presses.push({ t: at(), action: a, hidden: document.hidden });
+          if (a === 'pause' || a === 'stop') stop();
+          if (a === 'play') void start(false);
+          keep();
+        });
+      } catch {
+        /* not offered here */
+      }
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    log.visibility.push({ t: at(), state: document.visibilityState });
+    keep();
+  });
+
+  // --- The battery ---
+  void navigator.getBattery?.().then((b) => {
+    const note = () => {
+      log.battery ??= { start: b.level, startAt: Date.now() };
+      Object.assign(log.battery, { now: b.level, nowAt: Date.now(), charging: b.charging });
+      keep();
+    };
+    b.onlevelchange = note;
+    b.onchargingchange = note;
+    note();
+  });
+
+  // --- The element's delay, by the microphone: clicks through each path, their onsets found in what it hears ---
+  async function delay() {
+    if (running) return;
+    if (!tape.tapeOutput()) {
+      // The head's context is made with its first track.
+      const error = await tape.load('measure', trackUrl);
+      if (error) return void (log.error = error);
+    }
+    const { context: c } = tape.tapeOutput();
+    void c.resume();
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    const rec = `registerProcessor('measure-rec', class extends AudioWorkletProcessor {
+      process(i) { const x = i[0] && i[0][0]; if (x) this.port.postMessage({ f: currentFrame, x: x.slice() }); return true; }
+    });`;
+    await c.audioWorklet.addModule(URL.createObjectURL(new Blob([rec], { type: 'text/javascript' })));
+    // An output into silence, so the context certainly runs it.
+    const node = new AudioWorkletNode(c, 'measure-rec');
+    const hush = c.createGain();
+    hush.gain.value = 0;
+    node.connect(hush).connect(c.destination);
+    const heardFrames = [];
+    node.port.onmessage = (e) => heardFrames.push(e.data);
+    c.createMediaStreamSource(mic).connect(node);
+    const dest = c.createMediaStreamDestination();
+    el.srcObject = dest.stream;
+    await el.play();
+    const click = (to, t) => {
+      const o = c.createOscillator();
+      const g = c.createGain();
+      o.frequency.value = 2000;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.8, t + 0.002);
+      g.gain.linearRampToValueAtTime(0, t + 0.02);
+      o.connect(g).connect(to);
+      o.start(t);
+      o.stop(t + 0.03);
+    };
+    const onset = (fromFrame) => {
+      const quiet = 0.05;
+      for (const b of heardFrames) {
+        if (b.f + b.x.length < fromFrame) continue;
+        for (let i = 0; i < b.x.length; i++) if (b.f + i >= fromFrame && Math.abs(b.x[i]) > quiet) return b.f + i;
+      }
+      return null;
+    };
+    const measure = async (to) => {
+      const out = [];
+      for (let n = 0; n < 5; n++) {
+        heardFrames.length = 0;
+        const t = c.currentTime + 0.3;
+        click(to, t);
+        await new Promise((r) => setTimeout(r, 900));
+        const f = onset(Math.round(t * c.sampleRate));
+        if (f !== null) out.push(((f - t * c.sampleRate) / c.sampleRate) * 1000);
+      }
+      out.sort((a, b) => a - b);
+      return out.length ? Math.round(out[Math.floor(out.length / 2)]) : null;
+    };
+    const engineMs = await measure(c.destination);
+    const elementMs = await measure(dest);
+    for (const t of mic.getTracks()) t.stop();
+    node.disconnect();
+    hush.disconnect();
+    el.pause();
+    el.srcObject = null;
+    log.delay = { engineMs, elementMs, extraMs: engineMs !== null && elementMs !== null ? elementMs - engineMs : null, at: at() };
+    keep();
+  }
+
+  // --- The report ---
+  function show() {
+    const b = log.battery;
+    const hours = b && b.nowAt > b.startAt ? (b.nowAt - b.startAt) / 3_600_000 : 0;
+    const perHour = b && hours > 0.05 && !b.charging ? Math.round(((b.start - b.now) / hours) * 1000) / 10 : null;
+    const summary = {
+      mode: log.mode,
+      started: log.started,
+      minutes: Math.round(log.elapsedS / 6) / 10,
+      soundMinutes: Math.round(log.soundS / 6) / 10,
+      gaps: log.gaps.length,
+      longestGapS: log.gaps.reduce((n, g) => Math.max(n, g.missingS), 0),
+      loops: log.loops,
+      firstSoundMs: log.firstSoundMs,
+      fetchMs: log.fetchMs,
+      batteryPerHour: perHour === null ? null : `${perHour} %`,
+      presses: log.presses.length,
+      delay: log.delay,
+      error: log.error,
+    };
+    $('report').textContent = JSON.stringify(summary, null, 2) + '\n\n' + JSON.stringify({ gaps: log.gaps, contextStates: log.contextStates, visibility: log.visibility, presses: log.presses }, null, 2);
+  }
+
+  $('start').onclick = () => void start(true);
+  $('stop').onclick = stop;
+  $('delay').onclick = () => void delay().catch((e) => ((log.error = String(e)), keep()));
+  $('copy').onclick = () => void navigator.clipboard?.writeText(JSON.stringify(log));
+  $('clear').onclick = () => {
+    if (running) return;
+    log = blank();
+    keep();
+  };
+  show();
+  window.measure = { log: () => log, start, stop, delay };
+</script>

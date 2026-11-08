@@ -424,7 +424,8 @@ export function playlistDeleted(id: string) {
   swap(rest, panel.tab);
 }
 
-/** An album that moved (kept or replaced into Music: a new id on the server) stays viewed as itself there. */
+/** A record the server answers under another id than asked: an old link opened through the map kept at the migration, as
+ *  a move no longer changes an id. It stays viewed as itself there. */
 export function albumMoved(source: string, from: string, to: string) {
   if (panel.viewed !== albumSubject(source, from)) return;
   const [was, now] = [albumSubject(source, from), albumSubject(source, to)];
@@ -432,8 +433,8 @@ export function albumMoved(source: string, from: string, to: string) {
   show();
 }
 
-/** An album that left Incoming (kept, replaced or deleted) closes. */
-/** A record deleted: back one level from it (not every level: what it was opened over stays). */
+/** A record gone with its last copy (lib/albums `copiesGone` says which): back one level from it, not every level, what
+ *  it was opened over staying. While a copy is left it stays open. */
 export function albumGone(source: string, id: string) {
   if (panel.viewed === albumSubject(source, id)) backOne();
 }

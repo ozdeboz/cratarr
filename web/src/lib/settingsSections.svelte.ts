@@ -56,8 +56,9 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; kep
   { id: 'content', title: 'Content', icon: 'home', kept: 'device' },
   { id: 'connections', title: 'Connections', icon: 'server', kept: 'server', admin: true },
   { id: 'libraries', title: 'Libraries', icon: 'library', kept: 'server', admin: true },
-  // The server's devices (the owner, 2026-10-25: "players should be called devices"), its line still how many players.
-  { id: 'players', title: 'Devices', icon: 'speakers', kept: 'server', admin: true },
+  // The server's devices (the owner, 2026-10-25: "players should be called devices"), its line still how many players. Anyone's
+  // own: their speaker delay, their sharing and Remove are an owner's right, the rest of it the administrators'.
+  { id: 'players', title: 'Devices', icon: 'speakers', kept: 'server', admin: true, everyone: true },
   { id: 'users', title: 'Users', icon: 'users', kept: 'server', admin: true },
   { id: 'auth', title: 'Authentication', icon: 'key', kept: 'server', admin: true },
   // Another server's plays and favourites into an account: its administrators' (listening is private).

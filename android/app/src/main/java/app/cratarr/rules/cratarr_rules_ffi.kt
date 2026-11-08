@@ -30,6 +30,7 @@ import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 // This is a helper for safely working with byte buffers returned from the Rust code.
 // A rust-owned buffer is represented by its capacity, its current length, and a
@@ -719,6 +720,50 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -734,13 +779,55 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 // when the library is loaded.
 internal interface IntegrityCheckingUniffiLib : Library {
     // Integrity check functions only
-    fun uniffi_cratarr_rules_ffi_checksum_func_brake_accel(
+    fun uniffi_cratarr_rules_ffi_checksum_func_autoplay_batch(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_autoplay_due(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_brake_accel(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_length_ms(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_v(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_way(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_device_open(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_fresh_at(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_fresh_step(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_next_round(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_picks_from_kept(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_radio_place(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_after(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_anew(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_anew_after_ms(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_anew_by_another(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_answer(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_first_after_ms(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_paused(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_step(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_step_stale(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_take_changes(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_take_whole(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_sync_version(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_method_rulesdevice_ask(
 ): Short
 fun ffi_cratarr_rules_ffi_uniffi_contract_version(
 ): Int
@@ -784,10 +871,24 @@ internal interface UniffiLib : Library {
             lib
         }
         
+        // The Cleaner for the whole library
+        internal val CLEANER: UniffiCleaner by lazy {
+            UniffiCleaner.create()
+        }
     }
 
     // FFI functions
-    fun uniffi_cratarr_rules_ffi_fn_func_brake_accel(`v0`: Double,`to`: Double,`length`: Double,`t`: Double,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_cratarr_rules_ffi_fn_clone_rulesdevice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_cratarr_rules_ffi_fn_free_rulesdevice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_cratarr_rules_ffi_fn_method_rulesdevice_ask(`ptr`: Pointer,`asked`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_autoplay_batch(uniffi_out_err: UniffiRustCallStatus, 
+): Int
+fun uniffi_cratarr_rules_ffi_fn_func_autoplay_due(`count`: Int,`playing`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_cratarr_rules_ffi_fn_func_brake_accel(`v0`: Double,`to`: Double,`length`: Double,`t`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
 fun uniffi_cratarr_rules_ffi_fn_func_brake_length_ms(`v0`: Double,`to`: Double,`brakeMs`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
@@ -795,6 +896,42 @@ fun uniffi_cratarr_rules_ffi_fn_func_brake_v(`v0`: Double,`to`: Double,`length`:
 ): Double
 fun uniffi_cratarr_rules_ffi_fn_func_brake_way(`v0`: Double,`to`: Double,`length`: Double,`t`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
+fun uniffi_cratarr_rules_ffi_fn_func_device_open(`index`: RustBuffer.ByValue,`sounds`: RustBuffer.ByValue,`own`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_fresh_at(uniffi_out_err: UniffiRustCallStatus, 
+): Int
+fun uniffi_cratarr_rules_ffi_fn_func_fresh_step(`facts`: RustBuffer.ByValue,`version`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_next_round(`queue`: RustBuffer.ByValue,`playing`: Int,`shuffled`: Byte,`draw`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_picks_from_kept(`kept`: RustBuffer.ByValue,`queued`: RustBuffer.ByValue,`artists`: RustBuffer.ByValue,`any`: Byte,`count`: Int,`draw`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_radio_place(`lanes`: RustBuffer.ByValue,`playing`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_after(`part`: RustBuffer.ByValue,`outcome`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_anew(`part`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_anew_after_ms(uniffi_out_err: UniffiRustCallStatus, 
+): Long
+fun uniffi_cratarr_rules_ffi_fn_func_sync_anew_by_another(`part`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_answer(`status`: RustBuffer.ByValue,`whole`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_first_after_ms(uniffi_out_err: UniffiRustCallStatus, 
+): Long
+fun uniffi_cratarr_rules_ffi_fn_func_sync_paused(`part`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_cratarr_rules_ffi_fn_func_sync_step(`part`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`mobile`: RustBuffer.ByValue,`told`: Byte,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_step_stale(`part`: RustBuffer.ByValue,`network`: RustBuffer.ByValue,`mobile`: RustBuffer.ByValue,`took`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_take_changes(`kind`: RustBuffer.ByValue,`kept`: RustBuffer.ByValue,`feed`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_take_whole(`kind`: RustBuffer.ByValue,`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_sync_version(`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Int
 fun ffi_cratarr_rules_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun ffi_cratarr_rules_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -921,6 +1058,12 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_autoplay_batch() != 52903.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_autoplay_due() != 24763.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_brake_accel() != 17975.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -931,6 +1074,63 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_brake_way() != 18014.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_device_open() != 61812.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_fresh_at() != 62157.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_fresh_step() != 42507.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_next_round() != 52897.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_picks_from_kept() != 11457.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_radio_place() != 15524.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_after() != 38437.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_anew() != 44383.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_anew_after_ms() != 38501.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_anew_by_another() != 27644.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_answer() != 41326.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_first_after_ms() != 47277.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_paused() != 64662.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_step() != 45828.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_step_stale() != 11159.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_take_changes() != 27574.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_take_whole() != 45991.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_sync_version() != 31718.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_method_rulesdevice_ask() != 39989.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1011,6 +1211,162 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
  * @suppress
  * */
 object NoPointer
+/**
+ * The cleaner interface for Object finalization code to run.
+ * This is the entry point to any implementation that we're using.
+ *
+ * The cleaner registers objects and returns cleanables, so now we are
+ * defining a `UniffiCleaner` with a `UniffiClenaer.Cleanable` to abstract the
+ * different implmentations available at compile time.
+ *
+ * @suppress
+ */
+interface UniffiCleaner {
+    interface Cleanable {
+        fun clean()
+    }
+
+    fun register(value: Any, cleanUpTask: Runnable): UniffiCleaner.Cleanable
+
+    companion object
+}
+
+// The fallback Jna cleaner, which is available for both Android, and the JVM.
+private class UniffiJnaCleaner : UniffiCleaner {
+    private val cleaner = com.sun.jna.internal.Cleaner.getCleaner()
+
+    override fun register(value: Any, cleanUpTask: Runnable): UniffiCleaner.Cleanable =
+        UniffiJnaCleanable(cleaner.register(value, cleanUpTask))
+}
+
+private class UniffiJnaCleanable(
+    private val cleanable: com.sun.jna.internal.Cleaner.Cleanable,
+) : UniffiCleaner.Cleanable {
+    override fun clean() = cleanable.clean()
+}
+
+
+// We decide at uniffi binding generation time whether we were
+// using Android or not.
+// There are further runtime checks to chose the correct implementation
+// of the cleaner.
+private fun UniffiCleaner.Companion.create(): UniffiCleaner =
+    try {
+        // For safety's sake: if the library hasn't been run in android_cleaner = true
+        // mode, but is being run on Android, then we still need to think about
+        // Android API versions.
+        // So we check if java.lang.ref.Cleaner is there, and use that…
+        java.lang.Class.forName("java.lang.ref.Cleaner")
+        JavaLangRefCleaner()
+    } catch (e: ClassNotFoundException) {
+        // … otherwise, fallback to the JNA cleaner.
+        UniffiJnaCleaner()
+    }
+
+private class JavaLangRefCleaner : UniffiCleaner {
+    val cleaner = java.lang.ref.Cleaner.create()
+
+    override fun register(value: Any, cleanUpTask: Runnable): UniffiCleaner.Cleanable =
+        JavaLangRefCleanable(cleaner.register(value, cleanUpTask))
+}
+
+private class JavaLangRefCleanable(
+    val cleanable: java.lang.ref.Cleaner.Cleanable
+) : UniffiCleaner.Cleanable {
+    override fun clean() = cleanable.clean()
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
+    }
+}
 
 /**
  * @suppress
@@ -1032,6 +1388,29 @@ public object FfiConverterDouble: FfiConverter<Double, Double> {
 
     override fun write(value: Double, buf: ByteBuffer) {
         buf.putDouble(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -1091,6 +1470,1207 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         buf.put(byteBuf)
     }
 }
+
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * What the app asks of what it keeps, held in memory for as long as it asks: see `DeviceAnswers.kt`.
+ */
+public interface RulesDeviceInterface {
+    
+    /**
+     * What is asked, as JSON (`Device::ask`): the answer as JSON, none where it has none.
+     */
+    fun `ask`(`asked`: kotlin.String): kotlin.String?
+    
+    companion object
+}
+
+/**
+ * What the app asks of what it keeps, held in memory for as long as it asks: see `DeviceAnswers.kt`.
+ */
+open class RulesDevice: Disposable, AutoCloseable, RulesDeviceInterface
+{
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_free_rulesdevice(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_clone_rulesdevice(pointer!!, status)
+        }
+    }
+
+    
+    /**
+     * What is asked, as JSON (`Device::ask`): the answer as JSON, none where it has none.
+     */override fun `ask`(`asked`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_method_rulesdevice_ask(
+        it, FfiConverterString.lower(`asked`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRulesDevice: FfiConverter<RulesDevice, Pointer> {
+
+    override fun lower(value: RulesDevice): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): RulesDevice {
+        return RulesDevice(value)
+    }
+
+    override fun read(buf: ByteBuffer): RulesDevice {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: RulesDevice) = 8UL
+
+    override fun write(value: RulesDevice, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+
+/**
+ * What the device knows as it looks (`fresh::Facts`).
+ */
+data class FreshFacts (
+    var `marked`: kotlin.UInt?, 
+    var `collected`: kotlin.Boolean, 
+    var `cleared`: kotlin.Boolean, 
+    var `keptReadable`: kotlin.Boolean, 
+    var `waitingHere`: kotlin.Boolean, 
+    var `reached`: kotlin.Boolean, 
+    var `mayDownload`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFreshFacts: FfiConverterRustBuffer<FreshFacts> {
+    override fun read(buf: ByteBuffer): FreshFacts {
+        return FreshFacts(
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FreshFacts) = (
+            FfiConverterOptionalUInt.allocationSize(value.`marked`) +
+            FfiConverterBoolean.allocationSize(value.`collected`) +
+            FfiConverterBoolean.allocationSize(value.`cleared`) +
+            FfiConverterBoolean.allocationSize(value.`keptReadable`) +
+            FfiConverterBoolean.allocationSize(value.`waitingHere`) +
+            FfiConverterBoolean.allocationSize(value.`reached`) +
+            FfiConverterBoolean.allocationSize(value.`mayDownload`)
+    )
+
+    override fun write(value: FreshFacts, buf: ByteBuffer) {
+            FfiConverterOptionalUInt.write(value.`marked`, buf)
+            FfiConverterBoolean.write(value.`collected`, buf)
+            FfiConverterBoolean.write(value.`cleared`, buf)
+            FfiConverterBoolean.write(value.`keptReadable`, buf)
+            FfiConverterBoolean.write(value.`waitingHere`, buf)
+            FfiConverterBoolean.write(value.`reached`, buf)
+            FfiConverterBoolean.write(value.`mayDownload`, buf)
+    }
+}
+
+
+
+/**
+ * A track kept on the device.
+ */
+data class KeptPick (
+    var `key`: kotlin.String, 
+    var `artist`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeKeptPick: FfiConverterRustBuffer<KeptPick> {
+    override fun read(buf: ByteBuffer): KeptPick {
+        return KeptPick(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: KeptPick) = (
+            FfiConverterString.allocationSize(value.`key`) +
+            FfiConverterOptionalString.allocationSize(value.`artist`)
+    )
+
+    override fun write(value: KeptPick, buf: ByteBuffer) {
+            FfiConverterString.write(value.`key`, buf)
+            FfiConverterOptionalString.write(value.`artist`, buf)
+    }
+}
+
+
+
+/**
+ * A track of a queue, as repeat all reads it.
+ */
+data class QueueTrack (
+    var `key`: kotlin.String, 
+    var `place`: kotlin.UInt?, 
+    var `lane`: QueueLane
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeQueueTrack: FfiConverterRustBuffer<QueueTrack> {
+    override fun read(buf: ByteBuffer): QueueTrack {
+        return QueueTrack(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterTypeQueueLane.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: QueueTrack) = (
+            FfiConverterString.allocationSize(value.`key`) +
+            FfiConverterOptionalUInt.allocationSize(value.`place`) +
+            FfiConverterTypeQueueLane.allocationSize(value.`lane`)
+    )
+
+    override fun write(value: QueueTrack, buf: ByteBuffer) {
+            FfiConverterString.write(value.`key`, buf)
+            FfiConverterOptionalUInt.write(value.`place`, buf)
+            FfiConverterTypeQueueLane.write(value.`lane`, buf)
+    }
+}
+
+
+
+/**
+ * How one part stands (`index::sync::Part`). The app keeps it, as it must outlast a start.
+ */
+data class SyncPart (
+    var `whole`: kotlin.Boolean, 
+    var `stopped`: kotlin.Boolean, 
+    var `lost`: kotlin.UInt, 
+    var `failed`: kotlin.UInt, 
+    var `tried`: kotlin.Long?, 
+    var `started`: kotlin.Long
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncPart: FfiConverterRustBuffer<SyncPart> {
+    override fun read(buf: ByteBuffer): SyncPart {
+        return SyncPart(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncPart) = (
+            FfiConverterBoolean.allocationSize(value.`whole`) +
+            FfiConverterBoolean.allocationSize(value.`stopped`) +
+            FfiConverterUInt.allocationSize(value.`lost`) +
+            FfiConverterUInt.allocationSize(value.`failed`) +
+            FfiConverterOptionalLong.allocationSize(value.`tried`) +
+            FfiConverterLong.allocationSize(value.`started`)
+    )
+
+    override fun write(value: SyncPart, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`whole`, buf)
+            FfiConverterBoolean.write(value.`stopped`, buf)
+            FfiConverterUInt.write(value.`lost`, buf)
+            FfiConverterUInt.write(value.`failed`, buf)
+            FfiConverterOptionalLong.write(value.`tried`, buf)
+            FfiConverterLong.write(value.`started`, buf)
+    }
+}
+
+
+
+/**
+ * What bytes came to, and where they leave the part.
+ */
+data class SyncTaken (
+    var `outcome`: SyncOutcome, 
+    var `rev`: kotlin.Long?, 
+    /**
+     * What to keep now, after a feed. Bytes fetched whole are kept as they came.
+     */
+    var `bytes`: kotlin.ByteArray?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncTaken: FfiConverterRustBuffer<SyncTaken> {
+    override fun read(buf: ByteBuffer): SyncTaken {
+        return SyncTaken(
+            FfiConverterTypeSyncOutcome.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncTaken) = (
+            FfiConverterTypeSyncOutcome.allocationSize(value.`outcome`) +
+            FfiConverterOptionalLong.allocationSize(value.`rev`) +
+            FfiConverterOptionalByteArray.allocationSize(value.`bytes`)
+    )
+
+    override fun write(value: SyncTaken, buf: ByteBuffer) {
+            FfiConverterTypeSyncOutcome.write(value.`outcome`, buf)
+            FfiConverterOptionalLong.write(value.`rev`, buf)
+            FfiConverterOptionalByteArray.write(value.`bytes`, buf)
+    }
+}
+
+
+
+/**
+ * What to do now (`fresh::Step`).
+ */
+
+enum class FreshStep {
+    
+    NOTHING,
+    COLLECT,
+    CLEAR,
+    MARK,
+    FETCH;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFreshStep: FfiConverterRustBuffer<FreshStep> {
+    override fun read(buf: ByteBuffer) = try {
+        FreshStep.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FreshStep) = 4UL
+
+    override fun write(value: FreshStep, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Which lane a queue's track lies in.
+ */
+
+enum class QueueLane {
+    
+    OWN,
+    NEXT,
+    RADIO,
+    AUTOPLAY;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeQueueLane: FfiConverterRustBuffer<QueueLane> {
+    override fun read(buf: ByteBuffer) = try {
+        QueueLane.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: QueueLane) = 4UL
+
+    override fun write(value: QueueLane, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * What a device keeps.
+ */
+
+enum class SyncKind {
+    
+    INDEX,
+    SOUNDS,
+    COVERS,
+    /**
+     * An account's own (`index::Marks`): no feed, fetched whole when it has stood a while.
+     */
+    OWN;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncKind: FfiConverterRustBuffer<SyncKind> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncKind.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncKind) = 4UL
+
+    override fun write(value: SyncKind, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SyncMobile {
+    
+    UNASKED,
+    YES,
+    NO;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncMobile: FfiConverterRustBuffer<SyncMobile> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncMobile.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncMobile) = 4UL
+
+    override fun write(value: SyncMobile, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SyncNetwork {
+    
+    FREE,
+    METERED,
+    OFF;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncNetwork: FfiConverterRustBuffer<SyncNetwork> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncNetwork.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncNetwork) = 4UL
+
+    override fun write(value: SyncNetwork, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SyncOutcome {
+    
+    TOOK,
+    LOST,
+    FAILED,
+    START_AGAIN,
+    VERSION;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncOutcome: FfiConverterRustBuffer<SyncOutcome> {
+    override fun read(buf: ByteBuffer) = try {
+        SyncOutcome.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SyncOutcome) = 4UL
+
+    override fun write(value: SyncOutcome, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+sealed class SyncStep {
+    
+    object Stopped : SyncStep()
+    
+    
+    object Rest : SyncStep()
+    
+    
+    data class Wait(
+        val `until`: kotlin.Long) : SyncStep() {
+        companion object
+    }
+    
+    object Ask : SyncStep()
+    
+    
+    object Whole : SyncStep()
+    
+    
+    object Changes : SyncStep()
+    
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncStep : FfiConverterRustBuffer<SyncStep>{
+    override fun read(buf: ByteBuffer): SyncStep {
+        return when(buf.getInt()) {
+            1 -> SyncStep.Stopped
+            2 -> SyncStep.Rest
+            3 -> SyncStep.Wait(
+                FfiConverterLong.read(buf),
+                )
+            4 -> SyncStep.Ask
+            5 -> SyncStep.Whole
+            6 -> SyncStep.Changes
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: SyncStep) = when(value) {
+        is SyncStep.Stopped -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SyncStep.Rest -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SyncStep.Wait -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterLong.allocationSize(value.`until`)
+            )
+        }
+        is SyncStep.Ask -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SyncStep.Whole -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SyncStep.Changes -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: SyncStep, buf: ByteBuffer) {
+        when(value) {
+            is SyncStep.Stopped -> {
+                buf.putInt(1)
+                Unit
+            }
+            is SyncStep.Rest -> {
+                buf.putInt(2)
+                Unit
+            }
+            is SyncStep.Wait -> {
+                buf.putInt(3)
+                FfiConverterLong.write(value.`until`, buf)
+                Unit
+            }
+            is SyncStep.Ask -> {
+                buf.putInt(4)
+                Unit
+            }
+            is SyncStep.Whole -> {
+                buf.putInt(5)
+                Unit
+            }
+            is SyncStep.Changes -> {
+                buf.putInt(6)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalUShort: FfiConverterRustBuffer<kotlin.UShort?> {
+    override fun read(buf: ByteBuffer): kotlin.UShort? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUShort.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UShort?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUShort.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UShort?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUShort.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
+    override fun read(buf: ByteBuffer): kotlin.UInt? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UInt?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UInt?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
+    override fun read(buf: ByteBuffer): kotlin.Long? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterLong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Long?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterLong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Long?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterLong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.String?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteArray?> {
+    override fun read(buf: ByteBuffer): kotlin.ByteArray? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterByteArray.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ByteArray?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterByteArray.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ByteArray?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterByteArray.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeRulesDevice: FfiConverterRustBuffer<RulesDevice?> {
+    override fun read(buf: ByteBuffer): RulesDevice? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeRulesDevice.read(buf)
+    }
+
+    override fun allocationSize(value: RulesDevice?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeRulesDevice.allocationSize(value)
+        }
+    }
+
+    override fun write(value: RulesDevice?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeRulesDevice.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeSyncOutcome: FfiConverterRustBuffer<SyncOutcome?> {
+    override fun read(buf: ByteBuffer): SyncOutcome? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeSyncOutcome.read(buf)
+    }
+
+    override fun allocationSize(value: SyncOutcome?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeSyncOutcome.allocationSize(value)
+        }
+    }
+
+    override fun write(value: SyncOutcome?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeSyncOutcome.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceUInt: FfiConverterRustBuffer<List<kotlin.UInt>> {
+    override fun read(buf: ByteBuffer): List<kotlin.UInt> {
+        val len = buf.getInt()
+        return List<kotlin.UInt>(len) {
+            FfiConverterUInt.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.UInt>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterUInt.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.UInt>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterUInt.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeKeptPick: FfiConverterRustBuffer<List<KeptPick>> {
+    override fun read(buf: ByteBuffer): List<KeptPick> {
+        val len = buf.getInt()
+        return List<KeptPick>(len) {
+            FfiConverterTypeKeptPick.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<KeptPick>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeKeptPick.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<KeptPick>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeKeptPick.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeQueueTrack: FfiConverterRustBuffer<List<QueueTrack>> {
+    override fun read(buf: ByteBuffer): List<QueueTrack> {
+        val len = buf.getInt()
+        return List<QueueTrack>(len) {
+            FfiConverterTypeQueueTrack.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<QueueTrack>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeQueueTrack.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<QueueTrack>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeQueueTrack.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeQueueLane: FfiConverterRustBuffer<List<QueueLane>> {
+    override fun read(buf: ByteBuffer): List<QueueLane> {
+        val len = buf.getInt()
+        return List<QueueLane>(len) {
+            FfiConverterTypeQueueLane.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<QueueLane>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeQueueLane.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<QueueLane>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeQueueLane.write(it, buf)
+        }
+    }
+}
+        /**
+         * How many tracks Autoplay appends.
+         */ fun `autoplayBatch`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_autoplay_batch(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Whether Autoplay asks now.
+         */ fun `autoplayDue`(`count`: kotlin.UInt, `playing`: kotlin.UInt): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_autoplay_due(
+        FfiConverterUInt.lower(`count`),FfiConverterUInt.lower(`playing`),_status)
+}
+    )
+    }
+    
+
         /**
          * How fast its speed changes `t` ms after it was let go (× a second).
          */ fun `brakeAccel`(`v0`: kotlin.Double, `to`: kotlin.Double, `length`: kotlin.Double, `t`: kotlin.Double): kotlin.Double {
@@ -1134,6 +2714,223 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_brake_way(
         FfiConverterDouble.lower(`v0`),FfiConverterDouble.lower(`to`),FfiConverterDouble.lower(`length`),FfiConverterDouble.lower(`t`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * A device over what is kept; none where the index cannot be read. Sounds and an account's own are read if they can be: without them
+         * it answers what it can.
+         */ fun `deviceOpen`(`index`: kotlin.ByteArray, `sounds`: kotlin.ByteArray?, `own`: kotlin.ByteArray?): RulesDevice? {
+            return FfiConverterOptionalTypeRulesDevice.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_device_open(
+        FfiConverterByteArray.lower(`index`),FfiConverterOptionalByteArray.lower(`sounds`),FfiConverterOptionalByteArray.lower(`own`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The app's version that brings it.
+         */ fun `freshAt`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_fresh_at(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * What to do now, by an app of `version` (its `versionCode`).
+         */ fun `freshStep`(`facts`: FreshFacts, `version`: kotlin.UInt): FreshStep {
+            return FfiConverterTypeFreshStep.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_fresh_step(
+        FfiConverterTypeFreshFacts.lower(`facts`),FfiConverterUInt.lower(`version`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The next round of repeat all, as places in `queue`; none while the track at `playing` is not the last.
+         */ fun `nextRound`(`queue`: List<QueueTrack>, `playing`: kotlin.UInt, `shuffled`: kotlin.Boolean, `draw`: kotlin.ULong): List<kotlin.UInt> {
+            return FfiConverterSequenceUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_next_round(
+        FfiConverterSequenceTypeQueueTrack.lower(`queue`),FfiConverterUInt.lower(`playing`),FfiConverterBoolean.lower(`shuffled`),FfiConverterULong.lower(`draw`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * What comes next with no index on the device, as places in `kept`.
+         */ fun `picksFromKept`(`kept`: List<KeptPick>, `queued`: List<kotlin.String>, `artists`: List<kotlin.String>, `any`: kotlin.Boolean, `count`: kotlin.UInt, `draw`: kotlin.ULong): List<kotlin.UInt> {
+            return FfiConverterSequenceUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_picks_from_kept(
+        FfiConverterSequenceTypeKeptPick.lower(`kept`),FfiConverterSequenceString.lower(`queued`),FfiConverterSequenceString.lower(`artists`),FfiConverterBoolean.lower(`any`),FfiConverterUInt.lower(`count`),FfiConverterULong.lower(`draw`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Where Radio's inserts go for the track at `playing`; none where they would not.
+         */ fun `radioPlace`(`lanes`: List<QueueLane>, `playing`: kotlin.UInt): kotlin.UInt? {
+            return FfiConverterOptionalUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_radio_place(
+        FfiConverterSequenceTypeQueueLane.lower(`lanes`),FfiConverterUInt.lower(`playing`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * How a part stands after a fetch.
+         */ fun `syncAfter`(`part`: SyncPart, `outcome`: SyncOutcome, `now`: kotlin.Long): SyncPart {
+            return FfiConverterTypeSyncPart.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_after(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterTypeSyncOutcome.lower(`outcome`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * A start over what this version kept.
+         */ fun `syncAnew`(`part`: SyncPart, `now`: kotlin.Long): SyncPart {
+            return FfiConverterTypeSyncPart.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_anew(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Hidden this long, a device coming back has started again (ms).
+         */ fun `syncAnewAfterMs`(): kotlin.Long {
+            return FfiConverterLong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_anew_after_ms(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * A start over what another version kept.
+         */ fun `syncAnewByAnother`(`part`: SyncPart, `now`: kotlin.Long): SyncPart {
+            return FfiConverterTypeSyncPart.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_anew_by_another(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * How an answer to a fetch ended it, or nothing where it brought bytes to take. `status`: none where no answer came.
+         */ fun `syncAnswer`(`status`: kotlin.UShort?, `whole`: kotlin.Boolean): SyncOutcome? {
+            return FfiConverterOptionalTypeSyncOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_answer(
+        FfiConverterOptionalUShort.lower(`status`),FfiConverterBoolean.lower(`whole`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * How long after a start the first fetch waits (ms), so a worker can wait them out.
+         */ fun `syncFirstAfterMs`(): kotlin.Long {
+            return FfiConverterLong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_first_after_ms(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Whether a part should say it is paused.
+         */ fun `syncPaused`(`part`: SyncPart): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_paused(
+        FfiConverterTypeSyncPart.lower(`part`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * What to do now with a part. `told`: its feed may be asked.
+         */ fun `syncStep`(`part`: SyncPart, `network`: SyncNetwork, `mobile`: SyncMobile, `told`: kotlin.Boolean, `now`: kotlin.Long): SyncStep {
+            return FfiConverterTypeSyncStep.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_step(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterTypeSyncNetwork.lower(`network`),FfiConverterTypeSyncMobile.lower(`mobile`),FfiConverterBoolean.lower(`told`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * What to do now with an account's own. `took`: when it was last taken.
+         */ fun `syncStepStale`(`part`: SyncPart, `network`: SyncNetwork, `mobile`: SyncMobile, `took`: kotlin.Long?, `now`: kotlin.Long): SyncStep {
+            return FfiConverterTypeSyncStep.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_step_stale(
+        FfiConverterTypeSyncPart.lower(`part`),FfiConverterTypeSyncNetwork.lower(`network`),FfiConverterTypeSyncMobile.lower(`mobile`),FfiConverterOptionalLong.lower(`took`),FfiConverterLong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * A feed applied to what is kept. Of the covers `feed` is the feed's head, and nothing comes back to keep.
+         */ fun `syncTakeChanges`(`kind`: SyncKind, `kept`: kotlin.ByteArray, `feed`: kotlin.ByteArray): SyncTaken {
+            return FfiConverterTypeSyncTaken.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_take_changes(
+        FfiConverterTypeSyncKind.lower(`kind`),FfiConverterByteArray.lower(`kept`),FfiConverterByteArray.lower(`feed`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Bytes just fetched whole, read through. Of the covers only their head: their frames are the app's to read as they come.
+         */ fun `syncTakeWhole`(`kind`: SyncKind, `bytes`: kotlin.ByteArray): SyncTaken {
+            return FfiConverterTypeSyncTaken.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_take_whole(
+        FfiConverterTypeSyncKind.lower(`kind`),FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The version a part's bytes must be for this app to read them.
+         */ fun `syncVersion`(`kind`: SyncKind): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_sync_version(
+        FfiConverterTypeSyncKind.lower(`kind`),_status)
 }
     )
     }

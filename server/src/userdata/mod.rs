@@ -14,8 +14,13 @@
 
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
+pub mod albums;
+pub mod artists;
+mod moved;
 pub mod offline;
 pub mod overrides;
+pub mod playlists;
+pub mod preferences;
 pub mod scrobbles;
 pub mod tags;
 pub mod words;
@@ -28,9 +33,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+pub use moved::Moves;
+
 // journal_size_limit: as the catalogue's (the log's file cut back after a checkpoint).
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
+-- What the user data remembers of elsewhere (0101): which catalogue its track ids are of, and the highest id given out.
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 PRAGMA journal_size_limit = 8388608;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS annotation (
@@ -49,9 +58,12 @@ CREATE TABLE IF NOT EXISTS app_queue (
   user TEXT NOT NULL, client TEXT NOT NULL, songs TEXT NOT NULL, current INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
   changed INTEGER NOT NULL, PRIMARY KEY (user, client)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS playlist_seen (name TEXT PRIMARY KEY, print TEXT NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
-  name TEXT NOT NULL, album_artist TEXT NOT NULL);
+-- The 0.16 first start's migration report (decision 0101's one-way migration), one row per part (`playlists`, `records`,
+-- `libraries`): when it ran (epoch s), and what it found as JSON (`put_migration_part`).
+CREATE TABLE IF NOT EXISTS migration_report (part TEXT PRIMARY KEY, at INTEGER NOT NULL, report TEXT NOT NULL) WITHOUT ROWID;
+-- What was said of a copy that waited in Incoming: `folder` is its catalogue folder, -1 from before records had copies.
+CREATE TABLE IF NOT EXISTS album_review (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
+  name TEXT NOT NULL, album_artist TEXT NOT NULL, PRIMARY KEY (album, folder));
 CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
 CREATE TABLE IF NOT EXISTS imported (
   account TEXT NOT NULL, source TEXT NOT NULL, server_user TEXT NOT NULL, kind TEXT NOT NULL, item TEXT NOT NULL,
@@ -65,10 +77,6 @@ CREATE TABLE IF NOT EXISTS bookmark (
   created INTEGER NOT NULL, changed INTEGER NOT NULL, changed_by TEXT,
   PRIMARY KEY (user, item)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS bookmark_pid ON bookmark (pid);
-CREATE TABLE IF NOT EXISTS playlist_alias (old TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS playlist_entry (
-  playlist TEXT NOT NULL, entry TEXT NOT NULL, n INTEGER NOT NULL, added INTEGER NOT NULL,
-  PRIMARY KEY (playlist, entry, n)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS visual_snapshot (
   user TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, created INTEGER NOT NULL, picture TEXT,
   PRIMARY KEY (user, id));
@@ -78,7 +86,6 @@ CREATE TABLE IF NOT EXISTS visual_rating (
 CREATE TABLE IF NOT EXISTS visual_thumb (user TEXT NOT NULL, at INTEGER NOT NULL, thumb TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS visual_limits (
   user TEXT PRIMARY KEY, version INTEGER NOT NULL, limits TEXT NOT NULL, at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS playlist_shared (playlist TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS user_settings (user TEXT PRIMARY KEY, version INTEGER NOT NULL, settings TEXT NOT NULL, at INTEGER NOT NULL);
 -- Every track heard (decision 0064): only added to, kept forever. `event`: the player's own id for it, so a report sent
 -- again is one row.
@@ -227,7 +234,7 @@ pub struct Logged {
 /// with 74.3, the week before it was only in `annotation`). One row per song last played in the seven days before the
 /// user's first row a player told: finished, counted (it was, in `annotation` already: nothing is counted again),
 /// context `backfill:annotation`, its own event so running it again adds nothing. Only the last play of each song is
-/// known. Run as the file opens.
+/// known. Run once, as the file opens (`week_before_the_log`).
 const WEEK_BEFORE_THE_LOG: &str = "
 INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted, player, output, context, event)
   SELECT a.user, a.item, a.pid, a.play_date, NULL, NULL, 'finished', 1, NULL, NULL, 'backfill:annotation',
@@ -239,6 +246,17 @@ INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted,
   WHERE a.kind = 'song' AND a.play_date >= f.first - 604800 AND a.play_date < f.first
   ON CONFLICT DO NOTHING;
 ";
+
+/// Once for a data folder, and every install has had it since 74.3.1: its event names a song by the id it had, and a merge moves
+/// the play and leaves the event, so told over it would count the play again.
+fn week_before_the_log(conn: &Connection) -> Result<()> {
+    const WRITTEN: &str = "week_before_the_log";
+    if !conn.prepare("SELECT 1 FROM meta WHERE key = ?1")?.exists([WRITTEN])? {
+        conn.execute_batch(WEEK_BEFORE_THE_LOG)?;
+        conn.execute("INSERT INTO meta (key, value) VALUES (?1, 'written')", [WRITTEN])?;
+    }
+    Ok(())
+}
 
 /// A row of the log as read.
 fn logged(r: &rusqlite::Row) -> rusqlite::Result<Logged> {
@@ -291,6 +309,26 @@ pub struct Annotation {
     pub rating: u8,
     /// Epoch seconds, when starred.
     pub starred_at: Option<i64>,
+}
+
+impl Annotation {
+    /// Two items' data as one, where they turn out to be one thing: plays added up (all and one's own), the later last-played,
+    /// the better rating, a star when either has one, the first of two.
+    pub fn combined(&self, other: &Annotation) -> Annotation {
+        Annotation {
+            play_count: self.play_count + other.play_count,
+            play_date: self.play_date.max(other.play_date),
+            own_count: self.own_count + other.own_count,
+            own_date: self.own_date.max(other.own_date),
+            rating: self.rating.max(other.rating),
+            starred_at: match (self.starred_at, other.starred_at) {
+                // A star with no date reads as 0, which says nothing of when.
+                (Some(x), Some(y)) if x == 0 || y == 0 => Some(x.max(y)),
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            },
+        }
+    }
 }
 
 /// What an import last brought in for one item: the server's values then, so the next import adds only what changed
@@ -428,8 +466,8 @@ pub struct Rating {
 pub struct Review {
     /// The album id it was asked by (its Incoming id).
     pub album: String,
-    /// Its Music-form id (see `serve::ids::album`), the same before and after a Keep.
-    pub base: String,
+    /// The catalogue folder of the copy that waited: a later copy of the record, elsewhere, is not reviewed by this (Q24).
+    pub folder: i64,
     /// "promoted" or "rejected".
     pub state: String,
     /// Epoch seconds.
@@ -444,6 +482,10 @@ pub struct UserData {
     db: Mutex<Connection>,
     /// Every change of favourites, as `set_starred` makes it (`subscribe_starred`).
     starred: tokio::sync::broadcast::Sender<Starred>,
+    /// Every kept change of a preference (`subscribe_preferences`).
+    preferences: tokio::sync::broadcast::Sender<preferences::PreferenceChanged>,
+    /// The libraries each account has off, as read (`hidden_libraries_kept`).
+    hidden: Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<String>>>>,
 }
 
 /// A change of favourites (stars) as `set_starred` made it, whichever way it came: a page, a Subsonic app, Home
@@ -455,7 +497,7 @@ pub struct Starred {
     pub user: String,
     /// `song`, `album`, `artist` or `playlist`.
     pub kind: &'static str,
-    /// Their ids (a playlist's: its name).
+    /// Their ids.
     pub items: Vec<String>,
     pub on: bool,
 }
@@ -553,6 +595,28 @@ fn snapshot_of(r: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
 
 const SNAPSHOT_COLUMNS: &str = "id, name, settings, created, picture";
 
+/// The `folder` of what was kept by record before a record had copies: it goes for every copy.
+const NO_FOLDER: i64 = -1;
+
+/// Reviews from before a record had copies: by album alone, the key a table cannot change in place. Each stands for its
+/// whole record (`NO_FOLDER`). Safe to repeat.
+fn add_review_folder(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('album_review') WHERE name = 'folder'")?.exists([])?;
+    if !has {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE album_review RENAME TO album_review_by_album;
+             CREATE TABLE album_review (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
+               name TEXT NOT NULL, album_artist TEXT NOT NULL, PRIMARY KEY (album, folder));
+             INSERT INTO album_review (album, base, state, at, undo, name, album_artist) SELECT album, base, state, at, undo, name, album_artist FROM album_review_by_album;
+             DROP TABLE album_review_by_album;
+             CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
+             COMMIT;",
+        )?;
+    }
+    Ok(())
+}
+
 /// Listening services from before they could be switched off: on. Safe to repeat.
 fn add_scrobble_off(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('scrobble_target') WHERE name = 'off'")?.exists([])?;
@@ -644,7 +708,51 @@ fn imported_of(r: &rusqlite::Row) -> rusqlite::Result<Imported> {
     })
 }
 
+/// One part of the 0.16 first start's migration report (decision 0101: rehearsed on staging, the report compared with
+/// production's copy), written in the caller's transaction where it has one, last in it. Every part reads alike: a common
+/// core, `tables` (`[{name, before, after}]`, each table's rows) and `unmatched` (`[{what, count, sample}]`, what found no
+/// match, with up to ten samples), the part's own fields beside them. Written again, a part replaces itself.
+pub(crate) fn put_migration_part(conn: &Connection, part: &str, report: &serde_json::Value) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO migration_report (part, at, report) VALUES (?1, ?2, ?3)",
+        params![part, now(), report.to_string()],
+    )?;
+    Ok(())
+}
+
 impl UserData {
+    /// A part of the migration report (`put_migration_part`), in a transaction of its own.
+    pub fn set_migration_part(&self, part: &str, report: &serde_json::Value) -> Result<()> {
+        put_migration_part(&self.db(), part, report)
+    }
+
+    /// Fields added to a part of the migration report written before (what a later step of it found); none: nothing.
+    pub fn add_to_migration_part(&self, part: &str, fields: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
+        let db = self.db();
+        let Some(text) = db.query_row("SELECT report FROM migration_report WHERE part = ?1", [part], |r| r.get::<_, String>(0)).optional()? else {
+            return Ok(());
+        };
+        let mut report: serde_json::Value = serde_json::from_str(&text)?;
+        if let Some(map) = report.as_object_mut() {
+            map.extend(fields.clone());
+        }
+        db.execute("UPDATE migration_report SET report = ?2 WHERE part = ?1", params![part, report.to_string()])?;
+        Ok(())
+    }
+
+    /// Every part of the migration report, by part: when it ran (epoch s) and what it found.
+    pub fn migration_report(&self) -> Result<std::collections::BTreeMap<String, (i64, serde_json::Value)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT part, at, report FROM migration_report")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = std::collections::BTreeMap::new();
+        for row in rows {
+            let (part, at, report) = row?;
+            out.insert(part, (at, serde_json::from_str(&report).unwrap_or(serde_json::Value::Null)));
+        }
+        Ok(out)
+    }
+
     /// `file`: the database; `None` keeps it in memory.
     pub fn open(file: Option<&Path>) -> Result<Self> {
         let conn = crate::db::open(file)?;
@@ -659,10 +767,16 @@ impl UserData {
         // Offline writes (0.12, decision 0087): what is counted and made once, kept 30 days.
         conn.execute_batch(offline::SCHEMA).context("keeping the plays counted and the changes made")?;
         offline::migrate(&conn).context("bringing the change log up to date")?;
+        // The playlists (0.16, decision 0101): in the database, their `.m3u` files brought in once by the store.
+        conn.execute_batch(playlists::SCHEMA).context("creating the playlists' tables")?;
+        // The person's preferences on the account (0.16, decision 0101 point 14).
+        conn.execute_batch(preferences::SCHEMA).context("creating the preferences' table")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
+        add_review_folder(&conn).context("keeping reviews by the copy that waited")?;
+        words::add_heard_folder(&conn).context("keeping what was heard by the copy it was heard of")?;
         conn.execute_batch(scrobbles::SCHEMA).context("keeping the plays devices hand over")?;
         scrobbles::add_named(&conn).context("queueing plays the library does not know")?;
         add_answer_names(&conn)?;
@@ -671,12 +785,98 @@ impl UserData {
         add_release_types_rule(&conn)?;
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
-        conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
-        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
+        week_before_the_log(&conn).context("writing the week before the log from the last plays")?;
+        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default() })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A value the user data remembers (`set_meta`). Blocking.
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.db().query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
+        Ok(())
+    }
+
+    /// Where the user data names tracks (0101: what a fresh start of lost track ids leaves pointing at nothing): per
+    /// table, the rows that name one, and the highest track id named anywhere. Blocking.
+    pub fn track_references(&self) -> Result<(Vec<(&'static str, u64)>, i64)> {
+        let db = self.db();
+        let one_each: [(&'static str, &str); 7] = [
+            ("annotation", "item"),
+            ("bookmark", "item"),
+            ("imported", "item"),
+            ("plays", "song"),
+            ("scrobble_queue", "song"),
+            ("track_words", "track"),
+            ("playlist_item", "track"),
+        ];
+        let (mut rows, mut top) = (Vec::new(), 0i64);
+        for (table, column) in one_each {
+            let (n, highest): (i64, Option<i64>) = db.query_row(
+                &format!("SELECT COUNT(*), MAX(CAST(SUBSTR({column}, 4) AS INTEGER)) FROM {table} WHERE {column} LIKE 'tr-%'"),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if n > 0 {
+                rows.push((table, n as u64));
+            }
+            top = top.max(highest.unwrap_or(0));
+        }
+        // The apps' queues: a list each.
+        let mut st = db.prepare("SELECT songs FROM app_queue")?;
+        let mut queues = 0u64;
+        for songs in st.query_map([], |r| r.get::<_, String>(0))? {
+            let ids: Vec<i64> = songs?.split(',').filter_map(crate::serve::ids::track_of).collect();
+            if let Some(highest) = ids.iter().max() {
+                queues += 1;
+                top = top.max(*highest);
+            }
+        }
+        if queues > 0 {
+            rows.push(("app_queue", queues));
+        }
+        Ok((rows, top))
+    }
+
+    /// The highest record or artist id for life the user data names (`ids::highest_named`), 0 for none: with the JSON stores,
+    /// what a fresh start of lost ids must number above. Blocking.
+    pub fn top_named(&self) -> Result<i64> {
+        const COLUMNS: [(&str, &str); 19] = [
+            ("annotation", "item"),
+            ("added", "album"),
+            ("imported", "item"),
+            ("album_review", "album"),
+            ("album_tags", "album"),
+            ("record_overrides", "album"),
+            ("album_matches", "album"),
+            ("album_complete", "album"),
+            ("intake_heard", "album"),
+            ("record_references", "album"),
+            ("discogs_genres", "album"),
+            ("renumber_matched", "album"),
+            ("release_types", "key"),
+            ("words", "subject"),
+            ("words_asked", "subject"),
+            ("discogs_facts", "subject"),
+            ("change_at", "item"),
+            ("preference", "value"),
+            ("related_artists", "found"),
+        ];
+        let db = self.db();
+        let mut top = 0;
+        for (table, column) in COLUMNS {
+            let mut st = db.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE '%al-%' OR {column} LIKE '%ar-%'"))?;
+            for text in st.query_map([], |r| r.get::<_, String>(0))? {
+                top = top.max(crate::serve::ids::highest_named(&text?));
+            }
+        }
+        Ok(top)
     }
 
     /// The annotations of several items of one kind, by item; items without any are left out.
@@ -976,15 +1176,6 @@ impl UserData {
         Ok(())
     }
 
-    /// The ids of the listens imported into a user's history from `context` (an import's, decision 0067), to tell
-    /// what a preview would add.
-    pub fn heard_events(&self, user: &str, context: &str) -> Result<std::collections::HashSet<String>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT event FROM plays WHERE user = ?1 AND context = ?2 AND event IS NOT NULL")?;
-        let rows = st.query_map(params![user, context], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
     /// An import from `context` undone (decision 0067): its listens out of the user's history. They never counted, so
     /// the counts stay. How many.
     pub fn forget_heard(&self, user: &str, context: &str) -> Result<usize> {
@@ -1016,8 +1207,9 @@ impl UserData {
         )?)
     }
 
-    /// Writes the week before the log from the last plays (`WEEK_BEFORE_THE_LOG`); as the file opens. Safe to repeat.
-    pub fn backfill_week(&self) -> Result<()> {
+    /// `WEEK_BEFORE_THE_LOG` over a test's own rows: the file has run it at its open, before they were there.
+    #[cfg(test)]
+    fn backfill_week(&self) -> Result<()> {
         Ok(self.db().execute_batch(WEEK_BEFORE_THE_LOG)?)
     }
 
@@ -1428,6 +1620,12 @@ impl UserData {
         Ok(())
     }
 
+    /// The release group a fetcher found a request's album by, for one asked for by its names.
+    pub fn set_request_release_group(&self, id: i64, release_group: &str) -> Result<()> {
+        self.db().execute("UPDATE request SET release_group = ?2 WHERE id = ?1", params![id, release_group])?;
+        Ok(())
+    }
+
     /// How many requests wait for an answer (Health).
     pub fn requests_waiting(&self) -> Result<usize> {
         Ok(self.db().query_row("SELECT count(*) FROM request WHERE status = 'pending'", [], |r| r.get::<_, i64>(0))? as usize)
@@ -1444,23 +1642,32 @@ impl UserData {
 
     /// Songs' annotations, and what imports brought in for them, follow their persistent ids to new song ids (the
     /// catalogue was rebuilt): `moves` is (persistent id, song id now). A persistent id given twice goes to its first
-    /// song only: two would move its data there and back every time. Returns how many annotations moved.
-    pub fn follow_pids(&self, moves: &[(String, String)]) -> Result<usize> {
-        let mut seen = std::collections::HashSet::new();
-        let moves: Vec<&(String, String)> = moves.iter().filter(|(pid, _)| seen.insert(pid.as_str())).collect();
+    /// song only: two would move its data there and back every time. Ids are for life, so what lies on one of `songs`, the
+    /// ids of tracks alive, listed or away with their library, stays: a copy tagged otherwise has a persistent id of its own,
+    /// the one on a row can leave with a copy while the track stays, and two records can be tagged alike. Returns how many
+    /// annotations moved.
+    pub fn follow_pids(&self, moves: &[(String, String)], songs: &std::collections::HashSet<String>) -> Result<usize> {
+        let mut to = std::collections::HashMap::new();
+        for (pid, item) in moves {
+            to.entry(pid.as_str()).or_insert(item.as_str());
+        }
         let mut db = self.db();
         let tx = db.transaction()?;
-        let mut n = 0;
-        {
-            let mut st = tx.prepare_cached("UPDATE OR IGNORE annotation SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
-            let mut ledger = tx.prepare_cached("UPDATE OR IGNORE imported SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
-            let mut marks = tx.prepare_cached("UPDATE OR IGNORE bookmark SET item = ?2 WHERE pid = ?1 AND item != ?2")?;
-            for (pid, item) in moves {
-                n += st.execute(params![pid, item])?;
-                ledger.execute(params![pid, item])?;
-                marks.execute(params![pid, item])?;
+        let follow = |table: &str, of_songs: &str| -> Result<usize> {
+            let mut rows = tx.prepare_cached(&format!("SELECT DISTINCT pid, item FROM {table} WHERE pid IS NOT NULL{of_songs}"))?;
+            let rows: Vec<(String, String)> = rows.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            let mut go = tx.prepare_cached(&format!("UPDATE OR IGNORE {table} SET item = ?3 WHERE pid = ?1 AND item = ?2{of_songs}"))?;
+            let mut n = 0;
+            for (pid, item) in rows.iter().filter(|(_, item)| !songs.contains(item)) {
+                if let Some(now) = to.get(pid.as_str()).filter(|now| **now != item.as_str()) {
+                    n += go.execute(params![pid, item, now])?;
+                }
             }
-        }
+            Ok(n)
+        };
+        let n = follow("annotation", " AND kind = 'song'")?;
+        follow("imported", " AND kind = 'song'")?;
+        follow("bookmark", "")?;
         tx.commit()?;
         Ok(n)
     }
@@ -1674,6 +1881,14 @@ impl UserData {
         Ok(self.db().execute("DELETE FROM scrobble_queue WHERE user = ?1", [user])?)
     }
 
+    /// The tracks any account holds a play, a heart or a rating on, as served: what is worth finding again on Health's Missing list.
+    pub fn songs_held(&self) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT item FROM annotation WHERE kind = 'song' AND (play_count > 0 OR starred != 0 OR rating > 0) UNION SELECT song FROM plays")?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// A user's own settings (decision 0051: Radio's and Autoplay's defaults and the like, as the apps keep them) and
     /// their version; version 0 and none while nothing is kept.
     pub fn settings_of(&self, user: &str) -> Result<(i64, serde_json::Value)> {
@@ -1712,106 +1927,6 @@ impl UserData {
     /// Whether there was such a snapshot to delete.
     pub fn delete_snapshot(&self, user: &str, id: &str) -> Result<bool> {
         Ok(self.db().execute("DELETE FROM visual_snapshot WHERE user = ?1 AND id = ?2", params![user, id])? > 0)
-    }
-
-    /// A playlist was renamed: its old names lead to the new one. A Subsonic playlist's id is `pl-` and its name, and
-    /// clients keep the id across a rename (Symfonium asks for it again straight after renaming).
-    pub fn playlist_renamed(&self, from: &str, to: &str) -> Result<()> {
-        let at = now();
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        tx.execute("UPDATE playlist_alias SET name = ?2, at = ?3 WHERE name = ?1", params![from, to, at])?;
-        tx.execute("INSERT OR REPLACE INTO playlist_alias (old, name, at) VALUES (?1, ?2, ?3)", params![from, to, at])?;
-        tx.execute("DELETE FROM playlist_alias WHERE old = ?1", [to])?;
-        tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1", [to])?;
-        tx.execute("UPDATE playlist_entry SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
-        // Its entry ids go with it (decision 0087).
-        tx.execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [to])?;
-        tx.execute("UPDATE playlist_entry_id SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
-        tx.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [to])?;
-        tx.execute("UPDATE playlist_shared SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
-        // Logged again now its sharing moved with it (the store logged it before), so those it is shared with see it.
-        offline::log_playlist(&tx, to, offline::Op::Changed, false)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// The playlist an old name leads to, if it was renamed.
-    pub fn playlist_alias(&self, old: &str) -> Result<Option<String>> {
-        Ok(self.db().query_row("SELECT name FROM playlist_alias WHERE old = ?1", [old], |r| r.get(0)).optional()?)
-    }
-
-    /// A new playlist took a name: it no longer leads elsewhere.
-    pub fn playlist_made(&self, name: &str) -> Result<()> {
-        self.db().execute("DELETE FROM playlist_alias WHERE old = ?1", [name])?;
-        Ok(())
-    }
-
-    /// A playlist is gone: none of its old names leads anywhere, and it is no longer shared.
-    pub fn playlist_gone(&self, name: &str) -> Result<()> {
-        self.db().execute("DELETE FROM playlist_alias WHERE name = ?1 OR old = ?1", [name])?;
-        self.db().execute("DELETE FROM playlist_entry WHERE playlist = ?1", [name])?;
-        self.db().execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [name])?;
-        self.db().execute("DELETE FROM playlist_shared WHERE playlist = ?1", [name])?;
-        Ok(())
-    }
-
-    /// The playlists their owners share with everyone (decision 0051), by their keys (`Store::key`).
-    pub fn shared_playlists(&self) -> Result<std::collections::HashSet<String>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT playlist FROM playlist_shared")?;
-        Ok(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
-    }
-
-    /// Shares a playlist (by its key) or stops; whether that changed anything. Logged (decision 0087): shared, everyone
-    /// sees it come; no longer, its owner sees it changed (the others are told it is gone: `playlist_gone_for`). A
-    /// playlist deleted (unshared as it goes) is not logged back.
-    pub fn set_playlist_shared(&self, playlist: &str, on: bool) -> Result<bool> {
-        let db = self.db();
-        let n = if on {
-            db.execute("INSERT OR IGNORE INTO playlist_shared (playlist, at) VALUES (?1, ?2)", params![playlist, now()])?
-        } else {
-            db.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [playlist])?
-        };
-        let deleted = db
-            .prepare_cached("SELECT 1 FROM change_log WHERE kind = 'playlist' AND item = ?1 AND op = 'deleted' AND seen_by = ''")?
-            .exists([playlist])?;
-        if n > 0 && !deleted {
-            offline::log_playlist(&db, playlist, offline::Op::Changed, on)?;
-        }
-        Ok(n > 0)
-    }
-
-    /// A playlist was written (every write: the store tells it, `playlists::on_write`): an entry that came now dates
-    /// from now, one that went is forgotten. Entries are told apart as "the n-th copy of a line", so taking out an
-    /// earlier copy hands the later one its date: only repeats are touched by that. Entries a playlist held before
-    /// this was kept have no date (Added order puts them first, in file order).
-    pub fn entries_written(&self, playlist: &str, before: &[String], after: &[String]) -> Result<()> {
-        let (was, now_keys) = (occurrences(before), occurrences(after));
-        let at = now();
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        for (entry, n) in was.iter().filter(|k| !now_keys.contains(k)) {
-            tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1 AND entry = ?2 AND n = ?3", params![playlist, entry, *n as i64])?;
-        }
-        for (entry, n) in now_keys.iter().filter(|k| !was.contains(k)) {
-            tx.execute(
-                "INSERT OR REPLACE INTO playlist_entry (playlist, entry, n, added) VALUES (?1, ?2, ?3, ?4)",
-                params![playlist, entry, *n as i64, at],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// When each of a playlist's entries came (epoch seconds), in order; `None` for one held before dates were kept.
-    pub fn entries_added(&self, playlist: &str, entries: &[String]) -> Result<Vec<Option<i64>>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT added FROM playlist_entry WHERE playlist = ?1 AND entry = ?2 AND n = ?3")?;
-        occurrences(entries)
-            .iter()
-            .map(|(entry, n)| Ok(st.query_row(params![playlist, entry, *n as i64], |r| r.get::<_, i64>(0)).optional()?))
-            .collect()
     }
 
     /// Every song a user has played at least once (a crate's unplayed tracks are the others).
@@ -1868,29 +1983,19 @@ impl UserData {
         Ok(out)
     }
 
-    /// When a playlist was first seen and last seen changed (epoch seconds), given what it holds now (`print`): the
-    /// files keep no such dates, and Subsonic clients compare `changed` to know when to read a playlist again.
-    pub fn playlist_seen(&self, name: &str, print: &str) -> Result<(i64, i64)> {
-        let at = now();
+    /// An album's review (promoted or rejected from Incoming) as asked by its id, and the undo key of what was done: of its
+    /// copy waiting in catalogue folder `folder`, or with none waiting the last said of it. One from before copies goes for any.
+    pub fn review(&self, album: &str, folder: Option<i64>) -> Result<Option<Review>> {
         let db = self.db();
-        db.execute(
-            "INSERT INTO playlist_seen (name, print, created, changed) VALUES (?1, ?2, ?3, ?3)
-             ON CONFLICT (name) DO UPDATE SET changed = CASE WHEN playlist_seen.print = excluded.print THEN playlist_seen.changed ELSE excluded.changed END,
-               print = excluded.print",
-            params![name, print, at],
-        )?;
-        Ok(db.query_row("SELECT created, changed FROM playlist_seen WHERE name = ?1", [name], |r| Ok((r.get(0)?, r.get(1)?)))?)
-    }
-
-    /// An album's review (promoted or rejected from Incoming) as asked by its id, and the undo key of what was done.
-    pub fn review(&self, album: &str) -> Result<Option<Review>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT album, base, state, at, undo, name, album_artist FROM album_review WHERE album = ?1 OR base = ?1 ORDER BY at DESC LIMIT 1")?;
+        let mut st = db.prepare_cached(&format!(
+            "SELECT album, folder, state, at, undo, name, album_artist FROM album_review
+             WHERE album = ?1 AND (?2 IS NULL OR folder = ?2 OR folder = {NO_FOLDER}) ORDER BY at DESC LIMIT 1"
+        ))?;
         Ok(st
-            .query_map([album], |r| {
+            .query_map(params![album, folder], |r| {
                 Ok(Review {
                     album: r.get(0)?,
-                    base: r.get(1)?,
+                    folder: r.get(1)?,
                     state: r.get(2)?,
                     at: r.get(3)?,
                     undo: r.get(4)?,
@@ -1902,17 +2007,18 @@ impl UserData {
             .transpose()?)
     }
 
+    /// `base` stands in the table only for the rows of 0.15, which the first start finds through it: a new one's is the record.
     pub fn set_review(&self, r: &Review) -> Result<()> {
         self.db().execute(
-            "INSERT OR REPLACE INTO album_review (album, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![r.album, r.base, r.state, r.at, r.undo, r.name, r.album_artist],
+            "INSERT OR REPLACE INTO album_review (album, folder, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?1, ?3, ?4, ?5, ?6, ?7)",
+            params![r.album, r.folder, r.state, r.at, r.undo, r.name, r.album_artist],
         )?;
         Ok(())
     }
 
     /// Back to unreviewed.
-    pub fn clear_review(&self, album: &str) -> Result<()> {
-        self.db().execute("DELETE FROM album_review WHERE album = ?1", [album])?;
+    pub fn clear_review(&self, album: &str, folder: i64) -> Result<()> {
+        self.db().execute("DELETE FROM album_review WHERE album = ?1 AND folder = ?2", params![album, folder])?;
         Ok(())
     }
 
@@ -2078,19 +2184,6 @@ impl UserData {
     }
 }
 
-/// Each entry as "the n-th copy of this line" (from 0), in order.
-fn occurrences(entries: &[String]) -> Vec<(String, usize)> {
-    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    entries
-        .iter()
-        .map(|e| {
-            let n = seen.entry(e.as_str()).or_default();
-            *n += 1;
-            (e.clone(), *n - 1)
-        })
-        .collect()
-}
-
 /// An album asked for (decision 0070), as kept.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Request {
@@ -2141,6 +2234,43 @@ fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0101: what the user data remembers, and where it names tracks (a fresh start's report and its floor).
+    #[test]
+    fn it_remembers_and_finds_where_it_names_tracks() {
+        let u = UserData::open(None).unwrap();
+        assert_eq!(u.meta("catalogue").unwrap(), None);
+        u.set_meta("catalogue", "g1").unwrap();
+        assert_eq!(u.meta("catalogue").unwrap().as_deref(), Some("g1"));
+        {
+            let db = u.db();
+            db.execute("INSERT INTO annotation (user, item, kind) VALUES ('a', 'tr-7', 'song'), ('a', 'al-x', 'album')", []).unwrap();
+            db.execute("INSERT INTO app_queue (user, client, songs, changed) VALUES ('a', 'p', 'tr-3,tr-40', 0)", []).unwrap();
+        }
+        let (rows, top) = u.track_references().unwrap();
+        assert_eq!(rows, vec![("annotation", 1), ("app_queue", 1)], "an album's id is no track's");
+        assert_eq!(top, 40);
+    }
+
+    /// CR3: every kind of place an album id for life is written, so none is left to name another album after a fresh start.
+    #[test]
+    fn the_highest_album_id_is_found_wherever_the_user_data_names_one() {
+        let u = UserData::open(None).unwrap();
+        assert_eq!(u.top_named().unwrap(), 0);
+        let named = |sql: &str, top: i64| {
+            u.db().execute(sql, []).unwrap();
+            assert_eq!(u.top_named().unwrap(), top, "{sql}");
+        };
+        named("INSERT INTO annotation (user, item, kind) VALUES ('a', 'al-5vcUvYmuWJAgyxLXEUmaPz', 'album')", 0);
+        named("INSERT INTO annotation (user, item, kind) VALUES ('a', 'al-12', 'album')", 12);
+        named("INSERT INTO album_tags (album, tag, at) VALUES ('al-20', 't', 0)", 20);
+        named("INSERT INTO record_overrides (album, field, value, at) VALUES ('al-30', 'year', '1', 0)", 30);
+        named("INSERT INTO release_types (key, secondary, at) VALUES ('dc:al-40', '', 0)", 40);
+        named("INSERT INTO words_asked (subject, source, at, ok) VALUES ('album:al-50', 's', 0, 1)", 50);
+        named("INSERT INTO change_at (account, kind, item, at) VALUES ('a', 'favourite', 'album:cratarr/al-60', 0)", 60);
+        named("INSERT INTO annotation (user, item, kind) VALUES ('a', 'ar-70', 'artist')", 70);
+        named(r#"INSERT INTO related_artists (artist, at, found) VALUES ('mbid', 0, '{"artists":[{"id":"ar-80"}]}')"#, 80);
+    }
 
     #[test]
     fn discogs_genres_and_covers_are_kept_and_an_album_without_any_waits() {
@@ -2212,25 +2342,6 @@ mod tests {
         let asked = |since| u.original_years_asked(since).unwrap().into_iter().collect::<std::collections::BTreeSet<_>>();
         assert_eq!(asked(50), ["rel-a".to_string(), "rel-b".to_string()].into());
         assert_eq!(asked(200), ["rel-a".to_string()].into(), "one MusicBrainz knew no year for, asked again later");
-    }
-
-    #[test]
-    fn entries_date_from_the_write_that_brought_them() {
-        let u = UserData::open(None).unwrap();
-        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        // Held before dates were kept: no date.
-        assert_eq!(u.entries_added("p", &v(&["a", "b"])).unwrap(), vec![None, None]);
-        u.entries_written("p", &v(&["a", "b"]), &v(&["a", "b", "c", "a"])).unwrap();
-        let got = u.entries_added("p", &v(&["a", "b", "c", "a"])).unwrap();
-        assert_eq!((got[0], got[1]), (None, None), "a and b were there before");
-        assert!(got[2].is_some() && got[3].is_some(), "c and the second a came now");
-        // A copy taken out is forgotten; renamed, the dates go with the playlist; gone, they go.
-        u.entries_written("p", &v(&["a", "b", "c", "a"]), &v(&["a", "b", "c"])).unwrap();
-        assert_eq!(u.entries_added("p", &v(&["a", "a"])).unwrap()[1], None, "the second a is gone");
-        u.playlist_renamed("p", "q").unwrap();
-        assert!(u.entries_added("q", &v(&["c"])).unwrap()[0].is_some());
-        u.playlist_gone("q").unwrap();
-        assert_eq!(u.entries_added("q", &v(&["c"])).unwrap(), vec![None]);
     }
 
     #[test]
@@ -2416,7 +2527,7 @@ mod tests {
     fn data_follows_a_song_to_its_new_id() {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
-        assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())]).unwrap(), 1);
+        assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())], &Default::default()).unwrap(), 1);
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 1);
     }
 
@@ -2425,9 +2536,9 @@ mod tests {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
         let both = [("pid1".to_string(), "tr-5".to_string()), ("pid1".to_string(), "tr-8".to_string())];
-        assert_eq!(u.follow_pids(&both).unwrap(), 1, "moved once, to the first");
+        assert_eq!(u.follow_pids(&both, &Default::default()).unwrap(), 1, "moved once, to the first");
         assert_eq!(u.get("me", Kind::Song, &["tr-5".into()]).unwrap()["tr-5"].play_count, 1);
-        assert_eq!(u.follow_pids(&both).unwrap(), 0, "and it stays there");
+        assert_eq!(u.follow_pids(&both, &Default::default()).unwrap(), 0, "and it stays there");
     }
 
     const KEY: ImportKey = ImportKey { account: "me", source: "jellyfin", server_user: "u1" };
@@ -2464,7 +2575,7 @@ mod tests {
         u.apply_import(KEY, &[off]).unwrap();
         assert_eq!(u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"].starred_at, None);
         // The record follows the song to a new id with its annotation.
-        u.follow_pids(&[("p".into(), "tr-9".into())]).unwrap();
+        u.follow_pids(&[("p".into(), "tr-9".into())], &Default::default()).unwrap();
         assert!(u.imported(KEY, Kind::Song, &["tr-9".into()]).unwrap().contains_key("tr-9"));
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 8);
     }
@@ -2532,6 +2643,8 @@ mod tests {
         assert_eq!(u.requests(None, Some("pending"), 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
         u.set_request_fetched(a, "Lidarr is looking for it").unwrap();
         assert_eq!(u.request(a).unwrap().unwrap().fetched.as_deref(), Some("Lidarr is looking for it"));
+        u.set_request_release_group(a, "rg-found").unwrap();
+        assert_eq!(u.request(a).unwrap().unwrap().release_group.as_deref(), Some("rg-found"));
         assert!(u.request(99).unwrap().is_none());
     }
 
@@ -2658,27 +2771,11 @@ mod tests {
         let mine = u.bookmarks("me").unwrap();
         assert_eq!(mine.len(), 1, "one per song: the second replaced the first");
         assert_eq!((mine[0].position_ms, mine[0].comment.as_str()), (140_000, "chorus"));
-        u.follow_pids(&[("p1".into(), "tr-9".into())]).unwrap();
+        u.follow_pids(&[("p1".into(), "tr-9".into())], &Default::default()).unwrap();
         assert_eq!(u.bookmarks("me").unwrap()[0].item, "tr-9", "kept its persistent id through the update");
         u.delete_bookmark("me", "tr-9").unwrap();
         assert!(u.bookmarks("me").unwrap().is_empty());
         assert_eq!(u.bookmarks("you").unwrap().len(), 1);
-    }
-
-    #[test]
-    fn a_renamed_playlist_is_found_by_its_old_names() {
-        let u = UserData::open(None).unwrap();
-        u.playlist_renamed("Test", "Testttt").unwrap();
-        u.playlist_renamed("Testttt", "Trip").unwrap();
-        assert_eq!(u.playlist_alias("Test").unwrap().as_deref(), Some("Trip"), "a chain leads to the name now");
-        assert_eq!(u.playlist_alias("Testttt").unwrap().as_deref(), Some("Trip"));
-        u.playlist_renamed("Trip", "Test").unwrap();
-        assert_eq!(u.playlist_alias("Test").unwrap(), None, "its own name again");
-        assert_eq!(u.playlist_alias("Trip").unwrap().as_deref(), Some("Test"));
-        u.playlist_made("Trip").unwrap();
-        assert_eq!(u.playlist_alias("Trip").unwrap(), None, "a new playlist takes the name back");
-        u.playlist_gone("Test").unwrap();
-        assert_eq!(u.playlist_alias("Testttt").unwrap(), None, "gone with it");
     }
 
     #[test]
@@ -2848,5 +2945,80 @@ mod tests {
         assert_eq!(mine.iter().map(|x| (x.at, x.choice.as_str())).collect::<Vec<_>>(), [(1, "a"), (2, "b")]);
         assert_eq!(mine[0].a, serde_json::json!({ "seed": 1 }));
         assert_eq!(mine[0].context, serde_json::json!({ "secs": 20 }));
+    }
+
+    fn review(folder: i64, state: &str, at: i64) -> Review {
+        Review { album: "al-1".into(), folder, state: state.into(), at, undo: None, name: "A".into(), album_artist: "B".into() }
+    }
+
+    /// Keyed by record, a new Incoming copy of a kept record reads "was promoted already" and can never be reviewed (Q24).
+    #[test]
+    fn a_review_is_of_the_copy_that_waited() {
+        let u = UserData::open(None).unwrap();
+        u.set_review(&review(2, "promoted", 10)).unwrap();
+        assert_eq!(u.review("al-1", Some(2)).unwrap().map(|r| r.state).as_deref(), Some("promoted"));
+        assert!(u.review("al-1", Some(3)).unwrap().is_none(), "another Incoming's copy is unreviewed");
+        u.set_review(&review(3, "rejected", 20)).unwrap();
+        assert_eq!(u.review("al-1", Some(2)).unwrap().map(|r| r.state).as_deref(), Some("promoted"), "each keeps its own");
+        assert_eq!(u.review("al-1", None).unwrap().map(|r| r.state).as_deref(), Some("rejected"), "with none waiting, the last word");
+        u.clear_review("al-1", 3).unwrap();
+        assert!(u.review("al-1", Some(3)).unwrap().is_none());
+        assert!(u.review("al-1", Some(2)).unwrap().is_some(), "the other copy's stands");
+    }
+
+    /// What was heard is of one copy's files: a new copy of the record has not been heard. From before copies, it goes for any.
+    #[test]
+    fn what_was_heard_is_of_the_copy_heard() {
+        let dir = std::env::temp_dir().join(format!("cratarr-heard-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("user.sqlite");
+        std::fs::remove_file(&file).ok();
+        {
+            let u = UserData::open(Some(&file)).unwrap();
+            u.db()
+                .execute_batch(
+                    "DROP TABLE intake_heard;
+                     CREATE TABLE intake_heard (album TEXT PRIMARY KEY, at INTEGER NOT NULL, heard TEXT NOT NULL) WITHOUT ROWID;
+                     INSERT INTO intake_heard VALUES ('al-old', 1, 'then');",
+                )
+                .unwrap();
+        }
+        let u = UserData::open(Some(&file)).unwrap();
+        assert_eq!(u.intake_heard("al-old", Some(4)).unwrap(), Some((1, "then".to_string())));
+        u.set_intake_heard("al-1", Some(2), 5, "mp3s").unwrap();
+        assert_eq!(u.intake_heard("al-1", Some(2)).unwrap(), Some((5, "mp3s".to_string())));
+        assert_eq!(u.intake_heard("al-1", Some(3)).unwrap(), None, "another copy is not heard yet");
+        u.set_intake_heard("al-1", Some(3), 6, "flacs").unwrap();
+        assert_eq!(u.intake_heard("al-1", Some(2)).unwrap(), Some((5, "mp3s".to_string())), "each its own");
+        assert_eq!(u.intake_heard("al-1", None).unwrap(), Some((6, "flacs".to_string())), "with none named, the last heard");
+        drop(u);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A database from before copies: its reviews stand for the whole record, and the table takes more than one per record.
+    #[test]
+    fn a_review_from_before_copies_goes_for_any_copy() {
+        let dir = std::env::temp_dir().join(format!("cratarr-review-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("user.sqlite");
+        std::fs::remove_file(&file).ok();
+        {
+            let u = UserData::open(Some(&file)).unwrap();
+            u.db()
+                .execute_batch(
+                    "DROP TABLE album_review;
+                     CREATE TABLE album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT, name TEXT NOT NULL, album_artist TEXT NOT NULL);
+                     CREATE INDEX album_review_by_base ON album_review (base);
+                     INSERT INTO album_review VALUES ('al-1', 'base', 'rejected', 5, 'u', 'A', 'B');",
+                )
+                .unwrap();
+        }
+        let u = UserData::open(Some(&file)).unwrap();
+        assert_eq!(u.review("al-1", Some(7)).unwrap().map(|r| (r.folder, r.state, r.undo)), Some((NO_FOLDER, "rejected".to_string(), Some("u".to_string()))));
+        u.set_review(&review(7, "promoted", 9)).unwrap();
+        assert_eq!(u.review("al-1", Some(7)).unwrap().map(|r| r.state).as_deref(), Some("promoted"), "said since, of this copy");
+        drop(u);
+        UserData::open(Some(&file)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

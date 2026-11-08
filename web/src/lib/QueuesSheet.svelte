@@ -8,6 +8,7 @@
   // in one line. After when, where it was heard (amended 2026-10-19): Play On's icon and the outputs' own names (the
   // car's Bluetooth), else the players'.
   import type { QueueItem } from './api';
+  import Asking from './Asking.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import { longpress } from './longpress';
   import MenuCards from './MenuCards.svelte';
@@ -116,6 +117,7 @@
     {:else}
       <!-- Not read: the error alone, never "No queues yet" under it (the owner, 2026-11-02). -->
       {#if queues.error}<Notice text={queues.error} onretry={loadQueues} />{/if}
+      {#if !queues.known}<Asking />{/if}
       <ol class="queues" aria-busy={busy}>
         {#each queues.list as q (q.id)}
           <li>

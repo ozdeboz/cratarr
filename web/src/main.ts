@@ -25,4 +25,8 @@ watchForUpdates();
 // still works, it just cannot be installed.
 if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('Service worker not registered', e));
+  // What the page keeps on the device (the service worker's copy of the app and its data, the shelf, the covers; from
+  // 0.16 the library's index) kept for good where the browser allows it, not let go when its space runs short (the
+  // desktop app grants it, claude-be 2026-11-04; a browser decides by itself, or asks once).
+  void navigator.storage?.persisted?.().then((kept) => kept || navigator.storage.persist()).catch(() => {});
 }

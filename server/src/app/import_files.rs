@@ -136,6 +136,7 @@ fn listened<'a>(from: &str, listens: &'a [Listen]) -> Vec<Listened<'a>> {
             track: Track { recording: l.recording.as_deref(), artist: &l.artist, title: &l.title, album: l.album.as_deref(), length_secs: l.length_secs },
             at: l.at,
             event: format!("{ctx}:{}:{}:{}", l.at, key(&l.artist), key(&l.title)),
+            player: None,
         })
         .collect()
 }

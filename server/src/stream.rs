@@ -11,6 +11,7 @@
 //! (xiph.org); the boxes follow ISO/IEC 14496-12.
 
 use anyhow::{bail, Context, Result};
+use crate::serve::listener::Listener;
 use std::fs::File;
 use std::path::Path;
 use symphonia::core::formats::probe::Hint;
@@ -405,15 +406,14 @@ pub enum Kind {
     Mp3,
 }
 
-/// A track's file on Cratarr's own mount and how it is streamed; `None` when the catalogue does not know the track
-/// or its file is gone. Blocking (the catalogue).
+/// A track's file on Cratarr's own mount and how it is streamed, the copy that plays for `who`; `None` when the catalogue
+/// does not know the track or its file is gone. Blocking (the catalogue).
 /// Where a server's track is on disk, its kind (None: not one that plays here), and its length as the catalogue read
 /// it (milliseconds). Not the analysis's: its decoder stopped early on a few files (7 s for a 7:48 FLAC).
-pub fn locate(cat: &crate::catalogue::Catalogue, source: &str, item: &str) -> Option<(std::path::PathBuf, Option<Kind>, Option<u64>)> {
-    let track = cat.track_of_source(source, item)?;
-    let (folder, rel) = cat.file_of(track)?;
+pub fn locate(cat: &crate::catalogue::Catalogue, who: &Listener, source: &str, item: &str) -> Option<(std::path::PathBuf, Option<Kind>, Option<u64>)> {
+    let (folder, rel) = who.place(cat, source, item)?;
     let duration_ms = cat.duration_of(folder, &rel);
-    let path = cat.folders().get(folder as usize)?.join(rel);
+    let path = cat.folders().get(folder)?.join(rel);
     let kind = match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
         Some("flac") => Some(Kind::Flac),
         Some("mp3") => Some(Kind::Mp3),
@@ -424,13 +424,18 @@ pub fn locate(cat: &crate::catalogue::Catalogue, source: &str, item: &str) -> Op
 
 /// The tracks a wind goes on into (`api::stream_wind`, decision 0074), nearest first: each file and its length, as
 /// [`locate`] finds them, up to the first Cratarr keeps no file of (a Bandcamp preview, another server's track). The
-/// catalogue asked once for all of them (0.10.2: the slow answers of 2026-10-30). Blocking.
-pub fn locate_through(cat: &crate::catalogue::Catalogue, items: &[(String, String)]) -> Vec<(std::path::PathBuf, Option<u64>)> {
+/// catalogue asked once for all of them (0.10.2: the slow answers of 2026-10-30), the library only for a track with more
+/// than one file. Blocking.
+pub fn locate_through(cat: &crate::catalogue::Catalogue, who: &Listener, items: &[(String, String)]) -> Vec<(std::path::PathBuf, Option<u64>)> {
     let asked: Vec<(&str, &str)> = items.iter().take_while(|(s, _)| s != crate::bandcamp::SOURCE).map(|(s, i)| (s.as_str(), i.as_str())).collect();
     let folders = cat.folders();
     cat.files_of_sources(&asked)
         .into_iter()
-        .map_while(|(folder, rel, duration_ms)| Some((folders.get(usize::try_from(folder).ok()?)?.join(rel), duration_ms)))
+        .map_while(|(track, files)| {
+            let (folder, rel) = who.among(track, files.iter().map(|(f, r, _)| (*f, r.clone())).collect())?;
+            let duration_ms = files.iter().find(|(f, r, _)| *f == folder && *r == rel).and_then(|(_, _, d)| *d);
+            Some((folders.get(folder)?.join(rel), duration_ms))
+        })
         .collect()
 }
 

@@ -38,6 +38,10 @@ object ExportPaths {
     /** What a file is saved as when its extension says nothing: the provider then keeps its name as is. */
     const val ANY_TYPE = "application/octet-stream"
 
+    /** What a notification calls a download of [name], asked for by [whose], with [who] signed in now: it can outlive them,
+     *  and the file's name is theirs. Null: nothing of its own. */
+    fun titleOf(name: String?, whose: String?, who: String): String? = name?.takeIf { it.isNotBlank() && whose == who }
+
     /** A file name's extension, lower case; empty without one. */
     fun extension(name: String): String = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
 
@@ -110,8 +114,8 @@ object ExportSave {
         }
     }
 
-    /** One download: the document the user made for it, Cratarr's token and the download's name. */
-    class Job(val doc: Uri, val token: String, val name: String)
+    /** One download: the document the user made for it, Cratarr's token, the download's name and whose it is ([Who]). */
+    class Job(val doc: Uri, val token: String, val name: String, val who: String)
 
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "cratarr-export").apply { isDaemon = true } }
     private val main = Handler(Looper.getMainLooper())
@@ -158,6 +162,11 @@ object ExportSave {
                 }
             }
         }
+    }
+
+    /** The last download's note goes with whose it was. */
+    fun forget(context: Context) {
+        context.getSystemService(NotificationManager::class.java)?.cancel(DONE_NOTIFICATION)
     }
 
     private fun report(m: JSONObject) {
@@ -268,7 +277,7 @@ object ExportSave {
         )
         return Notification.Builder(context, CratarrDownloadService.CHANNEL)
             .setSmallIcon(R.drawable.media3_notification_small_icon)
-            .setContentTitle(job?.name?.takeIf { it.isNotBlank() } ?: context.getString(R.string.downloads))
+            .setContentTitle(ExportPaths.titleOf(job?.name, job?.who, Who.current(context)) ?: context.getString(R.string.downloads))
             .setContentIntent(open)
     }
 

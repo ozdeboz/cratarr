@@ -38,8 +38,8 @@ pub struct TempoChange {
 
 /// A track's file: its folder in the catalogue, its path there, and where it is.
 pub(super) fn place(cat: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<(i64, String, PathBuf)> {
-    let (folder, rel) = cat.track_of_source(source, id).and_then(|t| cat.file_of(t))?;
-    let path = cat.folders().get(folder as usize)?.join(&rel);
+    let (folder, rel) = cat.place_of_source(source, id)?;
+    let path = cat.folders().get(folder)?.join(&rel);
     Some((folder, rel, path))
 }
 
@@ -67,12 +67,13 @@ pub fn adjusted(t: &TrackTempo, how: Adjust) -> Option<u32> {
 
 /// The tracks' BPMs halved, doubled or reset as a run on the one path (decision 0092's writers' map, 0.14: the tap is
 /// the yes; Undo is the run's): each of Cratarr's own tracks whose tag changes, its BPM now → after. With the tracks'
-/// tempos as they will be. Blocking for the plan; the run writes in the background.
-pub(super) fn proposal(cat: &crate::catalogue::Catalogue, ids: &[String], how: Adjust) -> Result<(super::file_runs::Proposal, Vec<TrackTempo>)> {
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+/// tempos as they will be. The tempo is the track's, so every copy's file gets it, each from what it holds itself. Blocking
+/// for the plan; the run writes in the background.
+pub(super) fn proposal(served: &crate::serve::Serve, ids: &[String], how: Adjust) -> Result<(super::file_runs::Proposal, Vec<TrackTempo>)> {
+    let cat = served.catalogue();
     let own = crate::source::cratarr::KIND.id;
     let mut p = super::file_runs::Proposal { kind: "tempo".into(), ..Default::default() };
-    let mut tempos = Vec::new();
+    let (mut tempos, mut tracks) = (Vec::new(), 0);
     for id in ids {
         let Some(now) = tempo_of(cat, own, id) else { continue };
         let Some(to) = adjusted(&now, how) else {
@@ -80,34 +81,38 @@ pub(super) fn proposal(cat: &crate::catalogue::Catalogue, ids: &[String], how: A
             continue;
         };
         tempos.push(TrackTempo { bpm: Some(to), ..now.clone() });
-        let (_, _, path) = place(cat, own, id).context("a track's file is not known")?;
-        let had = crate::retag::bpm(&path);
-        if whole(had.as_deref().and_then(|v| v.trim().parse().ok())) == Some(to) {
-            continue;
-        }
         let Some((_, _, album, title)) = served.library.song_file(id)? else { continue };
-        if !p.records.iter().any(|r| r.album == album)
-            && let Some((_, _, _, artist, name)) = served.library.album_place(&album)?
-        {
-            p.records.push(crate::journal::RunRecord { album: album.clone(), title: name, artist });
-        }
+        let had_files = p.files.len();
         let from = match how {
             Adjust::Half => "halved",
             Adjust::Double => "doubled",
             Adjust::Reset => "Cratarr's measure",
         };
-        p.files.push(crate::journal::FileWrite {
-            album,
-            path,
-            track: Some(title),
-            before: vec![("bpm".into(), had.into_iter().collect())],
-            after: vec![("bpm".into(), vec![to.to_string()])],
-            from: vec![("bpm".into(), from.into())],
-            undone: false,
-            whole: None,
-        });
+        for (folder, rel) in served.library.files_of_track(id)? {
+            let path = cat.folders().get(folder).context("its library is not there")?.join(&rel);
+            let had = crate::retag::bpm(&path);
+            if whole(had.as_deref().and_then(|v| v.trim().parse().ok())) == Some(to) {
+                continue;
+            }
+            if !p.records.iter().any(|r| r.album == album)
+                && let Some((_, artist, name)) = served.library.album_names(&album)?
+            {
+                p.records.push(crate::journal::RunRecord { album: album.clone(), title: name, artist });
+            }
+            p.files.push(crate::journal::FileWrite {
+                album: album.clone(),
+                path,
+                track: Some(title.clone()),
+                before: vec![("bpm".into(), had.into_iter().collect())],
+                after: vec![("bpm".into(), vec![to.to_string()])],
+                from: vec![("bpm".into(), from.into())],
+                undone: false,
+                whole: None,
+            });
+        }
+        tracks += usize::from(p.files.len() > had_files);
     }
-    let n = p.files.len();
+    let n = tracks;
     let what = match how {
         Adjust::Half => "Tempo halved",
         Adjust::Double => "Tempo doubled",

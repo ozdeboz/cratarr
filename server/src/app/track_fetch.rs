@@ -181,7 +181,7 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
     if let Some(id) = found.and_then(|i| i.release_id) {
         return Ok(Some(id));
     }
-    if let Some(own) = served.library.album_place(album)?.and_then(|p| p.2).filter(|m| super::discogs::is_mbid(m)) {
+    if let Some(own) = served.library.album_names(album)?.and_then(|p| p.0).filter(|m| super::discogs::is_mbid(m)) {
         return Ok(Some(own));
     }
     Ok(served
@@ -281,6 +281,10 @@ pub struct FetchView {
     pub why: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
+    /// Refused for want of an answer ([`NotAsked`], [`crate::slskd::Away`]): nothing is known of the file or its user. The
+    /// page reads it as any refusal, with its why; the bulk intake holds nothing against the user for it.
+    #[serde(skip)]
+    pub no_verdict: bool,
 }
 
 struct FetchJob {
@@ -383,7 +387,7 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
     let batch = slskd.fetch(&c.user, &c.offered).await?;
     let id = new_id();
     jobs(|j| {
-        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None }, staged: None });
+        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None, no_verdict: false }, staged: None });
     });
     let job = id.clone();
     tokio::spawn(async move {
@@ -404,7 +408,7 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
         let staged = match got {
             Ok(p) => p,
             Err(e) => {
-                set(&|f| (f.view.state, f.view.why) = (Fetching::Refused, Some(format!("{e:#}"))));
+                set(&|f| (f.view.state, f.view.why, f.view.no_verdict) = (Fetching::Refused, Some(format!("{e:#}")), e.is::<crate::slskd::Away>()));
                 return;
             }
         };
@@ -412,7 +416,7 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
         let verdict = gate(&staged, &wanted.track).await;
         set(&|f| match &verdict {
             Ok(score) => (f.view.state, f.view.score) = (Fetching::Passed, Some(*score)),
-            Err(e) => (f.view.state, f.view.why) = (Fetching::Refused, Some(format!("{e:#}"))),
+            Err(e) => (f.view.state, f.view.why, f.view.no_verdict) = (Fetching::Refused, Some(format!("{e:#}")), e.is::<NotAsked>()),
         });
     });
     Ok(id)
@@ -579,6 +583,20 @@ async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid:
     crate::acoustid::lookup(&key, &print).await
 }
 
+/// The gate stopped short of a verdict: AcoustID could not be asked (away, over its limit, its key gone or never set).
+/// That says nothing of the file, so it is no refusal: what fetched the file on its own must not treat it as one
+/// (`soulseek::check`, `track_intake::fetch`). Reads as the failure it carries.
+#[derive(Debug)]
+pub struct NotAsked(pub(super) String);
+
+impl std::fmt::Display for NotAsked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotAsked {}
+
 /// [`gate`], asking `lookup` what AcoustID knows of the file (the tests' stands in for AcoustID).
 async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
 where
@@ -588,7 +606,7 @@ where
     let f = file.to_path_buf();
     let print = tokio::task::spawn_blocking(move || crate::acoustid::print(&f)).await??;
     refused_for(&print, track.length_ms)?;
-    let found = lookup(print).await?;
+    let found = lookup(print).await.map_err(|e| NotAsked(format!("{e:#}")))?;
     crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
 }
 
@@ -774,7 +792,7 @@ pub async fn fetch_file(album: &str, recording: &str, replace: Option<String>, r
     let id = new_id();
     let to = staging.join(&id).join(from.file_name().context("no file name")?);
     jobs(|j| {
-        let view = FetchView { state: Fetching::Checking, percent: 100.0, why: None, score: None };
+        let view = FetchView { state: Fetching::Checking, percent: 100.0, why: None, score: None, no_verdict: false };
         j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view, staged: Some(to.clone()) });
     });
     tell(&id);
@@ -866,6 +884,9 @@ struct Added {
     added: String,
     /// The track it replaced, in the trash.
     trashed: Option<String>,
+    /// The replaced file's track, handed to the new one and back by Undo (0101 point 11).
+    #[serde(default)]
+    track: Option<i64>,
 }
 
 fn undo_file(id: &str) -> Result<PathBuf> {
@@ -885,7 +906,7 @@ pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super:
     let staged = staged.context("That track is not staged")?;
     let s = served()?;
     let status = super::file_runs::made(app, move || {
-        let (_, _, _, artist, title) = s.library.album_place(&wanted.album)?.context("No such album in Cratarr's own library")?;
+        let (_, artist, title) = s.library.album_names(&wanted.album)?.context("No such album in Cratarr's own library")?;
         let replaced = match &wanted.replace {
             Some(id) => super::renumber::tracks_of(&wanted.album)?.0.into_iter().find(|t| &t.id == id).map(|t| t.title),
             None => None,
@@ -922,7 +943,8 @@ pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super:
 
 /// Places a passed track in its album: where it went, and what its Undo needs (`undo_at`).
 fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Result<(PathBuf, PathBuf)> {
-    let (folder, dir, ..) = s.library.album_place(&wanted.album)?.context("No such album in Cratarr's own library")?;
+    let copy = s.library.row_copy(&wanted.album)?.context("No such album in Cratarr's own library")?;
+    let (folder, dir) = (copy.folder, copy.dir);
     let root = PathBuf::from(s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?);
     let (tracks, ..) = super::renumber::tracks_of(&wanted.album)?;
     let t = &wanted.track;
@@ -948,41 +970,22 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let ext = source.extension().and_then(|x| x.to_str()).unwrap_or("flac").to_ascii_lowercase();
     let name = name_like(&neighbour.file, t.position, &t.title, &ext);
     let dest = album_dir.join(&name);
-    // The replaced track to the trash first: the new one may take its name.
+    // The replaced file's track, handed to the new one (0101 point 11: a better copy keeps the id, as Replace does).
+    let handed = replaced.and_then(|r| s.catalogue().place_of_path(&r.path)).and_then(|(f, rel)| s.catalogue().track_of(f, &rel));
+    let old = replaced.map(|r| rel_of(&root, &r.path)).transpose()?;
     let now = super::moment::now_secs();
-    let trashed = match replaced {
-        Some(r) => Some(crate::trash::trash_file(&root, &rel_of(&root, &r.path)?, now)?),
-        None => None,
-    };
-    if dest.exists() {
-        if let Some(tok) = &trashed {
-            crate::trash::restore_file(&root, tok).ok();
-        }
-        bail!("{name} is there already");
-    }
-    let placed = (|| -> Result<()> {
-        // Copied in under a hidden name, then renamed: no walk sees a half-written track.
-        let part = album_dir.join(format!(".{name}.cratarr-part"));
-        std::fs::copy(&source, &part).with_context(|| format!("copying into {}", album_dir.display()))?;
-        if let Ok(m) = std::fs::metadata(&neighbour.path) {
-            std::fs::set_permissions(&part, m.permissions()).ok();
-        }
-        std::fs::rename(&part, &dest)?;
-        tag(&dest, &neighbour.path, t)
-    })();
-    if let Err(e) = placed {
-        std::fs::remove_file(&dest).ok();
-        if let Some(tok) = &trashed {
-            crate::trash::restore_file(&root, tok).ok();
-        }
-        return Err(e);
-    }
+    let trashed = swap_in(&root, &source, &dest, old.as_deref(), &neighbour.path, now, |part| tag(part, &neighbour.path, t))?;
     // The album's cover inside it too (the owner's rule: inside every file and next to them).
     if let Err(e) = crate::covers_inside::complete(&album_dir) {
         tracing::warn!("track fetch: the cover not put inside {}: {e:#}", dest.display());
     }
     let id = now.to_string() + &new_id()[..4];
-    let undo = Added { root: root.clone(), added: rel_of(&root, &dest)?, trashed };
+    if let (Some(track), Some(r)) = (handed, replaced)
+        && let Err(e) = s.catalogue().hand_over(&dest, &r.path, track)
+    {
+        tracing::warn!("track fetch: {} not handed its track: {e:#}", dest.display());
+    }
+    let undo = Added { root: root.clone(), added: rel_of(&root, &dest)?, trashed, track: handed };
     let file = undo_file(&id)?;
     std::fs::create_dir_all(file.parent().context("no folder")?)?;
     std::fs::write(&file, serde_json::to_vec(&undo)?)?;
@@ -993,12 +996,41 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     Ok((dest, file))
 }
 
+/// A new track into its album at `dest`, the one it replaces (`old`, relative to `root`) to the trash: its token. Made whole
+/// first, copied in under a hidden name and tagged there, so no walk sees it half-written and a stop in this long part
+/// leaves the album as it was; only then the two renames. The hidden name keeps its extension: the tag writer goes by it.
+fn swap_in(root: &Path, source: &Path, dest: &Path, old: Option<&str>, like: &Path, now: i64, tag: impl FnOnce(&Path) -> Result<()>) -> Result<Option<String>> {
+    let name = dest.file_name().context("no file name")?.to_string_lossy().into_owned();
+    let part = dest.with_file_name(format!(".cratarr-part-{name}"));
+    let swapped = (|| -> Result<Option<String>> {
+        std::fs::copy(source, &part).with_context(|| format!("copying into {}", dest.display()))?;
+        if let Ok(m) = std::fs::metadata(like) {
+            std::fs::set_permissions(&part, m.permissions()).ok();
+        }
+        tag(&part)?;
+        // The replaced track out first: the new one may take its name.
+        let trashed = old.map(|rel| crate::trash::trash_file(root, rel, now)).transpose()?;
+        let placed = if dest.exists() { Err(anyhow::anyhow!("{name} is there already")) } else { std::fs::rename(&part, dest).map_err(anyhow::Error::from) };
+        if let Err(e) = placed {
+            if let Some(tok) = &trashed {
+                crate::trash::restore_file(root, tok).ok();
+            }
+            return Err(e);
+        }
+        Ok(trashed)
+    })();
+    if swapped.is_err() {
+        std::fs::remove_file(&part).ok();
+    }
+    swapped
+}
+
 /// The quality limit of the library whose folder is `root`: as Cratarr's own source has it (its libraries are its
-/// folders); CD format, Music's by its use, while none is found there (as a move's `quality_in`).
+/// folders); CD format, a main library's by its kind, while none is found there (as a move's `quality_in`).
 fn quality_at(saved: Option<&crate::settings::Saved>, root: &Path) -> crate::settings::Quality {
     saved
         .and_then(|s| s.sources.iter().find(|c| c.enabled && c.kind == crate::source::cratarr::KIND.id))
-        .and_then(|c| c.libraries.music.iter().chain(&c.libraries.incoming).find(|l| Path::new(l.as_str()) == root).map(|l| c.libraries.quality_of(l)))
+        .and_then(|c| c.libraries.0.iter().find(|l| Path::new(l.id.as_str()) == root).map(|l| c.libraries.quality_of(&l.id)))
         .unwrap_or(crate::settings::Quality::Cd)
 }
 
@@ -1057,14 +1089,33 @@ pub fn undo_at(file: &Path) -> Result<()> {
     {
         let a: Added = serde_json::from_slice(&std::fs::read(file).context("That can no longer be undone")?)?;
         let now = super::moment::now_secs();
-        crate::trash::trash_file(&a.root, &a.added, now)?;
-        let mut changed = vec![a.root.join(&a.added)];
+        // Asked first: a run stays listed after the trash let the old track go, and the album must not lose both.
         if let Some(tok) = &a.trashed {
-            let back = crate::trash::restore_file(&a.root, tok)?;
-            changed.push(a.root.join(back));
+            crate::trash::can_restore_file(&a.root, tok, &a.added)?;
+        }
+        let taken = crate::trash::trash_file(&a.root, &a.added, now)?;
+        let mut changed = vec![a.root.join(&a.added)];
+        let served = crate::serve::instance();
+        if let Some(tok) = &a.trashed {
+            let back = match crate::trash::restore_file(&a.root, tok) {
+                Ok(rel) => a.root.join(rel),
+                Err(e) => {
+                    if let Err(again) = crate::trash::restore_file(&a.root, &taken) {
+                        tracing::error!("track fetch undo: {} left in the trash: {again:#}", a.added);
+                    }
+                    return Err(e);
+                }
+            };
+            // The track back to the file it was (0101 point 11).
+            if let (Some(s), Some(track)) = (&served, a.track)
+                && let Err(e) = s.catalogue().hand_over(&back, &a.root.join(&a.added), track)
+            {
+                tracing::warn!("track fetch undo: {} not handed its track back: {e:#}", back.display());
+            }
+            changed.push(back);
         }
         std::fs::remove_file(file).ok();
-        if let Some(s) = crate::serve::instance() {
+        if let Some(s) = served {
             s.reread(&changed);
             s.catalogue().poke();
         }
@@ -1076,17 +1127,151 @@ pub fn undo_at(file: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// What a Better copy leaves: `added` in its album, the replaced track `old` named for the trash (paths relative to
+    /// the library), and what its Undo reads.
+    fn better_copy(tag: &str, added: &str, old: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("cratarr-better-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("A")).unwrap();
+        std::fs::write(root.join(added), b"new").unwrap();
+        let undo = root.join("undo.json");
+        let a = Added { root: root.clone(), added: added.into(), trashed: Some(format!("100/{old}")), track: None };
+        std::fs::write(&undo, serde_json::to_vec(&a).unwrap()).unwrap();
+        (root, undo)
+    }
+
+    fn album(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("cratarr-swap-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("A")).unwrap();
+        std::fs::write(root.join("staged.flac"), b"new").unwrap();
+        std::fs::write(root.join("A/one.flac"), b"old").unwrap();
+        root
+    }
+
+    fn names_in(d: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_better_copy_is_whole_and_tagged_before_the_old_track_leaves() {
+        let root = album("order");
+        let dest = root.join("A/one.flac");
+        let tagged = |part: &Path| -> Result<()> {
+            assert_eq!(std::fs::read(root.join("A/one.flac")).unwrap(), b"old", "the old track still in its place");
+            assert_eq!(part.extension().and_then(|x| x.to_str()), Some("flac"), "the tag writer goes by it");
+            std::fs::write(part, b"new, tagged")?;
+            Ok(())
+        };
+        let token = swap_in(&root, &root.join("staged.flac"), &dest, Some("A/one.flac"), &root.join("A/one.flac"), 100, tagged).unwrap();
+        assert_eq!(token.as_deref(), Some("100/A/one.flac"));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new, tagged");
+        assert_eq!(std::fs::read(root.join(crate::trash::TRASH_DIR).join("100/A/one.flac")).unwrap(), b"old");
+        assert_eq!(names_in(&root.join("A")), ["one.flac"], "no part left");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_better_copy_that_cannot_be_made_leaves_the_album_as_it_was() {
+        let root = album("fails");
+        let dest = root.join("A/one.flac");
+        let refused = |_: &Path| -> Result<()> { bail!("its tags did not read back as written") };
+        swap_in(&root, &root.join("staged.flac"), &dest, Some("A/one.flac"), &dest, 100, refused).unwrap_err();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"old");
+        assert_eq!(names_in(&root.join("A")), ["one.flac"]);
+        assert!(!root.join(crate::trash::TRASH_DIR).exists(), "the old track never left");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_missing_track_refused_for_its_name_being_taken_leaves_no_part_and_a_better_copy_puts_the_old_one_back() {
+        let root = album("taken");
+        std::fs::write(root.join("A/two.flac"), b"in the way").unwrap();
+        let dest = root.join("A/two.flac");
+        let tagged = |_: &Path| -> Result<()> { Ok(()) };
+        assert!(swap_in(&root, &root.join("staged.flac"), &dest, None, &dest, 100, tagged).unwrap_err().to_string().contains("there already"));
+        swap_in(&root, &root.join("staged.flac"), &dest, Some("A/one.flac"), &dest, 100, tagged).unwrap_err();
+        assert_eq!(names_in(&root.join("A")), ["one.flac", "two.flac"]);
+        assert_eq!(std::fs::read(root.join("A/one.flac")).unwrap(), b"old");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn in_trash(root: &Path, old: &str) {
+        let at = root.join(crate::trash::TRASH_DIR).join("100").join(old);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, b"old").unwrap();
+    }
+
+    #[test]
+    fn undo_of_a_better_copy_takes_the_new_track_out_and_puts_the_old_one_back() {
+        let (root, undo) = better_copy("plain", "A/new.flac", "A/old.flac");
+        in_trash(&root, "A/old.flac");
+        undo_at(&undo).unwrap();
+        assert_eq!(std::fs::read(root.join("A/old.flac")).unwrap(), b"old");
+        assert!(!root.join("A/new.flac").exists());
+        assert!(!undo.exists(), "done once");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_new_track_with_the_old_ones_name_does_not_stand_in_the_way_of_its_undo() {
+        let (root, undo) = better_copy("same-name", "A/one.flac", "A/one.flac");
+        in_trash(&root, "A/one.flac");
+        undo_at(&undo).unwrap();
+        assert_eq!(std::fs::read(root.join("A/one.flac")).unwrap(), b"old");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn undo_of_a_better_copy_leaves_the_new_track_when_the_trash_has_let_the_old_one_go() {
+        for (tag, added) in [("purged", "A/new.flac"), ("purged-same-name", "A/old.flac")] {
+            let (root, undo) = better_copy(tag, added, "A/old.flac");
+            assert!(undo_at(&undo).unwrap_err().to_string().contains("no longer in the trash"), "{tag}");
+            assert_eq!(std::fs::read(root.join(added)).unwrap(), b"new", "{tag}");
+            assert!(undo.exists(), "{tag}: still its Undo, to say why again");
+            std::fs::remove_dir_all(&root).ok();
+        }
+    }
+
+    #[test]
+    fn undo_of_a_better_copy_leaves_the_new_track_when_a_file_is_back_at_the_old_name() {
+        let (root, undo) = better_copy("taken", "A/new.flac", "A/old.flac");
+        in_trash(&root, "A/old.flac");
+        std::fs::write(root.join("A/old.flac"), b"someone else's").unwrap();
+        assert!(undo_at(&undo).unwrap_err().to_string().contains("exists again"));
+        assert_eq!(std::fs::read(root.join("A/new.flac")).unwrap(), b"new");
+        assert_eq!(std::fs::read(root.join("A/old.flac")).unwrap(), b"someone else's");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A file where its folder was passes the look first: only the restore itself finds out.
+    #[test]
+    fn the_new_track_goes_back_where_the_old_ones_restore_fails_after_all() {
+        let (root, undo) = better_copy("late", "A/new.flac", "B/old.flac");
+        in_trash(&root, "B/old.flac");
+        std::fs::write(root.join("B"), b"a file where its folder was").unwrap();
+        undo_at(&undo).unwrap_err();
+        assert_eq!(std::fs::read(root.join("A/new.flac")).unwrap(), b"new", "back in its album");
+        assert!(root.join(crate::trash::TRASH_DIR).join("100/B/old.flac").is_file(), "the old one where it was");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn a_track_is_converted_to_its_librarys_limit() {
-        use crate::settings::{LibraryPolicy, Quality, Roles, Saved, SourceConfig};
-        let roles = Roles { music: vec!["/music".into()], incoming: vec!["/incoming".into(), "/hires".into()], ..Roles::default() };
-        let mut saved = Saved {
-            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: roles, values: Default::default() }],
+        use crate::settings::{Libraries, LibraryKind, LibrarySetting, Quality, Saved, SourceConfig};
+        let libraries = Libraries(vec![
+            LibrarySetting::new("/music", LibraryKind::Main),
+            LibrarySetting::new("/incoming", LibraryKind::Incoming),
+            LibrarySetting { quality: Some(Quality::Hr96), ..LibrarySetting::new("/hires", LibraryKind::Incoming) },
+        ]);
+        let saved = Saved {
+            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries, values: Default::default() }],
             ..Default::default()
         };
-        saved.sources[0].libraries.policies.insert("/hires".into(), LibraryPolicy { quality: Some(Quality::Hr96), ..Default::default() });
-        assert_eq!(quality_at(Some(&saved), Path::new("/music")), Quality::Cd, "Music's by its use");
-        assert_eq!(quality_at(Some(&saved), Path::new("/incoming")), Quality::None, "Incoming's by its use: as it is");
+        assert_eq!(quality_at(Some(&saved), Path::new("/music")), Quality::Cd, "a main library's by its kind");
+        assert_eq!(quality_at(Some(&saved), Path::new("/incoming")), Quality::None, "Incoming's by its kind: as it is");
         assert_eq!(quality_at(Some(&saved), Path::new("/hires")), Quality::Hr96);
         assert_eq!(quality_at(Some(&saved), Path::new("/elsewhere")), Quality::Cd);
         assert_eq!(quality_at(None, Path::new("/incoming")), Quality::Cd, "nothing saved: CD format");
@@ -1127,7 +1312,7 @@ mod tests {
         });
         let mut view = release_of(&v);
         assert_eq!((view.year, view.artist.as_str(), view.tracks.len()), (Some(2023), "Arushi Jain", 2));
-        let files = vec![super::super::renumber::Track { id: "f1".into(), path: PathBuf::from("/m/a/01 Euphoria.flac"), file: "01 Euphoria.flac".into(), title: "Euphoria".into(), secs: 301, disc: Some(1), track: Some(1) }];
+        let files = vec![super::super::renumber::Track { id: "f1".into(), path: PathBuf::from("/m/a/01 Euphoria.flac"), place: (0, "a/01 Euphoria.flac".into()), file: "01 Euphoria.flac".into(), title: "Euphoria".into(), secs: 301, disc: Some(1), track: Some(1) }];
         place(&mut view, &files);
         assert_eq!(view.tracks[0].have.as_ref().map(|h| h.id.as_str()), Some("f1"));
         assert!(view.tracks[1].have.is_none(), "Bloom is missing");
@@ -1295,6 +1480,25 @@ mod tests {
         let err = take(&from, &d.join("staging/f4/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
         assert_eq!(err.to_string(), "It is 20 s shorter than the recording");
         assert_eq!(std::fs::read(&from).unwrap(), before, "and the original still there");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn acoustid_that_could_not_be_asked_is_no_refusal_of_the_file() {
+        let d = dir("trackfile-notasked");
+        let from = d.join("cratarr/Old drive/06 Bloom.flac");
+        old_flac(&from, "trackfile-notasked");
+        let track = track_of(delight(), "r7", false).unwrap();
+        let away = |_| std::future::ready(Err(anyhow::anyhow!("AcoustID could not be reached")));
+        let err = take(&from, &d.join("staging/f1/06 Bloom.flac"), &track, away).await.unwrap_err();
+        assert!(err.is::<NotAsked>());
+        assert_eq!(format!("{err:#}"), "AcoustID could not be reached", "said as it failed");
+        // Its own verdict, and one made before it is asked, are refusals.
+        let err = take(&from, &d.join("staging/f2/06 Bloom.flac"), &track, acoustid_says(0.99, "r6")).await.unwrap_err();
+        assert!(!err.is::<NotAsked>());
+        let longer = ReleaseTrack { length_ms: Some(30_000), ..track.clone() };
+        let err = take(&from, &d.join("staging/f3/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
+        assert!(!err.is::<NotAsked>());
         std::fs::remove_dir_all(&d).ok();
     }
 

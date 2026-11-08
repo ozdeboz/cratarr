@@ -298,7 +298,7 @@ impl PlayingService {
             }
         };
         self.lib.store()?;
-        let folders = self.lib.folders();
+        let folders = self.lib.catalogue().folders();
         let mut entries = Vec::new();
         let mut left_out = 0;
         for id in &ids {
@@ -482,7 +482,7 @@ impl PlayingService {
 
     async fn work_out_state(&self, want: Option<&str>) -> Result<StateView> {
         let (np, sources) = self.playing(want).await?;
-        let folders = self.lib.folders();
+        let folders = self.lib.catalogue().folders();
         let entry = np.as_ref().and_then(|(a, p)| a.line(&folders, &p.track));
         let playlists = self.playlists.view(entry.as_deref()).await?;
         let info = match &np {
@@ -528,7 +528,7 @@ impl PlayingService {
         let (np, _) = self.playing(want).await?;
         let (active, playing) = np.ok_or(ToggleError::NothingPlaying)?;
         self.lib.store()?;
-        let entry = active.line(&self.lib.folders(), &playing.track).ok_or(ToggleError::NotInLibrary)?;
+        let entry = active.line(&self.lib.catalogue().folders(), &playing.track).ok_or(ToggleError::NotInLibrary)?;
         self.playlists.set_entry(playlist_id, &entry, member).await?;
         Ok(self.fresh_state(want).await?)
     }
@@ -547,7 +547,7 @@ impl PlayingService {
     /// A given track's playlists, favourite and info chips (the local player's, decision 0022).
     pub async fn track_state(&self, source_id: &str, id: &str) -> Result<TrackStateView, ToggleError> {
         let (a, s, track) = self.find(source_id, id).await?;
-        let entry = a.line(&self.lib.folders(), &track);
+        let entry = a.line(&self.lib.catalogue().folders(), &track);
         let (favorite, info) = tokio::join!(s.favorite(id), self.info(&s, source_id, id));
         let playlists = self.playlists.view(entry.as_deref()).await?;
         Ok(TrackStateView { addable: entry.is_some(), album_id: track.album_id.clone(), favorite: favorite.unwrap_or(None), playlists, info })
@@ -560,7 +560,7 @@ impl PlayingService {
         }
         let (a, _, track) = self.find(source_id, id).await?;
         self.lib.store()?;
-        let entry = a.line(&self.lib.folders(), &track).ok_or(ToggleError::NotInLibrary)?;
+        let entry = a.line(&self.lib.catalogue().folders(), &track).ok_or(ToggleError::NotInLibrary)?;
         self.playlists.set_entry(playlist_id, &entry, member).await?;
         self.track_state(source_id, id).await
     }
@@ -796,7 +796,16 @@ impl PlayingService {
         let (mut albums, mut appears_on) = (w.albums, w.appears_on);
         // Of the libraries switched on: an album of one switched off goes, and its tracks with it.
         if !without.is_empty() {
-            let off = |a: &source::Album| a.library.as_ref().is_some_and(|l| without.contains(&format!("{source_id}/{l}")));
+            // Cratarr's own records by their copies: its list names the copy that plays, and that one can be the library off.
+            let held = match self.playlists.served() {
+                Some(served) if source_id == crate::source::cratarr::KIND.id => tokio::task::spawn_blocking(move || served.library.album_folders()).await.ok().and_then(Result::ok).unwrap_or_default(),
+                _ => Default::default(),
+            };
+            let folders_off: std::collections::HashSet<i64> = self.lib.folders_off(without).into_iter().collect();
+            let off = |a: &source::Album| match held.get(&a.id) {
+                Some(folders) => !crate::crates::on_for(folders, &folders_off),
+                None => a.library.as_ref().is_some_and(|l| without.contains(&format!("{source_id}/{l}"))),
+            };
             let gone: std::collections::HashSet<String> = albums.iter().chain(&appears_on).filter(|a| off(a)).map(|a| a.id.clone()).collect();
             albums.retain(|a| !off(a));
             appears_on.retain(|a| !off(a));
@@ -866,7 +875,7 @@ impl PlayingService {
         let (cat, source, item) = (self.lib.catalogue(), source_id.to_string(), id.to_string());
         let place = tokio::task::spawn_blocking(move || {
             let (folder, rel) = cat.file_of(cat.track_of_source(&source, &item)?)?;
-            Some((cat.folders().get(usize::try_from(folder).ok()?)?.clone(), rel))
+            Some((cat.folders().get(folder)?.clone(), rel))
         })
         .await
         .ok()
@@ -897,7 +906,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("cratarr-hear-{}", std::process::id()));
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let source = |id: &str, enabled| crate::settings::SourceConfig { id: id.into(), kind: "jellyfin".into(), enabled, libraries: Default::default(), values: Default::default() };
-        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), vec![source("old", false), source("away", true)], Default::default(), None).await.unwrap();
+        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), vec![source("old", false), source("away", true)], Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap())).await.unwrap();
         let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));

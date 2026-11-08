@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS discogs_names (discogs INTEGER PRIMARY KEY, realname 
 -- Discogs' genres and styles of a release or master MusicBrainz links (0.10; `release:<id>`, `master:<id>`; joined by
 -- U+001F, empty: none), and when.
 CREATE TABLE IF NOT EXISTS discogs_link_genres (link TEXT PRIMARY KEY, genres TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID;
--- A record marked by hand (0.10, the owner): `classical` or `not`, by its Music-form id (as its tags), library-wide; no
+-- A record marked by hand (0.10, the owner): `classical` or `not`, by its id (as its tags), library-wide; no
 -- pass changes it. Moved to `record_overrides` (0.13) as it opens; kept so an older file's marks are found.
 CREATE TABLE IF NOT EXISTS classical_marks (album TEXT PRIMARY KEY, mark TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID;
 -- Every composer key the page was given (0.10): a MusicBrainz artist or `name:<loose name>`, the name shown, and the key
@@ -222,14 +222,14 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// A record's mark (`classical` or `not`), by its Music-form id; none takes it away. Kept since 0.13 as the
+    /// A record's mark (`classical` or `not`), by its id; none takes it away. Kept since 0.13 as the
     /// record's `classical` fact set by hand (`overrides`).
     pub fn set_classical_mark(&self, album: &str, mark: Option<&str>, at: i64) -> Result<()> {
         let value = mark.map(|m| serde_json::Value::from(m == "classical"));
         self.set_overrides(&[album.to_string()], &[("classical".into(), value)], at)
     }
 
-    /// Every record's mark, by its Music-form id.
+    /// Every record's mark, by its id.
     pub fn classical_marks(&self) -> Result<HashMap<String, String>> {
         let all = self.overrides()?;
         Ok(all.into_iter().filter_map(|(a, o)| Some((a, mark_of(o.classical?)))).collect())

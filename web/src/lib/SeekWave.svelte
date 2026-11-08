@@ -10,7 +10,7 @@
   import { accentFor, keepAccent } from './accents.svelte';
   import { appInfo, inApp } from './app.svelte';
   import { startStopNow } from './device.svelte';
-  import { deckNow, local, throughOf, windFrame } from './localPlayer.svelte';
+  import { deckNow, deckSpeed, local, throughOf, windFrame } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { port } from './player/port.svelte';
   import { prefs } from './prefs.svelte';
@@ -183,6 +183,9 @@
         const f = windFrame(t);
         const at = (f && along(f.place.index, f.place.pos)) ?? herePos;
         const aim = f?.landing ? along(f.landing.index, f.landing.pos) : l === null ? null : along(li, l);
+        // Its speed of the same moment, counted on as its place is: the app says it ten times a second, and the window's
+        // width went up with each saying, a stair the bars redrew on.
+        const v = deckSpeed(t);
         win = stepWindow(
           win,
           {
@@ -192,7 +195,7 @@
             holding: zoomOn && holdNow.held,
             through: throughQueue,
             dir: holdNow.dir,
-            speed: holdNow.speed,
+            speed: v === null ? holdNow.speed : Math.abs(v),
             top: holdNow.top,
             aim,
             ends: queueEnds,
@@ -279,6 +282,7 @@
       cur0: -frameAt,
       cur1: hereLen - frameAt,
       marks: s.tracks.slice(1).map((t) => t.start),
+      held: !!win?.held,
       // One colour for the track the player shows, in every state (the owner, 2026-10-30: "The color should be
       // stable"; it was its cover's here and the player's elsewhere, yellow while winding, green let go).
       colours: waveColours(
@@ -311,7 +315,7 @@
     wideLost = lost;
   });
   /** The zoom on one track (0..1 of it). */
-  const view = $derived(shownHere && !throughQueue && hereLen ? { from: shownHere.a / hereLen, to: shownHere.b / hereLen } : null);
+  const view = $derived(shownHere && !throughQueue && hereLen ? { from: shownHere.a / hereLen, to: shownHere.b / hereLen, held: !!win?.held } : null);
   /** The look-ahead shown (0..1 of the track): a hold's landing, ahead of the playhead the way it goes; in a track
    *  further on through the queue, at this one's edge that way, until the tape is in that track (the owner, 2026-10-28:
    *  the line stood at the end, and on the next track at the last one's place). */

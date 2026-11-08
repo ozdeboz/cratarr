@@ -104,7 +104,7 @@ pub struct Week {
 }
 
 fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    super::moment::now_secs()
 }
 
 /// The albums without a cover, of Cratarr's own library (Home shows none of them).
@@ -144,7 +144,9 @@ fn listed<'a>(music: &[(&'a str, &'a [source::Album])], other: &[(&'a str, &'a [
         .map(|id| {
             let m: &'a [source::Album] = music.iter().find(|(s, _)| *s == id).map(|(_, a)| *a).unwrap_or_default();
             let o: &'a [source::Album] = other.iter().find(|(s, _)| *s == id).map(|(_, a)| *a).unwrap_or_default();
-            (id, m.iter().chain(o.iter()).collect())
+            // A record listed from two libraries is one entry, as `App::albums` folds it: the page keys them by id.
+            let mut seen = std::collections::HashSet::new();
+            (id, m.iter().chain(o.iter()).filter(|a| seen.insert(a.id.as_str())).collect())
         })
         .collect()
 }
@@ -429,6 +431,11 @@ mod tests {
         let other = [("other", &more_other[..]), ("cratarr", &own_other[..])];
         let got: Vec<(&str, Vec<&str>)> = listed(&music, &other).into_iter().map(|(s, l)| (s, l.into_iter().map(|a| a.id.as_str()).collect())).collect();
         assert_eq!(got, [("cratarr", vec!["m1", "m2", "i1"]), ("jellyfin", vec!["j1"]), ("other", vec!["o1"])]);
+        let copy = [card("m1")];
+        let music = [("cratarr", &own_music[..])];
+        let other = [("cratarr", &copy[..])];
+        let got: Vec<&str> = listed(&music, &other).remove(0).1.into_iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(got, ["m1", "m2"], "a record with a copy in each is listed once");
     }
 
     fn back(id: &str) -> Back {

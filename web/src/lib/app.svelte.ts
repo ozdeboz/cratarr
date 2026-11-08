@@ -1,6 +1,7 @@
 import { startStopOf, type StartStop } from './startStop';
 import type { AudioOutput } from './api';
 import { rampBegins, rampEnds, rewindNow } from './ramping.svelte';
+import { onSignInAsked } from './reach.svelte';
 
 // The Android app (decision 0031): on the server's own pages inside it, `window.CratarrApp` carries JSON messages both
 // ways (android/README.md). There the music plays in the app itself; the page is its face (localPlayer.svelte.ts).
@@ -88,8 +89,9 @@ export type DownloadedTrack = {
   manual?: boolean;
 };
 
-/** The owner's downloads on this device, as the app last told them (`known` once it has). */
-const kept = $state({ all: [] as DownloadedTrack[], bytes: 0, known: false });
+/** The account signed in's downloads on this device (decision 0101: an account sees only what it holds), as the app
+ *  last told them (`known` once it has). */
+const kept = $state({ all: [] as DownloadedTrack[], bytes: 0, known: false, who: null as string | null });
 /** Those of the mode the app is in (decision 0098: downloads are kept per server): a server's mode its own server's
  *  tracks (their source is the mode's name), Cratarr's mode all but the servers'. */
 const ofMode = (t: DownloadedTrack) => (appInfo.mode.startsWith('server:') ? t.source === appInfo.mode : !t.source.startsWith('server:'));
@@ -102,6 +104,14 @@ export const downloads = {
   },
   get known() {
     return kept.known;
+  },
+  /** Any at all, in every mode (Sign out's sheet). */
+  get any() {
+    return kept.all.length > 0;
+  },
+  /** Whose they are, as the app said (lib/account's whoOf). */
+  get who() {
+    return kept.who;
   },
 };
 
@@ -171,6 +181,22 @@ export const backgroundSettings = () => toApp({ type: 'battery', op: 'settings' 
 /** Asks the app for its settings again. */
 export const askDevice = () => toApp({ type: 'device' });
 
+/**
+ * Nobody signed in (decision 0101): the app plays on in Local or another server's mode with no Cratarr account, so
+ * Cratarr's sign-in page waits until Cratarr's mode is the one in (or the app has said which it is). Cratarr's own
+ * reads are refused meanwhile, quietly (lib/reach).
+ */
+let signInWaits: (() => void) | null = null;
+if (port)
+  onSignInAsked((go) => {
+    if (appInfo.version !== null && appInfo.mode === 'cratarr') return false;
+    // The page stays, so the app does not see Cratarr's sign-in page, which would have told it (Sessions.loaded): the session
+    // is over, and what the app holds of the account is not to go on showing for whoever holds the device.
+    toApp({ type: 'nobody' });
+    signInWaits = go;
+    return true;
+  });
+
 if (port) {
   port.onmessage = (event) => {
     let m: Message;
@@ -215,6 +241,11 @@ if (port) {
       appInfo.known = Array.isArray(m.known) ? (m.known as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       // Cratarr's, Local or a server's (`server:<id>`, decision 0098); anything else is Cratarr's.
       appInfo.mode = m.mode === 'device' || (typeof m.mode === 'string' && m.mode.startsWith('server:')) ? m.mode : 'cratarr';
+      if (signInWaits && appInfo.mode === 'cratarr') {
+        const go = signInWaits;
+        signInWaits = null;
+        go();
+      }
       // A Start and stop ramp turned round at a press mid-way (0.9.15): its play button live through it.
       appInfo.turnsRound = m.turnsRound === true;
       if (typeof m.target === 'string') appInfo.target = m.target;
@@ -247,6 +278,7 @@ if (port) {
     if (m.type === 'downloads') {
       kept.all = Array.isArray(m.tracks) ? (m.tracks as DownloadedTrack[]) : [];
       kept.bytes = typeof m.bytes === 'number' ? m.bytes : 0;
+      kept.who = typeof m.who === 'string' ? m.who : null;
       kept.known = true;
     }
     handlers.get(m.type)?.(m);

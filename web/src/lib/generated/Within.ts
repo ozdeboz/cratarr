@@ -4,4 +4,4 @@
  * What Radio and Autoplay stay inside (decision 0094: the page's collection), as Cratarr's own library has it: a
  * crate as saved (a genre too, `genre:<name>`), a playlist, a record, an artist, or tracks.
  */
-export type Within = { "kind": "crate", id: string, } | { "kind": "playlist", id: string, } | { "kind": "album", source: string, id: string, } | { "kind": "artist", source: string, name: string, } | { "kind": "tracks", source: string, ids: Array<string>, };
+export type Within = { "kind": "crate", id: string, without?: Array<string>, } | { "kind": "playlist", id: string, } | { "kind": "album", source: string, id: string, } | { "kind": "artist", source: string, name: string, without?: Array<string>, } | { "kind": "tracks", source: string, ids: Array<string>, };

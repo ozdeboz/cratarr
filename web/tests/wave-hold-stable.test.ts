@@ -61,17 +61,20 @@ type Seen = {
 };
 /** A hold's way and the queue's walls (lib/SeekWave's queueEnds): `walls` the queue's ends are walls, the tape resting
  *  at them; `known` the end known while `grow` s have not passed (a radio or Autoplay queue growing), then the whole. */
-type Opts = { dir?: 1 | -1; walls?: boolean; known?: number; grow?: number };
+type Opts = { dir?: 1 | -1; walls?: boolean; known?: number; grow?: number; top?: number; start?: number; doublingS?: number };
 
 /**
- * A hold from `q0` s along the queue: 4x doubling every 2 s to 16x, held `heldS` s, then braked to 1x in a second and
- * on for `afterS` s. Each frame: the window in the hold's frame, the strip shown with its bars.
+ * A hold from `q0` s along the queue: 4x doubling every 2 s to 16x (`start`, `doublingS`, `top`), held `heldS` s, then
+ * braked to 1x in a second and on for `afterS` s. Each frame: the window in the hold's frame, the strip shown with its
+ * bars, as lib/Waveform asks for it: by the zoom alone while held, with the stretch a frame ago.
  */
 function hold(q0: number, heldS: number, afterS: number, through = true, o: Opts = {}): Seen[] {
   const dir = o.dir ?? 1;
   let win: ReturnType<typeof stepWindow> = null;
   let base: number | null = null;
   let had: Strip | null = null;
+  let shown: { from: number; to: number } | null = null;
+  const top = o.top ?? 16;
   const bars = new Map<object, number[]>();
   let q = q0;
   let v = 1;
@@ -79,7 +82,7 @@ function hold(q0: number, heldS: number, afterS: number, through = true, o: Opts
   const out: Seen[] = [];
   for (let t = 0; t < heldS + afterS; t += FRAME / 1000) {
     const holding = t < heldS;
-    v = holding ? Math.min(16, 4 * 2 ** (t / 2)) : Math.max(1, v - 15 * (FRAME / 1000));
+    v = holding ? Math.min(top, (o.start ?? 4) * 2 ** (t / (o.doublingS ?? 2))) : Math.max(1, v - top * 0.9375 * (FRAME / 1000));
     const end = o.grow !== undefined && t < o.grow ? (o.known ?? TOTAL) : TOTAL;
     q += dir * v * (FRAME / 1000);
     if (o.walls) q = Math.max(0, Math.min(end - 1e-6, q));
@@ -91,7 +94,7 @@ function hold(q0: number, heldS: number, afterS: number, through = true, o: Opts
     const was = win;
     const ends = o.walls ? { lo: -STARTS[i], hi: end - STARTS[i] } : undefined;
     const aim = holding ? (o.walls ? Math.max(ends!.lo, Math.min(ends!.hi, pos + (dir * v * v) / 128)) : pos + (dir * v * v) / 128) : null;
-    win = stepWindow(win, { len: LENS[i], pos, moved, holding, through, dir, speed: v, top: 16, aim, ends }, FRAME);
+    win = stepWindow(win, { len: LENS[i], pos, moved, holding, through, dir, speed: v, top, aim, ends }, FRAME);
     if (!win) {
       if (was) out.push({ ...out.at(-1)!, t, plain: true });
       continue;
@@ -107,7 +110,8 @@ function hold(q0: number, heldS: number, afterS: number, through = true, o: Opts
     );
     const cur0 = -fa;
     const cur1 = LENS[i] - fa;
-    const s = planStrip(had, tracks, from, to, N, { from: cur0, to: cur1 });
+    const s = planStrip(had, tracks, from, to, N, win.held ? null : { from: cur0, to: cur1 }, shown);
+    shown = { from, to };
     const redrawn = s !== had;
     had = s;
     if (!bars.has(s)) bars.set(s, gridBars(tracks, s));
@@ -126,6 +130,39 @@ test('the same number of bars across the waveform on every frame: the wind-up, t
     assert.ok(Math.abs(shown - N) <= SPAN_SLACK + 1e-9, `${f.t.toFixed(2)} s: ${shown.toFixed(3)} bars across`);
   }
   assert.ok(drawn.length > 2000);
+});
+
+// 0.16, the owner: "Every change in waveform properties or zoom should have no effect on the number of sections displayed
+// in the entire waveform region". A hold as the tape engine's: 1x doubling each 1.5 s to 128x, its window far wider than
+// any track for most of it, from a place near a track's start, its wall. Measured before: the bars moved up to half a bar
+// a frame through the zoom, back and forth, each frame's standing between the last frame's.
+const flight = hold(8, 20, 6, true, { top: 128, start: 1, doublingS: 1.5 }).filter((f) => !f.plain);
+/** How far the bars moved on the waveform since the frame before, in bars. */
+function moves(frames: Seen[]): { t: number; held: boolean; d: number }[] {
+  return frames.slice(1).map((f, k) => {
+    const a = frames[k];
+    const d = (f.strip.o - f.from) / f.strip.span - (a.strip.o - a.from) / a.strip.span;
+    return { t: f.t, held: f.held, d: d - Math.round(d) };
+  });
+}
+
+test('through a hold to 128x the bars go no faster than the slide at one zoom, and never back and forth', () => {
+  const held = moves(flight).filter((m) => m.held);
+  // The slide at one zoom: the 15 s a window holds, in frames, over n.
+  const slide = N / (15 * 60);
+  assert.ok(held.length > 1000);
+  for (const m of held) assert.ok(Math.abs(m.d) <= slide * 1.1, `${m.t.toFixed(2)} s: ${m.d.toFixed(3)} bars in a frame`);
+  for (let k = 1; k < held.length; k++) {
+    const [a, b] = [held[k - 1].d, held[k].d];
+    assert.ok(Math.abs(a) < 0.02 || Math.abs(b) < 0.02 || Math.sign(a) === Math.sign(b), `${held[k].t.toFixed(2)} s: ${a.toFixed(3)} then ${b.toFixed(3)}`);
+  }
+});
+
+test('through a hold to 128x and its let go, the same number of bars across the waveform on every frame', () => {
+  for (const f of flight) {
+    const shown = (f.to - f.from) / f.strip.span;
+    assert.ok(Math.abs(shown - N) <= SPAN_SLACK + 1e-9, `${f.t.toFixed(2)} s: ${shown.toFixed(3)} bars across`);
+  }
 });
 
 test('no frame without its bars: one strip, covering the waveform edge to edge, every bar drawn', () => {

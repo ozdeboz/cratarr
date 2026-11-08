@@ -181,6 +181,39 @@ impl Timeline {
     }
 }
 
+/// A listener in the list for as long as its stream's task runs, however that ends. A newer one of the same name stays.
+struct Listed {
+    me: Arc<Snapcast>,
+    name: String,
+    listener: Arc<Listener>,
+}
+
+impl Drop for Listed {
+    fn drop(&mut self) {
+        let mut listeners = self.me.listeners.lock().unwrap_or_else(|p| p.into_inner());
+        if listeners.get(&self.name).is_some_and(|l| Arc::ptr_eq(l, &self.listener)) {
+            listeners.remove(&self.name);
+        }
+    }
+}
+
+/// The format of a group's sound, once it has one (at once, where it plays); `None` when the one listening hung up first,
+/// or the group ended. Without the first, a listener to a group that never sounds would wait here for good.
+async fn format_of(stream: &super::Stream, out: &mut broadcast::Receiver<Out>, tx: &mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>) -> Option<Format> {
+    let mut format = stream.state().codec.clone().and_then(|c| proto::read_codec_header(&c));
+    while format.is_none() {
+        tokio::select! {
+            _ = tx.closed() => return None,
+            o = out.recv() => match o {
+                Ok(Out::Codec(c)) => format = proto::read_codec_header(&c),
+                Ok(Out::Chunk(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => return None,
+            },
+        }
+    }
+    format
+}
+
 impl Snapcast {
     /// The listener of player `name`, while it listens.
     pub fn listener(&self, name: &str) -> Option<Arc<Listener>> {
@@ -201,16 +234,9 @@ impl Snapcast {
         self.listeners.lock().unwrap_or_else(|p| p.into_inner()).insert(name.clone(), listener.clone());
         let lag = i64::from(self.buffer_ms.saturating_sub(delay_ms)) * 1000;
         tokio::spawn(async move {
+            let _listed = Listed { me: me.clone(), name, listener: listener.clone() };
             let mut out = stream.out.subscribe();
-            let mut format = stream.state().codec.clone().and_then(|c| proto::read_codec_header(&c));
-            while format.is_none() {
-                match out.recv().await {
-                    Ok(Out::Codec(c)) => format = proto::read_codec_header(&c),
-                    Ok(Out::Chunk(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => return,
-                }
-            }
-            let f = format.expect("waited for");
+            let Some(f) = format_of(&stream, &mut out, &tx).await else { return };
             if tx.send(Ok(wav_header(f).into())).await.is_err() {
                 return;
             }
@@ -219,6 +245,7 @@ impl Snapcast {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
+                    _ = tx.closed() => break,
                     o = out.recv() => match o {
                         Ok(Out::Chunk(c)) => {
                             let stamp = i64::from(i32::from_le_bytes(c[0..4].try_into().unwrap_or_default())) * 1_000_000
@@ -257,10 +284,6 @@ impl Snapcast {
                     }
                 }
             }
-            let mut listeners = me.listeners.lock().unwrap_or_else(|p| p.into_inner());
-            if listeners.get(&name).is_some_and(|l| Arc::ptr_eq(l, &listener)) {
-                listeners.remove(&name);
-            }
         });
         rx
     }
@@ -295,15 +318,7 @@ impl Snapcast {
         tokio::spawn(async move {
             let mut out = stream.out.subscribe();
             let mut muted = stream.muted.subscribe();
-            let mut format = stream.state().codec.clone().and_then(|c| proto::read_codec_header(&c));
-            while format.is_none() {
-                match out.recv().await {
-                    Ok(Out::Codec(c)) => format = proto::read_codec_header(&c),
-                    Ok(Out::Chunk(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => return,
-                }
-            }
-            let f = format.expect("waited for");
+            let Some(f) = format_of(&stream, &mut out, &tx).await else { return };
             let mut head = Vec::with_capacity(16);
             head.extend_from_slice(&f.rate.to_le_bytes());
             head.extend_from_slice(&f.channels.to_le_bytes());
@@ -317,6 +332,8 @@ impl Snapcast {
             let mut behind = 0u64;
             let why = loop {
                 tokio::select! {
+                    // Between two pieces of sound, as a page may leave while the group is quiet.
+                    _ = tx.closed() => break "gone",
                     o = out.recv() => match o {
                         Ok(Out::Chunk(c)) => {
                             let stamp = i64::from(i32::from_le_bytes(c[0..4].try_into().unwrap_or_default())) * 1_000_000
@@ -419,6 +436,38 @@ mod tests {
         l.minute.lock().unwrap().2 = Instant::now().checked_sub(Duration::from_secs(61));
         assert_eq!(l.drift(), Some(Drift { median_ms: 2.0, min_ms: 1.0, max_ms: 3.5, readings: 3, corrections: 0 }));
         assert_eq!(l.drift(), None, "a new minute");
+    }
+
+    #[tokio::test]
+    async fn one_who_hangs_up_before_the_group_sounds_leaves_nothing_behind() {
+        use super::super::tests::{NoOne, until};
+        let snap = Snapcast::new(Arc::new(NoOne), 1000);
+        // A group with no sound yet: nothing is ever sent, so only the hanging up can end these.
+        let wav = snap.listen("lead", "kodi", 0);
+        let page = snap.frames("lead", "page", 0);
+        assert!(snap.listener("kodi").is_some());
+        assert_eq!(snap.streams_held(), 1);
+        drop(wav);
+        assert!(until(|| snap.listener("kodi").is_none()).await, "its name is free");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(snap.streams_held(), 1, "the page still holds the stream");
+        drop(page);
+        assert!(until(|| snap.streams_held() == 0).await, "the last one gone, it goes");
+    }
+
+    #[tokio::test]
+    async fn one_who_hangs_up_while_the_group_is_quiet_leaves_nothing_behind() {
+        use super::super::tests::{NoOne, until};
+        let snap = Snapcast::new(Arc::new(NoOne), 1000);
+        let source = snap.stream("lead");
+        source.take_over(1, snap.now());
+        source.codec(1, F, snap.now());
+        let mut page = snap.frames("lead", "page", 0);
+        let head = tokio::time::timeout(Duration::from_secs(2), page.recv()).await.unwrap();
+        assert_eq!(head.unwrap().unwrap().len(), 16, "its format came");
+        drop(source);
+        drop(page);
+        assert!(until(|| snap.streams_held() == 0).await, "no sound will come to tell it");
     }
 
     #[test]

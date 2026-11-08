@@ -27,9 +27,11 @@
   import { keyboard } from './lib/keyboard.svelte';
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
-  import { later } from './lib/later.svelte';
+  import { waitingHere } from './lib/later.svelte';
   // What changed elsewhere while away, read again (decision 0087).
   import './lib/changes.svelte';
+  // The person's preferences on their account (decision 0101 point 14).
+  import './lib/accountPrefs.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';
   import Visuals from './lib/visuals/Visuals.svelte';
@@ -74,6 +76,8 @@
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
+  import BackgroundAsk from './lib/BackgroundAsk.svelte';
+  import IndexAsk from './lib/IndexAsk.svelte';
   import ManyConfirm from './lib/ManyConfirm.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
@@ -336,10 +340,6 @@
   $effect(() => {
     document.documentElement.style.overflow = overlay || playlistLayer ? 'hidden' : '';
   });
-  // Whose last copies the service worker keeps (public/sw.js): another account signing in, the last one's go.
-  $effect(() => {
-    if (me.name) navigator.serviceWorker?.controller?.postMessage({ type: 'account', name: me.name });
-  });
   // One's own header picture (Settings › Appearance) behind every flow (the owner, 2026-10-26): one variable for the
   // page, each flow's canvas drawing it under a veil (--flow-photo; none without one). Only once it is in: until then
   // (and should it not come) the flows stand on the page's own ground, never a grey veil (the owner, 2026-10-27).
@@ -421,7 +421,7 @@
   // `page` follows, and opening one then would write it into the next page's address.
   $effect(() => {
     if (!settingsSplit || settingsShown || openedHere() || !me.known || fromHash() !== 'settings') return;
-    const parts = SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin));
+    const parts = SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone));
     const part = parts.find((x) => x.id === prefs.settingsPart) ?? parts[0];
     if (part) untrack(() => viewInPlace(SETTINGS_VIEW + part.id));
   });
@@ -863,7 +863,7 @@
 
   const connection = $derived(
     statusFailed
-      ? { ok: false, text: (reach.kept ? 'Offline · as last seen' : 'Cratarr server unreachable') + (later.list.length ? ` · ${later.list.length} to send` : '') }
+      ? { ok: false, text: (reach.kept ? 'Offline · as last seen' : 'Cratarr server unreachable') + (waitingHere().length ? ` · ${waitingHere().length} to send` : '') }
       : !status
         ? null
         : status.connected
@@ -1288,6 +1288,8 @@
   {/if}
   <Toasts />
   <ManyConfirm />
+  <BackgroundAsk />
+  <IndexAsk />
 <LabelTip />
   <ProgressBar />
 
@@ -1428,11 +1430,12 @@
     pointer-events: auto;
   }
 
-  /* The pill's side of the row: the extension's 2 px, as lib/NavigationControls' (the owner, 2026-10-26); none above, so
-     its glass's top is the lead's (the lead has none: back's 2 px are inside its glass; the owner, 2026-11-02: "why
-     are these glasses not perfectly aligned vertically?"). */
+  /* The pill's side of the row: none above, so its glass's top is the lead's (the lead has none: back's 2 px are inside
+     its glass; the owner, 2026-11-02: "why are these glasses not perfectly aligned vertically?"); none at the window's
+     side either, so its glass is as far from that edge as the lead's from its own (the owner, 2026-11-04: the
+     magnifier sat further in than back). */
   .right {
-    padding: 0 2px 2px;
+    padding: 0 0 2px 2px;
   }
 
   /* Going: up out under the bar, whole (a row along the bottom: down); nothing in it takes a tap meanwhile. */

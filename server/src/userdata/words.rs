@@ -1,4 +1,4 @@
-//! The library's words as each source said them (0.9.7, `app::words`): by subject (`album:<its Music-form id>`,
+//! The library's words as each source said them (0.9.7, `app::words`): by subject (`album:<its id>`,
 //! `artist:<its id>`), source (musicbrainz, discogs, lastfm, files) and word, with what the source called it (genre,
 //! style, mood, tag) and its own strength (0 to 1); and when each source was last asked about each subject, so the
 //! harvest's passes ask again only when due. Household-wide, as the album tags are.
@@ -20,12 +20,12 @@ CREATE TABLE IF NOT EXISTS album_matches (album TEXT PRIMARY KEY, at INTEGER NOT
 -- no release holds it), and when. Added later (0.13): the discs its tracks are on in the release that holds it
 -- (`discs`; none: no release holds it), and the rule it was looked at by (`rule`, `COMPLETE_RULE`).
 CREATE TABLE IF NOT EXISTS album_complete (album TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT) WITHOUT ROWID;
--- What Discogs says of a subject beyond its words (0.9.8, app::discogs_facts): an album's (`album:<its Music-form id>`),
+-- What Discogs says of a subject beyond its words (0.9.8, app::discogs_facts): an album's (`album:<its id>`),
 -- an artist's (`artist:<name key>`), a release group's (`rg:<id>`); JSON, none where Discogs has nothing; and when.
 CREATE TABLE IF NOT EXISTS discogs_facts (subject TEXT PRIMARY KEY, at INTEGER NOT NULL, facts TEXT) WITHOUT ROWID;
 -- What hearing a record waiting in Incoming found (0.14, app::intake_card): each track decoded whole and its recordings
 -- as AcoustID knows them (JSON), and when.
-CREATE TABLE IF NOT EXISTS intake_heard (album TEXT PRIMARY KEY, at INTEGER NOT NULL, heard TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS intake_heard (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, at INTEGER NOT NULL, heard TEXT NOT NULL, PRIMARY KEY (album, folder)) WITHOUT ROWID;
 -- What was chosen of a record's references (0.14, app::references): the source that counts, links pasted, checked by
 -- hand (JSON).
 CREATE TABLE IF NOT EXISTS record_references (album TEXT PRIMARY KEY, chosen TEXT NOT NULL) WITHOUT ROWID;
@@ -57,6 +57,23 @@ pub(super) fn add_album_complete_discs(conn: &rusqlite::Connection) -> Result<()
     Ok(())
 }
 
+/// What was heard before a record had copies: by album alone, the key a table cannot change in place. It goes for every copy
+/// of its record. Safe to repeat.
+pub(super) fn add_heard_folder(conn: &rusqlite::Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('intake_heard') WHERE name = 'folder'")?.exists([])?;
+    if !has {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE intake_heard RENAME TO intake_heard_by_album;
+             CREATE TABLE intake_heard (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, at INTEGER NOT NULL, heard TEXT NOT NULL, PRIMARY KEY (album, folder)) WITHOUT ROWID;
+             INSERT INTO intake_heard (album, at, heard) SELECT album, at, heard FROM intake_heard_by_album;
+             DROP TABLE intake_heard_by_album;
+             COMMIT;",
+        )?;
+    }
+    Ok(())
+}
+
 impl UserData {
     /// What Discogs said of a subject (`app::discogs_facts`), and when; none where it was never asked.
     pub fn discogs_facts(&self, subject: &str) -> Result<Option<(i64, Option<String>)>> {
@@ -71,6 +88,12 @@ impl UserData {
         let mut st = db.prepare_cached("SELECT subject, facts FROM discogs_facts WHERE substr(subject, 1, ?2) = ?1 AND facts IS NOT NULL")?;
         let rows = st.query_map(params![prefix, prefix.chars().count() as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// How many albums Discogs said something of, cheaply: one more may bring the crates a label. Not when: a round
+    /// asks old albums again all along, which changes nothing, and reading every file for that is what the stamp is for.
+    pub fn discogs_albums_stamp(&self) -> Result<i64> {
+        Ok(self.db().query_row("SELECT count(*) FROM discogs_facts WHERE subject >= 'album:' AND subject < 'album;' AND facts IS NOT NULL", [], |r| r.get(0))?)
     }
 
     pub fn set_discogs_facts(&self, subject: &str, facts: Option<&str>, at: i64) -> Result<()> {
@@ -150,15 +173,16 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// What hearing a record found (`app::intake_card`), and when.
-    pub fn intake_heard(&self, album: &str) -> Result<Option<(i64, String)>> {
+    /// What hearing a record's copy in catalogue folder `folder` found (`app::intake_card`), and when; with none named, the
+    /// last heard of the record. One from before copies goes for any.
+    pub fn intake_heard(&self, album: &str, folder: Option<i64>) -> Result<Option<(i64, String)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT at, heard FROM intake_heard WHERE album = ?1")?;
-        Ok(st.query_map([album], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
+        let mut st = db.prepare_cached(&format!("SELECT at, heard FROM intake_heard WHERE album = ?1 AND (?2 IS NULL OR folder = ?2 OR folder = {}) ORDER BY at DESC LIMIT 1", super::NO_FOLDER))?;
+        Ok(st.query_map(params![album, folder], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
     }
 
-    pub fn set_intake_heard(&self, album: &str, at: i64, heard: &str) -> Result<()> {
-        self.db().execute("INSERT OR REPLACE INTO intake_heard (album, at, heard) VALUES (?1, ?2, ?3)", params![album, at, heard])?;
+    pub fn set_intake_heard(&self, album: &str, folder: Option<i64>, at: i64, heard: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO intake_heard (album, folder, at, heard) VALUES (?1, ?2, ?3, ?4)", params![album, folder.unwrap_or(super::NO_FOLDER), at, heard])?;
         Ok(())
     }
 
@@ -262,6 +286,20 @@ impl UserData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_album_more_moves_the_discogs_stamp_and_a_round_asking_old_ones_again_does_not() {
+        let u = UserData::open(None).unwrap();
+        u.set_discogs_facts("album:a", Some("{}"), 1).unwrap();
+        let said = u.discogs_albums_stamp().unwrap();
+        assert_eq!(said, 1);
+        u.set_discogs_facts("album:a", Some("{}"), 2).unwrap();
+        u.set_discogs_facts("album:unknown there", None, 3).unwrap();
+        u.set_discogs_facts("artist:x", Some("{}"), 3).unwrap();
+        assert_eq!(u.discogs_albums_stamp().unwrap(), said, "asked again, nothing said, and no album's");
+        u.set_discogs_facts("album:b", Some("{}"), 4).unwrap();
+        assert_eq!(u.discogs_albums_stamp().unwrap(), 2);
+    }
 
     #[test]
     fn a_source_s_words_replace_its_own_and_an_unanswered_ask_keeps_them() {

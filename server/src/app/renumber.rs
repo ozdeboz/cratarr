@@ -25,6 +25,8 @@ const DISCOGS_RELEASES: usize = 4;
 pub struct Track {
     pub id: String,
     pub path: PathBuf,
+    /// Its catalogue folder and its path in it.
+    pub place: (i64, String),
     pub file: String,
     pub title: String,
     pub secs: u32,
@@ -337,25 +339,103 @@ async fn discogs(rg: Option<&str>, artist: &str, title: &str, tell: &(dyn Fn(u64
 
 // ---- The look and the writing
 
+/// A record's tracks to read: one file a track, the one that plays. What writes goes by `files_in`.
 pub(super) fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let (folder, _, mbid, artist, name) = served.library.album_place(album)?.context("No such album in Cratarr's own library")?;
-    let root = served.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
-    let tracks = served
-        .library
-        .album_tracks(album)?
-        .into_iter()
-        .map(|(id, rel, title, ms, disc, track)| Track {
-            id,
-            file: Path::new(&rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.clone()),
-            path: Path::new(&root).join(&rel),
-            title,
-            secs: (ms / 1000) as u32,
-            disc,
-            track,
-        })
-        .collect();
+    let (mbid, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
+    let tracks = row_tracks(&served.library, album)?;
     Ok((tracks, mbid.filter(|m| super::discogs::is_mbid(m)), artist, name))
+}
+
+/// `tracks_of`'s reading of the `songs` rows.
+fn row_tracks(lib: &crate::serve::library::Library, album: &str) -> Result<Vec<Track>> {
+    let roots = lib.roots();
+    lib.album_tracks(album)?
+        .into_iter()
+        .map(|(id, folder, rel, title, ms, disc, track)| {
+            let root = roots.iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
+            Ok(Track { id, file: file_name(&rel), path: Path::new(root).join(&rel), place: (folder, rel), title, secs: (ms / 1000) as u32, disc, track })
+        })
+        .collect()
+}
+
+pub(super) fn file_name(rel: &str) -> String {
+    Path::new(rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.to_string())
+}
+
+/// What a writer writes to: every file of a record, or of its copy at (catalogue folder, folder in it) alone. A track's files
+/// come together, in the album's order, the one that plays first, and read as that track. A file on no track of the row copy
+/// (a copy with tracks of its own, until they are taken) comes last, as its own tags say.
+pub(super) fn files_in(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Vec<Track>> {
+    let (lib, cat) = (&served.library, served.catalogue());
+    if let Some((folder, dir)) = at {
+        return copy_tracks(lib, cat, album, *folder, dir);
+    }
+    let rows = row_tracks(lib, album)?;
+    let roots = lib.roots();
+    let mut read: std::collections::HashMap<(i64, String), Tagged> = std::collections::HashMap::new();
+    let mut out = rows.clone();
+    for (id, folder, rel, ms) in lib.files_of_record(album)? {
+        if rows.iter().any(|t| t.place.0 == folder && t.place.1 == rel) {
+            continue;
+        }
+        let root = roots.iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
+        out.push(match rows.iter().find(|t| t.id == id) {
+            Some(t) => Track { file: file_name(&rel), path: Path::new(root).join(&rel), place: (folder, rel), secs: (ms / 1000) as u32, ..t.clone() },
+            None => {
+                let dir = crate::catalogue::dir_of(&rel).to_string();
+                if !read.contains_key(&(folder, dir.clone())) {
+                    read.insert((folder, dir.clone()), tagged(cat, folder, &dir)?);
+                }
+                by_its_tags(root, id, folder, rel, ms, &read[&(folder, dir)])
+            }
+        });
+    }
+    out.sort_by_key(|t| rows.iter().position(|r| r.id == t.id).unwrap_or(rows.len()));
+    Ok(out)
+}
+
+/// The tracks of a record's copy at (catalogue folder, folder in it), in its order, or of the record with none named. A copy
+/// that does not play has no rows in `songs`: its files and what their tags say are all there is of it.
+pub(super) fn tracks_in(album: &str, at: Option<&(i64, String)>) -> Result<(Vec<Track>, Option<String>, String, String)> {
+    let Some((folder, dir)) = at else { return tracks_of(album) };
+    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    let (mbid, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
+    let tracks = copy_tracks(&served.library, &served.catalogue(), album, *folder, dir)?;
+    Ok((tracks, mbid.filter(|m| super::discogs::is_mbid(m)), artist, name))
+}
+
+type Tagged = std::collections::HashMap<String, crate::naming::Tags>;
+
+/// What the catalogue read from a folder's files, by path.
+fn tagged(cat: &crate::catalogue::Catalogue, folder: i64, dir: &str) -> Result<Tagged> {
+    Ok(cat.album_tags(folder, dir)?.into_iter().map(|(rel, t)| (rel, crate::naming::Tags(t))).collect())
+}
+
+/// A file as its own tags say it: a file with no row in `songs` has nothing else.
+fn by_its_tags(root: &str, id: String, folder: i64, rel: String, ms: u64, tags: &Tagged) -> Track {
+    let of = tags.get(&rel);
+    let number = |name: &str| of.and_then(|t| t.first(name)).and_then(crate::serve::library::leading_number);
+    let file = file_name(&rel);
+    Track {
+        id,
+        path: Path::new(root).join(&rel),
+        title: of.and_then(|t| t.first("title")).map_or_else(|| file.clone(), str::to_string),
+        secs: (ms / 1000) as u32,
+        disc: number("discnumber"),
+        track: number("tracknumber"),
+        file,
+        place: (folder, rel),
+    }
+}
+
+/// `tracks_in`'s reading of a copy's files.
+pub(super) fn copy_tracks(lib: &crate::serve::library::Library, cat: &crate::catalogue::Catalogue, album: &str, folder: i64, dir: &str) -> Result<Vec<Track>> {
+    let root = lib.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
+    let tags = tagged(cat, folder, dir)?;
+    let mut tracks: Vec<Track> = lib.copy_songs(album, folder, dir)?.into_iter().map(|(id, rel, ms)| by_its_tags(&root, id, folder, rel, ms, &tags)).collect();
+    tracks.sort_by(|a, b| (a.disc.unwrap_or(1), a.track, &a.place.1).cmp(&(b.disc.unwrap_or(1), b.track, &b.place.1)));
+    Ok(tracks)
 }
 
 async fn look(album: &str, progress: &(dyn Fn(&str, u64, Option<u64>) + Send + Sync)) -> Result<Preview> {
@@ -451,26 +531,29 @@ fn planned(preview: &serde_json::Value) -> (Vec<(String, Vec<(String, u32)>)>, S
 
 /// The proposal of a finished look: each track's numbers now → as the release has them, only where they differ.
 /// Blocking.
-fn proposal(album: &str, preview: &serde_json::Value) -> Result<super::file_runs::Proposal> {
-    let (tracks, artist, name) = tracks_of(album).map(|(t, _, a, n)| (t, a, n))?;
+pub(super) fn proposal(served: &crate::serve::Serve, album: &str, preview: &serde_json::Value) -> Result<super::file_runs::Proposal> {
+    let (_, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
+    let tracks = files_in(served, album, None)?;
     let (numbers, title) = planned(preview);
     let mut p = super::file_runs::Proposal { kind: format!("{KIND}:{album}"), title, ..Default::default() };
     for (id, fields) in numbers {
-        let Some(t) = tracks.iter().find(|t| t.id == id) else { continue };
-        let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
-        let now = super::file_runs::fields_of(&t.path, &names)?;
-        let (mut before, mut after, mut from) = (Vec::new(), Vec::new(), Vec::new());
-        for (n, v) in fields {
-            let had = now.get(&n).cloned().unwrap_or_default();
-            let want = vec![v.to_string()];
-            if super::file_runs::flat(&had) != want {
-                before.push((n.clone(), had));
-                after.push((n.clone(), want));
-                from.push((n, preview["from"].as_str().unwrap_or("files").to_string()));
+        // Every copy of the track: each file says for itself what it holds now.
+        for t in tracks.iter().filter(|t| t.id == id) {
+            let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+            let now = super::file_runs::fields_of(&t.path, &names)?;
+            let (mut before, mut after, mut from) = (Vec::new(), Vec::new(), Vec::new());
+            for (n, v) in &fields {
+                let had = now.get(n).cloned().unwrap_or_default();
+                let want = vec![v.to_string()];
+                if super::file_runs::flat(&had) != want {
+                    before.push((n.clone(), had));
+                    after.push((n.clone(), want));
+                    from.push((n.clone(), preview["from"].as_str().unwrap_or("files").to_string()));
+                }
             }
-        }
-        if !after.is_empty() {
-            p.files.push(crate::journal::FileWrite { album: album.to_string(), path: t.path.clone(), track: Some(t.title.clone()), before, after, from, undone: false, whole: None });
+            if !after.is_empty() {
+                p.files.push(crate::journal::FileWrite { album: album.to_string(), path: t.path.clone(), track: Some(t.title.clone()), before, after, from, undone: false, whole: None });
+            }
         }
     }
     if !p.files.is_empty() {
@@ -497,8 +580,8 @@ pub async fn plan(account: &str, album: &str) -> Result<super::file_runs::PlanVi
     let Some(preview) = looked(account, album)? else {
         return Ok(super::file_runs::PlanView { kind: format!("{KIND}:{album}"), title: "Renumber".into(), records: Vec::new(), making: true });
     };
-    let a = album.to_string();
-    let p = tokio::task::spawn_blocking(move || proposal(&a, &preview)).await??;
+    let (a, served) = (album.to_string(), crate::serve::instance().context("Cratarr's own library is not open")?);
+    let p = tokio::task::spawn_blocking(move || proposal(&served, &a, &preview)).await??;
     Ok(super::file_runs::view(&p.kind, &p.title, &p.records, &p.files, false))
 }
 
@@ -508,8 +591,8 @@ pub async fn apply_plan(app: &std::sync::Arc<super::App>, account: &str, album: 
     let kind = format!("{KIND}:{album}");
     anyhow::ensure!(!super::file_runs::busy(&kind), "Already writing");
     let preview = looked(account, album)?.context("The release is still being looked up")?;
-    let a = album.to_string();
-    let p = tokio::task::spawn_blocking(move || -> Result<super::file_runs::Proposal> { Ok(super::file_runs::ticked(proposal(&a, &preview)?, &[a.clone()], stamps.as_ref())) }).await??;
+    let (a, served) = (album.to_string(), crate::serve::instance().context("Cratarr's own library is not open")?);
+    let p = tokio::task::spawn_blocking(move || -> Result<super::file_runs::Proposal> { Ok(super::file_runs::ticked(proposal(&served, &a, &preview)?, &[a.clone()], stamps.as_ref())) }).await??;
     anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Its numbers are as the release has them already");
     Ok(super::file_runs::start(app, p))
 }
@@ -596,7 +679,7 @@ mod tests {
     }
 
     fn track(id: &str, title: &str, secs: u32) -> Track {
-        Track { id: id.into(), path: PathBuf::from(format!("{id}.flac")), file: format!("{id}.flac"), title: title.into(), secs, disc: None, track: None }
+        Track { id: id.into(), path: PathBuf::from(format!("{id}.flac")), place: (0, format!("{id}.flac")), file: format!("{id}.flac"), title: title.into(), secs, disc: None, track: None }
     }
 
     fn release(format: &str, media: &[&[(&str, u32)]]) -> Release {

@@ -102,20 +102,20 @@ pub(crate) fn write(track: &Path, set: &[(&'static str, Option<String>)]) -> Res
     )
 }
 
-/// An album's tracks' files (as Renumber reads them).
-fn track_paths(album: &str) -> Result<Vec<PathBuf>> {
-    Ok(super::renumber::tracks_of(album)?.0.into_iter().map(|t| t.path).collect())
+/// The files a fix of an album writes: every copy's, or the copy `at` alone.
+fn track_paths(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Vec<PathBuf>> {
+    Ok(super::renumber::files_in(served, album, at)?.into_iter().map(|t| t.path).collect())
 }
 
 /// The fixes of a finding (`library:year`, `library:genre`, `library:album-artist`, `library:musicbrainz`), for each of
 /// its albums that has one, the certain first. Blocking parts apart.
 pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
     // Tracks shorter than their length (0.9.14): a fix a track.
+    let served = app.served.clone().context("Cratarr's own library is not open")?;
     if key.starts_with("files:") {
         let k = key.to_string();
-        return tokio::task::spawn_blocking(move || super::length_fixes::of_finding(&k)).await?;
+        return tokio::task::spawn_blocking(move || super::length_fixes::of_finding(&served, &k)).await?;
     }
-    let served = app.served.clone().context("Cratarr's own library is not open")?;
     let (s, k) = (served.clone(), key.to_string());
     // Year and genre from what is kept; album artist and MusicBrainz ids from a match (`matching`), its albums here.
     // Every library in use's albums, as Health finds them (the owner, 2026-11-02).
@@ -123,17 +123,17 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
         let lacking: Vec<crate::serve::library::Lacks> = s.library.lacking()?;
         let ids = |pick: fn(&crate::serve::library::Lacks) -> bool| lacking.iter().filter(|r| pick(r)).map(|r| r.id.clone()).collect::<Vec<_>>();
         Ok(match k.as_str() {
-            "library:year" => (year_fixes(&s, lacking.iter().filter(|r| r.year).map(|r| r.id.as_str()))?, Vec::new()),
-            "library:genre" => (genre_fixes(&s, lacking.iter().filter(|r| r.genre).map(|r| r.id.as_str()))?, Vec::new()),
+            "library:year" => (year_fixes(&s, lacking.iter().filter(|r| r.year).map(|r| r.id.as_str()), None)?, Vec::new()),
+            "library:genre" => (genre_fixes(&s, lacking.iter().filter(|r| r.genre).map(|r| r.id.as_str()), None)?, Vec::new()),
             "library:album-artist" => (Vec::new(), ids(|r| r.album_artist)),
             "library:musicbrainz" => (Vec::new(), ids(|r| r.musicbrainz)),
-            "library:rules" => (ruled_albums(&s)?.iter().filter_map(|a| rule_fix(&s, a).transpose()).collect::<Result<Vec<_>>>()?, Vec::new()),
+            "library:rules" => (ruled_albums(&s)?.iter().filter_map(|a| rule_fix(&s, a, None).transpose()).collect::<Result<Vec<_>>>()?, Vec::new()),
             _ => (Vec::new(), Vec::new()),
         })
     })
     .await??;
     if !to_match.is_empty() {
-        fixes.extend(super::matching::fixes(&served, key, to_match).await?);
+        fixes.extend(super::matching::fixes(&served, key, to_match, None).await?);
     }
     // Missing genres and years: their albums asked of Discogs in the background, a round at a time (0.9.8); what it
     // says shows the next time the fixes are read.
@@ -150,11 +150,11 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
 }
 
 /// The fix of each album without a year whose release MusicBrainz dated: its first release's year, as `date`.
-fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a str>) -> Result<Vec<Fix>> {
+fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a str>, at: Option<&(i64, String)>) -> Result<Vec<Fix>> {
     let years = served.userdata.original_years()?;
     let mut out = Vec::new();
     for album in albums {
-        let Some((_, _, release, _, _)) = served.library.album_place(album)? else { continue };
+        let Some((release, _, _)) = served.library.album_names(album)? else { continue };
         // MusicBrainz's first release date, else Discogs' master's year (0.9.8).
         let (year, source, certainty, why) = match release.as_ref().and_then(|r| years.get(r)) {
             Some(y) => (*y, "MusicBrainz", "certain", "Its release's first release date on MusicBrainz"),
@@ -163,7 +163,7 @@ fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a
                 None => continue,
             },
         };
-        let paths = track_paths(album)?;
+        let paths = track_paths(served, album, at)?;
         out.push(Fix {
             id: format!("year:{album}"),
             album: album.to_string(),
@@ -182,7 +182,7 @@ fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a
 
 /// The fix of each album without a genre that the library's words give one: its strongest genre, certain where two
 /// sources or more say it.
-fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a str>) -> Result<Vec<Fix>> {
+fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a str>, at: Option<&(i64, String)>) -> Result<Vec<Fix>> {
     use super::words::store::Kind;
     let stored = super::words::stored(served)?;
     let mut out = Vec::new();
@@ -190,7 +190,7 @@ fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'
         let Some(found) = stored.records.get(album) else { continue };
         let of = move |kind: Kind| found.kinds.iter().filter(move |k| k.kind == kind).flat_map(move |k| k.words.iter().map(move |w| (kind, w)));
         let Some((_, best)) = of(Kind::Genre).next() else { continue };
-        let paths = track_paths(album)?;
+        let paths = track_paths(served, album, at)?;
         let said = |w: &super::words::store::Word| names(&w.sources.iter().map(|s| s.name().to_string()).collect::<Vec<_>>());
         let sources = said(best);
         let candidates: Vec<Choice> = of(Kind::Genre)
@@ -237,7 +237,7 @@ pub fn ruled_albums(served: &crate::serve::Serve) -> Result<Vec<String>> {
 
 /// An album's rule fix: its tracks' genres and artists as the rules name them, where any differs (each value split as
 /// the rules split it, aliased, written joined by "; "); certain, the rules being the administrator's own.
-fn rule_fix(served: &crate::serve::Serve, album: &str) -> Result<Option<Fix>> {
+pub(super) fn rule_fix(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
     let rules = served.rules();
     if rules.genre_aliases.is_empty() && rules.artist_aliases.is_empty() {
         return Ok(None);
@@ -250,7 +250,7 @@ fn rule_fix(served: &crate::serve::Serve, album: &str) -> Result<Option<Fix>> {
     ];
     let names: Vec<&str> = fields.iter().map(|f| f.0).collect();
     let (mut writes, mut said) = (Vec::new(), Vec::<String>::new());
-    for path in track_paths(album)? {
+    for path in track_paths(served, album, at)? {
         let now = values(&path, &names)?;
         let mut set = Vec::new();
         for ((name, aliases, seps, keep), value) in fields.iter().zip(now) {
@@ -309,19 +309,24 @@ fn names(sources: &[String]) -> String {
 
 /// Every fix one album has (0.9.7, Incoming's intake: what an arrival would get before it is kept), wherever it is: a
 /// year, a genre, the album artist and MusicBrainz ids from a match, a cover where it has none (the first the cover
-/// look finds; certain from the Cover Art Archive). And whether its match is still being looked for.
-pub async fn of_album(app: &super::App, album: &str) -> Result<(Vec<Fix>, bool)> {
-    of_album_only(app, album, None).await
+/// look finds; certain from the Cover Art Archive). And whether its match is still being looked for. `at`: the copy they are
+/// for, as (catalogue folder, folder in it): what it lacks and its files alone, as the "Before adding" sheet says (Q20).
+pub async fn of_album(app: &super::App, album: &str, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
+    of_album_only(app, album, None, at).await
 }
 
 /// `of_album`, only the fields named (`year`, `genre`, `rule`, `albumartist`, `musicbrainz`, `cover`); all of them for
 /// none.
-async fn of_album_only(app: &super::App, album: &str, fields: Option<&[&str]>) -> Result<(Vec<Fix>, bool)> {
+async fn of_album_only(app: &super::App, album: &str, fields: Option<&[&str]>, at: Option<(i64, String)>) -> Result<(Vec<Fix>, bool)> {
     let wants = |f: &str| fields.is_none_or(|fs| fs.contains(&f));
     let served = app.served.clone().context("Cratarr's own library is not open")?;
-    let (s, a) = (served.clone(), album.to_string());
+    let (s, a, place) = (served.clone(), album.to_string(), at.clone());
     let (rule, year, genre) = (wants("rule"), wants("year"), wants("genre"));
-    let lacks = tokio::task::spawn_blocking(move || s.library.lacks_of(&a)).await??;
+    let lacks = tokio::task::spawn_blocking(move || match &place {
+        Some((folder, dir)) => s.lacks_at(&a, *folder, dir),
+        None => s.library.lacks_of(&a),
+    })
+    .await??;
     // Discogs' genres, styles and year for it, where it lacks one (0.9.8: asked now, not only by the background pass).
     if let Some(l) = &lacks
         && ((genre && l.genre) || (year && l.year))
@@ -329,25 +334,25 @@ async fn of_album_only(app: &super::App, album: &str, fields: Option<&[&str]>) -
     {
         tracing::debug!("discogs: {album}: {e:#}");
     }
-    let (s, a) = (served.clone(), album.to_string());
+    let (s, a, place) = (served.clone(), album.to_string(), at.clone());
     let (mut fixes, lacks) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Option<crate::serve::library::Lacks>)> {
         let Some(l) = lacks else { return Ok((Vec::new(), None)) };
-        let mut out: Vec<Fix> = if rule { rule_fix(&s, &a)?.into_iter().collect() } else { Vec::new() };
+        let mut out: Vec<Fix> = if rule { rule_fix(&s, &a, place.as_ref())?.into_iter().collect() } else { Vec::new() };
         if year && l.year {
-            out.extend(year_fixes(&s, std::iter::once(a.as_str()))?);
+            out.extend(year_fixes(&s, std::iter::once(a.as_str()), place.as_ref())?);
         }
         if genre && l.genre {
-            out.extend(genre_fixes(&s, std::iter::once(a.as_str()))?);
+            out.extend(genre_fixes(&s, std::iter::once(a.as_str()), place.as_ref())?);
         }
         Ok((out, Some(l)))
     })
     .await??;
     let Some(l) = lacks else { return Ok((fixes, false)) };
     if wants("albumartist") && l.album_artist {
-        fixes.extend(super::matching::fixes(&served, "library:album-artist", vec![album.to_string()]).await?);
+        fixes.extend(super::matching::fixes(&served, "library:album-artist", vec![album.to_string()], at.clone()).await?);
     }
     if wants("musicbrainz") && l.musicbrainz {
-        fixes.extend(super::matching::fixes(&served, "library:musicbrainz", vec![album.to_string()]).await?);
+        fixes.extend(super::matching::fixes(&served, "library:musicbrainz", vec![album.to_string()], at).await?);
     }
     if wants("cover") && l.cover
         && let Ok(found) = super::covers::candidates(album).await

@@ -16,7 +16,6 @@
     getHomeBack,
     getHomeNew,
     getHomeWeek,
-    getMoment,
     type Digging,
     type HomeBack,
     type HomeWeek,
@@ -58,7 +57,9 @@
   import PageLoading from './lib/PageLoading.svelte';
   import { holdUntil } from './lib/holdPlace.svelte';
   import { toast } from './lib/toast.svelte';
-  import { albumAway, away, here, rowsAway } from './lib/away.svelte';
+  import { albumAway, away, rowsAway } from './lib/away.svelte';
+  import { momentNow } from './lib/momentHere.svelte';
+  import { whenReadsMove } from './lib/deviceIndex.svelte';
   import { askDevicePlays, backHere, devicePlays, LOCAL_PARTS, newestHere, playHereAlbums } from './lib/localHome.svelte';
 
   const WEEK = `${LIKE}week`;
@@ -88,7 +89,7 @@
   const momentKept = momentFresh(kept);
 
   onMount(() => {
-    if (!library.view) void readLibrary(false);
+    if (!library.view) readLibrary(false).catch(() => {});
   });
   const sources = $derived((library.view?.sources ?? []).filter((s) => s.id !== DEVICE));
 
@@ -173,14 +174,16 @@
   // refill (it follows the weather).
   let moment = $state<Moment | null>(momentKept ? (kept.moment ?? null) : null);
   let momentIn = $state(momentKept);
+  const showMoment = (m: Moment) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), delete failed.moment, (momentIn = true));
+  // From wherever reads come from (lib/momentHere): read again when they move, so Cratarr's own moment is back with it, weather and all.
   const readMoment = () =>
-    getMoment(prefs.source || undefined, hiddenLibraries()).then(
-      (m) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), delete failed.moment, (momentIn = true)),
-      (e) => (!moment && fail('moment', e), (momentIn = true)),
-    );
+    momentNow(prefs.source || undefined, hiddenLibraries(), kept.moment?.albums).then(showMoment, (e) => (!moment && fail('moment', e), (momentIn = true)));
   onMount(() => {
     if (local) return void (momentIn = true);
     readMoment();
+    const again = () => void readMoment();
+    whenReadsMove.add(again);
+    return () => whenReadsMove.delete(again);
   });
   const momentAlbums = $derived(
     (moment?.albums ?? []).flatMap((id) => sources.find((s) => s.id === 'cratarr')?.albums.find((x) => x.id === id) ?? []),
@@ -611,6 +614,7 @@
       {:else}
         <h2>{leadTitle}</h2>
       {/if}
+      {#if lead === 'moment' && moment?.timeOnly}<p class="for-now note">Time and day only</p>{/if}
       <div class="sky-flow">
         {#if heroReady}<CoverFlow
           enter
@@ -649,6 +653,7 @@
   {#if turn('moment') && moment && momentAlbums.length}
     <section aria-label={moment.name}>
       <SectionHead title={moment.name} onmore={() => viewLike('now')} />
+      {#if moment.timeOnly}<p class="timeOnly">Time and day only</p>{/if}
       <ul class="shelf big">
         {#each momentAlbums as a (a.id)}
           <li><AlbumCard source="cratarr" album={a} lines={[a.artist ?? '', a.year ? String(a.year) : '']} /></li>
@@ -736,7 +741,7 @@
             <!-- A tap opens its album, as every card does (the owner, 2026-10-25: it played at once, with no play to be
                  seen); the section's Play plays them, the long-press is the track's menu. -->
             <button
-              class:gone={away() && !here('cratarr', t.id)}
+              class:gone={rowsAway('cratarr', [t.id])}
               onclick={() => viewFor(albumSubject('cratarr', t.album_id), t.id)}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id })}
             >
@@ -798,7 +803,7 @@
           <li>
             <!-- As Blast from the past's: a tap opens its album, the section's Play plays them, a long-press its menu. -->
             <button
-              class:gone={away() && !here('cratarr', t.id)}
+              class:gone={rowsAway('cratarr', [t.id])}
               onclick={() => t.album_id && t.id && viewFor(albumSubject('cratarr', t.album_id), t.id)}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id!, name: t.name ?? t.file, artist: t.artist, album: t.album, album_id: t.album_id ?? null })}
             >
@@ -892,6 +897,11 @@
     --veil: 0.65;
   }
 
+  .timeOnly {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
   .moment h2 {
     margin: 0;
     padding: 0 16px;
@@ -909,6 +919,11 @@
     margin: 4px 0 0;
     padding: 0 16px;
     font-size: 23px;
+  }
+
+  .moment .for-now.note {
+    font-size: 14px;
+    opacity: 0.8;
   }
 
   /* Room under the covers for their shadow (it fades over 30 px): at the flow's very foot, its clip cut the shadow off

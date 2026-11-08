@@ -297,6 +297,13 @@ impl Directory {
         Ok(())
     }
 
+    /// The names to sign an account in by, knowing only the account: each directory name `accounts` maps to it, as the
+    /// directory knows it by that and not by Cratarr's, then its own.
+    pub fn names_of(&self, account: &str) -> Vec<String> {
+        let config = self.config();
+        config.accounts.iter().filter(|(_, mapped)| mapped.as_str() == account).map(|(name, _)| name.clone()).chain([account.to_string()]).collect()
+    }
+
     /// The Cratarr account a name and password sign in as through the directory; `None` when it is off, refuses them,
     /// or cannot be reached and has no recent sign-in of theirs. `account`: the Cratarr account for a name (the one
     /// `accounts` maps it to, else the same), given what the directory says of it (whether an administrator, its display
@@ -649,6 +656,64 @@ mod tests {
         assert!(verify(&h, "correct horse"));
         assert!(!verify(&h, "correct hors"));
         assert!(!verify("not a hash", "correct horse"));
+    }
+
+    #[tokio::test]
+    async fn a_directory_account_s_app_password_signs_in_to_no_page_while_the_directory_is_on() {
+        let s = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        s.users.set("me", "pw").unwrap();
+        s.users.from_directory("ann", true, None).unwrap();
+        s.users.set_app_password("ann", "for-apps").unwrap();
+        // Nothing listens on port 1: the directory says no, however it says it.
+        s.directory.set_config(Config { url: "ldap://127.0.0.1:1".into(), ..config() }).unwrap();
+        assert_eq!(s.sign_in("ann", "for-apps").await, None);
+        assert_eq!(s.sign_in("me", "pw").await.as_deref(), Some("me"), "Cratarr's own accounts stay the fallback");
+        assert!(s.users.check(Some("ann"), None, None, Some("for-apps")).is_ok(), "her apps still sign in with it");
+        s.directory.set_config(Config { enabled: false, ..config() }).unwrap();
+        assert_eq!(s.sign_in("ann", "for-apps").await.as_deref(), Some("ann"), "no directory: it is all she has");
+    }
+
+    #[tokio::test]
+    async fn a_password_is_asked_again_by_the_name_the_directory_knows_and_holds_for_that_account_alone() {
+        use axum::body::Body;
+        use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
+        use tower::ServiceExt;
+        let d = std::env::temp_dir().join(format!("cratarr-ldap-mapped-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let pw = d.join("bind");
+        std::fs::write(&pw, "x").unwrap();
+        let s = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        s.users.set("me", "pw").unwrap();
+        s.users.from_directory("rob", false, None).unwrap();
+        s.users.set("robin", "own").unwrap();
+        // Nothing listens on port 1, so a sign-in the directory took stands in for it: robin's, who is the account rob.
+        let accounts = BTreeMap::from([("robin".to_string(), "rob".to_string())]);
+        s.directory.set_config(Config { url: "ldap://127.0.0.1:1".into(), bind_password_file: pw.display().to_string(), accounts, ..config() }).unwrap();
+        let now = crate::serve::now();
+        s.directory.remember("robin", "secret", now).await;
+        assert_eq!(s.sign_in("robin", "secret").await.as_deref(), Some("rob"), "the case");
+
+        // Account → App password, signed in as the account, which the directory knows by the other name.
+        let cookie = |user: &str| format!("{}={}", crate::serve::signin::COOKIE, s.sessions.create(user, "d", now).unwrap().0);
+        let rob = cookie("rob");
+        let set = |current: &str| {
+            let body = serde_json::json!({ "current": current, "password": "for-apps" }).to_string();
+            Request::put("/api/me/subsonic-password").header("content-type", "application/json").header("cookie", rob.as_str()).body(Body::from(body)).unwrap()
+        };
+        let routes = crate::serve::routes::router(s.clone()).layer(axum::middleware::from_fn_with_state(s.clone(), crate::serve::access::require));
+        assert_eq!(routes.clone().oneshot(set("wrong")).await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(routes.oneshot(set("secret")).await.unwrap().status(), StatusCode::NO_CONTENT);
+        assert!(s.users.check(Some("rob"), None, None, Some("for-apps")).is_ok(), "his apps sign in with it");
+
+        // The account named as the directory's name is another account: what signs in as rob is no password of its own.
+        let robin = {
+            let mut h = HeaderMap::new();
+            h.insert(header::COOKIE, HeaderValue::from_str(&cookie("robin")).unwrap());
+            h
+        };
+        assert_eq!(crate::serve::access::reauthenticate(&s, &robin, "own").await.ok().as_deref(), Some("robin"));
+        assert!(crate::serve::access::reauthenticate(&s, &robin, "secret").await.is_err());
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[tokio::test]

@@ -109,12 +109,15 @@ impl Rpc {
     }
 }
 
-/// A track's address for Kodi.
+/// A track's address for Kodi, naming the copy it is heard from where it has one.
 fn address(stream_from: &str, t: &QueueTrack) -> String {
     match reqwest::Url::parse(stream_from.trim()) {
         Ok(mut u) => {
             if let Ok(mut path) = u.path_segments_mut() {
                 path.pop_if_empty().extend(["api", "file", t.source.as_str(), t.id.as_str()]);
+            }
+            if let Some(from) = &t.from {
+                u.query_pairs_mut().append_pair("from", from);
             }
             u.to_string()
         }
@@ -511,9 +514,9 @@ impl Driver {
             return Ok(now);
         }
         let index = p.get("position").and_then(Value::as_i64).unwrap_or(-1);
-        // Its address without the signature (decision 0043), which differs each time one is handed out.
-        let unsigned = file.split('?').next().unwrap_or(file);
-        let ours = usize::try_from(index).ok().and_then(|i| self.queue.get(i)).is_some_and(|t| address(&self.stream_from, t) == unsigned);
+        // Its address without its query: the signature (decision 0043) differs each time one is handed out.
+        let path = |address: &str| address.split('?').next().unwrap_or(address).to_string();
+        let ours = usize::try_from(index).ok().and_then(|i| self.queue.get(i)).is_some_and(|t| path(&address(&self.stream_from, t)) == path(file));
         if !ours {
             return Ok(now);
         }
@@ -564,15 +567,15 @@ impl Driver {
     }
 }
 
-/// The group's silence when it changes; never without a group.
+/// The group's silence when it changes; never without a group. `None`, and `m` emptied, once the group's stream went (no
+/// one fed it or heard it): the driver's loop then follows the stream made after it.
 async fn changed(m: &mut Option<tokio::sync::watch::Receiver<bool>>) -> Option<bool> {
-    match m {
-        Some(m) => match m.changed().await {
-            Ok(()) => Some(*m.borrow()),
-            Err(_) => std::future::pending().await,
-        },
-        None => std::future::pending().await,
+    let Some(silence) = m else { return std::future::pending().await };
+    if silence.changed().await.is_ok() {
+        return Some(*silence.borrow());
     }
+    *m = None;
+    None
 }
 
 /// Drives one Kodi for as long as Cratarr runs (the task is aborted when the settings change).
@@ -884,6 +887,30 @@ mod tests {
         step("stop", &d);
         let muted = was.get("muted").and_then(Value::as_bool).unwrap_or(false);
         d.rpc.call("Application.SetMute", json!({ "mute": muted })).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_group_s_silence_is_asked_for_anew_once_its_stream_went() {
+        let (stream, heard) = tokio::sync::watch::channel(false);
+        let mut silence = Some(heard);
+        stream.send_replace(true);
+        assert_eq!(changed(&mut silence).await, Some(true));
+        drop(stream);
+        assert_eq!(changed(&mut silence).await, None);
+        assert!(silence.is_none(), "so the driver's loop takes the next stream's");
+    }
+
+    /// Play from: Kodi is told an address, so a queue's copy must be in it, and Kodi's own queue must still read as Cratarr's.
+    #[tokio::test]
+    async fn a_track_heard_from_a_copy_is_asked_of_it_and_stays_kodis_track() {
+        let (url, kodi) = fake().await;
+        let cfg = KodiConfig { name: "Bedroom".into(), url: format!("{url}/jsonrpc"), stream_from: "http://192.168.1.5:8081".into(), ..KodiConfig::default() };
+        let mut d = Driver::new(&cfg, Vec::new());
+        let named = QueueTrack { from: Some("/media/in coming".into()), ..t("tr-1") };
+        d.run(Command::play(vec![named, t("tr-2")], 0, 0)).await.unwrap();
+        assert_eq!(kodi.lock().unwrap().playlist, vec!["http://192.168.1.5:8081/api/file/cratarr/tr-1?from=%2Fmedia%2Fin+coming", "http://192.168.1.5:8081/api/file/cratarr/tr-2"]);
+        d.now = d.read().await.unwrap();
+        assert_eq!(d.report().entry.as_deref(), Some("e-tr-1"), "the file Kodi plays is the queue's");
     }
 
     #[test]

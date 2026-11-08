@@ -1,6 +1,8 @@
 // Cratarr's desktop app (decision 0078), Linux first: Cratarr's own pages in a window of their own. Thin, as the
-// Android app began (decision 0031): nothing of the web app is built in, the window shows the server's pages, and the
-// page plays as it does in a browser. What the shell adds to an installed page:
+// Android app began (decision 0031): the window shows Cratarr's page on the server's address, and the page plays as it
+// does in a browser. What the shell adds to an installed page:
+// - it carries its own copy of the page (decision 0085, step 1; page.js), answered on the server's address in place of
+//   the server's, so it opens at once and with the server out of reach, a blank window never;
 // - it can start at login and keeps running when its window is closed (in the tray), so the computer stays one of
 //   Cratarr's players;
 // - it plays without a first click, and a hidden window keeps its timers (its reports, the next track);
@@ -8,10 +10,12 @@
 //   worker, and with it Downloads, work there as on https.
 'use strict';
 
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, powerMonitor, screen, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, net, powerMonitor, screen, session, shell } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { Readable, Writable } = require('node:stream');
+const { buildOf, ownPage } = require('./page');
 
 /** The shell's own settings: the server, the window's place. */
 const SETTINGS = path.join(app.getPath('userData'), 'settings.json');
@@ -53,6 +57,10 @@ function originOf(address) {
 const settings = readSettings();
 /** The server's origin, or null before one is chosen. */
 const origin = originOf(settings.server);
+/** Cratarr's page as its health check last told it (`web`: its release and build), kept for the next start. */
+let told = buildOf(settings.serverPage);
+/** The app's own copy of the page (copy-page.js put it there). */
+const page = ownPage(app.isPackaged ? path.join(process.resourcesPath, 'page') : path.join(__dirname, 'page'), () => told);
 
 // Before the app is ready: what the page may do here that a browser tab may not.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -96,6 +104,63 @@ const sameOrigin = (url) => {
     return false;
   }
 };
+
+/** A request of the page's, sent on as it came (its body as it comes; the session's cookies to Cratarr alone, none to
+ *  another site), the answer streamed back. A redirect is handed back as one, so the page follows it itself and its
+ *  address says where it went (the sign-in); `net.fetch` follows it here instead, and its manual mode only refuses it.
+ *  An answer the page lets go of before its end (a closed event stream, a seek in a stream) ends the request too. */
+function sendOn(req) {
+  return new Promise((resolve, reject) => {
+    const r = net.request({
+      method: req.method,
+      url: req.url,
+      origin: req.headers.get('origin') ?? undefined,
+      credentials: sameOrigin(req.url) ? 'include' : 'omit',
+      redirect: 'manual',
+      bypassCustomProtocolHandlers: true,
+    });
+    for (const [k, v] of req.headers) r.setHeader(k, v);
+    // A page load said to be one, as the page's browser says it on its own way out (here it would go as `no-cors`):
+    // Cratarr sends a page load without a session to the sign-in page, and anything else gets a refusal.
+    if (req.method === 'GET' && req.headers.has('upgrade-insecure-requests') && req.headers.get('accept')?.includes('text/html')) {
+      r.setHeader('Sec-Fetch-Mode', 'navigate');
+      r.setHeader('Sec-Fetch-Dest', 'document');
+    }
+    r.on('redirect', (status, _method, url) => {
+      r.abort();
+      resolve(new Response(null, { status, headers: { location: url } }));
+    });
+    r.on('response', (res) => {
+      let ended = false;
+      res.on('end', () => (ended = true));
+      res.on('close', () => ended || r.abort());
+      const headers = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) for (const one of [].concat(v)) headers.append(k, one);
+      const empty = [101, 204, 205, 304].includes(res.statusCode) || req.method === 'HEAD';
+      resolve(new Response(empty ? null : Readable.toWeb(res), { status: res.statusCode, statusText: res.statusMessage, headers }));
+    });
+    r.on('error', reject);
+    if (req.body) req.body.pipeTo(Writable.toWeb(r)).catch(reject);
+    else r.end();
+  });
+}
+
+/** Cratarr's page as its health check tells it, at the start, every ten minutes and on waking, for the choice of page
+ *  (page.js); kept as it was while Cratarr is out of reach. */
+async function hearPage() {
+  if (!origin) return;
+  try {
+    const answer = await net.fetch(`${origin}/api/health`, { bypassCustomProtocolHandlers: true, signal: AbortSignal.timeout(8_000) });
+    const body = await answer.json();
+    if (body?.status !== 'ok' || typeof body.playlists !== 'number') return;
+    const web = buildOf(body.web);
+    if (JSON.stringify(web) === JSON.stringify(told)) return;
+    told = web;
+    writeSettings({ serverPage: web });
+  } catch {
+    /* out of reach: the last told stands */
+  }
+}
 
 /** Another site's link opens in the computer's browser, never in Cratarr's window. */
 function openOutside(url) {
@@ -175,8 +240,8 @@ function lastPlace() {
 }
 
 /** What the page may ask of the computer: copying, fullscreen (the map, the visuals), keeping the screen on (the
- *  visuals), a speaker of its choice. Nothing else: no camera, microphone or location. */
-const ALLOWED = new Set(['clipboard-sanitized-write', 'fullscreen', 'screen-wake-lock', 'speaker-selection']);
+ *  visuals), a speaker of its choice, storage that is kept (below). Nothing else: no camera, microphone or location. */
+const ALLOWED = new Set(['clipboard-sanitized-write', 'fullscreen', 'screen-wake-lock', 'speaker-selection', 'persistent-storage']);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -232,22 +297,17 @@ function createWindow() {
     setTimeout(() => win?.loadURL(url), retry);
     retry = Math.min(retry * 2, 60_000);
   });
-  win.webContents.on('did-finish-load', () => (retry = 5_000));
+  win.webContents.on('did-finish-load', () => {
+    retry = 5_000;
+    // What the page keeps on the computer (its last copies, its downloads, the library's index) is kept for good, not
+    // let go of when the disk runs low, as a browser does with a site's.
+    if (sameOrigin(win.webContents.getURL())) win.webContents.executeJavaScript('navigator.storage?.persist?.()').catch(() => {});
+  });
   win.webContents.on('render-process-gone', (_event, details) => {
     if (details.reason !== 'clean-exit' && !quitting) win?.webContents.reload();
   });
   if (origin) win.loadURL(origin + '/');
   else win.loadFile(path.join(__dirname, 'setup.html'));
-}
-
-/** Windows: the app updates itself from Cratarr's GitHub releases (electron-updater; the owner, 2026-10-29), looking at
- *  start and every six hours, the update put in place when the app next quits. On Linux apt does it (the APT
- *  repository). */
-function updates() {
-  const { autoUpdater } = require('electron-updater');
-  const look = () => autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-  look();
-  setInterval(look, 6 * 3600_000);
 }
 
 // The setup page's two questions; only it may ask them.
@@ -283,15 +343,23 @@ if (first) {
   app.whenReady().then(() => {
     // Woken or unlocked (0.10; the owner, 2026-10-30: the ThinkPad's player came back a minute after its Wi-Fi): the
     // page reconnects at once instead of waiting out a dead connection or its retry.
-    for (const e of ['resume', 'unlock-screen']) powerMonitor.on(e, () => win?.webContents.send('wake'));
+    for (const e of ['resume', 'unlock-screen'])
+      powerMonitor.on(e, () => {
+        win?.webContents.send('wake');
+        hearPage();
+      });
     session.defaultSession.setPermissionRequestHandler((_wc, permission, done, details) => done(ALLOWED.has(permission) && sameOrigin(details.requestingUrl)));
     session.defaultSession.setPermissionCheckHandler((_wc, permission, requesting) => ALLOWED.has(permission) && sameOrigin(requesting));
+    // Every request of the server's kind (https, or http at a home address) comes here: the app's own page answers on
+    // Cratarr's address where it is the one served, the rest goes on as it came.
+    if (origin) session.defaultSession.protocol.handle(new URL(origin).protocol.slice(0, -1), (req) => (sameOrigin(req.url) ? page.answer(req, sendOn) : sendOn(req)));
+    hearPage();
+    setInterval(hearPage, 10 * 60_000);
     tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 24, height: 24 }));
     tray.setToolTip('Cratarr');
     tray.on('click', show);
     menus();
     createWindow();
-    if (process.platform === 'win32' && app.isPackaged) updates();
   });
   // Without a tray (a desktop that has none), closing the window ends it.
   app.on('window-all-closed', () => app.quit());

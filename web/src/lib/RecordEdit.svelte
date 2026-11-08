@@ -8,6 +8,7 @@
   // until changed. Save sends only what changed (lib/recordEdit toSend), once; the Library reads itself again after.
   import { albumView, setAlbumOverrides, type ListedAlbum } from './api';
   import { readLibrary } from './albums.svelte';
+  import Asking from './Asking.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -44,17 +45,24 @@
   // One record's words read as the sheet opens (the list does not carry them); several's are not asked for: their rows
   // leave each its own until changed.
   let wordsRead = $state<Record<WordField, string[]> | null>(null);
+  let wordsFailed = $state(false);
   $effect(() => {
     if (albums.length !== 1) return;
     const id = albums[0].id;
     let current = true;
     albumView(source, id).then(
       (r) => current && (wordsRead = wordsOfView(r)),
-      () => {},
+      (e) => {
+        if (!current) return;
+        wordsFailed = true;
+        toast.fail(e, "Its words couldn't be read");
+      },
     );
     return () => (current = false);
   });
-  const records = $derived(albums.map((a) => editableOf(a, albums.length === 1 ? wordsRead : null)));
+  /** Its rows wait for its words: no "–" for words not read yet. */
+  const wordsWait = $derived(albums.length === 1 && !wordsRead && !wordsFailed);
+  const records =$derived(albums.map((a) => editableOf(a, albums.length === 1 ? wordsRead : null)));
 
   let draft = $state<OverrideSet>({});
   const send = $derived(toSend(records, draft));
@@ -146,18 +154,22 @@
 >
   {#if step === 'rows'}
     <div class="rows">
-      <Group>
-        <Item name="Type" line={lineOf(type)} value={type.mixed || type.reset ? null : typeLabel(type.value as string | null)} onclick={() => (step = 'type')} />
-        <Item name="Year" line={lineOf(year)} value={year.mixed || year.reset || year.value === null ? null : String(year.value)} onclick={openYear} />
-        <Item name="Secondary types" line={lineOf(secondary)} value={secondary.mixed || secondary.reset ? null : listed(secondaryNow, secondaryLabel)} onclick={() => (step = 'secondary')} />
-        {@render wordRow('genres')}
-        <Item name="Classical" line={classical === '' ? 'Mixed' : classicalFound}>
-          <Seg label="Classical" options={CLASSICAL_CHOICES} bind:value={() => classical, (v) => (draft.classical = classicalOfChoice(v))} />
-        </Item>
-        {@render wordRow('styles')}
-        {@render wordRow('moods')}
-        {@render wordRow('tags')}
-      </Group>
+      {#if wordsWait}
+        <Asking />
+      {:else}
+        <Group>
+          <Item name="Type" line={lineOf(type)} value={type.mixed || type.reset ? null : typeLabel(type.value as string | null)} onclick={() => (step = 'type')} />
+          <Item name="Year" line={lineOf(year)} value={year.mixed || year.reset || year.value === null ? null : String(year.value)} onclick={openYear} />
+          <Item name="Secondary types" line={lineOf(secondary)} value={secondary.mixed || secondary.reset ? null : listed(secondaryNow, secondaryLabel)} onclick={() => (step = 'secondary')} />
+          {@render wordRow('genres')}
+          <Item name="Classical" line={classical === '' ? 'Mixed' : classicalFound}>
+            <Seg label="Classical" options={CLASSICAL_CHOICES} bind:value={() => classical, (v) => (draft.classical = classicalOfChoice(v))} />
+          </Item>
+          {@render wordRow('styles')}
+          {@render wordRow('moods')}
+          {@render wordRow('tags')}
+        </Group>
+      {/if}
     </div>
   {:else if step === 'type'}
     <div class="step">

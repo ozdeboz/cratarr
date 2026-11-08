@@ -6,36 +6,12 @@
   import { port } from './player/port.svelte';
   import { untrack } from 'svelte';
   import type { AlbumsSource, LibraryInfo, ListedAlbum } from './api';
+  import { mayEdit, offersOf, type AlbumOffer } from './copiesRule';
   import { jobs } from './jobs.svelte';
+  import { me } from './me.svelte';
 
-  /** What an album's library allows (decision 0034): moves into the server's other used libraries, Replace for an
-   *  upgrade, Delete; each only when Cratarr can write the album's folder, and with a job in the conversion queue only
-   *  Cancel. */
-  export type AlbumOffer = {
-    /** The album's library. */
-    from: LibraryInfo | null;
-    /** The libraries it can move into. */
-    targets: LibraryInfo[];
-    replaceable: boolean;
-    deletable: boolean;
-    job: number | null;
-  };
-
-  /** For an album of the Library's list. One already in Music (an upgrade or a duplicate) does not move there again:
-   *  an upgrade replaces. Verdicts compare against every library now (2026-11-02, decision 0096's 0.13 fixes): only a
-   *  pair in Music replaces (`replaceable`), and only then is Music no target for a move. */
-  export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
-    const deletable = s.deletable.includes(a.id);
-    const verdict = s.verdicts[a.id];
-    const inMusic = !!verdict?.replaceable;
-    return {
-      from: s.library_info.find((l) => l.id === a.library) ?? null,
-      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(inMusic && l.use === 'music')) : [],
-      replaceable: deletable && verdict?.kind === 'upgrade' && inMusic,
-      deletable,
-      job: jobs.of(s.id, a.id)?.id ?? null,
-    };
-  }
+  /** What each of a record's copies allows the viewer, by what the Library's list says of them. */
+  export const offersIn = (s: AlbumsSource, a: ListedAlbum): AlbumOffer[] => offersOf(s, a, me.admin, (library) => jobs.of(s.id, a.id, library)?.id ?? null);
 </script>
 
 <script lang="ts">
@@ -45,9 +21,10 @@
   // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards in the table's order (lib/menuTable),
   // related ones joined: where to go (View, each of its artists, its genres); its rating; Add to playlist (all its
   // tracks, the playlists as toggle cards in a step, as a track's), Download…, Sync to this device and Share; Web search
-  // and Genius search; its cover on this device (a picture chosen here, or the server's read again); what its library
-  // allows (Move to another, Replace in Music; decision 0034), each question asked in place; Remove resume point and
-  // Delete last.
+  // and Genius search; its cover on this device (a picture chosen here, or the server's read again); Play from, a queue
+  // of it from another of its copies; what its copies allow (Move to another, Replace in Music; decision 0034), each
+  // question asked in place and of one copy, named where it has several; Remove resume point and Delete last. Wherever
+  // it was opened from, the Library's list says what its copies are.
   import {
     albumCoverUrl,
     albumResume,
@@ -73,7 +50,9 @@
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumOfDownload, albumPlay, albumRatings, goToArtist as showArtist, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum } from './albums.svelte';
+  import { albumOfDownload, albumPlay, albumRatings, copiesGone, copiesMoved, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
+  import { adds, deleteEntries, moveEntries, playFromEntries, replaceEntries } from './copiesRule';
+  import { shownIn } from './sources.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre } from './crates.svelte';
@@ -88,7 +67,7 @@
   import { inOrder, type EntryId } from './menuTable';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
-  import MarkLoader from './MarkLoader.svelte';
+  import Asking from './Asking.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
@@ -110,7 +89,6 @@
   import Meter from './Meter.svelte';
   import { progressOf, tasks } from './tasks.svelte';
   import { withUndo } from './undo.svelte';
-  import { me } from './me.svelte';
   import { can, findsTracks, offers } from './capabilities.svelte';
 
   type Ask = 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
@@ -120,9 +98,6 @@
     cover = null,
     tracks: givenTracks = null,
     genres: givenGenres = null,
-    offer = null,
-    trashDays = 14,
-    music = 'Music',
     viewable = true,
     start = 'menu',
     onresumegone,
@@ -137,11 +112,6 @@
     /** Its tracks in play order and its genres, when the opener has them (the panel); else read as the menu opens. */
     tracks?: LocalTrack[] | null;
     genres?: string[] | null;
-    /** What its library allows; none: no library entries (not known yet). */
-    offer?: AlbumOffer | null;
-    trashDays?: number;
-    /** The primary library (Music), by its own name: Replace puts albums in it, and deleting from it asks twice. */
-    music?: string;
     /** View in the panel (not from the panel showing it). */
     viewable?: boolean;
     /** The step it opens on: the entries, or straight at the playlists. */
@@ -149,7 +119,8 @@
     start?: 'menu' | 'lists' | 'cover';
     /** Its resume point was removed here (the panel's Resume goes too). */
     onresumegone?: () => void;
-    /** The album left its library (moved, replaced or deleted; not when queued to convert first). */
+    /** A copy left its library (moved, replaced or deleted; not when queued to convert first). The Library's list is
+     *  kept true here. */
     ongone?: () => void;
     /** A move's or a delete's Undo went through. */
     onundone?: () => void;
@@ -396,11 +367,23 @@
     }
   });
 
-  // What its library allows, each asked in place. Deleting from the primary library asks once more.
-  // svelte-ignore state_referenced_locally
-  const fromName = offer?.from?.name ?? 'Incoming';
-  // svelte-ignore state_referenced_locally
-  const primary = offer?.from?.use === 'music';
+  // What its copies allow, by the Library's list (read here if nothing has yet; until then no library entries), each
+  // asked in place. The copy being asked of is held apart: it stays what the entry chose however the list changes.
+  // Deleting from a main library asks once more.
+  $effect(() => {
+    if (!library.view && source !== DEVICE) readLibrary(false).catch(() => {});
+  });
+  const listedHere = $derived(listedAlbum(source, a.id));
+  const copyOffers = $derived(listedHere ? offersIn(listedHere.s, listedHere.a) : []);
+  const trashDays = $derived(library.view?.trash_days ?? 14);
+  let copy = $state<AlbumOffer | null>(null);
+  const fromName = $derived(copy?.name ?? 'Incoming');
+  const primary = $derived(copy?.from?.kind === 'main');
+  const severalCopies = $derived(copyOffers.length > 1);
+  // Play from: a queue of the record from another of its copies. It goes with that queue, so it needs no account and
+  // nothing is asked first. Each track carries `from` wherever the queue goes, a player elsewhere too.
+  const playFrom = $derived(listedHere ? playFromEntries(listedHere.a, listedHere.s.library_info, shownIn(source)) : []);
+  const editable = $derived(listedHere ? mayEdit(listedHere.a, listedHere.s.library_info, me.admin) : me.admin);
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
@@ -408,8 +391,9 @@
   const converted = (n: number, library: string) =>
     `${n} lossless ${n === 1 ? 'file' : 'files'} above ${library}'s quality limit ${n === 1 ? 'is' : 'are'} converted to FLAC first.`;
   let ask = $state<false | Ask | 'really'>(false);
-  /** The move's library. */
+  /** The library a move or a Replace goes into. */
   let to = $state<LibraryInfo | null>(null);
+  const adding = $derived(!!to && adds(copy?.from ?? null, to));
   let keep = $state<KeepPreview | null>(null);
   let swap = $state<ReplacePreview | null>(null);
   /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
@@ -490,36 +474,43 @@
   let year = $state('');
   let working = $state(false);
 
-  async function askMove(target: LibraryInfo) {
+  async function askMove(of: AlbumOffer, target: LibraryInfo) {
     ask = 'move';
+    copy = of;
     to = target;
     keep = null;
     year = '';
     try {
-      keep = await movePreview(source, a.id, target.id);
+      keep = await movePreview(source, a.id, of.library, target.id);
     } catch (e) {
       toast.fail(e, 'Could not work out the names');
       onclose();
     }
   }
-  async function askReplace() {
+  async function askReplace(of: AlbumOffer, target: LibraryInfo) {
     ask = 'replace';
+    copy = of;
+    to = target;
     swap = null;
     coverWay = 'keep';
     year = '';
     try {
-      swap = await replacePreview(source, a.id);
+      swap = await replacePreview(source, a.id, of.library, target.id);
     } catch (e) {
       toast.fail(e, 'Could not pair the tracks');
       onclose();
     }
   }
+  function askDelete(of: AlbumOffer) {
+    copy = of;
+    ask = 'delete';
+  }
   // With a year typed in, show what the names would be.
   async function tryYear() {
-    if (!/^\d{4}$/.test(year.trim())) return;
+    if (!/^\d{4}$/.test(year.trim()) || !to) return;
     try {
-      if (ask === 'replace') swap = await replacePreview(source, a.id, year.trim());
-      else if (to) keep = await movePreview(source, a.id, to.id, year.trim());
+      if (ask === 'replace') swap = await replacePreview(source, a.id, copy?.library, to.id, year.trim());
+      else keep = await movePreview(source, a.id, copy?.library, to.id, year.trim());
     } catch {
       /* keep the question open */
     }
@@ -536,39 +527,46 @@
       onclose();
     }
   }
-  // Done: the album leaves its library. Queued (lossless files above the target's quality limit to convert first): its
-  // row shows the progress instead, and the queue says when it is done.
-  function moved(r: AlbumMoved, words: string) {
+  // Done: the copy leaves its library, shown at once as `left` says. Queued (lossless files above the target's quality
+  // limit to convert first): its row shows the progress instead, and the queue says when it is done.
+  function moved(r: AlbumMoved, words: string, left: () => void) {
     if (r.queued) {
       jobs.poke();
       return;
     }
     // It stays open where it is (the owner, 2026-11-01: no U-turns): its panel follows it to its new place.
+    left();
     ongone?.();
     withUndo(words, [r.undo], { undone: `${r.title} is back in ${fromName}.`, after: onundone });
   }
+  /** Deleted: the record stays while one copy does; with its last its panel closes. */
   function gone() {
     ongone?.();
-    albumGone(source, a.id);
+    for (const x of copiesGone([{ source, id: a.id, from: copy?.library }])) albumGone(x.source, x.id);
   }
   const moveIt = () =>
     act(async () => {
       if (!to) return;
-      const name = to.name;
-      moved(await moveAlbum(source, a.id, to.id, year.trim() || undefined), `Moved ${a.title} to ${name}.`);
-    }, `Could not move the ${word}`);
+      const [into, from] = [to, copy?.library];
+      const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined);
+      moved(r, `${adding ? 'Added' : 'Moved'} ${a.title} to ${into.name}.`, () => copiesMoved([{ source, id: a.id, from, to: into.id }]));
+    }, `Could not ${adding ? 'add' : 'move'} the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
     act(async () => {
-      const r = await replaceIncoming(source, a.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
-      moved(r, `Replaced ${r.title} in ${music}.`);
+      if (!to) return;
+      const name = to.name;
+      const from = copy?.library;
+      const r = await replaceIncoming(source, a.id, from, to.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
+      // The copy that took the other's place is now that one: what is listed of it comes with the next read.
+      moved(r, `Replaced ${r.title} in ${name}.`, () => void copiesGone([{ source, id: a.id, from }]));
     }, `Could not replace the ${word}`);
   /** The tag differences shown at first (the rest behind "And N more"). */
   const DIFF_SHOWN = 12;
   let diffAll = $state(false);
   const remove = () =>
     act(async () => {
-      const { undo, title } = await deleteAlbum(source, a.id);
+      const { undo, title } = await deleteAlbum(source, a.id, copy?.library);
       gone();
       withUndo(`Deleted ${title}.`, [undo], { undone: `${title} is back in ${fromName}.`, after: onundone });
     }, `Could not delete the ${word}`);
@@ -664,28 +662,29 @@
     <!-- Its release's tracks, the missing ones found one at a time (0.9.8, single-track replacement). -->
     {#if me.admin && source === 'cratarr' && missingOffered}<MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />{/if}
   {:else if e === 'edit'}
-    {#if me.admin && source === 'cratarr'}<MenuEntry icon="pencil" label="Edit" onclick={() => (editOpen = true)} />{/if}
+    {#if editable && source === 'cratarr'}<MenuEntry icon="pencil" label="Edit" onclick={() => (editOpen = true)} />{/if}
   {:else if e === 'deviceCover'}
     {#if !(me.admin && source === 'cratarr') && deviceCovers}<MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />{/if}
   {:else if e === 'serverCover'}
     <!-- No Read the cover again (the owner, 2026-10-26): a cover's address carries its stamp (lib/coverStamps), so a
          changed one shows by itself. Only a picture chosen on this device is undone here. -->
     {#if ownCover}<MenuEntry icon="imageOff" label="Use the server's cover" onclick={serverCover} />{/if}
+  {:else if e === 'playFrom'}
+    {#each playFrom as p (p.library)}<MenuEntry icon="play" label={p.label} onclick={() => run(() => playListedAlbum(source, a as ListedAlbum, p.library))} />{/each}
   {:else if e === 'cancelConversion'}
-    {#if me.admin && offer && offer.job !== null}
-      {@const job = offer.job}
-      <MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />
+    {#if me.admin}
+      {#each new Set(copyOffers.flatMap((o) => o.job ?? [])) as job (job)}<MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />{/each}
     {/if}
   {:else if e === 'moveTo'}
-    {#if me.admin && offer && offer.job === null}
-      {#each offer.targets as t (t.id)}<MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />{/each}
-    {/if}
+    {#each moveEntries(copyOffers) as m (m.key)}<MenuEntry icon="intoBox" label={m.label} onclick={() => askMove(m.offer, m.to)} />{/each}
   {:else if e === 'replaceIn'}
-    {#if me.admin && offer && offer.job === null && offer.replaceable}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />{/if}
+    {#if me.admin}
+      {#each replaceEntries(copyOffers) as r (r.key)}<MenuEntry icon="swap" label={r.label} onclick={() => askReplace(r.offer, r.to)} />{/each}
+    {/if}
   {:else if e === 'removeResume'}
     {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
   {:else if e === 'deleteAlbum'}
-    {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label={`Delete ${word}`} danger onclick={() => (ask = 'delete')} />{/if}
+    {#each deleteEntries(copyOffers, word) as d (d.offer.library)}<MenuEntry icon="trash" label={d.label} danger onclick={() => askDelete(d.offer)} />{/each}
   {/if}
 {/snippet}
 
@@ -718,22 +717,22 @@
   {:else if ask === 'move'}
     <div class="form">
       {#if !keep}
-        <div class="loading"><MarkLoader size={40} /></div>
+        <Asking />
       {:else if keep.refused?.kind === 'needs_year'}
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
       {:else if keep.refused}
-        <p class="ask">Can't move {a.title}: {keep.refused.detail}</p>
+        <p class="ask">Can't {adding ? 'add' : 'move'} {a.title}: {keep.refused.detail}</p>
       {:else}
         <p class="ask">
-          Move {a.title} into {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
+          {adding ? 'Add' : 'Move'} {a.title} {adding ? 'to' : 'into'} {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
             {` ${converted(keep.convert, to?.name ?? '')}`}{/if}{#if !keep.acquisition && !primary}
             {` ${NO_LIDARR}`}{/if}
         </p>
       {/if}
       <div class="actions">
         {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
-          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>Move to {to?.name}</button>
+          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>{adding ? 'Add' : 'Move'} to {to?.name}</button>
         {/if}
         <button onclick={onclose}>Cancel</button>
       </div>
@@ -741,7 +740,7 @@
   {:else if ask === 'replace'}
     <div class="form">
       {#if !swap}
-        <div class="loading"><MarkLoader size={40} /></div>
+        <Asking />
       {:else if swap.refused?.kind === 'needs_year'}
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
@@ -755,7 +754,7 @@
             ? `, ${swap.added} new`
             : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
           {trashDays === 1 ? 'day' : 'days'}.{#if swap.convert}
-            {` ${converted(swap.convert, music)}`}{/if}{#if !swap.acquisition}
+            {` ${converted(swap.convert, to?.name ?? '')}`}{/if}{#if !swap.acquisition}
             {` ${NO_LIDARR}`}{/if}
         </p>
         <!-- Its cover (the owner, 2026-10-25): the one it has, or the new copy's; both shown. -->
@@ -825,18 +824,18 @@
     {/if}
   {:else if ask === 'delete'}
     <div class="form">
-      <p class="ask">Delete {a.title}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
+      <p class="ask">Delete {a.title}{severalCopies ? ` from ${fromName}` : ''}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
       <div class="actions">
-        <button class="danger solid" disabled={working} aria-busy={working} onclick={() => (primary ? (ask = 'really') : remove())}>Delete {word}</button>
+        <button class="danger solid" disabled={working} aria-busy={working} onclick={() => (primary ? (ask = 'really') : remove())}>{severalCopies ? `Delete from ${fromName}` : `Delete ${word}`}</button>
         <button onclick={onclose}>Cancel</button>
       </div>
     </div>
   {:else if ask === 'really'}
-    <!-- The primary library's extra step (decision 0034). -->
+    <!-- A main library's extra step (decision 0034; 0101: any of them). -->
     <div class="form">
-      <p class="ask">{a.title} is in {music}, your main library. Delete it from there?</p>
+      <p class="ask">{a.title} is in {fromName}, your main library. Delete it from there?</p>
       <div class="actions">
-        <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete from {music}</button>
+        <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete from {fromName}</button>
         <button onclick={onclose}>Cancel</button>
       </div>
     </div>
@@ -1038,10 +1037,4 @@
     font-size: 0.8rem;
   }
 
-  /* A question's answer being worked out: the loading sign, small (as the track menu's). */
-  .loading {
-    display: grid;
-    place-items: center;
-    padding: 16px 0;
-  }
-</style>
+  /* A question's answer being worked out: the loading sign, small (as the track menu's). */</style>

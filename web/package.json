@@ -1,7 +1,7 @@
 {
   "name": "cratarr-web",
   "private": true,
-  "version": "0.15.0",
+  "version": "0.16.0",
   "type": "module",
   "packageManager": "pnpm@11.17.0",
   "engines": {
@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:phone": "node scripts/check-phone.mjs",
-    "test": "node --experimental-strip-types --experimental-test-isolation=none --import ./tests/ts-resolve.mjs --test tests/*.test.ts && node --experimental-strip-types --import ./tests/ts-resolve.mjs --test tests/isolated/*.test.ts"
+    "test": "node --experimental-strip-types --experimental-test-isolation=none --import ./tests/ts-resolve.mjs --test tests/*.test.ts && node --experimental-strip-types --import ./tests/ts-resolve.mjs --test tests/isolated/*.test.ts",
+    "e2e:browser": "sh ../scripts/browser-e2e.sh",
+    "e2e:standin": "node e2e/standin-run.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
@@ -21,6 +23,7 @@
     "@types/d3-selection": "3.0.11",
     "@types/d3-zoom": "3.0.8",
     "@types/spark-md5": "3.0.5",
+    "playwright-core": "1.64.1",
     "svelte": "^5.57.2",
     "svelte-check": "^4.7.6",
     "typescript": "^6.0.3",

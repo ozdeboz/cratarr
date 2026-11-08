@@ -658,6 +658,7 @@ impl Source for SubsonicSource {
                         path,
                         tags: Vec::new(),
                         library: None,
+                        copies: Vec::new(),
                         artists: Vec::new(),
                         release: Default::default(),
                         id: a.id,

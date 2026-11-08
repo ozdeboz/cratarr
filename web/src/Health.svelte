@@ -29,7 +29,8 @@
   const groups = $derived(byArea(list, AREAS));
   // Changes to files (decision 0092; administrators'): the records whose files differ from their types and years (while
   // types into files is on) a line under Library, opening its review; every run one line under Files, naming what
-  // writes and waits. Lines that point: no meter, no Undo of their own.
+  // writes and waits, with the meter its panel shows at its top (the owner, 2026-11-04: its progress under the row's
+  // title too); no Undo of its own.
   $effect(() => loadFileFacts());
   $effect(() => loadRuns());
   const differ = $derived(fileFacts.value?.on ? fileFacts.value.differ : 0);
@@ -39,6 +40,12 @@
     const waiting = now.filter((r) => r.state === 'waiting').length;
     const parts = [writing ? `${writing.title} ${writing.state === 'adding' ? 'adding' : 'writing'}` : null, waiting ? `${waiting} waiting` : null].filter(Boolean);
     return parts.length ? parts.join(' · ') : null;
+  });
+  /** The run under way's meter, as the panel shows it: how much of it is written, nothing yet while it waits. */
+  const changesProgress = $derived.by(() => {
+    const writing = now.find((r) => r.state === 'writing');
+    if (writing?.of) return writing.done / writing.of;
+    return now.some((r) => r.state === 'waiting') ? 0 : null;
   });
   // Activity shows only while something runs or ran this month (the owner, 2026-11-01: only what matters shows).
   const showChanges = $derived(me.admin && !!fileRuns.list?.length);
@@ -105,7 +112,7 @@
   {#if differ > 0}<Item lead="off" name="Files that differ from their types and years" line="Review before writing" value={differ.toLocaleString()} open={opened('types')} onclick={() => openReview('types')} />{/if}
 {/snippet}
 {#snippet changesItem()}
-  {#if showChanges}<Item lead="off" name="Changes to files" line={changesLine} open={opened(null)} onclick={openChanges} />{/if}
+  {#if showChanges}<Item lead="off" name="Changes to files" line={changesLine} progress={changesProgress} open={opened(null)} onclick={openChanges} />{/if}
 {/snippet}
 
 <style>

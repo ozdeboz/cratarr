@@ -6,46 +6,40 @@
 // change Cratarr turns down when it comes (the playlist gone meanwhile) is let go: Cratarr's state is the truth. Each
 // carries the account it was made under and is sent only while that account is signed in (0.13, lib/account). The
 // rules are lib/outbox's.
-import { accountKey, whenAccount } from './account';
+import { accountKey, whenAccount, whenLeaving } from './account';
 import { keep, readKept } from './keptStore';
-import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, stamped, type Op } from './outbox';
+import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, turnedAway, worded, type Op } from './outbox';
 import { notReached, reach, whenReached } from './reach.svelte';
 
 export type Later = Op;
 
 const NAME = 'outbox';
-/** 0.9.15 to 0.11's list, in localStorage: taken over once. */
-const OLD_KEY = 'cratarr-later';
-function oldList(): Op[] {
-  try {
-    return opsFrom(JSON.parse(localStorage.getItem(OLD_KEY) ?? '[]'));
-  } catch {
-    return [];
-  }
-}
 
-export const later = $state({ list: typeof window === 'undefined' ? [] : oldList() });
+export const later = $state<{ list: Op[] }>({ list: [] });
+/** What this page made with no account known, for its first answer to name. A kept list names nothing: one of those there
+ *  is a page's that never heard, made perhaps by someone signing out, and no one's now, least of all the next to sign in's. */
+const madeHere = new Set<string>();
 /** Done once the stored outbox has been read in (until then a change waits behind it, kept in order). */
 const loaded =
   typeof window === 'undefined'
     ? Promise.resolve()
     : readKept<unknown>(NAME).then(async (v) => {
-        later.list = mergeOps(opsFrom(v), later.list);
-        stamp();
+        later.list = mergeOps(opsFrom(v).filter((c) => c.account !== undefined), later.list);
         await save();
-        try {
-          localStorage.removeItem(OLD_KEY);
-        } catch {
-          /* nothing there */
-        }
         if (later.list.length && !reach.away) void sendLater();
       });
 const save = () => keep(NAME, $state.snapshot(later.list));
-/** The account known: the changes carrying none take it (lib/outbox's `stamped`). */
+/** The account known: what this page made before it knew takes it. */
 function stamp() {
   const account = accountKey();
-  if (account !== null && later.list.some((c) => c.account === undefined)) later.list = stamped(later.list, account);
+  if (account === null || !madeHere.size) return;
+  later.list = later.list.map((c) => (madeHere.has(c.key) ? { ...c, account } : c));
+  madeHere.clear();
 }
+
+/** What waits of the account signed in: another's waits for it here, and neither its number nor what it is shows to
+ *  anyone else (decision 0101). */
+export const waitingHere = () => later.list.filter((c) => ours(c, accountKey()));
 
 /** A key for a change, the same for its first try and every resend. */
 export const laterKey = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -59,6 +53,11 @@ const letGo = async (key: string) => {
   later.list = later.list.filter((c) => c.key !== key);
   await save();
 };
+/** An answer turned it away: the first says when its week began. */
+const refused = async (key: string) => {
+  later.list = later.list.map((c) => (c.key === key && c.tried === undefined ? { ...c, tried: Date.now() } : c));
+  await save();
+};
 
 /** Keeps a change, written before it is first tried, then tries it unless others wait before it. `send` makes the
  *  request with the headers given; `unreached` tells its failure "not reached" apart. Returns what `send` returned, or
@@ -68,6 +67,7 @@ export async function keepAndTry<T>(op: Op, send: (headers: Record<string, strin
   // Another account's changes do not hold this one back; while the account is not known, any might be its own.
   const account = accountKey();
   const ahead = busy || later.list.some((c) => account === null || ours(c, account));
+  if (account === null) madeHere.add(op.key);
   later.list = [...later.list, account === null ? op : { ...op, account }];
   await save();
   if (ahead) {
@@ -106,19 +106,24 @@ export async function sendLater() {
     }
     let c: Op | undefined;
     while ((c = later.list.find((x) => ours(x, account)))) {
-      if (stale(c, Date.now())) {
-        console.warn('A change made away was let go, never taken', c.method, c.path);
-        await letGo(c.key);
-        continue;
-      }
       let r: Response | null = null;
       try {
         r = await fetch(c.path, { method: c.method, headers: headersOf(c), body: c.body });
       } catch {
         /* not reached */
       }
-      const outcome = outcomeOf(r?.status ?? null, !!r?.headers.has('Retry-After'), notReached);
-      if (outcome === 'wait') break;
+      const outcome = outcomeOf(r?.status ?? null, !!r?.headers.has('Retry-After'), notReached, r?.status === 403 && (await worded(r)));
+      if (outcome === 'wait') {
+        if (!turnedAway(r?.status ?? null)) break;
+        // Tried first: a week of refusals says nothing of today, and Cratarr may have mended.
+        if (!stale(c, Date.now())) {
+          await refused(c.key);
+          break;
+        }
+        console.warn('A change turned away for a week was let go, never taken', c.method, c.path);
+        await letGo(c.key);
+        continue;
+      }
       if (outcome === 'again') {
         await new Promise((ok) => setTimeout(ok, 1000));
         continue;
@@ -134,6 +139,7 @@ export async function sendLater() {
 }
 
 whenReached.add(() => void sendLater());
+whenLeaving.add(sendLater);
 whenAccount.add(async () => {
   await loaded;
   stamp();

@@ -1,6 +1,6 @@
 [package]
 name = "cratarr-server"
-version = "0.15.0"
+version = "0.16.0"
 edition = "2024"
 description = "Cratarr core: Jellyfin playlist index and API"
 license = "AGPL-3.0-or-later"
@@ -77,6 +77,8 @@ flate2 = "1"
 # The page's types from the server's (generated, web/src/lib/generated): written by the tests, so a release build
 # compiles none of it (0.14, faster previews: the dependency check's one lever).
 ts-rs = "12.0.1"
+# Radio's modes are among those types, and live in the rules.
+cratarr-rules = { path = "rules", features = ["ts", "made-up", "device"] }
 # Calls the routers as a client would, in tests (decision 0030).
 tower = { version = "0.5", default-features = false, features = ["util"] }
 

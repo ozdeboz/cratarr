@@ -234,63 +234,78 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
 }
 
 /// The fixes a match gives a finding's albums (`library:album-artist`: the album artist; `library:musicbrainz`: the
-/// release's and the tracks' ids).
-pub async fn fixes(served: &std::sync::Arc<crate::serve::Serve>, finding: &str, albums: Vec<String>) -> Result<Vec<Fix>> {
+/// release's and the tracks' ids). `at`: the copy written to, where they are one copy's and not the record's.
+pub async fn fixes(served: &std::sync::Arc<crate::serve::Serve>, finding: &str, albums: Vec<String>, at: Option<(i64, String)>) -> Result<Vec<Fix>> {
     let matched = kept_or_find(served, albums).await?;
-    let finding = finding.to_string();
+    let (finding, served) = (finding.to_string(), served.clone());
     tokio::task::spawn_blocking(move || -> Result<Vec<Fix>> {
         let mut out = Vec::new();
         for (album, m) in matched {
-            let (tracks, ..) = super::renumber::tracks_of(&album)?;
-            let path_of = |file: &str| tracks.iter().find(|t| t.file == file).map(|t| t.path.clone());
-            let certainty = if m.certain { "certain" } else { "likely" };
-            let fix = match finding.as_str() {
-                "library:album-artist" if !m.artist.is_empty() => Fix {
-                    id: format!("albumartist:{album}"),
-                    album: album.clone(),
-                    field: "albumartist",
-                    from: None,
-                    to: m.artist.clone(),
-                    source: "MusicBrainz".into(),
-                    certainty,
-                    why: m.why.clone(),
-                    writes: tracks.iter().map(|t| (t.path.clone(), vec![("albumartist", Some(m.artist.clone()))])).collect(),
-                    candidates: Vec::new(),
-                },
-                "library:musicbrainz" => Fix {
-                    id: format!("musicbrainz:{album}"),
-                    album: album.clone(),
-                    field: "musicbrainz",
-                    from: None,
-                    to: m.release.clone(),
-                    source: "MusicBrainz".into(),
-                    certainty,
-                    why: m.why.clone(),
-                    writes: m
-                        .tracks
-                        .iter()
-                        .filter_map(|(file, recording, artist)| {
-                            Some((
-                                path_of(file)?,
-                                vec![
-                                    ("musicbrainz_albumid", Some(m.release.clone())),
-                                    ("musicbrainz_releasegroupid", m.release_group.clone()),
-                                    ("musicbrainz_albumartistid", m.artist_id.clone()),
-                                    ("musicbrainz_trackid", Some(recording.clone()).filter(|r| !r.is_empty())),
-                                    ("musicbrainz_artistid", artist.clone()),
-                                ],
-                            ))
-                        })
-                        .collect(),
-                    candidates: Vec::new(),
-                },
-                _ => continue,
-            };
-            out.push(fix);
+            out.extend(fix_of(&served, &finding, &album, &m, at.as_ref())?);
         }
         Ok(out)
     })
     .await?
+}
+
+/// The files a matched file's fields go to. A match names the files of the copy it was made on, and copies name their files
+/// as they like, so what links them is the track: every file of it among `written`. A file on a track of its own there goes
+/// by its name, as nothing else says what it is.
+fn files_of_match(record: &[super::renumber::Track], written: &[super::renumber::Track], file: &str) -> Vec<std::path::PathBuf> {
+    let track = record.iter().find(|t| t.file == file).map(|t| t.id.as_str());
+    let same: Vec<std::path::PathBuf> = written.iter().filter(|t| Some(t.id.as_str()) == track).map(|t| t.path.clone()).collect();
+    if same.is_empty() { written.iter().find(|t| t.file == file).map(|t| t.path.clone()).into_iter().collect() } else { same }
+}
+
+/// A match's fix of one album, where `finding` has one. Blocking.
+pub(super) fn fix_of(served: &crate::serve::Serve, finding: &str, album: &str, m: &Match, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
+    let record = super::renumber::files_in(served, album, None)?;
+    let written = if at.is_some() { super::renumber::files_in(served, album, at)? } else { record.clone() };
+    let certainty = if m.certain { "certain" } else { "likely" };
+    Ok(Some(match finding {
+        "library:album-artist" if !m.artist.is_empty() => Fix {
+            id: format!("albumartist:{album}"),
+            album: album.to_string(),
+            field: "albumartist",
+            from: None,
+            to: m.artist.clone(),
+            source: "MusicBrainz".into(),
+            certainty,
+            why: m.why.clone(),
+            writes: written.iter().map(|t| (t.path.clone(), vec![("albumartist", Some(m.artist.clone()))])).collect(),
+            candidates: Vec::new(),
+        },
+        "library:musicbrainz" => Fix {
+            id: format!("musicbrainz:{album}"),
+            album: album.to_string(),
+            field: "musicbrainz",
+            from: None,
+            to: m.release.clone(),
+            source: "MusicBrainz".into(),
+            certainty,
+            why: m.why.clone(),
+            writes: m
+                .tracks
+                .iter()
+                .flat_map(|(file, recording, artist)| {
+                    files_of_match(&record, &written, file).into_iter().map(move |path| {
+                        (
+                            path,
+                            vec![
+                                ("musicbrainz_albumid", Some(m.release.clone())),
+                                ("musicbrainz_releasegroupid", m.release_group.clone()),
+                                ("musicbrainz_albumartistid", m.artist_id.clone()),
+                                ("musicbrainz_trackid", Some(recording.clone()).filter(|r| !r.is_empty())),
+                                ("musicbrainz_artistid", artist.clone()),
+                            ],
+                        )
+                    })
+                })
+                .collect(),
+            candidates: Vec::new(),
+        },
+        _ => return Ok(None),
+    }))
 }
 
 /// Whether the account's matching runs now.

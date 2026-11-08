@@ -41,7 +41,7 @@
   </Group>
   {#if mine.tracking}
     <Group title="Scrobbling">
-      <ChoiceRow name="Scrobble from" options={WAYS} value={scrobbling.way ?? 'server'} onchange={(w) => w !== scrobbling.way && (switching = w)} />
+      <ChoiceRow name="Scrobble from" options={WAYS} value={scrobbling.way ?? 'device'} onchange={(w) => w !== scrobbling.way && (switching = w)} />
     </Group>
     {#if scrobbling.way === 'device'}<DeviceListening />{:else if scrobbling.way}<ListeningPart own part="tracking" />{/if}
   {/if}
