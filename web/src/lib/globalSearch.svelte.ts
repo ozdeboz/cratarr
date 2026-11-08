@@ -320,7 +320,10 @@ export const everywhere = () => globalSearch.scope === 'everywhere' && pageView.
 export function rememberSearch() {
   const q = pageView.query.trim();
   if (q) history.replaceState({ ...(history.state ?? {}), search: { q, scope: globalSearch.scope } }, '');
+  page = history.state?.pk ?? null;
 }
+/** The page this one is (lib/panel's key for its step in the history), as last seen here. */
+let page: string | null = null;
 /** A found one opened (a result, a page's own list): kept for back, then the words gone (the owner, 2026-10-25: "When
  *  clicking on a search result, the search input field should always go back to zero"), but where it was found deep, in
  *  its contents: it opens narrowed to them (decision 0072). Gone once what it opened shows (lib/navStep; the owner,
@@ -339,8 +342,14 @@ onArrival((l) => {
 if (typeof window !== 'undefined') {
   // Back to a search: its words and scope as they were, over the page's own emptying (App), once where back went
   // shows; the server's answer for them kept, so they are there at once.
+  // Only on coming back from another page: a step over this same one, as the full player's (the owner, testing 0.16.0: closing
+  // it brought back the search a record was opened from, over the record), closes onto the page as it was left.
   addEventListener('popstate', () => {
     const kept = history.state?.search as { q: string; scope: 'page' | 'everywhere' } | undefined;
-    if (kept) leaveOnArrival({ restore: kept }, true);
+    const here = (history.state?.pk as string | undefined) ?? null;
+    const same = here !== null && here === page;
+    page = here;
+    if (kept && !same) leaveOnArrival({ restore: kept }, true);
   });
+  addEventListener('hashchange', () => (page = (history.state?.pk as string | undefined) ?? null));
 }
