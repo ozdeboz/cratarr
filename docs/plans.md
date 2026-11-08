@@ -93,6 +93,12 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   - **Soulseek searches that start simple** (with Soulseek in Cratarr, below): artist and title first, then the title,
     album and title, then all; classical titles without movement and catalogue numbers.
   The track map (below) comes after these: the least important of the ideas (the owner, 2026-11-04).
+  - **Audiobooks' first part** (the owner, later on 2026-11-04): Cratarr's own players keep each book's place, every
+    so often and on pause, with a Continue listening row on Home; a speed per book and ±30 s skips; books kept out of
+    music's shuffle, Radio, sounds-like, crates, statistics and scrobbling.
+- **0.18: Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)): a friend's Cratarr as a read-only
+  library of your own, its catalogue mirrored with its analysis through 0.16's index and feed, its streams relayed.
+  Then playlists, offline, a bounded cache and a record shown once (0.19); iroh's tickets after a trial.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Genre aliases from MusicBrainz** (the owner, 2026-11-07): its whole genre list and each genre's aliases, asked again
@@ -202,7 +208,8 @@ anything in without the owner's tick (0080); never a chat room.
 
 ## External library
 
-Taken up for 0.12 as modes per server (the runway above). What follows is the plan as it stood.
+Taken up for 0.12 as modes per server (the runway above). What follows is the plan as it stood. A friend's Cratarr is
+the exception since 2026-11-04: a library of your own server, shape A below ([0103](decisions/0103-cratarr-peers.md)).
 
 Another music server's library played in Cratarr's app directly: an OpenSubsonic server, a Jellyfin, through the same
 kind of adapters Cratarr's own sources use (0005).
