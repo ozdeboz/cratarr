@@ -8,6 +8,7 @@ import { openReads } from './deviceIndex.svelte';
 import { OWN } from './deviceReads';
 import type { IndexEngine } from './indexEngine';
 import { readBytes } from './indexStore';
+import { untrack } from 'svelte';
 import { whenReached } from './reach.svelte';
 import type { Crate, CrateFavourites, CrateLook, QueueTrack, TempoBands } from './api';
 
@@ -28,14 +29,16 @@ export const deviceOpening = $state({ asks: 0 });
 let appOpen = false;
 whenReached.add(() => (appOpen = false));
 
-/** `ask` run with the loader told, when the library on this device opens for it. */
+/** `ask` run with the loader told, when the library on this device opens for it. Counted untracked: an ask made inside a page's
+ *  own effect would else read the count it writes and run again for good (0.16.1's preview on the tablet, 2026-11-08: the Library
+ *  asked its crates once a second, "Opening the library on this device" never ending, effect_update_depth_exceeded). */
 async function opening<T>(cold: boolean, ask: () => Promise<T>): Promise<T> {
   if (!cold) return ask();
-  deviceOpening.asks++;
+  untrack(() => deviceOpening.asks++);
   try {
     return await ask();
   } finally {
-    deviceOpening.asks--;
+    untrack(() => deviceOpening.asks--);
   }
 }
 let toldPlays = '[]';
