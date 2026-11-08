@@ -41,3 +41,10 @@ test('the loader shows the line only where nothing else goes under it', () => {
   const loader = readFileSync(new URL('../../src/lib/PageLoading.svelte', import.meta.url), 'utf8');
   assert.match(loader, /\{#if children\}.*\{:else if deviceOpening\.asks > 0\}.*Opening the library on this device/);
 });
+
+test('the count is told untracked, so an ask made in an effect never runs that effect again', () => {
+  const src = readFileSync(new URL('../../src/lib/deviceAnswers.svelte.ts', import.meta.url), 'utf8');
+  assert.match(src, /untrack\(\(\) => deviceOpening\.asks\+\+\)/);
+  assert.match(src, /untrack\(\(\) => deviceOpening\.asks--\)/);
+  assert.doesNotMatch(src, /^\s*deviceOpening\.asks(\+\+|--);/m, 'never counted where an effect would track it');
+});
