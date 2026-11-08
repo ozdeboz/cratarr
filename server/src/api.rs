@@ -208,6 +208,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/tasks", get(own_tasks))
         .route("/api/tasks/{id}", delete(stop_task))
         .route("/api/tracks/describe", post(describe_tracks))
+        .route("/api/moved", post(ids_moved))
         .route("/api/scrobble", get(scrobble_targets))
         .route("/api/scrobbles", post(scrobbles_handed))
         .route("/api/scrobbles/now", post(scrobbles_now))
@@ -4740,6 +4741,23 @@ async fn describe_tracks(ctx: Ctx, Json(b): Json<DescribeBody>) -> Result<Json<s
     let account = ctx.account();
     let tracks = crate::app::describe::describe(b.tracks, account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "tracks": tracks })))
+}
+
+#[derive(Deserialize)]
+struct MovedBody {
+    ids: Vec<String>,
+}
+
+/// What ids from before 0.16 are now (decision 0101 point 23: the app's one fresh start fetches its downloads and kept items again
+/// under the ids they have now): each asked that moved, old id to new id, and nothing else, no name or path. One left out did not
+/// move. Any account's, as every account sees every library (0101 point 6, `app::device_index`'s `can_see`).
+async fn ids_moved(State(app): State<Arc<App>>, Json(b): Json<MovedBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.ids.len() > crate::app::describe::MOST {
+        return Err(ToggleError::Refused(format!("At most {} ids at once.", crate::app::describe::MOST)).into());
+    }
+    let catalogue = app.library.catalogue();
+    let now = tokio::task::spawn_blocking(move || catalogue.named_now_all(&b.ids)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    Ok(Json(json!(now)))
 }
 
 /// Long work begun as a task: 202 with the task, which the page follows (`app::tasks`).
