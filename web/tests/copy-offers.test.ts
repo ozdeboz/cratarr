@@ -124,11 +124,20 @@ test('the name is the server\'s, so "Your music" comes for free', () => {
 test('Add to or Move to as the copy goes, each entry knowing its copy and its target', () => {
   const e = moveEntries(offers([copy('in', { keepable: true, keep_to: 'own' }), copy('music')]));
   assert.deepEqual(e.map((x) => [x.label, x.offer.library, x.to.id]), [
-    ['Add to OWN', 'in', 'own'],
-    ['Add to MORE', 'in', 'more'],
-    ['Move to MORE', 'music', 'more'],
-    ['Move to IN2', 'music', 'in2'],
+    ['Add to OWN from IN', 'in', 'own'],
+    ['Add to MORE from IN', 'in', 'more'],
+    ['Move to MORE from MUSIC', 'music', 'more'],
+    ['Move to IN2 from MUSIC', 'music', 'in2'],
   ]);
+});
+
+// The owner, testing 0.16.0: on Drift, Music's MP3 and Your music's FLAC, "Move to lidarr-music" moved Music's copy, where the FLAC
+// was meant. Every action on a record of several copies names the copy it acts on, not only where two would read the same.
+test('a record of several copies names the copy each Move and Replace acts on; one copy names none', () => {
+  const s = list({ library_info: [...INFO, library('lidarr', 'main', { name: 'lidarr-music' })] });
+  assert.deepEqual(moveEntries(offers([copy('music'), copy('own')], s)).filter((x) => x.to.id === 'lidarr').map((x) => x.label), ['Move to lidarr-music from MUSIC']);
+  assert.deepEqual(replaceEntries(offers([copy('in'), copy('more')], list({ verdicts: upgrade(['music']) }))).map((x) => x.label), ['Replace in MUSIC from IN', 'Replace in MORE from IN']);
+  assert.deepEqual(moveEntries(offers([copy('music')], s)).filter((x) => x.to.id === 'lidarr').map((x) => x.label), ['Move to lidarr-music']);
 });
 
 test('two copies that would say the same each name themselves, and their keys differ', () => {
@@ -140,8 +149,8 @@ test('two copies that would say the same each name themselves, and their keys di
 test('Replace has an entry per main library, named by it', () => {
   const o = offers([copy('in'), copy('music'), copy('more')], list({ verdicts: upgrade(['music']) }));
   assert.deepEqual(replaceEntries(o).map((e) => [e.label, e.offer.library, e.to.id]), [
-    ['Replace in MUSIC', 'in', 'music'],
-    ['Replace in MORE', 'in', 'more'],
+    ['Replace in MUSIC from IN', 'in', 'music'],
+    ['Replace in MORE from IN', 'in', 'more'],
   ]);
 });
 

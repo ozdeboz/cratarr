@@ -2625,6 +2625,13 @@ async fn a_copy_named_is_heard_on_every_address_and_through_a_signed_link_end_to
     assert!(ann.bytes(&file).await.1 == kept, "for that one request");
     let (best, asked) = (ann.bytes(&stream).await.1, ann.bytes(&format!("{stream}?{from}")).await.1);
     assert!(best != asked, "a stream of the other file");
+    // The player's Details say the copy that streams (the owner, testing 0.16.0: they said the main copy while Play from played
+    // another): its file and its length.
+    let details = format!("/api/track/cratarr/{song}/details");
+    let (main, other) = (ann.get(&details).await, ann.get(&format!("{details}?{from}")).await);
+    let folder = |d: &Value| d["folder"].as_str().unwrap_or_default().to_string();
+    assert!(folder(&other).contains(&*waiting.file_name().unwrap().to_string_lossy()) && !folder(&main).contains(&*waiting.file_name().unwrap().to_string_lossy()), "the copy named: {other}");
+    assert_ne!(main["duration_ms"], other["duration_ms"], "its own length");
 
     let wind = format!("{stream}/wind?from_ms=0&dir=forward&map=1");
     let (over_best, over_named) = (ann.get(&wind).await, ann.get(&format!("{wind}&{from}")).await);

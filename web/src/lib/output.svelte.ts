@@ -8,12 +8,13 @@ import { playedHere, playingHere } from './scrobbles.svelte';
 import { away, pickHere } from './away.svelte';
 import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
 import { isServerSource, serverAlbumView } from './serverMode.svelte';
-import { albumView, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
+import { albumView, playerCommand, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
 import { untrack } from 'svelte';
 import { canPlayHere, cutForNow, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
 import { rewindNow } from './ramping.svelte';
-import { drivenName, follow, outputNow, playOn, pointAt } from './playOn.svelte';
+import { drivenName, follow, outputNow, playOn, pointAt, selfName } from './playOn.svelte';
+import { handoverEnds } from './handoverEnds';
 import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -251,6 +252,19 @@ const current = () => port().current();
 export async function moveTo(output: typeof prefs.output) {
   if (output === prefs.output) return;
   const was = current();
+  // Both ends Cratarr's players, connected: by Cratarr's own handover, so every screen showing the one it left follows it
+  // (lib/handoverEnds). Refused, the page's way.
+  const ends = was ? handoverEnds(output, drivenName(), outputNow() === 'local', selfName(), playOn.players) : null;
+  if (ends) {
+    try {
+      await playerCommand(ends.from, { command: 'handover', to: ends.to });
+      pointAt(output);
+      follow(output.startsWith('player:') ? ends.to : null);
+      return;
+    } catch {
+      // As before: stopped there, played here.
+    }
+  }
   await port().leave(was);
   pointAt(output);
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);

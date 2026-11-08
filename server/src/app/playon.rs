@@ -679,6 +679,12 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(test, ts(optional))]
         moved_to: Option<String>,
+        /// Back after its music was handed away while it was out of reach: stopped, its queue kept to go on with later (the
+        /// owner, 2026-11-08: "Stop it, keep its queue"; the tablet, offline in a group it led, came back to an empty queue).
+        /// Every other stop empties it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(test, ts(as = "Option<bool>", optional))]
+        kept: bool,
     },
     Next,
     Previous,
@@ -2344,7 +2350,7 @@ impl PlayOn {
             // Told where the music went while that is still shown (the owner, 2026-10-30: a screen asleep at the
             // handover switches there as it wakes).
             let moved_to = self.entries().get(name).and_then(|e| e.moved_now().map(|m| m.player.clone()));
-            let _ = self.send(name, &Command::Stop { moved_to });
+            let _ = self.send(name, &Command::Stop { moved_to, kept: true });
         }
         // A new track: its ids, looked up outside the lock; its album's id from its own source when it came without one
         // (queued by a page, handed over): Home Assistant finds "this album" by it.
@@ -2721,7 +2727,7 @@ impl PlayOn {
         }
         // The music is on its way there; this one stopping is no reason to fail the handover. One that cannot be told
         // (offline) is stopped here as the stop would have left it, and stopped itself once it is back.
-        let stop = Command::Stop { moved_to: Some(to.to_string()) };
+        let stop = Command::Stop { moved_to: Some(to.to_string()), kept: false };
         if Box::pin(self.command(from, stop)).await.is_err() {
             self.stopped_away(from);
         }
@@ -2995,7 +3001,7 @@ impl PlayOn {
         e.moved = e.queue.tracks.iter().map(|t| t.entry.clone()).filter(|x| !x.is_empty()).collect();
         let standing = e.standing();
         e.keep(standing);
-        if e.queue.edit_at(Command::Stop { moved_to: None }, None).is_ok() {
+        if e.queue.edit_at(Command::Stop { moved_to: None, kept: false }, None).is_ok() {
             e.told = e.queue.version;
         }
         (e.queue.id, e.queue.name, e.queue.renamed, e.queue.from) = (String::new(), String::new(), false, None);
@@ -4106,7 +4112,7 @@ mod tests {
         p.command("tablet", Command::QueueDelete { id: evening.id }).await.unwrap();
         assert_eq!(p.get("tablet").unwrap().queues.unwrap().len(), 1);
         // A stop keeps it too.
-        p.command("tablet", Command::Stop { moved_to: None }).await.unwrap();
+        p.command("tablet", Command::Stop { moved_to: None, kept: false }).await.unwrap();
         let list = p.get("tablet").unwrap().queues.unwrap();
         assert_eq!(list.iter().map(|q| (q.name.as_str(), q.playing)).collect::<Vec<_>>(), vec![("Transit", false)]);
     }
@@ -4371,7 +4377,7 @@ mod tests {
         assert!(v.track.is_none());
         // Steered: a pause reaches it; a stop is a pause there; an edit or a handover from it is refused.
         p.command("Phone", Command::Pause).await.unwrap();
-        p.command("Phone", Command::Stop { moved_to: None }).await.unwrap();
+        p.command("Phone", Command::Stop { moved_to: None, kept: false }).await.unwrap();
         assert_eq!(said(&mut phone), ["pause", "pause"]);
         let add = Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: None, how: None, now: false };
         assert!(matches!(p.command("Phone", add).await, Err(ToggleError::Refused(m)) if m == OWN_MUSIC));
@@ -4858,9 +4864,9 @@ mod tests {
     fn a_stop_names_where_the_music_went_only_at_a_handover() {
         // From before (pages, Home Assistant, the app): a plain stop still reads, and is sent as it was.
         let plain: Command = serde_json::from_str(r#"{"command":"stop"}"#).unwrap();
-        assert_eq!(plain, Command::Stop { moved_to: None });
+        assert_eq!(plain, Command::Stop { moved_to: None, kept: false });
         assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"command":"stop"}"#);
-        let moved = Command::Stop { moved_to: Some("tablet".into()) };
+        let moved = Command::Stop { moved_to: Some("tablet".into()), kept: false };
         assert_eq!(serde_json::to_string(&moved).unwrap(), r#"{"command":"stop","moved_to":"tablet"}"#);
         assert_eq!(serde_json::from_str::<Command>(r#"{"command":"stop","moved_to":"tablet"}"#).unwrap(), moved);
     }
@@ -4909,7 +4915,7 @@ mod tests {
 
         // Any other stop names nothing.
         told(&mut tablet);
-        p.command("tablet", Command::Stop { moved_to: None }).await.unwrap();
+        p.command("tablet", Command::Stop { moved_to: None, kept: false }).await.unwrap();
         let stop = told(&mut tablet).into_iter().find(|m| m["command"] == "stop").unwrap();
         assert!(stop.get("moved_to").is_none());
         assert_eq!(p.get("tablet").unwrap().moved_to, None);
@@ -4957,6 +4963,7 @@ mod tests {
         p.report("phone", Report { index: 0, entry: Some(entry), version: Some(version), playing: true, ..Report::default() }).unwrap();
         let stop = told(&mut phone).into_iter().find(|m| m["command"] == "stop").expect("stopped on its return");
         assert_eq!(stop["moved_to"], "tablet");
+        assert_eq!(stop["kept"], true, "its queue kept to go on with later");
         assert_eq!(p.get("phone").unwrap().moved_to.map(|m| m.player).as_deref(), Some("tablet"), "still shown");
     }
 
