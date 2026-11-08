@@ -370,9 +370,9 @@ internal class IndexFiles(private val root: File) {
         replace(file, jpeg) { to, bytes -> to.writeBytes(bytes) }
     }
 
-    /** Every small cover of [who]'s gone, for a whole to take their place. */
-    fun clearCovers(who: String) {
-        covers(who).deleteRecursively()
+    /** Small covers of [who] kept only for [records]: once a whole is all in, what it no longer holds goes. */
+    fun keepCoversOf(who: String, records: Set<Long>) {
+        covers(who).listFiles()?.forEach { f -> if (f.name.removeSuffix(".jpg").toLongOrNull() !in records) f.delete() }
     }
 
     private fun standing(who: String, name: String) = File(folder(who), "$name.json")
@@ -524,11 +524,16 @@ internal class IndexLooks(
         val head = ByteArray(COVERS_HEAD)
         val taken = taken(def, head.copyOf(fill(body, head)), whole)
         if (taken.outcome != SyncOutcome.TOOK) return Got(taken.outcome)
-        if (whole) files.clearCovers(who)
+        // A whole's records: what it no longer holds goes once it is all in, never before, so one cut short leaves what was held
+        // (audit/OFFLINE-REVIEW.md, finding 4).
+        val records = if (whole) mutableSetOf<Long>() else null
         val frame = ByteArray(COVER_FRAME)
         while (true) {
             val read = fill(body, frame)
-            if (read == 0) return Got(SyncOutcome.TOOK, rev = taken.rev, at = now())
+            if (read == 0) {
+                records?.let { files.keepCoversOf(who, it) }
+                return Got(SyncOutcome.TOOK, rev = taken.rev, at = now())
+            }
             if (read < COVER_FRAME) break
             val fields = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN)
             val record = fields.getLong()
@@ -537,6 +542,7 @@ internal class IndexLooks(
             val jpeg = ByteArray(length)
             if (fill(body, jpeg) < length) break
             files.putCover(who, record, jpeg.takeIf { length > 0 })
+            records?.add(record)
         }
         return Got(taken(def, ByteArray(0), whole).outcome)
     }

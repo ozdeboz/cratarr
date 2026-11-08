@@ -321,6 +321,24 @@ class DeviceIndexTest {
     }
 
     @Test
+    fun a_whole_cut_short_keeps_the_covers_held_before_it_until_the_new_ones_are_all_in() {
+        held()
+        answers["/api/index/covers/changes"] = { IndexFetched(410, "{\"rev\":99,\"reset\":true}".toByteArray()) }
+        val fresh = bundle(20, frame(2, picture(9)), frame(3, picture(3)))
+        answers["/api/index/covers"] = { IndexFetched(200, fresh.copyOf(fresh.size - 5)) }
+        looks.look(who)
+        assertEquals("what came of it taken, nothing gone for what did not", listOf("1.jpg", "2.jpg"), coverFiles())
+        assertArrayEquals(picture(9), files.cover(who, 2).readBytes())
+        assertEquals(5L, files.stands(who, "covers")?.rev)
+        answers["/api/index/covers"] = { IndexFetched(200, fresh) }
+        clock += 1_000
+        looks.startAnew()
+        looks.look(who)
+        assertEquals("whole, what it no longer holds goes", listOf("2.jpg", "3.jpg"), coverFiles())
+        assertEquals(20L, files.stands(who, "covers")?.rev)
+    }
+
+    @Test
     fun covers_of_another_version_in_a_whole_stop_and_what_was_held_stays() {
         held()
         answers["/api/index/covers/changes"] = { IndexFetched(410, null) }
