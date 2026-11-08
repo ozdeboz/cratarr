@@ -102,16 +102,18 @@ pub enum Outcome {
     Failed,
     /// "Start again", or what was held cannot go on: only a whole fetch will do.
     StartAgain,
-    /// Bytes just fetched whole are of another version.
+    /// Bytes just fetched whole are of a version newer than this device reads: only the device's own update mends that.
     Version,
 }
 
 impl Outcome {
-    /// What bytes just fetched whole came to. Only these can say the two differ for good: anything else refused is a bad answer.
+    /// What bytes just fetched whole came to. Only these can say the two differ for good, and only where Cratarr is the newer:
+    /// a device newer than Cratarr is mended by Cratarr's own update, with nothing done here, so it fails as a bad answer does and
+    /// is tried again, never stopped (audit/OFFLINE-REVIEW.md, finding 2). Anything else refused is a bad answer.
     pub fn of_whole<T>(taken: &Result<T, Refused>) -> Self {
         match taken {
             Ok(_) => Self::Took,
-            Err(Refused::Version { .. }) => Self::Version,
+            Err(Refused::Version { found, wants }) if found > wants => Self::Version,
             Err(_) => Self::Failed,
         }
     }
@@ -448,6 +450,20 @@ mod tests {
         assert_eq!(Outcome::of_whole::<()>(&Err(Refused::Damaged)), Outcome::Failed);
         assert_eq!(Outcome::of_whole::<()>(&Err(Refused::Rev { at: 1, from: 2 })), Outcome::Failed);
         assert_eq!(Outcome::of_whole::<()>(&Err(Refused::Unknown { what: "track", id: 1 })), Outcome::Failed);
+    }
+
+    #[test]
+    fn a_device_newer_than_cratarr_tries_again_and_one_older_waits_for_its_update() {
+        // Cratarr older than this device (it sends a version below the one read here): no stop, as Cratarr's own update mends
+        // it with nothing done on the device. Tried again as a failure is, and at every start.
+        let newer = Outcome::of_whole::<()>(&Err(Refused::Version { found: 1, wants: 2 }));
+        assert_eq!(newer, Outcome::Failed);
+        let s = whole().after(newer, LATER);
+        assert!(!s.stopped);
+        assert_eq!(s.step(Network::Free, Mobile::Yes, false, LATER + FAILED_AGAIN_MS), Step::Whole);
+        assert_eq!(s.anew(LATER + 1).step(Network::Free, Mobile::Yes, false, LATER + 1 + FIRST_AFTER_MS), Step::Whole);
+        // This device older than Cratarr: only its own update mends it, so it stops until then.
+        assert_eq!(Outcome::of_whole::<()>(&Err(Refused::Version { found: 2, wants: 1 })), Outcome::Version);
     }
 
     #[test]
