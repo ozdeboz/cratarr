@@ -409,7 +409,7 @@ class MainActivity : AppCompatActivity() {
         // The page keeps its priority when not in view: it is the player.
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         val app = applicationContext
-        view.webViewClient = CratarrWebViewClient(
+        val client = CratarrWebViewClient(
             origins,
             onError = { cannotReach(url, it) },
             onGone = { show(url) },
@@ -420,6 +420,7 @@ class MainActivity : AppCompatActivity() {
             // other address too; a sign-in page with the other's session at hand takes it and loads again.
             onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },
         )
+        view.webViewClient = client
         // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above. And for a record's
         // small cover with Cratarr away, which it cannot open itself here: the app holds them.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
@@ -428,7 +429,8 @@ class MainActivity : AppCompatActivity() {
             ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
                 override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
                     if (Prefs.originOf(request.url.toString()) !in origins) return null
-                    return request.url.path?.let { DeviceIndex.answer(app, it) } ?: BundledPage.answer(app, request.method, request.url)
+                    return request.url.path?.let { DeviceIndex.answer(app, it) }
+                        ?: BundledPage.answer(app, request.method, request.url)?.also { client.copyAnswered(request.method, request.url) }
                 }
             })
         }

@@ -35,5 +35,10 @@ class PageTrustTest {
         val started = source("CratarrWebViewClient.kt").substringAfter("override fun onPageStarted(").substringBefore("override fun onPageFinished(")
         assertTrue("the app's own copy, or trusted now", started.contains("PageTrust.loading(origin, origin != null && (fromCopy || Reach.trusts(view.context, origin)))"))
         assertTrue("whether it is the app's copy is known first", started.indexOf("fromCopy = ") < started.indexOf("PageTrust.loading("))
+        // The page's service worker asks the network first, which in the app is the copy: a load so answered is the copy's too,
+        // as when the app opens with Cratarr away.
+        assertTrue(activity.contains("BundledPage.answer(app, request.method, request.url)?.also { client.copyAnswered(request.method, request.url) }"))
+        val copied = source("CratarrWebViewClient.kt").substringAfter("fun copyAnswered(").substringBefore("override fun onPageStarted(")
+        assertTrue("a page, not a file of it", copied.contains("!path.substringAfterLast('/').contains('.')") && copied.contains("bundled = withoutRoute(url.toString())"))
     }
 }
