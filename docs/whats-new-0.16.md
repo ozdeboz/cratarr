@@ -9,7 +9,8 @@ each device, and crates, Sounds like and Radio with Cratarr away). The decisions
 comes once it has passed its gate, as the default where it runs, with a switch back per device.
 
 **At the first start** every user-data table moves to the new ids, in one step (below). **Every device starts fresh
-once:** it fetches its library and its downloads again.
+once:** it fetches its library again, and each account's downloads come again under the new ids at that account's
+own sign-in, on the network its downloads may use. The queue stays.
 
 ## Records and their copies
 
@@ -53,8 +54,12 @@ once:** it fetches its library and its downloads again.
 - **Cratarr gone mid-play:** the player stops at the place reached, keeps the queue, and carries on when Cratarr
   answers. The queue is kept on the device for each account and mode, and Play On takes it up.
 - **The moment's weather** from Open-Meteo while Cratarr is away, if switched on in This device (off by default).
+- **Several accounts on one device stay apart:** hearts, crates, plays, the library's own counts and downloads are each
+  account's, through a sign-out and another's sign-in, and come back as they were at the next.
 - **A download whose file is gone** shows as not here, and can be fetched again. A kept list that cannot be read says
-  so, and starts again with the music staying.
+  so, and starts again with the music staying, each download given back to whoever held it last.
+- **Sounds like of many seeds** is about twice as quick, with the same answer. The app frees the memory it answered
+  with as soon as Cratarr is back.
 - **Lists and grids ask covers at the size they show.**
 - **The app asks once, as it starts,** for what playing in the background needs.
 
@@ -62,6 +67,11 @@ once:** it fetches its library and its downloads again.
 
 - **A request by name finds the album Lidarr has,** and keeps its id.
 - **A Soulseek search gets its full 15 seconds.**
+
+## Crates
+
+- **A crate's favourites toggle never set takes favourites in, everywhere:** on the Crates page, when opened and when
+  played. Unlisted and Second chance included, which played without them before.
 
 ## Playing
 
@@ -78,5 +88,6 @@ once:** it fetches its library and its downloads again.
 - **Administrators only:** reviewing Incoming, an album's tags, sharing playlists in a batch. An app password signs in
   to no page.
 
-<!-- Draft, 2026-11-08, from the commits since v0.15.0 on 632/own-music at 302deb975. To be checked against what lands
-     after it: D21, the Sounds like speed and favourites default (P4), the offline review's six findings, D22. -->
+<!-- From the commits since v0.15.0 on 632/own-music at 3a3b948d3 (2026-11-08): D21, P4's Sounds like and favourites,
+     the offline review's six findings and the fresh start included. D22's tablet numbers, if they change anything,
+     come after. -->
