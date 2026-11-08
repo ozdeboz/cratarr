@@ -1781,6 +1781,15 @@ async fn cut_off_a_device_finds_lists_crates_and_picks_among_what_plays_here_as_
         let picked: Vec<String> = told(&mut device, asked)["tracks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect();
         let others: Vec<&String> = here.iter().filter(|id| *id != song).collect();
         assert!(!picked.is_empty() && picked.iter().all(|id| others.contains(&id)), "{song}: picked {picked:?} of {others:?}");
+
+        // Radio by this account's marks, never another's (P7-REVIEW): one ask on each device, the same seed and draw, favourites left
+        // out, among both accounts' hearts and Both Shores. Each leaves out its own heart, and takes the other's.
+        let other = &chose.iter().find(|(_, s)| s != song).unwrap().1;
+        let crossing = format!("tr-{}", tracks.iter().find(|t| t.title == "Crossing").unwrap().id);
+        let here: Vec<String> = tracks.iter().filter(|t| t.record == shores).map(|t| format!("tr-{}", t.id)).chain([song.clone(), other.clone()]).collect();
+        let asked = json!({ "ask": "pick", "mode": "random", "seed": [crossing], "exclude": [crossing], "last": crossing, "count": 10, "here": here, "skip_favourites": true, "draw": 7, "now": now });
+        let picked: Vec<String> = told(&mut device, asked)["tracks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect();
+        assert!(!picked.contains(song) && picked.contains(other), "{song}'s device, favourites left out: picked {picked:?}");
     }
     assert_ne!(hearted[0], hearted[1], "each device by its own account's marks");
     std::fs::remove_dir_all(&root).ok();
