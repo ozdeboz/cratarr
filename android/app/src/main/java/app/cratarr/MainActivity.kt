@@ -443,12 +443,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         // `window.CratarrApp`, on Cratarr's pages only: the local address's over plain http only while it answers as
-        // this app's Cratarr on this network (Reach.trusts).
+        // this app's Cratarr on this network (Reach.trusts), or the page loaded while it did (PageTrust).
         if (origins.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             Prefs.withoutRefused(origins) { rules ->
                 WebViewCompat.addWebMessageListener(view, "CratarrApp", rules) { _, message, sourceOrigin, isMainFrame, reply ->
                     val data = message.data
-                    if (isMainFrame && data != null && Reach.trusts(this, sourceOrigin.toString())) onPageMessage(data, reply)
+                    val origin = sourceOrigin.toString()
+                    if (isMainFrame && data != null && PageTrust.trusts(origin, Reach.trusts(this, origin))) onPageMessage(data, reply)
                 }
             } ?: Log.w(TAG, "WebView took none of the app's origins: $origins")
         }

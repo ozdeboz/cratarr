@@ -95,6 +95,10 @@ class CratarrWebViewClient(
     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
         super.onPageStarted(view, url, favicon)
         fromCopy = bundled == withoutRoute(url)
+        // Judged as it starts: the page may talk to the app while it is open if it may now, or if it is the app's own copy
+        // (PageTrust), as it is when the app opens with Cratarr out of reach.
+        val origin = Prefs.originOf(url)
+        PageTrust.loading(origin, origin != null && (fromCopy || Reach.trusts(view.context, origin)))
         bundled = null
     }
 
