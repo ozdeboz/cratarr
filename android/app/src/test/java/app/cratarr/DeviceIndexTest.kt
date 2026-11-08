@@ -690,7 +690,9 @@ class DeviceIndexTest {
     @Test
     fun the_service_worker_asks_a_small_cover_where_the_app_answers_it() {
         assertTrue(File("../../web/public/sw.js").readText().contains("const INDEX_COVER = '${DeviceIndex.COVER_PATH}';"))
-        assertTrue(source("MainActivity.kt").contains("return request.url.path?.let { DeviceIndex.answer(app, it) } ?: BundledPage.answer(app, request.method, request.url)"))
+        val worker = source("MainActivity.kt").substringAfter("setServiceWorkerClient(").substringBefore("view.webChromeClient")
+        assertTrue("the small cover first", worker.contains("return request.url.path?.let { DeviceIndex.answer(app, it) }"))
+        assertTrue("then the page's files", worker.contains("?: BundledPage.answer(app, request.method, request.url)"))
     }
 
     private fun source(name: String) = File("src/main/java/app/cratarr/$name").readText().replace("\r\n", "\n")
