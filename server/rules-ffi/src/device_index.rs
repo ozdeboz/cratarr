@@ -344,6 +344,17 @@ mod tests {
         assert_eq!(sync_take_whole(SyncKind::Index, SOUNDS.to_vec()).outcome, SyncOutcome::Failed, "the sounds are not an index");
     }
 
+    #[test]
+    fn bytes_of_a_cratarr_older_than_this_app_fail_and_are_tried_again_never_stopping() {
+        let older = |bytes: &[u8]| {
+            let mut out = bytes.to_vec();
+            out[4] = 0;
+            out
+        };
+        assert_eq!(sync_take_whole(SyncKind::Index, older(WHOLE)).outcome, SyncOutcome::Failed);
+        assert_eq!(sync_take_whole(SyncKind::Sounds, older(SOUNDS)).outcome, SyncOutcome::Failed);
+    }
+
     fn covers_head(version: u32, rev: i64) -> Vec<u8> {
         [&b"CRXV"[..], &version.to_le_bytes(), &rev.to_le_bytes()].concat()
     }

@@ -253,7 +253,7 @@ object Reach {
                 // Another network: the local address is no one's until it answers as the app's own Cratarr again.
                 override fun onAvailable(network: Network) {
                     localTrusted = null
-                    checkSoon(app, SETTLE_MS) { DeviceIndex.look(app) }
+                    checkSoon(app, SETTLE_MS) { DeviceIndex.look(app); FreshStart.look(app) }
                 }
                 override fun onLost(network: Network) {
                     localTrusted = null

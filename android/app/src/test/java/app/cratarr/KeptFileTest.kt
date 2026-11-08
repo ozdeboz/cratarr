@@ -141,4 +141,28 @@ class KeptFileTest {
         KeptFile.write(file, "[]")
         assertEquals(emptyList<Any>(), KeptFile.list(file))
     }
+
+    private val hers = """{"a":["@ann\tmanual"]}"""
+    private val his = """{"a":["@ann\tmanual"],"b":["@bo\tmanual"]}"""
+
+    /** The review of 2026-11-07, its third finding: a holders list that cannot be read later still says whose each download was. */
+    @Test
+    fun a_holders_list_written_is_mirrored_as_the_last_its_newest_download_too() {
+        val file = File(folder.root, "kept-holders.json")
+        KeptFile.writeHolders(file, hers)
+        KeptFile.writeHolders(file, his)
+        file.writeText(his.take(10))
+        assertEquals(mapOf("a" to setOf("@ann\tmanual"), "b" to setOf("@bo\tmanual")), KeptFile.lastHolders(file))
+    }
+
+    /** A list breaks on the disk, after its write, never in it (`write` is whole or not at all): what broke is not mirrored. */
+    @Test
+    fun a_holders_list_broken_on_the_disk_never_takes_the_last_ones_place() {
+        val file = File(folder.root, "kept-holders.json")
+        KeptFile.writeHolders(file, his)
+        file.writeText(his.take(10))
+        assertEquals(mapOf("a" to setOf("@ann\tmanual"), "b" to setOf("@bo\tmanual")), KeptFile.lastHolders(file))
+        KeptFile.writeHolders(file, hers)
+        assertEquals(mapOf("a" to setOf("@ann\tmanual")), KeptFile.lastHolders(file))
+    }
 }

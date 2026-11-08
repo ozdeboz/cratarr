@@ -268,6 +268,12 @@ impl Catalogue {
         Ok(Moved { ids: pairs, lines: lines(&db, &folders)? })
     }
 
+    /// What each of `old` is now, for a device's one fresh start at 0.16 (decision 0101 point 23): those that moved, old id to new
+    /// id, ids only. One left out did not move, or is no id from before. Blocking.
+    pub fn named_now_all(&self, old: &[String]) -> std::collections::BTreeMap<String, String> {
+        old.iter().filter_map(|o| self.named_now(o).map(|now| (o.clone(), now))).collect()
+    }
+
     /// What an id from before 0.16 is now, for a link or a seed kept elsewhere: an album's by what one copy was known by, an
     /// artist's or a track's. None for an id that did not move. Blocking.
     pub fn named_now(&self, old: &str) -> Option<String> {
@@ -428,6 +434,17 @@ mod tests {
         assert_eq!(moved.copies[0].id, kept.old_id, "its own id is met first, and a row of it stands");
         let folder_of = |folder: i64| moved.copies.iter().find(|c| c.id == ids::album_at("pid", folder)).map(|c| c.folder);
         assert_eq!((folder_of(1), folder_of(2)), (Some(0), Some(0)), "of the copy there is: a new one in Incoming was reviewed by nobody");
+    }
+
+    /// A device's fresh start asks many at once: those that moved come back as ids, and nothing else does.
+    #[test]
+    fn ids_asked_together_answer_those_that_moved_and_nothing_else() {
+        let cat = tracks(3);
+        let kept = three(&cat, 0, [1, 2, 3], "Kept", "pid");
+        cat.first_records(found(vec![kept.clone()]), &[MAIN, INCOMING, (2, Kind::Incoming)]).unwrap();
+        let record = ids::record(record_of(&cat, 1).unwrap());
+        let asked = [kept.old_id.clone(), "al-nothing".to_string(), ids::song(1), record.clone(), "Kept".to_string()];
+        assert_eq!(cat.named_now_all(&asked), std::collections::BTreeMap::from([(kept.old_id.clone(), record)]));
     }
 
     /// A copy kept in Music left, and the same release waits in Incoming: what went by the id Music gave it is this album's, as a

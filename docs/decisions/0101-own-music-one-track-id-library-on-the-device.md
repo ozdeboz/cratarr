@@ -369,3 +369,9 @@ library has none, and a card reached with all its libraries off names where it l
 The player stops at the place reached, keeps the queue, and carries on by itself when Cratarr answers. A track that could not be
 asked for says nothing of itself, so it is not skipped, and the queue does not run out behind the sound. This goes for a device
 that lost its network too: what was skipped there as gone, in the app, now holds. What is on the device still plays in its turn.
+
+## Amended 2026-11-07: a pick's budget is 100 ms (the owner, after D03's tablet numbers)
+
+Point 27's Radio pick under 0.05 s becomes under **0.1 s**, measured the same way on the slowest device. A Sounds like of 12
+seeds becomes one pass over the library, under 0.3 s, as a crate is. The numbers it rests on are D03's on the tablet
+(`rehearsal/spike-tablet.txt` in the build plan's folder); D22 measures them again on the real library.

@@ -151,8 +151,12 @@ mod index_exports {
         slot.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// `index` is the one held from now on.
+    /// `index` is the one held from now on. What was made over the one before goes with it: its finder, a device opened over it (which
+    /// would answer from what is no longer held, and keep it in memory), and the account's own loaded beside it, which a page loads
+    /// again for the one now held (audit/OFFLINE-REVIEW.md, finding 5).
     fn hold(index: Index) {
+        *held(&DEVICE) = None;
+        *held(&MARKS) = None;
         *held(&INDEX) = Some(index.into());
         *held(&FINDER) = None;
     }
@@ -232,7 +236,8 @@ mod index_exports {
         said(Index::load(unsafe { input(ptr, len) }).map(hold))
     }
 
-    /// The feed's bytes applied to the index held: `said`'s answer.
+    /// The feed's bytes applied to the index held: `said`'s answer. A device opened over it goes first, as over any other index held
+    /// (`hold`): it would answer from the index before, and while it held it, applying would copy the whole index.
     ///
     /// # Safety
     /// `ptr` holds `len` bytes.
@@ -242,6 +247,7 @@ mod index_exports {
             Ok(changes) => changes,
             Err(why) => return said(Err(why)),
         };
+        *held(&DEVICE) = None;
         match held(&INDEX).as_mut() {
             Some(index) => {
                 *held(&FINDER) = None;

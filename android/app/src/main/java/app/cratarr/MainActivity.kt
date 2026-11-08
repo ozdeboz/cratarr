@@ -219,6 +219,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         LinkLog.catchCrashes(this)
+        // A debug build's page can be read with DevTools over adb (D22's timings on the tablet); a release's never.
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
         prefs = Prefs(this)
         openAt = openAtOf(intent)
         frame = FrameLayout(this)
@@ -274,6 +276,8 @@ class MainActivity : AppCompatActivity() {
         Downloads.manager(this).addListener(downloadsChanged)
         // Kept on this device (decision 0038): in step now, and every few hours from here on.
         Kept.onChange = { runOnUiThread { tellKept() } }
+        // 0.16's one fresh start, where it is due, and what each account had fetched again (decision 0101 point 23).
+        FreshStart.look(this)
         Kept.schedule(this)
         Kept.sync(this)
         // The library on this device (PREVIEW2's D15): in step from here on, the page in view or not.

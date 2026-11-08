@@ -914,6 +914,8 @@ struct Device {
     sound_changes: index::SoundChanges,
     sounds_after: index::Sounds,
     own: index::Marks,
+    /// A second account's on the same device (decision 0101 point 28): his own, none of hers.
+    own_bob: index::Marks,
 }
 
 fn device_library() -> Device {
@@ -1031,10 +1033,14 @@ fn device_library() -> Device {
         (index::Sounds::build(5, &[(100, sound(0.25)), (101, sound(0.5)), (103, sound(0.75))]), index::Sounds::build(9, &[(100, sound(0.25)), (101, sound(0.625)), (105, sound(0.125))]));
     let sound_changes = sounds_after.changes(5, &[101, 103, 105]);
     let hearted = Kept { id: "hearted".into(), name: "Hearted".into(), conditions: vec![Condition::new("favourite", false, Value::Yes)], listed: true, ..Kept::default() };
-    let own = Own { favourites: vec![101, 102], crates: vec![hearted], lists: vec![List { id: "pl-1".into(), name: "Mix".into(), tracks: vec![100] }], ..Own::default() };
+    let own = Own { favourites: vec![101, 102], crates: vec![hearted.clone()], lists: vec![List { id: "pl-1".into(), name: "Mix".into(), tracks: vec![100] }], ..Own::default() };
     let marks = [index::Mark { track: 102, fit: Some(0.9), ..index::Mark::default() }, index::Mark { track: 101, fit: Some(0.25), plays: 2, last: Some(1_700_000_000), ..index::Mark::default() }];
     let own = index::Marks::build(1_800_000_000, &marks).with_own(serde_json::to_string(&own).unwrap());
-    Device { before: index::Index::build(5, &before).unwrap(), changes, after: index::Index::build(9, &after).unwrap(), sounds, sound_changes, sounds_after, own }
+    // The same crate saved by another account, who hearted another track and played it.
+    let bob = Own { favourites: vec![100], crates: vec![hearted], ..Own::default() };
+    let marks = [index::Mark { track: 100, fit: Some(0.75), plays: 1, last: Some(1_750_000_000), ..index::Mark::default() }];
+    let own_bob = index::Marks::build(1_800_000_000, &marks).with_own(serde_json::to_string(&bob).unwrap());
+    Device { before: index::Index::build(5, &before).unwrap(), changes, after: index::Index::build(9, &after).unwrap(), sounds, sound_changes, sounds_after, own, own_bob }
 }
 
 /// Where those files lie.
@@ -1053,6 +1059,7 @@ fn the_files_a_device_is_tested_on_are_what_this_library_makes_them() {
     assert_eq!(read("sound-changes.bin"), d.sound_changes.save());
     assert_eq!(read("sounds-after.bin"), d.sounds_after.save());
     assert_eq!(read("own.bin"), d.own.save());
+    assert_eq!(read("own-bob.bin"), d.own_bob.save());
     let text = |name: &str| String::from_utf8(read(name)).unwrap().replace('\r', "");
     assert_eq!(text("list.json"), d.before.list_json() + "\n");
     assert_eq!(text("record.json"), d.before.record_json(10).unwrap() + "\n");
@@ -1085,6 +1092,7 @@ fn write() {
         ("sound-changes.bin", d.sound_changes.save()),
         ("sounds-after.bin", d.sounds_after.save()),
         ("own.bin", d.own.save()),
+        ("own-bob.bin", d.own_bob.save()),
         ("list.json", (d.before.list_json() + "\n").into_bytes()),
         ("record.json", (d.before.record_json(10).unwrap() + "\n").into_bytes()),
     ] {

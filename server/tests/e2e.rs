@@ -1619,6 +1619,217 @@ async fn a_device_on_the_feed_holds_what_a_fresh_index_holds_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// What a device keeps of an account (decision 0101, points 16 to 19): the index, its sounds and the account's own, as fetched.
+struct DeviceKept {
+    index: Vec<u8>,
+    sounds: Vec<u8>,
+    own: Vec<u8>,
+}
+
+impl DeviceKept {
+    /// Everything a device fetches for `who`, whole.
+    async fn fetched(who: &Caller<'_>) -> DeviceKept {
+        let mut parts = Vec::new();
+        for path in ["/api/index", "/api/index/sounds", "/api/index/own"] {
+            let (status, bytes) = who.bytes(path).await;
+            assert_eq!(status, 200, "{path}");
+            parts.push(bytes);
+        }
+        let [index, sounds, own]: [Vec<u8>; 3] = parts.try_into().unwrap();
+        DeviceKept { index, sounds, own }
+    }
+
+    /// The device answering from what it keeps, with no Cratarr to ask.
+    fn device(&self) -> cratarr_rules::index::device::Device {
+        let sounds = cratarr_rules::index::Sounds::load(&self.sounds).unwrap();
+        let marks = cratarr_rules::index::Marks::load(&self.own).unwrap();
+        cratarr_rules::index::device::Device::new(cratarr_rules::index::Index::load(&self.index).unwrap(), Some(&sounds), &marks)
+    }
+
+    /// What its search finds for `q`: the artists', records' and tracks' ids, in its order.
+    fn found(&self, q: &str) -> [Vec<String>; 3] {
+        let index = cratarr_rules::index::Index::load(&self.index).unwrap();
+        let ask = cratarr_rules::index::find::Ask { q: q.to_string(), limit: 20, ..Default::default() };
+        let found: Value = serde_json::from_str(&index.found_json(&index.finder(), &ask)).unwrap();
+        let ids = |kind: &str| found[kind]["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect();
+        [ids("artists"), ids("records"), ids("tracks")]
+    }
+}
+
+/// What `device` says to `asked`, which it must have an answer to.
+fn told(device: &mut cratarr_rules::index::device::Device, asked: Value) -> Value {
+    let answer = device.ask(&asked.to_string()).unwrap_or_else(|| panic!("no answer to {asked}"));
+    serde_json::from_str(&answer).unwrap()
+}
+
+/// What the server's search finds for `q` in the library's tier, as a device finds it: the artists', records' and tracks' ids. What
+/// it finds only through what one holds is the server's alone: an artist only by a record's name, a record only by a track's title.
+/// A device finds the record, or the track (D17).
+async fn found_by(who: &Caller<'_>, q: &str) -> [Vec<String>; 3] {
+    let answer = who.get(&format!("/api/search?q={q}&kinds=artist,album,track&limit=20")).await;
+    let items = |kind: &str| answer["groups"][kind]["items"].as_array().cloned().unwrap_or_default();
+    let not_only = |item: &Value, through: &str| item["matched"].as_array().is_some_and(|m| m.iter().any(|m| m["on"] != through));
+    let artists = items("artist").iter().filter(|i| not_only(i, "album")).map(|i| i["id"].as_str().unwrap().to_string()).collect();
+    let records = items("album").iter().filter(|i| not_only(i, "track")).map(|i| i["subject"].as_str().unwrap().rsplit('/').next().unwrap().to_string()).collect();
+    let tracks = items("track").iter().map(|i| i["track"].as_str().unwrap().to_string()).collect();
+    [artists, records, tracks]
+}
+
+/// Found ids, each kind's in a fixed order. Results the words rank alike come in each one's own order: the server's full-text index
+/// (bm25), a device's the index's rows. The same results, and where ranks tie the first may differ.
+fn as_found(found: &[Vec<String>; 3]) -> [Vec<String>; 3] {
+    found.clone().map(|mut ids| {
+        ids.sort();
+        ids
+    })
+}
+
+/// The Crates page's list as each crate's id and counts.
+fn listed_crates(list: &Value) -> Vec<(String, Value)> {
+    list.as_array().unwrap().iter().map(|c| (c["id"].as_str().unwrap().to_string(), c["counts"].clone())).collect()
+}
+
+/// Rows' ids.
+fn rows_of(answer: &Value) -> Vec<String> {
+    answer["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect()
+}
+
+/// The whole layout read, ann its administrator and bob, each of whom has hearted and played a track of their own and saved a crate
+/// of what they hearted: the server, its folder, and each one's crate and track.
+async fn two_listeners(name: &str) -> (Server, PathBuf, [(String, String); 2]) {
+    let root = temp(name);
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("second"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let mut chose = Vec::new();
+    {
+        let ann = s.sign_in("ann", "ann's password").await;
+        ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
+        let titles = |albums: Vec<Value>| albums.iter().filter_map(|a| a["title"].as_str().map(str::to_string)).collect::<std::collections::BTreeSet<String>>();
+        s.until("every library read", Duration::from_secs(180), || async { titles(ann.albums().await).len() == 22 }).await;
+        let bob = s.sign_in("bob", "bob's password").await;
+        let tracks = index_of(&ann).await.rows().tracks;
+        for (who, title) in [(&ann, "Landing"), (&bob, "Other Room")] {
+            let song = format!("tr-{}", tracks.iter().find(|t| t.title == title).unwrap().id);
+            who.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{song}/favorite?on=true"), json!({})).await;
+            who.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{song}/played"), json!({})).await;
+            let conditions = json!([{ "axis": "favourite", "not": false, "value": { "kind": "yes" } }]);
+            let made = who.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Hearted", "conditions": conditions })).await;
+            chose.push((made["id"].as_str().unwrap().to_string(), song));
+        }
+    }
+    let [ann, bob]: [(String, String); 2] = chose.try_into().unwrap();
+    (s, root, [ann, bob])
+}
+
+/// D21, the network cut (decision 0101 point 28): two accounts' devices fetch what they keep, then Cratarr is gone, and each device
+/// finds what the server's search found in the library's tier, lists the Crates page and the account's own crate as the server did,
+/// and picks Radio's next among what plays on it. Each answers by its own account's marks, not the other's.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn cut_off_a_device_finds_lists_crates_and_picks_among_what_plays_here_as_the_server_did_end_to_end() {
+    let (s, root, chose) = two_listeners("device-cut").await;
+    let words = ["harbour", "room", "shores", "tide"];
+    let mut online = Vec::new();
+    for (name, (crate_id, _)) in [("ann", &chose[0]), ("bob", &chose[1])] {
+        let who = s.sign_in(name, &format!("{name}'s password")).await;
+        let kept = DeviceKept::fetched(&who).await;
+        let mut found = Vec::new();
+        for q in words {
+            found.push(found_by(&who, q).await);
+        }
+        let (list, rows) = (who.get("/api/crates").await, who.get(&format!("/api/crates/{crate_id}/rows?offset=0&limit=200")).await);
+        online.push((kept, found, listed_crates(&list), rows_of(&rows)));
+    }
+    s.stop();
+
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let mut hearted = Vec::new();
+    for ((kept, found, list, rows), (crate_id, song)) in online.iter().zip(&chose) {
+        for (q, server) in words.iter().zip(found) {
+            assert_eq!(as_found(&kept.found(q)), as_found(server), "{song}'s device searching {q:?}");
+        }
+        let mut device = kept.device();
+        let page = listed_crates(&told(&mut device, json!({ "ask": "crates", "without": [], "now": now })));
+        let ids = |l: &[(String, Value)]| l.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&page), ids(list), "the Crates page");
+        let mut counted = 0;
+        for ((id, here), (_, there)) in page.iter().zip(list) {
+            for (toggle, n) in here.as_object().unwrap() {
+                // A Sounds like's sizes at the toggles not set are the server's second and third pass: a device leaves them out (P6).
+                if !n.is_null() {
+                    assert_eq!(n, &there[toggle], "{id}'s count, {toggle}");
+                    counted += 1;
+                }
+            }
+        }
+        assert!(counted > page.len(), "the counts compared: {counted} for {} crates", page.len());
+        let own = rows_of(&told(&mut device, json!({ "ask": "rows", "id": crate_id, "offset": 0, "limit": 200, "now": now })));
+        assert_eq!(&own, rows, "the crate {crate_id}");
+        assert_eq!(own, [song.clone()], "what this account hearted, and only that");
+        hearted.push(own);
+
+        // What plays here: Both Shores and the hearted track, the one playing.
+        let tracks = cratarr_rules::index::Index::load(&kept.index).unwrap().rows().tracks;
+        let shores = tracks.iter().find(|t| t.title == "Landing").unwrap().record;
+        let here: Vec<String> = tracks.iter().filter(|t| t.record == shores || format!("tr-{}", t.id) == *song).map(|t| format!("tr-{}", t.id)).collect();
+        let asked = json!({ "ask": "pick", "mode": "random", "seed": [song], "exclude": [song], "last": song, "count": 5, "here": here, "draw": 7, "now": now });
+        let picked: Vec<String> = told(&mut device, asked)["tracks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect();
+        let others: Vec<&String> = here.iter().filter(|id| *id != song).collect();
+        assert!(!picked.is_empty() && picked.iter().all(|id| others.contains(&id)), "{song}: picked {picked:?} of {others:?}");
+
+        // Radio by this account's marks, never another's (P7-REVIEW): one ask on each device, the same seed and draw, favourites left
+        // out, among both accounts' hearts and Both Shores. Each leaves out its own heart, and takes the other's.
+        let other = &chose.iter().find(|(_, s)| s != song).unwrap().1;
+        let crossing = format!("tr-{}", tracks.iter().find(|t| t.title == "Crossing").unwrap().id);
+        let here: Vec<String> = tracks.iter().filter(|t| t.record == shores).map(|t| format!("tr-{}", t.id)).chain([song.clone(), other.clone()]).collect();
+        let asked = json!({ "ask": "pick", "mode": "random", "seed": [crossing], "exclude": [crossing], "last": crossing, "count": 10, "here": here, "skip_favourites": true, "draw": 7, "now": now });
+        let picked: Vec<String> = told(&mut device, asked)["tracks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect();
+        assert!(!picked.contains(song) && picked.contains(other), "{song}'s device, favourites left out: picked {picked:?}");
+    }
+    assert_ne!(hearted[0], hearted[1], "each device by its own account's marks");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// D21, hidden but kept (decision 0101 point 28): a device keeps an account's index through its sign-out, and at the account's next
+/// sign-in goes on from it by the feed, nothing fetched whole, while another account on the same device changed the library in
+/// between and has his own marks.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn signed_out_and_in_again_a_device_goes_on_from_what_it_kept_end_to_end() {
+    let (s, root, chose) = two_listeners("device-sign-out").await;
+    // A favourite makes a taste, and a taste marks every track: what tells one account's from another's is what it played.
+    let plays = |marks: &cratarr_rules::index::Marks, song: &str| marks.of(song.trim_start_matches("tr-").parse().unwrap()).map_or(0, |m| m.plays);
+    let ann = s.sign_in("ann", "ann's password").await;
+    let mut device = index_of(&ann).await;
+    let hers = cratarr_rules::index::Marks::load(&ann.bytes("/api/index/own").await.1).unwrap();
+    // Signed out as the page's form does, the sign-in page not followed: it would go on to the page itself.
+    let form = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    let r = form.post(format!("{}/signout", s.base)).header(reqwest::header::COOKIE, ann.session.clone().unwrap()).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 303, "sent to the sign-in page");
+    assert_eq!(ann.bytes("/api/index").await.0, 401, "her session is over");
+
+    // Another account on the same device: his own marks, and a fact of his own record set by hand meanwhile.
+    let bob = s.sign_in("bob", "bob's password").await;
+    let his = cratarr_rules::index::Marks::load(&bob.bytes("/api/index/own").await.1).unwrap();
+    assert_eq!((plays(&his, &chose[1].1), plays(&his, &chose[0].1)), (1, 0), "his play, none of hers");
+    let room = bob.albums().await.into_iter().find(|a| a["title"] == "Other Room").unwrap()["id"].as_str().unwrap().to_string();
+    bob.ok(reqwest::Method::PUT, "/api/albums/overrides", json!({ "albums": [room], "set": { "year": 1999 } })).await;
+    s.until("the fact set", Duration::from_secs(90), || async { bob.albums().await.iter().any(|a| a["title"] == "Other Room" && a["year"] == 1999) }).await;
+
+    // Her next sign-in: the feed goes on from her device's rev, to what a fresh fetch holds.
+    let ann = s.sign_in("ann", "ann's password").await;
+    in_step(&ann, &mut device, "a fact set while she was away", |d| d.rows().records.iter().any(|r| r.title == "Other Room" && r.year == Some(1999))).await;
+    let again = cratarr_rules::index::Marks::load(&ann.bytes("/api/index/own").await.1).unwrap();
+    assert_eq!((plays(&hers, &chose[0].1), plays(&again, &chose[0].1), plays(&again, &chose[1].1)), (1, 1, 0), "her play as she left it, none of his");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A slskd for a fetch to meet: every batch taken and complete at once, `file` in the folder its batch names under
 /// `completed`. Its address, and how many batches it was asked for.
 async fn slskd_serving(completed: PathBuf, file: PathBuf) -> (String, Arc<AtomicUsize>) {
