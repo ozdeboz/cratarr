@@ -20,6 +20,7 @@
     label,
     active = false,
     strong = false,
+    off = false,
     attach,
   }: {
     title: string;
@@ -43,12 +44,14 @@
     active?: boolean;
     /** Holding what matters now (it plays): tinted. */
     strong?: boolean;
+    /** It cannot be used now, though it still opens: dimmed, as a Row's. */
+    off?: boolean;
     /** On the whole tile (a long-press). */
     attach?: Attachment<HTMLElement>;
   } = $props();
 </script>
 
-<div class="tile" class:active class:strong {@attach attach}>
+<div class="tile" class:active class:strong class:off {@attach attach}>
   {#if onclick}
     <button type="button" class="main" aria-label={label} {onclick}>{@render inside()}</button>
   {:else}
@@ -73,6 +76,10 @@
     padding: 6px;
     border-radius: 12px;
     color: var(--text);
+  }
+
+  .off .main {
+    opacity: 0.5;
   }
 
   .main {

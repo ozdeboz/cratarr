@@ -249,8 +249,8 @@ mod tests {
         assert_eq!((track_of(0, "01 Landing.flac"), track_of(1, "01 Landing.mp3"), track_of(2, "01 Landing.flac")), (48, 48, 48));
         assert_eq!((track_of(1, "03 Return.mp3"), track_of(2, "03 Return.flac")), (46, 46));
         let part = part(&left);
-        assert_eq!((part["tracks_merged"].as_u64(), part["bases_on_two_records"].as_u64()), (Some(6), Some(3)), "{part}");
-        assert_eq!(part["copies"].as_u64().unwrap(), part["records"].as_u64().unwrap() + 2, "Both Shores' three copies are one record");
+        assert_eq!((part["tracks_merged"].as_u64(), part["bases_on_two_records"].as_u64()), (Some(9), Some(2)), "{part}");
+        assert_eq!(part["copies"].as_u64().unwrap(), part["records"].as_u64().unwrap() + 3, "Both Shores' three copies are one record, and Short Measure's two");
         assert_eq!(part["unmatched"].as_array().unwrap().iter().map(|u| u["count"].as_u64().unwrap()).sum::<u64>(), 0, "{part}");
         assert_eq!(left.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM meta WHERE key LIKE 'first_start:%'"), 0, "what the steps found has gone into the report");
         left.gone();

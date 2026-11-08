@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 
 import type { AlbumCopy, LibraryInfo } from '../src/lib/api.ts';
 
-const { copyLines, copyPlaying, dotsOf, librariesOf, playFromEntries, recordOn } = await import('../src/lib/copiesRule.ts');
+const { copyLines, copyPlaying, dotsOf, librariesOf, mayEdit, playFromEntries, recordOn } = await import('../src/lib/copiesRule.ts');
 
 const library = (id: string, kind: LibraryInfo['kind'], colour: string | null = `#${id}`) => ({ id, name: id.toUpperCase(), kind, colour }) as LibraryInfo;
 const INFO = [library('music', 'main'), library('more', 'main'), library('in', 'incoming'), library('own', 'own')];
@@ -26,6 +26,7 @@ const copy = (id: string, more: Partial<AlbumCopy> = {}): AlbumCopy => ({
   plays: false,
   added: null,
   size: null,
+  tracks: 3,
   job: null,
   ...more,
 });
@@ -213,6 +214,30 @@ const marked = (lines: { name: string; plays: boolean }[]) => lines.filter((l) =
 
 test('a record of two copies has a line each, saying what each is, which plays, and what a tap on the other does', () => {
   assert.deepEqual(copyLines(MP3_AND_FLAC, INFO, without()), [{ name: 'MUSIC', colour: '#music', quality: 'MP3 320', size: '92 MB', plays: true, playFrom: null }, FLAC_LINE]);
+});
+
+test('a copy short of the record\'s tracks says how much of it is there, where a whole one says its size', () => {
+  const a = { tracks: 10, copies: [copy('music', { plays: true, tracks: 10, size: 92_000_000 }), copy('in', { tracks: 3, size: 30_000_000 })] };
+  assert.deepEqual(copyLines(a, INFO, without()).map((l) => l.size), ['92 MB', '3 of 10']);
+});
+
+test('an administrator may edit any record, and nobody else one in a main library or Incoming, a copy of their own beside it or not', () => {
+  const info = [library('music', 'main'), library('in', 'incoming'), { ...library('mine', 'own'), mine: true }, library('yours', 'own')];
+  assert.equal(mayEdit(copies('music'), info, true), true);
+  assert.equal(mayEdit(copies('yours'), info, true), true);
+  assert.equal(mayEdit(copies('music'), info, false), false);
+  assert.equal(mayEdit(copies('mine', 'music'), info, false), false, 'owned by the administrators');
+  assert.equal(mayEdit(copies('mine', 'in'), info, false), false);
+  assert.equal(mayEdit({}, info, false), false, 'a list that names no copies');
+});
+
+test('a record only in people\'s own music is the owner\'s of the copy added first', () => {
+  const info = [{ ...library('mine', 'own'), mine: true }, library('yours', 'own')];
+  assert.equal(mayEdit(copies('mine'), info, false), true);
+  assert.equal(mayEdit(copies('yours'), info, false), false, 'not another\'s');
+  const first = { copies: [copy('yours', { added: 200 }), copy('mine', { added: 100 })] };
+  assert.equal(mayEdit(first, info, false), true, 'mine came first');
+  assert.equal(mayEdit({ copies: [copy('yours', { added: 100 }), copy('mine', { added: 200 })] }, info, false), false, 'theirs did');
 });
 
 test('lines keep the list\'s order, which is the order the copies would play, wherever the marked one stands in it', () => {

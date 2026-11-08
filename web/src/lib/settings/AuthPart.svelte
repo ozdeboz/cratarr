@@ -38,13 +38,25 @@
   const proxyList = (v: string) => v.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
   // Home (0.9.18-1; the owner, 2026-10-30): where other users may play on, follow or control a device someone shared.
   let editingHome = $state(false);
-  // The guest page's host (0.10): a user, or one of the players.
+  // The guest page's host (0.10): a user, or one of the players. On needs one, so a switch with none asks first, and the
+  // choice switches it on.
   let choosingHost = $state(false);
+  let hostToSwitchOn = $state(false);
   const hostName = (h: { user: string } | { player: string } | null) => (!h ? 'No one' : 'user' in h ? h.user : h.player);
   async function pickHost(host: { user: string } | { player: string }) {
     const g = runtime.value?.guest;
     if (!g) return;
-    if (await saveRuntime({ guest: { ...g, host } })) choosingHost = false;
+    if (await saveRuntime({ guest: { ...g, host, on: g.on || hostToSwitchOn } })) leaveHost();
+  }
+  function leaveHost() {
+    choosingHost = false;
+    hostToSwitchOn = false;
+  }
+  function switchGuests(g: { on: boolean; host: { user: string } | { player: string } | null }, on: boolean) {
+    if (on && !g.host) {
+      hostToSwitchOn = true;
+      choosingHost = true;
+    } else void saveRuntime({ guest: { ...g, on } });
   }
   const HOME_MORE =
     "Other users may play on, follow or control a device someone shared only from home: a local address, or one named here. Name your home's public address if devices at home reach Cratarr by its public name. Never a VPN's.";
@@ -98,8 +110,8 @@
       {#if r.guest}
         {@const g = r.guest}
         <!-- The guest page (0.10): /guest on the home network, its tracks asked of the host's player. -->
-        <Item name="Guest page" line={g.on ? `${location.origin}/guest` : null} toggle={{ checked: g.on, onchange: (on) => void saveRuntime({ guest: { ...g, on } }) }} />
-        {#if g.on}<Item name="Guests ask" value={hostName(g.host)} onclick={() => (choosingHost = true)} />{/if}
+        <Item name="Guest page" line={g.on ? `${location.origin}/guest` : null} toggle={{ checked: g.on, onchange: (on) => switchGuests(g, on) }} />
+        <Item name="Guests ask" value={hostName(g.host)} onclick={() => (choosingHost = true)} />
       {/if}
     </Group>
   {/if}
@@ -124,7 +136,7 @@
 {#if choosingHost && runtime.value?.guest}
   {@const g = runtime.value.guest}
   <!-- Whose player the guests' tracks are asked of: oneself (whatever one plays on), or one player. -->
-  <MenuSheet label="Guests ask" title="Guests ask" step="menu" onclose={() => (choosingHost = false)}>
+  <MenuSheet label="Guests ask" title="Guests ask" step="menu" onclose={leaveHost}>
     <div role="menu">
       {#if me.name}
         {@const name = me.name}

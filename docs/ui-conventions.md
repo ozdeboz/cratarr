@@ -184,6 +184,15 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   with one line, "The rest needs Cratarr." Large actions the same (`ACTIONS_NEED_SERVER`). Pages say it in one line
   where a whole thing steps aside ("Grabbing a crate needs Cratarr.", "New playlists need Cratarr."); never a refusal
   after a tap.
+- **The moment, away** (decision 0101, point 18; `lib/momentHere`): with Cratarr out of reach Home's moment keeps the albums it
+  last gave, under a name and a sky worked out here: from Open-Meteo's weather where This device's "Weather for the moment crate" is
+  on and the internet is there, else from the time and day, with "Time and day only" under the name. That switch, in its group
+  "Away from Cratarr", is the only way the device's rough place leaves it, and never to Cratarr.
+- **The library on this device** (PREVIEW2's D14 and D15; `lib/deviceSync`): This device's "Library on this device" says the date
+  it last stood where Cratarr does, or what stands in the way: "Waiting for Wi-Fi", "Paused" where the connection keeps going, and
+  "Differs from Cratarr" where the two read other versions; "Waiting for Wi-Fi" and "Differs from Cratarr" can be tapped, to ask again. Fetching it whole on mobile data
+  is asked once, on the sheet for a question, and a no waits for Wi-Fi. A page cannot tell where a read came from, and says nothing
+  of it.
 - **A menu's head and actions** (`lib/MenuSheet.svelte`, decided 2026-10-16, as Symfonium's): a small cover (64 px),
   the title large beside it and what it is under that in one muted line, on the sheet itself (no card); a track's,
   an album's heart at the end. The large actions are icons only (their words on a long-press, as every icon
@@ -231,7 +240,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **A record's copies in its panel** (the owner, 2026-11-06: "What's the difference!?!"; the rules are `lib/copiesRule`'s):
   a record of several copies has a line per copy under its details, in the order they would play: its library's dot, which
   every copy has here whatever a card's dots leave out, and name, its format and bitrate ("MP3 320", a lossless copy its
-  format alone), its size, and "plays" on the one Play would give. Format and bitrate leave the details line then, and the dots before it, as no line says one copy's quality as if
+  format alone), its size, or "3 of 10" for a copy short of the record's tracks, and "plays" on the one Play would give. Format and bitrate leave the details line then, and the dots before it, as no line says one copy's quality as if
   it were the record's. A tap on another copy's line is its Play from, as the menu's entry. A copy in a library off has no
   line, and the one left on by that keeps its own; a later folder of a library has a line and no tap, as `from` takes the
   first. A record of one copy has no lines. A long library name gives way, never what follows it.
@@ -259,13 +268,17 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   in for. No other icon, also where a crate, playlist, artist or snapshot used to show its own. Every cover is
   `lib/Cover.svelte`, which shows it when there is no address or the image fails to load; a failed address is
   remembered, so the same album shows the stand-in at once everywhere. The players and the queue's card show it only
-  when there is no cover to load, not while one loads. Blurred backdrops simply leave out a cover that fails.
+  when there is no cover to load, not while one loads. Blurred backdrops simply leave out a cover that fails. A list's
+  or a grid's cover is asked at the size its box shows, in the device's pixels (`lib/coverSize`, finding 86); the
+  players and a panel's own cover ask for it whole (`whole`).
 - **Downloads** (in the app) is the Library's list of what is on this device (decided 2026-10-16: "a special case of
   the library page"): the same rows or covers, order, size, search and select, each album as the Library lists it
   (else as its download says), the count with the space they take ("3 albums · 225 MB"). A cover plays what is on the
   device, so the page plays without a connection; an album still coming shows how far ("Downloading 6 of 10"), one
   partly here "3 of 8 on this device". The select bar plays or removes; the menu is the album's one menu, with Remove
-  from this device (and Download for the rest), as everywhere an album is downloaded.
+  from this device (and Download for the rest), as everywhere an album is downloaded. A kept list that cannot be read
+  says so, "Kept list can't be read", with Start again (the owner, 2026-11-07): what was kept in step starts over and
+  the downloads stay, in the app and in the installed page alike.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as **big
   cards** (decided 2026-10-16, `lib/CrateCard`; one across a phone): its picture on the left (its own, else a mosaic of
   its albums' covers), then its name, tracks and length with the favourites setting's small heart, its top three
@@ -374,6 +387,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   - **On a phone, or a window without room,** the list is alone. A part opens over it as a playlist does, and ✕ goes
     back to the list.
   - **A part belongs to the Settings page.** Going to another page leaves it closed (`keepViewed` does not carry it).
+  - **Asked as the app starts** (the owner, 2026-11-07: "a shortcut to the existing controls"; `lib/askAtStart`): where Android may
+    stop the app, one sheet asks once, "Keep playing in the background?", its Allow opening Android's own dialog as This device's
+    Background row does. Answered or closed it is not asked again, and that row stays the place for it. Notifications are
+    Android's own dialog, asked once too.
   - **The parts, in this order:**
     - This device (its name in the row's line; in the app also its player, Stay ready, what is downloaded);
     - Network and Sync (in the app only);
@@ -483,7 +500,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   Info, Repair and Sync tabs, the crate builder's preview and Health's files is Finamp's list tile (plain, 64 px, a
   60 px cover or a control in front). A track is a large row with its cover (`lib/TrackCover.svelte`).
 - **States are the row's:** viewed in the panel or ticked: a border in the accent; holding what plays: a stronger tint;
-  not usable now (a missing file): its contents dimmed (the row stays opaque).
+  not usable now (a missing file, a record with nothing of it on this device with Cratarr away): its contents dimmed (the row
+  stays opaque), and it still opens.
 - **What is listed has its own row on top of it,** the same wherever it shows: `lib/PlaylistItem.svelte` (the name, the
   pin and own-account marks, the count, a favourite's heart over the problems' dot), `lib/FileItem.svelte` (the file,
   and under it its album folder and what is wrong, or "→ the file a repair points it at"). Where it is decides only
@@ -525,7 +543,7 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   own lines), what sits over the picture (`over`: an album's Play in its upper right corner, the wait of its
   opening), the action (a tick while selecting) over its lower right corner, and over its upper left one a pill with what
   the list is ordered by when the lines do not say it already (an album list by Year or Added; decided 2026-10-16).
-  The album lists' View also has **Dates**: Relative ("3 days ago") or Absolute ("14 Oct"), remembered. Its states are the row's: a border when viewed, a tint when it holds what plays.
+  The album lists' View also has **Dates**: Relative ("3 days ago") or Absolute ("14 Oct"), remembered. Its states are the row's: a border when viewed, a tint when it holds what plays, dimmed when it cannot be used now.
 - **A list's sections** (`lib/Section.svelte`): a heading with its count that folds the list, and while open one line
   on what the list is. A selection's Tracks (a section per playlist), the Repair tab's kinds of repair, the Info tab
   for several playlists, Health's kinds of problem (folded at first).
@@ -581,6 +599,15 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 - **Writes wait on the device** (0.12, the outbox, `lib/later.svelte.ts`): a favourite, a rating, a playlist change, an
   exclusion or a play is shown at once and kept on the device before it is sent; while Cratarr is out of reach the
   connection line says "N to send", and they go in order when it answers. No notice when they arrive.
+- **The queue outlasts the page and the app** (decision 0101, points 14 and 19; `lib/localPlayer`, the app's `QueueKept`): the
+  queue that plays is kept on the device, each account's and mode's, the place going on with it, a Play from queue's copy too.
+  Cratarr gives its own back as the player connects, with its word on playing on, so the device's is taken up, paused where it
+  was, where it cannot be: Cratarr out of reach, or a queue that went on meanwhile, which then reaches Play On with the next report.
+- **Cratarr gone while it plays** (the owner, 2026-11-06; `lib/player/holdOn`, the app's `Holding`): what has come of the music
+  plays out and the player stops at the place reached, the queue whole, shown as not sounding yet, with nothing said and nothing
+  skipped. It asks again, every few seconds at first and at most every half minute, at once when Cratarr answers, and goes
+  on by itself; paused, it stays paused. A track on the device plays in its turn; one that is not holds the queue there, whatever
+  lies after it, and a tap on a row plays that row.
 - **What an action did, or why it failed, is a toast** (`lib/toast.svelte.ts`): one at a time, floating above the
   mini-player, or the bottom edge without it (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
   warnings, red for errors. Done and warnings go after a few seconds; errors stay until dismissed, replaced, or the

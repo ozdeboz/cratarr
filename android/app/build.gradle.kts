@@ -89,15 +89,33 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            // JNA's native part (Spike B) for ABIs no device of the app's has.
+            // JNA's native part for ABIs no device of the app's has.
             excludes += setOf("lib/mips/**", "lib/mips64/**", "lib/armeabi/**")
         }
     }
+}
 
-    // Spike B: the rules library as scripts/rules-android.sh builds it (not kept in the repository: an app built without it packs none).
-    sourceSets {
-        getByName("main") {
-            jniLibs.directories.add("build/rustJniLibs")
+/**
+ * The rules library (decision 0101: the app runs the rules crate natively, through UniFFI): server/rules-ffi for the app's ABIs, in
+ * every build that makes an app, so nothing that plays can come without it. scripts/rules-android.sh builds it in Docker, as the
+ * server's Rust; on Windows inside WSL, where Docker's engine is and the only place its bind mounts name the repository. Only
+ * when what it is made of changed: the crates beside the server's own, and the script. Its Kotlin stays in the repository, so
+ * the unit tests need no Rust: the script refuses a library that Kotlin does not fit.
+ */
+abstract class BuildRules : DefaultTask() {
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) abstract val sources: ConfigurableFileCollection
+    @get:Internal abstract val repository: DirectoryProperty
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+    @get:Inject abstract val exec: ExecOperations
+
+    @TaskAction
+    fun build() {
+        val script = "scripts/rules-android.sh"
+        val root = repository.get().asFile
+        val windows = System.getProperty("os.name").startsWith("Windows")
+        exec.exec {
+            workingDir = root
+            commandLine(if (windows) listOf("wsl.exe", "--cd", root.path, "--", "sh", script) else listOf("sh", script))
         }
     }
 }
@@ -185,9 +203,25 @@ val fetchSnapclient = tasks.register<FetchSnapclient>("fetchSnapclient") {
     outputDir.set(layout.buildDirectory.dir("snapclient"))
 }
 
+val rulesLibrary = tasks.register<BuildRules>("rulesLibrary") {
+    val repositoryRoot = rootProject.layout.projectDirectory.dir("..")
+    sources.from(
+        repositoryRoot.dir("server").asFileTree.matching {
+            include("*/**")
+            exclude("src/**", "tests/**", "**/target/**")
+        },
+        repositoryRoot.file("scripts/rules-android.sh"),
+        // The Rust it is built with is the server's.
+        repositoryRoot.file("Dockerfile"),
+    )
+    repository.set(repositoryRoot)
+    outputDir.set(layout.buildDirectory.dir("rustJniLibs"))
+}
+
 androidComponents {
     onVariants { variant ->
         variant.sources.jniLibs?.addGeneratedSourceDirectory(fetchSnapclient, FetchSnapclient::outputDir)
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(rulesLibrary, BuildRules::outputDir)
         variant.sources.assets?.addGeneratedSourceDirectory(bundlePage, BundlePage::outputDir)
     }
 }
@@ -204,7 +238,7 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.work.runtime)
-    // Spike B: the rules library's Kotlin (UniFFI) reaches it through JNA; the AAR carries JNA's own native part.
+    // The rules library's Kotlin (UniFFI) reaches it through JNA; the AAR carries JNA's own native part.
     implementation(libs.jna) { artifact { type = "aar" } }
     testImplementation(libs.junit)
     testImplementation(libs.org.json)

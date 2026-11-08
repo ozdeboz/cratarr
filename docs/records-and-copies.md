@@ -43,9 +43,10 @@ track" and "how a record's copies behave"); this says how they are built, and in
 As the owner decided, the same record is the same tracks. A folder is identified when its files are read, once, or over its
 first day where it arrives file by file:
 
-1. The tracklists must match, always: as many tracks, each one's length within 2 seconds, its title the same by the
-   loose key. A guest in a title is recognised: "Embrace (feat. X)" is the title "Embrace" with a guest, so it matches
-   "Embrace", and "Embrace (feat. Y)" does not. A folder missing a track of the release is not a copy of it.
+1. The tracklists must match: as many tracks, each one's length within 2 seconds, its title the same by the loose key. A
+   guest in a title is recognised: "Embrace (feat. X)" is the title "Embrace" with a guest, so it matches "Embrace", and
+   "Embrace (feat. Y)" does not. A folder missing a track of the release is not a copy of it, but for one case: see "A folder
+   of the very same release".
 2. With that, the same MusicBrainz release, where tags or references say one, is the same record; two different
    releases are two records.
 3. Without a release on either side, the same album artist and title is the same record.
@@ -83,6 +84,36 @@ file, so it is a record of its own for a while: a record less than a day old, al
 anything, is held against the others, and joins where `same_record` says yes. Its tracks are taken and the young record goes.
 Older records never merge, so nothing played or favourited moves by this.
 
+### A folder of the very same release
+
+A folder with the exact MusicBrainz release id of a record joins it at once, from its first file, even with tracks still missing
+(the owner, 2026-11-07). The tracklist rule bends for this case only; without that very id a folder waits for its last file, as above.
+
+- **A file takes the track it is, and no other.** By name and length, each to one track of the record's, whatever order they come in:
+  place by place a folder's second file would take the record's second track, which may be a track it does not hold. Of two tracks
+  alike a file cannot say which it is, and a take cannot be undone, so that folder waits for its last file too.
+- **A track the record does not list keeps a folder out.** It is short of the record, or it is something else.
+- **It works the other way round too:** a whole folder landing beside a few tracks of the release you hold is that record, and what
+  it brings are tracks of it. Who keeps the record goes by kind as ever, so Music's short copy keeps it from a whole one in Incoming.
+- **Short of what the record has, a copy stays,** arriving or for good: its ids hold it there whatever the tags say since, and a copy
+  of the very release that lost a file for good stays short rather than leaving. A track new to the record is another matter: there
+  the other copy grew, and the one that holds all the record ever had leaves by the rule above, the same release or not. It does not
+  come back as a folder short of it.
+- **Nothing old merges:** this is for a folder not yet held by a record. Two records of one release from before stay two, but at the
+  first start on 0.15's data, where every album is a new folder.
+
+What a short copy means while it arrives:
+
+- **Play:** nothing changes until it is all there. A whole copy plays before one short of tracks, whatever its quality, so a better
+  copy on its way does not turn a record into three tracks of FLAC and seven of something else, its cover and facts with it. Among
+  copies all short of something, quality decides, as it does among whole ones. A file gone a while makes its copy short for that
+  while, by the same rule.
+- **`from`:** it hears the copy for the tracks it holds, and is passed over for the others. An Incoming copy still plays only by
+  `from`. A track only an Incoming copy holds, of a kept copy short of it, is that track's only copy, and plays from there.
+- **The panel:** a copy's line says "3 of 10" in its size's place, as how much of it is there says more than its bytes.
+- **Replace** is refused: it would put the tracks the copy lacks in the trash. **Delete** takes the copy's own files, and the record goes
+  on. **Add to** moves what is there, still short.
+
 ## Which copy plays
 
 One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own and the only place that decides:
@@ -94,7 +125,8 @@ One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own 
    it. It plays once added, or when it is the only copy. A copy in a library switched off never plays. A record only in
    Incoming has nothing else: its copy plays.
 
-A tie goes by the libraries' order, then the path. Lossless copies not read since bit depth was kept rank last.
+A whole copy comes before one short of tracks, whatever its quality (above). A tie goes by the libraries' order, then the path.
+Lossless copies not read since bit depth was kept rank last.
 
 Nothing is remembered. A request can name a copy, `from`, a library's id: while its library is on, that copy is heard, with
 an account or without one, for that one request. "Play from" is a one-time action built on it: it starts a new queue of the
@@ -104,15 +136,54 @@ The crates, the words and the taste read a track once: one `Facts`, from its row
 every file of it. A set kept by line finds the track through any of them.
 
 A stream resolves its file through it. `songs` holds one row per track, on the copy that plays for most people: `copy_for`
-with no viewer, where own music counts as off unless nothing else holds the record. The stream asks with who is asking;
+with no viewer, where own music counts as off unless nothing else holds the record, and there the first copy added stands. The
+stream asks with who is asking;
 a copy lacking the track is passed over, and where nothing plays for them the row copy does. With no one in particular
 (a signed link while signing in is required) it is the row copy too. What is read of a track, its waveform, beats and
 gains, is the file that plays, so a waveform's ETag names the file.
 
+## What a record says
+
+A record's facts are shared, and a person's own copy never changes what others see (the owner, 2026-11-07).
+
+- **A record in a main library goes by it:** the name, artist, year, genres and release are that copy's, the one that plays for
+  most people.
+- **Where it says nothing, another copy fills in,** as a record must not lack a year or a release for that: another main library's or
+  Incoming's. Never someone's own music.
+- **A record only in people's own music goes by the first copy added,** whatever a later one's quality, and that copy alone speaks. A
+  listener still hears the best they have on: this is what the record says, not what plays.
+- **Who may change it:** "If it's owned by administrator, then only administrator can edit." A record in a main library or in Incoming
+  is the administrators', a copy of one's own beside it or not. A record only in people's own music is its first copy's owner's, and
+  the administrators' as ever. That goes for the facts set by hand. Its cover, tags and references stay the administrators': a cover goes
+  into every copy, someone else's files among them.
+
+## Where things stand when a library changes place
+
+A library's folder has an id for life, and its path is a name that can change.
+
+- **A switch follows its library.** What an account has off, and what Radio and Autoplay choose from, say a library by its path. A
+  rename or a moved mount is told to the user data, in one breath or through a start that found it parked, and each account's lists
+  follow, dated now, so a device's copy from before cannot win the old path back.
+- **Every table by folder and path goes with its file:** `FILE_TABLES`, and a test fails on one left out. `handovers` is the one that is
+  not a file's: a promise about a place a file is on its way to, which taken along would be gone before the file came.
+- **A file's own size, time and length come first** when a gone file is looked for: a `mv` keeps them. The rules after it go by tags and
+  names, and ambiguity is never guessed, under any of them.
+- **A library out of use is forgotten by nobody's clock.** Its rows wait, however long, and it comes back as itself. Only other files found
+  at its path forget it.
+
+## Missing music
+
+Health lists what Cratarr knows of and has no file for, to administrators: libraries out of use, tracks with nothing but files gone a
+while, and retired tracks that hold plays, hearts or ratings, each with where it lay and since when. Nothing there is forgotten by itself.
+
+A track there can be reconnected by hand: what no rule could pair, a title and a file name changed at once with no recording id. A
+person names the track it is, and it goes as a take goes, through `track_moved`, for good: its plays, hearts and lines follow at once,
+and an old id in a queue plays the one chosen. It has no Undo, as a take has none.
+
 ## On the page
 
 - A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, bits, rate, deletable, keepable,
-  keep_to, lacks, plays, added, size, job }]`, what the viewer may do going by the copy. They come in the order they
+  keep_to, lacks, plays, added, size, tracks, job }]`, what the viewer may do going by the copy. They come in the order they
   would play for that viewer, `copy_for` asked again of what is left, and a copy in a library off keeps its place, so the
   first one on is what plays and a switch thrown on the page needs no new list. The card's format and bitrate are the
   copy that plays. Dots: one for each library foreign to home, the first kept library in the libraries' order, main or
@@ -129,6 +200,8 @@ gains, is the file that plays, so a waveform's ETag names the file.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and a "Play from …" for each
   other copy in a library on, Incoming too, shown only where there is one. The record stays while one copy is left.
 - The quality on a card is the copy that plays.
+- Third-party apps see every library: the Library page's filter is the page's and does not reach Subsonic's music folders (the owner,
+  2026-11-07). It stays on the account, and still says which copy plays.
 - A record's Move, Add to, Delete and Replace take the copy: `from`, a library's id, in the query for a preview and the body
   for the act. A record of several copies with none named is refused, and nothing moves. Of two folders of one library
   `from` names the first. Replace also takes `to`, the main library whose copy it takes the place of.

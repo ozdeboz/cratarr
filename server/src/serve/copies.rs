@@ -1,9 +1,9 @@
 //! Which copy of a record plays (docs/records-and-copies.md): the one place that decides. Pure.
 //!
 //! A copy is one folder's files of a record. Whoever asks, a copy in a library switched off never plays. Then the copy this
-//! one request names; then the best quality among the kept libraries, the viewer's own music as any of them. An Incoming copy
-//! of a kept record plays only when named. Nothing here is remembered. Whether a record or a track shows is another question,
-//! and has its own one answer: `crates::on_for`.
+//! one request names; then the best quality among the kept libraries, the viewer's own music as any of them, a whole copy before
+//! one short of tracks. An Incoming copy of a kept record plays only when named. Nothing here is remembered. Whether a record or
+//! a track shows is another question, and has its own one answer: `crates::on_for`.
 
 pub use crate::settings::LibraryKind as Kind;
 
@@ -24,6 +24,10 @@ pub struct Copy {
     /// they were kept.
     pub bits: Option<i64>,
     pub rate: Option<i64>,
+    /// It lacks a track its record has: a folder of the very same release still arriving, or short for good, or a file gone a while.
+    pub short: bool,
+    /// When its first file came: of a record only in people's own music, the first added speaks for it.
+    pub added: Option<i64>,
 }
 
 /// Someone asking, as far as the choice goes: the library this one request names, if it names one. That anyone asks at all is
@@ -55,10 +59,11 @@ pub fn rank(c: &Copy) -> (u8, Option<i64>, Option<i64>, Option<i64>) {
     (tier, c.bits, c.rate, c.min_kbps)
 }
 
-/// The best of these copies; a tie goes by the libraries' order, then the folder's path, so it never turns on the order
-/// they came in.
+/// The best of these copies. A whole one comes first, whatever the other's quality: a card says the copy that plays, and a better
+/// copy on its way must not turn a record into three tracks of FLAC and seven of something else, its cover and facts with it, until
+/// it is all there. A tie goes by the libraries' order, then the folder's path, so it never turns on the order they came in.
 fn best<'a>(copies: impl Iterator<Item = &'a Copy>) -> Option<&'a Copy> {
-    copies.min_by(|a, b| rank(b).cmp(&rank(a)).then(a.order.cmp(&b.order)).then(a.folder.cmp(&b.folder)).then(a.dir.cmp(&b.dir)))
+    copies.min_by(|a, b| a.short.cmp(&b.short).then(rank(b).cmp(&rank(a))).then(a.order.cmp(&b.order)).then(a.folder.cmp(&b.folder)).then(a.dir.cmp(&b.dir)))
 }
 
 /// Who keeps a record of two copies that differ, the higher first (CR18, the owner): a main library, then someone's own music,
@@ -72,9 +77,11 @@ pub fn keeping(kind: Kind) -> u8 {
 }
 
 /// The copy that plays, of a record's `copies`: the best the kept libraries on hold, whoever's own music it lies in. `viewer` is
-/// none for no one in particular: then it is the row copy, the one that plays for most people, and own music counts as off
-/// unless nothing else holds the record (one user's FLAC is not what everyone else's Music shows). `off`: the folders of the
-/// libraries switched off. None where nothing plays: every copy off, or only an Incoming copy on of a record kept elsewhere.
+/// none for no one in particular: then it is the row copy, the one that plays for most people and whose word the record goes by,
+/// and own music counts as off unless nothing else holds the record (one user's FLAC is not what everyone else's Music shows).
+/// There the first added stands, whatever its quality, as a second person's copy must not change what the first one's says. `off`:
+/// the folders of the libraries switched off. None where nothing plays: every copy off, or only an Incoming copy on of a record
+/// kept elsewhere.
 pub fn copy_for<'a>(copies: &'a [Copy], viewer: Option<&Viewer>, off: &[i64]) -> Option<&'a Copy> {
     let only_own = copies.iter().all(|c| c.kind == Kind::Own);
     let held: Vec<&Copy> = copies.iter().filter(|c| viewer.is_some() || only_own || c.kind != Kind::Own).collect();
@@ -82,8 +89,18 @@ pub fn copy_for<'a>(copies: &'a [Copy], viewer: Option<&Viewer>, off: &[i64]) ->
     if let Some(c) = viewer.and_then(|v| v.from).and_then(|from| best(on().filter(|c| c.folder == from))) {
         return Some(c);
     }
+    if viewer.is_none() && only_own {
+        return on().min_by(|a, b| (a.added.is_none(), a.added, a.order, a.folder).cmp(&(b.added.is_none(), b.added, b.order, b.folder)).then(a.dir.cmp(&b.dir)));
+    }
     // A record only in Incoming has nothing else to play: its copy plays, as it always has.
     best(on().filter(|c| c.kind != Kind::Incoming)).or_else(|| best(on()).filter(|_| held.iter().all(|c| c.kind == Kind::Incoming)))
+}
+
+/// The library whose owner a record's facts are theirs to change, a catalogue folder: where it lies only in people's own music,
+/// that of the copy that speaks for it. Anywhere else the record is the administrators', and none (the owner, 2026-11-07: "If it's
+/// owned by administrator, then only administrator can edit").
+pub fn owned_by(copies: &[Copy]) -> Option<i64> {
+    copies.iter().all(|c| c.kind == Kind::Own).then(|| copy_for(copies, None, &[]).map(|c| c.folder)).flatten()
 }
 
 /// A record's copies in the order they would play for this viewer, whatever is off: `copy_for` asked again of what is left,
@@ -105,7 +122,7 @@ mod tests {
     use super::*;
 
     fn copy(folder: i64, kind: Kind, format: &str, kbps: i64, bits: Option<i64>, rate: Option<i64>) -> Copy {
-        Copy { folder, dir: "A/B".into(), kind, order: folder as usize, format: Some(format.into()), min_kbps: Some(kbps), bits, rate }
+        Copy { folder, dir: "A/B".into(), kind, order: folder as usize, format: Some(format.into()), min_kbps: Some(kbps), bits, rate, short: false, added: None }
     }
 
     fn flac(folder: i64, kind: Kind) -> Copy {
@@ -120,6 +137,69 @@ mod tests {
 
     fn naming(from: i64) -> Viewer {
         Viewer { from: Some(from) }
+    }
+
+    /// The owner, 2026-11-07: only in people's own music, the first copy added decides what the record says for most people, whatever
+    /// a later one's quality. Whoever listens hears the best they have on, as anywhere.
+    #[test]
+    fn of_copies_only_in_peoples_own_music_the_first_added_speaks_for_the_record() {
+        let first = Copy { added: Some(100), ..mp3(1, Kind::Own, 128) };
+        let later = Copy { added: Some(200), ..flac(0, Kind::Own) };
+        let copies = [later.clone(), first.clone()];
+        assert_eq!(folder(copy_for(&copies, None, &[])), Some(1), "though it is the worse, in the later library");
+        assert_eq!(in_order(&copies, None).iter().map(|c| c.folder).collect::<Vec<_>>(), [1, 0]);
+        assert_eq!(folder(copy_for(&copies, Some(ANYONE), &[])), Some(0), "a listener hears the better");
+        assert_eq!(folder(copy_for(&copies, None, &[1])), Some(0), "with it off, what is left");
+        let unknown = Copy { added: None, ..mp3(2, Kind::Own, 128) };
+        assert_eq!(folder(copy_for(&[unknown, first], None, &[])), Some(1), "a date goes before none");
+    }
+
+    /// Beside a kept copy or an Incoming one nothing changes: own music does not count for most people, first added or not.
+    #[test]
+    fn being_added_first_says_nothing_beside_a_library_not_someones_own() {
+        let own = Copy { added: Some(100), ..flac(1, Kind::Own) };
+        assert_eq!(folder(copy_for(&[Copy { added: Some(200), ..mp3(0, Kind::Main, 128) }, own.clone()], None, &[])), Some(0));
+        assert_eq!(folder(copy_for(&[Copy { added: Some(200), ..mp3(2, Kind::Incoming, 128) }, own], None, &[])), Some(2));
+    }
+
+    /// "If it's owned by administrator, then only administrator can edit": a main library or Incoming beside it makes it theirs.
+    #[test]
+    fn a_record_is_a_persons_to_change_only_where_it_lies_only_in_their_own_music_first() {
+        let (mine, yours) = (Copy { added: Some(100), ..mp3(1, Kind::Own, 128) }, Copy { added: Some(200), ..flac(2, Kind::Own) });
+        assert_eq!(owned_by(std::slice::from_ref(&mine)), Some(1));
+        assert_eq!(owned_by(&[yours.clone(), mine.clone()]), Some(1), "of two people's, the first added's");
+        assert_eq!(owned_by(&[mine.clone(), flac(0, Kind::Main)]), None, "in a main library");
+        assert_eq!(owned_by(&[mine, flac(3, Kind::Incoming)]), None, "beside Incoming, the administrators'");
+        assert_eq!(owned_by(&[]), None, "not had");
+    }
+
+    /// A better copy on its way changes nothing until it is all there: what plays, what a card says, and what a list says of it.
+    #[test]
+    fn a_whole_copy_plays_before_a_better_one_short_of_tracks() {
+        let arriving = Copy { short: true, ..flac(1, Kind::Main) };
+        let copies = [mp3(0, Kind::Main, 320), arriving.clone()];
+        assert_eq!(folder(copy_for(&copies, Some(ANYONE), &[])), Some(0), "though it is the better");
+        assert_eq!(folder(copy_for(&copies, None, &[])), Some(0), "and for most people");
+        assert_eq!(in_order(&copies, Some(ANYONE)).iter().map(|c| c.folder).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(folder(copy_for(&copies, Some(&naming(1)), &[])), Some(1), "a request can name it");
+        assert_eq!(folder(copy_for(&copies, Some(ANYONE), &[0])), Some(1), "with the whole one off it is what there is");
+        assert_eq!(folder(copy_for(&[flac(0, Kind::Main), Copy { short: false, ..arriving }], Some(ANYONE), &[])), Some(0), "whole, it counts as any copy");
+    }
+
+    /// An Incoming copy short of tracks is no nearer playing by itself than a whole one, and a kept copy short of tracks is still kept.
+    #[test]
+    fn being_short_of_tracks_says_nothing_of_incoming() {
+        let short_in_music = Copy { short: true, ..mp3(0, Kind::Main, 128) };
+        assert_eq!(folder(copy_for(&[short_in_music, flac(1, Kind::Incoming)], Some(ANYONE), &[])), Some(0), "whole in Incoming plays only by name");
+        let waiting = Copy { short: true, ..flac(1, Kind::Incoming) };
+        assert_eq!(folder(copy_for(&[mp3(0, Kind::Main, 128), waiting], Some(ANYONE), &[])), Some(0));
+    }
+
+    /// Of copies all short of something, quality says, as among whole ones.
+    #[test]
+    fn of_copies_all_short_of_something_the_best_plays() {
+        let copies = [Copy { short: true, ..mp3(0, Kind::Main, 320) }, Copy { short: true, ..flac(1, Kind::Main) }];
+        assert_eq!(folder(copy_for(&copies, Some(ANYONE), &[])), Some(1));
     }
 
     fn folder(c: Option<&Copy>) -> Option<i64> {

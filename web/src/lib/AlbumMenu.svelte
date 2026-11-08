@@ -6,7 +6,7 @@
   import { port } from './player/port.svelte';
   import { untrack } from 'svelte';
   import type { AlbumsSource, LibraryInfo, ListedAlbum } from './api';
-  import { offersOf, type AlbumOffer } from './copiesRule';
+  import { mayEdit, offersOf, type AlbumOffer } from './copiesRule';
   import { jobs } from './jobs.svelte';
   import { me } from './me.svelte';
 
@@ -383,6 +383,7 @@
   // Play from: a queue of the record from another of its copies. It goes with that queue, so it needs no account and
   // nothing is asked first. Each track carries `from` wherever the queue goes, a player elsewhere too.
   const playFrom = $derived(listedHere ? playFromEntries(listedHere.a, listedHere.s.library_info, shownIn(source)) : []);
+  const editable = $derived(listedHere ? mayEdit(listedHere.a, listedHere.s.library_info, me.admin) : me.admin);
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
@@ -661,7 +662,7 @@
     <!-- Its release's tracks, the missing ones found one at a time (0.9.8, single-track replacement). -->
     {#if me.admin && source === 'cratarr' && missingOffered}<MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />{/if}
   {:else if e === 'edit'}
-    {#if me.admin && source === 'cratarr'}<MenuEntry icon="pencil" label="Edit" onclick={() => (editOpen = true)} />{/if}
+    {#if editable && source === 'cratarr'}<MenuEntry icon="pencil" label="Edit" onclick={() => (editOpen = true)} />{/if}
   {:else if e === 'deviceCover'}
     {#if !(me.admin && source === 'cratarr') && deviceCovers}<MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />{/if}
   {:else if e === 'serverCover'}

@@ -1,7 +1,9 @@
 // An album's cover on this device (Symfonium's "Change local thumbnail", decided 2026-10-16): a picture chosen here,
 // kept in this browser (IndexedDB) and shown wherever the album's cover is (lib/api's albumCoverUrl); and a cover read
 // again from the server (Symfonium's "Remove cached images"). Neither reaches the server or another device; Home's
-// picture alone does, as a copy on the account.
+// picture alone does, as a copy on the account. Each account's apart (decision 0101: `cratarr-covers@name`; Home's
+// header picture is the person's own), hidden while another is signed in.
+import { perAccount, whenAccount } from './account';
 
 const DB = 'cratarr-covers';
 const STORE = 'covers';
@@ -14,9 +16,12 @@ export const localCovers = $state<Record<string, string>>({});
 export const coverRounds = $state<Record<string, number>>({});
 export const coverKey = (source: string, album: string) => `${source}/${album}`;
 
+/** Whose pictures [localCovers] holds. */
+let ofWho = perAccount(DB);
+
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const r = indexedDB.open(DB, 1);
+    const r = indexedDB.open(ofWho, 1);
     r.onupgradeneeded = () => r.result.createObjectStore(STORE);
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
@@ -35,21 +40,33 @@ async function write(key: string, blob: Blob | null) {
   db.close();
 }
 
-// The pictures chosen before, as the page opens.
+// The pictures chosen before, as the page opens, and another account's when it signs in.
 async function load() {
+  const who = ofWho;
   const db = await open();
   const tx = db.transaction(STORE, 'readonly');
   const cursor = tx.objectStore(STORE).openCursor();
   cursor.onsuccess = () => {
     const c = cursor.result;
-    if (!c) return db.close();
+    if (!c || who !== ofWho) return db.close();
     if (c.value instanceof Blob) localCovers[String(c.key)] = URL.createObjectURL(c.value);
-    // Chosen before it followed the account: its copy made now (decision 0101 point 14: the first device sends its own).
-    if (c.value instanceof Blob && c.key === HOME_HEADER && homePicture.held === null) void heldCopy(c.value).then(hold, () => {});
     c.continue();
   };
 }
 if (typeof indexedDB !== 'undefined') load().catch(() => {});
+
+// Another account signed in, or nobody: nothing of the one before shows from here on, at once, its pictures read in as
+// they come. Before lib/accountPrefs hears of it, which takes what shows now for the account's and not for a change.
+whenAccount.add(() => {
+  if (perAccount(DB) === ofWho) return;
+  ofWho = perAccount(DB);
+  for (const k of Object.keys(localCovers)) {
+    URL.revokeObjectURL(localCovers[k]);
+    delete localCovers[k];
+  }
+  homePicture.held = keptHeld();
+  if (typeof indexedDB !== 'undefined') load().catch(() => {});
+});
 
 /** A picture no larger than it needs to be (JPEG, its longest side at most `max`); as it is when it cannot be read. */
 async function shrink(file: Blob, max = MAX_PX): Promise<Blob> {
@@ -69,8 +86,11 @@ async function shrink(file: Blob, max = MAX_PX): Promise<Blob> {
 
 /** Keeps `file` on this device under `key` (its longest side at most `max`), shown from now on. */
 export async function setLocalPicture(key: string, file: Blob, max = MAX_PX) {
+  const who = ofWho;
   // Read whole first: a picked file is only a reference to it on the device, which IndexedDB may not keep.
   const small = await shrink(new Blob([await file.arrayBuffer()], { type: file.type }), max);
+  // Another account signed in meanwhile: it is not that one's choice.
+  if (who !== ofWho) return;
   await write(key, small);
   if (localCovers[key]) URL.revokeObjectURL(localCovers[key]);
   localCovers[key] = URL.createObjectURL(small);
@@ -94,7 +114,7 @@ const HOME_HEADER_PX = 2400;
 
 // Home's picture on the account (decision 0101 point 14), as a copy: what a preference holds is far below the picture
 // this device keeps, so the account's is the largest that fits, a data URL. The device that chose it shows its own;
-// another shows the account's. Not among the prefs: those go over to the app whole at each change.
+// another shows the account's. Not among the prefs: those go over to the app whole at each change. Each account's own.
 const HELD = 'cratarr-home-picture';
 /** The most the account keeps of a preference, as JSON (the server's MOST_BYTES), less the quotes round a string. */
 const HELD_MOST = 256 * 1024 - 2;
@@ -103,7 +123,7 @@ const HELD_SIDES = [1600, 1200, 900, 600, 400];
 
 function keptHeld(): string | null {
   try {
-    return localStorage.getItem(HELD);
+    return localStorage.getItem(perAccount(HELD));
   } catch {
     return null;
   }
@@ -115,8 +135,8 @@ export const homePicture = $state({ held: keptHeld() });
 function hold(held: string | null) {
   homePicture.held = held;
   try {
-    if (held === null) localStorage.removeItem(HELD);
-    else localStorage.setItem(HELD, held);
+    if (held === null) localStorage.removeItem(perAccount(HELD));
+    else localStorage.setItem(perAccount(HELD), held);
   } catch {
     /* not kept: asked of the account again at the next start */
   }
@@ -147,10 +167,12 @@ function blobOf(data: string): Blob {
 
 /** `file` as Home's picture, here and on the account. */
 export async function chooseHomePicture(file: Blob) {
+  const who = ofWho;
   // Read whole first, as `setLocalPicture` does: it is read twice here.
   const whole = new Blob([await file.arrayBuffer()], { type: file.type });
   await setLocalPicture(HOME_HEADER, whole, HOME_HEADER_PX);
-  hold(await heldCopy(whole));
+  const copy = await heldCopy(whole);
+  if (who === ofWho) hold(copy);
 }
 
 /** No picture of one's own any more, here or on the account. */

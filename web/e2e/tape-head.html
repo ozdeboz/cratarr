@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- The tape head's test page (web/e2e/tape.e2e.mjs): lib/tape on its own, with a WAV made here. -->
+<meta charset="utf-8" />
+<title>Tape head</title>
+<script type="module">
+  import * as tape from '/src/lib/tape/tape.svelte.ts';
+  import { headKey } from '/src/lib/tape/file.ts';
+
+  /** A WAV of `seconds` at `rate`, 16-bit stereo: a 440 Hz tone on both channels. */
+  function wavUrl(seconds, rate) {
+    const frames = Math.round(seconds * rate);
+    const b = new DataView(new ArrayBuffer(44 + frames * 4));
+    const text = (at, s) => [...s].forEach((c, i) => b.setUint8(at + i, c.charCodeAt(0)));
+    text(0, 'RIFF');
+    b.setUint32(4, 36 + frames * 4, true);
+    text(8, 'WAVE');
+    text(12, 'fmt ');
+    b.setUint32(16, 16, true);
+    b.setUint16(20, 1, true);
+    b.setUint16(22, 2, true);
+    b.setUint32(24, rate, true);
+    b.setUint32(28, rate * 4, true);
+    b.setUint16(32, 4, true);
+    b.setUint16(34, 16, true);
+    text(36, 'data');
+    b.setUint32(40, frames * 4, true);
+    for (let i = 0; i < frames; i++) {
+      const s = Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 16000);
+      b.setInt16(44 + i * 4, s, true);
+      b.setInt16(46 + i * 4, s, true);
+    }
+    return URL.createObjectURL(new Blob([b.buffer], { type: 'audio/wav' }));
+  }
+
+  /** How loud the head's output is now (its RMS over the analyser's window). */
+  let analyser = null;
+  function loudness() {
+    const o = tape.tapeOutput();
+    if (!o) return 0;
+    if (!analyser) {
+      analyser = o.context.createAnalyser();
+      analyser.fftSize = 2048;
+      o.node.connect(analyser);
+    }
+    const a = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(a);
+    return Math.sqrt(a.reduce((n, x) => n + x * x, 0) / a.length);
+  }
+
+  window.t = { tape, wavUrl, loudness, headKey };
+  window.ready = true;
+</script>

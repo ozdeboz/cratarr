@@ -1,7 +1,7 @@
 //! The person's preferences on their account (decision 0101 point 14): pinned items, libraries switched off, filters,
 //! Home's header picture, crate drafts and Radio's last choice, followed from device to device. Per preference the
 //! latest change wins, the whole value; offline a device works from its cached copy. Only the libraries switched off
-//! mean anything to the server (Subsonic's music folders); the others are the page's, kept and handed back.
+//! mean anything to the server (which copy plays); the others are the page's, kept and handed back.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -50,6 +50,13 @@ pub fn refusal(key: &str, value: &serde_json::Value) -> Option<String> {
         return Some("The libraries switched off are a list of names".into());
     }
     (value.to_string().len() > MOST_BYTES).then(|| format!("A preference holds at most {} KB", MOST_BYTES / 1024))
+}
+
+/// A library's switch as it reads once `moved`, (was, is) paths, are followed. A key is `source/library`, and the id of one of
+/// Cratarr's own libraries is its path, where another server's is that server's own and never moves with a folder.
+fn key_moved(key: &str, moved: &[(String, String)]) -> Option<String> {
+    let (source, library) = key.split_once('/')?;
+    moved.iter().find(|(was, _)| was == library).map(|(_, is)| format!("{source}/{is}"))
 }
 
 /// Each account's filters moved (`Moved::filters`), in the caller's transaction. One that moved is changed `now` (epoch ms): the
@@ -157,6 +164,54 @@ impl UserData {
         Ok(())
     }
 
+    /// What each account names a library by, as `moved`, (was, is) paths, leaves it (`Catalogue::paths_to_follow`): the libraries
+    /// they have off, and those Radio and Autoplay choose from. Each name moves once, so two libraries that changed places do not
+    /// end up as they were. Dated now, as a move of filters is: a device's copy from before must not win the old path back, and
+    /// turn on what was off. Blocking.
+    pub fn follow_library_paths(&self, moved: &[(String, String)]) -> Result<()> {
+        let mut told = Vec::new();
+        {
+            let mut db = self.db();
+            let tx = db.transaction()?;
+            let rows: Vec<(String, String)> = tx.prepare("SELECT account, value FROM preference WHERE key = ?1")?.query_map([HIDDEN_LIBRARIES], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            for (account, text) in rows {
+                let Ok(off) = serde_json::from_str::<Vec<String>>(&text) else { continue };
+                let mut now_off: Vec<String> = Vec::with_capacity(off.len());
+                for key in &off {
+                    let key = key_moved(key, moved).unwrap_or_else(|| key.clone());
+                    if !now_off.contains(&key) {
+                        now_off.push(key);
+                    }
+                }
+                if now_off != off {
+                    tx.execute("UPDATE preference SET value = ?3, changed = ?4 WHERE account = ?1 AND key = ?2", params![account, HIDDEN_LIBRARIES, serde_json::json!(now_off).to_string(), super::now_ms()])?;
+                    told.push(account);
+                }
+            }
+            let rows: Vec<(String, i64, String)> = tx.prepare("SELECT user, version, settings FROM user_settings")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+            for (user, version, text) in rows {
+                let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+                let Some(chosen) = settings["more_music"]["libraries"].as_array_mut() else { continue };
+                let mut changed = false;
+                for library in chosen.iter_mut() {
+                    if let Some((_, is)) = moved.iter().find(|(was, _)| library.as_str().is_some_and(|l| std::path::Path::new(l) == std::path::Path::new(was))) {
+                        *library = serde_json::Value::String(is.clone());
+                        changed = true;
+                    }
+                }
+                if changed {
+                    tx.execute("UPDATE user_settings SET version = ?2, settings = ?3 WHERE user = ?1", params![user, super::now_ms().max(version + 1), settings.to_string()])?;
+                }
+            }
+            tx.commit()?;
+        }
+        for account in told {
+            self.hidden.lock().unwrap_or_else(|p| p.into_inner()).remove(&account);
+            let _ = self.preferences.send(PreferenceChanged { account, key: HIDDEN_LIBRARIES.to_string() });
+        }
+        Ok(())
+    }
+
     /// Every kept change of a preference from now on, whoever's.
     pub fn subscribe_preferences(&self) -> tokio::sync::broadcast::Receiver<PreferenceChanged> {
         self.preferences.subscribe()
@@ -201,6 +256,47 @@ mod tests {
         let changed = u.preferences("bo").unwrap()[HIDDEN_LIBRARIES].changed;
         u.switch_library_off(&["bo".to_string()], "cratarr//own/cy").unwrap();
         assert_eq!(u.preferences("bo").unwrap()[HIDDEN_LIBRARIES].changed, changed, "already off: nothing changes");
+    }
+
+    /// A library's switch says its path, so a library renamed or on a moved mount would come back on for whoever has it off.
+    #[test]
+    fn a_library_switched_off_stays_off_when_its_path_changes() {
+        let u = UserData::open(None).unwrap();
+        u.set_preference("ann", HIDDEN_LIBRARIES, &json!(["cratarr//media/a", "jf/abc", "cratarr//media/keep"]), 100).unwrap();
+        u.set_preference("bo", HIDDEN_LIBRARIES, &json!(["cratarr//media/keep"]), 100).unwrap();
+        assert_eq!(*u.hidden_libraries_kept("ann"), ["cratarr//media/a", "jf/abc", "cratarr//media/keep"], "kept, as a stream asks for it");
+        let mut told = u.subscribe_preferences();
+        u.follow_library_paths(&[("/media/a".to_string(), "/media/b".to_string())]).unwrap();
+        assert_eq!(u.hidden_libraries("ann").unwrap(), ["cratarr//media/b", "jf/abc", "cratarr//media/keep"], "in its place, another server's id untouched");
+        assert_eq!(*u.hidden_libraries_kept("ann"), ["cratarr//media/b", "jf/abc", "cratarr//media/keep"], "a stream hears of it at once");
+        assert_eq!(told.try_recv().unwrap(), PreferenceChanged { account: "ann".into(), key: HIDDEN_LIBRARIES.into() }, "her open pages too");
+        assert!(told.try_recv().is_err(), "nothing moved for bo, nothing told");
+        assert_eq!(u.preferences("bo").unwrap()[HIDDEN_LIBRARIES].changed, 100, "and it keeps its time");
+        let old = json!(["cratarr//media/a"]);
+        assert_eq!(u.set_preference("ann", HIDDEN_LIBRARIES, &old, 200).unwrap().value, json!(["cratarr//media/b", "jf/abc", "cratarr//media/keep"]), "a device's copy from before loses");
+    }
+
+    /// Each name moves once: taken one library at a time, two that changed places would end up as they were.
+    #[test]
+    fn two_libraries_that_changed_places_keep_their_switches() {
+        let u = UserData::open(None).unwrap();
+        u.set_preference("ann", HIDDEN_LIBRARIES, &json!(["cratarr//media/a"]), 100).unwrap();
+        u.follow_library_paths(&[("/media/a".to_string(), "/media/b".to_string()), ("/media/b".to_string(), "/media/a".to_string())]).unwrap();
+        assert_eq!(u.hidden_libraries("ann").unwrap(), ["cratarr//media/b"]);
+    }
+
+    /// Radio's list names what is on, so a rename would turn the library off for Radio, and could leave it nothing to choose from.
+    #[test]
+    fn a_library_radio_chooses_from_stays_chosen_when_its_path_changes() {
+        let u = UserData::open(None).unwrap();
+        let v = u.put_settings("ann", 0, &json!({ "more_music": { "libraries": ["/media/a", "/media/keep"], "bandcamp": true }, "theme": 1 })).unwrap().unwrap();
+        u.put_settings("bo", 0, &json!({ "theme": 2 })).unwrap().unwrap();
+        let (bos, _) = u.settings_of("bo").unwrap();
+        u.follow_library_paths(&[("/media/a".to_string(), "/media/b".to_string())]).unwrap();
+        let (version, settings) = u.settings_of("ann").unwrap();
+        assert_eq!(settings, json!({ "more_music": { "libraries": ["/media/b", "/media/keep"], "bandcamp": true }, "theme": 1 }));
+        assert!(version > v, "a page holding the list as it was is told it is stale");
+        assert_eq!(u.settings_of("bo").unwrap().0, bos, "nothing moved, nothing changed");
     }
 
     /// 0101 point 14: per preference the latest change wins, the whole value; a tie keeps what is kept; each account's

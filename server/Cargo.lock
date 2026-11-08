@@ -439,6 +439,7 @@ dependencies = [
 name = "cratarr-rules"
 version = "0.1.0"
 dependencies = [
+ "rustc-hash",
  "serde",
  "serde_json",
  "ts-rs",

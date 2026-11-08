@@ -20,6 +20,9 @@
 //! - **What makes music alike** ([`similarity`], the one similarity): for Sounds like and Radio alike.
 //! - **Radio's picker** ([`radio`], decisions 0036, amended, and 0101's point 19): which tracks come next, for Radio's
 //!   inserts and Autoplay's modes.
+//! - **The library on a device** ([`index`], decisions 0085 and 0101's points 16 to 19): its tracks, records, artists and
+//!   copies in packed arrays, loaded from bytes, changed by the server's feed and saved as bytes, for all the above to run on
+//!   with no server; what a device reads of it, and when it fetches what ([`index::sync`]).
 //! - **What those lean on**: what an id says by its shape ([`ids`]), a name's loose key ([`names`]) and the artists
 //!   excluded everywhere ([`excluded_artists`]). How a library makes its ids is the caller's.
 
@@ -28,7 +31,9 @@ use serde::{Deserialize, Serialize};
 pub mod brake;
 pub mod crates;
 pub mod excluded_artists;
+pub mod fresh;
 pub mod ids;
+pub mod index;
 pub mod matcher;
 pub mod names;
 pub mod radio;

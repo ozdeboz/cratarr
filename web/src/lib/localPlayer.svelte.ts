@@ -14,18 +14,24 @@
 // of Cratarr's players (Play On, `drive`): then every call below is handed to that player (app.svelte.ts, or the
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
+import { untrack } from 'svelte';
+import { accountKey, perAccount, whenAccount } from './account';
 import { playback } from './deviceLog';
+import { headFile, headKey } from './tape/file';
+import * as tapeHead from './tape/tape.svelte';
+import type { Motion as TapeMotion } from './tape/tape.svelte';
+import { refusedText } from './tape/words';
 import { ask, heard as heardAsked, type Asked } from './player/asked';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type Collection, type QueueItem, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, UNREACHED, windMap, type Collection, type QueueItem, type TrackGain } from './api';
 import { collectionIn } from './within';
 import { commandOf } from './player/commands';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './deckCourse';
-import { asksSignIn, toSignIn } from './reach.svelte';
+import { asksSignIn, notReached, reach, refused as refusedHere, refusedFor, toSignIn, unreached, whenAway, whenReached } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { firstFrame } from './mp3Frames';
@@ -40,6 +46,7 @@ import { afterLetGo, holdInReverse, knobFor, letGoTo, notSounding, skipWay } fro
 import { resumePlace } from './player/resumePlace';
 import { drivenHold, NO_DRIVEN_HOLD, NO_OWN_RAMP, NO_PENDING_NEXT, ownRamp, pendingNext, type DrivenHold, type OwnRamp, type PendingNext } from './player/tapeParts';
 import { due, entered, NO_DEADLINES, type Deadlines } from './player/graces';
+import { heldAt, holdAfterCut, type HeldFor } from './player/holdOn';
 import { brakeLengthMs, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 import { heard as readClock, heardSpeed } from './player/heard';
@@ -238,6 +245,11 @@ let appendingIndex = -1;
 let lastAppended = -1;
 /** The queue index `local.error` is about: it goes once a later track plays. */
 let errorIndex = -1;
+/** The track that could not be asked for, Cratarr out of reach (lib/player/holdOn): nothing after it is asked for. What the
+ *  stream holds plays out, and it stands there with the queue kept until that track comes. */
+let hold: HeldFor | null = null;
+/** Cratarr did not answer for it: the network, or its proxy's empty 5xx or bare 403. Nothing is known of the track. */
+class NotReached extends Error {}
 
 // --- The tape engine's one state (decision 0075; the owner, 2026-10-27: "spread... fix it") ---
 // Everything that moves the tape, in one place, so no two parts of it can disagree: what a ramp has committed to and how
@@ -632,6 +644,8 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
     if (t.from) query.set('from', t.from);
     const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${query.toString() ? `?${query}` : ''}`, {
       signal: ctl.signal,
+    }).catch((e) => {
+      throw (e as DOMException).name === 'AbortError' ? e : new NotReached();
     });
     if (!res.ok) {
       if (asksSignIn(res)) toSignIn();
@@ -641,8 +655,13 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
       } catch {
         /* no words */
       }
+      if (!text && notReached(res.status)) {
+        if (res.status === 403) refusedHere();
+        throw new NotReached();
+      }
       throw new Error(`${t.name || 'A track'}: ${text || 'it could not be loaded.'}`);
     }
+    if (hold?.index === index) hold = null;
     // Part of a file from a moment that does not say where it begins (x-start-ms): never taken as its start (0.10: a
     // Bandcamp preview's seek, so placed, came out short and was passed over). Asked again from its top instead.
     if (from > 0 && !whole && res.status === 206 && !res.headers.has('x-start-ms')) {
@@ -789,6 +808,13 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
   } catch (e) {
     if ((e as DOMException).name === 'AbortError' || gen !== generation) return;
     playback('warn', 'track failed', { track: t.id, source: t.source, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), ms: ms?.readyState ?? null, sb: !!sb, mime });
+    // Cratarr out of reach, which says nothing of this track: held here, none of what follows asked for, so the queue does not
+    // run out while the stream plays what it has. Said by nothing but the player waiting.
+    if (e instanceof NotReached) {
+      hold = heldAt(hold, { index, from, whole }, Date.now(), refusedFor());
+      unreached();
+      return;
+    }
     // Broke while it plays (a roam, a restart, a proxy tired of a paused stream): it ends at what the stream holds, so
     // what follows goes after that, never over it. Its rest is asked for from there, once: a fresh stream would throw
     // away the minute already in, which is all there is to play while Cratarr cannot be reached.
@@ -798,6 +824,12 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
       placedSegment.length = here.offset + ahead();
       streamEnd = Math.max(streamEnd, placedSegment.start + placedSegment.length);
       if (!again) return appendTrack(index, placedSegment.length, gen, whole, true);
+    }
+    // Broke before its turn: what came of it goes, and it is asked for once more, which tells Cratarr gone from a track that
+    // will not come.
+    if (placedSegment && !reached && !again) {
+      cutFrom(index);
+      return appendTrack(index, 0, gen, false, true);
     }
     local.error = e instanceof Error ? e.message : String(e);
     errorIndex = index;
@@ -840,6 +872,7 @@ async function fresh(index: number, from = 0, play = true) {
   from = r.from;
   play = r.play;
   const gen = ++generation;
+  hold = null;
   streamFrom = { index, from };
   fetching?.abort();
   // Its own track's append is under way from here (its source opening first): the tick appends no other meanwhile. A
@@ -924,7 +957,8 @@ function tick() {
   settleTape();
   local.paused = tape.quietPause ? false : (tape.committed ?? audio.paused);
   const w = where(tape.heldAt ?? audio.currentTime);
-  if (w && tape.rewinding) local.position = tape.rewindPos ?? local.position;
+  if (headWind) local.position = headPlace(headWind);
+  else if (w && tape.rewinding) local.position = tape.rewindPos ?? local.position;
   else if (w) {
     if (w.seg.index !== local.index) {
       // Repeat one: the stream went on to the next track by itself; back to the start of this one. (Next and previous
@@ -942,10 +976,13 @@ function tick() {
     showOnLockScreen();
   }
   const gen = generation;
-  if (!appending && lastAppended >= local.index && lastAppended < local.queue.length - 1 && streamEnd - audio.currentTime < AHEAD && streaming()) {
+  if (hold) {
+    if (Date.now() >= hold.askAt) askHeld();
+  } else if (!appending && lastAppended >= local.index && lastAppended < local.queue.length - 1 && streamEnd - audio.currentTime < AHEAD && streaming()) {
     appendTrack(lastAppended + 1, 0, gen);
   }
   if (!appending) evict();
+  keepNowDue();
   if ('mediaSession' in navigator && local.duration && Number.isFinite(local.duration)) {
     try {
       navigator.mediaSession.setPositionState({ duration: local.duration, position: Math.min(local.position, local.duration), playbackRate: 1 });
@@ -1161,7 +1198,7 @@ if (audio) {
   el.addEventListener('stalled', () => {
     const buffered = el.buffered.length ? Math.round(el.buffered.end(el.buffered.length - 1) * 10) / 10 : 0;
     playback('warn', 'stalled', { index: local.index, at: Math.round(el.currentTime * 10) / 10, buffered });
-    if (buffered === 0) fallBack('stalled with nothing in');
+    if (buffered === 0 && !hold) fallBack('stalled with nothing in');
   });
   el.addEventListener('waiting', () => {
     playback('info', 'waiting', { index: local.index, at: Math.round(el.currentTime * 10) / 10 });
@@ -1544,6 +1581,7 @@ function hand(op: string, args: Record<string, unknown> = {}) {
  *  second: counted on from the playing player's last report, or read from this page's own audio. */
 export function positionNow(): number {
   if (!handed()) {
+    if (headWind) return headPlace(headWind);
     const w = where();
     return tape.rewindPos ?? (w ? inTrack(w) : local.position);
   }
@@ -1793,6 +1831,8 @@ export async function startRadio(seed: string[], from: string | null, within: Co
 const BATCH = 5;
 const LOW = 3;
 let filling = false;
+/** Cratarr out of reach when Radio or Autoplay asked. */
+let picksOwed = false;
 /** The own tracks Radio has asked inserts for (by entry, or place and id): one ask per track. */
 const insertedFor = new Set<string>();
 
@@ -1802,6 +1842,12 @@ function fill() {
   nextRound();
   insertRadio();
   fillAutoplay();
+}
+
+/** Radio's or Autoplay's ask failed: said, unless Cratarr is out of reach, when they are asked for again as it answers. */
+function picksFailed(e: unknown) {
+  if (e instanceof Error && e.message === UNREACHED) picksOwed = true;
+  else local.error = e instanceof Error ? e.message : String(e);
 }
 
 /** Radio, this page's own stream: about five tracks like the own track that plays, right after it and its hand-added
@@ -1827,7 +1873,7 @@ function insertRadio() {
     })
     .catch((e) => {
       insertedFor.delete(key);
-      local.error = e instanceof Error ? e.message : String(e);
+      picksFailed(e);
     });
 }
 
@@ -1858,7 +1904,7 @@ function fillAutoplay() {
         next();
       }
     })
-    .catch((e) => (local.error = e instanceof Error ? e.message : String(e)))
+    .catch(picksFailed)
     .finally(() => {
       filling = false;
       nextKept = pendingNext.filled(nextKept);
@@ -2049,6 +2095,7 @@ export const moveUpcoming = (from: number, to: number) => move(local.index + 1 +
 /** The queue changed from index `at` on: what the stream holds (or is fetching) from there is no longer what comes
  *  next. It is dropped, and the tick appends the new next track gaplessly after the last one kept. */
 function cutFrom(at: number) {
+  hold = holdAfterCut(hold, at, local.queue.length);
   // A track still coming in counts as appended only once wholly in, but its segment and its sound are in the stream
   // already: stopped, they go too.
   const aborted = appending && appendingIndex >= at;
@@ -2271,7 +2318,15 @@ export function stop(): { queue: LocalTrack[]; index: number; position: number }
   const was = { queue: local.queue, index: local.index, position: local.position };
   if (handed()) hand('stop');
   else keepLocal(standing(), '');
+  empty();
+  if (!handed()) keepNow();
+  return was;
+}
+
+/** The stream ended and the player emptied: nothing of what played lingers. */
+function empty() {
   generation++;
+  hold = null;
   endRewind();
   atOnce();
   resetTape();
@@ -2281,7 +2336,6 @@ export function stop(): { queue: LocalTrack[]; index: number; position: number }
   local.queue = [];
   local.index = -1;
   local.paused = true;
-  return was;
 }
 
 // --- Queue history in this browser (decision 0033, amended: a browser playing itself keeps its own, here only) ---
@@ -2309,10 +2363,12 @@ export type KeptQueue = {
 const KEPT_KEY = 'cratarr-queues';
 /** Queues in all, with the one that plays. */
 const QUEUES = 20;
+/** Whose list it is: each account's apart (decision 0101), hidden while another is signed in. */
+let keptOf = perAccount(KEPT_KEY);
 
 function loadKept(): KeptQueue[] {
   try {
-    const list = JSON.parse(localStorage.getItem(KEPT_KEY) ?? '[]');
+    const list = JSON.parse(localStorage.getItem(keptOf) ?? '[]');
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
@@ -2324,11 +2380,28 @@ export const keptHere = $state({ list: loadKept(), id: '', renamed: false });
 
 function saveKept() {
   try {
-    localStorage.setItem(KEPT_KEY, JSON.stringify(keptHere.list));
+    localStorage.setItem(keptOf, JSON.stringify(keptHere.list));
   } catch {
     // A private window, or storage refused: the list lasts as long as the page.
   }
 }
+
+// Another account signed in, or nobody: the one leaving's list and queue kept, the one come's read. What plays was the one
+// leaving's: it goes with them, and nothing of it is kept under the one come.
+whenAccount.add(() => {
+  const k = perAccount(KEPT_KEY);
+  if (k === keptOf) return;
+  saveKept();
+  if (!handed() && local.queue.length) {
+    keepNow();
+    empty();
+    untold = false;
+  }
+  keptOf = k;
+  nowOf = perAccount(NOW_KEY);
+  keptHere.list = loadKept();
+  takeUpKept();
+});
 
 const newQueueId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 
@@ -2390,6 +2463,11 @@ export function switchLocal(id: string) {
   const k = keptHere.list.find((x) => x.id === id);
   if (!k || id === keptHere.id) return;
   keepLocal(standing(), k.id);
+  takeUp(k, k.playing);
+}
+
+/** `k` in the player, where it was left. */
+function takeUp(k: KeptQueue, play: boolean) {
   keptHere.renamed = k.renamed;
   saveKept();
   Object.assign(local, {
@@ -2403,7 +2481,7 @@ export function switchLocal(id: string) {
     autoplay: k.autoplay,
     from: k.name,
   });
-  fresh(Math.min(k.index, k.tracks.length - 1), k.position, k.playing);
+  fresh(Math.min(k.index, k.tracks.length - 1), k.position, play);
   fill();
 }
 
@@ -2427,6 +2505,87 @@ export function deleteLocal(id: string) {
   saveKept();
 }
 
+// --- The queue that plays, kept on this device (decision 0101, points 14 and 19) ---
+// Each account's own, as the list above. Cratarr holds a player's queue too, and gives it back as the page opens, with its
+// word on whether it plays on. So this copy is taken up only where that cannot be: Cratarr out of reach, or a queue that went on
+// while it was (`ahead`), which it cannot know of. Then the page's first report is how Play On takes it up. A browser's only:
+// in the app the app keeps its own (Prefs.savedQueue).
+
+/** The queue that plays as kept; `ahead`: Cratarr has not been told how it stands. */
+type KeptNow = KeptQueue & { ahead: boolean };
+
+const NOW_KEY = 'cratarr-queue-now';
+/** While it plays, its place is kept this often; a change of queue, track or pause at the clock's next moment. */
+const KEEP_EVERY_MS = 10_000;
+let nowOf = perAccount(NOW_KEY);
+/** What is kept is `ahead`. */
+let untold = false;
+let keptAt = 0;
+let keptAs = { queue: local.queue, index: local.index, paused: local.paused };
+
+function keepNow() {
+  const q = standing();
+  untold = !!q && (untold || reach.away);
+  try {
+    if (q) localStorage.setItem(nowOf, JSON.stringify({ ...q, id: keptHere.id || q.id, ahead: untold } satisfies KeptNow));
+    else localStorage.removeItem(nowOf);
+  } catch {
+    // As the list: it lasts as long as the page.
+  }
+  keptAt = Date.now();
+  keptAs = { queue: local.queue, index: local.index, paused: local.paused };
+}
+
+function keepNowDue() {
+  const same = keptAs.queue === local.queue && keptAs.index === local.index && keptAs.paused === local.paused;
+  if (!same || (!local.paused && Date.now() - keptAt >= KEEP_EVERY_MS)) keepNow();
+}
+
+/** A report reached Cratarr, the queue in it where it changed: this copy is no longer ahead of it. */
+export function queueTold() {
+  if (!untold) return;
+  untold = false;
+  if (!handed() && local.queue.length) keepNow();
+}
+
+function readNow(): KeptNow | null {
+  try {
+    const k = JSON.parse(localStorage.getItem(nowOf) ?? 'null');
+    return k && Array.isArray(k.tracks) && k.tracks.length ? k : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The queue kept here taken up, paused at the place it reached, where Cratarr cannot give it back or has an older one. The
+ *  page has no sound of its own to go on with before it is touched, and away it has only what it keeps. */
+function takeUpKept() {
+  if (!audio || handed() || prefs.output !== 'local' || local.queue.length || accountKey() === null) return;
+  const k = readNow();
+  if (!k || !(k.ahead || reach.away)) return;
+  untold = k.ahead;
+  keepLocal(null, k.id);
+  takeUp(k, false);
+}
+whenAway.add(takeUpKept);
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => document.hidden && !handed() && local.queue.length && keepNow());
+
+// --- Held on server loss (lib/player/holdOn) ---
+
+/** The track held for, asked for again. It goes on from there by itself, as the stream never ended: what the element ran out
+ *  of comes in behind it, and a paused player stays paused. */
+function askHeld() {
+  if (hold && !appending) void appendTrack(hold.index, hold.from, generation, hold.whole);
+}
+
+// Cratarr answers: what waited for it at once, not at the next knock.
+whenReached.add(() => {
+  askHeld();
+  if (!picksOwed) return;
+  picksOwed = false;
+  if (!handed()) fill();
+});
+
 // --- Play On to this page (decision 0033: a page is a Play On target while it is open; 0031 amended) ---
 
 /** Its volume as Cratarr sets it (0 to 100), and whether it is ducked (an announcement): the element's, times a duck. */
@@ -2442,6 +2601,7 @@ export function setSnippetDuck(v: number) {
 function applyVolume() {
   if (audio) audio.volume = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1) * snippetDuck * rampGain;
   clipVolume();
+  if (headWind) tapeHead.setGain(headGain(headWind.gainDb));
 }
 
 // --- Start and stop (Settings › This device; the owner, 2026-10-25) ---
@@ -3012,6 +3172,7 @@ const holdFor = (dir: 1 | -1): HoldWind => holdWind(prefs.startStop, dir, Math.m
  *  clock through its way's speed, else the track's own as measured on its element (lib/player/heard); null where this
  *  page plays nothing here, or before it has been heard long enough to measure. */
 export function heardDeckSpeed(now = performance.now()): number | null {
+  if (headWind) return tapeHead.heardSpeed() ?? null;
   const w = tape.rewinding;
   if (w && w.at !== null) {
     const s = heardSpeed(w.clip, now);
@@ -3715,6 +3876,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
 }
 /** Ends a wind under way (nothing where none is). */
 function endRewind() {
+  if (headWind) headEnd();
   const w = tape.rewinding;
   if (!w) return;
   if (w.handArmed) disarm(w.handArmed);
@@ -4543,3 +4705,136 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
 }
 
 if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) lockScreenActions();
+
+// --- The tape on the page's own head (decision 0102) ---
+// The playing track's file fetched whole as it starts and read by the head (lib/tape) at any speed either way, the
+// track's own player waiting paused, handed back to where the head was heard. What a press does, the deck's state
+// machine says (0102, amended 2026-11-04: one pure machine in the rules crate, a5's, carried out here and in the app);
+// this is what carries its outcomes out: a motion started on the head ([headStart]), followed ([headStep]), let go,
+// handed back ([headFinish]) or dropped ([headEnd]). Until the machine is here, the server's wind streams as before.
+
+/** Normal play stays the track's own player's until 0102's gate is passed, which is the owner's call. Till then nothing calls
+ *  [headStart], so a file fetched for the head would be a whole file more for every track, for nothing. */
+const HEAD_PLAYS = false;
+
+/** A wind on the head: its track (its place in the queue and its key), where it began (s), its motion, when it began
+ *  (the clock's ms, for its length only), when it is over (ms in; null: at an edge, or at its let-go's arrival), what
+ *  follows it (where it was last heard, s, and whether it stopped at an edge), and its hold while held. */
+type HeadWind = {
+  index: number;
+  key: string;
+  fromSecs: number;
+  motion: TapeMotion;
+  t0: number;
+  endsAtMs: number | null;
+  then: (atSecs: number, edge: boolean) => void;
+  held: { dir: 1 | -1; letGo: boolean } | null;
+  gainDb: number;
+};
+let headWind: HeadWind | null = null;
+let headTimer: ReturnType<typeof setInterval> | null = null;
+/** How long after a wind's end (on its clock) it is heard there: the output's own delay (the app's HEARD_AFTER_MS). */
+const HEAD_HEARD_AFTER_MS = 300;
+const HEAD_STEP_MS = 40;
+
+/** A track's key on the head (lib/tape/file): Cratarr's own tracks only (never a preview, the device's or another server's
+ *  music). */
+const onHead = (t: LocalTrack | undefined) => (t && windable(t) ? headKey(t) : null);
+
+// The playing track's file fetched for the head as it starts (the playing track only, the owner's choice). Only in a
+// browser: in the app its own player has its own head.
+$effect.root(() => {
+  $effect(() => {
+    if (!HEAD_PLAYS || inApp || !audio) return;
+    const t = local.queue[local.index];
+    const key = onHead(t);
+    if (!key || !t) return;
+    untrack(() => void headLoad(key, headFile(t)));
+  });
+});
+async function headLoad(key: string, url: string) {
+  const error = await tapeHead.load(key, url);
+  if (error) playback('warn', 'tape head: the track not loaded', { key, error });
+}
+
+/** The head's gain for a wind: the page's volume and the track's level, times the wind's own (dB). */
+function headGain(gainDb: number): number {
+  const page = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1) * snippetDuck;
+  return Math.max(0, page * (level ? (told?.level ?? 1) : 1) * 10 ** (gainDb / 20));
+}
+
+/** Where the head is heard now, s into its track; where it began until it has been heard. */
+const headPlace = (w: HeadWind) => (tapeHead.heardMs() ?? w.fromSecs * 1000) / 1000;
+
+/**
+ * The head reads the playing track from `fromSecs` by `motion` at the wind's `gainDb`, the track's own player waiting
+ * paused; over at `endsAtMs` ms in (null: at its let-go's arrival, or at an edge of the track), then `then` with where it
+ * was last heard. False where the head has no file of the playing track yet (the server's stream then).
+ */
+function headStart(fromSecs: number, motion: TapeMotion, gainDb: number, endsAtMs: number | null, then: HeadWind['then'], held: HeadWind['held'] = null): boolean {
+  if (!audio || headWind || tape.rewinding) return false;
+  const key = onHead(local.queue[local.index]);
+  if (!key || tapeHead.tape.ready !== key) return false;
+  const w: HeadWind = { index: local.index, key, fromSecs, motion, t0: performance.now(), endsAtMs, then, held, gainDb };
+  const over = (edge: boolean) => headWind === w && headFinish(w, edge);
+  if (!tapeHead.start(key, fromSecs * 1000, motion, headGain(gainDb), (why) => over(why !== 'stopped'), () => over(false))) return false;
+  headWind = w;
+  audio.pause();
+  tape.committed = false;
+  local.paused = false;
+  local.position = fromSecs;
+  rewindNow.on = true;
+  windAsked(false);
+  playback('info', 'tape head: a wind', { from_s: Math.round(fromSecs * 10) / 10, kind: motion.kind, ends_at_ms: endsAtMs });
+  headTimer = setInterval(() => headStep(w), HEAD_STEP_MS);
+  return true;
+}
+
+/** Each step while a head wind runs: where it is heard shown; a hold's speed for the deck; over once its end (or its
+ *  let-go's arrival) has been heard. */
+function headStep(w: HeadWind) {
+  if (headWind !== w) return;
+  local.position = headPlace(w);
+  if (w.held) {
+    holdNow.on = true;
+    holdNow.speed = Math.abs(tapeHead.heardSpeed() ?? 0);
+    holdNow.dir = w.held.dir;
+    holdNow.held = !w.held.letGo;
+    holdNow.top = FLIGHT_TOP;
+  }
+  const elapsed = performance.now() - w.t0;
+  if (w.endsAtMs !== null && elapsed >= w.endsAtMs + HEAD_HEARD_AFTER_MS) return headFinish(w, false);
+}
+
+/** The head wind over: the head stopped, the track's own player put where the head was last heard, what follows. */
+function headFinish(w: HeadWind, edge: boolean) {
+  if (headWind !== w) return;
+  const at = Math.max(0, headPlace(w));
+  headEnd();
+  playback('info', 'tape head: the wind over', { at_s: Math.round(at * 10) / 10, edge });
+  w.then(at, edge);
+}
+
+/** The head wind dropped where it is, nothing following it (a press taking over). */
+function headEnd() {
+  headWind = null;
+  if (headTimer) clearInterval(headTimer);
+  headTimer = null;
+  tapeHead.stop();
+  holdNow.on = false;
+  tape.holding = null;
+  rewindNow.on = false;
+  windAsked(false);
+  tape.committed = null;
+  sought.n++;
+}
+
+// The app's own head could not sound a wind (a5's `tape` message): the knob stays as turned, and the deck says why.
+if (inApp)
+  onApp('tape', (m) => {
+    const text = refusedText(m.refused, m.way);
+    if (text) toast.show({ text });
+  });
+
+// The last line here: what it reaches reads all of the above, the head's part too, as this module loads.
+takeUpKept();

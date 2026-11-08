@@ -128,11 +128,14 @@ const TRACK_SWITCHES: ListSwitch[] = [
   { key: 'unplayed', label: 'Unplayed only' },
   { key: 'missing', label: 'Hide missing tracks' },
 ];
+/** The switch only this device can answer: what it holds is no word of Cratarr's (lib/listFilter). */
+export const HERE = 'here';
 export const SWITCHES: Record<string, ListSwitch[]> = {
   library: [
     { key: 'favourites', label: 'Favourites only' },
     { key: 'unplayed', label: 'Unplayed only' },
     { key: 'topRated', label: '4 stars and up' },
+    { key: HERE, label: 'Available offline' },
     // Not Lossless only, Upgrades waiting or Duplicates waiting (the owner, 2026-10-24: not filter options).
   ],
   playlists: [

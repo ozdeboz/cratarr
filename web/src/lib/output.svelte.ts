@@ -18,7 +18,8 @@ import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 import { keep, readKept } from './keptStore';
-import { accountKey, whenAccount } from './account';
+import { accountKey, pageGoing, whenAccount, whenLeaving } from './account';
+import { heldHere } from './deviceAnswers.svelte';
 import { playsToTell } from './playsToTell';
 import { reach, whenReached } from './reach.svelte';
 
@@ -29,9 +30,9 @@ export { isLocal, localNowPlaying, localState, tookLocal } from './player/port.s
 export const playsHere = () => prefs.output === 'local' && canPlayHere;
 
 // Leaving the page stops what plays in this browser, so a reload or closing the tab asks first (the browser's own
-// "Leave site?"), but only while this browser is playing.
+// "Leave site?"), but only while this browser is playing, and not once the account's own doing has it going.
 addEventListener('beforeunload', (e) => {
-  if (!playsHere() || local.index < 0 || local.paused) return;
+  if (pageGoing() || !playsHere() || local.index < 0 || local.paused) return;
   e.preventDefault();
   e.returnValue = '';
 });
@@ -81,6 +82,7 @@ const plays = playsToTell<Unsent>(
   accountKey,
   (list) => void keep(PLAYS, list),
 );
+heldHere.plays = () => plays.waiting().filter((p) => p.account === accountKey());
 if (typeof window !== 'undefined') {
   readKept<Unsent[]>(PLAYS).then((v) => {
     if (!Array.isArray(v) || !v.length) return;
@@ -88,10 +90,8 @@ if (typeof window !== 'undefined') {
     if (!reach.away) plays.tell();
   });
   whenReached.add(plays.tell);
-  whenAccount.add(() => {
-    plays.stamp();
-    plays.tell();
-  });
+  whenAccount.add(plays.tell);
+  whenLeaving.add(plays.tell);
 }
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
 const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);

@@ -7,7 +7,8 @@
  * it is left (skipped for another, stopped when nothing follows), with how much of it was heard.
  * Each kept play carries the account it was heard under, and is told only while that account is signed in (the owner,
  * 2026-11-02, a bug fixed in 0.13: plays kept while one account was signed in were told as the next one's); another
- * account's wait for it, 30 days at most.
+ * account's wait for it, 30 days at most. One heard with nobody signed in (decision 0101) is counted on this device
+ * only, never told as anyone's.
  */
 package app.cratarr
 
@@ -21,8 +22,6 @@ import java.util.concurrent.Executors
 object Plays {
     private const val TAG = "CratarrPlays"
     private const val PENDING = "plays_pending"
-    /** The account signed in as last learnt ([learn]): the plays heard from now on carry it. */
-    private const val ACCOUNT = "plays_account"
     private const val PLAYED_HERE = "plays_device"
     /** The device music's plays kept here, the latest tracks. */
     private const val PLAYED_HERE_MOST = 200
@@ -33,15 +32,23 @@ object Plays {
 
     private val sender = Executors.newSingleThreadExecutor()
 
+    /** The plays of the account signed in not told yet: what this device adds to the counts it last heard. */
+    @Synchronized
+    fun waiting(context: Context): JSONArray {
+        val who = Who.accountOf(Who.current(context))
+        return JSONArray(load(context).filter { who != null && ours(it, who) }.map(::told))
+    }
+
     /** Told (on the player's thread) when the device music played here changed. */
     @Volatile var onPlayedHere: (() -> Unit)? = null
 
     /**
-     * A track heard (as the page describes it), started at `atMs`: how it ended (`finished`, `skipped`, `stopped`),
-     * whether it counts as a play, how much of it was heard and how long it is (ms; 0 when not known).
+     * A track heard (as the page describes it) under [who], started at `atMs`: how it ended (`finished`, `skipped`,
+     * `stopped`), whether it counts as a play, how much of it was heard and how long it is (ms; 0 when not known). [who], not
+     * the one signed in now: the track being left at a change is told just after it.
      */
     @Synchronized
-    fun heard(context: Context, track: JSONObject, atMs: Long, ended: String, counts: Boolean, heardMs: Long, lengthMs: Long) {
+    fun heard(context: Context, who: String, track: JSONObject, atMs: Long, ended: String, counts: Boolean, heardMs: Long, lengthMs: Long) {
         val source = track.optString("source")
         val id = track.optString("id")
         if (source.isEmpty() || id.isEmpty()) return
@@ -64,48 +71,62 @@ object Plays {
             .put("heard_secs", heardMs / 1000.0)
             .put("player", prefs.playerName)
         if (lengthMs > 0) play.put("length_secs", lengthMs / 1000.0)
-        prefs.queueId.takeIf { it.isNotEmpty() }?.let { play.put("context", "queue:$it") }
-        Prefs.shared(context).getString(ACCOUNT, null)?.let { play.put("account", it) }
-        save(context, load(context).apply { add(play) })
+        prefs.queueId.takeIf { it.isNotEmpty() && who == Who.current(context) }?.let { play.put("context", "queue:$it") }
+        // Whose it is; with nobody, the device's own count only.
+        val account = Who.accountOf(who)
+        if (account != null) save(context, load(context).apply { add(play.put("account", account)) })
         if (source == DeviceMusic.SOURCE && counts) playedHere(context, id, atMs)
-        tell(context)
+        if (account != null) tell(context)
     }
 
     /**
      * Played here (0.9.15, local mode's Home; the owner, 2026-10-28: "the best PWA offline support possible"): the
      * device music this device played, kept here, as Cratarr cannot know it offline, and the app plays with the page
-     * closed (in the background, Android Auto). Each track once: when last played, and how often.
+     * closed (in the background, Android Auto). Each track once: when last played, and how often. Each account's its own.
      */
     @Synchronized
     private fun playedHere(context: Context, id: String, atMs: Long) {
-        val all = loadArray(context, PLAYED_HERE)
+        val all = loadArray(context, Who.keyed(context, PLAYED_HERE))
         val was = all.firstOrNull { it.optString("id") == id }
         val count = (was?.optInt("count") ?: 0) + 1
         val now = all.filter { it !== was }.toMutableList()
         now.add(JSONObject().put("id", id).put("at", atMs).put("count", count))
         val kept = now.sortedByDescending { it.optLong("at") }.take(PLAYED_HERE_MOST)
-        Prefs.shared(context).edit().putString(PLAYED_HERE, JSONArray(kept).toString()).apply()
+        Prefs.shared(context).edit().putString(Who.keyed(context, PLAYED_HERE), JSONArray(kept).toString()).apply()
         onPlayedHere?.invoke()
     }
 
     /** The page's `device-plays` message: the device music played here, the latest first. */
     @Synchronized
     fun playedHere(context: Context): JSONObject =
-        JSONObject().put("type", "device-plays").put("plays", JSONArray(loadArray(context, PLAYED_HERE)))
+        JSONObject().put("type", "device-plays").put("plays", JSONArray(loadArray(context, Who.keyed(context, PLAYED_HERE))))
 
-    /** The page signed in (another session): whose it is, learnt now, so the plays heard from now on carry it; then that
-     *  account's own plays are told. Signed out (no session): the account is forgotten, so plays heard before the next
-     *  one is learnt wait unstamped and take its key, not the one signed out's (632's review, 2026-11-02); asked,
-     *  Cratarr would only refuse. */
+    /** The page signed in (another session): whose it is, learnt now ([Who]), so the plays heard from now on carry it;
+     *  then that account's own plays are told. No session: nobody is signed in. */
     fun signedIn(context: Context) {
         val app = context.applicationContext
         val server = Prefs(app).serverUrl?.trimEnd('/') ?: return
         if (Sessions.tokenIn(Net.cookie(server)) == null) {
-            Prefs.shared(app).edit().remove(ACCOUNT).apply()
+            // With sign-in off there is never one, and a move between the addresses is no sign-out.
+            if (Who.current(app) != Who.keyOf("")) Who.set(app, null)
             return
         }
         sender.execute { learn(app, server) }
         tell(app)
+    }
+
+    /** Asks Cratarr whose this device is now (blocking), so [Who] is right before what goes by it opens. Not reached: as
+     *  it was. */
+    fun look(context: Context) {
+        val app = context.applicationContext
+        learn(app, Prefs(app).serverUrl?.trimEnd('/') ?: return)
+    }
+
+    /** Tells them now and waits for it, a few seconds at most (blocking; the account signing out, decision 0101: its
+     *  plays go first, where Cratarr can be reached). */
+    fun flush(context: Context) {
+        tell(context)
+        runCatching { sender.submit {}.get(8, java.util.concurrent.TimeUnit.SECONDS) }
     }
 
     /** Tells Cratarr the plays not told yet of the account signed in; those it answers for are forgotten. */
@@ -117,7 +138,7 @@ object Plays {
             val account = learn(app, server) ?: return@execute
             val pending = synchronized(this) {
                 val now = System.currentTimeMillis()
-                val kept = stamped(load(app), account).filter { ours(it, account) || now - it.optLong("at") < KEEP_MS }
+                val kept = load(app).filter { ours(it, account) || now - it.optLong("at") < KEEP_MS }
                 save(app, kept)
                 kept.filter { ours(it, account) }
             }
@@ -135,9 +156,12 @@ object Plays {
         }
     }
 
-    /** The account signed in, as Cratarr's `/api/me` says (blocking), kept as the last learnt; null when it did not say
-     *  (not reached, not signed in): nothing is told then. */
+    /** The account signed in, as Cratarr's `/api/me` says (blocking), this device's from now on ([Who]); null when it
+     *  did not say (not reached; nobody signed in, which [Who] learns too): nothing is told then. An answer that no
+     *  longer [stands] changes nothing here, and its account's plays still go: Cratarr can still hear them. */
     private fun learn(app: Context, server: String): String? {
+        val asked = Who.current(app)
+        var nobody = false
         val account = try {
             val c = Net.open(app, "$server/api/me")
             try {
@@ -145,6 +169,7 @@ object Plays {
                 c.readTimeout = 10_000
                 val code = Net.code(app, c)
                 val body = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }
+                nobody = signedOut(code, body, c.getHeaderField("WWW-Authenticate"))
                 accountOf(code, body)
             } finally {
                 c.disconnect()
@@ -152,9 +177,19 @@ object Plays {
         } catch (e: Exception) {
             null
         }
-        if (account == null) Log.i(TAG, "whose the plays are not known yet") else Prefs.shared(app).edit().putString(ACCOUNT, account).apply()
+        when {
+            !stands(asked, Who.current(app), Sessions.signingOut) -> Log.i(TAG, "an answer from before a change")
+            account != null -> Who.set(app, account)
+            nobody -> Who.set(app, null)
+            else -> Log.i(TAG, "whose the plays are not known yet")
+        }
         return account
     }
+
+    /** Whether an answer still says who is signed in: nothing moved since it was asked, with [asked] signed in then and
+     *  [now] since, and no sign-out under way ([signingOut]), where the session it names stands until the page ends it.
+     *  Taken up all the same, it signs the one leaving back in. */
+    fun stands(asked: String, now: String, signingOut: Boolean): Boolean = asked == now && !signingOut
 
     /** The account a `/api/me` answer names: its name, or "" with signing in off (one user); null when it names none. */
     fun accountOf(code: Int, body: String?): String? = when {
@@ -163,10 +198,11 @@ object Plays {
         else -> null
     }
 
-    /** The account known: the plays carrying none take it (heard before one was learnt here, or kept before 0.13: the
-     *  account signed in then, as was taken until now). */
-    fun stamped(plays: List<JSONObject>, account: String): MutableList<JSONObject> =
-        plays.map { if (it.has("account")) it else JSONObject(it.toString()).put("account", account) }.toMutableList()
+    /** A `/api/me` answer saying nobody is signed in (not one that only did not come). The proxy's bare 403, away from
+     *  home, says nothing of the kind, nor any 401 but Cratarr's own ([challenge]: its `WWW-Authenticate`): taken for it, the
+     *  account's downloads and queue would go just when they are all there is. */
+    fun signedOut(code: Int, body: String?, challenge: String?): Boolean =
+        (code == 401 && Sessions.asksSignIn(challenge)) || (code == 404 && body?.contains("No one is signed in") == true)
 
     /** Whether a play is [account]'s: only those are told. */
     fun ours(play: JSONObject, account: String): Boolean = play.has("account") && play.optString("account") == account

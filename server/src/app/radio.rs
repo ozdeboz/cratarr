@@ -243,6 +243,10 @@ struct Cache {
 
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
+/// The album artist Radio takes a song's artists to go on with, for a query over `albums a`. A compilation's ("Various Artists")
+/// is no artist: it would make every compilation alike.
+pub(crate) const ALBUM_ARTIST_HEARD: &str = "CASE WHEN a.compilation = 1 OR lower(a.artist) IN ('various artists', 'various', 'va', 'verschiedene interpreten') THEN NULL ELSE a.artist_id END";
+
 /// A request as its listener's settings make it: their Similar by, and the libraries they let Radio and Autoplay choose
 /// from (0.9.5: their folders). With the account it is for, and whether Bandcamp joins.
 fn as_asked(mut req: NextRequest) -> Result<(NextRequest, Option<String>, bool), ToggleError> {
@@ -486,6 +490,18 @@ fn recent_plays(userdata: &Path, owner: &str) -> Result<HashMap<String, i64>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// What Radio leaves for later of `user`'s, as `ready` reads it: nothing while its play history is off.
+pub(super) fn recent_of(serve: &crate::serve::Serve, user: &str) -> Result<HashMap<String, i64>> {
+    let Some(dir) = &serve.data_dir else { return Ok(HashMap::new()) };
+    if serve.userdata.tracking(user) { recent_plays(&dir.join("userdata.sqlite"), user) } else { Ok(HashMap::new()) }
+}
+
+/// The folders of the libraries `user` lets Radio and Autoplay choose from; none: every one.
+pub(super) fn folders_of(serve: &crate::serve::Serve, user: &str) -> Option<Vec<i64>> {
+    let libraries = more_music_of(user).0?;
+    Some(serve.library.roots().into_iter().filter(|(_, r)| libraries.iter().any(|l| Path::new(l) == Path::new(r))).map(|(f, _)| f).collect())
+}
+
 /// Interns names as numbers: genres and tags in any case, ids exactly.
 #[derive(Default)]
 struct Names {
@@ -537,14 +553,11 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
         }
     }
     let (mut albums, mut artists, mut genres, mut tags) = (Names::exact(), Names::exact(), Names::default(), Names::default());
-    let mut st = lib.prepare(
-        // A compilation's album artist ("Various Artists") is no artist: it would make every compilation alike.
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres, s.duration_ms, s.bpm,
-                CASE WHEN a.compilation = 1 OR lower(a.artist) IN ('various artists', 'various', 'va', 'verschiedene interpreten')
-                     THEN NULL ELSE a.artist_id END, s.folder
+    let mut st = lib.prepare(&format!(
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres, s.duration_ms, s.bpm, {ALBUM_ARTIST_HEARD}, s.folder
          FROM songs s LEFT JOIN albums a ON a.id = s.album_id
-         ORDER BY s.album_id, s.disc_no, s.track_no, s.rel",
-    )?;
+         ORDER BY s.album_id, s.disc_no, s.track_no, s.rel"
+    ))?;
     let mut songs = Vec::new();
     let rows = st.query_map([], |r| {
         Ok((

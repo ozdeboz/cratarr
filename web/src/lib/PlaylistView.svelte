@@ -120,7 +120,7 @@
   import Icon, { type IconName } from './Icon.svelte';
   import NavigationControls from './NavigationControls.svelte';
   import { can, offers } from './capabilities.svelte';
-  import { later, laterKey } from './later.svelte';
+  import { laterKey, waitingHere } from './later.svelte';
   import { applyOps, opsFor, type PlaylistOp } from './playlistOps';
   import { reach } from './reach.svelte';
   import ProgressRing from './ProgressRing.svelte';
@@ -136,7 +136,7 @@
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
-  import { away, here } from './away.svelte';
+  import { away, rowsAway } from './away.svelte';
   import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, playListedAlbum, readLibrary } from './albums.svelte';
   import { copyLines, librariesOf, type CopyLine } from './copiesRule';
   import { shownIn } from './sources.svelte';
@@ -812,8 +812,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** Edit mode: there is a picture of its own to remove (as saved, or picked). */
   const ownImage = $derived(crateImage ? crateImage !== 'remove' : !!crates.list?.find((c) => c.id === builder?.id)?.image);
 
-  /** Offline (lib/reach), a track that cannot play: not on this device (the owner, 2026-10-26: dimmed; lib/away). */
-  const awayDim = (r: PlaylistRow, src: string) => away() && !here(src, r.id);
+  /** Offline, a track that cannot play: not on this device (the owner, 2026-10-26: dimmed; lib/away). */
+  const awayDim = (r: PlaylistRow, src: string) => rowsAway(src, [r.id]);
   const length = $derived(rows ? rows.reduce((a, r) => a + (r.duration_secs ?? 0), 0) : 0);
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
 
@@ -1016,7 +1016,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const recordCells = (rec: CrateRecord): Cell[] => recordCols.map((c) => ({ ...c, text: recordCell(rec, c.id, albumTotal(rec), clockText, addedOn) }));
   // An album's own count, from the Library's list (Cratarr's own albums: a row of another source has no album id).
   $effect(() => {
-    if (recordsView && !library.view) untrack(() => void readLibrary(false));
+    if (recordsView && !library.view) untrack(() => readLibrary(false)).catch(() => {});
   });
   // As its rows say (album_tracks), else as the Library's list has the album.
   const albumTotal = (rec: { of: number | null; albumId: string | null }) =>
@@ -1783,7 +1783,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const opsReady = (rs: readonly PlaylistRow[] | null | undefined) => can('playlist_ops') === true && !!rs?.length && rs.every((r) => !!r.entry_id);
   const opsPath = (list: string) => `/api/playlists/${encodeURIComponent(list)}/ops`;
   function withWaiting(list: string, rs: PlaylistRow[]): PlaylistRow[] {
-    const ops = later.list
+    const ops = waitingHere()
       .filter((c) => c.path === opsPath(list) && c.body)
       .flatMap((c): PlaylistOp[] => {
         try {
@@ -2307,7 +2307,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       <header class="head">
         <div class="top">
         <div class="art" class:mosaic={coversShown.length === 4}>
-          {#each coversShown as c, i (i)}<Cover src={c} />{:else}<Cover src={null} />{/each}
+          {#each coversShown as c, i (i)}<Cover src={c} whole />{:else}<Cover src={null} />{/each}
         </div>
           <div class="info fields">
             <label class="field">
@@ -2337,9 +2337,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {:else if oneWide}
           <!-- Alone, it takes the top row's middle too (the glass is at that row's far ends) and comes nearer the action
                bar (the owner, 2026-10-26: at least twice the size it had). -->
-          <CoverFlow covers={heroShown} top={8} foot={40} />
+          <CoverFlow covers={heroShown} top={8} foot={40} whole />
         {:else}
-          {#each heroShown as c, i (i)}<Cover src={c} lazy={false} />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
+          {#each heroShown as c, i (i)}<Cover src={c} lazy={false} whole />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
         {/if}
         {#if crateEditing}
           <!-- The crate's own picture, set or removed with Save. -->

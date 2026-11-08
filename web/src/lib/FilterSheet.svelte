@@ -17,7 +17,7 @@
   import { activeConditions, filterChange, filterOf, filtersOn, hiddenLibraries, inView, resetFilter, setConditions, setSwitch, switchOn } from './listFilter.svelte';
   import { SWITCHES } from './pageView.svelte';
   import { startCrate, withoutFor } from './crates.svelte';
-  import { filterList, getCrateAxes, getLibraries, getStatus, type LibrariesView, type LibraryUse } from './api';
+  import { filterList, getCrateAxes, getLibraries, getStatus, notAnswered, type LibrariesView, type LibraryUse } from './api';
   import Icon from './Icon.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { keepWhile } from './keepWhile.svelte';
@@ -101,7 +101,8 @@
       (a) => (axes = a),
       (e) => {
         axes ??= [];
-        toast.fail(e, "The filter's conditions couldn't be loaded");
+        // Away from Cratarr its switches work all the same, Available offline among them, and the page says so already.
+        if (!notAnswered(e)) toast.fail(e, "The filter's conditions couldn't be loaded");
       },
     );
   });
@@ -132,7 +133,7 @@
       (e) => {
         if (gone) return;
         settingsKnown = true;
-        toast.fail(e, "The servers' libraries couldn't be loaded");
+        if (!notAnswered(e)) toast.fail(e, "The servers' libraries couldn't be loaded");
       },
     );
     return () => (gone = true);

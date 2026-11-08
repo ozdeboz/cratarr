@@ -2,9 +2,10 @@
 // (lib/pageView SWITCHES), remembered per kind of list (a page's id, or a panel kind) in the prefs. The Filter sheet
 // changes them (lib/FilterSheet); the lists read them.
 import { filterList, type Condition, type FilterList, type ListBlocked, type ListReason } from './api';
+import { albumsHere } from './away.svelte';
 import { noteChange } from './lastChange.svelte';
 import { complete } from './filterRow';
-import { pageView, SWITCHES } from './pageView.svelte';
+import { HERE, pageView, SWITCHES } from './pageView.svelte';
 import { prefs, type FilterCondition, type ListFilter } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
@@ -30,7 +31,7 @@ export function causeChip(kind: string, c: { kind: ListReason['kind']; key?: str
  *  as its filter stands now; none on, nothing. */
 export async function filterBlocked(kind: string, list: FilterList, source?: string): Promise<ListBlocked | null> {
   const conditions = $state.snapshot(conditionsFor(kind)) ?? [];
-  const switches = switchesOn(kind);
+  const switches = askedOf(kind);
   const without = list.kind === 'library' || list.kind === 'artists' ? hiddenLibraries() : undefined;
   if (!conditions.length && !switches.length && !without?.length) return null;
   return (await filterList(list, conditions, source, without, switches, true)).blocked ?? null;
@@ -106,6 +107,9 @@ export const activeConditions = (kind: string) => filterOf(kind).conditions.filt
  *  is no filter now. */
 export const switchesOn = (kind: string) => filterOf(kind).on.filter((k) => (SWITCHES[kind] ?? []).some((w) => w.key === k));
 
+/** Those Cratarr can answer: what this device holds it cannot know. */
+const askedOf = (kind: string) => switchesOn(kind).filter((k) => k !== HERE);
+
 /** How many filters a kind of list has on (the funnel's count): its conditions that apply and its switches on. */
 export const filtersOn = (kind: string) => activeConditions(kind).length + switchesOn(kind).length;
 
@@ -140,12 +144,14 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
     // A plain copy to send, read whole: a row's every field asks again (a card hands back a new row, lib/ConditionCard;
     // the owner, 2026-10-29: Not, then a chip, never asked the server again while rows were changed in place).
     const conditions = $state.snapshot(conditionsFor(kind)) ?? [];
-    const switches = switchesOn(kind);
+    const switches = askedOf(kind);
     const without = at && (at.list.kind === 'library' || at.list.kind === 'artists') ? hiddenLibraries() : undefined;
     const wait = atOnce.delete(kind) ? 0 : 300;
+    // Available offline: the device's own word, so it needs no Cratarr to answer it, and it holds with Cratarr away.
+    const held = switchesOn(kind).includes(HERE) ? albumsHere() : null;
     // A crate's rows come filtered (CrateLook.filter): its answer has no keys.
     if (!at || (!conditions.length && !switches.length) || at.list.kind === 'crate') {
-      out.keys = null;
+      out.keys = at && at.list.kind !== 'crate' ? held : null;
       out.pending = false;
       of = '';
       return;
@@ -162,7 +168,7 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
       filterList(at.list, conditions, at.source, without, switches).then(
         (f) => {
           if (gone) return;
-          out.keys = new Set(f.keys);
+          out.keys = new Set(held ? f.keys.filter((k) => held.has(k)) : f.keys);
           out.pending = false;
         },
         (e) => {

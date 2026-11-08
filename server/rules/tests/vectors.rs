@@ -12,8 +12,10 @@ use std::sync::Arc;
 use cratarr_rules::crates::{self, Alike, Avoid, Condition, Facts, Favourites, LikeMode, Target, Trait, Use, Value, View, World, credited_names};
 use cratarr_rules::excluded_artists;
 use cratarr_rules::ids::song;
+use cratarr_rules::index::own::{Kept, List, Own};
+use cratarr_rules::index::{self, Artist, Library, Rows};
 use cratarr_rules::radio::{Ask, Index, Mode, RadioBy, Song, choose};
-use cratarr_rules::similarity::{MOODS, Signal, Track, Weights};
+use cratarr_rules::similarity::{MOODS, Signal, Track, Weights, mean_sound};
 use cratarr_rules::{ByHand, How, Lane, Picked, Rng, add_place, pick, restore_order, shuffle_order};
 use serde::{Deserialize, Serialize};
 
@@ -225,8 +227,12 @@ impl Shared {
         Alike::of(files, &self.membership(), &self.artist_ids.iter().map(|(n, id)| (n.clone(), id.clone())).collect())
     }
 
-    /// Radio's index of it, as a caller makes one: albums, artists and playlists numbered as first met, its facts on top.
     fn index(&self) -> Index {
+        self.index_of(&self.facts())
+    }
+
+    /// Radio's index of it, as a caller makes one: albums, artists and playlists numbered as first met, its facts on top.
+    fn index_of(&self, files: &[Facts]) -> Index {
         let (mut albums, mut artists, mut lists) = (Numbers::default(), Numbers::default(), Numbers::default());
         let songs = self
             .files
@@ -237,7 +243,7 @@ impl Shared {
                 Song { id: song(f.track), title: f.rel.clone(), album: f.album.clone(), album_id: f.album.clone(), album_n: albums.of(&f.album), like, folders: vec![f.folder], ..Song::default() }
             })
             .collect();
-        Index::new(songs).with_facts(&self.facts())
+        Index::new(songs).with_facts(files)
     }
 
     /// A line's song.
@@ -728,6 +734,27 @@ fn radio_picks_as_written() {
     }
 }
 
+/// The written answers come of sounds each library made of unit length itself. A server's facts come so already and the
+/// libraries share them: the answers stay the ones written.
+#[test]
+fn every_crate_and_pick_answers_as_written_from_sounds_of_unit_length_shared() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let (crates, radio): (Vec<CrateCase>, Vec<RadioCase>) = (serde_json::from_str(CRATES).unwrap(), serde_json::from_str(RADIO).unwrap());
+    let mut files = lib.facts();
+    for f in &mut files {
+        f.sound = f.sound.take().and_then(|s| mean_sound(&[&s])).map(Arc::from);
+    }
+    assert!(files.iter().any(|f| f.sound.is_some()));
+    let alike = lib.alike(&files);
+    for c in &crates {
+        assert_eq!(crate_answer(&lib, &files, &alike, c), c.expected, "{}", c.name);
+    }
+    let index = lib.index_of(&files);
+    for c in &radio {
+        assert_eq!(radio_answer(&index, c), c.expected, "{}", c.name);
+    }
+}
+
 #[test]
 fn every_way_of_asking_radio_is_written_and_the_seed_decides() {
     let cases: Vec<RadioCase> = serde_json::from_str(RADIO).unwrap();
@@ -788,6 +815,265 @@ fn random_is_written_with_a_seed_left_to_draw_that_holds_each_thing_it_may_not_p
     assert!(cases.iter().any(|c| c.ask.mode == Mode::Random && left(c).iter().any(|t| c.expected.contains(t))), "no case draws from the seed");
 }
 
+// --- The same answers through the index (0101's point 17): what a device holds is what the server read ---
+
+/// The shared library as a device holds it: an index of its files, through its bytes. A record's and an artist's id are numbers
+/// for life there, so what a case names by this library's own words moves to them first: what they became is the second part.
+fn held(lib: &Shared) -> (index::Index, HashMap<String, String>) {
+    let (mut records, mut artists) = (Numbers::default(), Numbers::default());
+    let mut moved = HashMap::new();
+    let mut rows = Rows::default();
+    for (name, id) in &lib.artist_ids {
+        let number = i64::from(artists.of(id)) + 1;
+        moved.insert(id.clone(), format!("ar-{number}"));
+        match rows.artists.iter_mut().find(|a| a.id == number) {
+            Some(a) => a.spelled.push(name.clone()),
+            None => rows.artists.push(Artist { id: number, name: name.clone(), sort: name.to_lowercase(), spelled: Vec::new() }),
+        }
+    }
+    for f in &lib.files {
+        let record = i64::from(records.of(&f.album)) + 1;
+        moved.insert(f.album.clone(), format!("al-{record}"));
+        if !rows.records.iter().any(|r| r.id == record) {
+            rows.records.push(index::Record { id: record, title: f.album.clone(), sort: f.album.clone(), ..index::Record::default() });
+        }
+        if !rows.libraries.iter().any(|l| l.id == f.folder) {
+            rows.libraries.push(Library { id: f.folder, key: format!("library-{}", f.folder), name: format!("Library {}", f.folder), ..Library::default() });
+        }
+        let artist_ids = f.artists.iter().map(|a| moved[&lib.artist_ids[a]][3..].parse().unwrap()).collect();
+        rows.tracks.push(index::Track { id: f.track, record, number: Some(f.track as u32), title: f.rel.clone(), artist_ids, facts: f.facts(), ..index::Track::default() });
+    }
+    let saved = index::Index::build(1, &rows).unwrap().save();
+    (index::Index::load(&saved).unwrap(), moved)
+}
+
+/// The index's facts, with the sounds as written: how near eight bits come is another question, and this one is what else differs.
+fn facts_held(index: &index::Index, lib: &Shared) -> Vec<Facts> {
+    let mut files = index.facts(None);
+    for (f, written) in files.iter_mut().zip(lib.facts()) {
+        assert_eq!(f.rel, written.rel, "the order they are handed in");
+        f.sound = written.sound;
+    }
+    files
+}
+
+#[test]
+fn every_crate_answers_as_written_through_the_index() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let mut cases: Vec<CrateCase> = serde_json::from_str(CRATES).unwrap();
+    let (index, moved) = held(&lib);
+    let files = facts_held(&index, &lib);
+    let alike = Alike::of(&files, &lib.membership(), &index.artist_ids());
+    assert!(cases.len() >= 60);
+    for c in &mut cases {
+        crates::move_named(&mut c.conditions, &mut |id| moved.get(id).cloned());
+        assert_eq!(crate_answer(&lib, &files, &alike, c), c.expected, "{}", c.name);
+    }
+}
+
+/// Radio's index of the shared library as the server reads one (`app::radio`): songs by their album's id as text, then track,
+/// albums and artists numbered as met, the facts on top.
+fn read_as_the_server_does(lib: &Shared, moved: &HashMap<String, String>, member: &HashMap<String, Vec<u32>>) -> Index {
+    let mut files: Vec<&File> = lib.files.iter().collect();
+    files.sort_by_key(|f| (moved[&f.album].clone(), f.track));
+    let (mut albums, mut artists) = (Numbers::default(), Numbers::default());
+    let songs = files
+        .into_iter()
+        .map(|f| {
+            let id = song(f.track);
+            let like = Track { playlists: member.get(&id).cloned().unwrap_or_default(), artists: f.artists.iter().map(|a| artists.of(&lib.artist_ids[a])).collect(), ..Track::default() };
+            Song { id, title: f.rel.clone(), album: f.album.clone(), album_id: moved[&f.album].clone(), album_n: albums.of(&f.album), like, folders: vec![f.folder], ..Song::default() }
+        })
+        .collect();
+    Index::new(songs).with_facts(&lib.facts())
+}
+
+#[test]
+fn radio_picks_through_the_index_as_from_the_servers_read() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let cases: Vec<RadioCase> = serde_json::from_str(RADIO).unwrap();
+    let (index, moved) = held(&lib);
+    let mut lists = Numbers::default();
+    let member: HashMap<String, Vec<u32>> =
+        lib.files.iter().filter_map(|f| Some((song(f.track), lib.playlists.get(&f.rel)?.iter().map(|p| lists.of(p)).collect()))).collect();
+    let (device, server) = (index.radio(&facts_held(&index, &lib), &member), read_as_the_server_does(&lib, &moved, &member));
+    assert!(cases.len() >= 100);
+    for c in &cases {
+        assert_eq!(radio_answer(&device, c), radio_answer(&server, c), "{}", c.name);
+    }
+}
+
+// --- The files a device is tested on (web/tests, through WebAssembly): a small library before and after the feed ---
+
+/// What a device holds and is sent of one small library.
+struct Device {
+    before: index::Index,
+    changes: index::Changes,
+    after: index::Index,
+    sounds: index::Sounds,
+    sound_changes: index::SoundChanges,
+    sounds_after: index::Sounds,
+    own: index::Marks,
+    /// A second account's on the same device (decision 0101 point 28): his own, none of hers.
+    own_bob: index::Marks,
+}
+
+fn device_library() -> Device {
+    let library = |id: i64, key: &str, name: &str, kind, colour: &str, owner: Option<&str>| Library {
+        id,
+        key: key.into(),
+        name: name.into(),
+        kind,
+        order: id as u32,
+        colour: Some(colour.into()),
+        owner: owner.map(str::to_string),
+    };
+    let artist = |id: i64, name: &str, sort: &str| Artist { id, name: name.into(), sort: sort.into(), spelled: Vec::new() };
+    let copy = |library: i64, dir: &str, format: &str, min_kbps: u32, bits: Option<u32>, size: u64, tracks: u32| index::RecordCopy {
+        library,
+        dir: dir.into(),
+        format: Some(format.into()),
+        min_kbps: Some(min_kbps),
+        bits,
+        rate: bits.map(|_| 44_100),
+        size: Some(size),
+        added: Some(1_000 + library),
+        tracks,
+    };
+    let track = |id: i64, record: i64, number: u32, title: &str, artists: &[i64], rel: &str, folders: &[i64], length: Option<f64>| index::Track {
+        id,
+        record,
+        disc: Some(1),
+        number: Some(number),
+        title: title.into(),
+        artist: Some(if artists.len() > 1 { "Ana Bell & The Quiet".into() } else { "Ana Bell".into() }),
+        artist_ids: artists.to_vec(),
+        facts: Facts { rel: rel.into(), folders: folders.to_vec(), born: Some(1_000 + id), length, year: Some(2001.0), bpm: Some(120.0), ..Facts::default() },
+    };
+    let libraries = vec![
+        library(1, "cratarr//music", "Music", index::Kind::Main, "#aa3322", None),
+        library(2, "cratarr//in coming", "Incoming", index::Kind::Incoming, "#22aa33", None),
+        library(3, "own/ann", "Ann's music", index::Kind::Own, "#3322aa", Some("ann")),
+    ];
+    let first_light = index::Record {
+        id: 10,
+        title: "First Light".into(),
+        sort: "first light".into(),
+        artist: "Ana Bell".into(),
+        artist_ids: vec![1],
+        year: Some(2001),
+        original_year: Some(1999),
+        added: Some(1_001),
+        kind: Some("album".into()),
+        secondary: vec!["live".into()],
+        genres: vec!["Jazz".into(), "Soul".into()],
+        copies: vec![copy(1, "Ana Bell/First Light", "FLAC", 900, Some(16), 5_000, 2), copy(2, "First Light", "MP3", 320, None, 2_000, 2)],
+        ..index::Record::default()
+    };
+    let second_wind = index::Record {
+        id: 11,
+        title: "Second Wind".into(),
+        sort: "second wind".into(),
+        artist: "Ana Bell & The Quiet".into(),
+        artist_ids: vec![1, 2],
+        year: Some(2003),
+        added: Some(1_002),
+        kind: Some("ep".into()),
+        whole_tracks: Some(3),
+        copies: vec![copy(1, "Ana Bell/Second Wind", "FLAC", 700, Some(24), 3_000, 2)],
+        ..index::Record::default()
+    };
+    let own = index::Record {
+        id: 12,
+        title: "Own Thing".into(),
+        sort: "own thing".into(),
+        artist: "Mo".into(),
+        artist_ids: vec![3],
+        copies: vec![copy(3, "Mo/Own Thing", "OPUS", 128, None, 900, 1)],
+        ..index::Record::default()
+    };
+    let new_record = index::Record {
+        id: 13,
+        title: "New Day".into(),
+        sort: "new day".into(),
+        artist: "Vera".into(),
+        artist_ids: vec![4],
+        added: Some(2_000),
+        copies: vec![copy(1, "Vera/New Day", "FLAC", 800, Some(16), 1_000, 1)],
+        ..index::Record::default()
+    };
+    let (dawn, daybreak) = (
+        track(100, 10, 1, "Dawn", &[1], "Ana Bell/First Light/01.flac", &[1, 2], Some(200.5)),
+        track(100, 10, 1, "Daybreak", &[1], "Ana Bell/First Light/01.flac", &[1, 2], Some(200.5)),
+    );
+    let noon = track(101, 10, 2, "Noon", &[1], "Ana Bell/First Light/02.flac", &[1, 2], Some(180.0));
+    let gust = track(102, 11, 1, "Gust", &[1, 2], "Ana Bell/Second Wind/01.flac", &[1], Some(90.25));
+    let calm = track(103, 11, 2, "Calm", &[1, 2], "Ana Bell/Second Wind/02.flac", &[1], None);
+    let mine = track(104, 12, 1, "Mine", &[3], "../own/Mo/Own Thing/01.opus", &[3], Some(60.0));
+    let fresh = track(105, 13, 1, "Fresh", &[4], "Vera/New Day/01.flac", &[1], Some(30.0));
+    let artists = vec![artist(1, "Ana Bell", "bell, ana"), artist(2, "The Quiet", "quiet, the"), artist(3, "Mo", "mo")];
+    let vera = artist(4, "Vera", "vera");
+    let before = Rows {
+        libraries: libraries.clone(),
+        artists: artists.clone(),
+        records: vec![first_light.clone(), second_wind.clone(), own.clone()],
+        tracks: vec![dawn, noon.clone(), gust.clone(), calm, mine.clone()],
+    };
+    let after = Rows {
+        libraries: libraries.clone(),
+        artists: artists.iter().cloned().chain([vera.clone()]).collect(),
+        records: vec![first_light.clone(), second_wind, own, new_record.clone()],
+        tracks: vec![daybreak.clone(), noon, gust, mine, fresh.clone()],
+    };
+    // A batch brings what its rows name, as the server's does.
+    let set = Rows { libraries, artists: vec![artists[0].clone(), vera], records: vec![first_light, new_record], tracks: vec![daybreak, fresh] };
+    let changes = index::Changes::new(5, 9, &set, index::Gone { libraries: Vec::new(), tracks: vec![103] });
+    let sound = |x: f32| vec![x, 1.0 - x, 0.5, -x];
+    let (sounds, sounds_after) =
+        (index::Sounds::build(5, &[(100, sound(0.25)), (101, sound(0.5)), (103, sound(0.75))]), index::Sounds::build(9, &[(100, sound(0.25)), (101, sound(0.625)), (105, sound(0.125))]));
+    let sound_changes = sounds_after.changes(5, &[101, 103, 105]);
+    let hearted = Kept { id: "hearted".into(), name: "Hearted".into(), conditions: vec![Condition::new("favourite", false, Value::Yes)], listed: true, ..Kept::default() };
+    let own = Own { favourites: vec![101, 102], crates: vec![hearted.clone()], lists: vec![List { id: "pl-1".into(), name: "Mix".into(), tracks: vec![100] }], ..Own::default() };
+    let marks = [index::Mark { track: 102, fit: Some(0.9), ..index::Mark::default() }, index::Mark { track: 101, fit: Some(0.25), plays: 2, last: Some(1_700_000_000), ..index::Mark::default() }];
+    let own = index::Marks::build(1_800_000_000, &marks).with_own(serde_json::to_string(&own).unwrap());
+    // The same crate saved by another account, who hearted another track and played it.
+    let bob = Own { favourites: vec![100], crates: vec![hearted], ..Own::default() };
+    let marks = [index::Mark { track: 100, fit: Some(0.75), plays: 1, last: Some(1_750_000_000), ..index::Mark::default() }];
+    let own_bob = index::Marks::build(1_800_000_000, &marks).with_own(serde_json::to_string(&bob).unwrap());
+    Device { before: index::Index::build(5, &before).unwrap(), changes, after: index::Index::build(9, &after).unwrap(), sounds, sound_changes, sounds_after, own, own_bob }
+}
+
+/// Where those files lie.
+fn device_files() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/index")
+}
+
+#[test]
+fn the_files_a_device_is_tested_on_are_what_this_library_makes_them() {
+    let (d, dir) = (device_library(), device_files());
+    let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
+    assert_eq!(read("whole.bin"), d.before.save());
+    assert_eq!(read("changes.bin"), d.changes.save());
+    assert_eq!(read("after.bin"), d.after.save());
+    assert_eq!(read("sounds.bin"), d.sounds.save());
+    assert_eq!(read("sound-changes.bin"), d.sound_changes.save());
+    assert_eq!(read("sounds-after.bin"), d.sounds_after.save());
+    assert_eq!(read("own.bin"), d.own.save());
+    assert_eq!(read("own-bob.bin"), d.own_bob.save());
+    let text = |name: &str| String::from_utf8(read(name)).unwrap().replace('\r', "");
+    assert_eq!(text("list.json"), d.before.list_json() + "\n");
+    assert_eq!(text("record.json"), d.before.record_json(10).unwrap() + "\n");
+}
+
+#[test]
+fn the_feed_of_those_files_applied_is_the_index_and_the_sounds_after_it_to_the_byte() {
+    let mut d = device_library();
+    d.before.apply(&d.changes).unwrap();
+    assert_eq!(d.before.save(), d.after.save());
+    d.sounds.apply(&d.sound_changes).unwrap();
+    assert_eq!(d.sounds.save(), d.sounds_after.save());
+}
+
 #[test]
 #[ignore = "writes the vectors: only when a rule changes on purpose"]
 fn write() {
@@ -796,6 +1082,22 @@ fn write() {
     }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors");
     let save = |name: &str, v: serde_json::Value| std::fs::write(dir.join(name), serde_json::to_string_pretty(&v).unwrap() + "\n").unwrap();
+    let (d, files) = (device_library(), device_files());
+    std::fs::create_dir_all(&files).unwrap();
+    for (name, bytes) in [
+        ("whole.bin", d.before.save()),
+        ("changes.bin", d.changes.save()),
+        ("after.bin", d.after.save()),
+        ("sounds.bin", d.sounds.save()),
+        ("sound-changes.bin", d.sound_changes.save()),
+        ("sounds-after.bin", d.sounds_after.save()),
+        ("own.bin", d.own.save()),
+        ("own-bob.bin", d.own_bob.save()),
+        ("list.json", (d.before.list_json() + "\n").into_bytes()),
+        ("record.json", (d.before.record_json(10).unwrap() + "\n").into_bytes()),
+    ] {
+        std::fs::write(files.join(name), bytes).unwrap();
+    }
     // The answers come from the library as written, so they are what reading it back gives on the last bit.
     let written = by_lines(&serde_json::to_value(shared_library()).unwrap()) + "\n";
     std::fs::write(dir.join("library.json"), &written).unwrap();

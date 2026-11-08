@@ -146,6 +146,9 @@ pub fn router(app: Arc<App>) -> Router {
         // Asked of everyone: who may is the record's own (0101 point 2).
         .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
         .route("/api/albums/{source}/{album}/delete", post(delete_album))
+        // A record's facts set by hand (0.13): one record or a selection. The administrators', and a record only in one person's
+        // own music theirs (`may_change`).
+        .route("/api/albums/overrides", put(set_overrides))
         // Classical (0.10): its composers, a composer's records, a track's other versions; everyone's.
         .route("/api/classical/composers", get(classical_composers))
         .route("/api/classical/composers/{key}", get(classical_composer))
@@ -157,6 +160,14 @@ pub fn router(app: Arc<App>) -> Router {
         // What this install can do (0.11, decision 0085): behind the sign-in, as the open health check must not say.
         .route("/api/capabilities", get(capabilities))
         .route("/api/changes", get(changes))
+        // The library on a device (0101's point 16): bytes, as the rules crate reads them.
+        .route("/api/index", get(device_index))
+        .route("/api/index/changes", get(device_index_changes))
+        .route("/api/index/covers", get(device_covers))
+        .route("/api/index/covers/changes", get(device_cover_changes))
+        .route("/api/index/own", get(device_own))
+        .route("/api/index/sounds", get(device_sounds))
+        .route("/api/index/sounds/changes", get(device_sound_changes))
         .route("/api/incoming", get(incoming))
         .route("/api/insights", get(insights))
         // A playlist's repairs, as its edits: everyone's while playlists are (decision 0051's third stage gives them
@@ -197,6 +208,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/tasks", get(own_tasks))
         .route("/api/tasks/{id}", delete(stop_task))
         .route("/api/tracks/describe", post(describe_tracks))
+        .route("/api/moved", post(ids_moved))
         .route("/api/scrobble", get(scrobble_targets))
         .route("/api/scrobbles", post(scrobbles_handed))
         .route("/api/scrobbles/now", post(scrobbles_now))
@@ -310,8 +322,6 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
             // A record marked classical or not (0.10), library-wide.
             .route("/api/albums/{source}/{album}/classical", put(mark_classical))
-            // A record's facts set by hand (0.13): one record or a selection.
-            .route("/api/albums/overrides", put(set_overrides))
             .route("/api/artists/discogs", get(artist_discogs))
             .route("/api/track-search", post(start_track_search))
             .route("/api/track-search/{id}", get(track_search))
@@ -341,6 +351,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/admin/migration", get(migration_report))
             .route("/api/admin/migration/moved", get(migration_moved))
             .route("/api/health/report", get(health_report))
+            // Health's Missing list: a track there is this one (A5), for good.
+            .route("/api/missing/reconnect", post(reconnect_track))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
             .route("/api/folders/suggested", get(suggested_folders))
@@ -928,8 +940,9 @@ async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Q
     Ok(Json(app.playing.toggle(&id, f.source.as_deref(), f.member).await?))
 }
 
-async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+async fn cover(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Query<CoverStamp>, headers: HeaderMap) -> Response {
     use crate::covers::Outcome;
+    let app = ctx.app.clone();
     if source == crate::bandcamp::SOURCE {
         return bandcamp_cover(&id).await;
     }
@@ -937,6 +950,28 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
     // Asked again each time, answered by its ETag (0.9.7): a changed cover shows at once, an unchanged one costs a 304.
     let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, no-cache"));
     let tag = |etag: &str| HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""));
+    // A track's row in a list (finding 86): its record's cover at that size, as the record's own row gets it. Its print is the
+    // library's word, so a 304 reads nothing.
+    if let (Some(size), Some(served)) = (q.size, ctx.served.clone())
+        && source == crate::source::cratarr::KIND.id
+        && id.starts_with(crate::serve::ids::SONG)
+    {
+        let (s, song) = (served.clone(), id.clone());
+        let Some(album) = tokio::task::spawn_blocking(move || s.album_of_song(&song)).await.ok().flatten() else {
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response();
+        };
+        let etag = format!("\"{}-{size}\"", served.cover_stamps().get(&album).map_or("", String::as_str));
+        if inm.is_some_and(|h| crate::covers::etag_matches(h, &etag)) {
+            return (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response();
+        }
+        return match crate::app::device_covers::for_list(&served, &album, size).await {
+            Some((ct, bytes)) => {
+                let ct = HeaderValue::from_static(crate::serve::art::picture_type(Some(&ct), &bytes));
+                ([cache, (header::ETAG, tag(&etag)), (header::CONTENT_TYPE, ct)], bytes).into_response()
+            }
+            None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+        };
+    }
     match app.playing.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
         Outcome::NotModified { etag } => (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response(),
@@ -1113,6 +1148,14 @@ async fn mark_classical(ctx: Ctx, Path((source, album)): Path<(String, String)>,
     Ok(Json(json!({ "classical": classical, "classical_mark": kept })))
 }
 
+/// Whether someone not an administrator, `mine` being their own music's folder, may change what `album` says: only where it lies in
+/// people's own music alone and their copy speaks for it (the owner, 2026-11-07: "If it's owned by administrator, then only
+/// administrator can edit"). A copy of one's own of a record in a main library gives no say. Blocking.
+fn may_change(serve: &crate::serve::Serve, album: &str, mine: Option<i64>) -> anyhow::Result<bool> {
+    let owner = crate::serve::copies::owned_by(&serve.library.copies_of(album)?);
+    Ok(owner.is_some() && owner == mine)
+}
+
 #[derive(Deserialize)]
 struct SetOverrides {
     albums: Vec<String>,
@@ -1123,7 +1166,7 @@ struct SetOverrides {
 /// or null}}`, Cratarr's own library's albums. A field given is set (null: reset to what Cratarr finds), one left out
 /// is left as it is; the fields are `type`, `secondary`, `year`, `genres` and `classical` (`userdata::overrides`). Kept
 /// by each record, household-wide; the library is built again with them before the answer, and the
-/// pages are told. `{albums: {id: {field: value}}}`: each record's facts set now.
+/// pages are told. `{albums: {id: {field: value}}}`: each record's facts set now. All of them or none: `may_change` for each.
 async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<serde_json::Value>, ApiError> {
     if b.albums.is_empty() || b.set.is_empty() {
         return Err(ToggleError::BadSettings("Name the records and what to set.".into()).into());
@@ -1136,6 +1179,18 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
     let s = ctx.serve()?;
     let albums = b.albums;
     let b_words = facts.iter().any(|(f, _)| matches!(f.as_str(), "genres" | "styles" | "moods" | "tags"));
+    if !crate::serve::access::administering() {
+        // By a sign-in, as a key acts for no one's own music.
+        let mine = ctx.account().filter(|_| crate::serve::access::signed_in()).and_then(|a| ctx.app.library.own_folder(&a));
+        let (s, albums) = (s.clone(), albums.clone());
+        let may = tokio::task::spawn_blocking(move || albums.iter().try_fold(true, |all, album| Ok::<bool, anyhow::Error>(all && may_change(&s, album, mine)?)))
+            .await
+            .map_err(|e| ToggleError::Refused(format!("{e}")))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        if !may {
+            return Err(ToggleError::Forbidden("This record is the administrators'.".into()).into());
+        }
+    }
     let set = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
         for album in &albums {
             anyhow::ensure!(s.library.has_album(album)?, "That record is not in the library.");
@@ -1158,6 +1213,31 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
         crate::app::words::tell_changed();
     }
     Ok(Json(json!({ "albums": set })))
+}
+
+#[derive(Deserialize)]
+struct Reconnect {
+    /// The track on the Missing list, and the track it is.
+    track: String,
+    to: String,
+}
+
+/// A track on Health's Missing list is this one (A5): the take's way, for good, so its plays, hearts and lines follow it now.
+async fn reconnect_track(ctx: Ctx, Json(b): Json<Reconnect>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let cat = ctx.app.library.catalogue();
+    let (Some(goes), Some(stays)) = (crate::serve::ids::track_of(&b.track), crate::serve::ids::track_of(&b.to)) else {
+        return Err(ToggleError::BadSettings("Name two tracks.".into()).into());
+    };
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cat.reconnect(goes, stays)?;
+        serve.refresh()?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({})))
 }
 
 /// A track's Other versions (0.10): its MusicBrainz work, the work's composers, and the library's other tracks of it,
@@ -3980,16 +4060,21 @@ struct CoverStamp {
     /// The picture of its copy in this library, where it matters which: Replace shows two copies of one record side by side.
     #[serde(default)]
     from: Option<String>,
+    /// At most this many pixels on its longer side, for a list or a grid (finding 86); none, the whole picture.
+    #[serde(default)]
+    size: Option<u32>,
 }
 
 /// An album's cover. Asked by its stamp (`?v=`, 0.9.7): kept for good, a changed cover having another address; else
 /// for an hour (another server's album, a device's picture).
 async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
-    let found = match (q.from.as_deref(), ctx.served.as_ref()) {
-        (Some(library), Some(served)) if source == crate::source::cratarr::KIND.id => served.copy_cover_bytes(&album, library).await.unwrap_or_else(|e| {
+    let own = source == crate::source::cratarr::KIND.id;
+    let found = match (q.from.as_deref(), q.size, ctx.served.as_ref()) {
+        (Some(library), _, Some(served)) if own => served.copy_cover_bytes(&album, library).await.unwrap_or_else(|e| {
             tracing::warn!("cover of {album} in {library}: {e:#}");
             None
         }),
+        (None, Some(size), Some(served)) if own => crate::app::device_covers::for_list(served, &album, size).await,
         _ => ctx.app.playing.album_cover(&source, &album).await,
     };
     match found {
@@ -4307,15 +4392,62 @@ async fn capabilities(ctx: Ctx) -> Result<Json<crate::app::capabilities::Capabil
     Ok(Json(crate::app::capabilities::read(&ctx.app, ctx.served.clone()).await.map_err(ToggleError::from)?))
 }
 
-/// What changed since a device last looked (decision 0087): `?since=<rev>&kinds=playlist,favourite,rating,excluded`.
+/// What changed since a device last looked (decision 0087): `?since=<rev>&kinds=playlist,favourite,rating,excluded`; `index`
+/// among the kinds with `&index=<rev>`, where the library's log stands for a device at that rev.
 #[derive(Deserialize)]
 struct ChangesQuery {
     since: Option<i64>,
     kinds: Option<String>,
+    index: Option<i64>,
 }
 
 async fn changes(ctx: Ctx, Query(q): Query<ChangesQuery>) -> Result<Json<crate::app::changes::Changes>, ApiError> {
-    Ok(Json(crate::app::changes::read(&ctx.app, ctx.serve()?, q.since, q.kinds.as_deref()).await?))
+    Ok(Json(crate::app::changes::read(&ctx.app, ctx.serve()?, q.since, q.kinds.as_deref(), q.index).await?))
+}
+
+/// The whole index for the account asking (`app::device_index`).
+async fn device_index(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{read, takes_gzip};
+    Ok(read(&ctx.app, ctx.serve()?, ctx.account(), takes_gzip(&headers)).await?.into_response())
+}
+
+#[derive(Deserialize)]
+struct IndexSince {
+    since: i64,
+}
+
+/// What a device at `since` lacks of the account's index: bytes to apply, nothing, or start again (`app::device_index`).
+async fn device_index_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    use crate::app::device_index::{changes, takes_gzip};
+    Ok(changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
+}
+
+/// Every small cover made so far, as one bundle (`app::device_covers`).
+async fn device_covers(ctx: Ctx) -> Result<Response, ApiError> {
+    Ok(crate::app::device_covers::read(ctx.serve()?).await?.into_response())
+}
+
+/// What changed of the covers after `since`: as `device_index_changes`.
+async fn device_cover_changes(ctx: Ctx, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    Ok(crate::app::device_covers::changes(ctx.serve()?, q.since).await?.into_response())
+}
+
+/// The fits and counts of the account asking (`app::device_index`).
+async fn device_own(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{own, takes_gzip};
+    Ok(own(&ctx.app, ctx.account(), takes_gzip(&headers)).await?.into_response())
+}
+
+/// Every sound the account can see, eight bits each (`app::device_index`).
+async fn device_sounds(ctx: Ctx, headers: HeaderMap) -> Result<Response, ApiError> {
+    use crate::app::device_index::{sounds, takes_gzip};
+    Ok(sounds(&ctx.app, ctx.serve()?, ctx.account(), takes_gzip(&headers)).await?.into_response())
+}
+
+/// What of the sounds a device at `since` lacks: as `device_index_changes`.
+async fn device_sound_changes(ctx: Ctx, headers: HeaderMap, Query(q): Query<IndexSince>) -> Result<Response, ApiError> {
+    use crate::app::device_index::{sound_changes, takes_gzip};
+    Ok(sound_changes(&ctx.app, ctx.serve()?, ctx.account(), q.since, takes_gzip(&headers)).await?.into_response())
 }
 
 #[derive(Deserialize)]
@@ -4609,6 +4741,23 @@ async fn describe_tracks(ctx: Ctx, Json(b): Json<DescribeBody>) -> Result<Json<s
     let account = ctx.account();
     let tracks = crate::app::describe::describe(b.tracks, account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "tracks": tracks })))
+}
+
+#[derive(Deserialize)]
+struct MovedBody {
+    ids: Vec<String>,
+}
+
+/// What ids from before 0.16 are now (decision 0101 point 23: the app's one fresh start fetches its downloads and kept items again
+/// under the ids they have now): each asked that moved, old id to new id, and nothing else, no name or path. One left out did not
+/// move. Any account's, as every account sees every library (0101 point 6, `app::device_index`'s `can_see`).
+async fn ids_moved(State(app): State<Arc<App>>, Json(b): Json<MovedBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.ids.len() > crate::app::describe::MOST {
+        return Err(ToggleError::Refused(format!("At most {} ids at once.", crate::app::describe::MOST)).into());
+    }
+    let catalogue = app.library.catalogue();
+    let now = tokio::task::spawn_blocking(move || catalogue.named_now_all(&b.ids)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    Ok(Json(json!(now)))
 }
 
 /// Long work begun as a task: 202 with the task, which the page follows (`app::tasks`).
@@ -5618,7 +5767,7 @@ async fn lastfm_who(ctx: &Ctx, b: LastFmImport) -> Result<(Arc<crate::serve::Ser
         (Some((key, session, secret)), _) => crate::app::lastfm::Auth { key, signed: Some((session, secret)) },
         (None, Some(key)) => crate::app::lastfm::Auth { key, signed: None },
         (None, None) => {
-            return Err(ToggleError::Refused("Last.fm needs an API key: make one at last.fm/api/account/create, or connect Last.fm under Connections.".into()).into());
+            return Err(ToggleError::Refused("Last.fm needs an API key: make one at last.fm/api/account/create, or connect Last.fm under Tracking.".into()).into());
         }
     };
     Ok((serve, account, b.user.trim().to_string(), auth))
@@ -6043,12 +6192,25 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
     );
     let (mb_albums, artists) = mb.unwrap_or_default();
     let discogs = discogs.unwrap_or_default();
-    let library = tokio::task::spawn_blocking(crate::app::spotify::library).await.ok().and_then(Result::ok);
+    let library = crate::app::requests::library(&serve).await;
     let marks = request_marks(&app, &serve).await;
+    let albums = beyond_albums(mb_albums.into_iter().skip(offset).take(limit), discogs, library.as_deref(), marks.as_deref());
+    Ok(Json(json!({ "q": q, "albums": albums, "artists": if offset == 0 { json!(artists) } else { json!([]) } })))
+}
+
+/// What Beyond lists of what was found, MusicBrainz's first: a master of an album it found goes on that album, and of the
+/// rest the library says what it has. Its albums alone answer that (`Matcher::library_albums`): the whole library read
+/// for it stayed in memory, 60 MB of the NAS's 768, to answer this one question.
+fn beyond_albums(
+    mb_albums: impl Iterator<Item = crate::app::discover::FoundAlbum>,
+    discogs: Vec<crate::app::discogs::FoundMaster>,
+    library: Option<&crate::app::import::Matcher>,
+    marks: Option<&std::collections::HashMap<String, crate::app::requests::Mark>>,
+) -> Vec<serde_json::Value> {
     let key = |artist: &str, title: &str| format!("{}|{}", crate::app::import::key(artist), crate::app::import::key(title));
     let mut order: Vec<String> = Vec::new();
     let mut by: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
-    for a in mb_albums.into_iter().skip(offset).take(limit) {
+    for a in mb_albums {
         let k = key(&a.artist, &a.title);
         if by.contains_key(&k) {
             continue;
@@ -6057,7 +6219,7 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
         by.insert(
             k,
             json!({ "title": a.title, "artist": a.artist, "year": a.year, "cover": a.cover, "release_group": a.release_group, "discogs": null,
-                "discogs_url": null, "sources": ["musicbrainz"], "have": a.have, "request": marks.as_deref().and_then(|m| crate::app::requests::mark_of(m, Some(&a.release_group), &a.artist, &a.title)) }),
+                "discogs_url": null, "sources": ["musicbrainz"], "have": a.have, "request": marks.and_then(|m| crate::app::requests::mark_of(m, Some(&a.release_group), &a.artist, &a.title)) }),
         );
     }
     for d in discogs {
@@ -6068,16 +6230,15 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
             found["discogs_url"] = json!(d.url);
             continue;
         }
-        let have = library.as_ref().is_some_and(|l| l.has_album(&d.title, &d.artist));
+        let have = library.is_some_and(|l| l.find_album(&d.title, Some(&d.artist)).is_some());
         order.push(k.clone());
         by.insert(
             k,
             json!({ "title": d.title, "artist": d.artist, "year": d.year, "cover": d.cover, "release_group": null, "discogs": d.id,
-                "discogs_url": d.url, "sources": ["discogs"], "have": have, "request": marks.as_deref().and_then(|m| crate::app::requests::mark_of(m, None, &d.artist, &d.title)) }),
+                "discogs_url": d.url, "sources": ["discogs"], "have": have, "request": marks.and_then(|m| crate::app::requests::mark_of(m, None, &d.artist, &d.title)) }),
         );
     }
-    let albums: Vec<serde_json::Value> = order.into_iter().filter_map(|k| by.remove(&k)).collect();
-    Ok(Json(json!({ "q": q, "albums": albums, "artists": if offset == 0 { json!(artists) } else { json!([]) } })))
+    order.into_iter().filter_map(|k| by.remove(&k)).collect()
 }
 
 /// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name: as last looked up, and
@@ -7431,6 +7592,69 @@ mod tests {
         let refused = super::never_offline(&t(crate::bandcamp::SOURCE)).unwrap();
         assert_eq!((refused["offline"].as_bool(), refused["error"].as_str()), (Some(false), Some(crate::bandcamp::NOT_KEPT)));
         assert!(super::never_offline(&t("cratarr")).is_none(), "a library track goes on to its file or copy");
+    }
+
+    #[test]
+    fn beyond_marks_from_the_librarys_albums_alone_what_the_whole_library_marked() {
+        use crate::app::discogs::FoundMaster;
+        use crate::app::discover::FoundAlbum;
+        use crate::app::import::{Matcher, key};
+        use crate::app::requests::Mark;
+        let dir = std::env::temp_dir().join(format!("cratarr-beyond-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("library.sqlite");
+        let _ = std::fs::remove_file(&file);
+        let db = rusqlite::Connection::open(&file).unwrap();
+        db.execute_batch(
+            "CREATE TABLE songs (id TEXT, title TEXT, artist TEXT, album TEXT, mbid TEXT, duration_ms INTEGER, album_id TEXT, album_artist TEXT);
+             INSERT INTO songs VALUES ('tr-1', 'Joga', 'Björk', 'Homogenic', 'm1', 300000, 'al-1', NULL);
+             INSERT INTO songs VALUES ('tr-2', 'Human Behaviour', 'Björk', 'Debut', NULL, 250000, 'al-2', 'Björk');
+             INSERT INTO songs VALUES ('tr-3', 'Intro', 'Guest', 'Hits', NULL, NULL, 'al-3', 'Various Artists');
+             INSERT INTO songs VALUES ('tr-4', 'Intro', 'Other', 'Hits', NULL, NULL, 'al-4', 'Someone');",
+        )
+        .unwrap();
+        drop(db);
+        let found = || {
+            let debut = FoundAlbum { release_group: "rg-1".into(), title: "Debut".into(), artist: "Björk".into(), year: Some(1993), kind: None, cover: "/c".into(), have: true };
+            std::iter::once(debut)
+        };
+        let master = |id: u64, title: &str, artist: &str| FoundMaster { id, title: title.into(), artist: artist.into(), year: None, cover: None, url: format!("/master/{id}") };
+        let masters = || {
+            vec![
+                master(1, "Debut", "Björk"),
+                master(2, "Homogenic", "Björk"),
+                // Loosely, and by the name alone where one album has it, not where two do.
+                master(3, "Homogenic (Remastered)", "Bjork"),
+                master(4, "Homogenic", "Someone Else"),
+                master(5, "Hits", "Nobody"),
+                master(6, "Post", "Björk"),
+            ]
+        };
+        let marks: std::collections::HashMap<String, Mark> = [
+            ("rg-1".to_string(), Mark { state: "wanted", done: None }),
+            (format!("{}|{}", key("Björk"), key("Post")), Mark { state: "downloading", done: Some(0.5) }),
+        ]
+        .into();
+
+        let albums = Matcher::library_albums(&file, None).unwrap();
+        let answer = super::beyond_albums(found(), masters(), Some(&albums), Some(&marks));
+        assert_eq!(answer, super::beyond_albums(found(), masters(), Some(&Matcher::read(&file).unwrap()), Some(&marks)));
+        let have: Vec<(&str, &str, bool)> = answer.iter().map(|a| (a["title"].as_str().unwrap(), a["artist"].as_str().unwrap(), a["have"].as_bool().unwrap())).collect();
+        assert_eq!(
+            have,
+            [
+                ("Debut", "Björk", true),
+                ("Homogenic", "Björk", true),
+                ("Homogenic (Remastered)", "Bjork", true),
+                ("Homogenic", "Someone Else", true),
+                ("Hits", "Nobody", false),
+                ("Post", "Björk", false),
+            ]
+        );
+        assert_eq!((&answer[0]["sources"], &answer[0]["discogs"]), (&serde_json::json!(["musicbrainz", "discogs"]), &serde_json::json!(1)), "a master of an album found goes on it");
+        assert_eq!((&answer[0]["request"]["state"], &answer[5]["request"]["state"]), (&serde_json::json!("wanted"), &serde_json::json!("downloading")));
+        assert!(super::beyond_albums(std::iter::empty(), masters(), None, None).iter().all(|a| a["have"] == false && a["request"].is_null()), "no library to ask: nothing marked");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

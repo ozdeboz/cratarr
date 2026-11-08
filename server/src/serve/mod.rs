@@ -12,6 +12,7 @@ pub mod files;
 pub mod guest;
 pub mod ids;
 pub mod import;
+pub mod index_rows;
 pub mod ldap;
 pub mod library;
 pub mod library_api;
@@ -119,6 +120,8 @@ pub struct Serve {
     stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
     /// The covers a build changed (`subscribe_covers`).
     covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
+    /// One device's index made at a time, and what the library's log was last brought up to (`app::device_index`).
+    device: std::sync::Mutex<crate::app::device_index::Settled>,
 }
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
@@ -160,9 +163,12 @@ impl Serve {
                 tracing::warn!(target: "signin", "sessions.sqlite says nothing of the sign-in: required, and the keys it held are gone");
             }
         }
+        // The environment makes the account. Its password from then on is what the account says: set here at every start, one changed
+        // in Account came back.
         if let (Some(u), Some(p)) = (env("CRATARR_SUBSONIC_USER"), env("CRATARR_SUBSONIC_PASSWORD"))
             && !u.trim().is_empty()
             && !p.is_empty()
+            && users.get(u.trim()).is_none_or(|u| u.password.is_empty())
         {
             users.set(u.trim(), &p)?;
         }
@@ -189,6 +195,7 @@ impl Serve {
             play_on: Default::default(),
             stamps: Default::default(),
             covers: tokio::sync::broadcast::channel(16).0,
+            device: Default::default(),
         }))
     }
 
@@ -355,6 +362,23 @@ impl Serve {
         self.play_on.get()
     }
 
+    /// Tests elsewhere: the covers' stamps as a build's end leaves them.
+    #[cfg(test)]
+    pub fn covers_read_again_for_tests(&self) {
+        self.covers_built();
+    }
+
+    /// Tests elsewhere: the time of the last build moved on, as a build's end moves it.
+    #[cfg(test)]
+    pub fn build_passed_for_tests(&self) {
+        *self.built_at.write().unwrap() += 1;
+    }
+
+    /// A device's index being made: until this goes, another waits, as two would hold twice what one does. Blocking.
+    pub fn device_turn(&self) -> std::sync::MutexGuard<'_, crate::app::device_index::Settled> {
+        self.device.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Changes each time the library is built (to the time it was): for views kept from the built-in source.
     #[allow(dead_code)] // for Collection and Incoming to read the built-in source again (decision 0032)
     pub fn subscribe_built(&self) -> tokio::sync::watch::Receiver<i64> {
@@ -453,12 +477,19 @@ impl Serve {
         Ok(())
     }
 
+    /// When this build ended: past the build before even inside one second, as what was read between the two is kept by this, and
+    /// would pass for read after both. A reading of the crates so kept stands for five minutes, and a device's rows with it.
+    fn build_stamped(&self) -> i64 {
+        let mut at = self.built_at.write().unwrap_or_else(|p| p.into_inner());
+        *at = now().max(*at + 1);
+        *at
+    }
+
     /// After the library was built (whole, or `folders` of it): when, the plays and stars that follow songs to new ids, a
     /// line in the log; with changed songs, the catalogue links the built-in source's ids and those who keep its covers'
     /// stamps are told; and those who wait on a build. Blocking.
     fn built_now(&self, why: &str, whole: bool, folders: usize, songs_changed: bool) -> Result<()> {
-        let at = now();
-        *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = at;
+        let at = self.build_stamped();
         // Before the persistent ids: they would move what the merge means to add up. Failing, the next check goes over it.
         if let Err(e) = self.follow_taken() {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
@@ -654,6 +685,14 @@ impl Serve {
         Ok(tokio::task::spawn_blocking(move || me.art_of(&album)).await??.map(|(ct, bytes, _)| (ct, bytes)))
     }
 
+    /// A record's cover made small for a device (`art::jpeg_at`), a decode at a time as `cover`'s are; none where it has none or
+    /// it cannot be read.
+    pub async fn small_cover(self: &Arc<Self>, album: &str, side: u32, quality: u8) -> Result<Option<Vec<u8>>> {
+        let Some((_, bytes)) = self.cover_bytes(album).await? else { return Ok(None) };
+        let _turn = self.resizing.acquire().await?;
+        Ok(tokio::task::spawn_blocking(move || art::jpeg_at(&bytes, side, quality)).await?.ok())
+    }
+
     /// The cover of a record's copy in `library`, as `cover_bytes` has it; none where it has no copy there.
     pub async fn copy_cover_bytes(self: &Arc<Self>, album: &str, library: &str) -> Result<Option<(String, Vec<u8>)>> {
         let (me, album, library) = (self.clone(), album.to_string(), library.to_string());
@@ -711,17 +750,50 @@ impl Serve {
         self.library.roots().into_iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| f)
     }
 
+    /// The record a song is in; none for a song not held. Blocking.
+    pub fn album_of_song(&self, song: &str) -> Option<String> {
+        self.library.songs_by_id(&[song.to_string()]).ok()?.pop().map(|s| s.album_id)
+    }
+
+    /// A record's cover at most `size` pixels on its longer side, for a list or a grid (finding 86; the player and a panel keep the
+    /// whole one): made once, then from the disk cache, which a Subsonic client's sizes share. Its print is the library's word, so
+    /// a size made before costs no read of the picture, and the original is read only at the resizer's turn: a grid's asks waiting
+    /// for it hold nothing (finding 87). A record with no print yet is made each time, as nothing could tell its cache entry stale.
+    pub async fn sized_cover(self: &Arc<Self>, album: &str, size: u32) -> Result<Option<(String, Vec<u8>)>> {
+        let key = self.cover_stamps().get(album).map(|print| format!("{album}:{print}:{size}"));
+        if let Some(small) = key.as_deref().and_then(|k| self.art_cache.get(k)) {
+            return Ok(Some(("image/jpeg".to_string(), small)));
+        }
+        let _turn = self.resizing.acquire().await?;
+        // Made while this one waited.
+        if let Some(small) = key.as_deref().and_then(|k| self.art_cache.get(k)) {
+            return Ok(Some(("image/jpeg".to_string(), small)));
+        }
+        let (me, album) = (self.clone(), album.to_string());
+        tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<u8>)>> {
+            let Some((ct, bytes, _)) = me.art_of(&album)? else { return Ok(None) };
+            // A picture the resizer cannot read, or one small enough already, goes as it is.
+            Ok(Some(match art::resize(&bytes, size).ok().flatten() {
+                Some(small) => {
+                    if let Some(key) = &key {
+                        me.art_cache.put(key, &small);
+                    }
+                    ("image/jpeg".to_string(), small)
+                }
+                None => (ct, bytes),
+            }))
+        })
+        .await?
+    }
+
     /// An album's (or a song's, or an artist's) cover, at most `size` pixels on its longer side when asked. An id with
     /// the current fingerprint may be kept for good; any other is to be checked again (Navidrome's rule, see `art`).
     pub async fn cover(self: &Arc<Self>, id: &str, size: Option<u32>, headers: &HeaderMap) -> Result<Response> {
         let (me, want) = (self.clone(), id.to_string());
-        let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, String, Vec<u8>, String, Option<String>)>> {
-            let (album, asked) = me.art_album(&want)?;
-            let Some(album) = album else { return Ok(None) };
-            Ok(me.art_of(&album)?.map(|(ct, bytes, print)| (album, ct, bytes, print, asked)))
-        })
-        .await??;
-        let Some((album, ct, bytes, print, asked)) = found else { return Ok(StatusCode::NOT_FOUND.into_response()) };
+        let (album, asked) = tokio::task::spawn_blocking(move || me.art_album(&want)).await??;
+        let Some(album) = album else { return Ok(StatusCode::NOT_FOUND.into_response()) };
+        // The library's word on its print: a 304 costs no read of the picture (finding 87).
+        let print = self.cover_stamps().get(&album).cloned().unwrap_or_default();
         let etag = format!("\"{print}-{}\"", size.unwrap_or(0));
         let lasting = !print.is_empty() && asked.as_deref() == Some(print.as_str());
         let cache = HeaderValue::from_static(if lasting { "public, max-age=31536000, immutable" } else { "no-cache" });
@@ -733,27 +805,15 @@ impl Serve {
             ]
         };
         if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|h| crate::covers::etag_matches(h, &etag)) {
-            return Ok((StatusCode::NOT_MODIFIED, head(&ct)).into_response());
+            return Ok((StatusCode::NOT_MODIFIED, head("image/jpeg")).into_response());
         }
-        let Some(size) = size else { return Ok((head(&ct), bytes).into_response()) };
-        let key = format!("{album}:{print}:{size}");
-        if let Some(small) = self.art_cache.get(&key) {
-            return Ok((head("image/jpeg"), small).into_response());
-        }
-        let _turn = self.resizing.acquire().await?;
-        let me = self.clone();
-        let (small, bytes) = tokio::task::spawn_blocking(move || {
-            // A picture the resizer cannot read, or one small enough already, goes as it is.
-            let small = art::resize(&bytes, size).ok().flatten();
-            if let Some(s) = &small {
-                me.art_cache.put(&key, s);
-            }
-            (small, bytes)
-        })
-        .await?;
-        Ok(match small {
-            Some(s) => (head("image/jpeg"), s).into_response(),
-            None => (head(&ct), bytes).into_response(),
+        let found = match size {
+            Some(size) => self.sized_cover(&album, size).await?,
+            None => self.cover_bytes(&album).await?,
+        };
+        Ok(match found {
+            Some((ct, bytes)) => (head(&ct), bytes).into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
         })
     }
 }
@@ -833,6 +893,28 @@ mod tests {
         let a = serve.userdata.get("me", Item::Song, &[kept.clone()]).unwrap().remove(&kept).unwrap();
         assert_eq!((a.play_count, a.play_date), (2, Some(200)), "both plays, once each");
         assert_eq!(plays_of(&serve, &song), 0, "none left on the id that went");
+        assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// A5: a track on the Missing list is another by a person's word: its plays go to it at once, each once, and an old id in a queue
+    /// plays what it chose.
+    #[test]
+    fn a_track_reconnected_by_hand_brings_its_plays_with_it() {
+        let (roots, cat, serve) = on_two_folders("reconnected");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")]);
+        serve.refresh().unwrap();
+        let (old, chosen) = (cat.track_of(0, "A/01 One.flac").unwrap(), cat.track_of(0, "A/02 Two.flac").unwrap());
+        let (was, is) = (ids::song(old), ids::song(chosen));
+        serve.userdata.record("me", (&was, "p"), "al-x", &[], &Heard::counted(100)).unwrap();
+        serve.userdata.record("me", (&is, "q"), "al-x", &[], &Heard::counted(200)).unwrap();
+        std::fs::remove_file(roots[0].join("A/01 One.flac")).unwrap();
+        cat.walk_all();
+        cat.gone_long_ago_for_tests();
+        cat.identify().unwrap();
+        cat.reconnect(old, chosen).unwrap();
+        serve.refresh().unwrap();
+        assert_eq!((plays_of(&serve, &is), plays_of(&serve, &was)), (2, 0), "both plays on the one chosen, none left");
         assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
@@ -982,6 +1064,14 @@ mod tests {
         checked_again(&serve);
         assert_eq!((plays_of(&serve, &away), plays_of(&serve, &here)), (1, 0), "on its own track, and nothing on the other");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    #[test]
+    fn two_builds_inside_a_second_are_two_stamps() {
+        let s = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        let (first, second) = (s.build_stamped(), s.build_stamped());
+        assert!(second > first, "{first} then {second}");
+        assert_eq!(s.built_at(), second);
     }
 
     #[test]

@@ -25,6 +25,10 @@ fn the_rules_read_no_file_no_clock_and_no_network() {
     sources(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
     assert!(files.len() >= 8, "{files:?}");
     for file in files {
+        // A module's tests in a file of their own (`mod tests;`) are tests: they may read the shared cases and keep time.
+        if file.file_name().is_some_and(|name| name == "tests.rs") {
+            continue;
+        }
         let text = std::fs::read_to_string(&file).unwrap();
         // A test of its own may read the shared cases.
         let rules = text.split("mod tests {").next().unwrap();
@@ -41,7 +45,7 @@ fn the_rules_take_no_dependency_a_player_could_not_build() {
     let (dependencies, _) = rest.split_once("\n[").unwrap();
     // ts-rs only writes the page's types, in the server's tests: no build of the rules that plays turns `ts` on.
     let names: Vec<&str> = dependencies.lines().filter_map(|l| l.split_once(" = ")).map(|(name, _)| name).filter(|name| *name != "ts-rs").collect();
-    assert_eq!(names, ["serde", "unicode-normalization"], "a new one must build for wasm32-unknown-unknown first: cargo check-wasm");
+    assert_eq!(names, ["rustc-hash", "serde", "serde_json", "unicode-normalization"], "a new one must build for wasm32-unknown-unknown first: cargo check-wasm");
     assert!(manifest.contains("\ndefault = [\"nfkd\"]\n"), "the rules' default build stays without ts");
     let check = include_str!("../../.cargo/config.toml").lines().find(|l| l.starts_with("check-wasm = ")).unwrap();
     assert!(!check.split([' ', ',', '"']).any(|word| word == "ts"), "the page's build stays without ts");

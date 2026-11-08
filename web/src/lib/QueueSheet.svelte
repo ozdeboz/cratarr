@@ -372,7 +372,7 @@
         <span class="done" aria-hidden="true"></span>
         <button class="ncover" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampInert()} onclick={playPause} use:longpress={() => (startStopOpen = true)}>
           <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
-          {#if src || !coverSrc()}<Cover {src} lazy={false} />{/if}
+          {#if src || !coverSrc()}<Cover {src} lazy={false} whole />{/if}
           <span class="pp"><Icon name={shownPaused() ? 'play' : 'pause'} size={32} /></span>
         </button>
         <div class="ntext">

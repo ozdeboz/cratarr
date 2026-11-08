@@ -1,5 +1,7 @@
 package app.cratarr
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -85,6 +87,42 @@ class KeptFileTest {
         assertThrows(IOException::class.java) { KeptFile.list(file) }
     }
 
+    private fun holders() = File(folder.root, "kept-holders.json")
+
+    @Test
+    fun the_holders_read_as_they_were_written() {
+        val file = holders()
+        KeptFile.write(file, JSONObject().put("cratarr/tr-1", JSONArray(listOf("@ann\tmanual", "@bo\talbum:cratarr/al-1"))).toString())
+        assertEquals(mapOf("cratarr/tr-1" to setOf("@ann\tmanual", "@bo\talbum:cratarr/al-1")), KeptFile.holders(file))
+    }
+
+    @Test
+    fun holders_cut_off_are_not_read_as_nothing_held() {
+        // Nothing held, one account's Remove would take every account's downloads.
+        val file = holders()
+        file.writeText("""{"cratarr/tr-1":["@ann\tman""")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+        file.writeText("")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+        file.writeText("[]")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+    }
+
+    @Test
+    fun no_holders_yet_are_none() {
+        assertEquals(emptyMap<String, Set<String>>(), KeptFile.holders(holders()))
+    }
+
+    @Test
+    fun a_download_held_only_in_an_old_shape_is_not_there_for_a_pass_to_find_nothing_holds_it() {
+        // Read as held by nothing a pass would remove it. A device that kept its data past 0.16 keeps its files, unseen.
+        val file = holders()
+        file.writeText("""{"cratarr/tr-1":["manual"],"cratarr/tr-2":["@ann\tmanual","album:cratarr/al-1"]}""")
+        val h = KeptFile.holders(file)
+        assertEquals(mapOf("cratarr/tr-2" to setOf("@ann\tmanual")), h)
+        assertEquals(emptyList<String>(), KeptHolds.afterPass(h, emptyMap()))
+    }
+
     @Test
     fun no_list_yet_is_nothing_kept() {
         assertEquals(emptyList<Any>(), KeptFile.list(kept()))
@@ -102,5 +140,29 @@ class KeptFileTest {
         val file = kept()
         KeptFile.write(file, "[]")
         assertEquals(emptyList<Any>(), KeptFile.list(file))
+    }
+
+    private val hers = """{"a":["@ann\tmanual"]}"""
+    private val his = """{"a":["@ann\tmanual"],"b":["@bo\tmanual"]}"""
+
+    /** The review of 2026-11-07, its third finding: a holders list that cannot be read later still says whose each download was. */
+    @Test
+    fun a_holders_list_written_is_mirrored_as_the_last_its_newest_download_too() {
+        val file = File(folder.root, "kept-holders.json")
+        KeptFile.writeHolders(file, hers)
+        KeptFile.writeHolders(file, his)
+        file.writeText(his.take(10))
+        assertEquals(mapOf("a" to setOf("@ann\tmanual"), "b" to setOf("@bo\tmanual")), KeptFile.lastHolders(file))
+    }
+
+    /** A list breaks on the disk, after its write, never in it (`write` is whole or not at all): what broke is not mirrored. */
+    @Test
+    fun a_holders_list_broken_on_the_disk_never_takes_the_last_ones_place() {
+        val file = File(folder.root, "kept-holders.json")
+        KeptFile.writeHolders(file, his)
+        file.writeText(his.take(10))
+        assertEquals(mapOf("a" to setOf("@ann\tmanual"), "b" to setOf("@bo\tmanual")), KeptFile.lastHolders(file))
+        KeptFile.writeHolders(file, hers)
+        assertEquals(mapOf("a" to setOf("@ann\tmanual")), KeptFile.lastHolders(file))
     }
 }

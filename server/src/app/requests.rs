@@ -393,7 +393,7 @@ pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
 /// reading shared by those asking at once and kept until the library is built again (`Matcher::library_albums`;
 /// 0.11.1: /api/discover's memory, 2026-10-30: each Discover request read every song of the library here, twice, some
 /// 70 MB each time on the NAS).
-async fn library(serve: &Serve) -> Option<Arc<Matcher>> {
+pub(crate) async fn library(serve: &Serve) -> Option<Arc<Matcher>> {
     let (dir, built) = (serve.data_dir.clone()?, serve.built_at());
     tokio::task::spawn_blocking(move || Matcher::library_albums(&dir.join("library.sqlite"), Some(built)).ok()).await.ok().flatten()
 }

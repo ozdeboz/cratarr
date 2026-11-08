@@ -23,13 +23,6 @@ class Prefs(context: Context) {
             p.edit().putString(LOCAL_URL, value).apply()
         }
 
-    /** Spike B (0.11): the players' rules from the shared Rust crate in place of the app's Kotlin ([RustRules]). */
-    var rustRules: Boolean
-        get() = p.getBoolean(RUST_RULES, false)
-        set(value) {
-            p.edit().putBoolean(RUST_RULES, value).apply()
-        }
-
     /** Cratarr's page as its health check last told it ([BundledPage]): "<release> <build>"; null: not told. */
     var serverPage: String?
         get() = p.getString(SERVER_PAGE, null)
@@ -89,12 +82,20 @@ class Prefs(context: Context) {
             p.edit().putString(SESSION_MARK, value).apply()
         }
 
-    /** The page's own settings (its `cratarr-prefs`), kept here so both addresses' pages share them. */
+    /** The page's own settings (its `cratarr-prefs`), kept here so both addresses' pages share them: the device's. */
     var pagePrefs: String?
         get() = p.getString(PAGE_PREFS, null)
         set(value) {
             p.edit().putString(PAGE_PREFS, value).apply()
         }
+
+    /** The person's own of them (decision 0101: pinned items, libraries switched off, filters…), each account's
+     *  ([Who]'s key) apart, as its `cratarr-prefs<who>`. */
+    fun pagePrefsOf(who: String): String? = p.getString(PAGE_PREFS + who, null)
+
+    fun keepPagePrefsOf(who: String, value: String) {
+        p.edit().putString(PAGE_PREFS + who, value).apply()
+    }
 
     /** The origins of the two addresses: the pages that stay in the app and may talk to it. One kept from before Settings
      *  refused it has none ([origin]): it is left out, and shown in the field to be typed again. */
@@ -145,7 +146,7 @@ class Prefs(context: Context) {
 
     /** Downloads as the files are ([QUALITY_ORIGINAL]) or as Cratarr's smaller copies ([QUALITY_SMALLER]). */
     var downloadQuality: String
-        get() = p.getString(DOWNLOAD_QUALITY, QUALITY_ORIGINAL) ?: QUALITY_ORIGINAL
+        get() = p.getString(DOWNLOAD_QUALITY, QUALITY_SMALLER) ?: QUALITY_SMALLER
         set(value) {
             p.edit().putString(DOWNLOAD_QUALITY, if (value == QUALITY_SMALLER) QUALITY_SMALLER else QUALITY_ORIGINAL).apply()
         }
@@ -238,19 +239,33 @@ class Prefs(context: Context) {
             p.edit().putBoolean(DEVICE_MUSIC_ASKED, value).apply()
         }
 
-    /** A mode's queue as put by (PlayerService's snapshot, as JSON; empty for none): the one not playing, and local
-     *  mode's while it plays too, so it lasts a restart (Cratarr gives its own back). */
-    fun savedQueue(mode: String): String = p.getString(queueKey(mode), null).orEmpty()
+    /** Android's permission for notifications was asked for: it is not asked again, whatever the answer. */
+    var notificationsAsked: Boolean
+        get() = p.getBoolean(NOTIFICATIONS_ASKED, false)
+        set(value) {
+            p.edit().putBoolean(NOTIFICATIONS_ASKED, value).apply()
+        }
 
-    fun saveQueue(mode: String, snapshot: String) {
-        p.edit().putString(queueKey(mode), snapshot).apply()
+    /** A mode's queue as put by (PlayerService's snapshot, as JSON; empty for none) for one account ([Who]'s key): the
+     *  one not playing, and the one that plays too, so it lasts a restart ([QueueKept] says when Cratarr's mode takes it up). */
+    fun savedQueue(mode: String, who: String): String = p.getString(queueKey(mode) + who, null).orEmpty()
+
+    fun saveQueue(mode: String, snapshot: String, who: String) {
+        p.edit().putString(queueKey(mode) + who, snapshot).apply()
     }
 
-    /** Each mode's queue apart: a server's by its mode's name. */
+    /** Each mode's queue apart, and each account's (decision 0101): a server's by its mode's name. */
     private fun queueKey(mode: String) = when {
         mode == MODE_DEVICE -> DEVICE_QUEUE
         mode.startsWith(Servers.MODE_PREFIX) -> "${SERVER_QUEUE}$mode"
         else -> CRATARR_QUEUE
+    }
+
+    /** The mode an account ([Who]'s key) was last in, taken up at its next sign-in. */
+    fun modeOf(who: String): String = known(p.getString(MODE + who, null))
+
+    fun keepModeOf(who: String, mode: String) {
+        p.edit().putString(MODE + who, known(mode)).apply()
     }
 
     /** Automatic follows the owner's order of outputs (decision 0033, amended 2026-10-19: [Output.preferred]); off:
@@ -570,10 +585,42 @@ class Prefs(context: Context) {
         const val MODE_CRATARR = "cratarr"
         const val MODE_DEVICE = "device"
         const val DEVICE_MUSIC_ASKED = "device_music_asked"
+        const val NOTIFICATIONS_ASKED = "notifications_asked"
         const val LOCAL_FOLDERS = "local_folders"
         const val DEVICE_QUEUE = "device_queue"
         const val CRATARR_QUEUE = "cratarr_queue"
         const val SERVER_QUEUE = "queue_"
+
+        /** What goes with an account's queue beyond what [savedQueue] keeps of it: which queue it is and its name, Radio and
+         *  Autoplay as they ran (a seed and what it stays inside are that account's tracks), and where its controls point. */
+        private val CARRIED = listOf(QUEUE_ID, QUEUE_NAME, RADIO_ON, RADIO_BY, RADIO_COUNT, SKIP_FAVOURITES, AUTOPLAY, TARGET, TARGET_WHY)
+        private const val CARRIED_OF = "carried"
+
+        /**
+         * Another one's things are this device's ([Who]): what [from] carried is put by under them, and what [to] carried
+         * taken up. With [Who]'s own change, so it holds with the player's service stopped. One with none kept starts as
+         * a device new to it, its controls here: said, not left out, or the page would give the app its last choice while it
+         * is still the one before's.
+         */
+        fun handOver(p: SharedPreferences, from: String, to: String) {
+            val now = p.all
+            val left = org.json.JSONObject()
+            for (k in CARRIED) now[k]?.let { left.put(k, it) }
+            val come = p.getString(CARRIED_OF + to, null)?.let { runCatching { org.json.JSONObject(it) }.getOrNull() } ?: org.json.JSONObject()
+            val e = p.edit().putString(CARRIED_OF + from, left.toString())
+            for (k in CARRIED) {
+                when (val v = come.opt(k)) {
+                    is Boolean -> e.putBoolean(k, v)
+                    is Int -> e.putInt(k, v)
+                    is String -> e.putString(k, v)
+                    else -> e.remove(k)
+                }
+            }
+            if (!come.has(TARGET)) e.putString(TARGET, TARGET_SELF)
+            // Whoever set it has gone: it would pause the next one's music.
+            e.remove(SLEEP)
+            e.apply()
+        }
 
         /** A mode as kept: one of the three kinds, else Cratarr's. */
         fun known(mode: String?): String = when {
@@ -593,7 +640,6 @@ class Prefs(context: Context) {
         const val LOCAL_URL = "local_url"
         const val PREFER_LOCAL = "prefer_local"
         const val SERVER_PAGE = "server_page"
-        const val RUST_RULES = "rust_rules"
         private const val OLD_SIGN_IN_USER = "sign_in_user"
         private const val OLD_SIGN_IN_PASSWORD = "sign_in_password"
         const val SESSION_MARK = "session_mark"

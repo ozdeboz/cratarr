@@ -4,9 +4,11 @@
 // value, and a test runs an `$effect` by hand from `effects`.
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 
-// lib/api's ApiError declares its fields in its constructor, which Node's stripping of types refuses.
+// lib/api's ApiError declares its fields in its constructor, which Node's stripping of types refuses. And what Vite makes an
+// address of (`?url`, a worker's and a wasm file's) is only its address here: nothing fetches it, and neither would load.
 registerHooks({
   load(url, context, next) {
+    if (/[?&]url$/.test(url)) return { format: 'module', source: `export default ${JSON.stringify(url)};`, shortCircuit: true };
     const r = next(url, context);
     if (!url.endsWith('/lib/api.ts')) return r;
     return { ...r, format: 'module', source: stripTypeScriptTypes(new TextDecoder().decode(r.source as Uint8Array), { mode: 'transform' }) };

@@ -79,4 +79,5 @@ export const tapeItems = (): ResetItem[] => [
 export const deviceItems = (): ResetItem[] => [
   ...(inApp ? [{ name: 'Stay ready', now: () => !!appInfo.stayReady, def: false, set: (v: boolean) => setDevice({ stayReady: v }) }] : []),
   ...tapeItems(),
+  pref('momentWeather', 'Weather for the moment crate'),
 ];

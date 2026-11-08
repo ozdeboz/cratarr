@@ -17,7 +17,7 @@
     const [s, a] = [source, album];
     ids = [];
     if (s !== 'cratarr') return;
-    untrack(() => !library.view && void readLibrary(false));
+    untrack(() => !library.view && readLibrary(false).catch(() => {}));
     similarAlbums(s, a).then(
       (found) => {
         if (s === source && a === album) ids = found.map((f) => f.id);

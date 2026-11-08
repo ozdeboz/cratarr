@@ -55,7 +55,11 @@
 </script>
 
 {#if (inApp || pwa) && tracks.length}
-  {#if coming}
+  {#if pwa && offline.unreadable}
+    <!-- Its kept list cannot be read: nothing more is kept here until it starts again, in Downloads (decision 0085: never offer
+         what cannot be upheld). Offered, it would count tracks coming that never come. -->
+    <MenuEntry icon="arrowDownToLine" label="Kept list can't be read" disabled onclick={() => {}} />
+  {:else if coming}
     <MenuEntry icon="arrowDownToLine" label={`Downloading ${done} of ${plural(tracks.length, 'track')}`} progress={progress} onclick={() => {}} />
   {:else if failed.length}
     <MenuEntry icon="arrowDownToLine" label={`Retry ${plural(failed.length, 'failed track')}`} onclick={() => get([...failed, ...missing])} />

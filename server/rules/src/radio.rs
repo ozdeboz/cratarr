@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Rng;
 use crate::crates::Facts;
 use crate::ids::track_of;
 use crate::similarity::{Library, Profile, Signal, Track, Weights};
+use crate::{Lane, Rng};
 
 /// How Cratarr chooses, as a player asks: Radio's inserts, or one of Autoplay's modes. Continuous, AlbumMix and
 /// Reshuffle are the modes from before the amendment, still taken from apps not yet updated.
@@ -205,7 +205,7 @@ impl Index {
                 }
                 None => s.like.genres.clear(),
             }
-            sounds.push(f.and_then(|f| f.sound.as_deref().map(<[f32]>::to_vec)));
+            sounds.push(f.and_then(|f| f.sound.clone()));
         }
         self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
         self
@@ -251,6 +251,12 @@ impl Index {
 /// The radio's choice for one request: songs of the index, in the order they should play. `recent`: songs played
 /// within seven days, with when (epoch seconds). `within`: the songs of what it plays inside (a crate, a playlist…).
 pub fn choose(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: Option<&[usize]>, rng: &mut Rng) -> Vec<usize> {
+    choose_among(index, req, recent, within, None, rng)
+}
+
+/// `choose`, picking only what `here` holds (a device with Cratarr away: what plays there; the owner, 2026-11-06: what cannot play is
+/// left out, with no notice). What is not here still seeds, and still counts as played.
+pub fn choose_among(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: Option<&[usize]>, here: Option<&HashSet<usize>>, rng: &mut Rng) -> Vec<usize> {
     // Radio by artist or era: Autoplay's Artist or Era, seeded by the one track (decision 0036, amended).
     let as_mode = |mode| Ask { mode, by: RadioBy::Track, ..req.clone() };
     let changed = match (req.mode, req.by) {
@@ -280,6 +286,9 @@ pub fn choose(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: O
         && let Some(folders) = &req.folders
     {
         all.retain(|&i| index.songs[i].folders.iter().any(|f| folders.contains(f)));
+    }
+    if let Some(here) = here {
+        all.retain(|i| here.contains(i));
     }
     if req.skip_favourites {
         all.retain(|&i| !index.songs[i].favourite);
@@ -499,6 +508,86 @@ fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>
     index.albums.get(&album).map(|songs| songs.iter().copied().filter(|i| !out.contains(i)).collect()).unwrap_or_default()
 }
 
+// --- What a player decides of its queue (decision 0036, amended; audit/KOTLIN-DECISIONS.md): when and where, so that no player keeps
+// a rule of its own. What it does with the answer is its own: only it knows when a track starts and what is left.
+
+/// Autoplay asks when fewer than this many tracks are left ahead, and appends this many.
+pub const AUTOPLAY_LOW: usize = 3;
+pub const AUTOPLAY_BATCH: usize = DEFAULT_COUNT;
+
+/// Whether Autoplay asks now: `count` tracks in the queue, the one at `playing` playing.
+pub fn autoplay_due(count: usize, playing: usize) -> bool {
+    count > 0 && count.saturating_sub(playing + 1) < AUTOPLAY_LOW
+}
+
+/// Where Radio's inserts go for the track at `playing`: after it and its run of tracks added by hand. None where they would not: the
+/// playing track is not one of the queue's own, or inserts lie there already.
+pub fn radio_place(lanes: &[Lane], playing: usize) -> Option<usize> {
+    if lanes.get(playing) != Some(&Lane::Own) {
+        return None;
+    }
+    let at = playing + 1 + crate::added_ahead(lanes, Some(playing));
+    (lanes.get(at) != Some(&Lane::Radio)).then_some(at)
+}
+
+/// A track of a queue, as repeat all reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Queued {
+    /// Who it is: `source/id`.
+    pub key: String,
+    /// Its place in the album or playlist as it was played; none where the queue was played before places were kept.
+    pub place: Option<u32>,
+    pub lane: Lane,
+}
+
+/// The next round of repeat all (decision 0033, amended), as places in `queue`, or none while the track at `playing` is not the last:
+/// the album's or playlist's own tracks by their place, the last time each played, those added by hand not again; without places, its
+/// own tracks once each in their order. Shuffled anew where it plays shuffled, and never opening on the track that just played.
+pub fn next_round(queue: &[Queued], playing: usize, shuffled: bool, rng: &mut Rng) -> Vec<usize> {
+    if queue.is_empty() || playing != queue.len() - 1 {
+        return Vec::new();
+    }
+    let own = |t: &Queued| t.lane == Lane::Own;
+    let mut by_place: BTreeMap<u32, usize> = BTreeMap::new();
+    for (i, t) in queue.iter().enumerate().filter(|(_, t)| own(t)) {
+        if let Some(place) = t.place {
+            by_place.insert(place, i);
+        }
+    }
+    let mut round: Vec<usize> = if by_place.is_empty() {
+        let mut seen = HashSet::new();
+        (0..queue.len()).filter(|&i| own(&queue[i]) && seen.insert(queue[i].key.as_str())).collect()
+    } else {
+        by_place.into_values().collect()
+    };
+    if shuffled {
+        rng.shuffle(&mut round);
+        if round.len() > 1 && queue[round[0]].key == queue[playing].key {
+            round.rotate_left(1);
+        }
+    }
+    round
+}
+
+/// A track kept on a device, for a pick with nothing of the library to go by.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeptTrack {
+    pub key: String,
+    pub artist: Option<String>,
+}
+
+/// What comes next with no index on the device (it never synced, or it has no rules library's room): of the `kept` tracks not in the
+/// queue, at most `count`, at random, those by one of `artists` first unless `any`. Places in `kept`.
+pub fn from_kept(kept: &[KeptTrack], queued: &[String], artists: &[String], any: bool, count: usize, rng: &mut Rng) -> Vec<usize> {
+    let mut places: Vec<usize> = (0..kept.len()).filter(|&i| !queued.contains(&kept[i].key)).collect();
+    rng.shuffle(&mut places);
+    if !any {
+        places.sort_by_key(|&i| !kept[i].artist.as_ref().is_some_and(|a| artists.contains(a)));
+    }
+    places.truncate(count);
+    places
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,10 +626,132 @@ mod tests {
     impl Index {
         /// With what AudioMuse heard of each song, by its id: the sound alone, as `with_facts` makes it from a track's facts.
         fn with_sounds(mut self, sound: impl Fn(&str) -> Option<Vec<f32>>) -> Self {
-            let sounds = self.songs.iter().map(|s| sound(&s.id)).collect();
+            let sounds = self.songs.iter().map(|s| sound(&s.id).map(Arc::from)).collect();
             self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
             self
         }
+    }
+
+    /// `k1`, `k2` and the strangers from 3 on, those not here left out, whatever the seed.
+    fn picked_here(req: &Ask, within: Option<&[usize]>, here: &[&str]) -> Vec<Vec<String>> {
+        let index = library();
+        let here: HashSet<usize> = here.iter().map(|id| index.by_id[*id]).collect();
+        (0..40).map(|n| ids(&index, &choose_among(&index, req, &HashMap::new(), within, Some(&here), &mut Rng::seeded(n)))).collect()
+    }
+
+    #[test]
+    fn a_pick_among_what_plays_here_holds_only_that_in_every_mode() {
+        let here = ["k1", "x1", "x2", "x3", "x4", "x5", "x6"];
+        for mode in [Mode::Similar, Mode::Artist, Mode::Era, Mode::Random, Mode::Radio, Mode::Taste] {
+            for albums in [false, true] {
+                let req = Ask { albums, count: Some(5), ..ask(mode) };
+                for picked in picked_here(&req, None, &here) {
+                    assert!(picked.iter().all(|p| here.contains(&p.as_str())), "{mode:?}: {picked:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn what_is_not_here_still_seeds() {
+        // s1 and s2 are not here: what is like them comes first all the same.
+        let picks = picked_here(&ask(Mode::Similar), None, &["k1", "x1", "x2", "x3"]);
+        let near = picks.iter().filter(|p| p.contains(&"k1".to_string())).count();
+        assert!(near >= 30, "the kin, mostly: {near} of 40");
+    }
+
+    #[test]
+    fn inside_a_crate_a_pick_holds_what_is_of_it_and_here() {
+        let index = library();
+        let crate_: Vec<usize> = ["k1", "k2", "x1", "x2"].iter().map(|id| index.by_id[*id]).collect();
+        let req = Ask { count: Some(5), seed: vec![], exclude: vec![], last: None, ..ask(Mode::Random) };
+        for picked in picked_here(&req, Some(&crate_), &["k2", "x2", "x3"]) {
+            assert_eq!(picked.iter().map(String::as_str).collect::<HashSet<_>>(), HashSet::from(["k2", "x2"]), "of it and here, nothing else");
+        }
+    }
+
+    #[test]
+    fn with_nothing_said_of_what_is_here_a_pick_is_the_servers() {
+        let index = library();
+        for n in 0..20 {
+            let (a, b) = (choose(&index, &ask(Mode::Similar), &HashMap::new(), None, &mut Rng::seeded(n)), choose_among(&index, &ask(Mode::Similar), &HashMap::new(), None, None, &mut Rng::seeded(n)));
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn autoplay_asks_when_fewer_than_three_are_left_ahead() {
+        assert!(!autoplay_due(0, 0), "an empty queue asks nothing");
+        assert!(autoplay_due(1, 0));
+        assert!(autoplay_due(3, 0), "two left");
+        assert!(!autoplay_due(4, 0), "three left");
+        assert!(autoplay_due(4, 1));
+        assert!(autoplay_due(4, 3));
+    }
+
+    #[test]
+    fn radios_inserts_go_after_the_playing_track_and_its_hand_added_run() {
+        use Lane::{Autoplay, Next, Own, Radio};
+        assert_eq!(radio_place(&[Own, Own], 0), Some(1));
+        assert_eq!(radio_place(&[Own, Next, Next, Own], 0), Some(3));
+        assert_eq!(radio_place(&[Own, Next], 0), Some(2), "at the end");
+        assert_eq!(radio_place(&[Own, Autoplay], 0), Some(1), "before Autoplay's");
+        assert_eq!(radio_place(&[Own, Radio, Own], 0), None, "there already");
+        assert_eq!(radio_place(&[Own, Next, Radio], 0), None, "after its run too");
+        assert_eq!(radio_place(&[Radio, Own], 0), None, "only the queue's own get inserts");
+        assert_eq!(radio_place(&[Next, Own], 0), None);
+        assert_eq!(radio_place(&[Own], 3), None, "no such place");
+    }
+
+    fn queued(key: &str, place: Option<u32>, lane: Lane) -> Queued {
+        Queued { key: key.into(), place, lane }
+    }
+
+    #[test]
+    fn the_next_round_is_the_albums_own_by_place_those_added_by_hand_not_again() {
+        let queue = [queued("c", Some(2), Lane::Own), queued("n", Some(9), Lane::Next), queued("a", Some(0), Lane::Own), queued("r", None, Lane::Radio), queued("b", Some(1), Lane::Own)];
+        assert_eq!(next_round(&queue, 4, false, &mut Rng::seeded(1)), [2, 4, 0]);
+        assert!(next_round(&queue, 3, false, &mut Rng::seeded(1)).is_empty(), "only while the last plays");
+        assert!(next_round(&[], 0, false, &mut Rng::seeded(1)).is_empty());
+    }
+
+    #[test]
+    fn a_round_again_takes_the_last_time_each_place_played() {
+        let queue = [queued("a", Some(0), Lane::Own), queued("b", Some(1), Lane::Own), queued("a", Some(0), Lane::Own)];
+        assert_eq!(next_round(&queue, 2, false, &mut Rng::seeded(1)), [2, 1]);
+    }
+
+    #[test]
+    fn a_queue_without_places_goes_round_its_own_once_each() {
+        let queue = [queued("a", None, Lane::Own), queued("b", None, Lane::Own), queued("a", None, Lane::Own), queued("n", None, Lane::Next)];
+        assert_eq!(next_round(&queue, 3, false, &mut Rng::seeded(1)), [0, 1]);
+    }
+
+    #[test]
+    fn a_shuffled_round_never_opens_on_the_track_that_just_played() {
+        let queue: Vec<Queued> = (0..6).map(|n| queued(&format!("t{n}"), Some(n), Lane::Own)).collect();
+        let mut first = HashSet::new();
+        for n in 0..60 {
+            let round = next_round(&queue, 5, true, &mut Rng::seeded(n));
+            assert_eq!(round.iter().copied().collect::<HashSet<_>>().len(), 6, "every track once");
+            assert_ne!(round[0], 5);
+            first.insert(round[0]);
+        }
+        assert!(first.len() > 2, "shuffled anew: {first:?}");
+    }
+
+    #[test]
+    fn with_no_index_kept_tracks_not_queued_come_their_artists_first() {
+        let kept: Vec<KeptTrack> = [("a", "X"), ("b", "Y"), ("c", "X"), ("d", "Z")].map(|(k, a)| KeptTrack { key: k.into(), artist: Some(a.into()) }).to_vec();
+        let queued = vec!["c".to_string()];
+        for n in 0..20 {
+            let picks = from_kept(&kept, &queued, &["Y".to_string()], false, 2, &mut Rng::seeded(n));
+            assert_eq!(picks.len(), 2);
+            assert_eq!(picks[0], 1, "the artist's first");
+            assert!(!picks.contains(&2), "not what is queued");
+        }
+        let any: HashSet<usize> = (0..40).map(|n| from_kept(&kept, &queued, &["Y".to_string()], true, 1, &mut Rng::seeded(n))[0]).collect();
+        assert!(any.len() > 1, "at random: {any:?}");
     }
 
     #[test]

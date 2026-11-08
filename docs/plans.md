@@ -580,6 +580,25 @@ The steps, the biggest first:
 Not taken: an approximate vector index such as HNSW, which adds memory where a plain scan of 34,000 vectors should take
 milliseconds; a separate search engine; paging.
 
+## Decisions out of the app (2026-11-07)
+
+The app's Kotlin holds no decisions (`docs/architecture.md`), and today it still holds some. Each moves to the rules crate when
+other work touches it, not as a project of its own: refactoring as part of the work, old and new side by side until the old goes.
+Before a decision moves, shared cases pin what it does now, and both sides must answer them alike. One at a time. From now on
+nothing new is decided in Kotlin, so the list only shrinks.
+
+| When | What moves | Why then |
+|---|---|---|
+| 0.16, preview 2 | The rules in every app build, then `Radio.kt`'s top-up and inserts and `Repeat.kt`'s next round | Offline Radio and Autoplay need them in the rules crate anyway |
+| When the tape engine's gate passes | `StartStop.kt` retires for `deck.rs` | It can't go before the engine has proved itself: the two stand side by side until then |
+| 0.17 | `Levelling.kt` | Small, and it belongs with the Sound door once the engine is settled |
+| 0.17 | The storage budget in `Kept.kt` and `Downloads.kt`, and scrobbling held against the page's | They go with the "no mobile data" setting, which touches the same logic |
+
+## The References door (2026-11-07)
+
+In 0.17, with the references work: MusicBrainz, Discogs, Bandcamp and AcoustID behind one door, as `docs/architecture.md` has it.
+Today only MusicBrainz's turn goes through one, and the services are mostly called one by one.
+
 ## Parked
 
 Liked, not taken up:

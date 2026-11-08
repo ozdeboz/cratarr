@@ -1,0 +1,3 @@
+# A shell breaks on a carriage return, and the app's build runs scripts/rules-android.sh from a Windows checkout too.
+*.sh text eol=lf
+server/rules/tests/vectors/index/*.bin binary
