@@ -611,12 +611,22 @@ impl Device {
             let off = self.switched_off(&k.id, without);
             let fits = if crates::needs_fits(&conditions) { self.fitting(&off) } else { None };
             let view = View { files: &self.facts, switched_off: &off, world: self.world(fits.as_ref(), now), by: &by, alike: || self.alike() };
-            let lines = view.select(&shown(tracks), false);
             let ranks = conditions.iter().any(|c| c.value.ranks());
+            // Its sizes at the toggle's three settings from one selection: a setting is one condition more, so its tracks are the
+            // favourites among them or the rest. A Sounds like picks its closest anew at each, and says only its own setting's.
+            let every = if ranks { Vec::new() } else { view.select(&shown(Favourites::All), false) };
+            let held: Vec<&Facts> = every.iter().filter_map(|l| Some(&self.facts[*self.lines.get(l)?])).collect();
+            let among = |setting: Favourites| crates::select(held.iter().copied(), &setting.with(&[]), &view.world);
+            let lines: Vec<String> = match (ranks, tracks) {
+                (true, _) => view.select(&shown(tracks), false),
+                (false, Favourites::All) => every.clone(),
+                (false, _) => among(tracks).into_iter().map(str::to_string).collect(),
+            };
             let count = |setting: Favourites| match (setting == tracks, ranks) {
                 (true, _) => Some(lines.len()),
                 (false, true) => None,
-                (false, false) => Some(view.select(&shown(setting), false).len()),
+                (false, false) if setting == Favourites::All => Some(every.len()),
+                (false, false) => Some(among(setting).len()),
             };
             out.push(json!({
                 "id": k.id,
