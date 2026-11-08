@@ -11,6 +11,18 @@ export const databases = new Map<string, Map<string, Store>>();
 /** A store's rows in a database, as they are; none where it was never made. */
 export const rowsOf = (db: string, store: string) => databases.get(db)?.get(store)?.rows ?? new Map<unknown, unknown>();
 
+/** How the next opens go, as a browser's can: `fails` that many end in an error, `blocked` that many wait on another tab's connection,
+ *  blocked first and opened a turn later. */
+export const opening = { fails: 0, blocked: 0 };
+
+/** Every connection made, with whether it was closed: a tab's, to be told another wants a new version. */
+export const connections: { name: string; closed: boolean; onversionchange?: (() => void) | null }[] = [];
+
+/** Another tab opening `name` at a newer version: every connection still open on it is told. */
+export const upgradeElsewhere = (name: string) => {
+  for (const c of connections) if (c.name === name && !c.closed) c.onversionchange?.();
+};
+
 /** Set, writes are refused as a browser refuses one past its quota: the transaction aborts, and nothing of it lands. `only`: to that
  *  store alone, as a big write can be refused and a small one taken. */
 export const storage = { refused: false, only: null as string | null };
@@ -35,6 +47,7 @@ function objectStore(s: Store, refused: () => boolean) {
     clear: () => request(() => void (refused() || s.rows.clear())),
     get: (key: unknown) => request(() => s.rows.get(key)),
     getAll: () => request(() => [...s.rows.values()]),
+    getAllKeys: () => request(() => [...s.rows.keys()]),
     openCursor: () => {
       const r: Handlers = {};
       const entries = [...s.rows.entries()];
@@ -51,13 +64,22 @@ function objectStore(s: Store, refused: () => boolean) {
   };
 }
 
-function database(stores: Map<string, Store>) {
+function database(stores: Map<string, Store>, name = '') {
   let closed = false;
+  const seen = { name, closed: false, onversionchange: null as (() => void) | null };
+  connections.push(seen);
   return {
+    get onversionchange() {
+      return seen.onversionchange;
+    },
+    set onversionchange(f: (() => void) | null) {
+      seen.onversionchange = f;
+    },
     objectStoreNames: { contains: (n: string) => stores.has(n) },
     createObjectStore: (n: string, o?: { keyPath?: string }) => void stores.set(n, { keyPath: o?.keyPath, rows: new Map() }),
     close() {
       closed = true;
+      seen.closed = true;
     },
     transaction(names: string | string[], mode?: string) {
       // As a browser refuses it: a write that outlives its database throws, and is not quietly kept.
@@ -82,12 +104,25 @@ export const fakeIndexedDB = {
   open(name: string) {
     const r: Handlers & { onupgradeneeded?: (() => void) | null; onblocked?: (() => void) | null } = {};
     later(() => {
-      const fresh = !databases.has(name);
-      const stores = databases.get(name) ?? new Map<string, Store>();
-      databases.set(name, stores);
-      r.result = database(stores);
-      if (fresh) r.onupgradeneeded?.();
-      r.onsuccess?.();
+      if (opening.fails > 0) {
+        opening.fails--;
+        r.error = new DOMException('The open failed.', 'UnknownError');
+        return r.onerror?.();
+      }
+      const open = () => {
+        const fresh = !databases.has(name);
+        const stores = databases.get(name) ?? new Map<string, Store>();
+        databases.set(name, stores);
+        r.result = database(stores, name);
+        if (fresh) r.onupgradeneeded?.();
+        r.onsuccess?.();
+      };
+      if (opening.blocked > 0) {
+        opening.blocked--;
+        r.onblocked?.();
+        return later(open);
+      }
+      open();
     });
     return r;
   },

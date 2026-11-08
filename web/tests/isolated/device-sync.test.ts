@@ -615,6 +615,22 @@ test('"start again" on covers fetches them whole, the rev inside them, and what 
   assert.equal((await kept('covers'))?.rev, 20, 'not the rev in the answer');
 });
 
+test('a whole cut short keeps the covers held before it: they go only once the new ones are all in', async () => {
+  await held();
+  answers['/api/index/covers/changes'] = startAgain;
+  const fresh = bundle(20, frame(2, picture(9)), frame(3, picture(3)));
+  answers['/api/index/covers'] = () => bytes(fresh.slice(0, -5));
+  await syncNow();
+  assert.deepEqual([...coversKept().keys()].sort(), [1, 2], 'what came of it taken, nothing gone for what did not');
+  same(coversKept().get(2) as Uint8Array, picture(9));
+  assert.equal((await kept('covers'))?.rev, 5);
+  answers['/api/index/covers'] = () => bytes(fresh);
+  await gone(HOURS);
+  await syncNow();
+  assert.deepEqual([...coversKept().keys()].sort(), [2, 3], 'whole, what it no longer holds goes');
+  assert.equal((await kept('covers'))?.rev, 20);
+});
+
 test('covers of another version in a whole stop, and what was held stays', async () => {
   await held();
   answers['/api/index/covers/changes'] = startAgain;

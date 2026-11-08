@@ -21,24 +21,47 @@ const bytesOf = (name: PartName) => `${name}:bytes`;
 
 const open = new Map<string, Promise<IDBDatabase | null>>();
 
+/** The account's database, opened once and kept while it stands. An open that failed, or that another tab's connection blocked, is
+ *  not kept: the next read or write asks again (audit/OFFLINE-REVIEW.md, finding 6). A connection another tab's upgrade needs is
+ *  let go, and opened anew when next asked; one that opens after this page stopped waiting is closed, so it blocks nobody. */
 function db(who: string): Promise<IDBDatabase | null> {
   let d = open.get(who);
   if (!d) {
-    d = new Promise((done) => {
+    const opening: Promise<IDBDatabase | null> = new Promise((done) => {
       try {
         if (typeof indexedDB === 'undefined') return done(null);
+        let given = false;
         const r = indexedDB.open(DB + who, 2);
         r.onupgradeneeded = () => {
           for (const store of [PARTS, COVERS]) if (!r.result.objectStoreNames.contains(store)) r.result.createObjectStore(store);
         };
-        r.onsuccess = () => done(r.result);
-        r.onerror = () => done(null);
-        r.onblocked = () => done(null);
+        r.onsuccess = () => {
+          const got = r.result;
+          if (given) return got.close();
+          given = true;
+          got.onversionchange = () => {
+            got.close();
+            if (open.get(who) === opening) open.delete(who);
+          };
+          done(got);
+        };
+        r.onerror = () => {
+          given = true;
+          done(null);
+        };
+        r.onblocked = () => {
+          given = true;
+          done(null);
+        };
       } catch {
         done(null);
       }
     });
+    d = opening;
     open.set(who, d);
+    void d.then((got) => {
+      if (!got && open.get(who) === opening) open.delete(who);
+    });
   }
   return d;
 }
@@ -99,5 +122,21 @@ export const putCovers = (who: string, frames: CoverFrame[]) =>
         }
       });
 
-/** Every small cover of `who`'s gone, for a whole to take their place. */
-export const clearCovers = (who: string) => written(who, COVERS, (s) => s.clear());
+/** Small covers for `who` kept only for `records`: once a whole is all in, what it no longer holds goes. A whole cut short never
+ *  gets here, so what was held stays until one is whole (audit/OFFLINE-REVIEW.md, finding 4). */
+export async function keepCoversOf(who: string, records: Set<number>): Promise<boolean> {
+  const d = await db(who);
+  if (!d) return false;
+  const keys = await new Promise<IDBValidKey[] | null>((done) => {
+    try {
+      const r = d.transaction(COVERS, 'readonly').objectStore(COVERS).getAllKeys();
+      r.onsuccess = () => done(r.result);
+      r.onerror = () => done(null);
+    } catch {
+      done(null);
+    }
+  });
+  if (!keys) return false;
+  const gone = keys.filter((k) => !records.has(Number(k)));
+  return gone.length === 0 || written(who, COVERS, (s) => gone.forEach((k) => s.delete(k)));
+}
