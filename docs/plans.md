@@ -96,6 +96,30 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   - **Audiobooks' first part** (the owner, later on 2026-11-04): Cratarr's own players keep each book's place, every
     so often and on pause, with a Continue listening row on Home; a speed per book and ±30 s skips; books kept out of
     music's shuffle, Radio, sounds-like, crates, statistics and scrobbling.
+  - **Carried over from 0.16** (the owner, 2026-11-06 and 2026-11-08: "finish what's in flight", the rest after): the rest
+    of 0100 (references, artists and labels, requests on the record, one missing list, the pages), the verdicts, Copy to,
+    uploads and the allocation. With them: `android/` under AGPL-3.0-or-later before any public APK, the Kotlin moves into
+    the rules crate, the References door, a library's fixed identity in Settings, crates subscribing to their own
+    libraries, the Basic/Advanced toggle, and the "no mobile data" setting.
+  - **From testing 0.16** (the owner, 2026-11-08):
+    - **One offline mode and one way of waiting** ("we should have a unified way of showing progress and a unified way
+      of handling offline mode"): one loader with one line saying what it waits for, wherever something waits, as
+      PageLoading's line under the mark does; with Cratarr out of reach every page answers from the device where it can
+      and says so in one line where it cannot. Home's and playlists' "Cannot reach" rows go.
+    - **Creating a crate:** while the typed words differ from those last searched, the action row shows one button,
+      **Pick** (as Enter), in place of Shuffle and Play. The crate's profile while creating or editing is **optional**,
+      folded until opened, never shown by default.
+    - **Most alike:** a crate with a Sounds like word sorts its records closest to that sound first, taste only breaking
+      ties; without one, Best match as now.
+    - **Replace from Your music:** a better copy in someone's own music can take a main copy's place.
+    - **The Like curve takes a count cut** (as `like:…@n`), so its handle can stop inside a run of equal closeness.
+    - **Own music per account, on or off** (Settings › Libraries): off, no Your music anywhere and no "Add to Your
+      music".
+    - **Home Assistant names the playlist** in its voice answer, from `/api/state`'s `name`.
+    - **A device's first answer of a kind is quick:** the similarity and Radio's index are built at the first ask after
+      the device copy opens (about 0.5 s on a tablet); make them cheaper, build them at open, or keep them.
+    - Later still: one tie-break for search on the server and the device; downloads wholly the device's own, so another
+      server's behave as Cratarr's.
 - **0.18: Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)): a friend's Cratarr as a read-only
   library of your own, its catalogue mirrored with its analysis through 0.16's index and feed, its streams relayed.
   Then playlists, offline, a bounded cache and a record shown once (0.19); iroh's tickets after a trial.
