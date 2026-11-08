@@ -92,6 +92,12 @@ test('an artist found reads as Cratarr lists one, one album said as one', () => 
   assert.equal(found.groups.artist!.items[1].sub, '3 albums');
 });
 
+test('an artist found with tracks and no album of their own says no count, never "0 albums"', () => {
+  // The owner, testing 0.16.0: "C Cat Trance" found by a word said "0 albums".
+  const found = foundView({ artists: { total: 1, rows: [{ id: 'ar-9', name: 'C Cat Trance', records: 0, score: 5 }] } }, 'trance', 0);
+  assert.equal(found.groups.artist!.items[0].sub, '');
+});
+
 test('a record found says its artist and year, and an artist of none or a year of none is left out of the line', () => {
   const found = foundView({ records: { total: 2, rows: [{ id: 'al-3', title: 'T', artist: 'A', year: 1959, score: 5, on: 'name' }, { id: 'al-4', title: 'U', artist: '', year: null, score: 4, on: 'name' }] } }, 't', 0);
   assert.deepEqual(found.groups.album!.items[0], { kind: 'album', subject: 'album:cratarr/al-3', title: 'T', sub: 'A · 1959', cover: '/api/albums/cratarr/al-3/cover', score: 5, matched: [{ on: 'name', text: 'T' }] });
