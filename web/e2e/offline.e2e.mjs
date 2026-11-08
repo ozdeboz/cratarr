@@ -1,9 +1,11 @@
 // Browsing with Cratarr away, in a real browser (e2e/standin.mjs): the whole library read from what the device keeps.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { after, before, test } from 'node:test';
 import { device, inModule, PAGE, signIn } from './browser.mjs';
 
 const PREFS = '/src/lib/prefs.svelte.ts';
+const PLAYER = '/src/lib/localPlayer.svelte.ts';
 const standin = (page, what) => page.evaluate((w) => fetch(`/api/standin/${w}`).then((r) => r.json()), what);
 
 /** A track as the page lists what it keeps (lib/offline), its stream in the cache the service worker reads. */
@@ -191,6 +193,36 @@ test("a list's covers are asked at the size they are drawn, never whole, and a r
   await page.setViewportSize({ width: 900, height: 500 });
   await until(() => page.evaluate(() => !!document.querySelector('.hero.flowing img')), (alone) => alone, 'its cover alone in its flow');
   await until(own, (srcs) => srcs.length > 0 && srcs.every((src) => !src.includes('size=')), "the panel's own cover in its flow, whole");
+  await standin(page, 'up');
+  await context.close();
+});
+
+test('the network cut, the player names the track that plays, though its cover never comes', async () => {
+  // The tablet, 0.16.1 (the owner): offline, Zero played and the bar named the track before, Indiamore's, its cover and
+  // length, for good. A cut network drops what it is asked: the new track's cover is asked and never answered.
+  // Its own requests only, so each is the page's to answer or drop (a service worker's are not).
+  const context = await d.browser.newContext({ viewport: { width: 412, height: 915 }, serviceWorkers: 'block' });
+  const page = await context.newPage();
+  page.on('pageerror', (e) => d.errors.push(String(e)));
+  const jpeg = readFileSync(new URL('./cover.jpg', import.meta.url));
+  await page.route(/\/api\/(cover|albums)\/cratarr\/(tr-ahead|al-zero)/, () => {});
+  await page.route(/\/api\/cover\/cratarr\/tr-krishna/, (r) => r.fulfill({ body: jpeg, contentType: 'image/jpeg' }));
+  await signIn(page, 'ann');
+  await standin(page, 'down');
+  const song = (id, name, album, album_id) => ({ entry: `e-${id}`, source: 'cratarr', id, name, artist: null, album, album_id, duration_secs: 274, addable: true });
+  const queue = [song('tr-krishna', 'Little Krishna & The Girls', 'Indiamore', 'al-indiamore'), song('tr-ahead', 'Go Ahead', 'Zero', 'al-zero')];
+  await inModule(page, PLAYER, (m, q) => void ((m.local.queue = q), (m.local.index = 0), (m.local.paused = true)), queue);
+  const named = () => page.evaluate(() => document.querySelector('[aria-label^="Open the player: "]')?.getAttribute('aria-label').slice('Open the player: '.length) ?? null);
+  await until(named, (n) => n === 'Little Krishna & The Girls', 'the first track named');
+  await until(() => inModule(page, '/src/lib/remote.svelte.ts', (m) => m.shownCover()), (src) => src?.includes('tr-krishna'), 'its cover');
+  // The next plays, its place told five times a second, as the app tells it.
+  await inModule(page, PLAYER, (m) => {
+    m.local.index = 1;
+    m.local.position = 0;
+    const tick = setInterval(() => (m.local.position += 0.2), 200);
+    setTimeout(() => clearInterval(tick), 15_000);
+  });
+  await until(named, (n) => n === 'Go Ahead', 'the track that plays named', 12_000);
   await standin(page, 'up');
   await context.close();
 });
