@@ -124,6 +124,9 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
       own title alone (`index::find`'s `found()`), so a track found only through its record's exact title comes below a
       near spelling in another track's title. Rank a track by its best direct match across its other names, below a direct
       hit on its own name and above a near spelling: one function in the rules crate.
+    - **A heart set offline stays shown:** set while the page already knows it is away, it shows off again within a
+      second, though the outbox keeps it and sends it once back; the last copy of favourite albums likely overrides the
+      pending change.
     - Later still: downloads wholly the device's own, so another
       server's behave as Cratarr's.
 - **0.18: Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)): a friend's Cratarr as a read-only
