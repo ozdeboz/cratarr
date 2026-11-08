@@ -205,8 +205,19 @@ class KeptHoldsTest {
     }
 
     @Test
-    fun started_again_with_the_holders_gone_every_download_is_the_one_signed_ins() {
+    fun started_again_with_the_holders_gone_and_no_last_list_every_download_is_the_one_signed_ins() {
         assertEquals(mapOf("a" to setOf(manual(ann)), "b" to setOf(manual(ann))), KeptHolds.startAgain(null, itemsGone = false, listOf("a", "b"), ann))
+    }
+
+    /** The review of 2026-11-07, its third finding: on a shared device another account's downloads never become the one signed in's. */
+    @Test
+    fun started_again_with_the_holders_gone_each_download_goes_back_to_who_held_it_last() {
+        val last = holders("a" to setOf(manual(bo)), "b" to setOf(item(bo), manual(ann)), "gone" to setOf(manual(bo)))
+        val after = KeptHolds.startAgain(null, itemsGone = false, listOf("a", "b", "new"), ann, last)
+        assertEquals(mapOf("a" to setOf(manual(bo)), "b" to setOf(item(bo), manual(ann)), "new" to setOf(manual(ann))), after)
+        assertEquals(setOf("new", "b"), KeptHolds.seenBy(after, ann).keys)
+        val both = KeptHolds.startAgain(null, itemsGone = true, listOf("a", "b"), ann, last)
+        assertEquals("the items gone too: each item's hold its account's own", setOf(manual(bo), manual(ann)), both["b"])
     }
 
     @Test
@@ -232,5 +243,7 @@ class KeptHoldsTest {
         assertTrue(source("Kept.kt").contains(".put(\"unreadable\", unreadable)"))
         assertTrue(source("MainActivity.kt").contains("\"kept-start-again\" -> Kept.startAgain(this)"))
         assertTrue(source("Kept.kt").contains("if (items != null && holders != null) return@execute"))
+        assertTrue(source("Kept.kt").contains("val last = if (holders == null) KeptFile.lastHolders(file(app, HOLDERS_FILE)) else null"))
+        assertTrue(source("Kept.kt").contains("KeptFile.writeHolders(file(context, HOLDERS_FILE), o.toString())"))
     }
 }

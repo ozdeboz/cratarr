@@ -143,7 +143,7 @@ object Kept {
     private fun saveHolders(context: Context, holders: Map<String, Set<String>>) {
         val o = JSONObject()
         for ((k, v) in holders) if (v.isNotEmpty()) o.put(k, JSONArray(v.toList()))
-        KeptFile.write(file(context, HOLDERS_FILE), o.toString())
+        KeptFile.writeHolders(file(context, HOLDERS_FILE), o.toString())
     }
 
     // --- what the page and the other parts call ---
@@ -172,7 +172,7 @@ object Kept {
 
     /**
      * A list that cannot be read, started again (the owner, 2026-11-07), then a sync: one that reads is left as it is. Nothing on the
-     * device goes: [KeptHolds.startAgain] says whose each download is from now on.
+     * device goes: [KeptHolds.startAgain] says whose each download is from now on, by the last holders list that read where these do not.
      */
     fun startAgain(context: Context) {
         val app = context.applicationContext
@@ -191,8 +191,9 @@ object Kept {
             if (items != null && holders != null) return@execute
             val downloads = mutableListOf<String>()
             Downloads.manager(app).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) downloads.add(c.download.request.id) }
+            val last = if (holders == null) KeptFile.lastHolders(file(app, HOLDERS_FILE)) else null
             try {
-                saveHolders(app, KeptHolds.startAgain(holders, itemsGone = items == null, downloads, who))
+                saveHolders(app, KeptHolds.startAgain(holders, itemsGone = items == null, downloads, who, last))
                 if (items == null) saveItems(app, emptyList())
             } catch (e: IOException) {
                 // A full disk: the list stays as it was, and so does the offer.
@@ -642,12 +643,22 @@ internal object KeptHolds {
 
     /**
      * Whose each download is once a list that could not be read starts again ([Kept.startAgain]), so that nothing on the device goes.
-     * The holders gone: every download is [who]'s own, as nothing tells whose it was. The items gone: each hold of an item becomes its
-     * account's own, so what the items kept stays, and shows, as downloaded once.
+     * The holders gone: each download goes back to whoever held it in the [last] list that read (decision 0101: one account's things
+     * never another's), and only one that list does not name is [who]'s own, as nothing then tells whose it was. The items gone: each
+     * hold of an item becomes its account's own, so what the items kept stays, and shows, as downloaded once.
      */
-    fun startAgain(holders: Map<String, Set<String>>?, itemsGone: Boolean, downloads: Collection<String>, who: String): MutableMap<String, MutableSet<String>> {
-        if (holders == null) return downloads.associateWith { mutableSetOf(held(who, Kept.MANUAL)) }.toMutableMap()
-        return holders.mapValues { (_, h) -> if (itemsGone) h.mapTo(mutableSetOf()) { held(whoOf(it), Kept.MANUAL) } else h.toMutableSet() }.toMutableMap()
+    fun startAgain(
+        holders: Map<String, Set<String>>?,
+        itemsGone: Boolean,
+        downloads: Collection<String>,
+        who: String,
+        last: Map<String, Set<String>>? = null,
+    ): MutableMap<String, MutableSet<String>> {
+        val own = { h: Set<String> -> if (itemsGone) h.mapTo(mutableSetOf()) { held(whoOf(it), Kept.MANUAL) } else h.toMutableSet() }
+        if (holders == null) {
+            return downloads.associateWith { d -> last?.get(d)?.takeIf { it.isNotEmpty() }?.let(own) ?: mutableSetOf(held(who, Kept.MANUAL)) }.toMutableMap()
+        }
+        return holders.mapValues { (_, h) -> own(h) }.toMutableMap()
     }
 
     /** After a pass: every account's own Downloads stay, the items' holds are what the budget gave ([wanted]). Those
@@ -696,6 +707,20 @@ internal object KeptFile {
             throw IOException("${file.name} cannot be read: ${e.message}", e)
         }
     }
+
+    /**
+     * The holders in [file] as [write] puts them, the list there kept first as the last one ([lastHolders]) if it reads: a list that
+     * cannot be read later still tells from it whose each download was. One that cannot be read now never takes the last one's place.
+     */
+    fun writeHolders(file: File, text: String, put: (File, String) -> Unit = ::onDisk) {
+        if (file.exists() && runCatching { holders(file) }.isSuccess) write(lastOf(file), file.readText(), put)
+        write(file, text, put)
+    }
+
+    /** The holders list that read before [file]'s latest; none where there is none, or it cannot be read either. */
+    fun lastHolders(file: File): Map<String, Set<String>>? = lastOf(file).takeIf { it.exists() }?.let { runCatching { holders(it) }.getOrNull() }
+
+    private fun lastOf(file: File) = File(file.parentFile, "${file.name.removeSuffix(".json")}.last.json")
 
     /**
      * [text] in [file], whole or not at all: written aside by [put], then put in its place in one step. As LinkLog's trim,

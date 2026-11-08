@@ -1,7 +1,7 @@
 // A stand-in for Cratarr, for the browser tests with no built server (`pnpm run e2e:standin`, e2e/standin-run.mjs; the real
 // one is scripts/browser-e2e.sh): sign-in and its session as server/src/serve/signin.rs makes them, the 401 of access.rs,
 // /api/me, preferences, an account's few reads, a player's connection and reports, kept for a test to read at
-// /api/standin/reports, and the library's index, its feed and an account's own, the rules crate's own bytes
+// /api/standin/reports, and the library's index, its feed and each account's own, the rules crate's own bytes
 // (server/rules/tests/vectors/index), with small covers in their plain form: it stands at rev 5 until a test moves it to 9 by /api/standin/index-moves, which adds one cover.
 // Everything else is not here, which the page takes as it
 // takes a server without it. The sign-in page's
@@ -144,7 +144,8 @@ export function standIn(port, accounts) {
     if (path === '/api/index') return bytes(vector(indexRev === 5 ? 'whole.bin' : 'after.bin'));
     if (path === '/api/index/sounds') return bytes(vector(indexRev === 5 ? 'sounds.bin' : 'sounds-after.bin'));
     if (path === '/api/index/covers') return bytes(indexRev === 5 ? coverBundle(5, 10, 11) : coverBundle(9, 10, 11, 13));
-    if (path === '/api/index/own') return bytes(vector('own.bin'));
+    // Each account's: bob's is another's on the same device (decision 0101 point 28).
+    if (path === '/api/index/own') return bytes(vector(me === 'bob' ? 'own-bob.bin' : 'own.bin'));
     if (path === '/api/index/covers/changes') {
       if (Number(url.searchParams.get('since')) === indexRev) {
         res.writeHead(204);
