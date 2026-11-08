@@ -49,6 +49,8 @@ export type Link = {
 export type NowPlaying = {
   /** The source it came from (covers are looked up there). */
   source: string;
+  /** The page's own player: the copy it streams, its queue's Play from. */
+  from?: string;
   id: string;
   name: string;
   artist: string | null;
@@ -1953,7 +1955,9 @@ export type TrackFile = {
   genres: string[];
   tags: { name: string; value: string }[];
 };
-export const trackFile = (source: string, id: string) => quietly<TrackFile>(`${trackPath(source, id)}/details`);
+/** `from`: the copy that streams, a queue's Play from (lib/localPlayer's `from`), as the stream is asked. */
+export const trackFile = (source: string, id: string, from?: string) =>
+  quietly<TrackFile>(`${trackPath(source, id)}/details${from ? `?from=${encodeURIComponent(from)}` : ''}`);
 
 /** Put the track in the playlist or take it out (the state wanted, as `setMember`). */
 export const setTrackMember = (source: string, id: string, playlistId: string, member: boolean) =>
