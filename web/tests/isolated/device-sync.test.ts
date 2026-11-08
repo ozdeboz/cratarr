@@ -615,6 +615,17 @@ test('"start again" on covers fetches them whole, the rev inside them, and what 
   assert.equal((await kept('covers'))?.rev, 20, 'not the rev in the answer');
 });
 
+// The review of 2026-11-07, its fourth finding: a whole cut short, on mobile data or by the network going, left no cover at all.
+test('a whole of covers cut short keeps every cover held before it, those that came taken', async () => {
+  await held();
+  answers['/api/index/covers/changes'] = startAgain;
+  answers['/api/index/covers'] = () => bytes(bundle(20, frame(2, picture(9)), frame(3, picture(3))).slice(0, -5));
+  await syncNow();
+  assert.deepEqual([...coversKept().keys()].sort(), [1, 2]);
+  same(coversKept().get(2) as Uint8Array, picture(9));
+  assert.equal((await kept('covers'))?.rev, 5);
+});
+
 test('covers of another version in a whole stop, and what was held stays', async () => {
   await held();
   answers['/api/index/covers/changes'] = startAgain;

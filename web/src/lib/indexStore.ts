@@ -108,5 +108,21 @@ export const putCovers = (who: string, frames: CoverFrame[]) =>
         }
       });
 
-/** Every small cover of `who`'s gone, for a whole to take their place. */
-export const clearCovers = (who: string) => written(who, COVERS, (s) => s.clear());
+/** Small covers for `who`, those of `records` alone: a whole all in lets go of what it no longer holds, and not before, so one cut short
+ *  leaves every cover kept till then (the review of 2026-11-07, its fourth finding). Whether it was written. */
+export async function keepCovers(who: string, records: Set<number>): Promise<boolean> {
+  const d = await db(who);
+  if (!d) return false;
+  const keys = await new Promise<IDBValidKey[] | null>((done) => {
+    try {
+      const r = d.transaction(COVERS, 'readonly').objectStore(COVERS).getAllKeys();
+      r.onsuccess = () => done(r.result);
+      r.onerror = () => done(null);
+    } catch {
+      done(null);
+    }
+  });
+  if (!keys) return false;
+  const gone = keys.filter((k) => !records.has(Number(k)));
+  return gone.length === 0 || written(who, COVERS, (s) => gone.forEach((k) => s.delete(k)));
+}

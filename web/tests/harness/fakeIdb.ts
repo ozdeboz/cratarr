@@ -44,6 +44,7 @@ function objectStore(s: Store, refused: () => boolean) {
     clear: () => request(() => void (refused() || s.rows.clear())),
     get: (key: unknown) => request(() => s.rows.get(key)),
     getAll: () => request(() => [...s.rows.values()]),
+    getAllKeys: () => request(() => [...s.rows.keys()]),
     openCursor: () => {
       const r: Handlers = {};
       const entries = [...s.rows.entries()];
