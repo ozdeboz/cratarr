@@ -55,8 +55,6 @@ private object Scorer {
         val ok = Net.code(context, c) in 200..299
         val text = if (ok) c.inputStream.bufferedReader().use { it.readText() } else null
         c.disconnect()
-        // Cratarr answers: what answered for it is let go.
-        if (ok) DeviceAnswers.release()
         text?.let { JSONObject(it).optJSONArray("tracks") }
     } catch (e: Exception) {
         Log.w(TAG, "radio: ${e.message}")

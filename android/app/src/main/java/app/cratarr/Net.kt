@@ -99,7 +99,8 @@ object Net {
         return c
     }
 
-    /** The answer's status, noted: a refusal from an address of Cratarr's holds its requests back, an answer lifts that. */
+    /** The answer's status, noted: a refusal from an address of Cratarr's holds its requests back, an answer lifts that, and lets go
+     *  what this device answered for itself while Cratarr could not ([DeviceAnswers]): reads are Cratarr's again. */
     fun code(context: Context, c: HttpURLConnection): Int {
         val code = c.responseCode
         val url = c.url.toString()
@@ -117,6 +118,7 @@ object Net {
                 refusals[origin] = session(url) to SystemClock.elapsedRealtime()
             } else if (code in 200..399) {
                 if (refusals.remove(origin) != null) signedIn(context)
+                DeviceAnswers.release()
             }
         }
         return code

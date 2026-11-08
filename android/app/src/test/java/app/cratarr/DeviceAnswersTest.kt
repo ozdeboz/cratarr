@@ -54,9 +54,13 @@ class DeviceAnswersTest {
     }
 
     @Test
-    fun cratarr_answering_lets_the_copy_go() {
-        val ask = source("Radio.kt").substringAfter("fun ask(").substringBefore("fun offline(")
-        assertTrue(ask.contains("if (ok) DeviceAnswers.release()"))
+    fun any_answer_from_cratarr_lets_the_copy_go_in_one_place() {
+        // The review of D14 to D20, finding 1: only Radio's own ask let it go, so crates read offline kept it once Cratarr was back.
+        val code = source("Net.kt").substringAfter("fun code(").substringBefore("private const val SIGN_IN_CHANNEL")
+        assertTrue("where an address of Cratarr's answers", code.substringAfter("code in 200..399").contains("DeviceAnswers.release()"))
+        for (name in listOf("Radio.kt", "Reach.kt", "DeviceIndex.kt", "Plays.kt", "CratarrWebViewClient.kt")) {
+            assertFalse("nowhere else: $name", source(name).contains("DeviceAnswers.release()"))
+        }
     }
 
     @Test

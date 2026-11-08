@@ -2,8 +2,8 @@
  * What this device answers for itself (PREVIEW2's D18 to D20): crates, Sounds like and what comes next, by the rules crate over what
  * [DeviceIndex] keeps, so Autoplay runs with no page open and the page asks the same answer here ([PAGE_PATH]). Kotlin decides nothing:
  * it hands in what is kept, the plays not told yet and what plays here, and does what it is told.
- * One copy, opened when first asked and let go as soon as Cratarr answers again: the tablet held 173 MB of it, and a second in the
- * WebView is what it could not hold. So a page in the app never opens its own.
+ * One copy, opened when first asked and let go as soon as Cratarr answers any of the app's requests again ([Net.code]): the tablet held
+ * 173 MB of it, and a second in the WebView is what it could not hold. So a page in the app never opens its own.
  */
 package app.cratarr
 
@@ -24,7 +24,7 @@ object DeviceAnswers {
     const val PAGE_PATH = "/__device/answer"
 
     private class Held(val who: String, val stands: List<Long?>, val device: RulesDevice)
-    private var held: Held? = null
+    @Volatile private var held: Held? = null
 
     /** The device, opened anew where the account or anything kept moved; null where nothing is kept, or no rules library is here. */
     @Synchronized
@@ -44,11 +44,13 @@ object DeviceAnswers {
         return device
     }
 
-    /** Lets it go: its memory goes with it. */
-    @Synchronized
+    /** Lets it go: its memory goes with it. Told at every answer from Cratarr, so with nothing held it costs nothing. */
     fun release() {
-        held?.device?.close()
-        held = null
+        if (held == null) return
+        synchronized(this) {
+            held?.device?.close()
+            held = null
+        }
     }
 
     /** The answer to what is asked, this device's unsent plays gone by; null where it has none. */
