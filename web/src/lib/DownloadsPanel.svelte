@@ -91,6 +91,11 @@
   /** `album`: a one-time copy's album, its tracks here (for the menu offline: play them, take them off). */
   type Menu = { kind: KeptItem['kind']; source: string; id: string; subject: string; name: string; artist: string | null; cover: string | null; synced: boolean; album?: OnceAlbum };
   let menu = $state<Menu | null>(null);
+  /** The menu as opened, kept while it closes: a tap there closes it and goes on reading what it was opened on (0.16.0 on the
+   *  tablet, 2026-11-08: Play in a synced album's menu said "Could not start playing", its record's details read from a menu
+   *  already gone). */
+  let opened: Menu | null = null;
+  const shownMenu = $derived((opened = menu ?? opened));
   const keptMenu = (i: KeptItem): Menu => ({
     kind: i.kind,
     source: i.source,
@@ -360,7 +365,7 @@
 {/if}
 
 {#if menu}
-  {@const m = menu}
+  {@const m = shownMenu!}
   {#if reach.away}
     <!-- Out of Cratarr's reach (decision 0085): only what this device can do itself. -->
     <MenuSheet label={m.name} title={m.name} images={m.cover ? [m.cover] : []} onclose={() => (menu = null)}>

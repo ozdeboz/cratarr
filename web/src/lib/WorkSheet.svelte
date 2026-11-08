@@ -29,6 +29,9 @@
   /** A movement's menu, or a recording's album's. */
   let trackMenu = $state<MenuTrack | null>(null);
   let albumMenu = $state<WorkRecording | null>(null);
+  /** The recording its menu was opened on, kept while it closes: a tap there closes it and goes on reading what it was opened on (lib/DownloadsPanel). */
+  let openedAlbum: WorkRecording | null = null;
+  const shownAlbum = $derived((openedAlbum = albumMenu ?? openedAlbum));
   $effect(() => {
     const id = mbid;
     let gone = false;
@@ -126,7 +129,7 @@
   {/if}
 </MenuSheet>
 {#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
-{#if albumMenu}{@const r = albumMenu}<AlbumMenu source={SOURCE} album={{ id: r.album_id, title: r.album, artist: r.performers.length ? r.performers.join(', ') : null }} onclose={() => (albumMenu = null)} />{/if}
+{#if albumMenu}{@const r = shownAlbum!}<AlbumMenu source={SOURCE} album={{ id: r.album_id, title: r.album, artist: r.performers.length ? r.performers.join(', ') : null }} onclose={() => (albumMenu = null)} />{/if}
 
 <style>
   .rows,
