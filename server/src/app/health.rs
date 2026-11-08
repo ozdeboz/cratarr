@@ -139,8 +139,12 @@ pub(crate) fn short_cause(path: &std::path::Path, heard: i64) -> &'static str {
 fn missing_list(m: crate::catalogue::Missing, held: &std::collections::HashSet<String>) -> Option<Finding> {
     let track = |t: crate::catalogue::MissingTrack| {
         let by: Vec<String> = [t.artist, t.album].into_iter().flatten().collect();
-        let title = t.title.or_else(|| t.rel.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string())).unwrap_or_else(|| crate::serve::ids::song(t.track));
-        Item { title, line: (!by.is_empty()).then(|| by.join(" · ")), files: t.rel.into_iter().collect(), track: Some(crate::serve::ids::song(t.track)), since: Some(t.since), ..Item::default() }
+        let named = t.title.or_else(|| t.rel.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string()));
+        // Retired before 0.16, a track kept nothing of itself but what it holds (the owner, testing 0.16.0: its bare id
+        // showed): said so, in the page's words.
+        let line = (!by.is_empty()).then(|| by.join(" · ")).or_else(|| named.is_none().then(|| "Nothing kept of it".to_string()));
+        let title = named.unwrap_or_else(|| "A track".to_string());
+        Item { title, line, files: t.rel.into_iter().collect(), track: Some(crate::serve::ids::song(t.track)), since: Some(t.since), ..Item::default() }
     };
     let libraries = m.parked.into_iter().map(|l| Item { line: Some(n(l.files, "file, its library out of use", "files, their library out of use")), since: l.since, title: l.path, ..Item::default() });
     let retired = m.retired.into_iter().filter(|t| held.contains(&crate::serve::ids::song(t.track)));
@@ -1211,6 +1215,17 @@ mod tests {
         assert_eq!((row.track.as_deref(), row.since, row.line.as_deref(), row.files.as_slice()), (Some("tr-2"), Some(100), Some("A · B"), &["A - B/01 One.flac".to_string()][..]));
         assert_eq!((f.items[0].track.clone(), f.items[0].since), (None, Some(50)), "a library has no track to reconnect");
         assert!(missing_list(Missing { retired: vec![a_track(3, None)], ..Missing::default() }, &["tr-2".to_string()].into()).is_none());
+    }
+
+    /// A track retired before 0.16 kept nothing of itself but what it holds (the owner, testing 0.16.0: Health › Music
+    /// showed bare ids like tr-38757): it says so, never its id.
+    #[test]
+    fn a_retired_track_nothing_was_kept_of_says_so_not_its_id() {
+        use crate::catalogue::{Missing, MissingTrack};
+        let bare = MissingTrack { track: 38757, title: None, artist: None, album: None, rel: None, since: 100 };
+        let f = missing_list(Missing { retired: vec![bare], ..Missing::default() }, &["tr-38757".to_string()].into()).expect("a finding");
+        let row = &f.items[0];
+        assert_eq!((row.title.as_str(), row.line.as_deref(), row.track.as_deref()), ("A track", Some("Nothing kept of it"), Some("tr-38757")));
     }
 
     #[test]
