@@ -28,13 +28,32 @@ function aPage() {
 
 /** Cratarr as the page's requests find it: answering `answer`, counted. */
 function cratarr(answer = () => new Response('Cratarr’s', { status: 200 })) {
-  const f = async (req) => {
+  const f = async (req, signal) => {
     f.asked.push(new URL(req.url).pathname);
-    return answer(req);
+    return answer(req, signal);
   };
   f.asked = [];
   return f;
 }
+
+/** Cratarr behind a network gone silent: no answer ever, the request let go only when told (counted in `letGo`). */
+function silent() {
+  const f = cratarr(
+    (_req, signal) =>
+      new Promise((_, reject) =>
+        signal?.addEventListener('abort', () => {
+          f.letGo++;
+          reject(signal.reason);
+        }),
+      ),
+  );
+  f.letGo = 0;
+  return f;
+}
+
+const newer = () => ({ version: '0.16.0', build: 'ZZZ' });
+const sameBuiltAgain = () => ({ version: '0.15.0', build: 'BBB' });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 test('releases in order', () => {
   assert.equal(compare('0.15.0', '0.16.0'), -1);
@@ -97,20 +116,79 @@ test('Cratarr newer, or the same release built again: Cratarr’s page; Vite’s
 });
 
 test('Cratarr’s page chosen but out of reach or failing: the app’s page opens; a redirect is Cratarr’s', async () => {
-  const newer = () => ({ version: '0.16.0', build: 'ZZZ' });
-  const page = ownPage(aPage(), newer);
   const away = cratarr(() => {
     throw new TypeError('net::ERR_INTERNET_DISCONNECTED');
   });
-  assert.equal(await (await page.answer(get('/'), away)).text(), '<p>the app’s page</p>');
+  assert.equal(await (await ownPage(aPage(), newer).answer(get('/'), away)).text(), '<p>the app’s page</p>');
   const failing = cratarr(() => new Response('Bad Gateway', { status: 502 }));
-  assert.equal(await (await page.answer(get('/library'), failing)).text(), '<p>the app’s page</p>');
+  assert.equal(await (await ownPage(aPage(), newer).answer(get('/library'), failing)).text(), '<p>the app’s page</p>');
+  const broken = cratarr(() => new Response('Internal Server Error', { status: 500 }));
+  assert.equal(await (await ownPage(aPage(), newer).answer(get('/'), broken)).text(), '<p>the app’s page</p>', 'an error page in its place');
   const signIn = cratarr(() => new Response(null, { status: 303, headers: { location: '/signin?next=%2F' } }));
-  const r = await page.answer(get('/'), signIn);
+  const r = await ownPage(aPage(), newer).answer(get('/'), signIn);
   assert.equal(r.status, 303);
   assert.equal(r.headers.get('location'), '/signin?next=%2F');
-  // Only the page itself falls back: another file (the service worker's script) is Cratarr’s or nothing.
-  await assert.rejects(page.answer(get('/sw.js'), away));
+  // The service worker's script is Cratarr’s or none: the browser keeps the worker it has.
+  await assert.rejects(ownPage(aPage(), newer).answer(get('/sw.js'), away));
+  // Another file Cratarr answers is Cratarr’s answer, an error too (404: its page has no such file).
+  const gone = cratarr(() => new Response('Not Found', { status: 404 }));
+  assert.equal((await ownPage(aPage(), newer).answer(get('/build.json'), gone)).status, 404);
+});
+
+test('Cratarr silent for its page: the app’s page within the wait, the request let go', async () => {
+  for (const heard of [newer, sameBuiltAgain]) {
+    const page = ownPage(aPage(), heard, { waitMs: 50 });
+    const c = silent();
+    const started = Date.now();
+    assert.equal(await (await page.answer(get('/'), c)).text(), '<p>the app’s page</p>');
+    assert.ok(Date.now() - started < 1_000, `within the wait, not ${Date.now() - started} ms`);
+    assert.equal(c.letGo, 1, 'the request let go');
+    assert.equal(page.away(), true);
+  }
+  // A way out that does not listen to being let go: the wait holds all the same.
+  const deaf = cratarr(() => new Promise(() => {}));
+  assert.equal(await (await ownPage(aPage(), newer, { waitMs: 50 }).answer(get('/'), deaf)).text(), '<p>the app’s page</p>');
+});
+
+test('Cratarr out of reach: the page’s files are the app’s at once, the service worker’s script none', async () => {
+  const page = ownPage(aPage(), newer, { waitMs: 50 });
+  await page.answer(get('/'), silent());
+  const c = silent();
+  const started = Date.now();
+  assert.equal(await (await page.answer(get('/library'), c)).text(), '<p>the app’s page</p>');
+  assert.deepEqual(await (await page.answer(get('/build.json'), c)).json(), { version: '0.15.0', build: 'AAA' });
+  assert.equal(await (await page.answer(get('/icons/icon-192.png'), c)).text(), 'png');
+  await assert.rejects(page.answer(get('/sw.js'), c));
+  assert.ok(Date.now() - started < 40, 'nothing waited for');
+  assert.deepEqual(c.asked, [], 'Cratarr not asked');
+  // A file whose wait runs out on its own (Cratarr not yet out of reach) is the app’s too, the worker’s script not.
+  assert.deepEqual(await (await ownPage(aPage(), newer, { waitMs: 50 }).answer(get('/build.json'), silent())).json(), { version: '0.15.0', build: 'AAA' });
+  await assert.rejects(ownPage(aPage(), newer, { waitMs: 50 }).answer(get('/sw.js'), silent()));
+});
+
+test('Out of reach ends when Cratarr answers anything, or after its time', async () => {
+  const page = ownPage(aPage(), newer, { waitMs: 50 });
+  await page.answer(get('/'), silent());
+  // The page's own request answered (its API): Cratarr is back, and its page is asked for again.
+  await page.answer(get('/api/health'), cratarr());
+  assert.equal(page.away(), false);
+  const c = cratarr();
+  assert.equal(await (await page.answer(get('/'), c)).text(), 'Cratarr’s');
+  assert.deepEqual(c.asked, ['/']);
+  // A proxy's refusal in front of it is no answer: out of reach again; the health check's answer ends it too.
+  await page.answer(get('/api/health'), cratarr(() => new Response(null, { status: 502 })));
+  assert.equal(page.away(), false, 'a request of the page’s that is refused does not make Cratarr out of reach');
+  await page.answer(get('/'), cratarr(() => new Response(null, { status: 403 })));
+  assert.equal(page.away(), true, 'the page refused by the proxy does');
+  page.reached();
+  assert.equal(page.away(), false);
+  // After its time, Cratarr is asked again.
+  const short = ownPage(aPage(), newer, { waitMs: 50, awayMs: 30 });
+  await short.answer(get('/'), silent());
+  await sleep(40);
+  const again = cratarr();
+  assert.equal(await (await short.answer(get('/'), again)).text(), 'Cratarr’s');
+  assert.deepEqual(again.asked, ['/']);
 });
 
 test('what is not a page file goes to Cratarr as it came', async () => {

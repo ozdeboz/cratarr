@@ -39,6 +39,12 @@ updates itself.**
   Android's: Vite's fingerprinted files are the app's wherever it has them, and with the server's copy chosen but
   out of reach (no answer, an error page), the app's opens: a blank window never. What the page stores is kept for
   good (the shell asks `navigator.storage.persist()` and grants it).*
+  *Amended 2026-11-08 (the owner's offline test on the ThinkPad): out of reach has a bound. A network gone silent
+  answers nothing and refuses nothing, and the window stayed blank 2 min 14 s, until the connection gave up. Now the
+  server gets 3 s to begin its answer for its page, and a proxy's refusal in front of it (403, 502 to 504) counts as
+  no answer; after that it counts as out of reach for a minute, or until it answers anything, and the page's files are
+  the app's at once. The service worker's script is the one exception: the server's or none, so the browser keeps the
+  worker it has.*
 - The server's address is asked once, on the app's one page of its own; the health check (`/api/health`, open to
   all) tells a Cratarr server from anything else. **Change server…** (the window's menu, shown with Alt, and the
   tray's) asks again; the app then starts afresh with it.

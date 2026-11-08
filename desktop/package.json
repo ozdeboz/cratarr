@@ -20,7 +20,7 @@
     "page": "node copy-page.js",
     "start": "npm run icons && npm run page && electron .",
     "check": "node check-no-house.js",
-    "test": "node --test page.test.js",
+    "test": "node --test page.test.js after-install.test.js",
     "dist": "umask 022 && npm run icons && npm run page && npm run check && electron-builder --linux deb --publish never",
     "dist:win": "npm run icons && npm run page && npm run check && electron-builder --win nsis --publish never"
   },
