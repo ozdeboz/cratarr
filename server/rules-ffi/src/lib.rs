@@ -6,6 +6,7 @@ uniffi::setup_scaffolding!();
 
 mod device;
 mod device_index;
+mod fresh;
 
 /// How long a brake from `v0` to `to` lasts (ms), never shorter than `brake_ms`.
 #[uniffi::export]

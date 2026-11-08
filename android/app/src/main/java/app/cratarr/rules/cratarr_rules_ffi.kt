@@ -760,6 +760,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -788,6 +792,10 @@ fun uniffi_cratarr_rules_ffi_checksum_func_brake_v(
 fun uniffi_cratarr_rules_ffi_checksum_func_brake_way(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_device_open(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_fresh_at(
+): Short
+fun uniffi_cratarr_rules_ffi_checksum_func_fresh_step(
 ): Short
 fun uniffi_cratarr_rules_ffi_checksum_func_next_round(
 ): Short
@@ -889,6 +897,10 @@ fun uniffi_cratarr_rules_ffi_fn_func_brake_v(`v0`: Double,`to`: Double,`length`:
 fun uniffi_cratarr_rules_ffi_fn_func_brake_way(`v0`: Double,`to`: Double,`length`: Double,`t`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
 fun uniffi_cratarr_rules_ffi_fn_func_device_open(`index`: RustBuffer.ByValue,`sounds`: RustBuffer.ByValue,`own`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_cratarr_rules_ffi_fn_func_fresh_at(uniffi_out_err: UniffiRustCallStatus, 
+): Int
+fun uniffi_cratarr_rules_ffi_fn_func_fresh_step(`facts`: RustBuffer.ByValue,`version`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_cratarr_rules_ffi_fn_func_next_round(`queue`: RustBuffer.ByValue,`playing`: Int,`shuffled`: Byte,`draw`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1065,6 +1077,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_device_open() != 61812.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_fresh_at() != 62157.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_cratarr_rules_ffi_checksum_func_fresh_step() != 42507.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_cratarr_rules_ffi_checksum_func_next_round() != 52897.toShort()) {
@@ -1723,6 +1741,61 @@ public object FfiConverterTypeRulesDevice: FfiConverter<RulesDevice, Pointer> {
 
 
 /**
+ * What the device knows as it looks (`fresh::Facts`).
+ */
+data class FreshFacts (
+    var `marked`: kotlin.UInt?, 
+    var `collected`: kotlin.Boolean, 
+    var `cleared`: kotlin.Boolean, 
+    var `keptReadable`: kotlin.Boolean, 
+    var `waitingHere`: kotlin.Boolean, 
+    var `reached`: kotlin.Boolean, 
+    var `mayDownload`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFreshFacts: FfiConverterRustBuffer<FreshFacts> {
+    override fun read(buf: ByteBuffer): FreshFacts {
+        return FreshFacts(
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FreshFacts) = (
+            FfiConverterOptionalUInt.allocationSize(value.`marked`) +
+            FfiConverterBoolean.allocationSize(value.`collected`) +
+            FfiConverterBoolean.allocationSize(value.`cleared`) +
+            FfiConverterBoolean.allocationSize(value.`keptReadable`) +
+            FfiConverterBoolean.allocationSize(value.`waitingHere`) +
+            FfiConverterBoolean.allocationSize(value.`reached`) +
+            FfiConverterBoolean.allocationSize(value.`mayDownload`)
+    )
+
+    override fun write(value: FreshFacts, buf: ByteBuffer) {
+            FfiConverterOptionalUInt.write(value.`marked`, buf)
+            FfiConverterBoolean.write(value.`collected`, buf)
+            FfiConverterBoolean.write(value.`cleared`, buf)
+            FfiConverterBoolean.write(value.`keptReadable`, buf)
+            FfiConverterBoolean.write(value.`waitingHere`, buf)
+            FfiConverterBoolean.write(value.`reached`, buf)
+            FfiConverterBoolean.write(value.`mayDownload`, buf)
+    }
+}
+
+
+
+/**
  * A track kept on the device.
  */
 data class KeptPick (
@@ -1886,6 +1959,42 @@ public object FfiConverterTypeSyncTaken: FfiConverterRustBuffer<SyncTaken> {
             FfiConverterOptionalByteArray.write(value.`bytes`, buf)
     }
 }
+
+
+
+/**
+ * What to do now (`fresh::Step`).
+ */
+
+enum class FreshStep {
+    
+    NOTHING,
+    COLLECT,
+    CLEAR,
+    MARK,
+    FETCH;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFreshStep: FfiConverterRustBuffer<FreshStep> {
+    override fun read(buf: ByteBuffer) = try {
+        FreshStep.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FreshStep) = 4UL
+
+    override fun write(value: FreshStep, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 
@@ -2618,6 +2727,30 @@ public object FfiConverterSequenceTypeQueueLane: FfiConverterRustBuffer<List<Que
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_device_open(
         FfiConverterByteArray.lower(`index`),FfiConverterOptionalByteArray.lower(`sounds`),FfiConverterOptionalByteArray.lower(`own`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The app's version that brings it.
+         */ fun `freshAt`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_fresh_at(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * What to do now, by an app of `version` (its `versionCode`).
+         */ fun `freshStep`(`facts`: FreshFacts, `version`: kotlin.UInt): FreshStep {
+            return FfiConverterTypeFreshStep.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_cratarr_rules_ffi_fn_func_fresh_step(
+        FfiConverterTypeFreshFacts.lower(`facts`),FfiConverterUInt.lower(`version`),_status)
 }
     )
     }

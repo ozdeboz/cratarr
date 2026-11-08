@@ -61,6 +61,7 @@ object Who {
         ExportSave.forget(app)
         Kept.sync(app)
         DeviceIndex.start(app)
+        FreshStart.look(app)
         for (f in changed) f(from, to)
     }
 }

@@ -297,6 +297,7 @@ class PlayerService : MediaSessionService() {
         Reach.watch(this)
         // A car opens this with no page at all.
         DeviceIndex.start(this)
+        FreshStart.look(this)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(prefsChanged)
         // Where the controls point, as kept.
         showTarget()

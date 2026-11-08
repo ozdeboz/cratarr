@@ -286,6 +286,33 @@ object Kept {
         return KeptHolds.seenBy(shownHolders(app), Who.current(app))
     }
 
+    /** What every account keeps and holds, as 0.16's fresh start writes it down ([FreshStart]): each kept item (its account, kind,
+     *  source, id and name) and each download's holders. Null while either list cannot be read. */
+    fun snapshot(context: Context): Pair<List<JSONObject>, Map<String, Set<String>>>? {
+        val app = context.applicationContext
+        return worker.submit<Pair<List<JSONObject>, Map<String, Set<String>>>?> {
+            try {
+                loadItems(app).map { JSONObject().put("who", it.who).put("kind", it.kind).put("source", it.source).put("id", it.id).put("name", it.name) } to loadHolders(app)
+            } catch (e: IOException) {
+                null
+            }
+        }.get()
+    }
+
+    /** Both lists emptied, for 0.16's fresh start ([FreshStart]); false where they could not be written. */
+    fun forgetAll(context: Context): Boolean {
+        val app = context.applicationContext
+        return worker.submit<Boolean> {
+            try {
+                saveItems(app, emptyList())
+                saveHolders(app, emptyMap())
+                true
+            } catch (e: IOException) {
+                false
+            }
+        }.get()
+    }
+
     /** WorkManager's every few hours, with the downloads' rules as its constraints. */
     fun schedule(context: Context) {
         val prefs = Prefs(context)

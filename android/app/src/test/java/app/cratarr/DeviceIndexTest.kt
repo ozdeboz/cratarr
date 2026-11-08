@@ -709,7 +709,8 @@ class DeviceIndexTest {
 
     @Test
     fun a_new_network_looks_once_the_address_is_settled() {
-        assertTrue(source("Reach.kt").contains("checkSoon(app, SETTLE_MS) { DeviceIndex.look(app) }"))
+        // 0.16's fresh start looks then too (decision 0101 point 23, FreshStart): what waits may be fetched on the new network.
+        assertTrue(source("Reach.kt").contains("checkSoon(app, SETTLE_MS) { DeviceIndex.look(app); FreshStart.look(app) }"))
     }
 
     @Test
