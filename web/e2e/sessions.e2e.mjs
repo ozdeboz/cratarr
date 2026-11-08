@@ -107,6 +107,9 @@ test('signed in, Cratarr not reached again to say who: a reload is no one’s, n
   const context = await d.browser.newContext({ serviceWorkers: 'block' });
   const page = await context.newPage();
   await signIn(page, 'ann', '/signin');
+  // Off the page first, as the tests beside it go: left open, its next request meets the session gone, and it sends itself to the
+  // sign-in page (lib/reach's toSignIn) while the sign-in below is on its way there, which then never arrives.
+  await page.goto('about:blank');
   await context.clearCookies();
   await page.route('**/api/me', (r) => r.abort());
   await signInOnly(page, 'bob', '/signin');
