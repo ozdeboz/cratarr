@@ -585,8 +585,11 @@
   {#if loading}<PageLoading />{/if}
   <!-- Its sections in the user's order, those switched on (Settings › Home; the owner, 2026-10-24). -->
   {#each order as part, i (part)}
-    {#if failedOf(part) && turn(part)}{@render failedPart(part)}{:else if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
+    <!-- Out of reach, a section the device cannot answer, with nothing kept, is left out: one line under Home says so (0.17, the
+         owner: one offline mode, not a "Cannot reach … Try again" per section). -->
+    {#if failedOf(part) && turn(part)}{#if !away()}{@render failedPart(part)}{/if}{:else if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
   {/each}
+  {#if away() && order.some((p) => failedOf(p))}<p class="away">The rest of Home needs Cratarr.</p>{/if}
   {/if}
 </div>
 
@@ -1010,6 +1013,13 @@
 
   .failed {
     margin: 0 16px;
+  }
+
+  /* What Home cannot show out of reach, in one line (as the menus' "The rest needs Cratarr."). */
+  .away {
+    margin: 8px 16px;
+    color: var(--muted);
+    font-size: 13px;
   }
 
   .shelf {

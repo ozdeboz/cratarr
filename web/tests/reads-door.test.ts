@@ -36,7 +36,7 @@ function uses(text: string) {
 /** What may read it, how often, and what for. Not one of these chooses what a page reads. */
 const ALLOWED: Record<string, [number, string]> = {
   'App.svelte': [2, 'which page the app opens on away from home; the quick crate card offered'],
-  'Home.svelte': [2, 'Radio offered, and the moment offered with nothing of it here'],
+  'Home.svelte': [4, 'Radio offered, and the moment offered with nothing of it here; a section the device cannot answer said in one line'],
   'Playlists.svelte': [2, 'New playlist offered, and the word that it needs Cratarr'],
   'lib/DownloadsPanel.svelte': [2, 'Retry offered, and its word'],
   'lib/MenuSheet.svelte': [2, 'which of a menu\'s entries are offered'],

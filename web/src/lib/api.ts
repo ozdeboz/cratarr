@@ -9,6 +9,7 @@ import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick } from './deviceAnswers.svelte';
+import { cratarrBusy } from './waiting.svelte';
 import { deviceAlbums, deviceArtist, deviceRecord, deviceSearch, readsNow } from './deviceIndex.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
@@ -173,12 +174,24 @@ function watched(path: string, init?: RequestInit): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    /** Counted among those waiting on a busy Cratarr (lib/waiting), from its first look that found it there till it ends. */
+    let busy = false;
+    const settle = () => {
+      done = true;
+      clearTimeout(timer);
+      if (busy) cratarrBusy.asks--;
+      busy = false;
+    };
     const look = () => {
       timer = setTimeout(() => {
         void answers().then((there) => {
           if (done) return;
-          if (there) return look();
-          done = true;
+          if (there) {
+            if (!busy) cratarrBusy.asks++;
+            busy = true;
+            return look();
+          }
+          settle();
           gone.abort();
           reject(new TypeError('Cratarr does not answer'));
         });
@@ -187,14 +200,12 @@ function watched(path: string, init?: RequestInit): Promise<Response> {
     look();
     fetch(path, { ...init, signal }).then(
       (r) => {
-        done = true;
-        clearTimeout(timer);
+        settle();
         resolve(r);
       },
       (e) => {
         if (done) return;
-        done = true;
-        clearTimeout(timer);
+        settle();
         reject(e);
       },
     );

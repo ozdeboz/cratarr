@@ -5,6 +5,7 @@
   // LOADER_AFTER_MS after the wait began, as it would have. Its room is kept from the start, so its coming moves nothing.
   // In a panel or a sheet it is the small one (lib/loader), as every loader there.
   import MarkLoader from './MarkLoader.svelte';
+  import { waitingFor } from './waiting.svelte';
   import { LOADER_AFTER_MS, LOADER_LARGE, loaderSizeIn } from './loader';
 
   let { size = 48, now = false }: { size?: number; now?: boolean } = $props();
@@ -21,7 +22,7 @@
 </script>
 
 <div class="asking" aria-busy="true" bind:this={el}>
-  {#if now || due}<MarkLoader size={Math.min(size, most)} />{/if}
+  {#if now || due}<MarkLoader size={Math.min(size, most)} />{#if waitingFor()}<p class="for">{waitingFor()}</p>{/if}{/if}
 </div>
 
 <style>
@@ -30,5 +31,12 @@
     place-items: center;
     min-height: 96px;
     padding-top: 24px;
+  }
+
+  /* What it waits for (lib/waiting), as a page's loader says it under its mark (lib/PageLoading). */
+  .for {
+    margin: 12px 0 0;
+    color: var(--muted);
+    text-align: center;
   }
 </style>
