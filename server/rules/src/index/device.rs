@@ -495,8 +495,9 @@ impl Device {
         })
     }
 
-    /// A crate's lines in the order its list shows, the server's `crate_in_order`.
-    fn ordered(&self, mut lines: Vec<String>, look: &Look) -> Vec<String> {
+    /// A crate's lines in the order its list shows, the server's `crate_in_order`. `resolved`: its conditions worked out, as Best
+    /// match reads a Sounds like's closeness (`crates::most_alike`).
+    fn ordered(&self, mut lines: Vec<String>, look: &Look, resolved: &[Condition]) -> Vec<String> {
         match look.order {
             Order::Own => {
                 if look.down {
@@ -506,7 +507,7 @@ impl Device {
             }
             Order::BestMatch => {
                 let fit = |l: &str| self.fits.get(&self.facts[*self.lines.get(l)?].track?).copied();
-                crates::by_fit(lines, fit, look.down)
+                crates::most_alike(lines, resolved, fit, look.down)
             }
             order => {
                 let rows: Vec<Row> = lines.iter().map(|l| self.row(l)).collect();
@@ -524,7 +525,8 @@ impl Device {
         let by = self.by();
         let view = View { files: &self.facts, switched_off: &off, world: self.world(fits.as_ref(), now), by: &by, alike: || self.alike() };
         let mine: Vec<String> = without.iter().filter(|k| k.starts_with(&format!("{SOURCE}/"))).cloned().collect();
-        let (lines, reasons, all_back, _) = view.select_saying(&shown, &causes, &mine, false);
+        let resolved = view.resolved(&shown, false);
+        let (lines, reasons, all_back, _) = view.select_saying_in(&resolved, &shown, &causes, &mine, false);
         let genres = if offset == 0 {
             let chosen: FxHashSet<&str> = lines.iter().map(String::as_str).collect();
             crates::top_genres(self.facts.iter().filter(|f| crates::on_for(&f.folders, &off) && chosen.contains(f.rel.as_str())).map(|f| f.genres.as_slice()), GENRES_SHOWN)
@@ -532,7 +534,7 @@ impl Device {
             Vec::new()
         };
         let total = lines.len();
-        let lines = self.ordered(lines, look);
+        let lines = self.ordered(lines, look, &resolved);
         let rows: Vec<Row> = lines.iter().skip(offset).take(limit).map(|l| self.row(l)).collect();
         Some(json!({ "source": SOURCE, "total": total, "limit": limit, "rows": rows, "genres": genres, "reasons": reasons, "all_back": all_back }))
     }
@@ -690,7 +692,8 @@ impl Device {
         let fits = if crates::needs_fits(&shown) { self.fitting(&off) } else { None };
         let by = self.by();
         let view = View { files: &self.facts, switched_off: &off, world: self.world(fits.as_ref(), now), by: &by, alike: || self.alike() };
-        let lines = self.ordered(view.select(&shown, false), look);
+        let resolved = view.resolved(&shown, false);
+        let lines = self.ordered(view.select_in(&resolved, false), look, &resolved);
         lines.iter().filter_map(|l| self.facts[*self.lines.get(l)?].song()).collect()
     }
 

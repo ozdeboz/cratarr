@@ -6,7 +6,7 @@
   // lib/CrateEditor) shows this one list.
   import { onDestroy, untrack, type Snippet } from 'svelte';
   import { coverUrl, previewCrate, type Condition, type CrateName, type PlaylistRow } from './api';
-  import { crateViewOf, holdsLine, orderRecords, recordKey, recordOrderOf, recordOrders, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, ranksAlike, recordKey, recordOrderOf, recordOrders, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
   import Asking from './Asking.svelte';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
@@ -186,7 +186,7 @@
   <div class="views"><Seg label="Show the crate as" options={VIEWS} bind:value={() => view, setView} /></div>
   {#if view === 'records'}
     <ListHead
-      fields={recordOrders(null)}
+      fields={recordOrders(null, ranksAlike(null, conditions))}
       bind:value={() => recordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: recordSort.down })}
       bind:down={() => recordSort.down, (d) => (prefs.crateRecordSort = { key: recordSort.key, down: d })}
       count={plural(records.length, 'record')}

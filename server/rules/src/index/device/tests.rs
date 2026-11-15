@@ -103,6 +103,18 @@ fn best_match_goes_by_the_servers_last_fits_those_it_knows_nothing_of_after() {
 }
 
 #[test]
+fn a_sounds_like_opens_most_alike_the_taste_only_among_those_as_alike() {
+    // The taste would put six first and two last; how alike they are goes before it.
+    let marks = [Mark { track: 6, fit: Some(0.9), ..Mark::default() }, Mark { track: 2, fit: Some(0.1), ..Mark::default() }];
+    let mut d = device_of(Own::default(), &marks);
+    let closest = tracks(&mut d, "like:tr-1@10", own_order());
+    assert_eq!(tracks(&mut d, "like:tr-1@10", json!({})), closest, "closest first, as its own order");
+    let mut down = closest.clone();
+    down.reverse();
+    assert_eq!(tracks(&mut d, "like:tr-1@10", json!({ "down": true })), down);
+}
+
+#[test]
 fn a_list_orders_by_a_field_as_the_servers_does() {
     let mut d = device();
     assert_eq!(tracks(&mut d, "dub", json!({ "order": "title" })), [1, 6, 3, 2], "two 9 before two 10: numbers by what they count");

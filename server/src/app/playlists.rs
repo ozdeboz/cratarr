@@ -3523,7 +3523,9 @@ impl PlaylistService {
             };
             let alike = lib.alike();
             let song = |line: &str| Some(crate::serve::ids::song(lib.files[alike.place_of_line(line)?].track?));
-            Arc::new(by_fit(lines, |l| fit.get(&song(l)?).copied(), look.down))
+            let fit = |l: &str| fit.get(&song(l)?).copied();
+            // A Sounds like's crate: Most alike, its closeness first and the taste among those as alike (0.17).
+            if crates::ranks_alike(conditions) { Arc::new(crates::most_alike(lines, &lib.resolved(conditions), fit, look.down)) } else { Arc::new(by_fit(lines, fit, look.down)) }
         } else {
             let mut rows = self.rows_of(lines, &lib.source).await?;
             self.with_plays_and_added(&mut rows, lib).await;

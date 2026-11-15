@@ -153,7 +153,7 @@
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, recordCell, recordKey, recordOrderOf, recordOrders, recordsOf, tracksForRecords, type CrateRecord, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, ranksAlike, RECORD_COLUMNS, recordCell, recordKey, recordOrderOf, recordOrders, recordsOf, tracksForRecords, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
   import { stateLine } from './fileChangeRules';
   import { openReview, undoRun } from './fileRuns.svelte';
@@ -824,7 +824,21 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const kind = $derived<PanelKind>(album ? 'album' : crate || crateEditing || creating ? 'crate' : artist ? 'artist' : 'playlist');
   const topTracks = $derived(!!artist?.tracks);
   let topSort = $state<ListSort>({ key: 'plays', down: true });
-  const sortFields = $derived(trackOrders(kind, crate, !offServer));
+  // A crate with a Sounds like on: its Best match is Most alike (lib/crateRecords ranksAlike), read from its conditions; a draft's
+  // as they stand.
+  let crateAlike = $state(false);
+  $effect(() => {
+    const c = crate;
+    crateAlike = ranksAlike(c);
+    if (!c || crateAlike) return;
+    let gone = false;
+    getCrate(c).then(
+      (d) => !gone && (crateAlike = ranksAlike(c, d.conditions)),
+      () => {},
+    );
+    return () => (gone = true);
+  });
+  const sortFields = $derived(trackOrders(kind, crate, !offServer, crateEditing ? ranksAlike(null, crateDraft?.conditions) : crateAlike));
   const sort = $derived.by(() => {
     const s = topTracks ? topSort : prefs.panelSorts[kind];
     // Where none was chosen, or this crate has not the one chosen: its own order; a crate's Best match ("Every crate").
@@ -890,7 +904,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // A Home shelf's crate shows what Home showed, of every library, whatever is switched off (the owner, 2026-10-24).
   // A crate as records or as tracks (lib/crateRecords), and its records' order.
   const recordsView = $derived(!!crate && !crateEditing && crateViewOf(crate, prefs.crateViews) === 'records');
-  const recordFields = $derived(recordOrders(crate));
+  const recordFields = $derived(recordOrders(crate, crateAlike));
   const recordSort = $derived(recordOrderOf(crate, prefs.crateRecordSort));
   // As records: its tracks in Best match or its own order, the records ordered from them (lib/crateRecords).
   const crateLook = $derived<CrateLook>({

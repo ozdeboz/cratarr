@@ -3,6 +3,7 @@
 // added). A record says how much of the album the crate holds ("3 of 10 tracks"). Records or tracks is the crate's own
 // choice, remembered; the crates that are albums already (Home's New for you and Grave digging) start as records.
 // Pure: rows in, records out.
+import type { Condition } from './api';
 import type { OrderField } from './pageView.svelte';
 
 export type CrateView = 'records' | 'tracks';
@@ -20,13 +21,21 @@ export function ownOrderOf(crate: string | null | undefined): string | null {
   return null;
 }
 
+/** Whether a crate's conditions have a Sounds like on (not left out): its Best match is Most alike (0.17; the owner, 2026-11-08: "the
+ *  user would expect matching here to mean matching the similarity condition"), closest to that sound first and the taste only among
+ *  those as alike (the rules crate's `most_alike`). A Sounds like crate (`like:…`) is one by its id. */
+export const ranksAlike = (crate: string | null | undefined, conditions: readonly Condition[] = []) =>
+  !!crate?.startsWith('like:') || conditions.some((c) => c.enabled !== false && !c.not && c.value.kind === 'like');
+/** Best match's name: Most alike where a Sounds like ranks the crate (`ranksAlike`). */
+export const bestMatchLabel = (alike: boolean) => (alike ? 'Most alike' : 'Best match');
+
 /** Best match and its own: the records in their tracks' order (the server's). */
 export type RecordOrder = 'bestMatch' | 'own' | 'artist' | 'title' | 'year' | 'added' | 'tracks' | 'length';
 export const RECORD_ORDER_KEYS: readonly RecordOrder[] = ['bestMatch', 'own', 'artist', 'title', 'year', 'added', 'tracks', 'length'];
-/** Crate `crate`'s record orders: Best match first, its own where it has one, then the fields. */
-export const recordOrders = (crate: string | null | undefined): OrderField<RecordOrder>[] => {
+/** Crate `crate`'s record orders: Best match first (`alike`: Most alike), its own where it has one, then the fields. */
+export const recordOrders = (crate: string | null | undefined, alike = ranksAlike(crate)): OrderField<RecordOrder>[] => {
   const own = ownOrderOf(crate);
-  return [{ value: 'bestMatch', label: 'Best match' }, ...(own ? [{ value: 'own' as const, label: own }] : []), ...RECORD_FIELDS];
+  return [{ value: 'bestMatch', label: bestMatchLabel(alike) }, ...(own ? [{ value: 'own' as const, label: own }] : []), ...RECORD_FIELDS];
 };
 /** Its records' order: as chosen where the crate has it; else Best match, what every crate opens on (the owner,
  *  2026-11-02, amending decision 0094: "Every crate"). */
