@@ -12,12 +12,13 @@
   import { curveKey, type CurveAsk } from './likeCurveAsk';
   import { hiddenLibraries } from './listFilter.svelte';
   import { prefs } from './prefs.svelte';
-  import { TERM_KINDS, conditionsOf, countAt, flipped, joinOf, keepsOwn, minAt, readLine, readOnto, seedsOf, sentenceOf, type Chip, type Found, type JoinKind, type Modes } from './quickCrate';
+  import { LIKE_MOST, TERM_KINDS, conditionsOf, countCut, cutAt, flipped, joinOf, keepsOwn, minAt, readLine, readOnto, seedsOf, sentenceOf, type Chip, type Found, type JoinKind, type Modes } from './quickCrate';
   import QuickTermSheet from './QuickTermSheet.svelte';
 
   let {
     chips = $bindable(),
     min = $bindable(),
+    count = $bindable(LIKE_MOST),
     modes = $bindable(),
     rest = [],
     onmore,
@@ -28,6 +29,8 @@
   }: {
     chips: Chip[];
     min: number;
+    /** Its count cut, where the handle stops inside a run of equal closeness (lib/quickCrate countCut); `LIKE_MOST`: none. */
+    count?: number;
     modes: Modes;
     /** The crate's conditions a sentence cannot say (lib/quickCrate chipsOf): the curve counts within them too. */
     rest?: readonly Condition[];
@@ -110,7 +113,7 @@
   // The closeness curve, for what is "like", counted among the tracks the other terms (and the rest) leave, as the
   // crate counts them, its join too; asked 300 ms after a change, not again when only its cut moves.
   let curve = $state<number[] | null>(null);
-  const within = $derived([...conditionsOf(chips, min, modes), ...rest]);
+  const within = $derived([...conditionsOf(chips, min, modes, count), ...rest]);
   const curveAsk = $derived<CurveAsk>({ of: seeds, within, without: hiddenLibraries(), own, ...(joinOf(modes, 'like') === 'or' && seeds.length > 1 ? { mode: 'either' as const } : {}) });
   const curveAt = $derived(curveKey(curveAsk, prefs.source || undefined));
   $effect(() => {
@@ -165,7 +168,7 @@
   {@const c = curve}
   <div class="near">
     <p class="alike"><span>Alike {likedNames.join(joinOf(modes, 'like') === 'or' ? ' or ' : ' and ')}</span><b>at least {Math.round(min)}%</b></p>
-    <LikeCurve curve={c} count={countAt(c, min)} onchange={(n) => (min = minAt(c, n))} />
+    <LikeCurve curve={c} count={cutAt(c, min, count)} onchange={(n) => ([min, count] = [minAt(c, n), countCut(c, n)])} />
   </div>
 {/if}
 

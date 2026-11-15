@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, tempoOf, tempoSaid, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf, crateShows, crateCardOn, readOnto } = await import(
+const { splitTerms, yearOf, tempoOf, tempoSaid, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, countCut, cutAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf, crateShows, crateCardOn, readOnto } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -109,6 +109,23 @@ test('the conditions: each kind one row, any of them; the years one span; by an 
   assert.deepEqual(kept, [{ axis: 'like', not: false, value: { kind: 'like', of: ['ar-b'], count: LIKE_MOST, min: 40, own: true } }]);
   assert.deepEqual(conditionsOf([]), []);
   assert.equal(nameOf(chips), 'jazz · funk · 1970s · 1985 · like Bonobo · Air · Kind');
+});
+
+test('a cut inside a run of equal closeness keeps its count: the handle stops at 10, not 16', () => {
+  // Ranks 10 to 16 share 63 % as a whole percent, as the owner's crate had them.
+  const curve = [90, 88, 85, 80, 77, 74, 70, 68, 66, 63.9, 63.8, 63.6, 63.5, 63.3, 63.2, 63.1, 58, 50];
+  assert.equal(countAt(curve, minAt(curve, 10)), 16, 'the floor alone takes in 16');
+  assert.equal(countCut(curve, 10), 10);
+  assert.equal(cutAt(curve, minAt(curve, 10), countCut(curve, 10)), 10, 'and the handle stays where it was let go');
+  assert.equal(countCut(curve, 17), LIKE_MOST, 'at the end of a run the floor alone says it, as before');
+  assert.equal(cutAt(curve, minAt(curve, 17), LIKE_MOST), 17);
+  const bonobo = likeChip('artist', 'ar-b', 'Bonobo');
+  const rows = conditionsOf([bonobo], minAt(curve, 10), {}, countCut(curve, 10));
+  assert.deepEqual(rows, [{ axis: 'like', not: false, value: { kind: 'like', of: ['ar-b'], count: 10, min: 63 } }]);
+  const read = chipsOf(rows, { 'ar-b': { name: 'Bonobo', kind: 'artist' } });
+  assert.equal(read.count, 10, 'read back as the sentence it was');
+  assert.equal(read.min, 63);
+  assert.equal(chipsOf(conditionsOf([bonobo])).count, LIKE_MOST);
 });
 
 test('the cut on the closeness curve: how many at least that alike, and back', () => {

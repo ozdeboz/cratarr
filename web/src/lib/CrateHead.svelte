@@ -8,13 +8,14 @@
   import { EDIT_CRATE, keepDraft } from './crates.svelte';
   import CrateSentence from './CrateSentence.svelte';
   import { viewPlaylist } from './panel.svelte';
-  import { chipsOf, conditionsOf, type Chip, type Modes, type Named } from './quickCrate';
+  import { LIKE_MOST, chipsOf, conditionsOf, type Chip, type Modes, type Named } from './quickCrate';
 
   let { crate, name }: { crate: string; name: string } = $props();
 
-  let read = $state<{ chips: Chip[]; min: number; modes: Modes; names: Record<string, Named>; rest: import('./api').Condition[]; brief: { text: string; condition: import('./api').Condition } | null } | null>(null);
+  let read = $state<{ chips: Chip[]; min: number; count: number; modes: Modes; names: Record<string, Named>; rest: import('./api').Condition[]; brief: { text: string; condition: import('./api').Condition } | null } | null>(null);
   let chips = $state<Chip[]>([]);
   let min = $state(0);
+  let count = $state(LIKE_MOST);
   let modes = $state<Modes>({});
   $effect(() => {
     const c = crate;
@@ -25,8 +26,8 @@
         if (gone) return;
         const names = d.names ?? {};
         const r = chipsOf(d.conditions, names, untrack(() => name));
-        [chips, min, modes] = [r.chips, r.min, r.modes];
-        read = { chips: r.chips, min: r.min, modes: r.modes, names, rest: r.rest, brief: r.brief };
+        [chips, min, count, modes] = [r.chips, r.min, r.count, r.modes];
+        read = { chips: r.chips, min: r.min, count: r.count, modes: r.modes, names, rest: r.rest, brief: r.brief };
       },
       () => {},
     );
@@ -37,17 +38,17 @@
   function edit() {
     const r = read;
     if (!r) return;
-    const conditions = [...conditionsOf(chips, min, modes), ...(r.brief ? [r.brief.condition] : []), ...r.rest];
+    const conditions = [...conditionsOf(chips, min, modes, count), ...(r.brief ? [r.brief.condition] : []), ...r.rest];
     keepDraft(crate, { name, conditions, names: r.names });
     viewPlaylist(EDIT_CRATE + crate);
   }
   // A change in the sentence (words typed at its end too, once read: Enter or a comma): the crate being changed.
   $effect(() => {
     const r = read;
-    const now = JSON.stringify([chips, min, modes]);
+    const now = JSON.stringify([chips, min, count, modes]);
     if (!r) return;
     untrack(() => {
-      if (now !== JSON.stringify([r.chips, r.min, r.modes])) edit();
+      if (now !== JSON.stringify([r.chips, r.min, r.count, r.modes])) edit();
     });
   });
 </script>
@@ -55,7 +56,7 @@
 <!-- Only where the sentence says something: a crate of conditions alone keeps its plain head. -->
 {#if read && (read.chips.length || read.brief)}
   <div class="head">
-    <CrateSentence bind:chips bind:min bind:modes rest={read.rest} brief={read.brief?.text ?? null} onmore={() => edit()} />
+    <CrateSentence bind:chips bind:min bind:count bind:modes rest={read.rest} brief={read.brief?.text ?? null} onmore={() => edit()} />
   </div>
 {/if}
 

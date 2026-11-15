@@ -620,7 +620,7 @@ const spanned = (k: ChipKind): k is Spanned => (SPANNED as readonly string[]).in
 /** The chips as a crate's conditions: each kind's chips one row, any of them (two genres: either); the years one span
  *  from the earliest to the latest, the tempos one from the slowest to the fastest; the artists "by" them one row;
  *  those "like" them one Sounds like, cut at `min`, their own tracks out unless one of them keeps them. */
-export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes = {}): Condition[] {
+export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes = {}, count = LIKE_MOST): Condition[] {
   const rows: Condition[] = [];
   const byAxis = new Map<string, string[]>();
   const add = (axis: string, v: string) => {
@@ -681,7 +681,7 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
     rows.push({
       axis: 'like',
       not: false,
-      value: { kind: 'like', of: seeds, count: LIKE_MOST, min, ...(keepsOwn(chips) ? { own: true } : {}), ...(either ? { mode: 'either' as const } : {}) },
+      value: { kind: 'like', of: seeds, count, min, ...(keepsOwn(chips) ? { own: true } : {}), ...(either ? { mode: 'either' as const } : {}) },
     });
   }
   return rows;
@@ -868,13 +868,14 @@ export function chipsOf(
   conditions: readonly Condition[],
   names: Readonly<Record<string, Named>> = {},
   crateName = '',
-): { chips: Chip[]; modes: Modes; min: number; rest: Condition[]; brief: { text: string; condition: Condition } | null } {
+): { chips: Chip[]; modes: Modes; min: number; count: number; rest: Condition[]; brief: { text: string; condition: Condition } | null } {
   const chips: Chip[] = [];
   const modes: Modes = {};
   const rest: Condition[] = [];
   const done = new Set<string>();
   let brief: { text: string; condition: Condition } | null = null;
   let min = CLOSE;
+  let count = LIKE_MOST;
   const kindOfId = (id: string): Named['kind'] => names[id]?.kind ?? (id.startsWith('al-') ? 'album' : id.startsWith('tr-') ? 'track' : 'artist');
   const gone = (k: Named['kind']) => `${k === 'album' ? 'an album' : k === 'track' ? 'a track' : 'an artist'} no longer in the library`;
   for (const c of conditions) {
@@ -920,6 +921,7 @@ export function chipsOf(
         chips.push({ ...likeChip(kind, id, names[id]?.name ?? gone(kind)), own: k === 0 && !!v.own });
       });
       min = v.min;
+      count = v.count;
       if (v.of.length > 1) modes.like = v.mode === 'either' ? 'or' : 'and';
     } else {
       rest.push(c);
@@ -927,7 +929,7 @@ export function chipsOf(
     }
     done.add(at);
   }
-  return { chips, modes, min, rest, brief };
+  return { chips, modes, min, count, rest, brief };
 }
 
 /** A name for it, from its chips: "Jazz · like Bonobo · 1970s". */
@@ -954,6 +956,12 @@ export const countAt = (curve: readonly number[], min: number) => curve.filter((
  *  (0.12.1: the curve's own value, 25.37, was refused with 422), rounded down so the track at `count` stays in. */
 export const minAt = (curve: readonly number[], count: number) =>
   count > 0 && count <= curve.length ? Math.max(0, Math.min(100, Math.floor(curve[count - 1]))) : 0;
+/** The count a cut at the handle's `count` keeps beside its floor (0.17, as `like:<item>@<count>` holds): the count itself where
+ *  the floor alone would take in more, a run of equal closeness across it (the owner's 10, which snapped to 16 as ranks 10 to 16
+ *  share 63 %); else none (`LIKE_MOST`), the floor alone saying it as before. */
+export const countCut = (curve: readonly number[], count: number) => (countAt(curve, minAt(curve, count)) > count ? count : LIKE_MOST);
+/** Where the handle stands for a cut by its floor `min` and its count: the fewer of the two. */
+export const cutAt = (curve: readonly number[], min: number, count: number) => Math.min(count, countAt(curve, min));
 
 /** A search answer, as far as a crate's terms need it (lib/api ServerSearch). */
 type Answer<I extends { subject: string }> = { q: string; groups: Partial<Record<string, { total: number; items: I[] }>>; top: I[] };

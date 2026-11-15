@@ -19,7 +19,7 @@
   import ConditionList from './ConditionList.svelte';
   import CrateResults from './CrateResults.svelte';
   import CrateSentence from './CrateSentence.svelte';
-  import { chipsOf, conditionsOf, nameOf, namesOf, type Chip, type Modes, type Named } from './quickCrate';
+  import { LIKE_MOST, chipsOf, conditionsOf, nameOf, namesOf, type Chip, type Modes, type Named } from './quickCrate';
   import { excludedArtists, loadCrateArtists, setNotInCrate } from './excludedArtists.svelte';
   import Seg from './Seg.svelte';
   import { prefs, type FilterCondition } from './prefs.svelte';
@@ -70,18 +70,19 @@
   // The sentence's terms, cut and joins while it shows, and what it cannot say, kept as it is.
   let chips = $state<Chip[]>([]);
   let min = $state(0);
+  let count = $state(LIKE_MOST);
   let modes = $state<Modes>({});
   let rest = $state<Condition[]>([]);
   /** A Sounds like said briefly (a built-in crate's), kept as it is among the conditions. */
   let brief = $state<{ text: string; condition: Condition } | null>(null);
   function toSentence() {
     const r = chipsOf(conditions, allNames, name);
-    [chips, min, modes, rest, brief] = [r.chips, r.min, r.modes, r.rest, r.brief];
+    [chips, min, count, modes, rest, brief] = [r.chips, r.min, r.count, r.modes, r.rest, r.brief];
     view = 'sentence';
   }
   let view = $state<'sentence' | 'conditions'>('conditions');
   untrack(() => {
-    if (sentence) [chips, min, modes, view] = [sentence.chips, sentence.min, sentence.modes, 'sentence'];
+    if (sentence) [chips, min, count, modes, view] = [sentence.chips, sentence.min, LIKE_MOST, sentence.modes, 'sentence'];
     else if (!chipsOf(conditions, allNames, name).rest.length) toSentence();
   });
   $effect(() => {
@@ -102,7 +103,7 @@
   // The sentence's edits are the crate's conditions (what it cannot say after them), its terms' names learnt.
   $effect(() => {
     if (view !== 'sentence') return;
-    const next = [...conditionsOf(chips, min, modes), ...(brief ? [brief.condition] : []), ...rest];
+    const next = [...conditionsOf(chips, min, modes, count), ...(brief ? [brief.condition] : []), ...rest];
     untrack(() => {
       const learnt = namesOf(chips);
       if (Object.keys(learnt).some((k) => allNames[k]?.name !== learnt[k].name)) added = { ...added, ...learnt };
@@ -131,7 +132,7 @@
   </div>
   {#if view === 'sentence'}
     <div class="sentence">
-      <CrateSentence bind:this={said} bind:chips bind:min bind:modes {rest} brief={brief?.text ?? null} {excluded} onexcluded={takeBack} onmore={() => (view = 'conditions')} />
+      <CrateSentence bind:this={said} bind:chips bind:min bind:count bind:modes {rest} brief={brief?.text ?? null} {excluded} onexcluded={takeBack} onmore={() => (view = 'conditions')} />
     </div>
   {:else}
     <ConditionList bind:conditions {axes} crate names={allNames} onnamed={(id, n) => (added = { ...added, [id]: n })} />
