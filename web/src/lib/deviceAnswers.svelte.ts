@@ -51,7 +51,11 @@ function ready(e: IndexEngine, who: string): Promise<boolean> {
       if (sounds) e.loadSounds(sounds);
       if (own) e.loadOwn(own);
       toldPlays = '[]';
-      return e.openDevice();
+      // What the first ask of each kind would make (the similarity, Radio's index) made now, while the page says it opens the library
+      // here: the first Sounds like or pick after it is answered at once (0.17).
+      const open = e.openDevice();
+      if (open) e.ask({ ask: 'warm' });
+      return open;
     });
     made.set(e, done);
   }

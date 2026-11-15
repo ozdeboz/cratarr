@@ -154,6 +154,9 @@ pub enum Asked {
         draw: u64,
         now: i64,
     },
+    /// What the first ask of each kind would make, made now (0.17): the similarity and Radio's index, half a second on a tablet. The
+    /// app and the page ask it as the device opens, so the first Sounds like or pick after it is answered at once.
+    Warm,
 }
 
 /// A crate's row, in the names a page's lists give it (the server's `PlaylistRow`).
@@ -312,6 +315,11 @@ impl Device {
             Asked::Rows { id, look, offset, limit, now } => self.rows(&id, &look, offset, limit, now),
             Asked::Tempo { id, look, now } => self.tempo(&id, &look, now),
             Asked::Pick { what, within, here, draw, now } => Some(self.pick(what, within.as_ref(), here.as_deref(), draw, now)),
+            Asked::Warm => {
+                self.alike();
+                self.radio();
+                Some(json!({}))
+            }
         };
         answer.map(|a| a.to_string())
     }
