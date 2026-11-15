@@ -92,3 +92,26 @@ export function opsFrom(v: unknown): Op[] {
       ((o as Op).tried === undefined || typeof (o as Op).tried === 'number'),
   );
 }
+
+/** A heart's change as it waits: its request's path without its `on` (the track's, the album's, the artist's by name). Built the same
+ *  for a path the page asks about, so the two meet. */
+export function heartKey(path: string): string {
+  const u = new URL(path, 'http://cratarr.invalid');
+  u.searchParams.delete('on');
+  return u.pathname + u.search;
+}
+
+/** What each heart waiting will be once sent, by its `heartKey` (the owner, 2026-11-08: "offline, what shows must be what will
+ *  happen"): the last change to it of the account signed in, or made before one was known. What a read says, Cratarr's or its last
+ *  copy, gives way to it, as Cratarr's will once the change comes. */
+export function heartsWaiting(ops: readonly Op[], account: string | null): Map<string, boolean> {
+  const out = new Map<string, boolean>();
+  for (const c of ops) {
+    if (c.method !== 'POST' || !(c.account === undefined || ours(c, account))) continue;
+    const u = new URL(c.path, 'http://cratarr.invalid');
+    const on = u.searchParams.get('on');
+    if (on === null || !u.pathname.endsWith('/favorite')) continue;
+    out.set(heartKey(c.path), on === 'true');
+  }
+  return out;
+}

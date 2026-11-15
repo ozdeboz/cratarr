@@ -1,6 +1,7 @@
-import { signOutOwed } from './account';
+import { accountKey, signOutOwed } from './account';
 import { track } from './progress.svelte';
-import { keepAndTry, laterKey } from './later.svelte';
+import { keepAndTry, later as outbox, laterKey } from './later.svelte';
+import { heartKey, heartsWaiting } from './outbox';
 import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
@@ -1980,7 +1981,11 @@ export const trackDetails = (source: string, id: string) =>
  *  server's player's. `favorite` null: not known. */
 export type TrackState = { addable: boolean; album_id: string | null; favorite: boolean | null; playlists: Playlist[]; info: TrackInfo | null };
 
-export const trackState = (source: string, id: string) => quietly<TrackState>(`${trackPath(source, id)}/playlists`).then((s) => knownState(source, id, s));
+export const trackState = (source: string, id: string) =>
+  quietly<TrackState>(`${trackPath(source, id)}/playlists`).then((s) => {
+    const waiting = heartsWaiting(outbox.list, accountKey()).get(heartKey(`${trackPath(source, id)}/favorite`));
+    return knownState(source, id, waiting === undefined ? s : { ...s, favorite: waiting });
+  });
 /** Each track's state as last told, for a change kept for later to answer with (lib/later). */
 const trackStates = new Map<string, TrackState>();
 const knownState = (source: string, id: string, s: TrackState) => (trackStates.set(`${source}/${id}`, s), s);
@@ -2030,12 +2035,43 @@ export const getFavorites = (source: string, ids: string[]) =>
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ids }),
+  }).then((found) => {
+    const waiting = heartsWaiting(outbox.list, accountKey());
+    for (const id of ids) {
+      const on = waiting.get(heartKey(`${trackPath(source, id)}/favorite`));
+      if (on !== undefined) found[id] = on;
+    }
+    return found;
   });
 
+/** A list of hearts as read, with those whose change waits in the outbox as they will be: `of` names an item's heart path. */
+function withWaiting(list: string[], of: (item: string) => string, waitingOf: (key: string) => string | null): string[] {
+  const out = new Set(list);
+  for (const [key, on] of heartsWaiting(outbox.list, accountKey())) {
+    const item = waitingOf(key);
+    if (item === null || heartKey(of(item)) !== key) continue;
+    if (on) out.add(item);
+    else out.delete(item);
+  }
+  return [...out];
+}
+
 /** The favourite albums of a server (their ids): the Library's Favourites only and the albums' hearts. */
-export const getFavoriteAlbums = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/albums`);
+export const getFavoriteAlbums = (source: string) => {
+  const at = `/api/albums/${encodeURIComponent(source)}/`;
+  const path = (id: string) => `${at}${encodeURIComponent(id)}/favorite`;
+  return quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/albums`).then((list) =>
+    withWaiting(list, path, (key) => (key.startsWith(at) && key.endsWith('/favorite') ? decodeURIComponent(key.slice(at.length, -'/favorite'.length)) : null)),
+  );
+};
 /** A server's favourite artists, by name (the Library's Artists, Favourites only). */
-export const getFavoriteArtists = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/artists`);
+export const getFavoriteArtists = (source: string) => {
+  const at = `/api/artists/${encodeURIComponent(source)}/favorite`;
+  const path = (name: string) => `${at}?name=${encodeURIComponent(name)}`;
+  return quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/artists`).then((list) =>
+    withWaiting(list, path, (key) => (key.startsWith(`${at}?`) ? new URLSearchParams(key.slice(at.length + 1)).get('name') : null)),
+  );
+};
 /** Cratarr's own favourite tracks as rows (Home's Favourite tracks), at most 100. */
 export const getFavoriteTracks = () => quietly<{ source: string; rows: PlaylistRow[] }>('/api/favorites/cratarr/tracks');
 
