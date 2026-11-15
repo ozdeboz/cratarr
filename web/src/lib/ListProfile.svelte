@@ -6,6 +6,7 @@
   // switched off there never show. A row with nothing to say is left out by the server (a number
   // all its tracks share) or here (no styles). Its artists are a line under the list's genres (lib/PlaylistView).
   import type { ListProfileData } from './api';
+  import Asking from './Asking.svelte';
   import DensityBar from './DensityBar.svelte';
   import { wordShown } from './facts';
   import Icon from './Icon.svelte';
@@ -13,14 +14,25 @@
   import { insideOf, type Window } from './profileWindow';
 
   // `fixed`: beside an artist's albums on a wide panel (the owner, 2026-10-23): all of it, nothing to fold. `windows`:
-  // the list filter's on each number (lib/profileWindow), lit on its bar.
-  let { data, fixed = false, windows = {} }: { data: ListProfileData; fixed?: boolean; windows?: Partial<Record<string, Window>> } = $props();
+  // the list filter's on each number (lib/profileWindow), lit on its bar. `open`: folded or open for this profile alone, and
+  // folded nothing of it shows but its pill (0.17, the owner, of a crate being made: "I don't want the profile always ...
+  // optional at the very least"); its `data` then asked only once it is open, none meanwhile.
+  let {
+    data,
+    fixed = false,
+    windows = {},
+    open = $bindable(),
+  }: { data: ListProfileData | null; fixed?: boolean; windows?: Partial<Record<string, Window>>; open?: boolean } = $props();
+  const own = $derived(open !== undefined);
+  const isOpen = $derived(own ? !!open : prefs.profileOpen);
+  const toggle = () => (own ? (open = !open) : (prefs.profileOpen = !prefs.profileOpen));
 
   const ENDS: Record<string, [string, string]> = { tempo: ['60', '180 BPM'], energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
   /** The rows switched on, in the user's order, that it has something for. */
   const rows = $derived(
     prefs.profileRows.flatMap((id) => PROFILE_ROWS.filter((r) => r.id === id)).filter((r) => {
+      if (!data) return false;
       if (r.id === 'style') return data.styles.length > 0;
       if (r.id === 'mood') return data.moods.length > 0;
       return data.numbers.some((n) => n.key === r.id);
@@ -28,15 +40,15 @@
   );
   /** The rows above the fold line (by the user's order, whatever this list has of them). */
   const kept = $derived(rows.filter((r) => prefs.profileRows.indexOf(r.id) < prefs.profileFoldAt));
-  const shown = $derived(fixed || prefs.profileOpen ? rows : kept);
-  /** Folding changes something: some row is below the line. */
-  const folds = $derived(!fixed && kept.length < rows.length);
-  const number = (id: ProfileRow) => data.numbers.find((n) => n.key === id)!;
+  const shown = $derived(fixed || isOpen ? rows : own ? [] : kept);
+  /** Folding changes something: some row is below the line; or this profile is folded whole. */
+  const folds = $derived(own || (!fixed && kept.length < rows.length));
+  const number = (id: ProfileRow) => data!.numbers.find((n) => n.key === id)!;
   /** One value as the row says it: a year, a tempo in BPM, energy and danceability as AudioMuse's 0 to 100. */
   const oneValue = (n: ListProfileData['numbers'][number]) => (n.key === 'tempo' ? `${Math.round(n.one!)} BPM` : String(Math.round(n.one!)));
 </script>
 
-{#if rows.length}
+{#if rows.length || own}
   <section class="profile">
     <!-- A line between the header and the rows, whenever a row shows. -->
     {#if shown.length}<div class="rule"></div>{/if}
@@ -45,11 +57,11 @@
         <div class="row" class:words={r.id === 'style'} class:mood={r.id === 'mood'}>
           <span class="label">{r.label}</span>
           {#if r.id === 'style'}
-            <div class="chips">{#each data.styles as s (s)}<span>{wordShown(s)}</span>{/each}</div>
+            <div class="chips">{#each data!.styles as s (s)}<span>{wordShown(s)}</span>{/each}</div>
           {:else if r.id === 'mood'}
             <!-- Each mood above or below the library's middle. -->
             <div class="moods">
-              {#each data.moods as m (m.name)}
+              {#each data!.moods as m (m.name)}
                 <div class="m">
                   <div class="col"><b class:up={m.lift >= 0} style:height="{Math.abs(m.lift) * 50}%"></b></div>
                   <small>{wordShown(m.name)}</small>
@@ -66,11 +78,12 @@
         </div>
       {/each}
     </div>
-    {#if (fixed || prefs.profileOpen) && data.heard < data.tracks}<p class="heard">{data.heard.toLocaleString()} of {data.tracks.toLocaleString()} heard by AudioMuse</p>{/if}
+    {#if own && isOpen && !data}<Asking />{/if}
+    {#if (fixed || isOpen) && data && data.heard < data.tracks}<p class="heard">{data.heard.toLocaleString()} of {data.tracks.toLocaleString()} heard by AudioMuse</p>{/if}
     {#if folds}
       <div class="fold" class:alone={!shown.length}>
-        <button class="pill" aria-expanded={prefs.profileOpen} onclick={() => (prefs.profileOpen = !prefs.profileOpen)}
-          ><Icon name={prefs.profileOpen ? 'chevronUp' : 'chevronDown'} size={16} /><span>{prefs.profileOpen ? 'Fold' : 'Profile'}</span></button
+        <button class="pill" aria-expanded={isOpen} onclick={toggle}
+          ><Icon name={isOpen ? 'chevronUp' : 'chevronDown'} size={16} /><span>{isOpen ? 'Fold' : 'Profile'}</span></button
         >
       </div>
     {/if}

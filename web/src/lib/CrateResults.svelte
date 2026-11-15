@@ -41,6 +41,7 @@
     views = 'quick',
     actions,
     onnames,
+    pick = null,
   }: {
     conditions: readonly Condition[];
     /** Its name, for what plays. */
@@ -53,6 +54,8 @@
     actions?: Snippet;
     /** The server's names for the ids the conditions hold (decision 0088), as each answer brings them. */
     onnames?: (names: Record<string, CrateName>) => void;
+    /** Words typed and not read yet (lib/quickCrate crateActions): one button, Pick, reads them, in place of Shuffle and Play. */
+    pick?: (() => void) | null;
   } = $props();
 
   // Its count and its tracks a page at a time, asked 300 ms after a change (none without a condition: that would be the
@@ -169,8 +172,12 @@
 <div class="sum">
   <b>{preview ? `${preview.total.toLocaleString()} ${preview.total === 1 ? 'track' : 'tracks'}` : ''}</b>
   {@render actions?.()}
-  <button class="icon" aria-label="Shuffle" title="Shuffle" disabled={none || !!starting} onclick={() => play('shuffle')}><Icon name="shuffle" size={22} /></button>
-  <button class="icon play" aria-label="Play" title="Play" disabled={none || !!starting} onclick={() => play('play')}><Icon name="play" size={22} /></button>
+  {#if pick}
+    <button class="pick" onclick={pick}>Pick</button>
+  {:else}
+    <button class="icon" aria-label="Shuffle" title="Shuffle" disabled={none || !!starting} onclick={() => play('shuffle')}><Icon name="shuffle" size={22} /></button>
+    <button class="icon play" aria-label="Play" title="Play" disabled={none || !!starting} onclick={() => play('play')}><Icon name="play" size={22} /></button>
+  {/if}
 </div>
 {#if previewError}
   <p class="error" role="alert">{previewError}</p>
@@ -262,6 +269,19 @@
   .sum :global(.icon.play) {
     background: var(--accent);
     color: var(--accent-text);
+  }
+
+  /* Pick, in Play's place and its colours (the accent), a word as it is no symbol's. */
+  .pick {
+    height: 44px;
+    padding: 0 20px;
+    border: 0;
+    border-radius: 22px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .sum :global(.icon:disabled) {

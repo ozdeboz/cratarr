@@ -15,11 +15,12 @@
   // sentence as it was read (`sentence`) or its words still to read (`words`); a new one empty, the caret in its field.
   import { untrack } from 'svelte';
   import { hiddenLibraries } from './listFilter.svelte';
-  import { getCrateAxes, type Axis, type Condition } from './api';
+  import { getCrateAxes, previewCrate, type Axis, type Condition, type ListProfileData } from './api';
   import ConditionList from './ConditionList.svelte';
   import CrateResults from './CrateResults.svelte';
   import CrateSentence from './CrateSentence.svelte';
-  import { LIKE_MOST, chipsOf, conditionsOf, nameOf, namesOf, type Chip, type Modes, type Named } from './quickCrate';
+  import { LIKE_MOST, chipsOf, conditionsOf, crateActions, nameOf, namesOf, type Chip, type Modes, type Named } from './quickCrate';
+  import ListProfile from './ListProfile.svelte';
   import { excludedArtists, loadCrateArtists, setNotInCrate } from './excludedArtists.svelte';
   import Seg from './Seg.svelte';
   import { prefs, type FilterCondition } from './prefs.svelte';
@@ -89,7 +90,28 @@
     named = nameOf(chips);
   });
   /** The sentence (lib/CrateSentence): its words read in, the caret put in its field. */
-  let said = $state<{ add: (words: string) => Promise<void>; focus: () => void }>();
+  let said = $state<{ add: (words: string) => Promise<void>; focus: () => void; pick: () => void }>();
+  /** What is typed in it and not read yet. */
+  let typed = $state('');
+  // Its profile only when asked (0.17, the owner: "I don't want the profile always ... optional at the very least"): folded
+  // until its pill opens it, and then asked again at each change, as the list is.
+  let profileOpen = $state(false);
+  let profile = $state<ListProfileData | null>(null);
+  $effect(() => {
+    const [open, k] = [profileOpen, JSON.stringify(conditions)];
+    if (!open || !untrack(() => conditions.length)) return void (profile = null);
+    let gone = false;
+    const t = setTimeout(() => {
+      previewCrate(JSON.parse(k), 1, prefs.source || undefined, { without: hiddenLibraries(), profile: true }).then(
+        (p) => !gone && (profile = p.profile ?? null),
+        () => {},
+      );
+    }, 300);
+    return () => {
+      gone = true;
+      clearTimeout(t);
+    };
+  });
   let started = false;
   $effect(() => {
     const s = said;
@@ -132,7 +154,7 @@
   </div>
   {#if view === 'sentence'}
     <div class="sentence">
-      <CrateSentence bind:this={said} bind:chips bind:min bind:count bind:modes {rest} brief={brief?.text ?? null} {excluded} onexcluded={takeBack} onmore={() => (view = 'conditions')} />
+      <CrateSentence bind:this={said} bind:chips bind:min bind:count bind:modes bind:text={typed} {rest} brief={brief?.text ?? null} {excluded} onexcluded={takeBack} onmore={() => (view = 'conditions')} />
     </div>
   {:else}
     <ConditionList bind:conditions {axes} crate names={allNames} onnamed={(id, n) => (added = { ...added, [id]: n })} />
@@ -144,8 +166,17 @@
     {/if}
   {/if}
 
+  {#if conditions.length}<div class="profile"><ListProfile data={profile} bind:open={profileOpen} /></div>{/if}
+
   <div class="results">
-    <CrateResults {conditions} name={name || 'New crate'} bind:total views={crate ?? 'quick'} onnames={(n) => (added = { ...added, ...n })} />
+    <CrateResults
+      {conditions}
+      name={name || 'New crate'}
+      bind:total
+      views={crate ?? 'quick'}
+      onnames={(n) => (added = { ...added, ...n })}
+      pick={view === 'sentence' && crateActions(typed) === 'pick' ? () => said?.pick() : null}
+    />
   </div>
 </div>
 
@@ -188,6 +219,11 @@
     font-size: 14px;
     text-decoration: line-through;
     cursor: pointer;
+  }
+
+  /* Its fold's pill on a divider, as in a list's header (lib/ListProfile), room kept below it. */
+  .profile {
+    margin: 18px 0 12px;
   }
 
   .results {

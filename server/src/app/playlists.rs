@@ -1187,6 +1187,7 @@ mod undo_tests {
         assert!(said(s.crate_save(None, "Years", years.clone()).await.err()).contains("Year"));
         assert!(said(s.crate_page(&years, None, 0, 50, &CrateLook::default()).await.err()).contains("Year"));
         assert!(said(s.crate_lines_in_order(&years, None, &CrateLook::default()).await.err()).contains("Year"), "what Play plays");
+        assert!(said(s.crate_profile(&years, None, &[]).await.err()).contains("Year"), "its profile, asked while it is made");
         let curve = s.like_curve(&["tr-1".to_string()], &[], crates::LikeMode::Either, None, &[], false, None, &years).await;
         assert!(said(curve.err()).contains("Year"));
         let jazz_funk = vec![crates::Condition::new("genre", false, crates::Value::AllOf { values: vec!["Jazz".into(), "Funk".into()] })];
@@ -2951,6 +2952,16 @@ impl PlaylistService {
     pub(super) async fn crate_lines_of(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<(String, Vec<String>), ToggleError> {
         let (lib, lines) = self.crate_selection(conditions, want, without).await?;
         Ok((lib.source, lines))
+    }
+
+    /// The profile of what these conditions select from the libraries not in `without` (0.17, the owner: a crate being made or
+    /// changed shows its profile only when asked, folded until its pill opens it), as a saved crate's is counted (`filter`).
+    pub async fn crate_profile(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<crates::Profile, ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want, without).await?;
+        let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
+        let mine: Vec<&crates::Facts> = lib.files().filter(|f| chosen.contains(f.rel.as_str())).collect();
+        let library: Vec<&crates::Facts> = lib.files().collect();
+        Ok(crates::profile(&mine, &library))
     }
 
     /// The library a crate is worked out from, and its lines.

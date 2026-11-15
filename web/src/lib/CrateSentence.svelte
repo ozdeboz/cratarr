@@ -88,11 +88,15 @@
     void add(text.slice(0, cut));
     text = text.slice(cut + 1).trimStart();
   }
+  /** What is typed read, as Enter reads it (the action row's Pick). */
+  export function pick() {
+    void add(text);
+    text = '';
+  }
   function entered(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       e.preventDefault();
-      void add(text);
-      text = '';
+      pick();
     } else if (e.key === 'Backspace' && !text && chips.length) {
       // An empty field's Backspace opens the last term (its Remove a tap away), as a token field's would take it.
       at = chips.length - 1;

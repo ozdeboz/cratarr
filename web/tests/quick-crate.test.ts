@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, tempoOf, tempoSaid, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, countCut, cutAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf, crateShows, crateCardOn, readOnto } = await import(
+const { splitTerms, yearOf, tempoOf, tempoSaid, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, countCut, cutAt, crateActions, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf, crateShows, crateCardOn, readOnto } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -109,6 +109,12 @@ test('the conditions: each kind one row, any of them; the years one span; by an 
   assert.deepEqual(kept, [{ axis: 'like', not: false, value: { kind: 'like', of: ['ar-b'], count: LIKE_MOST, min: 40, own: true } }]);
   assert.deepEqual(conditionsOf([]), []);
   assert.equal(nameOf(chips), 'jazz · funk · 1970s · 1985 · like Bonobo · Air · Kind');
+});
+
+test('a crate being made offers Pick while words are typed and not read, Shuffle and Play once they are', () => {
+  assert.equal(crateActions('trance 90s'), 'pick');
+  assert.equal(crateActions('  '), 'play', 'nothing typed: what the crate is, to play');
+  assert.equal(crateActions(''), 'play');
 });
 
 test('a cut inside a run of equal closeness keeps its count: the handle stops at 10, not 16', () => {

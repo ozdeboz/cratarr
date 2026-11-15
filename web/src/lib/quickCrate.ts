@@ -950,6 +950,10 @@ export function recentFor<T extends { chips: readonly Chip[] }>(recent: readonly
   });
 }
 
+/** What a crate being made offers (0.17; the owner, 2026-11-08: typed words search only on Enter, which nothing showed): while words
+ *  are typed and not read yet (Enter or a comma reads them), one action, Pick, as Enter; else Shuffle and Play. */
+export const crateActions = (typed: string): 'pick' | 'play' => (typed.trim() ? 'pick' : 'play');
+
 /** Where a cut at closeness `min` falls on the closeness curve (how many are at least that alike), and back. */
 export const countAt = (curve: readonly number[], min: number) => curve.filter((a) => a >= min).length;
 /** The cutoff at `count`: the curve's closeness there, a whole number 0 to 100 as the server's Like `min` takes it
