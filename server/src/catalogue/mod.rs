@@ -923,6 +923,9 @@ const FOLDER_TOP: &str = "folder_top";
 
 pub struct Catalogue {
     db: Mutex<Connection>,
+    /// How many readers it opened (`reader`): what a test counts.
+    #[cfg(test)]
+    readers: std::sync::atomic::AtomicUsize,
     /// The folders in use, by their ids for life.
     folders: RwLock<InUse>,
     progress: Mutex<Progress>,
@@ -1022,6 +1025,8 @@ impl Catalogue {
             moving: Default::default(),
             read_half_way: Default::default(),
             file: file.map(Path::to_path_buf),
+            #[cfg(test)]
+            readers: Default::default(),
         };
         // A better reader may read what an older one could not.
         if cat.meta("reader").as_deref() != Some(&tags::READER_VERSION.to_string()) {
@@ -2244,9 +2249,23 @@ impl Catalogue {
         cover_prints(&self.db())
     }
 
+    /// How many readers it has opened (`reader`).
+    #[cfg(test)]
+    pub fn readers_for_tests(&self) -> usize {
+        self.readers.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The writer's lock, held by a test as a build holds it for its record pass.
+    #[cfg(test)]
+    pub fn writer_for_tests(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.db()
+    }
+
     /// A read-only connection of its own to the catalogue's file, for long reads that must not hold up the catalogue
     /// (WAL lets it read beside the writer). `None` for a catalogue in memory.
     pub fn reader(&self) -> Option<Connection> {
+        #[cfg(test)]
+        self.readers.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let file = self.file.as_ref()?;
         let conn = crate::db::open_read_only(file).ok()?;
         conn.busy_timeout(Duration::from_secs(10)).ok()?;
@@ -2714,6 +2733,7 @@ impl Catalogue {
         }
         // Folders a fetcher placed for a record not had (C50): their albums are those records.
         let expected = records::expected_in(tx, now)?;
+        let mut not_had = None;
         let mut given = 0;
         // The records a track moved out of.
         let mut left = std::collections::HashSet::new();
@@ -2793,7 +2813,7 @@ impl Catalogue {
                             // list), else a new record.
                             None => {
                                 let at = records::expected_of(&expected, &a.files);
-                                match records::wanted_record(tx, a, at.as_ref().map(|(_, record)| *record))? {
+                                match records::wanted_record(tx, a, at.as_ref().map(|(_, record)| *record), &mut not_had)? {
                                     Some(r) => {
                                         if let Some(((folder, dir), _)) = &at {
                                             tx.execute("DELETE FROM expected WHERE folder = ?1 AND dir = ?2", params![folder, dir])?;

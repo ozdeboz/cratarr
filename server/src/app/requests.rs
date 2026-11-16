@@ -491,17 +491,17 @@ impl RecordOf {
 }
 
 /// Each request's record as the catalogue holds it now, in the requests' order: none where it names no record yet (before
-/// 0.17's step) or one that is gone. Blocking.
+/// 0.17's step) or one that is gone. All read at once on one reader, never under the writer's lock (R16,
+/// `Catalogue::requested`): the Albums page and the marks ask for every open request while builds run. Blocking.
 pub fn records_of(cat: &crate::catalogue::Catalogue, rs: &[Request]) -> Result<Vec<Option<RecordOf>>> {
-    let rows: Vec<Option<crate::catalogue::records::RecordRow>> = rs.iter().map(|r| Ok(r.record.map(|id| cat.record(id)).transpose()?.flatten())).collect::<Result<_>>()?;
-    let holders = cat.holders(&rows.iter().flatten().map(|row| row.id).collect::<Vec<_>>())?;
-    rows.into_iter()
-        .map(|row| {
-            let Some(row) = row else { return Ok(None) };
-            let groups = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().filter(|(x, _)| x.source == "musicbrainz" && x.kind == "release-group").map(|(x, _)| x.value).collect();
-            Ok(Some(RecordOf { record: row.id, groups, title: row.title, artist: row.artist, year: row.year, cover: row.cover, holder: holders.get(&row.id).copied() }))
+    let read = cat.requested(&rs.iter().filter_map(|r| r.record).collect::<Vec<_>>())?;
+    Ok(rs
+        .iter()
+        .map(|r| {
+            let q = read.get(&r.record?)?;
+            Some(RecordOf { record: q.row.id, groups: q.groups.clone(), title: q.row.title.clone(), artist: q.row.artist.clone(), year: q.row.year, cover: q.row.cover.clone(), holder: q.holder })
         })
-        .collect()
+        .collect())
 }
 
 /// `records_of` from an async caller; none for each where the catalogue cannot be read (logged).
@@ -733,6 +733,32 @@ mod tests {
         r.id = serve.userdata.add_request(&r).unwrap();
         let who = requesters(&serve);
         assert_eq!((who.get(&asked).map(String::as_str), who.get(&arrived).map(String::as_str)), (Some("bob"), Some("bob")));
+    }
+
+    /// R16 (F5): who asked for what is read on one reader, never under the writer's lock: while a build holds it, the Albums
+    /// page's requesters still answer, the catalogue opened once for all the requests.
+    #[test]
+    fn requesters_read_the_catalogue_once() {
+        let dir = std::env::temp_dir().join(format!("cratarr-requesters-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let serve = Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(Some(&dir.join("catalogue.sqlite")), Vec::new()).unwrap()));
+        for title in ["Tide Tables", "Two Rooms", "Quiet Lanes"] {
+            let record = record_of_album(serve.catalogue(), None, "Glass Harbour", title, None, None).unwrap();
+            serve.userdata.add_request(&asked_for(record)).unwrap();
+        }
+        let opened = serve.catalogue().readers_for_tests();
+        let build = serve.catalogue().writer_for_tests();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s = serve.clone();
+        std::thread::spawn(move || tx.send(requesters(&s)).ok());
+        let who = rx.recv_timeout(Duration::from_secs(5)).expect("answered while a build holds the writer");
+        drop(build);
+        assert_eq!(who.len(), 3);
+        assert_eq!(serve.catalogue().readers_for_tests() - opened, 1, "one reader for them all");
+        drop(serve);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A server of the tests' own, in memory, its catalogue attached.

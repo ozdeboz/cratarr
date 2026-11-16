@@ -150,7 +150,11 @@ impl App {
         // Who is looking (0101 point 2): the names, the rights and where Add to goes are theirs.
         let viewer = self.served.as_ref().and_then(|s| s.current_user());
         let admin = crate::serve::access::administering();
-        let asked =self.served.as_ref().map(|s| super::requests::requesters(s)).unwrap_or_default();
+        // Read beside the async workers (R16, F5): one catalogue reader, never a build's lock.
+        let asked = match self.served.clone() {
+            Some(s) => tokio::task::spawn_blocking(move || super::requests::requesters(&s)).await.unwrap_or_default(),
+            None => std::collections::HashMap::new(),
+        };
         // By the record each album is (C49b): its id names it.
         let requester = |al: &source::Album| crate::serve::ids::record_number(&al.id).and_then(|record| asked.get(&record));
         let mut sources: Vec<AlbumsSourceView> = ids
