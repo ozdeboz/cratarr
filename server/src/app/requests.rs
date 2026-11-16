@@ -47,12 +47,96 @@ pub enum Album {
     Unknown,
 }
 
-/// A request as the pages show it: as kept, and its album's state.
+/// A request as the pages show it: as kept, its state (W5, `request_state`: the one every view reads), and whether Hand over
+/// again is open for it; and its album's state as the page has read it so far (decision 0070), from that one state.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct View {
     #[serde(flatten)]
     pub request: Request,
+    pub state: RequestState,
     pub album_state: Album,
+    pub hand_over_again: bool,
+}
+
+/// A request's state, the one every view reads (W5, G1): its status as kept first (waiting for approval, declined, cancelled,
+/// rejected), then how its record is held (W4: done, arrived, partly there), then what the fetchers say of one wanted: Lidarr's
+/// progress, and Soulseek's item (searching, found and waiting for the tick, fetching and how far, or waiting and why). A
+/// request's `fetched` stays the hand-over's words; its state is worked out at each read.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum RequestState {
+    WaitingForApproval,
+    Declined,
+    Cancelled,
+    Rejected,
+    Wanted {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lidarr: Option<Fetching>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        soulseek: Option<super::soulseek::Word>,
+    },
+    PartlyThere {
+        has: u32,
+        of: u32,
+    },
+    Arrived,
+    Done,
+}
+
+/// What Lidarr says of a request it was handed (W5): looking for it, or fetching it and how far (0 to 1).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Fetching {
+    Looking,
+    Fetching { done: f32 },
+}
+
+/// A request's state (W5): `RequestState`, from the request as kept, how its record is held (`holding`), Lidarr's progress for its
+/// group, and Soulseek's word of its item. A request of an album the library has, or that arrived, reads so whatever its answer
+/// was to be. Pure.
+pub fn request_state(r: &Request, held: Holding, lidarr: Option<&Progress>, soulseek: Option<&super::soulseek::Word>) -> RequestState {
+    match r.status.as_str() {
+        DECLINED => return RequestState::Declined,
+        CANCELLED => return RequestState::Cancelled,
+        REJECTED => return RequestState::Rejected,
+        _ => {}
+    }
+    match held {
+        Holding::Done => RequestState::Done,
+        Holding::Arrived => RequestState::Arrived,
+        _ if r.status != APPROVED => RequestState::WaitingForApproval,
+        Holding::Partly { has, of } => RequestState::PartlyThere { has, of },
+        Holding::None => {
+            let lidarr = lidarr.and_then(|p| match *p {
+                Progress::Looking => Some(Fetching::Looking),
+                Progress::Fetching { done } => Some(Fetching::Fetching { done }),
+                Progress::Fetched { .. } => Some(Fetching::Fetching { done: 1.0 }),
+                Progress::NotWanted | Progress::Unknown => None,
+            });
+            RequestState::Wanted { lidarr, soulseek: soulseek.cloned() }
+        }
+    }
+}
+
+/// The album state the page has read so far (decision 0070), from the one state (W5): run 9's page reads `state` itself.
+fn album_state_of(s: &RequestState) -> Album {
+    use super::soulseek::Word;
+    match s {
+        RequestState::Done => Album::InLibrary,
+        RequestState::Arrived => Album::InIncoming,
+        RequestState::PartlyThere { has, of } => Album::PartlyThere { tracks: *has, of: *of },
+        RequestState::Wanted { lidarr: Some(Fetching::Fetching { done }), .. } => Album::Fetching { done: *done },
+        RequestState::Wanted { soulseek: Some(Word::Fetching { percent }), .. } => Album::Fetching { done: (*percent / 100.0) as f32 },
+        RequestState::Wanted { lidarr: Some(Fetching::Looking), .. } | RequestState::Wanted { soulseek: Some(Word::Searching | Word::Found), .. } => Album::Looking,
+        RequestState::Wanted { lidarr: None, soulseek: None } => Album::Unknown,
+        RequestState::Wanted { .. } | RequestState::WaitingForApproval | RequestState::Declined | RequestState::Cancelled | RequestState::Rejected => Album::Requested,
+    }
+}
+
+/// Whether no fetcher has said a word of a request (W5, G2): none written, or only that it was not handed over. Hand over again is
+/// open for an approved one still wanted (`decide`).
+fn no_fetcher_spoke(r: &Request) -> bool {
+    r.fetched.as_deref().is_none_or(|f| f.starts_with("Not handed over"))
 }
 
 /// The Requests page: the account's own requests, everyone's waiting ones for those who answer them, and what the
@@ -394,7 +478,7 @@ pub async fn decide(app: &super::App, serve: &Serve, by: &str, ids: &[i64], appr
             out.push((id, "That request is gone".to_string()));
             continue;
         };
-        let retry = approve && r.status == APPROVED && r.fetched.as_deref().is_none_or(|f| f.starts_with("Not handed over"));
+        let retry = approve && r.status == APPROVED && no_fetcher_spoke(&r);
         if r.status != PENDING && !retry {
             out.push((id, format!("Already {}", r.status)));
             continue;
@@ -741,15 +825,17 @@ fn shown(mut r: Request, of: Option<&RecordOf>) -> Request {
     r
 }
 
-/// Requests as the pages show them (`shown`), their records read here (Health's list). Blocking.
-pub fn shown_requests(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
-    let of = records_of(serve.catalogue(), &rs).unwrap_or_else(|_| vec![None; rs.len()]);
-    rs.into_iter().zip(of).map(|(r, o)| shown(r, o.as_ref())).collect()
-}
-
-/// How many requests wait for an answer (Health, for those who answer them).
-pub fn waiting(serve: &Serve) -> Result<usize> {
-    serve.userdata.requests_waiting()
+/// The requests waiting for an answer (Health, for those who answer them, W5): pending ones whose state says so, each as the pages
+/// show it; one whose album the library has meanwhile waits for no one.
+pub fn waiting(serve: &Serve) -> Result<Vec<Request>> {
+    let pending = serve.userdata.requests(None, Some(PENDING), OPEN)?;
+    let of = records_held(serve.catalogue(), &pending, &serve.library.kinds())?;
+    Ok(pending
+        .into_iter()
+        .zip(of)
+        .filter(|(r, o)| request_state(r, o.as_ref().map_or(Holding::None, |o| o.holding), None, None) == RequestState::WaitingForApproval)
+        .map(|(r, o)| shown(r, o.as_ref()))
+        .collect())
 }
 
 /// Requests as the pages show them, with their albums' states (C49b): each by its record (`shown`), in the library where its
@@ -767,7 +853,14 @@ async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<Record
         Some(f) if !asked.is_empty() => f.statuses(&asked).await.ok(),
         _ => None,
     };
-    rs.into_iter().map(|(r, held)| View { album_state: state(held, progress.as_ref(), &r), request: r }).collect()
+    let soulseek = super::soulseek::item_words(&rs.iter().map(|(r, _)| r.id).collect::<Vec<_>>());
+    rs.into_iter()
+        .map(|(r, held)| {
+            let lidarr = r.release_group.as_deref().and_then(|g| progress.as_ref()?.get(g));
+            let state = request_state(&r, held, lidarr, soulseek.get(&r.id));
+            View { album_state: album_state_of(&state), hand_over_again: matches!(state, RequestState::Wanted { .. }) && no_fetcher_spoke(&r), state, request: r }
+        })
+        .collect()
 }
 
 /// Of these requests, those whose record is not had yet (the owner, 2026-10-30: "Once something is actually in the library,
@@ -775,7 +868,11 @@ async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<Record
 /// pages show it (`shown`, C49b).
 pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
     let of = named(serve, &rs).await;
-    rs.into_iter().zip(of).filter(|(_, o)| !o.as_ref().is_some_and(|o| o.holding == Holding::Done)).map(|(r, o)| shown(r, o.as_ref())).collect()
+    rs.into_iter()
+        .zip(of)
+        .filter(|(r, o)| request_state(r, o.as_ref().map_or(Holding::None, |o| o.holding), None, None) != RequestState::Done)
+        .map(|(r, o)| shown(r, o.as_ref()))
+        .collect()
 }
 
 /// The library's albums by name (the import's matcher), where Cratarr's data folder holds it: its albums alone, one
@@ -787,28 +884,7 @@ pub(crate) async fn library(serve: &Serve) -> Option<Arc<Matcher>> {
     tokio::task::spawn_blocking(move || Matcher::library_albums(&dir.join("library.sqlite"), Some(built)).ok()).await.ok().flatten()
 }
 
-/// A request's album as it stands: how its record is held first (W4: done, arrived, or partly there), then the fetcher's word
-/// (only for one handed to it; none when there is no fetcher or it could not be asked).
-fn state(held: Holding, progress: Option<&HashMap<String, Progress>>, r: &Request) -> Album {
-    match held {
-        Holding::Done => return Album::InLibrary,
-        // In Incoming, not added yet (the owner's answer (d)): it reads "Arrived" until it is added.
-        Holding::Arrived => return Album::InIncoming,
-        Holding::Partly { has, of } if r.status == APPROVED => return Album::PartlyThere { tracks: has, of },
-        _ => {}
-    }
-    if r.status != APPROVED {
-        return Album::Requested;
-    }
-    let Some(p) = r.release_group.as_deref().and_then(|rg| progress?.get(rg)) else { return Album::Unknown };
-    match *p {
-        Progress::Fetched { tracks, of } if of > 0 && tracks < of => Album::PartlyThere { tracks, of },
-        Progress::Fetched { .. } => Album::InIncoming,
-        Progress::Fetching { done } => Album::Fetching { done },
-        Progress::Looking => Album::Looking,
-        Progress::NotWanted | Progress::Unknown => Album::Requested,
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -843,7 +919,7 @@ mod tests {
         };
         let of = records_of(&cat, std::slice::from_ref(&r)).unwrap();
         assert_eq!(of[0].as_ref().map(|o| o.record), Some(record), "merged: the record it went into");
-        let views = vec![View { request: shown(r, of[0].as_ref()), album_state: Album::Requested }];
+        let views = vec![View { request: shown(r, of[0].as_ref()), state: RequestState::WaitingForApproval, album_state: Album::Requested, hand_over_again: false }];
         assert_eq!((views[0].request.artist.as_str(), views[0].request.album.as_str(), views[0].request.release_group.as_deref()), ("Tape Club", "After Hours", Some(group)));
         let marks = marks_of(&views, &of);
         let wanted = Some(Mark { state: "wanted", done: None });
@@ -1055,6 +1131,33 @@ mod tests {
         assert_eq!((row.artist.as_str(), row.title.as_str()), ("Tape Club", "Harbour Songs"));
         let label = serve.catalogue().label_for("Paper Lantern").unwrap();
         assert!(serve.catalogue().label_records(label).unwrap().iter().any(|(r, _)| *r == record), "the account its label");
+    }
+
+    /// W5 (G1): every view reads one state of a request (`request_state`): the Requests page (and Hand over again on it, open while
+    /// no fetcher has spoken), the marks the lists show, the requested lists (search's, Discover's), and Health's count of those
+    /// waiting for an answer, which leaves one the library has out.
+    #[tokio::test]
+    async fn every_view_reads_one_request_state() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let owned = cat.record_for_tests("Harbour Lights", 2);
+        let mut done = Request { status: PENDING.into(), ..asked_for(owned) };
+        done.id = serve.userdata.add_request(&done).unwrap();
+        let wanted = record_of_album(cat, None, "Glass Harbour", "Quiet Lanes", None, None).unwrap();
+        let mut asking = Request { status: PENDING.into(), album_key: "k2".into(), ..asked_for(wanted) };
+        asking.id = serve.userdata.add_request(&asking).unwrap();
+        let other = record_of_album(cat, None, "Glass Harbour", "Two Rooms", None, None).unwrap();
+        let mut asked = Request { album_key: "k3".into(), ..asked_for(other) };
+        asked.id = serve.userdata.add_request(&asked).unwrap();
+        let rs = vec![done.clone(), asking.clone(), asked.clone()];
+        let shown = views(&serve, None, rs.clone()).await;
+        assert_eq!(shown.iter().map(|v| v.state.clone()).collect::<Vec<_>>(), [RequestState::Done, RequestState::WaitingForApproval, RequestState::Wanted { lidarr: None, soulseek: None }]);
+        assert_eq!(shown.iter().map(|v| v.album_state.clone()).collect::<Vec<_>>(), [Album::InLibrary, Album::Requested, Album::Unknown], "the page's own, from the one state");
+        assert_eq!(shown.iter().map(|v| v.hand_over_again).collect::<Vec<_>>(), [false, false, true], "no fetcher has spoken of the one wanted");
+        assert_eq!(waiting(&serve).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), [asking.id], "Health: the one waiting for an answer");
+        assert_eq!(not_in_library(&serve, rs.clone()).await.iter().map(|r| r.id).collect::<Vec<_>>(), [asking.id, asked.id], "the requested lists");
+        let marks = marks_of(&shown, &named(&serve, &rs).await);
+        assert!(!marks.by_record.contains_key(&owned) && marks.by_record.contains_key(&wanted) && marks.by_record.contains_key(&other), "the marks");
     }
 
     /// W4 (D3): Health's "Ask for the full album" fetches it again: its group finds the owned record, short of the list its files

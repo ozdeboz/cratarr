@@ -161,27 +161,25 @@ pub struct ArtistRef {
 pub struct Marks<'a> {
     pub library: &'a Library,
     pub answers: &'a Answers,
-    /// The account's requests by their key (a release group, else `artist|album` keys), the latest first.
-    pub requests: HashMap<String, Request>,
-}
-
-/// An open request (asked for, not declined nor taken back) makes a missing item *requested*.
-fn open(r: &Request) -> bool {
-    r.status == crate::app::requests::PENDING || r.status == crate::app::requests::APPROVED
+    /// The account's requests by their key (a release group, else `artist|album` keys), the latest first, each with its state (W5).
+    pub requests: HashMap<String, (Request, crate::app::requests::RequestState)>,
 }
 
 /// The requests by every key an album of a list may name them by (C49b): the key each was asked by, and what names its
 /// record (`of`, in the requests' order, `requests::records_of`): its release groups and its names. The first for a key.
-pub fn requests_by_key(all: Vec<Request>, of: &[Option<crate::app::requests::RecordOf>]) -> HashMap<String, Request> {
+pub fn requests_by_key(all: Vec<Request>, of: &[Option<crate::app::requests::RecordOf>]) -> HashMap<String, (Request, crate::app::requests::RequestState)> {
     let mut out = HashMap::new();
     for (r, o) in all.into_iter().zip(of.iter().chain(std::iter::repeat(&None))) {
+        let held = o.as_ref().map_or(crate::app::requests::Holding::None, |o| o.holding);
+        let state = crate::app::requests::request_state(&r, held, None, None);
+        let r = (r, state);
         if let Some(o) = o {
             for g in &o.groups {
                 out.entry(g.clone()).or_insert_with(|| r.clone());
             }
             out.entry(crate::app::requests::requested(&o.artist, &o.title)).or_insert_with(|| r.clone());
         }
-        out.entry(r.album_key.clone()).or_insert(r);
+        out.entry(r.0.album_key.clone()).or_insert(r);
     }
     out
 }
@@ -194,23 +192,25 @@ impl Marks<'_> {
         recordings.iter().find_map(|r| self.library.matcher.find(&wanted(Some(r.as_str())))).or_else(|| self.library.matcher.find(&wanted(None))).map(str::to_string)
     }
 
-    fn request(&self, release_group: Option<&str>, artist: &str, album: &str) -> Option<Request> {
+    fn request(&self, release_group: Option<&str>, artist: &str, album: &str) -> Option<(Request, crate::app::requests::RequestState)> {
         release_group
             .and_then(|rg| self.requests.get(rg))
             .or_else(|| self.requests.get(&format!("{}|{}", key(artist), key(album))))
             .cloned()
     }
 
-    fn status(&self, have: u32, of: u32, found: bool, request: Option<&Request>) -> &'static str {
+    /// An item's status: in the library by its own tracks; else as a request of it stands (W5, the one state every view reads):
+    /// done, partly there, or still coming (waiting for an answer, wanted, arrived); else by what of it the library has.
+    fn status(&self, have: u32, of: u32, found: bool, request: Option<&(Request, crate::app::requests::RequestState)>) -> &'static str {
+        use crate::app::requests::RequestState;
         let there = if of > 0 { have == of } else { found };
-        if there {
-            IN
-        } else if request.is_some_and(open) {
-            REQUESTED
-        } else if have > 0 || found {
-            PARTLY
-        } else {
-            MISSING
+        match request.map(|(_, s)| s) {
+            _ if there => IN,
+            Some(RequestState::Done) => IN,
+            Some(RequestState::PartlyThere { .. }) => PARTLY,
+            Some(RequestState::WaitingForApproval | RequestState::Wanted { .. } | RequestState::Arrived) => REQUESTED,
+            _ if have > 0 || found => PARTLY,
+            _ => MISSING,
         }
     }
 
@@ -245,7 +245,7 @@ impl Marks<'_> {
             release_group,
             album: found.map(|id| Ref { source: self.library.source.clone(), id }),
             // In the library, it is the library's (the owner, 2026-10-30): requested only on the Requests page.
-            request: request.filter(|_| status != IN),
+            request: request.map(|(r, _)| r).filter(|_| status != IN),
             preview: None,
         }
     }
@@ -266,7 +266,7 @@ impl Marks<'_> {
             added_at: t.added_at,
             status,
             track: song.map(|id| Ref { source: self.library.source.clone(), id }),
-            request: request.filter(|_| status != IN),
+            request: request.map(|(r, _)| r).filter(|_| status != IN),
         }
     }
 

@@ -619,13 +619,14 @@ pub fn track_ids(lost: bool) -> Option<Finding> {
 /// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
 fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let Some(serve) = served else { return Ok(Vec::new()) };
-    let waiting = serve.userdata.requests(None, Some(super::requests::PENDING), ITEMS)?;
+    // Those whose state says they wait for an answer (W5): one whose album the library has meanwhile waits for no one. Each by its
+    // record's names (C49b): a label's "Artist - Title" is the artist's title.
+    let mut waiting = super::requests::waiting(serve)?;
     if waiting.is_empty() {
         return Ok(Vec::new());
     }
-    // Each by its record's names (C49b): a label's "Artist - Title" is the artist's title.
-    let waiting = super::requests::shown_requests(serve, waiting);
-    let count = super::requests::waiting(&serve)? as u64;
+    let count = waiting.len() as u64;
+    waiting.truncate(ITEMS);
     let mut f = finding("requests", "requests:waiting", Level::Info, count, format!("{} waiting", n(count, "request", "requests")));
     f.open = Some(Open { page: "requests", switch: None, thing: None });
     f.items = waiting.into_iter().map(|r| Item { title: r.album, line: Some(format!("{} · asked by {}", r.artist, r.user)), ..Item::default() }).collect();

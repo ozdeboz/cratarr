@@ -555,6 +555,49 @@ fn search_again(i: &mut Item) {
     }
 }
 
+/// What Soulseek says of a request's record (W5): its item's state, as the request reads it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Word {
+    /// Being searched now.
+    Searching,
+    /// Folders found, waiting for the administrator's tick.
+    Found,
+    /// Ticked and fetched (how far, 0 to 100), or its files checked and placed.
+    Fetching { percent: f64 },
+    /// To be searched, again where a search found nothing: why, where it says.
+    Waiting {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        why: Option<String>,
+    },
+    /// Something it cannot get past by itself (no list to judge it by), and why.
+    Stuck {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        why: Option<String>,
+    },
+}
+
+/// What Soulseek says of these requests (W5): each one's item, by the request's id.
+pub fn item_words(requests: &[i64]) -> std::collections::HashMap<i64, Word> {
+    kept(|k| {
+        k.items
+            .iter()
+            .filter(|i| requests.contains(&i.record.request))
+            .map(|i| {
+                let word = match i.state {
+                    State::Searching => Word::Searching,
+                    State::Found => Word::Found,
+                    State::Approved | State::Fetching => Word::Fetching { percent: i.percent },
+                    State::Checking | State::Placed => Word::Fetching { percent: 100.0 },
+                    State::Waiting => Word::Waiting { why: i.why.clone() },
+                    State::Stuck => Word::Stuck { why: i.why.clone() },
+                };
+                (i.record.request, word)
+            })
+            .collect()
+    })
+}
+
 /// A record taken off the list (not while it is fetched): its Request is not taken in again. What it fetched goes with
 /// it: nothing else looks in a batch's folder.
 pub async fn drop_item(app: &Arc<super::App>, id: &str) -> View {

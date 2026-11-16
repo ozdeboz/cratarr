@@ -1714,10 +1714,6 @@ impl UserData {
     }
 
     /// How many requests wait for an answer (Health).
-    pub fn requests_waiting(&self) -> Result<usize> {
-        Ok(self.db().query_row("SELECT count(*) FROM request WHERE status = 'pending'", [], |r| r.get::<_, i64>(0))? as usize)
-    }
-
     pub fn import_choice(&self, source: &str) -> Result<Option<String>> {
         Ok(self.db().query_row("SELECT choice FROM import_choices WHERE source = ?1", [source], |r| r.get(0)).optional()?)
     }
@@ -2724,7 +2720,7 @@ mod tests {
         };
         let a = u.add_request(&r("me", "Moon Safari", 1)).unwrap();
         let b = u.add_request(&r("you", "Talkie Walkie", 2)).unwrap();
-        assert_eq!(u.requests_waiting().unwrap(), 2);
+        assert_eq!(u.requests(None, Some("pending"), 10).unwrap().len(), 2);
         assert_eq!(u.requests(None, None, 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![b, a], "newest first");
         assert_eq!(u.requests(Some("me"), None, 10).unwrap().len(), 1, "each account its own");
         u.set_request_status(b, "declined", Some("Not on Soulseek"), Some("admin")).unwrap();
