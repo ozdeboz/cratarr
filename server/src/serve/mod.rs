@@ -122,6 +122,8 @@ pub struct Serve {
     covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
     /// One device's index made at a time, and what the library's log was last brought up to (`app::device_index`).
     device: std::sync::Mutex<crate::app::device_index::Settled>,
+    /// Who asked for what, as last read (`app::requests::requesters`, R30).
+    requesters: std::sync::Mutex<crate::app::requests::KeptRequesters>,
 }
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
@@ -196,6 +198,7 @@ impl Serve {
             stamps: Default::default(),
             covers: tokio::sync::broadcast::channel(16).0,
             device: Default::default(),
+            requesters: Default::default(),
         }))
     }
 
@@ -372,6 +375,11 @@ impl Serve {
     #[cfg(test)]
     pub fn build_passed_for_tests(&self) {
         *self.built_at.write().unwrap() += 1;
+    }
+
+    /// Who asked for what, as last read (`app::requests::requesters`).
+    pub fn requesters_kept(&self) -> std::sync::MutexGuard<'_, crate::app::requests::KeptRequesters> {
+        self.requesters.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// A device's index being made: until this goes, another waits, as two would hold twice what one does. Blocking.

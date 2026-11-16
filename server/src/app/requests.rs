@@ -500,8 +500,26 @@ pub fn requested(artist: &str, album: &str) -> String {
 
 /// Who asked for each approved request, by its record (C49b, merges followed) and by the record that holds its files where that
 /// is another (R13: an album that came as a record of its own): an Incoming record goes into its requester's own music by
-/// default, and is theirs to add or delete (0101 point 2). The newest asker of a record.
-pub fn requesters(serve: &Serve) -> HashMap<i64, String> {
+/// default, and is theirs to add or delete (0101 point 2). The newest asker of a record. Kept `MARKS_KEEP`, as the marks are
+/// (R30, N15): the Albums page asks at every open, and a read works the had rule out for every approved request's record.
+pub fn requesters(serve: &Serve) -> Arc<HashMap<i64, String>> {
+    let kept = serve.requesters_kept().0.clone();
+    if let Some((at, who)) = kept
+        && at.elapsed() < MARKS_KEEP
+    {
+        return who;
+    }
+    let who = Arc::new(requesters_now(serve));
+    serve.requesters_kept().0 = Some((Instant::now(), who.clone()));
+    who
+}
+
+/// Who asked for what, as last read, and when (`requesters`): on the server, so each server of the tests has its own.
+#[derive(Debug, Default)]
+pub struct KeptRequesters(Option<(Instant, Arc<HashMap<i64, String>>)>);
+
+/// `requesters`, read now.
+fn requesters_now(serve: &Serve) -> HashMap<i64, String> {
     let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
     let of = records_of(serve.catalogue(), &approved).unwrap_or_else(|e| {
         tracing::debug!("the requests' records not read: {e:#}");
@@ -866,6 +884,19 @@ mod tests {
         serve.userdata.set_bandcamp_found(group, 1, Some("https://kitetheory.bandcamp.com/album/night-walks")).unwrap();
         let asked = record_of_album_in(&serve, None, "Kite Theory", "Night Walks", None, None, None).await.unwrap();
         assert_eq!((asked, page_of(asked).as_deref()), (listed, Some("https://kitetheory.bandcamp.com/album/night-walks")), "by the group its record holds");
+    }
+
+    /// R30 (N15): who asked for what is kept with the marks (`MARKS_KEEP`): the Albums page, asking at every open, reads the
+    /// requests and their records once in that while; a request made meanwhile shows once it has passed.
+    #[test]
+    fn requesters_are_kept_with_the_marks() {
+        let serve = served();
+        let first = record_of_album(serve.catalogue(), None, "Glass Harbour", "Tide Tables", None, None).unwrap();
+        serve.userdata.add_request(&asked_for(first)).unwrap();
+        assert_eq!(requesters(&serve).len(), 1);
+        let second = record_of_album(serve.catalogue(), None, "Glass Harbour", "Two Rooms", None, None).unwrap();
+        serve.userdata.add_request(&asked_for(second)).unwrap();
+        assert_eq!(requesters(&serve).len(), 1, "kept, not read again");
     }
 
     /// A server of the tests' own, in memory, its catalogue attached.

@@ -153,7 +153,7 @@ impl App {
         // Read beside the async workers (R16, F5): one catalogue reader, never a build's lock.
         let asked = match self.served.clone() {
             Some(s) => tokio::task::spawn_blocking(move || super::requests::requesters(&s)).await.unwrap_or_default(),
-            None => std::collections::HashMap::new(),
+            None => Default::default(),
         };
         // By the record each album is (C49b): its id names it.
         let requester = |al: &source::Album| crate::serve::ids::record_number(&al.id).and_then(|record| asked.get(&record));
