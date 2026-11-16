@@ -2465,6 +2465,10 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     user.busy_timeout(Duration::from_secs(10)).unwrap();
     user.execute("INSERT INTO request (user, album_key, artist_key, album, artist, at, status, record) VALUES ('bob', 'k', 'k', 'Both Shores', 'Salt Meridian', 1, 'approved', ?1)", [record]).unwrap();
     drop(user);
+    // Who asked for what is kept 30 s (R30), and it was read while both copies were waited for: his request shows once that has
+    // passed.
+    let his = |a: &Value| a["title"] == "Both Shores" && copies(a).iter().any(|c| c["library"].as_str() == Some(&*path(&incoming)) && c["deletable"] == true);
+    s.until("his request read", Duration::from_secs(90), || async { bob.albums().await.iter().any(his) }).await;
     let id = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap()["id"].as_str().unwrap().to_string();
     assert_ne!(id, format!("al-{record}"), "the album a record of its own");
     let album = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap();
