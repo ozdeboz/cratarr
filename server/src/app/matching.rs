@@ -158,7 +158,6 @@ async fn lookup(http: &reqwest::Client, release: &str) -> Result<Release> {
         .error_for_status()?
         .json()
         .await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(release_of(&v))
 }
 
@@ -175,7 +174,6 @@ async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Match>> {
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release")?;
     url.query_pairs_mut().append_pair("query", &query).append_pair("limit", "10").append_pair("fmt", "json");
     let v: Value = http.get(url).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     let ids: Vec<String> = v["releases"]
         .as_array()
         .into_iter()

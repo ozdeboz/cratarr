@@ -244,7 +244,6 @@ async fn mb_links(entity: &str, id: &str) -> Result<Vec<String>> {
     }
     let http = super::discover::http()?;
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/{entity}/{id}?inc=url-rels&fmt=json")).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(v["relations"].as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect())
 }
 
@@ -529,7 +528,6 @@ async fn genres_pass() -> Result<()> {
 /// A MusicBrainz release's release group.
 pub(super) async fn release_group_of(http: &reqwest::Client, release: &str) -> Result<Option<String>> {
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json")).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(v["release-group"]["id"].as_str().map(str::to_string))
 }
 

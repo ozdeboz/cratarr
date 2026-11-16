@@ -81,6 +81,8 @@ ts-rs = "12.0.1"
 cratarr-rules = { path = "rules", features = ["ts", "made-up", "device"] }
 # Calls the routers as a client would, in tests (decision 0030).
 tower = { version = "0.5", default-features = false, features = ["util"] }
+# A paused clock for what waits its turn (MusicBrainz's, S10): its seconds pass at once, and exactly.
+tokio = { version = "1", features = ["test-util"] }
 
 # The page's rules.wasm (scripts/rules-wasm.sh, 0.12): as small as it gets, the page loads it with its first view.
 [profile.wasm]

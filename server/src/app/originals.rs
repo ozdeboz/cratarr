@@ -12,7 +12,8 @@ use super::musicbrainz::Asked as _;
 
 /// Releases asked about in one pass, kept together at its end: each keeping builds the library again.
 const BATCH: usize = 500;
-/// Between two questions: half Discover's pace, so the two together stay within MusicBrainz's one a second.
+/// Between two questions: the turn keeps MusicBrainz's one a second (`musicbrainz::Asked`), and a background pass takes no
+/// more than every other one of it, so a page asking meanwhile waits little.
 const PAUSE: Duration = Duration::from_secs(super::musicbrainz::PACE_SECS);
 /// A release MusicBrainz knew no date for is asked about again after this.
 const AGAIN_SECS: i64 = 90 * 86_400;

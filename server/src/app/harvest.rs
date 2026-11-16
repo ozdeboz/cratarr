@@ -150,7 +150,6 @@ async fn keep(served: &std::sync::Arc<crate::serve::Serve>, subject: &str, sourc
 /// group or an artist (`what`: `release-group/<id>`, `artist/<id>`), each weighed by its votes against the most.
 async fn mb_words(http: &reqwest::Client, what: &str) -> Result<Vec<RawWord>> {
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/{what}?inc=genres+tags&fmt=json")).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(mb_parse(&v))
 }
 

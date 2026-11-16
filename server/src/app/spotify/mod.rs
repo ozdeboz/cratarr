@@ -23,7 +23,8 @@ use store::{IMPORT, LIVE, Store};
 const AGAIN: Duration = Duration::from_secs(6 * 3600);
 /// How often the background looks for lists to read and questions for MusicBrainz.
 const LOOK: Duration = Duration::from_secs(10 * 60);
-/// Between two questions to MusicBrainz (its rule is one a second; others ask too).
+/// Between two questions to MusicBrainz: the turn keeps its one a second (`musicbrainz::Asked`), and the lists' questions in
+/// the background leave turns between for the pages.
 const MB_PACE: Duration = Duration::from_millis(1500);
 /// Matching reads the library again after this long.
 const LIBRARY_FOR: Duration = Duration::from_secs(60);

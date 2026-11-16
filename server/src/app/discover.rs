@@ -625,7 +625,6 @@ async fn related_discography(serve: &Arc<crate::serve::Serve>, http: &reqwest::C
             Vec::new()
         }
     };
-    tokio::time::sleep(MB_PAUSE).await;
     groups
 }
 
@@ -720,7 +719,6 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
             }
             Err(e) => tracing::info!("discover: {}'s albums could not be read from MusicBrainz: {e:#}", a.name),
         }
-        tokio::time::sleep(MB_PAUSE).await;
     }
     let most = artists.iter().map(|a| a.plays).max().unwrap_or(0).max(1) as f64;
     let mut out = Vec::new();
@@ -1230,7 +1228,7 @@ fn same(a: &str, b: &str) -> bool {
 
 /// An album's page on Bandcamp (decision 0071): its own on MusicBrainz, else found on its artist's own Bandcamp page
 /// (MusicBrainz's for the artist) by its title, else Bandcamp's search box where artist and title both match; none
-/// otherwise. Bandcamp is asked at most once a second, as MusicBrainz is.
+/// otherwise. Bandcamp is asked at most once a second, in its own turn (`Bandcamp::send`), as MusicBrainz is in its.
 async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[String], artist: &str, album: &str) -> Option<String> {
     if let Some(p) = urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
         return Some(p);
@@ -1238,18 +1236,15 @@ async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[Strin
     let bc = crate::bandcamp::Bandcamp::get();
     if let Some(id) = artists.first() {
         let own = mb_artist_urls(http, id).await.unwrap_or_default();
-        tokio::time::sleep(MB_PAUSE).await;
         let page = own.iter().filter_map(|u| crate::bandcamp::page(u)).find(|p| reqwest::Url::parse(p).ok().and_then(|u| u.host_str().map(|h| h != "bandcamp.com")).unwrap_or(false));
         if let Some(page) = page {
             let releases = bc.releases(&page).await.unwrap_or_default();
-            tokio::time::sleep(MB_PAUSE).await;
             if let Some((_, url)) = releases.into_iter().find(|(t, _)| same(t, album)) {
                 return Some(url);
             }
         }
     }
     let found = bc.search(artist, album).await.unwrap_or_default();
-    tokio::time::sleep(MB_PAUSE).await;
     found.into_iter().find(|(t, a, _)| same(t, album) && same(a, artist)).map(|(_, _, url)| url)
 }
 
@@ -1271,7 +1266,6 @@ pub async fn bandcamp_artist(name: &str, mbid: Option<&str>, given: Option<&str>
         && let Some(id) = mbid.filter(|m| !m.is_empty())
     {
         page = own_bandcamp(&mb_artist_urls(&http, id).await.unwrap_or_default());
-        tokio::time::sleep(MB_PAUSE).await;
     }
     if page.is_none() {
         page = bc.search_artist(name).await.unwrap_or_default().into_iter().find(|(n, _)| same(n, name)).map(|(_, p)| p);
@@ -1312,7 +1306,6 @@ async fn artist_of_group(http: &reqwest::Client, release_group: &str) -> Result<
         .error_for_status()?
         .json()
         .await?;
-    tokio::time::sleep(MB_PAUSE).await;
     Ok(v["artist-credit"].as_array().and_then(|c| c.first()).and_then(|c| c["artist"]["id"].as_str()).map(str::to_string))
 }
 
@@ -1338,10 +1331,7 @@ pub async fn artist_albums(name: &str) -> Option<u32> {
     }
     let http = http().ok()?;
     let n = match mb_artist_by_name(&http, name).await.ok().flatten() {
-        Some(mbid) => {
-            tokio::time::sleep(MB_PAUSE).await;
-            studio_albums(&http, &mbid).await.ok()
-        }
+        Some(mbid) => studio_albums(&http, &mbid).await.ok(),
         None => None,
     };
     kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key, (now, n));
@@ -1380,8 +1370,8 @@ async fn mb_release_group(http: &reqwest::Client, artist: &str, album: &str) -> 
     Ok(s.groups.into_iter().find(|g| g.score >= 95 && loose(&g.title) == loose(album)).map(|g| (g.id, g.first.get(..4).and_then(|y| y.parse().ok()))))
 }
 
-/// MusicBrainz asks for at most one request a second.
-pub(super) const MB_PAUSE: Duration = Duration::from_millis(1100);
+/// TheAudioDB asked for a look's new artists a little over a second apart: outside its builder's, it has no turn of its own.
+const AUDIODB_PAUSE: Duration = Duration::from_millis(1100);
 
 /// Looks up the account's suggestions now (blocking parts apart) and keeps them.
 pub async fn look(
@@ -1450,7 +1440,6 @@ pub async fn look(
             c.year = c.year.or(year);
             c.release_group = Some(g);
         }
-        tokio::time::sleep(MB_PAUSE).await;
     }
     progress("Leaving out what you have", 0, None);
     let (ud, a) = (serve.userdata.clone(), account.to_string());
@@ -1521,11 +1510,7 @@ pub async fn look(
         let s = &mut albums[i];
         progress(LISTEN_STEP, i as u64, Some(total));
         let mut mb = match &s.release_group {
-            Some(g) => {
-                let got = mb_urls(&http, g).await.unwrap_or_default();
-                tokio::time::sleep(MB_PAUSE).await;
-                got
-            }
+            Some(g) => mb_urls(&http, g).await.unwrap_or_default(),
             None => MbAlbum::default(),
         };
         (s.track_count, s.length_secs) = (mb.tracks, mb.length_secs);
@@ -1564,21 +1549,18 @@ pub async fn look(
         let total = new.len() as u64;
         for (i, name) in new.iter().enumerate() {
             progress("Finding new artists' pictures", i as u64, Some(total));
-            // TheAudioDB's, not MusicBrainz's; asked at the same gentle pace all the same.
+            // TheAudioDB's, not MusicBrainz's (which keeps its own turn); asked at a gentle pace all the same.
             if i > 0 {
-                tokio::time::sleep(MB_PAUSE).await;
+                tokio::time::sleep(AUDIODB_PAUSE).await;
             }
             let photo = store.get_or_read(name, None).await.is_some_and(|info| info.photo.is_some());
             // How many albums they have released: their MusicBrainz id by name (a sure match only), their albums; and
             // their own Bandcamp page, as MusicBrainz keeps it.
             let (mut released, mut own) = (None, None);
             if let Ok(Some(mbid)) = mb_artist_by_name(&http, name).await {
-                tokio::time::sleep(MB_PAUSE).await;
                 released = studio_albums(&http, &mbid).await.ok();
-                tokio::time::sleep(MB_PAUSE).await;
                 own = own_bandcamp(&mb_artist_urls(&http, &mbid).await.unwrap_or_default());
             }
-            tokio::time::sleep(MB_PAUSE).await;
             for s in albums.iter_mut().filter(|s| &s.artist == name) {
                 (s.artist_photo, s.artist_albums, s.artist_bandcamp) = (photo, released, own.clone());
             }
@@ -1760,7 +1742,6 @@ async fn look_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>
     let (urls, artists) = match release_group.filter(|g| !g.is_empty()) {
         Some(g) => {
             let got = mb_urls(&http, g).await.unwrap_or_default();
-            tokio::time::sleep(MB_PAUSE).await;
             (got.urls, got.artists)
         }
         None => (Vec::new(), Vec::new()),
@@ -1955,7 +1936,6 @@ pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release-group")?;
     url.query_pairs_mut().append_pair("query", &text).append_pair("fmt", "json").append_pair("limit", &limit.to_string());
     let rg: serde_json::Value = http.get(url).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(MB_PAUSE).await;
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/artist")?;
     url.query_pairs_mut().append_pair("query", &text).append_pair("fmt", "json").append_pair("limit", &limit.to_string());
     let ar: serde_json::Value = http.get(url).asked().await?.error_for_status()?.json().await?;

@@ -193,7 +193,6 @@ async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<(MbRelated, Ve
 /// newest release.
 async fn on_bandcamp(http: &reqwest::Client, mbid: &str) -> Option<(String, String)> {
     let urls = super::discover::mb_artist_urls(http, mbid).await.ok()?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     let own = urls.iter().filter_map(|u| crate::bandcamp::page(u)).find(|p| reqwest::Url::parse(p).ok().and_then(|u| u.host_str().map(|h| h != "bandcamp.com")).unwrap_or(false))?;
     let releases = crate::bandcamp::Bandcamp::get().releases(&own).await.ok()?;
     releases.into_iter().find_map(|(title, url)| Some((title, crate::bandcamp::album_page(&url)?)))
@@ -235,7 +234,6 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
         }
         Err(e) => tracing::info!("related artists of {name}: MusicBrainz: {e:#}"),
     }
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     let mut artists: Vec<Related> = by.into_values().filter(|r| loose(&r.name) != loose(name)).collect();
     // The library's: by name, as the artist page names them.
     let (lib, names) = (serve.library.clone(), artists.iter().map(|r| r.name.clone()).collect::<Vec<_>>());

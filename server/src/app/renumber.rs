@@ -273,7 +273,6 @@ pub(super) async fn group_releases(http: &reqwest::Client, rg: &str) -> Result<V
         .error_for_status()?
         .json()
         .await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(v["releases"].as_array().into_iter().flatten().map(mb_release).collect())
 }
 

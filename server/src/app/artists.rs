@@ -31,9 +31,8 @@ const MISSING_KEEP: i64 = 30 * 86_400;
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS artist_info (
   key TEXT PRIMARY KEY, name TEXT NOT NULL, mbid TEXT, adb TEXT, bio TEXT, photo TEXT, read_at INTEGER NOT NULL);";
-/// Wikimedia Commons' photo, a 600 px copy, and MusicBrainz asked at most once a second.
+/// Wikimedia Commons' photo, a 600 px copy (MusicBrainz, asked on the way, keeps its own turn: `musicbrainz::Asked`).
 const COMMONS_WIDTH: u32 = 600;
-const MB_PAUSE: Duration = Duration::from_millis(1100);
 
 /// Who made a freely licensed photo and under which licence, and its page: shown beside it, as its licence asks.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -200,7 +199,6 @@ impl ArtistInfo {
     async fn mbid_by_name(&self, name: &str) -> Result<Option<String>> {
         let url = format!("https://musicbrainz.org/ws/2/artist?query=artist:%22{}%22&fmt=json&limit=3", urlencode(name));
         let answer: serde_json::Value = self.http.get(&url).asked().await?.error_for_status()?.json().await?;
-        tokio::time::sleep(MB_PAUSE).await;
         Ok(answer["artists"]
             .as_array()
             .into_iter()
@@ -215,7 +213,6 @@ impl ArtistInfo {
     async fn commons_photo(&self, mbid: &str) -> Result<Option<(String, Credit)>> {
         let rels: serde_json::Value =
             self.http.get(format!("https://musicbrainz.org/ws/2/artist/{}?inc=url-rels&fmt=json", urlencode(mbid))).asked().await?.error_for_status()?.json().await?;
-        tokio::time::sleep(MB_PAUSE).await;
         let Some(item) = rels["relations"]
             .as_array()
             .into_iter()
