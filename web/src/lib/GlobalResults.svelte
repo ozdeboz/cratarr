@@ -81,8 +81,10 @@
     if (it.kind === 'work') return void (workOpen = workOf(it));
     leaveSearch(deep(it));
     if (it.subject.startsWith('#')) location.hash = it.subject;
+    // A missing record (C53b: `album:cratarr/al-<n>`): opened as an album elsewhere is, by its names, until a record not had has
+    // a page of its own.
     else if (it.kind === 'missing')
-      void elsewhere?.open({ release_group: it.subject.slice('missing:'.length), title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null, bandcamp: it.bandcamp });
+      void elsewhere?.open({ release_group: null, title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null, bandcamp: it.bandcamp });
     else if (it.kind === 'excluded') leftOut = it;
     else if (KNOWN.includes(it.kind)) {
       // Known elsewhere: opened as a missing album is, by its release group where its subject carries one.

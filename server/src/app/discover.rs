@@ -2090,59 +2090,13 @@ async fn look_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>
     Ok(bandcamp_page(&http, &urls, &artists, artist, album).await)
 }
 
-/// A missing album of one of the library's artists (Insights › Discovery › Missing albums, 0.9.3).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct MissingOf {
-    pub release_group: String,
-    pub title: String,
-    pub artist: String,
-    pub year: Option<i32>,
-    pub kind: Option<String>,
-    pub cover: String,
-    /// Its page on Bandcamp where an open of it found one lately (0.9.5: its cover's play button, as Discover's).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bandcamp: Option<String>,
-    /// An open request's mark (0.9.5): wanted, or coming and how far; none without one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request: Option<super::requests::Mark>,
-}
-
-/// Every missing album of the library's artists whose discography Discover keeps (shared by every account), newest
-/// first, as an artist's page counts them; and how many artists that is.
-pub async fn all_missing(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>) -> Result<(Vec<MissingOf>, usize)> {
-    let dir = serve.data_dir.clone().context("Cratarr's data folder is needed")?;
-    let (lib, ud) = (serve.library.clone(), serve.userdata.clone());
-    tokio::task::spawn_blocking(move || -> Result<(Vec<MissingOf>, usize)> {
-        let rows = lib.artist_albums()?;
-        let names: HashMap<String, String> = rows.iter().filter_map(|(_, name, mbid, _, _, _)| Some((mbid.clone().filter(|m| !m.is_empty())?, name.clone()))).collect();
-        let have = have(Path::new(&dir), &cat, rows.into_iter().map(|r| r.1))?;
-        let pages = ud.bandcamp_pages(super::moment::now_secs() - BANDCAMP_FOUND_SECS)?;
-        let mut out = Vec::new();
-        let mut artists = 0;
-        for (mbid, json) in ud.discographies()? {
-            let Some(artist) = names.get(&mbid) else { continue };
-            let Ok(groups) = serde_json::from_str::<Vec<Group>>(&json) else { continue };
-            artists += 1;
-            for g in groups {
-                if have.has(&Candidate { album: g.title.clone(), artist: artist.clone(), release_group: Some(g.id.clone()), ..Candidate::default() }) {
-                    continue;
-                }
-                out.push(MissingOf {
-                    cover: format!("/api/covers/release-group/{}", g.id),
-                    bandcamp: pages.get(&g.id).cloned(),
-                    request: None,
-                    release_group: g.id,
-                    title: g.title,
-                    artist: artist.clone(),
-                    year: g.year,
-                    kind: g.kind,
-                });
-            }
-        }
-        out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.artist.cmp(&b.artist)).then_with(|| a.title.cmp(&b.title)));
-        Ok((out, artists))
-    })
-    .await?
+/// Every record not had of the library's artists (Insights › Discovery › Missing albums, 0.9.3; C53b: one query,
+/// `Catalogue::missing_everywhere`), newest first, as their pages list them; and how many of those artists have a list read.
+pub async fn all_missing(cat: Arc<crate::catalogue::Catalogue>) -> Result<(Vec<Missing>, usize)> {
+    let (rows, artists) = tokio::task::spawn_blocking(move || cat.missing_everywhere()).await??;
+    let mut out: Vec<Missing> = rows.into_iter().map(|(_, q)| Missing::of(q)).collect();
+    out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.artist.cmp(&b.artist)).then_with(|| a.title.cmp(&b.title)));
+    Ok((out, artists))
 }
 
 /// An album left out of Discover (Insights › Discovery › Discovery exclusions, 0.9.3): Not interested (`no`) or

@@ -266,8 +266,8 @@ fn artist_line(albums: u32) -> String {
     }
 }
 
-/// The missing albums the words name (`subject` `missing:<release group>`), the best first, the newest among equals.
-fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: Option<&super::requests::Marks>) -> Vec<Item> {
+/// The missing records the words name, each by its record (`album:cratarr/al-<n>`, C53b), the best first, the newest among equals.
+fn missing_items(list: &[crate::app::discover::Missing], w: &[String], marks: Option<&super::requests::Marks>) -> Vec<Item> {
     let n = list.len();
     let mut out: Vec<Item> = list
         .iter()
@@ -279,7 +279,7 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: 
                 album: None,
                 album_id: None,
                 duration_secs: None,
-                subject: format!("missing:{}", m.release_group),
+                subject: format!("album:{}/{}", crate::source::cratarr::KIND.id, m.record),
                 known: vec![format!("Missing from {}", m.artist)],
                 composers: Vec::new(),
                 id: None,
@@ -289,7 +289,7 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: 
                 track: None,
                 artist: Some(m.artist.clone()),
                 bandcamp: m.bandcamp.clone(),
-                request: marks.and_then(|k| super::requests::mark_of(k, Some(&m.release_group), &m.artist, &m.title)),
+                request: marks.and_then(|k| crate::serve::ids::record_number(&m.record).and_then(|r| k.of_record(r))),
                 score: matched_rank(close, &matched, w, i, n),
                 matched,
             })
@@ -402,9 +402,50 @@ fn known_item(kind: &'static str, id: String, title: &str, artist: &str, year: O
     })
 }
 
-/// What one album is, across the known-elsewhere lists: its release group where one is known, else its names.
+/// One album once outside the library (0076): in the first known-elsewhere kind that has it, the reasons of every kind naming it
+/// gathered there; a record by its id (`album_key`, C53b), so a missing record that is requested too is one row.
+fn once_known(groups: &mut BTreeMap<&'static str, Vec<Item>>) {
+    let mut first: HashMap<String, (&'static str, usize)> = HashMap::new();
+    for kind in KNOWN {
+        let Some(items) = groups.remove(kind) else { continue };
+        let mut kept: Vec<Item> = Vec::new();
+        for item in items {
+            let key = album_key(&item);
+            if let Some((k, at)) = first.get(&key).copied() {
+                let into = if k == kind { kept.get_mut(at) } else { groups.get_mut(k).and_then(|g| g.get_mut(at)) };
+                if let Some(into) = into {
+                    for why in item.known {
+                        if !into.known.contains(&why) {
+                            into.known.push(why);
+                        }
+                    }
+                }
+                continue;
+            }
+            first.insert(key, (kind, kept.len()));
+            kept.push(item);
+        }
+        groups.insert(kind, kept);
+    }
+}
+
+/// A request found, as the known-elsewhere lists show it: by its record where it names one (`album:cratarr/al-<n>`, C53b: a
+/// missing record it asks for is one row), else by its release group, else its id.
+fn requested_item(r: &crate::userdata::Request, w: &[String], at: usize, of: usize) -> Option<Item> {
+    let mut item = known_item("requested", r.release_group.clone().unwrap_or_else(|| r.id.to_string()), &r.album, &r.artist, r.year, r.cover.clone(), "Requested", w, at, of)?;
+    if let Some(record) = r.record {
+        item.subject = format!("album:{}/{}", crate::source::cratarr::KIND.id, crate::serve::ids::record(record));
+    }
+    Some(item)
+}
+
+/// What one album is, across the known-elsewhere lists: its record where the item names one (`album:cratarr/al-<n>`, C53b), else
+/// its release group where one is known, else its names.
 fn album_key(i: &Item) -> String {
     let id = i.subject.split_once(':').map_or("", |(_, id)| id);
+    if i.subject.starts_with("album:") {
+        return id.to_string();
+    }
     let uuid = id.len() == 36 && id.chars().filter(|c| *c == '-').count() == 4;
     if uuid { id.to_string() } else { format!("{}|{}", crate::app::import::key(i.artist.as_deref().unwrap_or_default()), crate::app::import::key(&i.title)) }
 }
@@ -507,8 +548,8 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
 }
 
 /// Every missing album of the library's artists, kept a minute (`MISSING_KEEP`): the same for every account.
-async fn all_missing(app: &super::App, served: &Arc<crate::serve::Serve>) -> anyhow::Result<Arc<Vec<crate::app::discover::MissingOf>>> {
-    type Kept = Option<(Instant, Arc<Vec<crate::app::discover::MissingOf>>)>;
+async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::discover::Missing>>> {
+    type Kept = Option<(Instant, Arc<Vec<crate::app::discover::Missing>>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
     let kept = KEPT.get_or_init(Default::default);
     if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone()
@@ -516,7 +557,7 @@ async fn all_missing(app: &super::App, served: &Arc<crate::serve::Serve>) -> any
     {
         return Ok(m);
     }
-    let m = Arc::new(crate::app::discover::all_missing(served, app.library.catalogue()).await?.0);
+    let m = Arc::new(crate::app::discover::all_missing(app.library.catalogue()).await?.0);
     *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
     Ok(m)
 }
@@ -808,7 +849,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     if let Some(served) = app.served.clone() {
         if wants("missing") {
             let marks = super::requests::marks(app, &served).await.inspect_err(|e| tracing::debug!("search: the requests' marks not read: {e:#}")).ok();
-            groups.insert("missing", missing_items(&all_missing(app, &served).await?, &w, marks.as_deref()));
+            groups.insert("missing", missing_items(&all_missing(app).await?, &w, marks.as_deref()));
         }
         if wants("excluded")
             && let Some(account) = served.current_user()
@@ -839,7 +880,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 let items = open
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, r)| known_item("requested", r.release_group.clone().unwrap_or_else(|| r.id.to_string()), &r.album, &r.artist, r.year, r.cover.clone(), "Requested", &w, i, n))
+                    .filter_map(|(i, r)| requested_item(r, &w, i, n))
                     .collect();
                 groups.insert("requested", items);
             }
@@ -878,29 +919,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             }
         }
     }
-    // One album once outside the library, in the first known-elsewhere kind that has it, its reasons gathered there.
-    let mut first: HashMap<String, (&'static str, usize)> = HashMap::new();
-    for kind in KNOWN {
-        let Some(items) = groups.remove(kind) else { continue };
-        let mut kept: Vec<Item> = Vec::new();
-        for item in items {
-            let key = album_key(&item);
-            if let Some((k, at)) = first.get(&key).copied() {
-                let into = if k == kind { kept.get_mut(at) } else { groups.get_mut(k).and_then(|g| g.get_mut(at)) };
-                if let Some(into) = into {
-                    for why in item.known {
-                        if !into.known.contains(&why) {
-                            into.known.push(why);
-                        }
-                    }
-                }
-                continue;
-            }
-            first.insert(key, (kind, kept.len()));
-            kept.push(item);
-        }
-        groups.insert(kind, kept);
-    }
+    once_known(&mut groups);
     // Each group as asked for; `top` the best of all, weighed by kind.
     let mut top: Vec<Item> = Vec::new();
     for (kind, weight) in KINDS {
@@ -1075,14 +1094,61 @@ mod tests {
         assert!(score("Airbag", &w, 0, 10) > score("Airbag", &w, 5, 10));
     }
 
+    /// A record of an artist's the library has none of, as Discover's list holds it.
+    fn missing(record: i64, title: &str, artist: &str, year: Option<i32>) -> crate::app::discover::Missing {
+        crate::app::discover::Missing {
+            record: crate::serve::ids::record(record),
+            title: title.into(),
+            artist: artist.into(),
+            year,
+            kind: None,
+            cover: "c".into(),
+            release_group: None,
+            bandcamp: None,
+            request: None,
+            was_until: None,
+        }
+    }
+
+    /// C53b: a missing record is listed once, by its record (`album:cratarr/al-<n>`), though it is requested too under other names:
+    /// the reasons of both on the one row.
+    #[test]
+    fn search_lists_a_missing_record_once() {
+        let w = words("somersault");
+        let mut groups: BTreeMap<&'static str, Vec<Item>> = BTreeMap::new();
+        groups.insert("missing", missing_items(&[missing(7, "Somersault", "Jacco Gardner", Some(2023))], &w, None));
+        let asked = crate::userdata::Request {
+            id: 3,
+            user: "bob".into(),
+            album_key: "k".into(),
+            artist_key: "a".into(),
+            release_group: None,
+            album: "Somersault (Deluxe Edition)".into(),
+            artist: "Jacco Gardner & Friends".into(),
+            year: None,
+            cover: None,
+            at: 1,
+            status: "approved".into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+            record: Some(7),
+        };
+        groups.insert("requested", requested_item(&asked, &w, 0, 1).into_iter().collect());
+        once_known(&mut groups);
+        let rows: Vec<&Item> = groups.values().flatten().collect();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!((rows[0].subject.as_str(), rows[0].known.len()), ("album:cratarr/al-7", 2));
+    }
+
     #[test]
     fn albums_not_in_the_library_are_found_by_their_name_or_artist_with_the_artist_apart() {
-        use crate::app::discover::{Excluded, LeftOutArtist, MissingOf};
-        let m = |t: &str, a: &str, y| MissingOf { release_group: format!("rg-{t}"), title: t.into(), artist: a.into(), year: y, kind: None, cover: "c".into(), bandcamp: None, request: None };
-        let list = [m("Somersault", "Jacco Gardner", Some(2023)), m("Hypnophobia", "Jacco Gardner", Some(2015)), m("Moon Safari", "Air", Some(1998))];
+        use crate::app::discover::{Excluded, LeftOutArtist};
+        let list = [missing(1, "Somersault", "Jacco Gardner", Some(2023)), missing(2, "Hypnophobia", "Jacco Gardner", Some(2015)), missing(3, "Moon Safari", "Air", Some(1998))];
         let found = missing_items(&list, &words("gardner"), None);
         assert_eq!(found.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["Somersault", "Hypnophobia"]);
-        assert_eq!((found[0].subject.as_str(), found[0].sub.as_str(), found[0].artist.as_deref()), ("missing:rg-Somersault", "Jacco Gardner · 2023", Some("Jacco Gardner")));
+        assert_eq!((found[0].subject.as_str(), found[0].sub.as_str(), found[0].artist.as_deref()), ("album:cratarr/al-1", "Jacco Gardner · 2023", Some("Jacco Gardner")));
         assert_eq!(found[0].matched, vec![Matched { on: "artist", text: "Jacco Gardner".into(), count: None }]);
         let found = missing_items(&list, &words("hypno gardner"), None);
         assert_eq!((found.len(), found[0].matched[0].on), (1, "name"));

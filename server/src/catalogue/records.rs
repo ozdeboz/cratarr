@@ -893,6 +893,53 @@ impl Catalogue {
         }
     }
 
+    /// Every record not had of the artists the library has albums by (C53b, Discover's missing list), each under the album artist
+    /// it credits first, as their pages list them (`missing_of`'s rule: by the one had rule, a retired record per OQ16, each album
+    /// once); and how many of those artists have a list read anywhere. On one reader, never the writer's lock; the rows in one
+    /// query. Blocking.
+    pub fn missing_everywhere(&self) -> Result<(Vec<(i64, Requested)>, usize)> {
+        let read = |db: &Connection| -> Result<(Vec<(i64, Requested)>, usize)> {
+            // The artists with albums here: one credited first on a live record that holds live tracks.
+            const HERE: &str = "SELECT b.artist FROM record_artists b JOIN records h ON h.id = b.record
+                WHERE b.position = 0 AND h.merged_into IS NULL AND h.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks u WHERE u.record = h.id AND u.retired_at IS NULL)";
+            let rows: Vec<(i64, i64)> = db
+                .prepare_cached(&format!(
+                    "SELECT a.artist, a.record FROM record_artists a JOIN records r ON r.id = a.record
+                     WHERE a.position = 0 AND r.merged_into IS NULL AND (r.kind IS NULL OR r.kind IN ('album', 'ep'))
+                       AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
+                       AND a.artist IN ({HERE})
+                     ORDER BY a.artist, a.record"
+                ))?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            let here: Vec<i64> = db.prepare_cached(&format!("SELECT DISTINCT artist FROM ({HERE})"))?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let read_lists: i64 = if here.is_empty() {
+                0
+            } else {
+                let sql = format!("SELECT count(DISTINCT subject) FROM \"references\" WHERE kind = 'artist' AND read_at IS NOT NULL AND subject IN ({})", quoted_list(here.iter().map(|a| ids::artist(*a))));
+                db.query_row(&sql, [], |r| r.get(0))?
+            };
+            let records: Vec<i64> = rows.iter().map(|(_, record)| *record).collect();
+            let mut names = None;
+            let mut read: std::collections::HashMap<i64, Requested> = read_records_in(db, &records, &mut names)?.into_iter().filter(|q| q.holder.is_none()).map(|q| (q.row.id, q)).collect();
+            let mut by_artist: std::collections::BTreeMap<i64, Vec<Requested>> = std::collections::BTreeMap::new();
+            for (artist, record) in rows {
+                if let Some(q) = read.remove(&record) {
+                    by_artist.entry(artist).or_default().push(q);
+                }
+            }
+            let mut out = Vec::new();
+            for (artist, rows) in by_artist {
+                out.extend(once_each(db, rows)?.into_iter().map(|q| (artist, q)));
+            }
+            Ok((out, read_lists as usize))
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// An artist as their page reads them (C53a): their name, and what each source knows them by, with when their list there was
     /// read last (`read_at`). None: no such artist. On a reader. Blocking.
     pub fn artist_known(&self, artist: i64) -> Result<Option<(String, Vec<(Ref, ReferenceRow)>)>> {
@@ -2129,6 +2176,32 @@ mod tests {
         assert!(cat.set_reference(&ids::record(live), &Ref::new("musicbrainz", "release-group", group), "link").unwrap());
         cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", params![live, artist]).unwrap();
         assert_eq!(cat.missing_of(artist).unwrap().iter().map(|q| q.row.id).collect::<Vec<_>>(), [live], "the live record of its group in its place");
+    }
+
+    /// C53b: Discover's missing list is one query on one reader, never the writer's lock: while a build holds it, the records not
+    /// had of every artist with albums here are read at once; an artist with none here has no row.
+    #[test]
+    fn discover_missing_is_one_query() {
+        let dir = std::env::temp_dir().join(format!("cratarr-missing-everywhere-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let cat = std::sync::Arc::new(Catalogue::open(Some(&dir.join("catalogue.sqlite")), Vec::new()).unwrap());
+        let (here, elsewhere) = (cat.artist_for("Glass Harbour").unwrap(), cat.artist_for("Orbit Lane").unwrap());
+        let had = cat.record_for_tests("Tide Tables", 2);
+        cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", params![had, here]).unwrap();
+        credited(&cat, here, "Undertow", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000163")]);
+        credited(&cat, elsewhere, "Quiet Lanes", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000164")]);
+        let opened = cat.readers_for_tests();
+        let build = cat.writer_for_tests();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let c = cat.clone();
+        std::thread::spawn(move || tx.send(c.missing_everywhere().unwrap()).ok());
+        let (rows, _) = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("answered while a build holds the writer");
+        drop(build);
+        assert_eq!(rows.iter().map(|(artist, q)| (*artist, q.row.title.as_str())).collect::<Vec<_>>(), [(here, "Undertow")]);
+        assert_eq!(cat.readers_for_tests() - opened, 1, "one reader for every artist");
+        drop(cat);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// R14 (run 7): a request's record is kept for good, so it never takes another artist's album by its title alone, though the

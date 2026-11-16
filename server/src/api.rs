@@ -5085,7 +5085,7 @@ async fn musicbrainz_search(ctx: Ctx, Query(q): Query<MbSearch>) -> Result<Json<
 async fn discover_missing(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
-    let (mut albums, artists) = crate::app::discover::all_missing(&serve, app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let (mut albums, artists) = crate::app::discover::all_missing(app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     // None by an artist the account excluded everywhere (decision 0083).
     if let Some(account) = ctx.account() {
         let s = serve.clone();
@@ -5097,7 +5097,7 @@ async fn discover_missing(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError>
     }
     if let Some(marks) = request_marks(&app, &serve).await {
         for a in &mut albums {
-            a.request = crate::app::requests::mark_of(&marks, Some(&a.release_group), &a.artist, &a.title);
+            a.request = crate::serve::ids::record_number(&a.record).and_then(|r| marks.of_record(r));
         }
     }
     Ok(Json(json!({ "albums": albums, "artists": artists })))

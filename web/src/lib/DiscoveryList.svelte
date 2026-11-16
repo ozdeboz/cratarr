@@ -112,7 +112,7 @@
   {:else if !missing.albums.length}
     <p class="note">Nothing missing from the {missing.artists} artists read so far.</p>
   {:else}
-    <p class="note">From the discographies of {missing.artists} of your artists, as MusicBrainz lists them.</p>
+    <p class="note">From the lists of {missing.artists} of your artists at MusicBrainz, Discogs and Bandcamp.</p>
     <ul class="rows">
       {#each shownMissing as a (keyOf(a))}
         <li>
