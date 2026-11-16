@@ -39,6 +39,18 @@ pub const PART: &str = "references";
 /// What 0.16 said on an approved request it could not hand to Soulseek, for want of a release group.
 const SOULSEEK_016: &str = "Not handed over to Soulseek: no release group to judge it by";
 
+/// The mark that 0.16's word on Soulseek is off the requests (R29): a part of the migration report, what came off in it.
+const SOULSEEK_WORD: &str = "requests: 0.16's word on Soulseek";
+
+/// 0.16's word that it could not hand a request to Soulseek taken off every request it is on, once (R29, N12).
+fn clear_soulseek_word(ud: &UserData) -> Result<()> {
+    if ud.migration_report()?.contains_key(SOULSEEK_WORD) {
+        return Ok(());
+    }
+    let cleared = ud.clear_fetched_clause(SOULSEEK_016)?;
+    ud.set_migration_part(SOULSEEK_WORD, &serde_json::json!({ "cleared": cleared }))
+}
+
 /// The requests with no record still (the step's map unreadable, R19: F12), or naming one the catalogue no longer knows (a
 /// catalogue restored from a backup older than the request, fresh track ids: F14), each given the record its release group and
 /// names find, as a Want's is (`requests::record_of_album`). At every start; after the first, none is left. Blocking.
@@ -71,11 +83,15 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
     for (id, record) in cat.request_records_017()? {
         ud.give_request_record(id, record)?;
     }
-    // 0.16 could not hand an approved request with no release group to Soulseek, and said so on it, which the page shows as
-    // not handed over; 0.17's Soulseek takes in every record, judged by its list (C51b): said again, as a hand-over now says
-    // it. At every start, as above: after the first, nothing says it any more.
-    ud.reword_fetched(SOULSEEK_016, super::requests::SOULSEEK_SEARCHES)?;
-    give_again(cat, ud)?;
+    // Two repairs of the requests, each said in the log where it fails, and the start goes on: it is tried again at the next (R29,
+    // N12). 0.16's word that it could not hand a request to Soulseek, untrue since 0.17's Soulseek takes in every record (C51b),
+    // comes off once, under its mark, nothing claimed in its place: whether Soulseek searches for it is Soulseek's own row's to say.
+    if let Err(e) = clear_soulseek_word(ud) {
+        tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step: 0.16's word on Soulseek could not be taken off the requests; tried again at the next start");
+    }
+    if let Err(e) = give_again(cat, ud) {
+        tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step: the requests could not all be given their records again; tried again at the next start");
+    }
     if ran.is_empty() && ud.migration_report()?.contains_key(PART) {
         return Ok(());
     }
@@ -603,17 +619,38 @@ mod tests {
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM records WHERE title = 'Quiet Lanes'"), 1);
     }
 
-    /// C51b: the requests 0.16 could not hand to Soulseek for want of a release group (FX01's 7, 8 and 11) say Soulseek searches
-    /// for them, as 0.17's Soulseek takes them in; the page no longer shows them as not handed over.
+    /// C51b, R29 (N12): 0.16's word that it could not hand a request to Soulseek (FX01's 7, 8, 11 and 12) comes off, once, under its
+    /// mark, and nothing is claimed in its place: the page no longer shows them as not handed over, and Soulseek's own row says what
+    /// it does; a word written since stays.
     #[test]
-    fn a_request_0_16_could_not_hand_to_soulseek_says_soulseek_searches() {
+    fn a_request_0_16_could_not_hand_to_soulseek_loses_that_word() {
         let data = Data::new("soulseek-said");
         let said = |sql: &str| data.sql::<i64>("userdata.sqlite", &format!("SELECT count(*) FROM request WHERE {sql}"));
         assert_eq!(said("fetched LIKE 'Not handed over to Soulseek%'"), 4, "FX01 as 0.16 left it");
         data.run();
-        assert_eq!(said("fetched LIKE 'Not handed over%'"), 0);
-        assert_eq!(said("id IN (7, 8, 11, 12) AND fetched = 'Soulseek searches for it'"), 4);
-        assert_eq!(said("id = 9 AND fetched IS NULL"), 1, "a cancelled one, which said nothing, as it was");
+        assert_eq!(said("fetched LIKE '%Not handed over to Soulseek%'"), 0);
+        assert_eq!(said("id IN (7, 8, 11, 12) AND fetched IS NULL"), 4, "nothing in its place");
+        assert_eq!(said("id = 1 AND fetched = 'Soulseek searches for it'"), 1, "another word, as it was");
+        data.batch("userdata.sqlite", "UPDATE request SET fetched = 'Not handed over to Soulseek: no release group to judge it by' WHERE id = 7");
+        data.run();
+        assert_eq!(said("id = 7 AND fetched IS NOT NULL"), 1, "once");
+    }
+
+    /// R29 (N12): the requests' repairs at a start that fail (0.16's word taken off, a record given again) are said in the log, and
+    /// the start goes on; each is tried again at the next.
+    #[test]
+    fn a_failed_repair_of_requests_does_not_stop_the_start() {
+        let data = Data::new("repair-fails");
+        data.batch("userdata.sqlite", "CREATE TRIGGER broken_word BEFORE UPDATE OF fetched ON request BEGIN SELECT RAISE(ABORT, 'broken by the test'); END;");
+        data.run();
+        data.batch(
+            "userdata.sqlite",
+            "UPDATE request SET record = 99999 WHERE id = 6;
+             CREATE TRIGGER broken_record BEFORE UPDATE OF record ON request WHEN NEW.record <> 99999 BEGIN SELECT RAISE(ABORT, 'broken by the test'); END;",
+        );
+        data.run();
+        assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 6"), 99999, "left for the next start");
+        assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM request WHERE fetched LIKE 'Not handed over to Soulseek%'"), 4, "and the word");
     }
 
     /// C49a: a request with no release group and no record of its names gets a new record not had, credited to its artist; one

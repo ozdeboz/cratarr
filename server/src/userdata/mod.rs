@@ -1696,9 +1696,13 @@ impl UserData {
         Ok(())
     }
 
-    /// What a fetcher said on approved requests (`fetched`), `old` said as `new` wherever it is in it (0.17's step). How many.
-    pub fn reword_fetched(&self, old: &str, new: &str) -> Result<usize> {
-        Ok(self.db().execute("UPDATE request SET fetched = replace(fetched, ?1, ?2) WHERE status = 'approved' AND instr(fetched, ?1) > 0", params![old, new])?)
+    /// A clause a fetcher's word on requests (`fetched`) says no more, taken off wherever it is, with the "; " that joins it to
+    /// another, the word gone where nothing else is left (0.17's step, R29). How many.
+    pub fn clear_fetched_clause(&self, clause: &str) -> Result<usize> {
+        Ok(self.db().execute(
+            "UPDATE request SET fetched = NULLIF(replace(replace(replace(fetched, '; ' || ?1, ''), ?1 || '; ', ''), ?1, ''), '') WHERE instr(fetched, ?1) > 0",
+            [clause],
+        )?)
     }
 
     /// How many requests wait for an answer (Health).
