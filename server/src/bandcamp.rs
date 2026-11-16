@@ -588,8 +588,8 @@ pub struct Named {
 
 /// A release named the way a label's own account names its artists' on Bandcamp, sorted out (S12; C49a's rule too). The
 /// owner's 0.16.2 case: "GROUCH - further (Up Records)" by "Up Records". Where the album's artist is the label's own (the
-/// `label` the caller knows, an account or a publisher; or the name the title closes on in brackets, the label crediting
-/// itself), the artist is the title's before " - ", the title what follows, a closing "(Label)" goes, and the label is that
+/// `label` the caller knows, an account or a publisher; or the name an "Artist - Title" closes on in brackets, the label
+/// crediting itself, R18), the artist is the title's before " - ", the title what follows, a closing "(Label)" goes, and the label is that
 /// account. The label's own release with no artist before a dash (its compilation) keeps the label as its artist. Any other
 /// release is as named: a real artist's title with a dash in it, and a closing "(Remastered)" that names no label, stay.
 /// Pure.
@@ -601,7 +601,12 @@ pub fn label_release(artist: &str, title: &str, label: Option<&str>) -> Named {
     let (artist, title) = (artist.trim(), title.trim());
     // The title's closing brackets: what comes before, and what they say.
     let closing = title.strip_suffix(')').and_then(|t| t.rfind('(').map(|at| (t[..at].trim_end(), &t[at + 1..])));
-    let labels = label.is_some_and(|l| same(l, artist)) || closing.is_some_and(|(_, inside)| same(inside, artist));
+    let dash_at = |t: &str| [" - ", " \u{2013} ", " \u{2014} "].iter().filter_map(|d| t.find(d).map(|at| (at, d.len()))).min();
+    let artist_title = |t: &str| dash_at(t).is_some_and(|(at, len)| !t[..at].trim().is_empty() && !t[at + len..].trim().is_empty());
+    // Brackets naming the account say it is a label's only of an "Artist - Title" (R18, F10): a band's "Live (Orbit Lane)" by
+    // Orbit Lane is its title.
+    let credits_itself = closing.is_some_and(|(before, inside)| same(inside, artist) && artist_title(before));
+    let labels = label.is_some_and(|l| same(l, artist)) || credits_itself;
     if !labels {
         return Named { artist: artist.to_string(), title: title.to_string(), label: None };
     }
@@ -609,8 +614,7 @@ pub fn label_release(artist: &str, title: &str, label: Option<&str>) -> Named {
         Some((before, inside)) if same(inside, artist) && !before.is_empty() => before,
         _ => title,
     };
-    let dash = [" - ", " \u{2013} ", " \u{2014} "].iter().filter_map(|d| title.find(d).map(|at| (at, d.len()))).min();
-    match dash.map(|(at, len)| (title[..at].trim(), title[at + len..].trim())) {
+    match dash_at(title).map(|(at, len)| (title[..at].trim(), title[at + len..].trim())) {
         Some((who, what)) if !who.is_empty() && !what.is_empty() => Named { artist: who.to_string(), title: what.to_string(), label: Some(artist.to_string()) },
         _ => Named { artist: artist.to_string(), title: title.to_string(), label: Some(artist.to_string()) },
     }
@@ -821,7 +825,22 @@ mod tests {
         assert_eq!(named("Up Records", "GROUCH - further (Remastered)", Some("Up Records")), ("GROUCH".into(), "further (Remastered)".into(), up.clone()), "brackets that name no label stay");
         assert_eq!(named("Up Records", "GROUCH - further (Remastered)", None), ("Up Records".into(), "GROUCH - further (Remastered)".into(), None), "nothing says it is a label's");
         assert_eq!(named("Up Records", "Summer Sampler 2019", Some("Up Records")), ("Up Records".into(), "Summer Sampler 2019".into(), up.clone()), "the label's own compilation");
-        assert_eq!(named("Up Records", "Summer Sampler (Up Records)", None), ("Up Records".into(), "Summer Sampler".into(), up), "its compilation, crediting itself");
+        assert_eq!(named("Up Records", "Summer Sampler (Up Records)", Some("Up Records")), ("Up Records".into(), "Summer Sampler".into(), up), "its compilation, the label known");
+    }
+
+    /// R18 (F10): a title closing on its own artist's name in brackets is no label's release unless it is "Artist - Title": a
+    /// band's "Live (Orbit Lane)" stays as named, and so does a compilation crediting itself with no label known; the owner's
+    /// case is still sorted out.
+    #[test]
+    fn a_title_closing_on_its_own_artist_is_no_labels_release() {
+        let named = |artist: &str, title: &str| {
+            let n = label_release(artist, title, None);
+            (n.artist, n.title, n.label)
+        };
+        assert_eq!(named("Orbit Lane", "Live (Orbit Lane)"), ("Orbit Lane".into(), "Live (Orbit Lane)".into(), None));
+        assert_eq!(named("ORBIT LANE", "Live - Encore (Orbit Lane)"), ("Live".into(), "Encore".into(), Some("ORBIT LANE".to_string())), "an \"Artist - Title\" closing on it");
+        assert_eq!(named("Up Records", "Summer Sampler (Up Records)"), ("Up Records".into(), "Summer Sampler (Up Records)".into(), None));
+        assert_eq!(named("Up Records", "GROUCH - further (Up Records)"), ("GROUCH".into(), "further".into(), Some("Up Records".to_string())));
     }
 
     /// S12: a label's page read as an artist's: its albums, the label's artists' as the grid names them, the label's own split
