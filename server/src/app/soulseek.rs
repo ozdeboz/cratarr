@@ -647,9 +647,13 @@ enum Listing {
     Ready(String, Vec<Track>),
     /// No list to judge by: why, in few words.
     None(String),
-    /// A source out of reach: nothing is known of the record yet, so it waits for a round, as with slskd away.
-    Later(String),
+    /// A source out of reach: nothing is known of the record yet, so it waits, as with slskd away: why, and how long (a round;
+    /// a day for Bandcamp's bot check, R23).
+    Later(String, i64),
 }
+
+/// How long an item waits after Bandcamp answered with its bot check (R23, N3): at most once a day, nothing done to get past it.
+const CHECKED_AGAIN_SECS: i64 = 86_400;
 
 /// A record's counting list, read through `read` (`references::tracklist`, kept there once read).
 async fn listing<R, F>(it: &Item, cat: &Arc<crate::catalogue::Catalogue>, read: R) -> Listing
@@ -663,7 +667,8 @@ where
     match super::references::tracklist(cat, it.record.record, read).await {
         Ok(Ok((source, list))) => Listing::Ready(source, list),
         Ok(Err(why)) => Listing::None(why),
-        Err(e) => Listing::Later(format!("{e:#}")),
+        Err(e) if crate::bandcamp::not_read(&e) => Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS),
+        Err(e) => Listing::Later(format!("{e:#}"), ROUND_AT_LEAST),
     }
 }
 
@@ -679,7 +684,7 @@ async fn search(id: &str) {
                 with_item(id, |i| i.tracks = tracks);
             }
             Listing::None(why) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Stuck, Some(why), now() + wait_after(3))),
-            Listing::Later(why) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(why), now() + ROUND_AT_LEAST)),
+            Listing::Later(why, wait) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(why), now() + wait)),
         }
     }
     let slskd = match super::track_fetch::slskd_ready().await {
@@ -1371,6 +1376,18 @@ mod tests {
         assert_eq!(again.items[0].record.record, 42, "written back with it");
     }
 
+    /// R23 (N3): Bandcamp's bot check is Bandcamp out of reach: the item waits, and is tried again a day later at the soonest,
+    /// nothing done to get past the check; it is not Stuck for good.
+    #[tokio::test]
+    async fn bandcamps_bot_check_is_tried_again_later() {
+        let (cat, items, d) = fx01("bot-check");
+        let checked = |_| std::future::ready(Err(anyhow::Error::from(crate::bandcamp::NotRead)));
+        assert_eq!(listing(of_request(&items, 11), &cat, checked).await, Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS));
+        assert!(CHECKED_AGAIN_SECS >= 86_400);
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// FX01's data after 0.17's step, and the Soulseek items its approved requests make, as `read_requests` takes them; the
     /// data folder, to remove once the catalogue is let go.
     fn fx01(name: &str) -> (Arc<crate::catalogue::Catalogue>, Vec<Item>, PathBuf) {
@@ -1424,14 +1441,13 @@ mod tests {
     async fn a_record_with_no_tracklist_says_why() {
         let (cat, items, d) = fx01("no-list");
         let checked = |_| std::future::ready(Err(anyhow::Error::from(crate::bandcamp::NotRead)));
-        assert_eq!(listing(of_request(&items, 11), &cat, checked).await, Listing::None("Bandcamp didn't answer".into()));
         assert_eq!(listing(of_request(&items, 8), &cat, checked).await, Listing::None("No list to judge by".into()), "Quiet Lanes holds no reference");
         // Tide Tables, had, its files and no list agreeing (FX01's counts MusicBrainz's): none counts until one is chosen.
         let tide = of_request(&items, 6);
         cat.set_counting(tide.record.record, None, true).unwrap();
         assert_eq!(listing(tide, &cat, checked).await, Listing::None("No list counts until one is chosen".into()));
         let away = |_| std::future::ready(Err(anyhow::anyhow!("MusicBrainz could not be reached")));
-        assert!(matches!(listing(of_request(&items, 2), &cat, away).await, Listing::Later(_)), "Harbour Lights holds its release group");
+        assert!(matches!(listing(of_request(&items, 2), &cat, away).await, Listing::Later(_, ROUND_AT_LEAST)), "Harbour Lights holds its release group");
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
     }

@@ -211,6 +211,7 @@ where
         None => identity::COUNTING_ORDER.to_vec(),
     };
     let mut why: Vec<String> = Vec::new();
+    let mut off = None;
     for source in sources {
         if let Some(list) = kept_of(source) {
             if row.counting.is_none() {
@@ -225,12 +226,29 @@ where
                 return Ok(Ok((source.to_string(), list)));
             }
             Ok(_) => why.push(format!("{} has no list of it", source_name(source))),
-            Err(e) if crate::bandcamp::not_read(&e) => why.push(format!("{} didn't answer", source_name(source))),
+            // Switched off (R23, N16): passed over for the next list; where none answers, out of reach until it is on again.
+            Err(e) if e.is::<SwitchedOff>() => off = Some(e),
+            // Out of reach, Bandcamp's bot check among them (R23, N3): asked again later, nothing said against the record.
             Err(e) => return Err(e),
         }
     }
+    if let Some(e) = off {
+        return Err(e);
+    }
     Ok(Err(if why.is_empty() { "No list to judge by".to_string() } else { why.join("; ") }))
 }
+
+/// A source switched off: no answer about any record, and none against it (R23).
+#[derive(Debug)]
+pub struct SwitchedOff(pub &'static str);
+
+impl std::fmt::Display for SwitchedOff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} is switched off", self.0)
+    }
+}
+
+impl std::error::Error for SwitchedOff {}
 
 /// A reference's list, read from its source (C51a, `tracklist`'s reader): a MusicBrainz release's own; a release group's, one
 /// of its releases (the first official one with tracks, else the first with tracks, as 0.16's Soulseek chose); a Discogs
@@ -245,6 +263,9 @@ pub async fn read_reference(r: Ref) -> Result<Option<Vec<RefTrack>>> {
             Err(e) => Err(e),
         }
     };
+    if r.source == "musicbrainz" && !super::switches::is_on(super::switches::MUSICBRAINZ) {
+        return Err(SwitchedOff("MusicBrainz").into());
+    }
     match (r.source.as_str(), r.kind.as_str()) {
         ("musicbrainz", "release") => release(r.value).await,
         ("musicbrainz", "release-group") => match release_of_group(&r.value).await? {
@@ -364,17 +385,20 @@ where
 /// How many failed questions a record's list is asked again after, before the record is let go of to Health's item.
 const LIST_TRIES: i64 = 3;
 
-/// Whether an error is MusicBrainz out of reach, not an answer about one release: no answer at all, busy or down (a 5xx), limiting
-/// its rate (429, R15), or switched off.
+/// Whether an error is MusicBrainz out of reach, not an answer about one release: no answer at all, busy or down (a 5xx), any
+/// other refusal than "no such release" (its rate limit's 429, a 401 or 403 from it or a proxy: R15, R23), or switched off.
 fn out_of_reach(e: &anyhow::Error) -> bool {
-    let busy = |s: reqwest::StatusCode| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS;
+    let busy = |s: reqwest::StatusCode| s.is_server_error() || (s.is_client_error() && !no_such_status(s));
     e.downcast_ref::<reqwest::Error>().is_some_and(|r| r.is_connect() || r.is_timeout() || r.status().is_some_and(busy)) || !super::switches::is_on(super::switches::MUSICBRAINZ)
 }
 
-/// Whether MusicBrainz answered that it will not give this release (no such release, an id it refuses: a 4xx other than its
-/// rate limit's 429, which is out of reach).
+/// Whether MusicBrainz answered that it will not give this release: 404, no such release, or 400, an id it refuses (R23, N13).
 fn no_such(e: &anyhow::Error) -> bool {
-    e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status).is_some_and(|s| s.is_client_error() && s != reqwest::StatusCode::TOO_MANY_REQUESTS)
+    e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status).is_some_and(no_such_status)
+}
+
+fn no_such_status(s: reqwest::StatusCode) -> bool {
+    s == reqwest::StatusCode::NOT_FOUND || s == reqwest::StatusCode::BAD_REQUEST
 }
 
 /// How many lists `lists_pass` reads in one pass.
@@ -996,6 +1020,44 @@ mod tests {
         assert!(cat.unreferenced(true).unwrap().is_empty(), "none on Health's item");
     }
 
+    /// R23 (N13): a 401 or 403 from MusicBrainz, or a proxy in front of it, is out of reach, not "no such release": no record waiting
+    /// for a list is let go of, however many passes it lasts; a 404 or a 400 is that answer.
+    #[tokio::test]
+    async fn a_forbidden_answer_lets_no_record_go() {
+        for status in [403, 401] {
+            assert!(!no_such(&asked(serving(status).await).await), "{status}");
+        }
+        assert!(no_such(&asked(serving(404).await).await) && no_such(&asked(serving(400).await).await));
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let mut waits = vec![waiting(&cat, "Signal", "r1"), waiting(&cat, "Lamplight", "r2")];
+        waits.sort();
+        let url = serving(403).await;
+        let read = |_| {
+            let url = url.clone();
+            async move { Err(asked(url).await) }
+        };
+        for _ in 0..=LIST_TRIES {
+            read_lists(&cat, files_none(), read, 10).await.unwrap();
+        }
+        let mut left: Vec<i64> = cat.lists_to_read(10).unwrap().into_iter().map(|(r, _)| r).collect();
+        left.sort();
+        assert_eq!(left, waits);
+    }
+
+    /// R23 (N16): with MusicBrainz switched off, a record not had is judged by its next list in the order; one MusicBrainz alone
+    /// counts is out of reach until it is on again, nothing said against it.
+    #[tokio::test]
+    async fn with_musicbrainz_off_a_record_is_judged_by_its_next_list() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let both = wanted(&cat, "Night Walks", &[("musicbrainz", "release", "r5"), ("discogs", "release", "2000005")]);
+        let off = |r: Ref| {
+            std::future::ready(if r.source == "musicbrainz" { Err(anyhow::Error::from(SwitchedOff("MusicBrainz"))) } else { Ok(Some(list(&[("Lamplight", Some(200_000))]))) })
+        };
+        assert_eq!(tracklist(&cat, both, off).await.unwrap().unwrap().0, "discogs");
+        let alone = wanted(&cat, "Undated", &[("musicbrainz", "release", "r6")]);
+        assert!(tracklist(&cat, alone, off).await.unwrap_err().is::<SwitchedOff>());
+    }
+
     /// R15 (F4): a release MusicBrainz says it will not give (a 404) has no list, at once; its rate limit (a 429) is no such answer.
     #[tokio::test]
     async fn a_musicbrainz_rate_limit_is_no_answer_about_a_release() {
@@ -1095,14 +1157,15 @@ mod tests {
         assert_eq!(cat.record(record).unwrap().unwrap().counting, None);
     }
 
-    /// C51a: Bandcamp's bot check where Bandcamp is the only reference: no list, and why in few words; nothing counts.
+    /// C51a, R23 (N3): Bandcamp's bot check where Bandcamp is the only reference is Bandcamp out of reach, nothing said against the
+    /// record: asked again later; with no reference at all, no list, and why in few words; nothing counts.
     #[tokio::test]
     async fn a_record_with_only_bandcamp_behind_its_check_has_no_list() {
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let record = wanted(&cat, "After Hours", &[("bandcamp", "album", "https://paperlantern.bandcamp.com/album/after-hours")]);
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
         let checked = reader(&[], asked, || Err(anyhow::Error::from(crate::bandcamp::NotRead)));
-        assert_eq!(tracklist(&cat, record, &checked).await.unwrap(), Err("Bandcamp didn't answer".to_string()));
+        assert!(crate::bandcamp::not_read(&tracklist(&cat, record, &checked).await.unwrap_err()));
         let none = wanted(&cat, "Quiet Lanes", &[]);
         assert_eq!(tracklist(&cat, none, &checked).await.unwrap(), Err("No list to judge by".to_string()));
         assert_eq!(cat.record(record).unwrap().unwrap().counting, None);
