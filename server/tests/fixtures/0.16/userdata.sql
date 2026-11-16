@@ -273,7 +273,8 @@ INSERT INTO bandcamp_found (album, at, page) VALUES
   ('glassharbour|partialshore', 1794600000, 'https://glassharbour.bandcamp.com/album/partial-shore'),
   ('noorfield|signal', 1794300000, 'https://noorfield.bandcamp.com/music'),
   ('paperlantern|tapeclubafterhourspaperlantern', 1793950800, 'https://paperlantern.bandcamp.com/album/after-hours'),
-  ('ABCDEF00-0000-4000-8000-000000000130', 1794800100, 'https://orbitlane.bandcamp.com/album/undertow');
+  ('ABCDEF00-0000-4000-8000-000000000130', 1794800100, 'https://orbitlane.bandcamp.com/album/undertow'),
+  ('00000000-0000-4000-8000-000000000116', 1793950900, 'https://paperlantern.bandcamp.com/album/tape-club-long-player-paper-lantern');
 
 -- Releases the works' pass read (`app::works::Stored`), with MusicBrainz's verified Discogs links: a release and its master,
 -- a release alone, one it links to nothing on Discogs, one no record is, one whose JSON cannot be read, and one MusicBrainz
@@ -312,7 +313,10 @@ INSERT INTO request (id, user, album_key, artist_key, release_group, album, arti
   (8, 'bob', 'orbitlane|quietlanes', 'orbit lane', NULL, 'Quiet Lanes', 'Orbit Lane', 2017, 'https://example.org/covers/quiet-lanes.jpg', 1793950500, 'approved', NULL, 'ann', 1793960000, 'Not handed over to Soulseek: no release group to judge it by'),
   (9, 'ann', 'tapeclub|nowherefast', 'tape club', NULL, 'Nowhere Fast', 'Tape Club', NULL, NULL, 1793950600, 'cancelled', NULL, NULL, NULL, NULL),
   (10, 'bob', '00000000-0000-4000-8000-000000000116', 'tape club', '00000000-0000-4000-8000-000000000116', 'Long Player', 'Tape Club', 2015, '/api/covers/release-group/00000000-0000-4000-8000-000000000116', 1793950700, 'approved', NULL, 'ann', 1793950700, 'Soulseek searches for it'),
-  (11, 'bob', 'paperlantern|tapeclubafterhourspaperlantern', 'paper lantern', NULL, 'Tape Club - After Hours (Paper Lantern)', 'Paper Lantern', 2020, NULL, 1793950800, 'approved', NULL, 'ann', 1793950800, 'Not handed over to Soulseek: no release group to judge it by');
+  (11, 'bob', 'paperlantern|tapeclubafterhourspaperlantern', 'paper lantern', NULL, 'Tape Club - After Hours (Paper Lantern)', 'Paper Lantern', 2020, NULL, 1793950800, 'approved', NULL, 'ann', 1793950800, 'Not handed over to Soulseek: no release group to judge it by'),
+  -- The owner's GROUCH request's shape (made up): asked by Bandcamp's names, no group; its page found at the same minute by the
+  -- release group its card knew, which a discography lists (`bandcamp_found` by that group, below).
+  (12, 'ann', 'paperlantern|tapeclublongplayerpaperlantern', 'paper lantern', NULL, 'Tape Club - Long Player (Paper Lantern)', 'Paper Lantern', 2015, NULL, 1793950900, 'approved', NULL, 'ann', 1793950900, 'Not handed over to Soulseek: no release group to judge it by');
 
 -- 0.16's first start, done: what says it is over is this part of the report.
 INSERT INTO migration_report (part, at, report) VALUES

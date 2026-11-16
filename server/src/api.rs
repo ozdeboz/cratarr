@@ -5013,6 +5013,9 @@ struct WantAlbum {
     year: Option<i32>,
     #[serde(default)]
     cover: Option<String>,
+    /// Its Bandcamp album page, where the card knows it (R22, N2): a record Bandcamp alone lists is judged by Bandcamp's list.
+    #[serde(default)]
+    page: Option<String>,
 }
 
 /// Any album wanted (0.9.3: an artist's missing album), as Discover's Want: a request, handed to Lidarr where the
@@ -5022,7 +5025,7 @@ async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_jso
     let (serve, account) = discoverer(&ctx)?;
     let r = match b.record {
         Some(record) => crate::app::requests::ask_record(&app, &serve, &account, record).await,
-        None => crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover).await,
+        None => crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover, b.page).await,
     }
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "request": r })))

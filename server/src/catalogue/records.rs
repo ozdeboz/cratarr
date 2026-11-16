@@ -1880,7 +1880,9 @@ impl Carrying<'_> {
     ///     (S12, `bandcamp::label_release`), and where it has no release group, the Bandcamp page `bandcamp_found` kept by its
     ///     names: a page the pages part found no record for, as the record is made only here.
     fn requests(&mut self, c: &Carry) -> Result<()> {
-        let pages: std::collections::HashMap<&str, &str> = c.pages.iter().map(|p| (p.key.as_str(), p.page.as_str())).collect();
+        // By key, a release group's lower-cased as references keep it.
+        let lower = |key: &str| if is_mbid(key) { key.to_ascii_lowercase() } else { key.to_string() };
+        let pages: std::collections::HashMap<String, &str> = c.pages.iter().map(|p| (lower(&p.key), p.page.as_str())).collect();
         let mut given: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         let (mut made, mut paged) = (0, 0);
         let (mut made_for, mut found_by_names) = (Vec::new(), Vec::new());
@@ -1888,9 +1890,22 @@ impl Carrying<'_> {
             let named = crate::bandcamp::label_release(&r.artist, &r.album, None);
             // Its page as `bandcamp_found` kept it, by its names or by its release group (R19, F13): where its record is made only
             // here, the pages part found none to give it to. Counted where it is put now; one another record holds is reported so.
-            let page = pages.get(r.key.as_str()).map(|p| p.to_string());
+            let page = pages.get(&lower(&r.key)).or_else(|| r.group.as_deref().and_then(|g| pages.get(&lower(g)))).map(|p| p.to_string());
             let w = Wanted { group: r.group.clone(), artist: named.artist, title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
-            let RequestRecord { record, made: new, by_names, paged: page } = request_record_in(self.tx, &w, r.at)?;
+            let RequestRecord { record, made: new, by_names, paged: mut page } = request_record_in(self.tx, &w, r.at)?;
+            // Else by a release group its record holds (R22, the owner's GROUCH request: 0.16 found its page by the group its card
+            // knew, and it was asked for by Bandcamp's names).
+            let mut put = w.page.clone();
+            if put.is_none() {
+                let groups: Vec<String> = refs_in(self.tx, &ids::record(record))?.into_iter().filter(|(s, k, _)| s == "musicbrainz" && k == "release-group").map(|(.., v)| v).collect();
+                if let Some(found) = groups.iter().find_map(|g| pages.get(g)) {
+                    let (bc, subject) = (Ref::new("bandcamp", "album", found), ids::record(record));
+                    if !subjects_in(self.tx, &bc)?.contains(&subject) {
+                        page = Some(put_reference(self.tx, &subject, &bc, "search", r.at, false)?.kept());
+                        put = Some(found.to_string());
+                    }
+                }
+            }
             made += u64::from(new);
             if by_names {
                 let (artist, title): (String, String) = self.tx.query_row("SELECT COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id = ?1", [record], |x| Ok((x.get(0)?, x.get(1)?)))?;
@@ -1898,7 +1913,7 @@ impl Carrying<'_> {
             }
             paged += u64::from(page == Some(true));
             if page == Some(false) {
-                self.refused.push(format!("{} bandcamp:album:{}", ids::record(record), w.page.as_deref().unwrap_or_default()));
+                self.refused.push(format!("{} bandcamp:album:{}", ids::record(record), put.as_deref().unwrap_or_default()));
             }
             if new {
                 made_for.push(format!("{} {} - {}", r.id, w.artist, w.title));

@@ -89,7 +89,7 @@ pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> R
     if let Some(r) = open_request(serve, account, &s.key)? {
         return Ok(r);
     }
-    let record = record_of_album_in(serve, s.release_group.clone(), &s.artist, &s.album, s.year, s.cover.clone()).await?;
+    let record = record_of_album_in(serve, s.release_group.clone(), &s.artist, &s.album, s.year, s.cover.clone(), s.bandcamp.clone()).await?;
     asked_record(app, serve, account, record, Some(s.key), s.release_group).await
 }
 
@@ -97,7 +97,7 @@ pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> R
 /// Discover keys albums (its release group, else its artist's and its name's), so its suggestion leaves Discover too; its
 /// record found or made first (`record_of_album`, C49a), whose names the request shows.
 #[allow(clippy::too_many_arguments)]
-pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<Request> {
+pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<Request> {
     if !rights(serve).request {
         bail!("Requesting albums is not on for this account");
     }
@@ -106,7 +106,7 @@ pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_g
     if let Some(r) = open_request(serve, account, &key)? {
         return Ok(r);
     }
-    let record = record_of_album_in(serve, release_group.clone(), artist, album, year, cover).await?;
+    let record = record_of_album_in(serve, release_group.clone(), artist, album, year, cover, page).await?;
     asked_record(app, serve, account, record, Some(key), release_group).await
 }
 
@@ -159,14 +159,46 @@ fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Reques
 /// "Title", the label credited), then the record of its release group, else a record had of its names, else a new record not
 /// had (`Catalogue::record_for_request`). Blocking.
 pub fn record_of_album(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<i64> {
+    record_of_album_paged(cat, release_group, artist, album, year, cover, None)
+}
+
+/// `record_of_album`, its Bandcamp album page given (R22): kept on the record as a reference (`search`), so a record only
+/// Bandcamp lists is judged by Bandcamp's list.
+fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
     let named = crate::bandcamp::label_release(artist, album, None);
-    let wanted = crate::catalogue::records::Wanted { group: release_group.map(str::to_string), artist: named.artist, title: named.title, label: named.label, year, cover, page: None };
+    let wanted = crate::catalogue::records::Wanted { group: release_group.map(str::to_string), artist: named.artist, title: named.title, label: named.label, year, cover, page };
     cat.record_for_request(&wanted)
 }
 
-async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<i64> {
-    let (cat, artist, album) = (serve.catalogue().clone(), artist.to_string(), album.to_string());
-    tokio::task::spawn_blocking(move || record_of_album(&cat, release_group.as_deref(), &artist, &album, year, cover)).await?
+/// `record_of_album` for a Want (R22, N2): its Bandcamp album page the card's, else the one Discover found for it by its release
+/// group or by its names (`bandcamp_found`, as a page is found when an album is opened), else, once its record is known, the one
+/// found by a release group the record holds (the owner's GROUCH request: 0.16 found its page by the group its card knew, and it
+/// was asked for by Bandcamp's names).
+#[allow(clippy::too_many_arguments)]
+async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
+    let (cat, ud, artist, album) = (serve.catalogue().clone(), serve.userdata.clone(), artist.to_string(), album.to_string());
+    tokio::task::spawn_blocking(move || -> Result<i64> {
+        let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
+        let group = release_group.as_deref().filter(|g| !g.is_empty());
+        let page = match page.filter(|p| !p.is_empty()) {
+            Some(page) => Some(page),
+            None => match group.map(found).transpose()?.flatten() {
+                Some(page) => Some(page),
+                None => found(&requested(&artist, &album))?,
+            },
+        };
+        let record = record_of_album_paged(&cat, group, &artist, &album, year, cover, page.clone())?;
+        if page.is_none() {
+            let refs = cat.references_of(&crate::serve::ids::record(record))?;
+            if !refs.iter().any(|(r, _)| r.source == "bandcamp" && r.kind == "album")
+                && let Some(page) = refs.iter().filter(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").find_map(|(r, _)| found(&r.value).transpose()).transpose()?
+            {
+                cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new("bandcamp", "album", &page), "search")?;
+            }
+        }
+        Ok(record)
+    })
+    .await?
 }
 
 /// What a request asks for: a record, by its key and its artist's, and what to show of it.
@@ -816,6 +848,24 @@ mod tests {
         let lidarr = Wanting::default();
         hand_to(Some(&lidarr), false, &serve, &r).await;
         assert_eq!(lidarr.0.lock().unwrap()[0].0.as_deref(), Some(second));
+    }
+
+    /// R22 (N2): a Want of a record Bandcamp alone lists, made since 0.17, keeps its page: the one the card sends, else the one
+    /// Discover found for it by its names, else by the release group its record holds; so Soulseek judges it by Bandcamp's list.
+    #[tokio::test]
+    async fn a_bandcamp_want_made_now_is_judged_by_its_page() {
+        let serve = served();
+        let page_of = |record: i64| serve.catalogue().references_of(&crate::serve::ids::record(record)).unwrap().into_iter().find(|(r, _)| r.source == "bandcamp").map(|(r, _)| r.value);
+        let sent = record_of_album_in(&serve, None, "Paper Lantern", "Tape Club - Neon (Paper Lantern)", None, None, Some("https://paperlantern.bandcamp.com/album/neon".into())).await.unwrap();
+        assert_eq!(page_of(sent).as_deref(), Some("https://paperlantern.bandcamp.com/album/neon"), "the card's");
+        serve.userdata.set_bandcamp_found(&requested("Orbit Lane", "Undertow"), 1, Some("https://orbitlane.bandcamp.com/album/undertow")).unwrap();
+        let by_names = record_of_album_in(&serve, None, "Orbit Lane", "Undertow", None, None, None).await.unwrap();
+        assert_eq!(page_of(by_names).as_deref(), Some("https://orbitlane.bandcamp.com/album/undertow"), "found by its names");
+        let group = "00000000-0000-4000-8000-000000000210";
+        let listed = record_of_album(serve.catalogue(), Some(group), "Kite Theory", "Night Walks", None, None).unwrap();
+        serve.userdata.set_bandcamp_found(group, 1, Some("https://kitetheory.bandcamp.com/album/night-walks")).unwrap();
+        let asked = record_of_album_in(&serve, None, "Kite Theory", "Night Walks", None, None, None).await.unwrap();
+        assert_eq!((asked, page_of(asked).as_deref()), (listed, Some("https://kitetheory.bandcamp.com/album/night-walks")), "by the group its record holds");
     }
 
     /// A server of the tests' own, in memory, its catalogue attached.

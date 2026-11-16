@@ -580,14 +580,26 @@ mod tests {
         assert!(listed(report, "bandcamp_found").1.is_empty(), "{report}");
     }
 
+    /// R22 (the owner's GROUCH request, FX01's 12): a request asked by Bandcamp's names, whose page 0.16 found by the release group
+    /// its card knew, finds the discography's record of its names, and the page kept by that group is on it.
+    #[test]
+    fn a_requests_page_keyed_by_its_records_group_is_kept() {
+        let data = Data::new("request-group-page");
+        data.run();
+        let (record, group_record) = (data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 12"), data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 10"));
+        assert_eq!(record, group_record, "the discography's record, by its names");
+        let page = data.sql::<String>("catalogue.sqlite", &format!("SELECT value FROM \"references\" WHERE subject = 'al-{record}' AND source = 'bandcamp'"));
+        assert_eq!(page, "https://paperlantern.bandcamp.com/album/tape-club-long-player-paper-lantern");
+    }
+
     /// R14 (F3): two requests of one album with no release group share one record not had: the second finds what the first made.
     #[test]
     fn two_requests_of_one_album_without_a_group_share_a_record() {
         let data = Data::new("requests-share");
-        data.batch("userdata.sqlite", "INSERT INTO request (id, user, album_key, artist_key, album, artist, year, at, status) VALUES (12, 'ann', 'orbitlane|quietlanes', 'orbit lane', 'Quiet Lanes', 'Orbit Lane', 2017, 1793950900, 'approved')");
+        data.batch("userdata.sqlite", "INSERT INTO request (id, user, album_key, artist_key, album, artist, year, at, status) VALUES (14, 'ann', 'orbitlane|quietlanes', 'orbit lane', 'Quiet Lanes', 'Orbit Lane', 2017, 1793950900, 'approved')");
         data.run();
         let record = |id: i64| data.sql::<i64>("userdata.sqlite", &format!("SELECT record FROM request WHERE id = {id}"));
-        assert_eq!(record(12), record(8));
+        assert_eq!(record(14), record(8));
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM records WHERE title = 'Quiet Lanes'"), 1);
     }
 
@@ -597,10 +609,10 @@ mod tests {
     fn a_request_0_16_could_not_hand_to_soulseek_says_soulseek_searches() {
         let data = Data::new("soulseek-said");
         let said = |sql: &str| data.sql::<i64>("userdata.sqlite", &format!("SELECT count(*) FROM request WHERE {sql}"));
-        assert_eq!(said("fetched LIKE 'Not handed over to Soulseek%'"), 3, "FX01 as 0.16 left it");
+        assert_eq!(said("fetched LIKE 'Not handed over to Soulseek%'"), 4, "FX01 as 0.16 left it");
         data.run();
         assert_eq!(said("fetched LIKE 'Not handed over%'"), 0);
-        assert_eq!(said("id IN (7, 8, 11) AND fetched = 'Soulseek searches for it'"), 3);
+        assert_eq!(said("id IN (7, 8, 11, 12) AND fetched = 'Soulseek searches for it'"), 4);
         assert_eq!(said("id = 9 AND fetched IS NULL"), 1, "a cancelled one, which said nothing, as it was");
     }
 
@@ -619,7 +631,7 @@ mod tests {
         let hours = cat.record(record(11)).unwrap().unwrap();
         assert_eq!((hours.title.as_str(), hours.artist.as_str(), hours.had), ("After Hours", "Tape Club", false), "named by its title");
         assert_eq!(cat.record_artists(hours.id).unwrap(), [cat.artist_of("Tape Club").unwrap().unwrap()]);
-        assert_eq!(cat.label_records(cat.label_for("Paper Lantern").unwrap()).unwrap(), [(hours.id, String::new())], "the account its label");
+        assert!(cat.label_records(cat.label_for("Paper Lantern").unwrap()).unwrap().contains(&(hours.id, String::new())), "the account its label (and Long Player's, FX01's 12)");
         assert!(refs(&cat, hours.id).contains(&by("bandcamp", "album", "https://paperlantern.bandcamp.com/album/after-hours", "search", false)), "{:?}", refs(&cat, hours.id));
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!((report["records_made_for_requests"].as_u64(), report["pages_for_requests"].as_u64()), (Some(3), Some(1)), "Quiet Lanes, Nowhere Fast, After Hours: {report}");
