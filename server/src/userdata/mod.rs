@@ -1682,6 +1682,11 @@ impl UserData {
         Ok(self.db().execute("UPDATE request SET record = ?2 WHERE id = ?1 AND record IS NULL", params![id, record])? > 0)
     }
 
+    /// What a fetcher said on approved requests (`fetched`), `old` said as `new` wherever it is in it (0.17's step). How many.
+    pub fn reword_fetched(&self, old: &str, new: &str) -> Result<usize> {
+        Ok(self.db().execute("UPDATE request SET fetched = replace(fetched, ?1, ?2) WHERE status = 'approved' AND instr(fetched, ?1) > 0", params![old, new])?)
+    }
+
     /// How many requests wait for an answer (Health).
     pub fn requests_waiting(&self) -> Result<usize> {
         Ok(self.db().query_row("SELECT count(*) FROM request WHERE status = 'pending'", [], |r| r.get::<_, i64>(0))? as usize)

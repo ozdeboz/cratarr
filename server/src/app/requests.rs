@@ -213,6 +213,9 @@ async fn connected(lidarr: bool) -> Vec<&'static str> {
     out
 }
 
+/// What a request handed to Soulseek says (`hand`).
+pub const SOULSEEK_SEARCHES: &str = "Soulseek searches for it";
+
 /// An approved request handed to every fetcher connected (decision 0099's amendment), as its record is named and referenced
 /// (`shown`, C51b): Lidarr told to want it; Soulseek woken to take it in (it reads the approved Requests itself, each judged
 /// by its record's list; one with none says so on its row). What each said (or why it could not), kept on the request. A
@@ -251,7 +254,7 @@ async fn hand_to(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r:
     }
     if soulseek {
         super::soulseek::wake();
-        said.push("Soulseek searches for it".to_string());
+        said.push(SOULSEEK_SEARCHES.to_string());
     }
     let said = if said.is_empty() { "Not handed over: no fetcher is connected, or they are switched off".to_string() } else { said.join("; ") };
     if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {

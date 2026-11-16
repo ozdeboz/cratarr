@@ -36,6 +36,9 @@ use crate::userdata::UserData;
 /// The migration report's part, as `/api/admin/migration` lists it.
 pub const PART: &str = "references";
 
+/// What 0.16 said on an approved request it could not hand to Soulseek, for want of a release group.
+const SOULSEEK_016: &str = "Not handed over to Soulseek: no release group to judge it by";
+
 /// The step at a start: done before, or done now. Blocking.
 pub fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
     run_with(cat, ud, &|_| Ok(()))
@@ -50,6 +53,10 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
     for (id, record) in cat.request_records_017()? {
         ud.give_request_record(id, record)?;
     }
+    // 0.16 could not hand an approved request with no release group to Soulseek, and said so on it, which the page shows as
+    // not handed over; 0.17's Soulseek takes in every record, judged by its list (C51b): said again, as a hand-over now says
+    // it. At every start, as above: after the first, nothing says it any more.
+    ud.reword_fetched(SOULSEEK_016, super::requests::SOULSEEK_SEARCHES)?;
     if ran.is_empty() && ud.migration_report()?.contains_key(PART) {
         return Ok(());
     }
@@ -502,6 +509,19 @@ mod tests {
         data.batch("catalogue.sqlite", "DELETE FROM meta WHERE key GLOB '017:*'");
         data.run();
         assert_eq!(data.rows_of("userdata.sqlite", "SELECT id, record FROM request ORDER BY id"), given, "the step again: each as it was");
+    }
+
+    /// C51b: the requests 0.16 could not hand to Soulseek for want of a release group (FX01's 7, 8 and 11) say Soulseek searches
+    /// for them, as 0.17's Soulseek takes them in; the page no longer shows them as not handed over.
+    #[test]
+    fn a_request_0_16_could_not_hand_to_soulseek_says_soulseek_searches() {
+        let data = Data::new("soulseek-said");
+        let said = |sql: &str| data.sql::<i64>("userdata.sqlite", &format!("SELECT count(*) FROM request WHERE {sql}"));
+        assert_eq!(said("fetched LIKE 'Not handed over to Soulseek%'"), 3, "FX01 as 0.16 left it");
+        data.run();
+        assert_eq!(said("fetched LIKE 'Not handed over%'"), 0);
+        assert_eq!(said("id IN (7, 8, 11) AND fetched = 'Soulseek searches for it'"), 3);
+        assert_eq!(said("id = 9 AND fetched IS NULL"), 1, "a cancelled one, which said nothing, as it was");
     }
 
     /// C49a: a request with no release group and no record of its names gets a new record not had, credited to its artist; one
