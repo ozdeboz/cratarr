@@ -500,9 +500,10 @@ pub fn requested(artist: &str, album: &str) -> String {
 
 /// Who asked for each approved request, by its record (C49b, merges followed) and by the record that holds its files where that
 /// is another (R13: an album that came as a record of its own): an Incoming record goes into its requester's own music by
-/// default, and is theirs to add or delete (0101 point 2). The newest asker of a record. Kept `MARKS_KEEP`, as the marks are
-/// (R30, N15): the Albums page asks at every open, and a read works the had rule out for every approved request's record.
-pub fn requesters(serve: &Serve) -> Arc<HashMap<i64, String>> {
+/// default, and is theirs to add or delete (0101 point 2), where it came after they asked (R32, `Requester::of_copy`). The newest
+/// asker of a record. Kept `MARKS_KEEP`, as the marks are (R30, N15): the Albums page asks at every open, and a read works the had
+/// rule out for every approved request's record.
+pub fn requesters(serve: &Serve) -> Arc<HashMap<i64, Requester>> {
     let kept = serve.requesters_kept().0.clone();
     if let Some((at, who)) = kept
         && at.elapsed() < MARKS_KEEP
@@ -516,16 +517,33 @@ pub fn requesters(serve: &Serve) -> Arc<HashMap<i64, String>> {
 
 /// Who asked for what, as last read, and when (`requesters`): on the server, so each server of the tests has its own.
 #[derive(Debug, Default)]
-pub struct KeptRequesters(Option<(Instant, Arc<HashMap<i64, String>>)>);
+pub struct KeptRequesters(Option<(Instant, Arc<HashMap<i64, Requester>>)>);
+
+/// Who asked for a record, and when (`requesters`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Requester {
+    pub user: String,
+    /// When they asked, epoch seconds.
+    pub at: i64,
+}
+
+impl Requester {
+    /// Whether a copy that came at `came` is theirs to keep into their own music or to delete: it came after they asked (R32,
+    /// N14, the owner's). One the library held already (an upgrade the administrator's Lidarr fetched, an album that was there
+    /// when they asked), or whose coming is not known, stays an administrator's.
+    pub fn of_copy(&self, came: Option<i64>) -> bool {
+        came.is_some_and(|came| came >= self.at)
+    }
+}
 
 /// `requesters`, read now.
-fn requesters_now(serve: &Serve) -> HashMap<i64, String> {
+fn requesters_now(serve: &Serve) -> HashMap<i64, Requester> {
     let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
     let of = records_of(serve.catalogue(), &approved).unwrap_or_else(|e| {
         tracing::debug!("the requests' records not read: {e:#}");
         vec![None; approved.len()]
     });
-    approved.into_iter().zip(of).rev().filter_map(|(r, o)| Some((o?, r.user))).flat_map(|(o, user)| o.holder.into_iter().chain([o.record]).map(move |id| (id, user.clone()))).collect()
+    approved.into_iter().zip(of).rev().filter_map(|(r, o)| Some((o?, Requester { user: r.user, at: r.at }))).flat_map(|(o, who)| o.holder.into_iter().chain([o.record]).map(move |id| (id, who.clone()))).collect()
 }
 
 /// An album's mark where a list has no record id for it: by its release group, else by its artist's and its name's key (a
@@ -798,7 +816,7 @@ mod tests {
         let mut r = asked_for(asked);
         r.id = serve.userdata.add_request(&r).unwrap();
         let who = requesters(&serve);
-        assert_eq!((who.get(&asked).map(String::as_str), who.get(&arrived).map(String::as_str)), (Some("bob"), Some("bob")));
+        assert_eq!((who.get(&asked).map(|r| r.user.as_str()), who.get(&arrived).map(|r| r.user.as_str())), (Some("bob"), Some("bob")));
     }
 
     /// R16 (F5): who asked for what is read on one reader, never under the writer's lock: while a build holds it, the Albums

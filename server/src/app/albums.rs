@@ -155,8 +155,7 @@ impl App {
             Some(s) => tokio::task::spawn_blocking(move || super::requests::requesters(&s)).await.unwrap_or_default(),
             None => Default::default(),
         };
-        // By the record each album is (C49b): its id names it.
-        let requester = |al: &source::Album| crate::serve::ids::record_number(&al.id).and_then(|record| asked.get(&record));
+        let requester = |al: &source::Album| requester_of(&asked, al);
         let mut sources: Vec<AlbumsSourceView> = ids
             .into_iter()
             .map(|id| {
@@ -321,6 +320,12 @@ fn job_on<'a>(jobs: &'a [JobView], source: &str, a: &source::Album) -> Option<&'
         None => j.from == a.library,
     };
     jobs.iter().find(|j| j.source == source && j.album_id == a.id && j.at_work() && here(j))
+}
+
+/// Who asked for the record an album is (its id names it, C49b), where this copy of it is theirs: it came after they asked (R32,
+/// N14). An Incoming copy that was there before, an upgrade another fetched, is no requester's.
+fn requester_of<'a>(asked: &'a HashMap<i64, super::requests::Requester>, al: &source::Album) -> Option<&'a String> {
+    crate::serve::ids::record_number(&al.id).and_then(|record| asked.get(&record)).filter(|r| r.of_copy(al.added)).map(|r| &r.user)
 }
 
 /// Whether the viewer may delete this copy: the view's `deletable` goes by id, so it holds while any copy of the record may
@@ -672,6 +677,18 @@ mod tests {
         assert!(kept.deletable && !kept.keepable && kept.keep_to.is_none() && kept.lacks.is_empty() && kept.job.is_none());
         assert!(!waiting.deletable && waiting.keepable);
         assert_eq!((waiting.keep_to.as_deref(), waiting.lacks.as_slice(), waiting.job, waiting.bits, waiting.added), (Some("music"), &["cover".to_string()][..], Some(7), Some(24), Some(50)));
+    }
+
+    /// R32 (N14): a requester has a say (Keep into their own music, Delete) over an Incoming copy of their request's record that
+    /// came after they asked; one that was there before (an upgrade the administrator's Lidarr fetched) stays an administrator's.
+    #[test]
+    fn a_requester_has_no_say_over_an_incoming_copy_from_before_the_request() {
+        let asked = HashMap::from([(1, super::super::requests::Requester { user: "bob".into(), at: 1_000 })]);
+        let came = |added: Option<i64>| source::Album { added, ..listed("al-1", 2, "incoming", "FLAC") };
+        assert_eq!(requester_of(&asked, &came(Some(2_000))).map(String::as_str), Some("bob"), "came after he asked");
+        assert_eq!(requester_of(&asked, &came(Some(500))), None, "there before he asked");
+        assert_eq!(requester_of(&asked, &came(None)), None, "when it came not known");
+        assert_eq!(requester_of(&asked, &source::Album { added: Some(2_000), ..listed("al-2", 2, "incoming", "FLAC") }), None, "another record");
     }
 
     /// A requester may delete their Incoming copy, so the record's id is in the view's `deletable`: the right that counts is
