@@ -10,8 +10,8 @@
 //!   never because its name looks right. A list without its tracks' lengths gives way to the next in the order that has them;
 //!   where no list with lengths finds a folder in any rung of a search, the same answers are judged by it, by titles and count,
 //!   each such folder said to have no lengths to check beside its tick (R33, the owner's: `untimed_folders`), and gated by
-//!   that list. A record with no list to judge by is Stuck, saying why; so is one that even its list without lengths finds no
-//!   folder for, by titles, in a search every rung of which answered.
+//!   that list. A record with no list to judge by is Stuck, saying why: Stuck is for what a search cannot change (no list at
+//!   all, none readable). Nothing found, by either list, is a search's answer: searched again later, as ever.
 //! - **Searched on a ladder** (`ladder`): the record and its year, its title stripped of what is in brackets, the main
 //!   artist only, then the artist with a wildcard for the artists Soulseek's server filters; none twice; one search at a
 //!   time, paced. Not found, it is searched again later (`wait_after`): at once after none or one miss, four hours after
@@ -847,16 +847,12 @@ where
             (i.folders, i.state, i.misses, i.why) = (found.into_iter().take(SHOWN).collect(), State::Found, 0, None);
         });
     }
-    // Not found. Where even its list without lengths finds nothing by titles, every rung having answered, it is Stuck, saying so
-    // (R33, the owner's: the fallback was the last way): Search now, or another list, takes it up again. Else searched again later.
-    let stuck = !it.untimed.is_empty() && why.is_none();
+    // Not found: a search's answer, not a dead end, as Soulseek's users change by the hour (the coordinator, run 7b): searched
+    // again later, by either list; its why says which could not find it.
+    let missed = if it.untimed.is_empty() { "No folder holds every track of its release" } else { "No folder holds every track, even by titles" };
     with_item(id, |i| {
         i.misses += 1;
-        (i.state, i.why, i.due) = if stuck {
-            (State::Stuck, Some("No folder holds every track, even by titles".into()), now() + wait_after(3))
-        } else {
-            (State::Waiting, why.or_else(|| Some("No folder holds every track of its release".into())), now() + wait_after(i.misses))
-        };
+        (i.state, i.why, i.due) = (State::Waiting, why.or_else(|| Some(missed.into())), now() + wait_after(i.misses));
     });
 }
 
@@ -1593,8 +1589,8 @@ mod tests {
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2, "found at the second rung");
     }
 
-    /// R33: where even the titles find no folder (a track none holds; another count of tracks), the item is Stuck, saying so; with
-    /// a list with lengths alone, a miss is searched again later, as ever.
+    /// R33: where even the titles find no folder (a track none holds; another count of tracks), the item says so, and is searched
+    /// again later, as a miss by the list with lengths is: nothing found is no dead end.
     #[tokio::test]
     async fn with_no_list_matching_even_by_titles_the_item_says_so() {
         for (id, list) in [("ss-r33-none", vec![no_length(1, "One"), no_length(2, "Two"), no_length(3, "Three")]), ("ss-r33-count", vec![no_length(1, "One")])] {
@@ -1602,7 +1598,7 @@ mod tests {
             let asked = std::sync::atomic::AtomicUsize::new(0);
             search_with(id, answering(vec![vec![titled_folder("near")]], &asked)).await;
             let i = item(id).unwrap();
-            assert_eq!((i.state, i.why.as_deref(), i.misses, i.folders.len()), (State::Stuck, Some("No folder holds every track, even by titles"), 1, 0), "{id}");
+            assert_eq!((i.state, i.why.as_deref(), i.misses, i.folders.len()), (State::Waiting, Some("No folder holds every track, even by titles"), 1, 0), "{id}");
         }
         waiting_with("ss-r33-timed", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
         search_with("ss-r33-timed", answering(vec![vec![titled_folder("near")]], &std::sync::atomic::AtomicUsize::new(0))).await;
