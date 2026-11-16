@@ -90,7 +90,7 @@ pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> R
         return Ok(r);
     }
     let record = record_of_album_in(serve, s.release_group.clone(), &s.artist, &s.album, s.year, s.cover.clone()).await?;
-    asked_record(app, serve, account, record, Some(s.key)).await
+    asked_record(app, serve, account, record, Some(s.key), s.release_group).await
 }
 
 /// Any album asked for by its names (0.9.3, the owner: Want for any album an artist's page says is missing): keyed as
@@ -106,8 +106,8 @@ pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_g
     if let Some(r) = open_request(serve, account, &key)? {
         return Ok(r);
     }
-    let record = record_of_album_in(serve, release_group, artist, album, year, cover).await?;
-    asked_record(app, serve, account, record, Some(key)).await
+    let record = record_of_album_in(serve, release_group.clone(), artist, album, year, cover).await?;
+    asked_record(app, serve, account, record, Some(key), release_group).await
 }
 
 /// A record asked for by its id (C49a): an artist's or a label's missing record, any record not had. The account's open
@@ -116,22 +116,32 @@ pub async fn ask_record(app: &super::App, serve: &Serve, account: &str, record: 
     if !rights(serve).request {
         bail!("Requesting albums is not on for this account");
     }
-    asked_record(app, serve, account, record, None).await
+    asked_record(app, serve, account, record, None, None).await
 }
 
-/// The request for `record`: its names, year, cover and release group the record's (the first group it holds), its key the one
-/// given (Discover's, so its suggestion leaves it), else the record's group, else its names'.
-async fn asked_record(app: &super::App, serve: &Serve, account: &str, record: i64, key: Option<String>) -> Result<Request> {
+/// The request for `record`: its names, year, cover and release group the record's (`group_asked`: the one it was asked with
+/// where the record holds it), its key the one given (Discover's, so its suggestion leaves it), else the record's group, else its
+/// names'.
+async fn asked_record(app: &super::App, serve: &Serve, account: &str, record: i64, key: Option<String>, asked: Option<String>) -> Result<Request> {
     let cat = serve.catalogue().clone();
     let (row, group) = tokio::task::spawn_blocking(move || -> Result<_> {
         let row = cat.record(record)?.context("That record is gone")?;
-        let group = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().find(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").map(|(r, _)| r.value);
-        Ok((row, group))
+        let held: Vec<String> = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().filter(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").map(|(r, _)| r.value).collect();
+        Ok((row, group_asked(asked, &held)))
     })
     .await??;
     let key = key.or_else(|| group.clone()).unwrap_or_else(|| format!("{}|{}", super::import::key(&row.artist), super::import::key(&row.title)));
     let asked = Asked { record: row.id, key, artist_key: super::import::loose(&row.artist), release_group: group, album: row.title, artist: row.artist, year: row.year, cover: row.cover };
     ask_for(app, serve, account, asked).await
+}
+
+/// The release group a request names (F15): the one it was asked with, where its record holds it, or holds none; else the
+/// record's first. A record may hold two (a file's tag and a match that disagree): the one asked for is the one wanted. Pure.
+fn group_asked(asked: Option<String>, held: &[String]) -> Option<String> {
+    match asked.map(|g| g.to_ascii_lowercase()) {
+        Some(g) if held.is_empty() || held.contains(&g) => Some(g),
+        _ => held.first().cloned(),
+    }
 }
 
 /// The account's open request (pending or approved) for an album by its key, where there is one.
@@ -521,14 +531,15 @@ async fn named(serve: &Serve, rs: &[Request]) -> Vec<Option<RecordOf>> {
 }
 
 /// A request as the pages show it (C49b): its record's names, year, cover and release group in place of those it was asked
-/// with, and the id its record answers by, where it has a record.
+/// with (of the record's groups, the one the request names, F15), and the id its record answers by, where it has a record.
 fn shown(mut r: Request, of: Option<&RecordOf>) -> Request {
     if let Some(o) = of {
         r.album = o.title.clone();
         r.artist = o.artist.clone();
         r.year = o.year.or(r.year);
         r.cover = o.cover.clone().or(r.cover);
-        r.release_group = o.groups.first().cloned().or(r.release_group);
+        let own = r.release_group.take();
+        r.release_group = own.clone().filter(|g| o.groups.iter().any(|x| x.eq_ignore_ascii_case(g))).or_else(|| o.groups.first().cloned()).or(own);
         r.record = Some(o.record);
     }
     r
@@ -759,6 +770,31 @@ mod tests {
         assert_eq!(serve.catalogue().readers_for_tests() - opened, 1, "one reader for them all");
         drop(serve);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// F15: a request names the release group it was asked with where its record holds several, not the first in value order;
+    /// one the record does not hold gives way to the record's.
+    #[test]
+    fn a_request_keeps_the_group_it_was_asked_with() {
+        let (first, second) = ("00000000-0000-4000-8000-000000000150".to_string(), "00000000-0000-4000-8000-000000000151".to_string());
+        let both = [first.clone(), second.clone()];
+        assert_eq!(group_asked(Some(second.to_uppercase()), &both), Some(second.clone()));
+        assert_eq!(group_asked(None, &both), Some(first.clone()), "none asked: the record's first");
+        assert_eq!(group_asked(Some("00000000-0000-4000-8000-000000000159".into()), &both), Some(first.clone()), "one it does not hold: the record's");
+        assert_eq!(group_asked(Some(second.clone()), &[]), Some(second), "a record holding none: the one asked");
+    }
+
+    /// F15: Lidarr is asked with the release group the request names, where its record holds several.
+    #[tokio::test]
+    async fn lidarr_is_asked_with_the_group_the_request_names() {
+        let (first, second) = ("00000000-0000-4000-8000-000000000150", "00000000-0000-4000-8000-000000000151");
+        let serve = served();
+        let record = record_of_album(serve.catalogue(), Some(second), "Glass Harbour", "Two Rooms", None, None).unwrap();
+        assert!(serve.catalogue().set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", first), "files").unwrap());
+        let r = Request { release_group: Some(second.to_string()), ..asked_for(record) };
+        let lidarr = Wanting::default();
+        hand_to(Some(&lidarr), false, &serve, &r).await;
+        assert_eq!(lidarr.0.lock().unwrap()[0].0.as_deref(), Some(second));
     }
 
     /// A server of the tests' own, in memory, its catalogue attached.
