@@ -17,6 +17,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::identity::RefTrack;
 use super::{Catalogue, now};
+use crate::serve::ids;
 
 pub(super) const SCHEMA: &str = "
 -- 0100: a record's, an artist's or a label's id at a source (`subject`: al-<record>, ar-<artist>, la-<label>): MusicBrainz's
@@ -134,6 +135,39 @@ fn record_in(db: &Connection, id: i64) -> Result<Option<RecordRow>> {
         .optional()?)
 }
 
+/// A MusicBrainz id's shape: what a tag must hold to name a release.
+fn is_mbid(id: &str) -> bool {
+    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// What each album's files say its record is at MusicBrainz, kept as `files` references in the record pass's transaction
+/// (`records[i]` is `albums[i]`'s): the release and the release group as tagged. Those kept already are left as they are, so a
+/// pass over a library as it was writes nothing; one a search found becomes the files'. In the records' order: where one release's files make two records (G1, a
+/// bonus track, another master), the older record keeps the release and the newer only the group, until a certain match or a
+/// link pasted says which it is.
+pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>], at: i64) -> Result<()> {
+    let mut named: Vec<(i64, &str, &str)> = Vec::new();
+    for (a, record) in albums.iter().zip(records) {
+        let Some(record) = *record else { continue };
+        named.extend(a.facts.release.as_deref().map(|v| (record, "release", v)));
+        named.extend(a.group.as_deref().map(|v| (record, "release-group", v)));
+    }
+    named.retain(|(_, _, v)| is_mbid(v));
+    named.sort_unstable();
+    named.dedup();
+    let known: std::collections::HashSet<(String, String, String)> = {
+        let mut st = tx.prepare_cached("SELECT subject, kind, value FROM \"references\" WHERE source = 'musicbrainz' AND kind IN ('release', 'release-group') AND how IN ('files', 'hand')")?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    for (record, kind, value) in named {
+        let subject = ids::record(record);
+        if !known.contains(&(subject.clone(), kind.to_string(), value.to_string())) {
+            put_reference(tx, &subject, &Ref::new("musicbrainz", kind, value), "files", at, false)?;
+        }
+    }
+    Ok(())
+}
+
 /// `set_reference` in the caller's transaction, found at `at`. `takes`: one another subject holds alone comes here, as by hand.
 pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, at: i64, takes: bool) -> Result<bool> {
     if ONE_SUBJECT.contains(&r.kind.as_str()) && subjects_in(tx, r)?.iter().any(|s| s != subject) {
@@ -191,6 +225,16 @@ impl Catalogue {
         let mut db = self.db();
         let tx = db.transaction()?;
         let kept = put_reference(&tx, subject, r, how, now(), how == "hand")?;
+        tx.commit()?;
+        Ok(kept)
+    }
+
+    /// `set_reference`, taking a reference another subject holds alone whatever the way: a certain match's release, as
+    /// MusicBrainz matched the record's own tracks to it (where one release's files make two records, G1). Blocking.
+    pub fn take_reference(&self, subject: &str, r: &Ref, how: &str) -> Result<bool> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let kept = put_reference(&tx, subject, r, how, now(), true)?;
         tx.commit()?;
         Ok(kept)
     }
@@ -276,7 +320,6 @@ impl Catalogue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::serve::ids;
 
     /// A record of this title, not had.
     fn record(cat: &Catalogue, title: &str) -> String {

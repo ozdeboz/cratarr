@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::fixes::Fix;
+use crate::catalogue::identity::RefTrack;
 use super::musicbrainz::Asked as _;
 
 /// The task's kind (`app::tasks`).
@@ -57,6 +58,9 @@ struct Release {
     format: String,
     /// Each track: title, length (s), recording id, first artist's id.
     tracks: Vec<(String, Option<i64>, String, Option<String>)>,
+    /// Its list as a reference keeps it (`reference_tracks`): MusicBrainz's own titles, lengths to the ms, recordings, each
+    /// at its medium and place. A match keeps none of it, only its files' names.
+    list: Vec<RefTrack>,
 }
 
 fn credit(v: &Value) -> (String, Option<String>) {
@@ -68,7 +72,22 @@ fn credit(v: &Value) -> (String, Option<String>) {
 fn release_of(v: &Value) -> Release {
     let (artist, artist_id) = credit(&v["artist-credit"]);
     let media = v["media"].as_array().cloned().unwrap_or_default();
+    let list = media
+        .iter()
+        .zip(1..)
+        .flat_map(|(m, disc)| {
+            let disc = m["position"].as_u64().map_or(disc, |p| p as u32);
+            m["tracks"].as_array().cloned().unwrap_or_default().into_iter().zip(1..).map(move |(t, at)| RefTrack {
+                disc,
+                position: t["position"].as_u64().map_or(at, |p| p as u32),
+                title: t["title"].as_str().unwrap_or_default().to_string(),
+                length_ms: t["length"].as_i64(),
+                recording: t["recording"]["id"].as_str().map(str::to_string),
+            })
+        })
+        .collect();
     Release {
+        list,
         id: v["id"].as_str().unwrap_or_default().to_string(),
         group: v["release-group"]["id"].as_str().map(str::to_string),
         title: v["title"].as_str().unwrap_or_default().to_string(),
@@ -161,14 +180,18 @@ async fn lookup(http: &reqwest::Client, release: &str) -> Result<Release> {
     Ok(release_of(&v))
 }
 
+/// What `find` found: the match, the release's own list, and whether the files name that release.
+type Found = (Match, Vec<RefTrack>, bool);
+
 /// An album's best match: its own release where its files name one, else the best of what a search by its name and
 /// artist finds (certain before likely, the first found among equals).
-async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Match>> {
+async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Found>> {
     let a = album.to_string();
     let (tracks, release, artist, name) = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a)).await??;
     let files: Vec<(String, String, i64)> = tracks.iter().map(|t| (t.file.clone(), t.title.clone(), i64::from(t.secs))).collect();
     if let Some(r) = release {
-        return Ok(score(&files, &lookup(http, &r).await?));
+        let read = lookup(http, &r).await?;
+        return Ok(score(&files, &read).map(|m| (m, read.list, true)));
     }
     let query = format!("release:{} AND artist:{}", phrase(&name), phrase(&artist));
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release")?;
@@ -182,13 +205,14 @@ async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Match>> {
         .filter_map(|r| r["id"].as_str().map(str::to_string))
         .take(CANDIDATES)
         .collect();
-    let mut best: Option<Match> = None;
+    let mut best: Option<Found> = None;
     for id in ids {
-        if let Some(m) = score(&files, &lookup(http, &id).await?)
-            && best.as_ref().is_none_or(|b| m.certain && !b.certain)
+        let read = lookup(http, &id).await?;
+        if let Some(m) = score(&files, &read)
+            && best.as_ref().is_none_or(|(b, ..)| m.certain && !b.certain)
         {
             let certain = m.certain;
-            best = Some(m);
+            best = Some((m, read.list, false));
             if certain {
                 break;
             }
@@ -208,7 +232,7 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
     if !due.is_empty()
         && let Some(account) = served.current_user()
     {
-        let ud = served.userdata.clone();
+        let (ud, served) = (served.userdata.clone(), served.clone());
         // One running for the account already: it is left to finish (asked again later, it takes the rest).
         let _ = super::tasks::spawn(KIND, &account, false, move |h| async move {
             let http = super::discover::http()?;
@@ -222,8 +246,16 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
                         continue;
                     }
                 };
-                let (ud, json) = (ud.clone(), found.as_ref().map(serde_json::to_string).transpose()?);
-                tokio::task::spawn_blocking(move || ud.set_album_match(&album, json.as_deref(), super::moment::now_secs())).await??;
+                let (ud, s, json) = (ud.clone(), served.clone(), found.as_ref().map(|(m, ..)| serde_json::to_string(m)).transpose()?);
+                tokio::task::spawn_blocking(move || -> Result<()> {
+                    ud.set_album_match(&album, json.as_deref(), super::moment::now_secs())?;
+                    // In the references too (C43b), with the release's own list.
+                    if let Some((m, list, named)) = &found {
+                        super::references::keep_match(&s, &album, m, list, *named)?;
+                    }
+                    Ok(())
+                })
+                .await??;
             }
             anyhow::Ok(())
         });
@@ -323,6 +355,19 @@ mod tests {
             tracks: tracks.iter().enumerate().map(|(i, (t, s))| (t.to_string(), Some(*s), format!("rec{i}"), Some("a1".into()))).collect(),
             ..Release::default()
         }
+    }
+
+    /// A match keeps its files' names; the release's list keeps MusicBrainz's own titles, to the ms, at their medium and place
+    /// (a track with no place says its order), each with its recording.
+    #[test]
+    fn a_releases_list_is_its_own_titles() {
+        let v = serde_json::json!({ "id": "r1", "media": [
+            { "position": 1, "tracks": [{ "position": 1, "title": "Slack Water", "length": 181_234, "recording": { "id": "rec1" } }] },
+            { "position": 2, "tracks": [{ "position": 1, "title": "Neap", "recording": { "id": "rec2" } }, { "title": "Ebb", "length": 90_000 }] }
+        ]});
+        let list = release_of(&v).list;
+        let rec = |disc: u32, position: u32, title: &str, length_ms: Option<i64>, recording: Option<&str>| RefTrack { disc, position, title: title.into(), length_ms, recording: recording.map(str::to_string) };
+        assert_eq!(list, [rec(1, 1, "Slack Water", Some(181_234), Some("rec1")), rec(2, 1, "Neap", None, Some("rec2")), rec(2, 2, "Ebb", Some(90_000), None)]);
     }
 
     #[test]

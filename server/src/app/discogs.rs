@@ -630,6 +630,9 @@ pub struct AlbumFacts {
     pub credits: Vec<Credit>,
     /// Its page on Discogs (the master's, else the release's).
     pub url: Option<String>,
+    /// Its main release's list, as read: kept as Discogs' list of the record (`reference_tracks`), not with these facts.
+    #[serde(skip)]
+    pub tracks: Vec<crate::catalogue::identity::RefTrack>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -753,6 +756,7 @@ pub async fn album_facts(release_group: Option<&str>, artist: &str, title: &str)
     {
         facts.labels = labels_of(&r);
         facts.credits = credits_of(&r);
+        facts.tracks = super::references::list_of_discogs(&r);
         if facts.year.is_none() {
             facts.year = r["year"].as_u64().filter(|y| *y > 0).map(|y| y as u32);
         }

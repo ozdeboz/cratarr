@@ -95,10 +95,15 @@ pub async fn album(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Opt
             genres.chain(f.styles.iter().map(|s| RawWord { word: s.clone(), kind: "style".into(), weight: 1.0 }))
         })
         .collect();
-    let (s, json) = (served.clone(), facts.as_ref().map(serde_json::to_string).transpose()?);
+    let (s, json, a, kept) = (served.clone(), facts.as_ref().map(serde_json::to_string).transpose()?, album.to_string(), facts.clone());
     tokio::task::spawn_blocking(move || -> Result<()> {
         s.userdata.set_discogs_facts(&subject, json.as_deref(), now)?;
-        s.userdata.set_words(&subject, "discogs", &words, true, now)
+        s.userdata.set_words(&subject, "discogs", &words, true, now)?;
+        // In the references too (C43b), with its main release's list.
+        match &kept {
+            Some(f) => super::references::keep_discogs(&s, &a, f),
+            None => Ok(()),
+        }
     })
     .await??;
     Ok(facts)

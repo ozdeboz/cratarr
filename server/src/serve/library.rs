@@ -1678,6 +1678,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                     title: fold(&first.album),
                     tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
+                group: list.iter().find_map(|s| s.row.first("musicbrainz_releasegroupid")).map(str::to_lowercase),
                 title: first.album.clone(),
                 artist: first.album_artist.clone(),
                 year: list.iter().filter_map(|s| s.row.first("date").and_then(year_of)).max(),

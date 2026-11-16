@@ -181,6 +181,55 @@ pub fn work_out(served: &crate::serve::Serve, album: &str) -> Result<Option<Stri
     work_out_in(served.catalogue(), record, &files_of(served, album)?)
 }
 
+/// A match matching found (`album_matches` keeps it as before), kept as references too: its release and release group, how
+/// the files say (their own release: `files`, else `search`), and the release's own list; the count worked out with it. A
+/// certain match takes its release from another record that only held it by its files or a guess: MusicBrainz matched this
+/// one's tracks to it (one release's files on two records, G1). Its list is kept only where its release is this record's.
+/// Blocking.
+pub fn keep_match(served: &crate::serve::Serve, album: &str, m: &super::matching::Match, list: &[RefTrack], named: bool) -> Result<()> {
+    let Some(record) = ids::record_number(album) else { return Ok(()) };
+    keep_match_in(served.catalogue(), record, album, m, list, named, &files_of(served, album)?)
+}
+
+/// `keep_match`, `files` the record's.
+fn keep_match_in(cat: &Catalogue, record: i64, album: &str, m: &super::matching::Match, list: &[RefTrack], named: bool, files: &[Listed]) -> Result<()> {
+    let how = if named { "files" } else { "search" };
+    let release = Ref::new("musicbrainz", "release", &m.release);
+    let held = if m.certain { cat.take_reference(album, &release, how)? } else { cat.set_reference(album, &release, how)? };
+    if let Some(group) = &m.release_group {
+        cat.set_reference(album, &Ref::new("musicbrainz", "release-group", group), how)?;
+    }
+    if held && !list.is_empty() {
+        cat.set_reference_tracks(record, "musicbrainz", list)?;
+        work_out_in(cat, record, files)?;
+    }
+    Ok(())
+}
+
+/// What Discogs said of a record (`discogs_facts` keeps it as before), kept as references too: its master and main release,
+/// found by the record's name or MusicBrainz's link (the facts do not say which: `search`, which a link at 0.17's step makes
+/// surer), and the main release's list; the count worked out with it. Blocking.
+pub fn keep_discogs(served: &crate::serve::Serve, album: &str, f: &super::discogs::AlbumFacts) -> Result<()> {
+    let Some(record) = ids::record_number(album) else { return Ok(()) };
+    keep_discogs_in(served.catalogue(), record, album, f, &files_of(served, album)?)
+}
+
+/// `keep_discogs`, `files` the record's.
+fn keep_discogs_in(cat: &Catalogue, record: i64, album: &str, f: &super::discogs::AlbumFacts, files: &[Listed]) -> Result<()> {
+    if let Some(master) = f.master {
+        cat.set_reference(album, &Ref::new("discogs", "master", &master.to_string()), "search")?;
+    }
+    let held = match f.release {
+        Some(release) => cat.set_reference(album, &Ref::new("discogs", "release", &release.to_string()), "search")?,
+        None => false,
+    };
+    if held && !f.tracks.is_empty() {
+        cat.set_reference_tracks(record, "discogs", &f.tracks)?;
+        work_out_in(cat, record, files)?;
+    }
+    Ok(())
+}
+
 /// A source's list held against the record's files, as `identity::agrees` decides: the one measure, so a row never says it
 /// agrees where the count says it does not. Its state, and what it says.
 fn held(list: &[RefTrack], files: &[Listed]) -> (&'static str, String) {
@@ -554,6 +603,88 @@ mod tests {
         assert_eq!((discogs.state, discogs.said.as_str(), discogs.guessed), ("agrees", "Pasted by hand", false));
         assert_eq!(discogs.url.as_deref(), Some("https://www.discogs.com/release/2000002"));
         assert!(chose(&cat, record, &album, &Choose { link: Some("https://example.org/x".into()), ..Choose::default() }, &[]).is_err());
+    }
+
+    fn matched(release: &str, certain: bool) -> crate::app::matching::Match {
+        crate::app::matching::Match {
+            release: release.into(),
+            release_group: Some("00000000-0000-4000-8000-000000000101".into()),
+            title: "Tide Tables".into(),
+            artist: "Glass Harbour".into(),
+            artist_id: None,
+            year: Some(2012),
+            certain,
+            why: String::new(),
+            tracks: Vec::new(),
+            lengths: Vec::new(),
+        }
+    }
+
+    /// A match kept as references, with the release's own list (C43b). A likely one takes nothing another record holds; a
+    /// certain one does, as MusicBrainz matched its tracks to it.
+    #[test]
+    fn a_match_becomes_a_reference_with_its_tracklist() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let ((record, album), (_, other)) = (had(&cat, "Tide Tables", 2), had(&cat, "Tide Tables (Bonus)", 3));
+        let tracks = files(&[("Slack Water", 200_000), ("Neap", 180_000)]);
+        let own = list(&[("Slack Water", Some(200_400)), ("Neap", Some(180_000))]);
+        let release = Ref::new("musicbrainz", "release", "00000000-0000-4000-8000-000000000001");
+        cat.set_reference(&other, &release, "files").unwrap();
+        keep_match_in(&cat, record, &album, &matched(&release.value, false), &own, false, &tracks).unwrap();
+        assert_eq!(cat.subject_of(&release).unwrap(), [other.clone()], "a likely match takes nothing");
+        assert!(cat.reference_tracks(record).unwrap().is_empty(), "nor keeps a list of a release not its own");
+        keep_match_in(&cat, record, &album, &matched(&release.value, true), &own, false, &tracks).unwrap();
+        assert_eq!(cat.subject_of(&release).unwrap(), [album.clone()], "a certain match: its tracks are the release's");
+        let how = || cat.references_of(&album).unwrap().into_iter().map(|(r, row)| (r.kind, row.how)).collect::<Vec<_>>();
+        assert_eq!(how(), [("release".to_string(), "search".to_string()), ("release-group".to_string(), "search".to_string())]);
+        assert_eq!(cat.reference_tracks(record).unwrap(), [("musicbrainz".to_string(), own.clone())], "the release's titles");
+        assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"), "worked out as it arrived");
+        keep_match_in(&cat, record, &album, &matched(&release.value, true), &own, true, &tracks).unwrap();
+        assert!(how().iter().all(|(_, how)| how == "files"), "matched again by its files' own release: surer");
+    }
+
+    /// The count is worked out as each list arrives, and follows the lists (C43b): none fitting, none counting.
+    #[test]
+    fn counting_follows_a_new_list() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (record, album) = had(&cat, "Tide Tables", 2);
+        let tracks = files(&[("Slack Water", 200_000), ("Neap", 180_000)]);
+        let fits = list(&[("Slack Water", Some(200_000)), ("Neap", Some(180_000))]);
+        let bonus = list(&[("Slack Water", Some(200_000)), ("Neap", Some(180_000)), ("Bonus", Some(90_000))]);
+        let counting = || cat.record(record).unwrap().unwrap().counting;
+        assert_eq!(work_out_in(&cat, record, &tracks).unwrap(), None, "no list");
+        let discogs = crate::app::discogs::AlbumFacts { master: Some(1000001), release: Some(2000001), tracks: bonus.clone(), ..Default::default() };
+        keep_discogs_in(&cat, record, &album, &discogs, &tracks).unwrap();
+        assert_eq!(counting(), None, "Discogs' main release has a bonus track");
+        assert_eq!(cat.references_of(&album).unwrap().len(), 2, "its master and release, kept all the same");
+        keep_match_in(&cat, record, &album, &matched("00000000-0000-4000-8000-000000000001", true), &fits, false, &tracks).unwrap();
+        assert_eq!(counting().as_deref(), Some("musicbrainz"));
+        cat.set_reference_tracks(record, "bandcamp", &fits).unwrap();
+        work_out_in(&cat, record, &tracks).unwrap();
+        assert_eq!(counting().as_deref(), Some("musicbrainz"), "of two that fit, the first in order");
+        cat.set_reference_tracks(record, "musicbrainz", &bonus).unwrap();
+        work_out_in(&cat, record, &tracks).unwrap();
+        assert_eq!(counting().as_deref(), Some("bandcamp"), "MusicBrainz's read again with another track");
+        cat.set_reference_tracks(record, "bandcamp", &bonus).unwrap();
+        work_out_in(&cat, record, &tracks).unwrap();
+        assert_eq!(counting(), None, "none fits: none counts");
+        chose(&cat, record, &album, &Choose { counting: Some(Some("discogs".into())), ..Choose::default() }, &tracks).unwrap();
+        cat.set_reference_tracks(record, "musicbrainz", &fits).unwrap();
+        work_out_in(&cat, record, &tracks).unwrap();
+        assert_eq!(counting().as_deref(), Some("discogs"), "chosen by hand, whatever arrives");
+    }
+
+    /// A count from before any list of its source (0.17's step, by a certain match) stands until that list is read.
+    #[test]
+    fn a_count_from_before_its_list_stands_until_its_list_is_read() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (record, _) = had(&cat, "Tide Tables", 2);
+        let tracks = files(&[("Slack Water", 200_000), ("Neap", 180_000)]);
+        cat.set_counting(record, Some("musicbrainz"), false).unwrap();
+        cat.set_reference_tracks(record, "discogs", &list(&[("Slack Water", None)])).unwrap();
+        assert_eq!(work_out_in(&cat, record, &tracks).unwrap().as_deref(), Some("musicbrainz"), "another's list that does not fit");
+        cat.set_reference_tracks(record, "musicbrainz", &list(&[("Other", Some(1_000)), ("Neap", Some(180_000))])).unwrap();
+        assert_eq!(work_out_in(&cat, record, &tracks).unwrap(), None, "its own list read, and it does not fit");
     }
 
     /// Health's item: what 0.16 left off it stays off, in one query. A guess confirmed and checked by hand, the record's.
