@@ -90,7 +90,9 @@ INSERT INTO records (id, born, retired_at, title, artist, year, kind, counting) 
   (4, 1760000300, NULL, 'Undated', 'Kite Theory', NULL, NULL, NULL),
   (5, 1760000400, NULL, 'Late Train OST', 'Various Artists', 2005, NULL, NULL),
   (6, 1760000500, 1794500000, 'Partial Shore', 'Glass Harbour', 2011, NULL, NULL),
-  (7, 1794200000, NULL, 'Signal', 'Noor Field', 2021, NULL, NULL);
+  (7, 1794200000, NULL, 'Signal', 'Noor Field', 2021, NULL, NULL),
+  (8, 1794600000, NULL, 'Partial Shore', 'Glass Harbour', 2011, NULL, NULL),
+  (9, 1794600100, NULL, 'Two Rooms', 'Noor Field', 2019, NULL, NULL);
 INSERT INTO tracks (id, born, retired_at, record, disc, number) VALUES
   (1, 1760000000, NULL, 1, 1, 1), (2, 1760000000, NULL, 1, 1, 2), (3, 1760000000, NULL, 1, 1, 3),
   (4, 1760000000, NULL, 1, 1, 4), (5, 1760000000, NULL, 1, 1, 5), (6, 1760000000, NULL, 1, 1, 6),
@@ -99,7 +101,10 @@ INSERT INTO tracks (id, born, retired_at, record, disc, number) VALUES
   (13, 1760000200, NULL, 3, 1, 1), (14, 1760000200, NULL, 3, 1, 2), (15, 1760000200, NULL, 3, 1, 3),
   (16, 1760000300, NULL, 4, 1, 1), (17, 1760000300, NULL, 4, 1, 2), (18, 1760000300, NULL, 4, 1, 3), (19, 1760000300, NULL, 4, 1, 4),
   (20, 1760000400, NULL, 5, 1, 1), (21, 1760000400, NULL, 5, 1, 2), (22, 1760000400, NULL, 5, 1, 3), (23, 1760000400, NULL, 5, 1, 4), (24, 1760000400, NULL, 5, 1, 5),
-  (28, 1794200000, NULL, 7, 1, 1);
+  (28, 1794200000, NULL, 7, 1, 1),
+  (29, 1794600100, NULL, 9, 1, 1), (30, 1794600100, NULL, 9, 1, 2), (31, 1794600100, NULL, 9, 1, 3),
+  (32, 1794600100, NULL, 9, 2, 1), (33, 1794600100, NULL, 9, 2, 2), (34, 1794600100, NULL, 9, 2, 3),
+  (35, 1794600000, NULL, 8, 1, 1), (36, 1794600000, NULL, 8, 1, 2), (37, 1794600000, NULL, 8, 1, 5);
 -- A retired track keeps its record and says what it was, as `REMEMBER` writes it.
 INSERT INTO tracks (id, born, retired_at, record, disc, number, was_rel, was_ms, was_title, was_artist, was_album) VALUES
   (25, 1760000500, 1794500000, 6, 1, 1, 'Glass Harbour/Partial Shore (2011)/01 Sandbar.flac', 201000, 'Sandbar', 'Glass Harbour', 'Partial Shore'),
@@ -163,6 +168,15 @@ INSERT INTO tags (folder, rel, n, raw, name, value) VALUES
   (0, 'Noor Field/Signal (2021)/01 Signal.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000007'),
   (0, 'Noor Field/Signal (2021)/01 Signal.flac', 1, 'MUSICBRAINZ_RELEASEGROUPID', 'musicbrainz_releasegroupid', '00000000-0000-4000-8000-000000000107'),
   (0, 'Various Artists/Late Train OST (2005)/01 Platform.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000005');
+-- Partial Shore came back after it retired (record 8): its files name the release the retired record was linked to.
+INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES
+  (0, 'Glass Harbour/Partial Shore (2011)/01 Sandbar.flac', 26000000, 1794600000, 1, 'FLAC', 900, 201000, 35, 16, 44100, 1794600000),
+  (0, 'Glass Harbour/Partial Shore (2011)/02 Groyne.flac', 26000001, 1794600000, 1, 'FLAC', 900, 202000, 36, 16, 44100, 1794600000),
+  (0, 'Glass Harbour/Partial Shore (2011)/05 Breakwater.flac', 26000002, 1794600000, 1, 'FLAC', 900, 203000, 37, 16, 44100, 1794600000);
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES
+  (0, 'Glass Harbour/Partial Shore (2011)/01 Sandbar.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000006'),
+  (0, 'Glass Harbour/Partial Shore (2011)/02 Groyne.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000006'),
+  (0, 'Glass Harbour/Partial Shore (2011)/05 Breakwater.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000006');
 -- 0.16's first start, done.
 INSERT INTO meta (key, value) VALUES
   ('first_records', '{"records":6,"copies":6,"tracks_merged":0,"bases_on_two_records":0,"artists":6,"shapes_moved":0,"shapes_left":0,"beats_moved":0,"beats_left":0}'),

@@ -228,6 +228,44 @@ mod tests {
         }
     }
 
+    fn mb(n: u32) -> String {
+        format!("00000000-0000-4000-8000-{n:012}")
+    }
+
+    /// The samples of one of the report's `differed` lists.
+    fn differed(report: &serde_json::Value, what: &str) -> Vec<String> {
+        let list = report["differed"].as_array().unwrap().iter().find(|d| d["what"] == what).unwrap_or_else(|| panic!("no {what}: {report}"));
+        list["sample"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
+    }
+
+    /// R1: a certain match never takes what a hand pasted: al-2's MusicBrainz link stays where it was, record 9's certain match
+    /// on that release notwithstanding, which keeps its release group.
+    #[test]
+    fn a_certain_match_never_takes_a_hand_link() {
+        let data = Data::new("hand-link");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", &mb(2))).unwrap(), ["al-2"]);
+        assert_eq!(refs(&cat, 9), [by("musicbrainz", "release-group", &mb(102), "search", false)]);
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert!(differed(report, "references: held by another record").contains(&format!("al-9 musicbrainz:release:{}", mb(2))), "{report}");
+        assert!(differed(report, "references: taken from another record").is_empty(), "{report}");
+    }
+
+    /// R1: a retired record holds no release: the link pasted while Partial Shore lived is not its, and the release goes to the
+    /// record its files are now (record 8).
+    #[test]
+    fn a_retired_record_gives_its_release_to_a_live_one() {
+        let data = Data::new("retired");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", &mb(6))).unwrap(), ["al-8"]);
+        assert_eq!(refs(&cat, 8), [by("musicbrainz", "release", &mb(6), "files", false)]);
+        assert!(refs(&cat, 6).iter().all(|(_, kind, ..)| kind != "release"), "{:?}", refs(&cat, 6));
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert!(differed(report, "references: a retired record's").contains(&format!("al-6 musicbrainz:release:{}", mb(6))), "{report}");
+    }
+
     fn refs(cat: &Catalogue, record: i64) -> Vec<(String, String, String, String, bool)> {
         cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().map(|(r, row)| (r.source, r.kind, r.value, row.how, row.confirmed)).collect()
     }
@@ -263,7 +301,7 @@ mod tests {
         // Two Rooms: a Discogs link pasted, counting, checked by hand; its files name their release.
         assert_eq!(counted(2), (chosen("discogs"), true, true, None));
         assert_eq!(refs(&cat, 2)[0], by("discogs", "release", "2000002", "hand", false));
-        assert!(refs(&cat, 2).contains(&by("musicbrainz", "release", &mb(2), "files", false)));
+        assert!(refs(&cat, 2).contains(&by("musicbrainz", "release", &mb(2), "hand", false)), "pasted, and its files name it too");
         // Night Walks EP: a Bandcamp guess confirmed, nothing chosen; a likely match the files agree with, Discogs by link.
         assert_eq!(counted(3), (None, false, false, None));
         assert!(refs(&cat, 3).contains(&by("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks", "search", true)));
@@ -272,9 +310,9 @@ mod tests {
         assert!(refs(&cat, 4).is_empty());
         // Late Train OST: AcoustID counting, as chosen.
         assert_eq!(counted(5).0, chosen("acoustid"));
-        // Partial Shore, retired: its link and its choices all the same.
+        // Partial Shore, retired: its choices all the same, and its master; no release (R1).
         assert_eq!(counted(6), (chosen("musicbrainz"), true, true, None));
-        assert!(refs(&cat, 6).contains(&by("musicbrainz", "release", &mb(6), "hand", false)));
+        assert_eq!(refs(&cat, 6), [by("discogs", "master", "1000006", "search", true)], "Discogs confirmed in 0.14");
         // Signal: nothing chosen, a certain match over its one track: MusicBrainz counts, worked out.
         assert_eq!(counted(7), (chosen("musicbrainz"), false, false, None));
         assert!(cat.reference_tracks(7).unwrap().is_empty(), "no list: a match keeps none of MusicBrainz's titles");
@@ -283,7 +321,8 @@ mod tests {
         let unmatched = |what: &str| report["unmatched"].as_array().unwrap().iter().find(|u| u["what"] == what).map(|u| u["count"].as_u64().unwrap()).unwrap_or(0);
         assert_eq!(unmatched("album_matches"), 1, "{report}");
         assert_eq!(unmatched("bandcamp_found"), 1, "Harbour Lights, a record not had: C48b's");
-        assert_eq!(report["differed"].as_array().unwrap().iter().map(|d| d["count"].as_u64().unwrap()).sum::<u64>(), 1, "Undated's tag: {report}");
+        assert_eq!(differed(report, "references: held by another record"), [format!("al-9 musicbrainz:release:{}", mb(2)), format!("al-4 musicbrainz:release:{}", mb(1))], "Two Rooms' hand, Undated's tag");
+        assert_eq!(differed(report, "references: a retired record's"), [format!("al-6 musicbrainz:release:{}", mb(6)), "al-6 discogs:release:2000006".to_string()]);
         assert_eq!((report["counted_by_hand"].as_u64(), report["counted_by_a_match"].as_u64(), report["checked_by_hand"].as_u64()), (Some(4), Some(1), Some(2)));
         assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM record_references"), 5, "kept one version");
     }

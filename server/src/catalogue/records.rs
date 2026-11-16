@@ -398,13 +398,54 @@ fn grouped(tx: &Connection, sql: &str) -> Result<std::collections::HashMap<i64, 
     Ok(out)
 }
 
-/// `set_reference` in the caller's transaction, found at `at`. `takes`: one another subject holds alone comes here, as by hand.
-pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, at: i64, takes: bool) -> Result<bool> {
-    if ONE_SUBJECT.contains(&r.kind.as_str()) && subjects_in(tx, r)?.iter().any(|s| s != subject) {
-        if !takes {
-            return Ok(false);
+/// What a reference write did: kept, with the subjects it was taken from (none, mostly); or refused, as another holds it
+/// alone, or as a retired record holds no such reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Put {
+    Kept(Vec<String>),
+    Held,
+    Retired,
+}
+
+impl Put {
+    pub(super) fn kept(&self) -> bool {
+        matches!(self, Put::Kept(_))
+    }
+}
+
+/// Whether a subject is a record retired or merged into another: it keeps its choices and its groups and masters, and holds no
+/// release, album page, artist or label, which name what is there now.
+fn retired(tx: &Connection, subject: &str) -> Result<bool> {
+    let Some(id) = ids::record_number(subject) else { return Ok(false) };
+    let gone: Option<bool> = tx.prepare_cached("SELECT retired_at IS NOT NULL OR merged_into IS NOT NULL FROM records WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?;
+    Ok(gone.unwrap_or(false))
+}
+
+/// `set_reference` in the caller's transaction, found at `at`. One a subject holds alone (a release, an album page, an artist, a
+/// label): a retired record is given none, and one it held goes to whoever names it now; held by another, it is taken by hand,
+/// or where `takes` (a certain match), and never from a hand by anything else: a link pasted names what it names.
+pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, at: i64, takes: bool) -> Result<Put> {
+    let mut taken = Vec::new();
+    if ONE_SUBJECT.contains(&r.kind.as_str()) {
+        if retired(tx, subject)? {
+            return Ok(Put::Retired);
         }
-        tx.prepare_cached("DELETE FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject <> ?4")?.execute(params![r.source, r.kind, r.value, subject])?;
+        let holders: Vec<(String, String)> = {
+            let mut st = tx.prepare_cached("SELECT subject, how FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject <> ?4")?;
+            st.query_map(params![r.source, r.kind, r.value, subject], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        for (holder, held_how) in holders {
+            if !retired(tx, &holder)? {
+                if held_how == "hand" && how != "hand" {
+                    return Ok(Put::Held);
+                }
+                if !takes && how != "hand" {
+                    return Ok(Put::Held);
+                }
+            }
+            tx.prepare_cached("DELETE FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject = ?4")?.execute(params![r.source, r.kind, r.value, holder])?;
+            taken.push(holder);
+        }
     }
     let had: Option<String> = tx
         .prepare_cached("SELECT how FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject = ?4")?
@@ -419,7 +460,7 @@ pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, 
         }
         Some(_) => {}
     }
-    Ok(true)
+    Ok(Put::Kept(taken))
 }
 
 fn subjects_in(db: &Connection, r: &Ref) -> Result<Vec<String>> {
@@ -500,17 +541,18 @@ impl Catalogue {
     pub fn set_reference(&self, subject: &str, r: &Ref, how: &str) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let kept = put_reference(&tx, subject, r, how, now(), how == "hand")?;
+        let kept = put_reference(&tx, subject, r, how, now(), how == "hand")?.kept();
         tx.commit()?;
         Ok(kept)
     }
 
-    /// `set_reference`, taking a reference another subject holds alone whatever the way: a certain match's release, as
-    /// MusicBrainz matched the record's own tracks to it (where one release's files make two records, G1). Blocking.
+    /// `set_reference`, taking a reference another subject holds alone by its files or a guess: a certain match's release, as
+    /// MusicBrainz matched the record's own tracks to it (where one release's files make two records, G1). A link pasted by
+    /// hand stays where it is. Blocking.
     pub fn take_reference(&self, subject: &str, r: &Ref, how: &str) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let kept = put_reference(&tx, subject, r, how, now(), true)?;
+        let kept = put_reference(&tx, subject, r, how, now(), true)?.kept();
         tx.commit()?;
         Ok(kept)
     }
@@ -689,6 +731,10 @@ struct Carrying<'t> {
     tx: &'t Connection,
     /// References another record holds alone, not taken: "<subject> <source>:<kind>:<value>".
     refused: Vec<String>,
+    /// Those a retired record would have held: "<subject> <source>:<kind>:<value>".
+    retired: Vec<String>,
+    /// Those taken from another record: "<subject> <source>:<kind>:<value> from <other>".
+    taken: Vec<String>,
     /// What found no record, by where it was kept.
     unmatched: std::collections::BTreeMap<&'static str, Vec<String>>,
 }
@@ -708,11 +754,21 @@ impl Carrying<'_> {
 
     fn put(&mut self, record: i64, r: &Ref, how: &str, at: i64, takes: bool) -> Result<bool> {
         let subject = ids::record(record);
-        let kept = put_reference(self.tx, &subject, r, how, at, takes)?;
-        if !kept {
-            self.refused.push(format!("{subject} {}:{}:{}", r.source, r.kind, r.value));
-        }
-        Ok(kept)
+        let named = format!("{subject} {}:{}:{}", r.source, r.kind, r.value);
+        Ok(match put_reference(self.tx, &subject, r, how, at, takes)? {
+            Put::Kept(taken) => {
+                self.taken.extend(taken.into_iter().map(|from| format!("{named} from {from}")));
+                true
+            }
+            Put::Held => {
+                self.refused.push(named);
+                false
+            }
+            Put::Retired => {
+                self.retired.push(named);
+                false
+            }
+        })
     }
 
     /// The records a reference names, by their numbers.
@@ -739,7 +795,7 @@ impl Catalogue {
         let before = count(&tx)?;
         let files = files_named(&tx)?;
         let named: std::collections::HashSet<(i64, &str, &str)> = files.iter().map(|(r, k, v)| (*r, *k, v.as_str())).collect();
-        let mut w = Carrying { tx: &tx, refused: Vec::new(), unmatched: std::collections::BTreeMap::new() };
+        let mut w = Carrying { tx: &tx, refused: Vec::new(), retired: Vec::new(), taken: Vec::new(), unmatched: std::collections::BTreeMap::new() };
         let mut moved: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
 
         // 1. A link pasted by hand names what it names, whoever held it.
@@ -875,7 +931,7 @@ impl Catalogue {
         report.table("files: musicbrainz", files.len() as u64, files.len() as u64, by_files);
         let after_count = count(&tx)?;
         report.table("references", before, after_count, after_count - before);
-        let (refused, mut unmatched) = (std::mem::take(&mut w.refused), std::mem::take(&mut w.unmatched));
+        let (refused, retired, taken, mut unmatched) = (std::mem::take(&mut w.refused), std::mem::take(&mut w.retired), std::mem::take(&mut w.taken), std::mem::take(&mut w.unmatched));
         for (table, keys) in &c.unread {
             unmatched.entry(table).or_default().extend(keys.iter().map(|k| format!("{k} (not read)")));
         }
@@ -883,6 +939,8 @@ impl Catalogue {
             report.unmatched(what, unmatched.remove(what).unwrap_or_default());
         }
         report.differed("references: held by another record", refused);
+        report.differed("references: a retired record's", retired);
+        report.differed("references: taken from another record", taken);
         let mut report = serde_json::to_value(&report)?;
         if let Some(fields) = report.as_object_mut() {
             for (field, n) in [("references", after_count), ("counted_by_hand", by_hand), ("counted_by_a_match", by_match), ("checked_by_hand", checked), ("confirmed", confirmed)] {
@@ -1060,6 +1118,31 @@ mod tests {
         assert_eq!(cat.record_artists(kept[1]).unwrap(), [artist]);
         assert!(cat.references_of(&ids::record(tide)).unwrap().iter().any(|(r, row)| r.value == "g1" && row.how == "link"), "the record found learns its group");
         assert_eq!(cat.keep_listing(Some(artist), &list, "link").unwrap(), kept, "read again: the same records");
+    }
+
+    /// R1: a link pasted by hand is taken by nothing but another hand, whatever takes; a retired record holds no release, and
+    /// gives up one it held to the live record that names it.
+    #[test]
+    fn a_hand_is_never_taken_and_a_retired_record_holds_no_release() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (pasted, matched, retired) = (ids::record(cat.record_for_tests("Two Rooms", 2)), ids::record(cat.record_for_tests("Two Rooms", 2)), cat.record_for_tests("Partial Shore", 0));
+        let release = Ref::new("musicbrainz", "release", "r2");
+        assert!(cat.set_reference(&pasted, &release, "hand").unwrap());
+        assert!(!cat.take_reference(&matched, &release, "search").unwrap(), "a certain match takes no hand");
+        assert!(!cat.take_reference(&matched, &release, "files").unwrap());
+        assert_eq!(cat.subject_of(&release).unwrap(), [pasted.clone()]);
+        assert!(cat.set_reference(&matched, &release, "hand").unwrap(), "a hand takes from a hand");
+        assert_eq!(cat.subject_of(&release).unwrap(), [matched.clone()]);
+
+        let (old, shore) = (ids::record(retired), Ref::new("musicbrainz", "release", "r6"));
+        assert!(cat.set_reference(&old, &shore, "hand").unwrap(), "held while it lives");
+        assert!(cat.set_reference(&old, &Ref::new("musicbrainz", "release-group", "g6"), "files").unwrap());
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [retired]).unwrap();
+        assert!(!cat.set_reference(&old, &Ref::new("musicbrainz", "release", "r7"), "hand").unwrap(), "retired: no release, even by hand");
+        let live = ids::record(cat.record_for_tests("Partial Shore", 3));
+        assert!(cat.set_reference(&live, &shore, "files").unwrap(), "a retired record gives up its release to the live one, even a hand's");
+        assert_eq!(cat.subject_of(&shore).unwrap(), [live]);
+        assert_eq!(cat.references_of(&old).unwrap().into_iter().map(|(r, _)| r.kind).collect::<Vec<_>>(), ["release-group"], "it keeps its group");
     }
 
     /// Each source's list kept by record, and the count's source: worked out until chosen by hand, then the hand's.
