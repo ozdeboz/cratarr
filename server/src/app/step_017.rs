@@ -445,10 +445,11 @@ mod tests {
         assert_eq!(at("al-7", "musicbrainz", "release"), 1794300000);
     }
 
-    /// R5, measuring: the step over a catalogue as large as production's (5,000 records of 8 tracks, 40,000 files with ten
-    /// tags each, 400,000 tags), with a match for 3,000 records, two in three certain, and 2,000 each of Discogs' facts,
-    /// Bandcamp's pages and MusicBrainz's links; then what every build now reads of the tags (`keep_files_names`). Run by hand:
-    /// `rt.sh test -- --ignored --nocapture the_step_at_production_size`.
+    /// R5 and R10, measuring: the step over a catalogue as large as production's (5,000 records of 8 tracks by 700 artists,
+    /// 40,000 files with ten tags each, 400,000 tags), with a match for 3,000 records, two in three certain, 2,000 each of
+    /// Discogs' facts, Bandcamp's pages and MusicBrainz's links, and 700 discographies of 20 albums each (production kept 688),
+    /// a third of them records had; then what a build does with the albums each time (`album_copies`, `keep_files_names`). Run
+    /// in release by hand: `rt.sh release --ignored --nocapture the_step_at_production_size`.
     #[test]
     #[ignore]
     fn the_step_at_production_size() {
@@ -482,7 +483,7 @@ mod tests {
                         ("albumartist", format!("Artist {}", r % 700)),
                         ("tracknumber", n.to_string()),
                         ("discnumber", "1".to_string()),
-                        ("date", "2012".to_string()),
+                        ("musicbrainz_albumartistid", id(3, r % 700)),
                         ("genre", "Electronic".to_string()),
                         ("musicbrainz_albumid", id(1, r)),
                         ("musicbrainz_releasegroupid", id(2, r)),
@@ -517,6 +518,17 @@ mod tests {
             for r in 1..=500 {
                 tx.execute("INSERT INTO record_references (album, chosen) VALUES (?1, ?2)", rusqlite::params![format!("al-{}", r * 7), r#"{"counting":"musicbrainz","by_hand":false,"links":{},"confirmed":["musicbrainz"]}"#]).unwrap();
             }
+            for a in 0..700_i64 {
+                // Each artist's records here first (their release groups), then albums the library has not.
+                let had = (1..=records).filter(|r| r % 700 == a).map(|r| id(2, r));
+                let groups: Vec<serde_json::Value> = had
+                    .chain((0..20).map(|k| id(4, a * 20 + k)))
+                    .take(20)
+                    .enumerate()
+                    .map(|(k, g)| serde_json::json!({"id": g, "title": format!("Album {a}-{k}"), "kind": "Album", "year": 2000 + k as i32, "genres": ["ambient"], "date": format!("{}-01-01", 2000 + k)}))
+                    .collect();
+                tx.execute("INSERT INTO discography (artist, at, groups) VALUES (?1, 1793900000, ?2)", rusqlite::params![id(3, a), serde_json::to_string(&groups).unwrap()]).unwrap();
+            }
             tx.commit().unwrap();
         }
         let made = made.elapsed();
@@ -525,10 +537,22 @@ mod tests {
         let step = step.elapsed();
         assert!(cat.references_to_carry().unwrap().is_empty());
         let references: i64 = Connection::open(d.join("catalogue.sqlite")).unwrap().query_row("SELECT count(*) FROM \"references\"", [], |r| r.get(0)).unwrap();
+        let report = cat.references_carried().unwrap().unwrap();
+        let copies_at = std::time::Instant::now();
+        let folders: Vec<crate::serve::library::FolderRows> =
+            cat.folders().iter().map(|(folder, root)| crate::serve::library::FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder).unwrap() }).collect();
+        let copies = crate::serve::library::album_copies(&folders, &crate::catalogue::Rules::default());
+        let copies_took = copies_at.elapsed();
         let build = std::time::Instant::now();
-        cat.keep_files_names(&[]).unwrap();
+        cat.keep_files_names(&copies).unwrap();
         let build = build.elapsed();
-        eprintln!("0.17's step at production size: {step:?} for {references} references (made in {made:?}); what a build reads of the tags: {build:?}");
+        let again = std::time::Instant::now();
+        cat.keep_files_names(&copies).unwrap();
+        let again = again.elapsed();
+        eprintln!(
+            "0.17's step at production size: {step:?} for {references} references, {} records not had, {} found by their groups (made in {made:?}); a build's albums: {} copies in {copies_took:?}; keep_files_names: {build:?} the first time, {again:?} with nothing changed",
+            report["records_not_had"], report["records_found"], copies.len()
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

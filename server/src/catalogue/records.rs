@@ -97,8 +97,11 @@ pub struct Listing {
 pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64) -> Result<Vec<i64>> {
     let mut out = Vec::with_capacity(list.len());
     for l in list {
+        // A listing with no link to another source (`says`) and, as every listing, no tracks is found by its references or
+        // not at all: `same_listing` has nothing else to go by, so the scan of every record of its name is skipped (R10).
         let found = match found_by_reference(tx, l)? {
             Some(r) => Some(r),
+            None if l.says.is_empty() => None,
             None => found_by_listing(tx, l)?,
         };
         let record = match found {
