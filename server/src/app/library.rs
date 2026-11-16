@@ -916,7 +916,7 @@ mod switched_off_tests {
         let placement = Placement { roots: Vec::new(), libraries: vec![placed("/music"), placed("/own/ann"), placed("/own/bo")] };
         let a = Active { cfg, source: None, placement, error: None };
         let own: Vec<(String, Option<String>)> = a.libraries().into_iter().filter(|u| u.kind == LibraryKind::Own).map(|u| (u.id, u.owner)).collect();
-        assert_eq!(own, [("/own/ann".to_string(), Some("ann".to_string())), ("/own/bo".to_string(), None)], "his folder stays, no one's");
+        assert_eq!(own, [("/own/ann".to_string(), Some("ann".to_string())), ("/own/bo".to_string(), None)], "the folder stays, no one's");
         assert_eq!(a.own_of("ann").as_deref(), Some("/own/ann"));
         assert_eq!(a.own_of("bo"), None, "nothing to add to");
         assert_eq!(a.own_of("cy").as_deref(), Some("/own/cy"), "on for everyone not named");
