@@ -22,6 +22,10 @@ pub const PENDING: &str = "pending";
 pub const APPROVED: &str = "approved";
 pub const DECLINED: &str = "declined";
 pub const CANCELLED: &str = "cancelled";
+/// Closed by its arrival's deletion (W4, the owner's answer (c)): wanted again, it is a new request.
+pub const REJECTED: &str = "rejected";
+/// Why a request is rejected, as its reason says.
+const REJECTED_WHY: &str = "Rejected";
 
 /// The most requests a list shows.
 const LIST: usize = 200;
@@ -281,6 +285,41 @@ async fn connected(lidarr: bool) -> Vec<&'static str> {
 
 /// What a request handed to Soulseek says (`hand`).
 pub const SOULSEEK_SEARCHES: &str = "Soulseek searches for it";
+
+/// The approved requests a copy arrived for (W4): those whose record it is or whose record it holds (R13), asked before it came,
+/// as R32 has it for a requester's rights; each as the pages show it (its record's group). Read before the copy goes, as its going
+/// ends the holding. A copy whose coming is not known arrived for none.
+pub async fn arrived_for(serve: &Serve, record: i64, came: Option<i64>) -> Vec<Request> {
+    let Some(came) = came else { return Vec::new() };
+    let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
+    let of = named(serve, &approved).await;
+    approved
+        .into_iter()
+        .zip(of)
+        .filter(|(r, o)| r.at <= came && o.as_ref().is_some_and(|o| o.record == record || o.holder == Some(record)))
+        .map(|(r, o)| shown(r, o.as_ref()))
+        .collect()
+}
+
+/// Requests whose arrival was deleted from Incoming, closed (W4, the owner's answer (c)): each "rejected", its reason "Rejected";
+/// Lidarr told to stop by its record's group, as far as it can be (a failure is said in the log); Soulseek woken, which drops its
+/// item unless it is under way. Wanted again, it is a new request.
+pub async fn reject(lidarr: Option<&dyn Fetcher>, serve: &Serve, rs: &[Request]) {
+    for r in rs {
+        if let Err(e) = serve.userdata.set_request_status(r.id, REJECTED, Some(REJECTED_WHY), None) {
+            tracing::warn!("request {}: not closed as rejected: {e:#}", r.id);
+            continue;
+        }
+        if let (Some(f), Some(group)) = (lidarr, r.release_group.as_deref())
+            && let Err(e) = f.cancel(group).await
+        {
+            tracing::warn!("request {}: Lidarr not told to stop: {e:#}", r.id);
+        }
+    }
+    if !rs.is_empty() {
+        super::soulseek::wake();
+    }
+}
 
 /// What a request of a record the library has says, handed to no fetcher (W3).
 pub const ALREADY_HAD: &str = "Already in the library";
@@ -570,7 +609,7 @@ impl Requester {
 /// `requesters`, read now.
 fn requesters_now(serve: &Serve) -> HashMap<i64, Requester> {
     let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
-    let of = records_of(serve.catalogue(), &approved).unwrap_or_else(|e| {
+    let of = records_held(serve.catalogue(), &approved, &serve.library.kinds()).unwrap_or_else(|e| {
         tracing::debug!("the requests' records not read: {e:#}");
         vec![None; approved.len()]
     });
@@ -595,33 +634,86 @@ pub struct RecordOf {
     pub year: Option<i32>,
     pub cover: Option<String>,
     pub holder: Option<i64>,
+    /// How it is held (W4): partly, arrived (in Incoming alone), or done.
+    pub holding: Holding,
 }
 
 impl RecordOf {
-    /// Whether its album is in the library.
+    /// Whether its album is delivered (W4): a whole copy arrived in Incoming, or in a library. A copy short of its list is not: it
+    /// is searched and fetched still.
     pub fn had(&self) -> bool {
-        self.holder.is_some()
+        matches!(self.holding, Holding::Arrived | Holding::Done)
     }
+}
+
+/// How a request's record is held (W4, the owner's answers (b) and (d): one "had" for requests and fetchers): no copy there (none,
+/// or only in the trash); a copy short of its list ("partly there": searched and fetched still, its request open); a whole copy in
+/// Incoming alone ("arrived": delivered, until it is added); a whole copy in a main library or someone's own music ("done").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Holding {
+    #[default]
+    None,
+    Partly {
+        has: u32,
+        of: u32,
+    },
+    Arrived,
+    Done,
+}
+
+/// How a record read for its requests is held (`Holding`), each catalogue folder's library as `kind` says: a copy is whole where it
+/// holds every track of the list it must hold (`Requested::list`; with none, any copy is). Tracks no file holds, as the tests make
+/// them, are one copy kept. Pure.
+pub fn holding_of(q: &crate::catalogue::records::Requested, kind: impl Fn(i64) -> crate::settings::LibraryKind) -> Holding {
+    if q.holder.is_none() || q.present == 0 {
+        return Holding::None;
+    }
+    let whole = |n: usize| q.list.is_none_or(|l| n >= l);
+    let partly = Holding::Partly { has: q.present as u32, of: q.list.unwrap_or(q.present) as u32 };
+    if q.copies.is_empty() {
+        return if whole(q.present) { Holding::Done } else { partly };
+    }
+    let whole_in: Vec<crate::settings::LibraryKind> = q.copies.iter().filter(|(_, n)| whole(*n)).map(|(folder, _)| kind(*folder)).collect();
+    if whole_in.is_empty() {
+        partly
+    } else if whole_in.iter().any(|k| *k != crate::settings::LibraryKind::Incoming) {
+        Holding::Done
+    } else {
+        Holding::Arrived
+    }
+}
+
+/// What each catalogue folder's library is, as the running server holds them; none where there is no server (a test), and
+/// `kind_in`'s own rule holds: the first folder Music, the others Incoming.
+fn library_kinds() -> Vec<(i64, crate::settings::LibraryKind)> {
+    crate::serve::instance().map(|s| s.library.kinds()).unwrap_or_default()
 }
 
 /// Each request's record as the catalogue holds it now, in the requests' order: none where it names no record yet (before
 /// 0.17's step) or one that is gone. All read at once on one reader, never under the writer's lock (R16,
 /// `Catalogue::requested`): the Albums page and the marks ask for every open request while builds run. Blocking.
 pub fn records_of(cat: &crate::catalogue::Catalogue, rs: &[Request]) -> Result<Vec<Option<RecordOf>>> {
+    records_held(cat, rs, &library_kinds())
+}
+
+/// `records_of`, each catalogue folder's library as `kinds` has it (`Serve`'s library), for how each record is held (W4).
+pub fn records_held(cat: &crate::catalogue::Catalogue, rs: &[Request], kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Vec<Option<RecordOf>>> {
     let read = cat.requested(&rs.iter().filter_map(|r| r.record).collect::<Vec<_>>())?;
+    let kind = |folder: i64| crate::serve::library::kind_in(kinds, folder).0;
     Ok(rs
         .iter()
         .map(|r| {
             let q = read.get(&r.record?)?;
-            Some(RecordOf { record: q.row.id, groups: q.groups.clone(), title: q.row.title.clone(), artist: q.row.artist.clone(), year: q.row.year, cover: q.row.cover.clone(), holder: q.holder })
+            let holding = holding_of(q, kind);
+            Some(RecordOf { record: q.row.id, groups: q.groups.clone(), title: q.row.title.clone(), artist: q.row.artist.clone(), year: q.row.year, cover: q.row.cover.clone(), holder: q.holder, holding })
         })
         .collect())
 }
 
 /// `records_of` from an async caller; none for each where the catalogue cannot be read (logged).
 async fn named(serve: &Serve, rs: &[Request]) -> Vec<Option<RecordOf>> {
-    let (cat, rs2) = (serve.catalogue().clone(), rs.to_vec());
-    match tokio::task::spawn_blocking(move || records_of(&cat, &rs2)).await {
+    let (cat, rs2, kinds) = (serve.catalogue().clone(), rs.to_vec(), serve.library.kinds());
+    match tokio::task::spawn_blocking(move || records_held(&cat, &rs2, &kinds)).await {
         Ok(Ok(of)) => of,
         Ok(Err(e)) => {
             tracing::debug!("the requests' records not read: {e:#}");
@@ -669,13 +761,13 @@ async fn views(serve: &Serve, f: Option<&dyn Fetcher>, rs: Vec<Request>) -> Vec<
 
 /// `views`, each request's record read (`of`, in the requests' order).
 async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<RecordOf>]) -> Vec<View> {
-    let rs: Vec<(Request, bool)> = rs.into_iter().zip(of).map(|(r, o)| (shown(r, o.as_ref()), o.as_ref().is_some_and(RecordOf::had))).collect();
-    let asked: Vec<String> = rs.iter().filter(|(r, there)| !*there && r.status == APPROVED).filter_map(|(r, _)| r.release_group.clone()).collect();
+    let rs: Vec<(Request, Holding)> = rs.into_iter().zip(of).map(|(r, o)| (shown(r, o.as_ref()), o.as_ref().map_or(Holding::None, |o| o.holding))).collect();
+    let asked: Vec<String> = rs.iter().filter(|(r, held)| !matches!(held, Holding::Arrived | Holding::Done) && r.status == APPROVED).filter_map(|(r, _)| r.release_group.clone()).collect();
     let progress = match f {
         Some(f) if !asked.is_empty() => f.statuses(&asked).await.ok(),
         _ => None,
     };
-    rs.into_iter().map(|(r, there)| View { album_state: state(there, progress.as_ref(), &r), request: r }).collect()
+    rs.into_iter().map(|(r, held)| View { album_state: state(held, progress.as_ref(), &r), request: r }).collect()
 }
 
 /// Of these requests, those whose record is not had yet (the owner, 2026-10-30: "Once something is actually in the library,
@@ -683,7 +775,7 @@ async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<Record
 /// pages show it (`shown`, C49b).
 pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
     let of = named(serve, &rs).await;
-    rs.into_iter().zip(of).filter(|(_, o)| !o.as_ref().is_some_and(RecordOf::had)).map(|(r, o)| shown(r, o.as_ref())).collect()
+    rs.into_iter().zip(of).filter(|(_, o)| !o.as_ref().is_some_and(|o| o.holding == Holding::Done)).map(|(r, o)| shown(r, o.as_ref())).collect()
 }
 
 /// The library's albums by name (the import's matcher), where Cratarr's data folder holds it: its albums alone, one
@@ -695,11 +787,15 @@ pub(crate) async fn library(serve: &Serve) -> Option<Arc<Matcher>> {
     tokio::task::spawn_blocking(move || Matcher::library_albums(&dir.join("library.sqlite"), Some(built)).ok()).await.ok().flatten()
 }
 
-/// A request's album as it stands: the library first, then the fetcher's word (only for one handed to it; none when
-/// there is no fetcher or it could not be asked).
-fn state(in_library: bool, progress: Option<&HashMap<String, Progress>>, r: &Request) -> Album {
-    if in_library {
-        return Album::InLibrary;
+/// A request's album as it stands: how its record is held first (W4: done, arrived, or partly there), then the fetcher's word
+/// (only for one handed to it; none when there is no fetcher or it could not be asked).
+fn state(held: Holding, progress: Option<&HashMap<String, Progress>>, r: &Request) -> Album {
+    match held {
+        Holding::Done => return Album::InLibrary,
+        // In Incoming, not added yet (the owner's answer (d)): it reads "Arrived" until it is added.
+        Holding::Arrived => return Album::InIncoming,
+        Holding::Partly { has, of } if r.status == APPROVED => return Album::PartlyThere { tracks: has, of },
+        _ => {}
     }
     if r.status != APPROVED {
         return Album::Requested;
@@ -961,6 +1057,79 @@ mod tests {
         assert!(serve.catalogue().label_records(label).unwrap().iter().any(|(r, _)| *r == record), "the account its label");
     }
 
+    /// W4 (D3): Health's "Ask for the full album" fetches it again: its group finds the owned record, short of the list its files
+    /// name, which reads "partly there" and stays open; Lidarr is asked for it, and Soulseek searches it by that full list.
+    #[tokio::test]
+    async fn asking_for_the_full_album_fetches_it() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let group = "00000000-0000-4000-8000-000000000303";
+        let owned = cat.record_for_tests("Tide Tables", 2);
+        assert!(cat.set_reference(&crate::serve::ids::record(owned), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", group), "files").unwrap());
+        let list: Vec<crate::catalogue::identity::RefTrack> =
+            (1..=3).map(|n| crate::catalogue::identity::RefTrack { disc: 1, position: n, title: format!("Track {n}"), length_ms: Some(200_000), recording: None }).collect();
+        cat.set_reference_tracks(owned, "musicbrainz", &list).unwrap();
+        assert_eq!(record_of_album(cat, Some(group), "Glass Harbour", "Tide Tables", None, None).unwrap(), owned, "by its group, the owned album");
+        let mut r = Request { release_group: Some(group.into()), ..asked_for(owned) };
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let of = records_of(cat, std::slice::from_ref(&r)).unwrap().pop().flatten().unwrap();
+        assert_eq!(of.holding, Holding::Partly { has: 2, of: 3 });
+        assert_eq!(views(&serve, None, vec![r.clone()]).await[0].album_state, Album::PartlyThere { tracks: 2, of: 3 });
+        let lidarr = Wanting::default();
+        hand_to(Some(&lidarr), false, &serve, &r).await;
+        assert_eq!(lidarr.0.lock().unwrap()[0].0.as_deref(), Some(group), "Lidarr asked for it");
+        let none = |_: crate::catalogue::records::Ref| std::future::ready(Ok::<Option<crate::app::references::Read>, anyhow::Error>(None));
+        let judged = crate::app::references::tracklist(cat, owned, none).await.unwrap().unwrap();
+        assert_eq!(judged.timed.map(|(source, l)| (source, l.len())), Some(("musicbrainz".to_string(), 3)), "searched by the full list");
+    }
+
+    /// W4 (D2, the owner's answer (d)): a requested album in Incoming reads "Arrived" (Incoming's state) until it is added; a whole
+    /// copy in a main library or someone's own music makes it done.
+    #[tokio::test]
+    async fn a_requested_album_in_incoming_reads_arrived() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let record = cat.record_for_tests("Two Rooms", 2);
+        cat.copy_for_tests(record, 1);
+        let mut r = asked_for(record);
+        r.id = serve.userdata.add_request(&r).unwrap();
+        assert_eq!(views(&serve, None, vec![r.clone()]).await[0].album_state, Album::InIncoming, "in Incoming alone (its second folder)");
+        assert!(!not_in_library(&serve, vec![r.clone()]).await.is_empty(), "still among those coming");
+        cat.copy_for_tests(record, 0);
+        assert_eq!(views(&serve, None, vec![r]).await[0].album_state, Album::InLibrary, "and in Music (its first)");
+    }
+
+    /// W4 (the owner's answer (c)): deleting a copy that arrived for a request (after it was asked) closes the request as rejected,
+    /// Lidarr told to stop by its record's group; wanted again, it is a new request.
+    #[tokio::test]
+    async fn rejecting_the_arrival_closes_its_request() {
+        let serve = served();
+        let group = "00000000-0000-4000-8000-000000000304";
+        let record = record_of_album(serve.catalogue(), Some(group), "Glass Harbour", "Two Rooms", None, None).unwrap();
+        let mut r = Request { release_group: Some(group.into()), at: 100, ..asked_for(record) };
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let arrived = arrived_for(&serve, record, Some(200)).await;
+        assert_eq!(arrived.iter().map(|r| r.id).collect::<Vec<_>>(), [r.id]);
+        let lidarr = Wanting::default();
+        reject(Some(&lidarr), &serve, &arrived).await;
+        let closed = serve.userdata.request(r.id).unwrap().unwrap();
+        assert_eq!((closed.status.as_str(), closed.reason.as_deref()), (REJECTED, Some("Rejected")));
+        assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()], "Lidarr told to stop, by the record's group");
+        assert!(open_request(&serve, "bob", &r.album_key).unwrap().is_none(), "wanted again, a new request");
+    }
+
+    /// W4: deleting a copy that was there before the request was asked changes nothing of it.
+    #[tokio::test]
+    async fn deleting_an_older_copy_leaves_the_request_alone() {
+        let serve = served();
+        let record = record_of_album(serve.catalogue(), None, "Glass Harbour", "Quiet Lanes", None, None).unwrap();
+        let mut r = Request { at: 300, ..asked_for(record) };
+        r.id = serve.userdata.add_request(&r).unwrap();
+        assert!(arrived_for(&serve, record, Some(200)).await.is_empty());
+        assert!(arrived_for(&serve, record, None).await.is_empty(), "nor one whose coming is not known");
+        assert_eq!(serve.userdata.request(r.id).unwrap().unwrap().status, APPROVED);
+    }
+
     /// W3 (F4): a Want of an album the library has is handed to no fetcher: Lidarr is not asked (it would fetch it again where its
     /// folder no longer holds it), and nothing says Soulseek searches for it. It reads as had.
     #[tokio::test]
@@ -1041,9 +1210,9 @@ mod tests {
         serve
     }
 
-    /// The Lidarr a test hands requests to: what it was asked to want; the release group it finds.
+    /// The Lidarr a test hands requests to: what it was asked to want, and to stop wanting; the release group it finds.
     #[derive(Default)]
-    struct Wanting(Mutex<Vec<(Option<String>, String, String)>>);
+    struct Wanting(Mutex<Vec<(Option<String>, String, String)>>, Mutex<Vec<String>>);
 
     const FOUND: &str = "00000000-0000-4000-8000-000000000131";
 
@@ -1057,7 +1226,8 @@ mod tests {
             Box::pin(async { Ok(HashMap::new()) })
         }
 
-        fn cancel<'a>(&'a self, _: &'a str) -> crate::source::Fut<'a, ()> {
+        fn cancel<'a>(&'a self, release_group: &'a str) -> crate::source::Fut<'a, ()> {
+            self.1.lock().unwrap().push(release_group.to_string());
             Box::pin(async { Ok(()) })
         }
     }

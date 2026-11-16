@@ -422,7 +422,7 @@ pub struct Waiting {
 /// Every record waiting in an Incoming library of Cratarr's own, as Incoming lists them: no card worked out (a card is
 /// asked for one record; 0.14's preview.2: working out the cards of every Incoming library's records, 800 in one,
 /// took minutes).
-pub async fn waiting(app: &Arc<super::App>) -> Vec<Waiting> {
+pub async fn waiting(app: &super::App) -> Vec<Waiting> {
     let view = app.incoming.list(None).await;
     let mut out = Vec::new();
     for s in view.sources.iter().filter(|s| s.id == crate::source::cratarr::KIND.id) {

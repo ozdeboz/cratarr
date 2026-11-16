@@ -661,10 +661,10 @@ pub fn start(_app: &Arc<super::App>) {
 /// (C51b, `requests::records_of`): one whose record is not on the list yet is added, waiting to be searched; one no longer
 /// approved (cancelled, declined) goes, unless it is fetched or placed.
 async fn read_requests(served: &Arc<crate::serve::Serve>) -> Result<()> {
-    let (ud, cat) = (served.userdata.clone(), served.catalogue().clone());
+    let (ud, cat, kinds) = (served.userdata.clone(), served.catalogue().clone(), served.library.kinds());
     let (approved, of) = tokio::task::spawn_blocking(move || -> Result<_> {
         let approved = ud.requests(None, Some(super::requests::APPROVED), REQUESTS_AT_MOST)?;
-        let of = super::requests::records_of(&cat, &approved)?;
+        let of = super::requests::records_held(&cat, &approved, &kinds)?;
         Ok((approved, of))
     })
     .await??;
@@ -1479,7 +1479,7 @@ mod tests {
 
     /// A request's record as `records_of` reads it: record `n`, named after its request.
     fn of(n: i64) -> Option<super::super::requests::RecordOf> {
-        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, holder: None })
+        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, holder: None, holding: Default::default() })
     }
 
     #[test]
@@ -1685,7 +1685,7 @@ mod tests {
 
     /// A request's record as `records_of` reads it, had: a record holding its files.
     fn had(n: i64) -> Option<super::super::requests::RecordOf> {
-        Some(super::super::requests::RecordOf { holder: Some(n + 1000), ..of(n).unwrap() })
+        Some(super::super::requests::RecordOf { holder: Some(n + 1000), holding: super::super::requests::Holding::Done, ..of(n).unwrap() })
     }
 
     /// R26 (N9): Soulseek takes no record already had (its own files, or a record holding them), and an item of one not in flight

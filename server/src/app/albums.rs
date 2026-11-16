@@ -445,7 +445,19 @@ impl App {
         if !may_delete_copy(&s.deletable, &a) {
             return Err(ToggleError::Refused("That isn't yours to delete".into()));
         }
-        self.incoming.delete_listed(source, a).await
+        // A copy in Incoming that arrived for requests (W4, the owner's answer (c)): read before it goes, they close as rejected once
+        // it has.
+        let live = self.library.live();
+        let incoming = a.library.as_deref().and_then(|l| live.iter().find(|x| x.cfg.id == source)?.kind_of(l)) == Some(LibraryKind::Incoming);
+        let arrived = match (self.served.as_ref(), crate::serve::ids::record_number(&a.id)) {
+            (Some(served), Some(record)) if incoming => super::requests::arrived_for(served, record, a.added).await,
+            _ => Vec::new(),
+        };
+        let done = self.incoming.delete_listed(source, a).await?;
+        if let Some(served) = self.served.as_ref() {
+            super::requests::reject(super::requests::fetcher(self).as_deref(), served, &arrived).await;
+        }
+        Ok(done)
     }
 
     /// Delete an album of someone's own music from the Users panel: an administrator's, only there (the owner, 2026-11-04:

@@ -259,6 +259,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "incoming:upgrades" => ("Replacements", "better"),
         "incoming:duplicates" => ("Duplicates", "found"),
         "incoming:failed" => ("Conversions", "failed"),
+        "incoming:arrived" => ("Records", "arrived"),
         "playlists:missing" => ("Playlist tracks", "missing"),
         "analysis:audiomuse" => ("Analysis", "to do"),
         "sign-in:refused" => ("Sign-ins", "refused"),
@@ -307,6 +308,7 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "incoming:upgrades" => "Quality replacements",
         "incoming:duplicates" => "Duplicates",
         "incoming:failed" => "Failed conversions",
+        "incoming:arrived" => "Arrived",
         "playlists:missing" => "Missing tracks",
         // No tool names in the names (the owner, 2026-10-26).
         "analysis:audiomuse" => "Analysis",
@@ -448,6 +450,24 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
         out.push(f);
     }
     out
+}
+
+/// Records arrived in Incoming and waiting to be added (W4; 0.14's "Records waiting for you", `intake_card::waiting`): an item each,
+/// its intake card opened from it ("Before adding" in it). Those a verdict names (an upgrade, a duplicate) are on that verdict's
+/// item. None waiting, no finding. Pure.
+pub fn arrived(waiting: &[super::intake_card::Waiting]) -> Option<Finding> {
+    let items: Vec<Item> = waiting
+        .iter()
+        .filter(|w| w.verdict.is_none())
+        .map(|w| Item { title: w.title.clone(), line: Some(w.artist.clone()).filter(|a| !a.is_empty()), album: Some((w.source.clone(), w.album.clone())), ..Item::default() })
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    let count = items.len() as u64;
+    let mut f = finding("incoming", "incoming:arrived", Level::Info, count, n(count, "record arrived, waiting to be added", "records arrived, waiting to be added"));
+    f.items = items;
+    Some(f)
 }
 
 /// Incoming's albums as they stand to the other libraries (decision 0034): better copies of Music's (Replace), the rest
@@ -957,6 +977,7 @@ impl App {
             }
             f.items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
         }
+        out.extend(arrived(&super::intake_card::waiting(self).await));
         Ok(out)
     }
 
@@ -1153,6 +1174,24 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W4 (E1): records arrived in Incoming and waiting to be added are one Health item, each opening its intake card ("Before
+    /// adding" in it); those an upgrade's or a duplicate's verdict names stay on those items.
+    #[test]
+    fn health_lists_arrivals_waiting_to_be_added() {
+        let w = |album: &str, verdict: Option<&'static str>| super::super::intake_card::Waiting {
+            source: "cratarr".into(),
+            album: album.into(),
+            title: format!("Title {album}"),
+            artist: "Glass Harbour".into(),
+            library: Some("incoming".into()),
+            verdict,
+        };
+        let f = arrived(&[w("al-1", None), w("al-2", Some("duplicate")), w("al-3", None)]).unwrap();
+        assert_eq!((f.key.as_str(), f.count), ("incoming:arrived", 2));
+        assert_eq!(f.items.iter().filter_map(|i| i.album.clone()).map(|(_, id)| id).collect::<Vec<_>>(), ["al-1", "al-3"]);
+        assert!(arrived(&[w("al-2", Some("upgrade"))]).is_none(), "none waiting but those");
+    }
 
     #[test]
     fn lidarr_adding_outside_its_incoming_is_said_with_the_root_folder_to_choose() {

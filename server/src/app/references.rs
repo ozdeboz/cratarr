@@ -187,7 +187,8 @@ pub fn timed(list: &[RefTrack]) -> bool {
 ///   the first whose list answers, and that source counts from then on, lengths or none. One that answers nothing (no such
 ///   release) gives way to the next, and so does one without lengths, for judging (R33).
 /// - **Had, no count**: its files and no list agree, so none counts until an administrator picks one (the owner, 2026-11-16):
-///   nothing is read.
+///   nothing is read. One whose files are short of the list they name (W4: "partly there") is judged by that list, counted by
+///   nothing.
 ///
 /// `Ok(Err(why))`: no list to judge by, and why in few words. `Err`: a source could not be reached; asked again later.
 pub async fn tracklist<R, F>(cat: &Arc<Catalogue>, record: i64, read: R) -> Result<std::result::Result<Judging, String>>
@@ -196,11 +197,13 @@ where
     F: std::future::Future<Output = Result<Option<Read>>>,
 {
     let c = cat.clone();
-    let Some((row, refs, kept)) = tokio::task::spawn_blocking(move || -> Result<_> {
+    let Some((row, refs, kept, short)) = tokio::task::spawn_blocking(move || -> Result<_> {
         let Some(row) = c.record(record)? else { return Ok(None) };
         let refs = c.references_of(&ids::record(row.id))?;
         let kept = c.reference_tracks(row.id)?;
-        Ok(Some((row, refs, kept)))
+        // Had, short of the list its files name (W4: "partly there"; Health's "Ask for the full album").
+        let short = row.had && c.requested(&[row.id])?.get(&row.id).is_some_and(|q| q.list.is_some_and(|l| q.present < l));
+        Ok(Some((row, refs, kept, short)))
     })
     .await??
     else {
@@ -228,10 +231,12 @@ where
     let sources: Vec<&'static str> = match row.counting.as_deref() {
         // Its own first; the others in the order where its own has no lengths (R33).
         Some(counting) => identity::COUNTING_ORDER.iter().copied().filter(|s| *s == counting).chain(identity::COUNTING_ORDER.iter().copied().filter(|s| *s != counting)).collect(),
+        // Had, short of the list its files name: searched by that list (W4), nothing counted by it.
+        None if row.had && short && kept_of("musicbrainz").is_some() => vec!["musicbrainz"],
         None if row.had => return Ok(Err("No list counts until one is chosen".into())),
         None => identity::COUNTING_ORDER.to_vec(),
     };
-    let mut counted = row.counting.is_some();
+    let mut counted = row.counting.is_some() || row.had;
     let mut judging = Judging::default();
     let mut why: Vec<String> = Vec::new();
     let mut off = None;

@@ -1457,7 +1457,7 @@ struct BuiltAlbum {
 
 /// What a folder's library is, and its place in the libraries' order. With no word from the app (a test without one;
 /// `main` sets them before anything is served): the first folder is the Music folder, the others wait in Incoming.
-fn kind_in(kinds: &[(i64, Kind)], folder: i64) -> (Kind, usize) {
+pub(crate) fn kind_in(kinds: &[(i64, Kind)], folder: i64) -> (Kind, usize) {
     match kinds.iter().position(|(f, _)| *f == folder) {
         Some(i) => (kinds[i].1, i),
         None if folder == 0 && kinds.is_empty() => (Kind::Main, 0),
