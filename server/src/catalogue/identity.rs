@@ -304,6 +304,33 @@ pub struct RefTrack {
     pub recording: Option<String>,
 }
 
+/// The sources in the order one counts where nothing else decides (decision 0100: MusicBrainz, then Discogs, then Bandcamp).
+#[cfg_attr(not(test), allow(dead_code))] // worked out by the references' writers from C43b on
+pub const COUNTING_ORDER: [&str; 3] = ["musicbrainz", "discogs", "bandcamp"];
+
+/// Whether a source's tracklist agrees with a record's files, both in order (0100: "the source whose tracklist agrees with the
+/// files"): as many tracks, each one track by [`Listed::same_track`], its name, its guests and its length. A length the list does
+/// not give passes on the title, so a list with none agrees where every title does (OQ8 (a)). It may count, and no more: two
+/// folders are one record by [`same_tracks`] alone, which reads no source's list. An empty list says nothing.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn agrees(list: &[RefTrack], files: &[Listed]) -> bool {
+    !list.is_empty() && list.len() == files.len() && list.iter().zip(files).all(|(t, f)| Listed::of(&t.title, t.length_ms.unwrap_or(f.duration_ms)).same_track(f))
+}
+
+/// Which source's tracklist counts for a record (decision 0100, the owner's rule): one chosen by hand first (0.14); else the source
+/// whose list agrees with the files ([`agrees`]), the first in [`COUNTING_ORDER`] where several do; with no files to hold a list
+/// against, the first in that order with a list. Where the files have every list against them, none counts until one is chosen:
+/// the one that counts is the one that fits, and Health's references item asks for the choice. None with no list at all.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn counting(chosen: Option<&str>, lists: &[(&str, &[RefTrack])], files: &[Listed]) -> Option<String> {
+    if let Some(chosen) = chosen {
+        return Some(chosen.to_string());
+    }
+    let mut listed = COUNTING_ORDER.iter().filter(|source| lists.iter().any(|(s, list)| s == *source && !list.is_empty()));
+    let found = if files.is_empty() { listed.next() } else { listed.find(|source| lists.iter().any(|(s, list)| s == *source && agrees(list, files))) };
+    found.map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,5 +636,70 @@ mod tests {
         let new = vec![f("n/01 A.flac", 100_000, Some("r1"), Some("A"), None), f("n/02 B.flac", 100_000, None, Some("B"), None)];
         let gone = vec![f("o/01 A.flac", 100_000, Some("r1"), Some("A"), None), f("o/02 B.flac", 100_000, None, Some("B"), None)];
         assert_eq!(match_moves(&new, &gone), vec![(0, 0), (1, 1)]);
+    }
+
+    /// A source's list, each (title, length) in order.
+    fn list(tracks: &[(&str, Option<i64>)]) -> Vec<RefTrack> {
+        tracks.iter().zip(1..).map(|((title, length_ms), position)| RefTrack { disc: 1, position, title: title.to_string(), length_ms: *length_ms, recording: None }).collect()
+    }
+
+    fn files(tracks: &[(&str, i64)]) -> Vec<Listed> {
+        tracks.iter().map(|(t, ms)| Listed::of(t, *ms)).collect()
+    }
+
+    /// A record's files, and three sources' lists of it: MusicBrainz's with a bonus track, Discogs' and Bandcamp's as the files are.
+    fn tide() -> (Vec<Listed>, Vec<RefTrack>, Vec<RefTrack>, Vec<RefTrack>) {
+        let held = files(&[("Slack Water", 181_000), ("Neap", 203_000)]);
+        let mb = list(&[("Slack Water", Some(181_000)), ("Neap", Some(203_000)), ("Bonus", Some(90_000))]);
+        let discogs = list(&[("Slack Water", Some(182_000)), ("Neap", Some(204_000))]);
+        let bandcamp = list(&[("Slack Water", Some(181_000)), ("Neap (feat. Noor Field)", Some(203_000))]);
+        (held, mb, discogs, bandcamp)
+    }
+
+    /// 0.14's "Use this", or a link pasted by hand: before whatever agrees, and with no list of its own yet.
+    #[test]
+    fn counting_hand_first() {
+        let (held, mb, discogs, _) = tide();
+        let lists = [("musicbrainz", &mb[..]), ("discogs", &discogs[..])];
+        assert_eq!(counting(Some("musicbrainz"), &lists, &held).as_deref(), Some("musicbrainz"), "chosen, though it does not agree");
+        assert_eq!(counting(Some("bandcamp"), &lists, &[]).as_deref(), Some("bandcamp"), "chosen, its list not read yet");
+        assert_eq!(counting(Some("acoustid"), &[], &held).as_deref(), Some("acoustid"), "0.14 could choose a source with no list");
+    }
+
+    #[test]
+    fn counting_the_source_that_agrees() {
+        let (held, mb, discogs, bandcamp) = tide();
+        assert!(!agrees(&mb, &held) && agrees(&discogs, &held) && agrees(&bandcamp, &held), "a guest named on one side is the same track");
+        let all = [("bandcamp", &bandcamp[..]), ("discogs", &discogs[..]), ("musicbrainz", &mb[..])];
+        assert_eq!(counting(None, &all, &held).as_deref(), Some("discogs"), "of two that agree, the first in order");
+        assert_eq!(counting(None, &all[..1], &held).as_deref(), Some("bandcamp"));
+        assert_eq!(counting(None, &[("musicbrainz", &mb[..])], &held), None, "none fits: none counts until one is chosen");
+        assert!(!agrees(&list(&[("Slack Water", Some(184_000)), ("Neap", Some(203_000))]), &held), "more than two seconds apart");
+        assert!(!agrees(&list(&[("Neap", Some(203_000)), ("Slack Water", Some(181_000))]), &held), "in order");
+        assert!(!agrees(&[], &[]), "an empty list says nothing");
+    }
+
+    /// A record not had: nothing to hold a list against, so the first source in the order with a list (decision 0100).
+    #[test]
+    fn counting_with_no_files_goes_by_order() {
+        let (_, mb, discogs, bandcamp) = tide();
+        assert_eq!(counting(None, &[("bandcamp", &bandcamp[..]), ("musicbrainz", &mb[..])], &[]).as_deref(), Some("musicbrainz"));
+        assert_eq!(counting(None, &[("bandcamp", &bandcamp[..]), ("discogs", &discogs[..])], &[]).as_deref(), Some("discogs"));
+        assert_eq!(counting(None, &[("bandcamp", &bandcamp[..])], &[]).as_deref(), Some("bandcamp"));
+        assert_eq!(counting(None, &[("musicbrainz", &[][..]), ("bandcamp", &bandcamp[..])], &[]).as_deref(), Some("bandcamp"), "an empty list is no list");
+        assert_eq!(counting(None, &[], &[]), None);
+    }
+
+    /// OQ8 (a): a list with no lengths, Discogs' often, counts where every title agrees; a length it lacks is not held against it.
+    #[test]
+    fn a_list_with_no_lengths_counts_where_every_title_agrees() {
+        let (held, mb, _, _) = tide();
+        let titles = list(&[("Slack Water", None), ("Neap", None)]);
+        assert!(agrees(&titles, &held));
+        assert_eq!(counting(None, &[("musicbrainz", &mb[..]), ("discogs", &titles[..])], &held).as_deref(), Some("discogs"));
+        assert!(!agrees(&list(&[("Slack Water", None), ("Spring Tide", None)]), &held), "every title");
+        assert!(!agrees(&list(&[("Slack Water", None)]), &held), "and as many");
+        assert!(agrees(&list(&[("Slack Water", None), ("Neap", Some(203_500))]), &held), "a length given still decides, within two seconds");
+        assert!(!agrees(&list(&[("Slack Water", None), ("Neap", Some(240_000))]), &held));
     }
 }
