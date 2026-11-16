@@ -14,6 +14,8 @@ mod id3;
 pub mod identity;
 mod index_log;
 pub mod normalise;
+#[cfg_attr(not(test), allow(dead_code))] // read and written by app::references and 0.17's step from C43a on
+pub mod records;
 pub mod tags;
 pub mod walk;
 
@@ -477,7 +479,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 30] = [
+const ADDED_COLUMNS: [(&str, &str); 36] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -531,6 +533,15 @@ const ADDED_COLUMNS: [(&str, &str); 30] = [
     ("files", "rate INTEGER"),
     // When the file first came (docs/records-and-copies.md): a copy keeps its own date, where `tracks.born` is the track's.
     ("files", "came INTEGER"),
+    // 0100 (`records`): what a record not had shows with no file to read it from, its first release date, its genres (joined by
+    // U+001F) and a picture where no reference makes one; whether `counting` was chosen by hand (0.14's "Use this", a link
+    // pasted) or worked out; 0.14's "Checked by hand"; and the record it became where two proved one (G3), so its id stays good.
+    ("records", "released TEXT"),
+    ("records", "genres TEXT"),
+    ("records", "cover TEXT"),
+    ("records", "counted_by_hand INTEGER NOT NULL DEFAULT 0"),
+    ("records", "checked_by_hand INTEGER NOT NULL DEFAULT 0"),
+    ("records", "merged_into INTEGER"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -963,6 +974,7 @@ impl Catalogue {
             }
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track); CREATE INDEX IF NOT EXISTS tracks_by_record ON tracks (record);")?;
+        conn.execute_batch(records::SCHEMA).context("creating the records' references")?;
         // A folder in use before ids for life: its place is its id from now on.
         conn.execute_batch("UPDATE folders SET home = id WHERE id >= 0 AND home IS NULL;")?;
         // Once, before any copy takes another's track: a file came when its track was born, the one date there was. After

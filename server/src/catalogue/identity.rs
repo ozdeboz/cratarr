@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 /// What is compared, already folded (lower case, letters and digits only).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileFacts {
@@ -287,6 +289,19 @@ pub fn same_record(a: &RecordFacts, b: &RecordFacts) -> bool {
         (Some(x), Some(y)) => x == y,
         _ => !a.title.is_empty() && a.title == b.title && a.artist == b.artist,
     }
+}
+
+/// A track of a source's tracklist (0100, `reference_tracks`): its place, its title as the source writes it, and its length and
+/// MusicBrainz recording where the source gives them. Discogs may give no length, and only MusicBrainz gives a recording.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefTrack {
+    pub disc: u32,
+    pub position: u32,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<String>,
 }
 
 #[cfg(test)]
