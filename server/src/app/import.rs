@@ -115,7 +115,8 @@ impl Matcher {
                 same.push(id.to_string());
             }
         }
-        self.loose_albums.entry((loose(name), loose(artist))).or_insert_with(|| id.to_string());
+        // As by its own key: the last added (the oldest, where records are added newest first: R28, N11).
+        self.loose_albums.insert((loose(name), loose(artist)), id.to_string());
     }
 
     /// The album a source names: by name and artist, then loosely, then by name alone where only one has it.

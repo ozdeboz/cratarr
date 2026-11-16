@@ -488,7 +488,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 36] = [
+const ADDED_COLUMNS: [(&str, &str); 37] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -551,6 +551,8 @@ const ADDED_COLUMNS: [(&str, &str); 36] = [
     ("records", "counted_by_hand INTEGER NOT NULL DEFAULT 0"),
     ("records", "checked_by_hand INTEGER NOT NULL DEFAULT 0"),
     ("records", "merged_into INTEGER"),
+    // The rank of the copy that named a record last (R28): a copy ranked lower does not name it again.
+    ("records", "named_rank INTEGER"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -5503,6 +5505,24 @@ mod tests {
         assert_eq!((record_of(&cat, 1), record_of(&cat, 3)), (Some(odd), Some(fits)));
         assert_eq!(cat.record(odd).unwrap().unwrap().counting, None, "a list of three against two files");
         assert_eq!(cat.record(fits).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"));
+    }
+
+    /// R28 (N11): a record's names change on a real retag only: a build without the copy that named it (its library parked, an
+    /// Incoming copy ranked first meanwhile) leaves them; a retag of that copy shows.
+    #[test]
+    fn a_copy_missing_for_one_build_keeps_the_records_names() {
+        let cat = tracks(2);
+        let tracks_of = [(1, "Track 1", 200_000), (2, "Track 2", 200_000)];
+        let main = AlbumCopy { rank: 2, ..copy(None, "Glass Harbour", "Tide Tables", &tracks_of) };
+        cat.assign_records(std::slice::from_ref(&main)).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        let title = || cat.record(record).unwrap().unwrap().title;
+        assert_eq!(title(), "Tide Tables");
+        let incoming = AlbumCopy { folder: 1, rank: 0, ..copy(None, "Glass Harbour", "Tide Tables (WEB)", &tracks_of) };
+        cat.keep_files_names(&[incoming]).unwrap();
+        assert_eq!(title(), "Tide Tables", "kept through a build without it");
+        cat.keep_files_names(&[AlbumCopy { title: "Tide Tables (Remastered)".into(), ..main }]).unwrap();
+        assert_eq!(title(), "Tide Tables (Remastered)", "a retag of the copy that counts");
     }
 
     /// R14 (F6): a had record's title and artist follow its first-ranked copy at each build: a retag shows.

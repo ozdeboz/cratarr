@@ -498,7 +498,14 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         out
     };
     for (record, a) in first {
-        tx.prepare_cached("UPDATE records SET title = ?2, artist = ?3 WHERE id = ?1 AND ?2 <> '' AND (title IS NOT ?2 OR artist IS NOT ?3)")?.execute(params![record, a.title, a.artist])?;
+        // Its names change on a retag only (R28, N11), as its list is let go of (R17): the copy that counts must rank at least as
+        // high as the one that named it last (`named_rank`). A build without that copy (its library parked or out of reach, an
+        // Incoming copy ranked first meanwhile) leaves them; a retag of it shows, as does a better copy (a Keep into Music).
+        tx.prepare_cached(
+            "UPDATE records SET title = ?2, artist = ?3, named_rank = ?4
+             WHERE id = ?1 AND ?2 <> '' AND ?4 >= COALESCE(named_rank, 0) AND (title IS NOT ?2 OR artist IS NOT ?3 OR named_rank IS NOT ?4)",
+        )?
+        .execute(params![record, a.title, a.artist, a.rank])?;
         let mut ids: Vec<i64> = Vec::new();
         for name in &a.artists {
             if let Some(id) = artists.get(&ids::artist_key(name))
@@ -2290,6 +2297,16 @@ mod tests {
         assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000202"), "files").unwrap());
         let wanted = crate::app::requests::record_of_album(&cat, Some("00000000-0000-4000-8000-000000000203"), "Glass Harbour", "Glass Harbour", None, None).unwrap();
         assert_ne!(wanted, owned);
+    }
+
+    /// R28 (N11): of two records the library holds under one loose name, a request found by its loose names takes the older, as
+    /// one found by its exact names does.
+    #[test]
+    fn a_request_by_loose_names_takes_the_older_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let older = cat.record_for_tests("Tide Tables (Remaster)", 2);
+        cat.record_for_tests("Tide Tables (Live)", 2);
+        assert_eq!(crate::app::requests::record_of_album(&cat, None, "The Glass Harbour", "Tide Tables (Deluxe)", None, None).unwrap(), older);
     }
 
     /// R26 (N8): a request's record holding a release group and its own release (a deluxe edition from a label's list) is not had
