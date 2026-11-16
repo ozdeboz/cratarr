@@ -596,14 +596,19 @@ mod tests {
         assert!(listed(report, "bandcamp_found").1.is_empty(), "{report}");
     }
 
-    /// R22 (the owner's GROUCH request, FX01's 12): a request asked by Bandcamp's names, whose page 0.16 found by the release group
-    /// its card knew, finds the discography's record of its names, and the page kept by that group is on it.
+    /// R22 (the owner's GROUCH request, as production's copy holds it, made up: FX01's 12): asked by the label's account with no
+    /// release group, its split names fold to the record not had that the artist's discography made, holding the group; the page
+    /// 0.16 found by that group is on it. Request 10, asking the group itself, is taken away, so the discography is the only way
+    /// to the record, as on production.
     #[test]
     fn a_requests_page_keyed_by_its_records_group_is_kept() {
         let data = Data::new("request-group-page");
+        data.batch("userdata.sqlite", "DELETE FROM request WHERE id = 10");
         data.run();
-        let (record, group_record) = (data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 12"), data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 10"));
-        assert_eq!(record, group_record, "the discography's record, by its names");
+        let record = data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 12");
+        let named = data.sql::<String>("catalogue.sqlite", &format!("SELECT artist || ' - ' || title FROM records WHERE id = {record}"));
+        let group = data.sql::<String>("catalogue.sqlite", &format!("SELECT value FROM \"references\" WHERE subject = 'al-{record}' AND source = 'musicbrainz' AND kind = 'release-group'"));
+        assert_eq!((named.as_str(), group.as_str()), ("Tape Club - Long Player", "00000000-0000-4000-8000-000000000116"), "the discography's record, by its names");
         let page = data.sql::<String>("catalogue.sqlite", &format!("SELECT value FROM \"references\" WHERE subject = 'al-{record}' AND source = 'bandcamp'"));
         assert_eq!(page, "https://paperlantern.bandcamp.com/album/tape-club-long-player-paper-lantern");
     }

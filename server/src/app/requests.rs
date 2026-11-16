@@ -917,6 +917,26 @@ mod tests {
         assert_eq!(requesters(&serve).len(), 1, "kept, not read again");
     }
 
+    /// R22 (the owner's GROUCH request, as production's copy holds it, made up: FX01's 12): asked by the label's account with no
+    /// release group, it takes the record the artist's discography made of its split names, and Lidarr is asked with that record's
+    /// group, by its names.
+    #[tokio::test]
+    async fn a_label_named_request_asks_lidarr_with_its_discography_records_group() {
+        let d = std::env::temp_dir().join(format!("cratarr-requests-label-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        crate::fixtures::data_0_16(&d).unwrap();
+        let serve = Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music")]).unwrap()));
+        super::super::step_017::run(serve.catalogue(), &serve.userdata).unwrap();
+        let r = serve.userdata.requests(None, Some(APPROVED), LIST).unwrap().into_iter().find(|r| r.id == 12).unwrap();
+        assert_eq!(r.release_group, None, "asked with none");
+        let lidarr = Wanting::default();
+        hand_to(Some(&lidarr), false, &serve, &r).await;
+        assert_eq!(lidarr.0.lock().unwrap()[0], (Some("00000000-0000-4000-8000-000000000116".to_string()), "Tape Club".to_string(), "Long Player".to_string()));
+        drop(serve);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// A server of the tests' own, in memory, its catalogue attached.
     fn served() -> Arc<Serve> {
         let serve = Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
