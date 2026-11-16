@@ -86,11 +86,16 @@ pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> R
         bail!("Requesting albums is not on for this account");
     }
     let s = super::discover::suggestion(serve, account, key)?.context("That suggestion is gone; look again")?;
-    ask_for(app, serve, account, Asked { key: s.key, artist_key: s.artist_key, release_group: s.release_group, album: s.album, artist: s.artist, year: s.year, cover: s.cover }).await
+    if let Some(r) = open_request(serve, account, &s.key)? {
+        return Ok(r);
+    }
+    let record = record_of_album_in(serve, s.release_group.clone(), &s.artist, &s.album, s.year, s.cover.clone()).await?;
+    asked_record(app, serve, account, record, Some(s.key)).await
 }
 
 /// Any album asked for by its names (0.9.3, the owner: Want for any album an artist's page says is missing): keyed as
-/// Discover keys albums (its release group, else its artist's and its name's), so its suggestion leaves Discover too.
+/// Discover keys albums (its release group, else its artist's and its name's), so its suggestion leaves Discover too; its
+/// record found or made first (`record_of_album`, C49a), whose names the request shows.
 #[allow(clippy::too_many_arguments)]
 pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<Request> {
     if !rights(serve).request {
@@ -98,12 +103,61 @@ pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_g
     }
     let release_group = release_group.filter(|g| !g.is_empty());
     let key = release_group.clone().unwrap_or_else(|| format!("{}|{}", super::import::key(artist), super::import::key(album)));
-    let asked = Asked { key, artist_key: super::import::loose(artist), release_group, album: album.to_string(), artist: artist.to_string(), year, cover };
+    if let Some(r) = open_request(serve, account, &key)? {
+        return Ok(r);
+    }
+    let record = record_of_album_in(serve, release_group, artist, album, year, cover).await?;
+    asked_record(app, serve, account, record, Some(key)).await
+}
+
+/// A record asked for by its id (C49a): an artist's or a label's missing record, any record not had. The account's open
+/// request for it is the answer where there is one.
+#[allow(dead_code)] // Want by record (C49b's `WantAlbum.record`)
+pub async fn ask_record(app: &super::App, serve: &Serve, account: &str, record: i64) -> Result<Request> {
+    if !rights(serve).request {
+        bail!("Requesting albums is not on for this account");
+    }
+    asked_record(app, serve, account, record, None).await
+}
+
+/// The request for `record`: its names, year, cover and release group the record's (the first group it holds), its key the one
+/// given (Discover's, so its suggestion leaves it), else the record's group, else its names'.
+async fn asked_record(app: &super::App, serve: &Serve, account: &str, record: i64, key: Option<String>) -> Result<Request> {
+    let cat = serve.catalogue().clone();
+    let (row, group) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let row = cat.record(record)?.context("That record is gone")?;
+        let group = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().find(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").map(|(r, _)| r.value);
+        Ok((row, group))
+    })
+    .await??;
+    let key = key.or_else(|| group.clone()).unwrap_or_else(|| format!("{}|{}", super::import::key(&row.artist), super::import::key(&row.title)));
+    let asked = Asked { record: row.id, key, artist_key: super::import::loose(&row.artist), release_group: group, album: row.title, artist: row.artist, year: row.year, cover: row.cover };
     ask_for(app, serve, account, asked).await
 }
 
-/// What a request asks for: an album, by its key and its artist's, and what to show of it.
+/// The account's open request (pending or approved) for an album by its key, where there is one.
+fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Request>> {
+    Ok(serve.userdata.requests(Some(account), None, LIST)?.into_iter().find(|r| r.album_key == key && (r.status == PENDING || r.status == APPROVED)))
+}
+
+/// The record an album asked for by its names is (C49a): its names as a label's own account gives them sorted out first (S12,
+/// `bandcamp::label_release`: a Want from a label's Bandcamp page, "Artist - Title (Label)" by the label, is the artist's
+/// "Title", the label credited), then the record of its release group, else a record had of its names, else a new record not
+/// had (`Catalogue::record_for_request`). Blocking.
+pub fn record_of_album(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<i64> {
+    let named = crate::bandcamp::label_release(artist, album, None);
+    let wanted = crate::catalogue::records::Wanted { group: release_group.map(str::to_string), artist: named.artist, title: named.title, label: named.label, year, cover, page: None };
+    cat.record_for_request(&wanted)
+}
+
+async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<i64> {
+    let (cat, artist, album) = (serve.catalogue().clone(), artist.to_string(), album.to_string());
+    tokio::task::spawn_blocking(move || record_of_album(&cat, release_group.as_deref(), &artist, &album, year, cover)).await?
+}
+
+/// What a request asks for: a record, by its key and its artist's, and what to show of it.
 struct Asked {
+    record: i64,
     key: String,
     artist_key: String,
     release_group: Option<String>,
@@ -118,7 +172,7 @@ struct Asked {
 async fn ask_for(app: &super::App, serve: &Serve, account: &str, s: Asked) -> Result<Request> {
     let may = rights(serve);
     let open = serve.userdata.requests(Some(account), None, LIST)?;
-    if let Some(r) = open.into_iter().find(|r| r.album_key == s.key && (r.status == PENDING || r.status == APPROVED)) {
+    if let Some(r) = open.into_iter().find(|r| (r.record == Some(s.record) || r.album_key == s.key) && (r.status == PENDING || r.status == APPROVED)) {
         return Ok(r);
     }
     let now = super::moment::now_secs();
@@ -139,6 +193,7 @@ async fn ask_for(app: &super::App, serve: &Serve, account: &str, s: Asked) -> Re
         decided_by: approved.then(|| account.to_string()),
         decided_at: approved.then_some(now),
         fetched: None,
+        record: Some(s.record),
     };
     r.id = serve.userdata.add_request(&r)?;
     if approved {
@@ -420,6 +475,23 @@ fn state(in_library: bool, progress: Option<&HashMap<String, Progress>>, r: &Req
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C49a, S12: a Want from a label's Bandcamp album page, which names the label's own account as the artist and the album
+    /// "Artist - Title (Label)", makes the artist's record of that title, the label credited; another Want by its release
+    /// group finds the record of the group.
+    #[test]
+    fn a_want_from_a_labels_album_page_names_the_artist() {
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let record = record_of_album(&cat, None, "Paper Lantern", "Tape Club - After Hours (Paper Lantern)", Some(2020), None).unwrap();
+        let row = cat.record(record).unwrap().unwrap();
+        assert_eq!((row.artist.as_str(), row.title.as_str(), row.year, row.had), ("Tape Club", "After Hours", Some(2020), false));
+        assert_eq!(cat.record_artists(record).unwrap(), [cat.artist_of("Tape Club").unwrap().unwrap()]);
+        assert_eq!(cat.label_records(cat.label_for("Paper Lantern").unwrap()).unwrap(), [(record, String::new())]);
+        assert_eq!(cat.artist_of("Paper Lantern").unwrap(), None, "the account is no artist");
+        let mbid = "00000000-0000-4000-8000-000000000130";
+        let by_group = record_of_album(&cat, Some(mbid), "Orbit Lane", "Undertow", None, None).unwrap();
+        assert_eq!(record_of_album(&cat, Some(mbid), "Orbit Lane", "Undertow (Deluxe)", None, None).unwrap(), by_group, "its group finds it");
+    }
 
     #[test]
     fn a_request_marks_its_album_wanted_or_coming_and_none_once_in() {

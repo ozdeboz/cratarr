@@ -272,6 +272,7 @@ INSERT INTO bandcamp_found (album, at, page) VALUES
   ('00000000-0000-4000-8000-000000000111', 1793950000, 'https://glassharbour.bandcamp.com/album/harbour-lights'),
   ('glassharbour|partialshore', 1794600000, 'https://glassharbour.bandcamp.com/album/partial-shore'),
   ('noorfield|signal', 1794300000, 'https://noorfield.bandcamp.com/music'),
+  ('paperlantern|tapeclubafterhourspaperlantern', 1793950800, 'https://paperlantern.bandcamp.com/album/after-hours'),
   ('ABCDEF00-0000-4000-8000-000000000130', 1794800100, 'https://orbitlane.bandcamp.com/album/undertow');
 
 -- Releases the works' pass read (`app::works::Stored`), with MusicBrainz's verified Discogs links: a release and its master,
@@ -298,7 +299,8 @@ INSERT INTO related_artists (artist, at, found) VALUES
   ('00000000-0000-4000-8000-000000000201', 1793950000, '{"at":1793950000,"artists":[{"name":"Tape Club","mbid":"00000000-0000-4000-8000-000000000204","why":["Listened alongside"],"score":1.0},{"name":"Kite Theory","mbid":"00000000-0000-4000-8000-000000000203","why":["Worked together"],"score":0.6}]}');
 
 -- Requests (0070), by names: with a release group (Soulseek fetches those, `soulseek.json`), one for a record owned by its
--- group; without one (production: 8 of 87), owned by names, not owned, and cancelled.
+-- group; without one (production: 8 of 87), owned by names, not owned, and cancelled; and one a label's own account named
+-- "Artist - Title (Label)", as the owner's 0.16.2 case (made up here), its page found on Bandcamp by those names.
 INSERT INTO request (id, user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched) VALUES
   (1, 'ann', '00000000-0000-4000-8000-000000000112', 'glass harbour', '00000000-0000-4000-8000-000000000112', 'Deep Water', 'Glass Harbour', 2016, '/api/covers/release-group/00000000-0000-4000-8000-000000000112', 1793950000, 'approved', NULL, 'ann', 1793950000, 'Soulseek searches for it'),
   (2, 'bob', '00000000-0000-4000-8000-000000000111', 'glass harbour', '00000000-0000-4000-8000-000000000111', 'Harbour Lights', 'Glass Harbour', 2014, '/api/covers/release-group/00000000-0000-4000-8000-000000000111', 1793950100, 'approved', NULL, 'ann', 1793960000, 'Soulseek searches for it'),
@@ -309,7 +311,8 @@ INSERT INTO request (id, user, album_key, artist_key, release_group, album, arti
   (7, 'bob', 'noorfield|tworooms', 'noor field', NULL, 'Two Rooms', 'Noor Field', 2019, 'https://example.org/covers/two-rooms.jpg', 1750000000, 'approved', NULL, 'ann', 1750000000, 'Not handed over to Soulseek: no release group to judge it by'),
   (8, 'bob', 'orbitlane|quietlanes', 'orbit lane', NULL, 'Quiet Lanes', 'Orbit Lane', 2017, 'https://example.org/covers/quiet-lanes.jpg', 1793950500, 'approved', NULL, 'ann', 1793960000, 'Not handed over to Soulseek: no release group to judge it by'),
   (9, 'ann', 'tapeclub|nowherefast', 'tape club', NULL, 'Nowhere Fast', 'Tape Club', NULL, NULL, 1793950600, 'cancelled', NULL, NULL, NULL, NULL),
-  (10, 'bob', '00000000-0000-4000-8000-000000000116', 'tape club', '00000000-0000-4000-8000-000000000116', 'Long Player', 'Tape Club', 2015, '/api/covers/release-group/00000000-0000-4000-8000-000000000116', 1793950700, 'approved', NULL, 'ann', 1793950700, 'Soulseek searches for it');
+  (10, 'bob', '00000000-0000-4000-8000-000000000116', 'tape club', '00000000-0000-4000-8000-000000000116', 'Long Player', 'Tape Club', 2015, '/api/covers/release-group/00000000-0000-4000-8000-000000000116', 1793950700, 'approved', NULL, 'ann', 1793950700, 'Soulseek searches for it'),
+  (11, 'bob', 'paperlantern|tapeclubafterhourspaperlantern', 'paper lantern', NULL, 'Tape Club - After Hours (Paper Lantern)', 'Paper Lantern', 2020, NULL, 1793950800, 'approved', NULL, 'ann', 1793950800, 'Not handed over to Soulseek: no release group to judge it by');
 
 -- 0.16's first start, done: what says it is over is this part of the report.
 INSERT INTO migration_report (part, at, report) VALUES

@@ -1280,6 +1280,7 @@ mod tests {
 
     fn asked(id: i64, group: Option<&str>) -> crate::userdata::Request {
         crate::userdata::Request {
+            record: None,
             id,
             user: "u".into(),
             album_key: format!("k{id}"),

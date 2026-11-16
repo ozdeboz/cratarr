@@ -30,7 +30,7 @@
 use anyhow::Result;
 
 use crate::catalogue::Catalogue;
-use crate::catalogue::records::{JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, Ref};
+use crate::catalogue::records::{JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, CarriedRequest, Ref};
 use crate::userdata::UserData;
 
 /// The migration report's part, as `/api/admin/migration` lists it.
@@ -45,6 +45,11 @@ pub fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
 /// "catalogue" is after the parts, before the report.
 fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) -> Result<()> {
     let ran = if cat.references_to_carry()?.is_empty() { Vec::new() } else { cat.carry_references(&carry_of(&ud.kept_for_017()?), after)? };
+    // The records the step gave the requests, into the user data where it has none yet (C49a): at every start, so a step cut
+    // off between its part and here gives them at the next.
+    for (id, record) in cat.request_records_017()? {
+        ud.give_request_record(id, record)?;
+    }
     if ran.is_empty() && ud.migration_report()?.contains_key(PART) {
         return Ok(());
     }
@@ -164,6 +169,20 @@ fn carry_of(kept: &crate::userdata::KeptFor017) -> Carry {
             Err(_) => note("discography: not read", artist),
         }
     }
+    let requests = kept
+        .requests
+        .iter()
+        .map(|(id, key, group, album, artist, year, cover, at)| CarriedRequest {
+            id: *id,
+            key: key.clone(),
+            group: group.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(str::to_ascii_lowercase),
+            album: album.clone(),
+            artist: artist.clone(),
+            year: *year,
+            cover: cover.clone(),
+            at: *at,
+        })
+        .collect();
     Carry {
         chosen,
         matches,
@@ -171,6 +190,7 @@ fn carry_of(kept: &crate::userdata::KeptFor017) -> Carry {
         pages,
         links,
         discographies,
+        requests,
         read: vec![
             ("record_references", kept.chosen.len() as u64),
             ("album_matches", kept.matches.len() as u64),
@@ -178,6 +198,7 @@ fn carry_of(kept: &crate::userdata::KeptFor017) -> Carry {
             ("bandcamp_found", kept.pages.len() as u64),
             ("mb_releases", kept.releases.len() as u64),
             ("discography", kept.discographies.len() as u64),
+            ("request", kept.requests.len() as u64),
         ],
         noted,
     }
@@ -229,6 +250,7 @@ mod tests {
                 self.rows_of("catalogue.sqlite", "SELECT id, counting, counted_by_hand, checked_by_hand, kind FROM records ORDER BY id"),
                 self.rows_of("catalogue.sqlite", "SELECT record, source FROM reference_tracks ORDER BY record, source"),
                 self.rows_of("userdata.sqlite", "SELECT count(*) FROM record_references"),
+                self.rows_of("userdata.sqlite", "SELECT id, record FROM request ORDER BY id"),
             ]
             .concat()
         }
@@ -308,16 +330,17 @@ mod tests {
     fn a_later_part_runs_where_an_earlier_part_is_marked() {
         let data = Data::new("later-part");
         data.run();
-        let pages = data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp'");
+        // The pages part's pages: a request's (After Hours') is the requests part's, done and not run again.
+        let pages = data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp' AND value NOT LIKE 'https://paperlantern.%'");
         assert!(pages > 0);
         data.batch(
             "catalogue.sqlite",
-            "DELETE FROM \"references\" WHERE source = 'bandcamp'; DELETE FROM meta WHERE key = '017:pages';
+            "DELETE FROM \"references\" WHERE source = 'bandcamp' AND value NOT LIKE 'https://paperlantern.%'; DELETE FROM meta WHERE key = '017:pages';
              DELETE FROM \"references\" WHERE subject = 'al-2' AND source = 'discogs' AND how = 'hand';",
         );
         data.batch("userdata.sqlite", "UPDATE migration_report SET report = '{}' WHERE part = 'references'");
         data.run();
-        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp'"), pages, "the part it lacked ran");
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp' AND value NOT LIKE 'https://paperlantern.%'"), pages, "the part it lacked ran");
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE subject = 'al-2' AND source = 'discogs' AND how = 'hand'"), 0, "a part done did not run again");
         assert_eq!(data.marks().len(), PARTS_017.len());
         let (_, ud) = data.open();
@@ -461,6 +484,47 @@ mod tests {
         assert!(report["tables"].as_array().unwrap().iter().any(|t| t["name"] == "record_references"));
     }
 
+    /// C49a: each request is given its record: by its release group (a record had, or a discography's record not had), else
+    /// the oldest record had of its names; written into the user data, and found as it was when the step runs again.
+    #[test]
+    fn a_request_finds_its_record() {
+        let data = Data::new("request-record");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        let record = |id: i64| ud.request(id).unwrap().unwrap().record;
+        let of_group = |n: u32| -> Vec<i64> { cat.subject_of(&Ref::new("musicbrainz", "release-group", &mb(n))).unwrap().iter().filter_map(|s| crate::serve::ids::record_number(s)).collect() };
+        assert_eq!(record(6), Some(1), "Tide Tables, by its group");
+        assert_eq!(record(7), Some(2), "Two Rooms, no group: the oldest record had of its names");
+        assert_eq!(of_group(111).len(), 1);
+        assert_eq!(record(2), of_group(111).first().copied(), "Harbour Lights: the discography's record not had");
+        assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM request WHERE record IS NULL"), 0, "every request its record");
+        let given = data.rows_of("userdata.sqlite", "SELECT id, record FROM request ORDER BY id");
+        data.batch("catalogue.sqlite", "DELETE FROM meta WHERE key GLOB '017:*'");
+        data.run();
+        assert_eq!(data.rows_of("userdata.sqlite", "SELECT id, record FROM request ORDER BY id"), given, "the step again: each as it was");
+    }
+
+    /// C49a: a request with no release group and no record of its names gets a new record not had, credited to its artist; one
+    /// a label's account named "Artist - Title (Label)" (S12, the owner's case's shape) gets the artist and title from its
+    /// names, the label credited, and the Bandcamp page `bandcamp_found` kept by its names as its record's reference.
+    #[test]
+    fn a_request_with_no_release_group_gets_a_record() {
+        let data = Data::new("request-new");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        let record = |id: i64| ud.request(id).unwrap().unwrap().record.unwrap();
+        let lanes = cat.record(record(8)).unwrap().unwrap();
+        assert_eq!((lanes.title.as_str(), lanes.artist.as_str(), lanes.year, lanes.had), ("Quiet Lanes", "Orbit Lane", Some(2017), false));
+        assert_eq!(cat.record_artists(lanes.id).unwrap(), [cat.artist_of("Orbit Lane").unwrap().unwrap()]);
+        let hours = cat.record(record(11)).unwrap().unwrap();
+        assert_eq!((hours.title.as_str(), hours.artist.as_str(), hours.had), ("After Hours", "Tape Club", false), "named by its title");
+        assert_eq!(cat.record_artists(hours.id).unwrap(), [cat.artist_of("Tape Club").unwrap().unwrap()]);
+        assert_eq!(cat.label_records(cat.label_for("Paper Lantern").unwrap()).unwrap(), [(hours.id, String::new())], "the account its label");
+        assert!(refs(&cat, hours.id).contains(&by("bandcamp", "album", "https://paperlantern.bandcamp.com/album/after-hours", "search", false)), "{:?}", refs(&cat, hours.id));
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert_eq!((report["records_made_for_requests"].as_u64(), report["pages_for_requests"].as_u64()), (Some(3), Some(1)), "Quiet Lanes, Nowhere Fast, After Hours: {report}");
+    }
+
     /// R5: an id in capitals is the same id: Ferry Lights' two matches name one release, one in capitals, and the older copy
     /// keeps it; Undertow's page, kept by its release group in capitals, is its.
     #[test]
@@ -471,7 +535,7 @@ mod tests {
         assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", FERRY)).unwrap(), ["al-10"]);
         assert_eq!(cat.subject_of(&Ref::new("bandcamp", "album", "https://orbitlane.bandcamp.com/album/undertow")).unwrap(), ["al-12"]);
         let report = &ud.migration_report().unwrap()[PART].1;
-        assert!(listed(report, "bandcamp_found").1.is_empty(), "Harbour Lights' found its record not had (C48b): {report}");
+        assert_eq!(listed(report, "bandcamp_found").1, ["paperlantern|tapeclubafterhourspaperlantern"], "a request's, taken by the requests part (C49a): {report}");
     }
 
     /// R5: a row keeps when it was first found: a match's, a page's and a link's as 0.16 found them, a hand's when the step
@@ -621,6 +685,7 @@ mod tests {
             ("bandcamp_found", "SELECT count(*) FROM bandcamp_found"),
             ("mb_releases", "SELECT count(*) FROM mb_releases WHERE found <> 0"),
             ("discography", "SELECT count(*) FROM discography"),
+            ("request", "SELECT count(*) FROM request"),
         ] {
             let rows = data.sql::<i64>("userdata.sqlite", sql) as u64;
             let (before, moved) = table(report, name);
@@ -802,7 +867,7 @@ mod tests {
 
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!(listed(report, "album_matches").0, 1, "{report}");
-        assert_eq!(listed(report, "bandcamp_found").0, 0, "Harbour Lights', a record not had now (C48b)");
+        assert_eq!(listed(report, "bandcamp_found").1, ["paperlantern|tapeclubafterhourspaperlantern"], "Harbour Lights' found its record not had (C48b); After Hours' is a request's, its record made by the requests part (C49a)");
         assert_eq!(
             differed(report, "references: held by another record"),
             [

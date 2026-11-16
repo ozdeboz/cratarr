@@ -781,9 +781,10 @@ impl Catalogue {
 /// a certain match, MusicBrainz having matched the record's own tracks to the release; what the files name, the older record
 /// first; a likely match; MusicBrainz's verified Discogs links, before a Discogs search by names, which can find another
 /// record's; the discographies (C48b), records not had found by the release groups the parts before kept; Bandcamp's pages,
-/// a record not had's among them; 0.14's choices, which confirm what the parts before wrote. No part counts: a certain match's
-/// list is read after (`lists_to_read`), and counts where it agrees with the files.
-pub const PARTS_017: [&str; 9] = ["hand", "certain", "files", "likely", "links", "discogs", "discography", "pages", "chosen"];
+/// a record not had's among them; 0.14's choices, which confirm what the parts before wrote; the requests (C49a), each given
+/// its record. No part counts: a certain match's list is read after (`lists_to_read`), and counts where it agrees with the
+/// files. A new part goes at the end, so a data folder that ran the parts before runs it in the same order as a new one.
+pub const PARTS_017: [&str; 10] = ["hand", "certain", "files", "likely", "links", "discogs", "discography", "pages", "chosen", "requests"];
 
 /// A part's mark in `meta`, holding its report: there, the part is done. One a part, so a data folder that ran an earlier
 /// version of the step, with fewer parts, runs the ones it lacks.
@@ -801,6 +802,7 @@ fn table_017(part: &str) -> Option<&'static str> {
         "discogs" => "discogs_facts: albums",
         "discography" => "discography",
         "pages" => "bandcamp_found",
+        "requests" => "request",
         _ => return None,
     })
 }
@@ -825,6 +827,7 @@ pub struct Carry {
     pub pages: Vec<CarriedPage>,
     pub links: Vec<CarriedLinks>,
     pub discographies: Vec<CarriedDiscography>,
+    pub requests: Vec<CarriedRequest>,
     /// Each table's rows as read: the report's before and after alike, as nothing is taken out of it.
     pub read: Vec<(&'static str, u64)>,
     /// Rows read that carry nothing, by why ("<table>: <why>": nothing found, a miss, not read, ...): their keys, which the
@@ -870,6 +873,88 @@ pub struct CarriedPage {
     pub at: i64,
     pub page: String,
 }
+
+/// A request with no record yet (`request`, C49a): its id, its key (its release group, else its names' as Discover keyed them,
+/// which `bandcamp_found` keeps a page by), its release group, its names as asked for, its year and cover, and when it was
+/// asked.
+#[derive(Debug, Clone, Default)]
+pub struct CarriedRequest {
+    pub id: i64,
+    pub key: String,
+    pub group: Option<String>,
+    pub album: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub cover: Option<String>,
+    pub at: i64,
+}
+
+/// What an album asked for is (C49a): its release group, its names (as `bandcamp::label_release` sorts a label's out), the label
+/// that named it so, its year and cover, and a Bandcamp album page where one was found for it by its names.
+#[derive(Debug, Clone, Default)]
+pub struct Wanted {
+    pub group: Option<String>,
+    pub artist: String,
+    pub title: String,
+    pub label: Option<String>,
+    pub year: Option<i32>,
+    pub cover: Option<String>,
+    pub page: Option<String>,
+}
+
+/// The record an album asked for is, in the caller's transaction (C49a): the record its release group names (the oldest, each
+/// followed through its merges; under OQ16 a retired record is its group's), else the oldest live record had of its names,
+/// else a new record not had, credited to its artist (`listing`). Its label, where a label named it, credited too (`listing`);
+/// its Bandcamp album page, where it has no release group, a reference (`search`), so Soulseek can judge by Bandcamp's list
+/// (C51b). Its id, and whether it was made now.
+pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<(i64, bool)> {
+    use super::identity::fold;
+    let group = w.group.as_deref().map(str::to_ascii_lowercase).filter(|g| is_mbid(g)).map(|g| Ref::new("musicbrainz", "release-group", &g));
+    let by_group = match &group {
+        Some(g) => found_by_reference(tx, &Listing { refs: vec![g.clone()], ..Listing::default() })?,
+        None => None,
+    };
+    let by_names = || -> Result<Option<i64>> {
+        let (artist, title) = (fold(&w.artist), fold(&w.title));
+        let mut st = tx.prepare_cached(
+            "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
+             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
+             ORDER BY r.id",
+        )?;
+        let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows.into_iter().find(|(_, a, t)| !title.is_empty() && fold(a) == artist && fold(t) == title).map(|(id, ..)| id))
+    };
+    let found = match by_group {
+        Some(record) => Some(record),
+        None => by_names()?,
+    };
+    let (record, made) = match found {
+        Some(record) => (record, false),
+        None => {
+            let artist = match w.artist.trim() {
+                "" => None,
+                name => Some(super::artists::artists_in(tx, &std::collections::BTreeSet::from([name.to_string()]), at)?[&ids::artist_key(name)]),
+            };
+            let listing = Listing { title: w.title.clone(), artist: w.artist.clone(), year: w.year, cover: w.cover.clone(), refs: group.clone().into_iter().collect(), ..Listing::default() };
+            (keep_listing_in(tx, artist, &[listing], "link", at)?[0], true)
+        }
+    };
+    if let Some(label) = w.label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+        let id = super::labels::labels_in(tx, &std::collections::BTreeSet::from([label.to_string()]), at)?[&ids::artist_key(label)];
+        tx.prepare_cached("INSERT OR IGNORE INTO record_labels (record, label, catno, how) VALUES (?1, ?2, '', 'listing')")?.execute(params![record, id])?;
+    }
+    if group.is_none()
+        && let Some(page) = w.page.as_deref()
+    {
+        put_reference(tx, &ids::record(record), &Ref::new("bandcamp", "album", page), "search", at, false)?;
+    }
+    Ok((record, made))
+}
+
+/// Where 0.17's step keeps the record it gave each request (`requests`), in the part's transaction: the user data's own
+/// (`request.record`) is written from it at every start where it is still empty, so a step cut off between the two gives it
+/// at the next.
+const REQUEST_RECORDS: &str = "requests_017";
 
 /// One artist's discography (`discography`, C48b): their MusicBrainz id, when it was read, its release groups as listings, and
 /// the names they may go by where nothing here names them yet: (name, how found), a related artist's first, then a match's.
@@ -1243,6 +1328,28 @@ impl Carrying<'_> {
         Ok(())
     }
 
+    /// 10. The requests (C49a): each its record (`request_record_in`), its names as a label's account named them sorted out
+    ///     (S12, `bandcamp::label_release`), and where it has no release group, the Bandcamp page `bandcamp_found` kept by its
+    ///     names: a page the pages part found no record for, as the record is made only here.
+    fn requests(&mut self, c: &Carry) -> Result<()> {
+        let pages: std::collections::HashMap<&str, &str> = c.pages.iter().map(|p| (p.key.as_str(), p.page.as_str())).collect();
+        let mut given: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        let (mut made, mut paged) = (0, 0);
+        for r in &c.requests {
+            let named = crate::bandcamp::label_release(&r.artist, &r.album, None);
+            let page = r.group.is_none().then(|| pages.get(r.key.as_str()).map(|p| p.to_string())).flatten();
+            paged += u64::from(page.is_some());
+            let w = Wanted { group: r.group.clone(), artist: named.artist, title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
+            let (record, new) = request_record_in(self.tx, &w, r.at)?;
+            made += u64::from(new);
+            given.insert(r.id, record);
+            self.moved += 1;
+        }
+        self.tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![REQUEST_RECORDS, serde_json::to_string(&given)?])?;
+        self.counts = vec![("records_made_for_requests", made), ("pages_for_requests", paged)];
+        Ok(())
+    }
+
     /// 9. 0.14's choices: the source chosen, by hand; checked by hand; its guesses confirmed, each source of which the record
     ///    holds no reference listed.
     fn chosen(&mut self, c: &Carry) -> Result<()> {
@@ -1298,6 +1405,7 @@ fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_
         "discography" => w.discography(c)?,
         "pages" => w.pages(c)?,
         "chosen" => w.chosen(c)?,
+        "requests" => w.requests(c)?,
         _ => anyhow::bail!("0.17's step has no part {part}"),
     }
     let mut report = crate::moved::Report::default();
@@ -1330,6 +1438,22 @@ fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_
 }
 
 impl Catalogue {
+    /// The records 0.17's step gave the requests (C49a), by request id, for the user data's `request.record`. Blocking.
+    pub fn request_records_017(&self) -> Result<Vec<(i64, i64)>> {
+        let Some(text) = self.meta(REQUEST_RECORDS) else { return Ok(Vec::new()) };
+        let given: std::collections::BTreeMap<i64, i64> = serde_json::from_str(&text)?;
+        Ok(given.into_iter().collect())
+    }
+
+    /// The record an album asked for is, found or made (`request_record_in`, C49a). Blocking.
+    pub fn record_for_request(&self, w: &Wanted) -> Result<i64> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (record, _) = request_record_in(&tx, w, now())?;
+        tx.commit()?;
+        Ok(record)
+    }
+
     /// 0.17's step's parts not done (no mark), in order. Blocking.
     pub fn references_to_carry(&self) -> Result<Vec<&'static str>> {
         let db = self.db();

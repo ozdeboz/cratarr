@@ -617,6 +617,17 @@ fn add_review_folder(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Requests from before they named their record (0.17, C49a) get the column, empty, and its index: 0.17's step gives each its
+/// record. Safe to repeat.
+fn add_request_record(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('request') WHERE name = 'record'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE request ADD COLUMN record INTEGER")?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS request_record ON request (record)")?;
+    Ok(())
+}
+
 /// Listening services from before they could be switched off: on. Safe to repeat.
 fn add_scrobble_off(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('scrobble_target') WHERE name = 'off'")?.exists([])?;
@@ -733,6 +744,9 @@ pub struct KeptFor017 {
     pub pages: Vec<(String, i64, Option<String>)>,
     /// `mb_releases` MusicBrainz knew: (release, when, what was read).
     pub releases: Vec<(String, i64, String)>,
+    /// `request`s with no record yet (C49a): (id, album key, release group, album, artist, year, cover, when asked).
+    #[allow(clippy::type_complexity)]
+    pub requests: Vec<(i64, String, Option<String>, String, String, Option<i32>, Option<String>, i64)>,
     /// `discography` (C48b): (artist's MusicBrainz id, when read, its release groups as JSON).
     pub discographies: Vec<(String, i64, String)>,
     /// `related_artists`' finds (JSON), for the names of the artists in them, by MusicBrainz id.
@@ -757,6 +771,9 @@ impl UserData {
             releases: rows(&db, "SELECT release, at, facts FROM mb_releases WHERE found <> 0 ORDER BY release", |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?,
             discographies: rows(&db, "SELECT artist, at, groups FROM discography ORDER BY artist", |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?,
             related: rows(&db, "SELECT found FROM related_artists ORDER BY artist", |r| r.get(0))?,
+            requests: rows(&db, "SELECT id, album_key, release_group, album, artist, year, cover, at FROM request WHERE record IS NULL ORDER BY id", |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+            })?,
         })
     }
 
@@ -814,6 +831,7 @@ impl UserData {
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
+        add_request_record(&conn)?;
         add_review_folder(&conn).context("keeping reviews by the copy that waited")?;
         words::add_heard_folder(&conn).context("keeping what was heard by the copy it was heard of")?;
         conn.execute_batch(scrobbles::SCHEMA).context("keeping the plays devices hand over")?;
@@ -1623,9 +1641,9 @@ impl UserData {
     pub fn add_request(&self, r: &Request) -> Result<i64> {
         let db = self.db();
         db.execute(
-            "INSERT INTO request (user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![r.user, r.album_key, r.artist_key, r.release_group, r.album, r.artist, r.year, r.cover, r.at, r.status, r.reason, r.decided_by, r.decided_at, r.fetched],
+            "INSERT INTO request (user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched, record)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![r.user, r.album_key, r.artist_key, r.release_group, r.album, r.artist, r.year, r.cover, r.at, r.status, r.reason, r.decided_by, r.decided_at, r.fetched, r.record],
         )?;
         Ok(db.last_insert_rowid())
     }
@@ -1660,6 +1678,11 @@ impl UserData {
     }
 
     /// The release group a fetcher found a request's album by, for one asked for by its names.
+    /// A request's record (C49a), where it has none yet: 0.17's step's, given once. Whether it was given.
+    pub fn give_request_record(&self, id: i64, record: i64) -> Result<bool> {
+        Ok(self.db().execute("UPDATE request SET record = ?2 WHERE id = ?1 AND record IS NULL", params![id, record])? > 0)
+    }
+
     pub fn set_request_release_group(&self, id: i64, release_group: &str) -> Result<()> {
         self.db().execute("UPDATE request SET release_group = ?2 WHERE id = ?1", params![id, release_group])?;
         Ok(())
@@ -2245,10 +2268,12 @@ pub struct Request {
     pub decided_at: Option<i64>,
     /// What the fetcher (Lidarr) said when it was handed the request.
     pub fetched: Option<String>,
+    /// The record asked for (C49a), the catalogue's: what its names and references come from. None only before 0.17's step.
+    pub record: Option<i64>,
 }
 
 const REQUEST_COLUMNS: &str =
-    "id, user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched";
+    "id, user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched, record";
 
 fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
     Ok(Request {
@@ -2267,6 +2292,7 @@ fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
         decided_by: r.get(12)?,
         decided_at: r.get(13)?,
         fetched: r.get(14)?,
+        record: r.get(15)?,
     })
 }
 
@@ -2654,6 +2680,7 @@ mod tests {
     fn requests_keep_who_asked_their_status_and_who_answered() {
         let u = UserData::open(None).unwrap();
         let r = |user: &str, album: &str, at: i64| Request {
+            record: None,
             id: 0,
             user: user.into(),
             album_key: format!("rg-{album}"),
