@@ -299,29 +299,76 @@ fn is_mbid(id: &str) -> bool {
     id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
-/// What each album's files say its record is at MusicBrainz, kept as `files` references in the record pass's transaction
-/// (`records[i]` is `albums[i]`'s): the release and the release group as tagged. Those kept already are left as they are, so a
-/// pass over a library as it was writes nothing; one a search found becomes the files'. In the records' order: where one release's files make two records (G1, a
-/// bonus track, another master), the older record keeps the release and the newer only the group, until a certain match or a
-/// link pasted says which it is.
-pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>], at: i64) -> Result<()> {
-    let mut named: Vec<(i64, &str, &str)> = Vec::new();
-    for (a, record) in albums.iter().zip(records) {
-        let Some(record) = *record else { continue };
-        named.extend(a.facts.release.as_deref().map(|v| (record, "release", v)));
-        named.extend(a.group.as_deref().map(|v| (record, "release-group", v)));
+/// What a record's files name at MusicBrainz, of one kind (a release, a release group), each file by its first value: the
+/// value most of them name, the lower where as many name two, folded to lower case; none where no file names one. The one
+/// rule for what an album's files name: the record pass's (`files_named`, `files_references`), 0.17's step's, and the identity
+/// an album is held by (`serve::library::album_copies`).
+pub fn most_named<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for value in values {
+        let value = value.trim().to_lowercase();
+        if !value.is_empty() {
+            *counts.entry(value).or_default() += 1;
+        }
     }
-    named.retain(|(_, _, v)| is_mbid(v));
-    named.sort_unstable();
-    named.dedup();
+    counts.into_iter().max_by(|(a, x), (b, y)| x.cmp(y).then(b.cmp(a))).map(|(value, _)| value)
+}
+
+/// What each record's files name at MusicBrainz, as their tags say now (`most_named`): (record, `release` or `release-group`,
+/// id), the records in order. A value that is no MusicBrainz id names nothing.
+fn files_named(tx: &Connection) -> Result<Vec<(i64, &'static str, String)>> {
+    let mut st = tx.prepare(
+        "SELECT t.record, g.name, g.folder, g.rel, g.value FROM tags g
+         JOIN files f ON f.folder = g.folder AND f.rel = g.rel
+         JOIN tracks t ON t.id = f.track
+         WHERE g.name IN ('musicbrainz_albumid', 'musicbrainz_releasegroupid') AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL
+           AND t.record IS NOT NULL AND t.retired_at IS NULL
+         ORDER BY t.record, g.name, g.folder, g.rel, g.n",
+    )?;
+    let rows: Vec<(i64, String, i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
+    let mut firsts: std::collections::BTreeMap<(i64, &str), Vec<&str>> = std::collections::BTreeMap::new();
+    let mut file = None;
+    for (record, name, folder, rel, value) in &rows {
+        let this = (*record, name.as_str(), *folder, rel.as_str());
+        if file.replace(this) != Some(this) {
+            firsts.entry((*record, name.as_str())).or_default().push(value.as_str());
+        }
+    }
+    let mut out = Vec::new();
+    for ((record, name), values) in firsts {
+        if let Some(value) = most_named(values).filter(|v| is_mbid(v)) {
+            out.push((record, if name == "musicbrainz_albumid" { "release" } else { "release-group" }, value));
+        }
+    }
+    Ok(out)
+}
+
+/// What the records of a pass name at MusicBrainz now (`files_named`), kept as their `files` references in the record pass's
+/// transaction: a release or a release group they named before and name no more is let go of (a retag), one they name now
+/// kept. Those kept already are left as they are, so a pass over a library as it was writes nothing; one a search found
+/// becomes the files'. In the records' order: where one release's files make two records (G1, a bonus track, another master),
+/// the older record keeps the release and the newer only the group, until a certain match or a link pasted says which it is.
+pub(super) fn files_references(tx: &Connection, records: &[Option<i64>], at: i64) -> Result<()> {
+    let ours: std::collections::HashSet<i64> = records.iter().flatten().copied().collect();
+    let named: Vec<(i64, &str, String)> = files_named(tx)?.into_iter().filter(|(record, ..)| ours.contains(record)).collect();
+    let now: std::collections::HashSet<(String, &str, &str)> = named.iter().map(|(record, kind, value)| (ids::record(*record), *kind, value.as_str())).collect();
+    let held: Vec<(String, String, String)> = {
+        let mut st = tx.prepare_cached("SELECT subject, kind, value FROM \"references\" WHERE source = 'musicbrainz' AND kind IN ('release', 'release-group') AND how = 'files'")?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    for (subject, kind, value) in &held {
+        if ids::record_number(subject).is_some_and(|record| ours.contains(&record)) && !now.contains(&(subject.clone(), kind.as_str(), value.as_str())) {
+            tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1 AND source = 'musicbrainz' AND kind = ?2 AND value = ?3")?.execute(params![subject, kind, value])?;
+        }
+    }
     let known: std::collections::HashSet<(String, String, String)> = {
         let mut st = tx.prepare_cached("SELECT subject, kind, value FROM \"references\" WHERE source = 'musicbrainz' AND kind IN ('release', 'release-group') AND how IN ('files', 'hand')")?;
         st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
     };
     for (record, kind, value) in named {
         let subject = ids::record(record);
-        if !known.contains(&(subject.clone(), kind.to_string(), value.to_string())) {
-            put_reference(tx, &subject, &Ref::new("musicbrainz", kind, value), "files", at, false)?;
+        if !known.contains(&(subject.clone(), kind.to_string(), value.clone())) {
+            put_reference(tx, &subject, &Ref::new("musicbrainz", kind, &value), "files", at, false)?;
         }
     }
     Ok(())
@@ -755,30 +802,6 @@ pub struct CarriedLinks {
     pub discogs: Vec<Ref>,
 }
 
-/// What each record's files name at MusicBrainz, as their tags say: (record, `release` or `release-group`, id), the id most
-/// of its files present name, the records in order. A tag that is no MusicBrainz id names nothing.
-fn files_named(tx: &Connection) -> Result<Vec<(i64, &'static str, String)>> {
-    let mut st = tx.prepare(
-        "SELECT t.record, g.name, lower(g.value) FROM tags g
-         JOIN files f ON f.folder = g.folder AND f.rel = g.rel
-         JOIN tracks t ON t.id = f.track
-         WHERE g.name IN ('musicbrainz_albumid', 'musicbrainz_releasegroupid') AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL
-           AND t.record IS NOT NULL AND t.retired_at IS NULL
-         GROUP BY t.record, g.name, lower(g.value)
-         ORDER BY t.record, g.name, count(*) DESC, lower(g.value)",
-    )?;
-    let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for (record, name, value) in rows {
-        let kind = if name == "musicbrainz_albumid" { "release" } else { "release-group" };
-        if is_mbid(&value) && seen.insert((record, kind)) {
-            out.push((record, kind, value));
-        }
-    }
-    Ok(out)
-}
-
 /// One part's writes in its transaction, and what its report says of them.
 struct Carrying<'t> {
     tx: &'t Connection,
@@ -1125,6 +1148,16 @@ impl Catalogue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R4: what an album's files name is what most of them name, folded to lower case, the lower of two named as often; a
+    /// blank names nothing. Not the first file's: its tag may be the odd one out.
+    #[test]
+    fn what_the_files_name_is_what_most_of_them_name() {
+        let (a, b) = ("00000000-0000-4000-8000-000000000001", "ABCDEF00-0000-4000-8000-000000000002");
+        assert_eq!(most_named([a, b, b]).as_deref(), Some("abcdef00-0000-4000-8000-000000000002"));
+        assert_eq!(most_named([b, a]).as_deref(), Some(a), "as often: the lower");
+        assert_eq!(most_named(["", " "]), None);
+    }
 
     /// A record of this title, not had.
     fn record(cat: &Catalogue, title: &str) -> String {

@@ -855,6 +855,9 @@ impl Library {
             if given > 0 {
                 folders = read()?;
             }
+        } else {
+            // Every record settled: what the files name and credit is still kept, so a retag shows (R4).
+            cat.keep_files_names(&copies).context("keeping what the albums' files name")?;
         }
         drop(copies);
         // As for records: a new name has its id before anything written names it.
@@ -1687,12 +1690,11 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
             let named = list.iter().copied().find(|s| ids::album(s.row, &s.album_artist, s.folder) == s.group).unwrap_or(first);
             crate::catalogue::AlbumCopy {
                 facts: RecordFacts {
-                    release: list.iter().find_map(|s| s.row.first("musicbrainz_albumid")).map(str::to_lowercase),
+                    release: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_albumid"))),
                     artist: fold(&first.album_artist),
                     title: fold(&first.album),
                     tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
-                group: list.iter().find_map(|s| s.row.first("musicbrainz_releasegroupid")).map(str::to_lowercase),
                 artists: first.album_artists.clone(),
                 artist_ids: first.row.all("musicbrainz_albumartistid").flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect(),
                 labels: labels_of_album(&list),
@@ -2745,6 +2747,29 @@ mod tests {
         tagged(&cat, 1, &[("date", "1999"), ("genre", "Own Word"), ("musicbrainz_albumid", "own-release")]);
         build_now(&lib, &cat);
         assert_eq!(says(&lib, &album), before);
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// R4: a retag shows in the record's references at the next build, its tracks settled as they were (no album needs a
+    /// record, so `assign_records` does not run): the release its files name now is its `files` reference, and the one they
+    /// named before is let go of.
+    #[test]
+    fn a_retagged_album_lets_go_of_its_old_release() {
+        let (roots, cat, lib, album, _) = a_record_in("retagged", Kind::Incoming);
+        let (old, new) = ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002");
+        let refs = || -> Vec<(String, String, String)> { cat.references_of(&album).unwrap().into_iter().map(|(r, row)| (r.kind, r.value, row.how)).collect() };
+        let release = |id: &str| vec![("release".to_string(), id.to_string(), "files".to_string())];
+        for folder in [0, 1] {
+            tagged(&cat, folder, &[("musicbrainz_albumid", old)]);
+        }
+        build_now(&lib, &cat);
+        assert!(!cat.records_unsettled() && albums_now(&cat).iter().all(|a| !a.split), "no album needs a record");
+        assert_eq!(refs(), release(old), "tagged after its record was given");
+        for folder in [0, 1] {
+            tagged(&cat, folder, &[("musicbrainz_albumid", new)]);
+        }
+        build_now(&lib, &cat);
+        assert_eq!(refs(), release(new), "the release named before let go of");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
