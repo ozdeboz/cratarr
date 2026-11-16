@@ -603,6 +603,8 @@ fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Fi
     if waiting.is_empty() {
         return Ok(Vec::new());
     }
+    // Each by its record's names (C49b): a label's "Artist - Title" is the artist's title.
+    let waiting = super::requests::shown_requests(serve, waiting);
     let count = super::requests::waiting(&serve)? as u64;
     let mut f = finding("requests", "requests:waiting", Level::Info, count, format!("{} waiting", n(count, "request", "requests")));
     f.open = Some(Open { page: "requests", switch: None, thing: None });

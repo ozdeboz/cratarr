@@ -387,7 +387,9 @@ fn with_marks<T>(account: &str, f: impl FnOnce(&Marks, &Lists) -> T) -> Result<O
     let library = library()?;
     let answers = Answers(s.all_mb()?);
     let serve = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let requests = marks::requests_by_key(serve.userdata.requests(Some(account), None, 10_000)?);
+    let all = serve.userdata.requests(Some(account), None, 10_000)?;
+    let of = crate::app::requests::records_of(serve.catalogue(), &all)?;
+    let requests = marks::requests_by_key(all, &of);
     let m = Marks { library: &library, answers: &answers, requests };
     Ok(Some(f(&m, &lists)))
 }

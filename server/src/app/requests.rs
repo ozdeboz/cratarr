@@ -112,7 +112,6 @@ pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_g
 
 /// A record asked for by its id (C49a): an artist's or a label's missing record, any record not had. The account's open
 /// request for it is the answer where there is one.
-#[allow(dead_code)] // Want by record (C49b's `WantAlbum.record`)
 pub async fn ask_record(app: &super::App, serve: &Serve, account: &str, record: i64) -> Result<Request> {
     if !rights(serve).request {
         bail!("Requesting albums is not on for this account");
@@ -311,10 +310,10 @@ pub async fn list(app: &super::App, serve: &Serve, account: &str) -> Result<List
     let may = rights(serve);
     let mine = serve.userdata.requests(Some(account), None, LIST)?;
     let waiting = if may.manage_requests { Some(serve.userdata.requests(None, Some(PENDING), LIST)?) } else { None };
-    let (f, lib) = (fetcher(app), library(serve).await);
-    let mine = views(f.as_deref(), lib.as_deref(), mine).await;
+    let f = fetcher(app);
+    let mine = views(serve, f.as_deref(), mine).await;
     let waiting = match waiting {
-        Some(w) => Some(views(f.as_deref(), lib.as_deref(), w).await),
+        Some(w) => Some(views(serve, f.as_deref(), w).await),
         None => None,
     };
     let fetchers = connected(f.is_some()).await;
@@ -333,8 +332,8 @@ pub async fn of_suggestions(app: &super::App, serve: &Serve, account: &str, keys
     if newest.is_empty() {
         return Ok(Vec::new());
     }
-    let (f, lib) = (fetcher(app), library(serve).await);
-    Ok(views(f.as_deref(), lib.as_deref(), newest).await.into_iter().map(|v| (v.request.album_key.clone(), v)).collect())
+    let f = fetcher(app);
+    Ok(views(serve, f.as_deref(), newest).await.into_iter().map(|v| (v.request.album_key.clone(), v)).collect())
 }
 
 /// What Lidarr is looking for and fetching now (the page's "Lidarr is looking for these"); asked while the page is
@@ -371,11 +370,10 @@ fn mark(state: &Album) -> Option<Mark> {
     }
 }
 
-/// Every open request's mark (pending or approved, any account's: an album someone asked for comes for the whole
-/// server), by its album's key as Discover keys albums (its release group, else its artist's and its name's); one
-/// coming wins over one only wanted. Kept `MARKS_KEEP`.
-pub async fn marks(app: &super::App, serve: &Serve) -> Result<Arc<HashMap<String, Mark>>> {
-    type Kept = Option<(Instant, Arc<HashMap<String, Mark>>)>;
+/// Every open request's mark (pending or approved, any account's: an album someone asked for comes for the whole server), by
+/// its record and by what names its record (C49b, `marks_of`); one coming wins over one only wanted. Kept `MARKS_KEEP`.
+pub async fn marks(app: &super::App, serve: &Serve) -> Result<Arc<Marks>> {
+    type Kept = Option<(Instant, Arc<Marks>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
     let kept = KEPT.get_or_init(Default::default);
     if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone()
@@ -384,39 +382,141 @@ pub async fn marks(app: &super::App, serve: &Serve) -> Result<Arc<HashMap<String
         return Ok(m);
     }
     let open: Vec<Request> = serve.userdata.requests(None, None, OPEN)?.into_iter().filter(|r| r.status == PENDING || r.status == APPROVED).collect();
-    let (f, lib) = (fetcher(app), library(serve).await);
-    let mut out: HashMap<String, Mark> = HashMap::new();
-    for v in views(f.as_deref(), lib.as_deref(), open).await {
-        let Some(m) = mark(&v.album_state) else { continue };
-        let e = out.entry(v.request.album_key.clone()).or_insert(m);
-        if e.state == "wanted" && m.state == "downloading" {
-            *e = m;
-        }
-    }
-    let m = Arc::new(out);
+    let of = named(serve, &open).await;
+    let views = views_of(fetcher(app).as_deref(), open, &of).await;
+    let m = Arc::new(marks_of(&views, &of));
     *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
     Ok(m)
 }
 
-/// An album's key among `requesters`.
+/// The open requests' marks (C49b): by the record each asks for (merges followed), and by what names that record for lists
+/// that have no record id (Discover's cards, Spotify's albums, search's "beyond"): its release groups, its names (`requested`)
+/// and the key it was asked by (Discover's). One coming wins over one only wanted.
+#[derive(Debug, Clone, Default)]
+pub struct Marks {
+    by_record: HashMap<i64, Mark>,
+    by_key: HashMap<String, Mark>,
+}
+
+impl Marks {
+    /// A record's mark, by the id it answers by now (`Catalogue::record` follows a merge).
+    #[allow(dead_code)] // the pages of records not had (C53a, C56)
+    pub fn of_record(&self, record: i64) -> Option<Mark> {
+        self.by_record.get(&record).copied()
+    }
+
+    /// Tests elsewhere: marks by key alone, as lists with no record id find them.
+    #[cfg(test)]
+    pub fn by_key(by_key: HashMap<String, Mark>) -> Self {
+        Self { by_key, by_record: HashMap::new() }
+    }
+}
+
+fn put<K: std::hash::Hash + Eq>(map: &mut HashMap<K, Mark>, key: K, m: Mark) {
+    let e = map.entry(key).or_insert(m);
+    if e.state == "wanted" && m.state == "downloading" {
+        *e = m;
+    }
+}
+
+/// `views`' marks, each request's record as `records_of` read it (`of`, in the views' order). Pure.
+fn marks_of(views: &[View], of: &[Option<RecordOf>]) -> Marks {
+    let mut marks = Marks::default();
+    for (v, o) in views.iter().zip(of) {
+        let Some(m) = mark(&v.album_state) else { continue };
+        put(&mut marks.by_key, v.request.album_key.clone(), m);
+        if let Some(o) = o {
+            put(&mut marks.by_record, o.record, m);
+            for g in &o.groups {
+                put(&mut marks.by_key, g.clone(), m);
+            }
+            put(&mut marks.by_key, requested(&o.artist, &o.title), m);
+        }
+    }
+    marks
+}
+
+/// An album's key by its names: its artist's and its title's.
 pub fn requested(artist: &str, album: &str) -> String {
     format!("{}|{}", super::import::key(artist), super::import::key(album))
 }
 
-/// Who asked for each approved request, by its artist and album (`requested`): an Incoming record goes into its
-/// requester's own music by default, and is theirs to add or delete (0101 point 2). The newest asker of an album.
-pub fn requesters(serve: &Serve) -> HashMap<String, String> {
+/// Who asked for each approved request, by its record (C49b, merges followed): an Incoming record goes into its requester's
+/// own music by default, and is theirs to add or delete (0101 point 2). The newest asker of a record.
+pub fn requesters(serve: &Serve) -> HashMap<i64, String> {
     let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
-    approved.into_iter().rev().map(|r| (requested(&r.artist, &r.album), r.user)).collect()
+    let of = records_of(serve.catalogue(), &approved).unwrap_or_else(|e| {
+        tracing::debug!("the requests' records not read: {e:#}");
+        vec![None; approved.len()]
+    });
+    approved.into_iter().zip(of).rev().filter_map(|(r, o)| Some((o?.record, r.user))).collect()
 }
 
-/// An album's mark, by its release group, else by its artist's and its name's key (a Bandcamp album's Want).
-pub fn mark_of(marks: &HashMap<String, Mark>, release_group: Option<&str>, artist: &str, album: &str) -> Option<Mark> {
-    release_group
-        .filter(|g| !g.is_empty())
-        .and_then(|g| marks.get(g))
-        .or_else(|| marks.get(&format!("{}|{}", super::import::key(artist), super::import::key(album))))
-        .copied()
+/// An album's mark where a list has no record id for it: by its release group, else by its artist's and its name's key (a
+/// Bandcamp album's Want), as `marks_of` keys them.
+pub fn mark_of(marks: &Marks, release_group: Option<&str>, artist: &str, album: &str) -> Option<Mark> {
+    release_group.filter(|g| !g.is_empty()).and_then(|g| marks.by_key.get(g)).or_else(|| marks.by_key.get(&requested(artist, album))).copied()
+}
+
+/// What a request's record says now (C49b): the id it answers by (a merge followed), its release groups, its names, year and
+/// cover, and whether it is had.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecordOf {
+    pub record: i64,
+    pub groups: Vec<String>,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub cover: Option<String>,
+    pub had: bool,
+}
+
+/// Each request's record as the catalogue holds it now, in the requests' order: none where it names no record yet (before
+/// 0.17's step) or one that is gone. Blocking.
+pub fn records_of(cat: &crate::catalogue::Catalogue, rs: &[Request]) -> Result<Vec<Option<RecordOf>>> {
+    rs.iter()
+        .map(|r| {
+            let Some(row) = r.record.map(|id| cat.record(id)).transpose()?.flatten() else { return Ok(None) };
+            let groups = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().filter(|(x, _)| x.source == "musicbrainz" && x.kind == "release-group").map(|(x, _)| x.value).collect();
+            Ok(Some(RecordOf { record: row.id, groups, title: row.title, artist: row.artist, year: row.year, cover: row.cover, had: row.had }))
+        })
+        .collect()
+}
+
+/// `records_of` from an async caller; none for each where the catalogue cannot be read (logged).
+async fn named(serve: &Serve, rs: &[Request]) -> Vec<Option<RecordOf>> {
+    let (cat, rs2) = (serve.catalogue().clone(), rs.to_vec());
+    match tokio::task::spawn_blocking(move || records_of(&cat, &rs2)).await {
+        Ok(Ok(of)) => of,
+        Ok(Err(e)) => {
+            tracing::debug!("the requests' records not read: {e:#}");
+            vec![None; rs.len()]
+        }
+        Err(e) => {
+            tracing::debug!("the requests' records not read: {e}");
+            vec![None; rs.len()]
+        }
+    }
+}
+
+/// A request as the pages show it (C49b): its record's names, year, cover and release group in place of those it was asked
+/// with, and the id its record answers by, where it has a record.
+fn shown(mut r: Request, of: Option<&RecordOf>) -> Request {
+    if let Some(o) = of {
+        r.album = o.title.clone();
+        r.artist = o.artist.clone();
+        r.year = o.year.or(r.year);
+        r.cover = o.cover.clone().or(r.cover);
+        r.release_group = o.groups.first().cloned().or(r.release_group);
+        r.record = Some(o.record);
+    }
+    r
+}
+
+/// Requests as the pages show them (`shown`), their records read here (Health's list). Blocking.
+pub fn shown_requests(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
+    let of = records_of(serve.catalogue(), &rs).unwrap_or_else(|_| vec![None; rs.len()]);
+    rs.into_iter().zip(of).map(|(r, o)| shown(r, o.as_ref())).collect()
 }
 
 /// How many requests wait for an answer (Health, for those who answer them).
@@ -424,24 +524,30 @@ pub fn waiting(serve: &Serve) -> Result<usize> {
     serve.userdata.requests_waiting()
 }
 
-/// Requests with their albums' states: the fetcher asked once, for every approved one not in the library.
-async fn views(f: Option<&dyn Fetcher>, lib: Option<&Matcher>, rs: Vec<Request>) -> Vec<View> {
-    let found: Vec<bool> = rs.iter().map(|r| lib.is_some_and(|m| m.find_album(&r.album, Some(&r.artist)).is_some())).collect();
-    let asked: Vec<String> =
-        rs.iter().zip(&found).filter(|(r, there)| !**there && r.status == APPROVED).filter_map(|(r, _)| r.release_group.clone()).collect();
+/// Requests as the pages show them, with their albums' states (C49b): each by its record (`shown`), in the library where its
+/// record is had; the fetcher asked once, for every approved one not had.
+async fn views(serve: &Serve, f: Option<&dyn Fetcher>, rs: Vec<Request>) -> Vec<View> {
+    let of = named(serve, &rs).await;
+    views_of(f, rs, &of).await
+}
+
+/// `views`, each request's record read (`of`, in the requests' order).
+async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<RecordOf>]) -> Vec<View> {
+    let rs: Vec<(Request, bool)> = rs.into_iter().zip(of).map(|(r, o)| (shown(r, o.as_ref()), o.as_ref().is_some_and(|o| o.had))).collect();
+    let asked: Vec<String> = rs.iter().filter(|(r, there)| !*there && r.status == APPROVED).filter_map(|(r, _)| r.release_group.clone()).collect();
     let progress = match f {
         Some(f) if !asked.is_empty() => f.statuses(&asked).await.ok(),
         _ => None,
     };
-    rs.into_iter().zip(found).map(|(r, there)| View { album_state: state(there, progress.as_ref(), &r), request: r }).collect()
+    rs.into_iter().map(|(r, there)| View { album_state: state(there, progress.as_ref(), &r), request: r }).collect()
 }
 
-/// Of these requests, those whose album is not in the library yet (the owner, 2026-10-30: "Once something is actually
-/// in the library, there's no reason to show it in any of the requested sections except for in the requests control
-/// panel").
+/// Of these requests, those whose record is not had yet (the owner, 2026-10-30: "Once something is actually in the library,
+/// there's no reason to show it in any of the requested sections except for in the requests control panel"), each as the
+/// pages show it (`shown`, C49b).
 pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
-    let lib = library(serve).await;
-    rs.into_iter().filter(|r| !lib.as_ref().is_some_and(|m| m.find_album(&r.album, Some(&r.artist)).is_some())).collect()
+    let of = named(serve, &rs).await;
+    rs.into_iter().zip(of).filter(|(_, o)| !o.as_ref().is_some_and(|o| o.had)).map(|(r, o)| shown(r, o.as_ref())).collect()
 }
 
 /// The library's albums by name (the import's matcher), where Cratarr's data folder holds it: its albums alone, one
@@ -476,6 +582,46 @@ fn state(in_library: bool, progress: Option<&HashMap<String, Progress>>, r: &Req
 mod tests {
     use super::*;
 
+    /// C49b: an open request's mark is found by the record it asks for (the one a merge made it, too), by what names that
+    /// record (its release group, its names), and by the names it was asked with; and the request shows its record's names.
+    #[test]
+    fn a_mark_finds_its_record() {
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let group = "00000000-0000-4000-8000-000000000130";
+        let record = record_of_album(&cat, Some(group), "Paper Lantern", "Tape Club - After Hours (Paper Lantern)", Some(2020), None).unwrap();
+        let asked = cat.record_for_tests("After Hours (a copy asked for)", 0);
+        cat.merge_records(asked, record).unwrap();
+        let r = Request {
+            id: 1,
+            user: "ann".into(),
+            album_key: requested("Paper Lantern", "Tape Club - After Hours (Paper Lantern)"),
+            artist_key: "paper lantern".into(),
+            release_group: None,
+            album: "Tape Club - After Hours (Paper Lantern)".into(),
+            artist: "Paper Lantern".into(),
+            year: None,
+            cover: None,
+            at: 1,
+            status: APPROVED.into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+            record: Some(asked),
+        };
+        let of = records_of(&cat, std::slice::from_ref(&r)).unwrap();
+        assert_eq!(of[0].as_ref().map(|o| o.record), Some(record), "merged: the record it went into");
+        let views = vec![View { request: shown(r, of[0].as_ref()), album_state: Album::Requested }];
+        assert_eq!((views[0].request.artist.as_str(), views[0].request.album.as_str(), views[0].request.release_group.as_deref()), ("Tape Club", "After Hours", Some(group)));
+        let marks = marks_of(&views, &of);
+        let wanted = Some(Mark { state: "wanted", done: None });
+        assert_eq!(marks.of_record(record), wanted);
+        assert_eq!(mark_of(&marks, Some(group), "", ""), wanted, "by its record's group");
+        assert_eq!(mark_of(&marks, None, "Tape Club", "After Hours"), wanted, "by its record's names");
+        assert_eq!(mark_of(&marks, None, "Paper Lantern", "Tape Club - After Hours (Paper Lantern)"), wanted, "by the names it was asked with");
+        assert_eq!(mark_of(&marks, None, "Tape Club", "Before Hours"), None);
+    }
+
     /// C49a, S12: a Want from a label's Bandcamp album page, which names the label's own account as the artist and the album
     /// "Artist - Title (Label)", makes the artist's record of that title, the label credited; another Want by its release
     /// group finds the record of the group.
@@ -500,11 +646,14 @@ mod tests {
         assert_eq!(mark(&Album::Unknown), Some(Mark { state: "wanted", done: None }), "no fetcher, or not handed over");
         assert_eq!(mark(&Album::Fetching { done: 0.4 }), Some(Mark { state: "downloading", done: Some(0.4) }));
         assert_eq!(mark(&Album::PartlyThere { tracks: 3, of: 9 }), Some(Mark { state: "downloading", done: Some(1.0) }));
-        let marks: HashMap<String, Mark> = [
-            ("rg-1".to_string(), Mark { state: "wanted", done: None }),
-            (format!("{}|{}", crate::app::import::key("Ott"), crate::app::import::key("Skylon")), Mark { state: "downloading", done: Some(0.5) }),
-        ]
-        .into();
+        let marks = Marks {
+            by_key: [
+                ("rg-1".to_string(), Mark { state: "wanted", done: None }),
+                (format!("{}|{}", crate::app::import::key("Ott"), crate::app::import::key("Skylon")), Mark { state: "downloading", done: Some(0.5) }),
+            ]
+            .into(),
+            by_record: HashMap::new(),
+        };
         assert_eq!(mark_of(&marks, Some("rg-1"), "X", "Y").map(|m| m.state), Some("wanted"));
         assert_eq!(mark_of(&marks, Some("rg-2"), "OTT", "Skylon").map(|m| m.state), Some("downloading"), "by its names where its release group has none");
         assert_eq!(mark_of(&marks, None, "Ott", "Mir"), None);

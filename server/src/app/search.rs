@@ -267,7 +267,7 @@ fn artist_line(albums: u32) -> String {
 }
 
 /// The missing albums the words name (`subject` `missing:<release group>`), the best first, the newest among equals.
-fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: Option<&HashMap<String, super::requests::Mark>>) -> Vec<Item> {
+fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: Option<&super::requests::Marks>) -> Vec<Item> {
     let n = list.len();
     let mut out: Vec<Item> = list
         .iter()

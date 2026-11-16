@@ -4828,7 +4828,7 @@ fn bring_listenbrainz(ctx: &Ctx, b: ListenBrainzImport, preview: bool) -> Result
 
 /// Every open request's mark (0.9.5), for lists of albums not in the library; none when they cannot be read (the list
 /// is shown without them).
-async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<std::collections::HashMap<String, crate::app::requests::Mark>>> {
+async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<crate::app::requests::Marks>> {
     crate::app::requests::marks(app, serve).await.inspect_err(|e| tracing::debug!("the requests' marks not read: {e:#}")).ok()
 }
 
@@ -5000,9 +5000,14 @@ async fn discover_want(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serd
 
 #[derive(Deserialize)]
 struct WantAlbum {
+    /// The record wanted (C49b), a record not had a page shows: asked for by its id. Else by the names below.
+    #[serde(default)]
+    record: Option<i64>,
     #[serde(default)]
     release_group: Option<String>,
+    #[serde(default)]
     artist: String,
+    #[serde(default)]
     album: String,
     #[serde(default)]
     year: Option<i32>,
@@ -5015,9 +5020,11 @@ struct WantAlbum {
 async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
-    let r = crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover)
-        .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let r = match b.record {
+        Some(record) => crate::app::requests::ask_record(&app, &serve, &account, record).await,
+        None => crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover).await,
+    }
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "request": r })))
 }
 
@@ -6213,7 +6220,7 @@ fn beyond_albums(
     mb_albums: impl Iterator<Item = crate::app::discover::FoundAlbum>,
     discogs: Vec<crate::app::discogs::FoundMaster>,
     library: Option<&crate::app::import::Matcher>,
-    marks: Option<&std::collections::HashMap<String, crate::app::requests::Mark>>,
+    marks: Option<&crate::app::requests::Marks>,
 ) -> Vec<serde_json::Value> {
     let key = |artist: &str, title: &str| format!("{}|{}", crate::app::import::key(artist), crate::app::import::key(title));
     let mut order: Vec<String> = Vec::new();
@@ -7638,11 +7645,9 @@ mod tests {
                 master(6, "Post", "Björk"),
             ]
         };
-        let marks: std::collections::HashMap<String, Mark> = [
-            ("rg-1".to_string(), Mark { state: "wanted", done: None }),
-            (format!("{}|{}", key("Björk"), key("Post")), Mark { state: "downloading", done: Some(0.5) }),
-        ]
-        .into();
+        let marks = crate::app::requests::Marks::by_key(
+            [("rg-1".to_string(), Mark { state: "wanted", done: None }), (format!("{}|{}", key("Björk"), key("Post")), Mark { state: "downloading", done: Some(0.5) })].into(),
+        );
 
         let albums = Matcher::library_albums(&file, None).unwrap();
         let answer = super::beyond_albums(found(), masters(), Some(&albums), Some(&marks));

@@ -170,9 +170,17 @@ fn open(r: &Request) -> bool {
     r.status == crate::app::requests::PENDING || r.status == crate::app::requests::APPROVED
 }
 
-pub fn requests_by_key(all: Vec<Request>) -> HashMap<String, Request> {
+/// The requests by every key an album of a list may name them by (C49b): the key each was asked by, and what names its
+/// record (`of`, in the requests' order, `requests::records_of`): its release groups and its names. The first for a key.
+pub fn requests_by_key(all: Vec<Request>, of: &[Option<crate::app::requests::RecordOf>]) -> HashMap<String, Request> {
     let mut out = HashMap::new();
-    for r in all {
+    for (r, o) in all.into_iter().zip(of.iter().chain(std::iter::repeat(&None))) {
+        if let Some(o) = o {
+            for g in &o.groups {
+                out.entry(g.clone()).or_insert_with(|| r.clone());
+            }
+            out.entry(crate::app::requests::requested(&o.artist, &o.title)).or_insert_with(|| r.clone());
+        }
         out.entry(r.album_key.clone()).or_insert(r);
     }
     out
@@ -345,7 +353,7 @@ mod tests {
             (upc_key("0731452280826"), r#"{"releases":["rel-nnta"],"release_group":"rg-nnta"}"#.to_string()),
             (name_key("Björk", "Homogenic"), r#""rg-homogenic""#.to_string()),
         ]));
-        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "pending")]) };
+        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "pending")], &[]) };
         // By ISRC, though the title differs.
         let t = Track { id: "t1".into(), title: "Zombie (Remastered)".into(), artist: "The Cranberries".into(), album: "No Need To Argue".into(), isrc: Some("IEACJ9400015".into()), ..Default::default() };
         let v = marks.track(&t);
@@ -361,7 +369,7 @@ mod tests {
         let v = marks.album(&a, None);
         assert_eq!((v.status, v.release_group.as_deref()), (REQUESTED, Some("rg-homogenic")));
         // Declined: missing again.
-        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "declined")]) };
+        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "declined")], &[]) };
         assert_eq!(marks.album(&a, None).status, MISSING);
         assert_eq!(marks.artist(&Artist { id: "x".into(), name: "the cranberries".into(), photo: None }, None).have, 3);
     }

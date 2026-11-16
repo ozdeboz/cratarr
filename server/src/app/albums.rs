@@ -151,7 +151,8 @@ impl App {
         let viewer = self.served.as_ref().and_then(|s| s.current_user());
         let admin = crate::serve::access::administering();
         let asked =self.served.as_ref().map(|s| super::requests::requesters(s)).unwrap_or_default();
-        let requester = |al: &source::Album| al.artist.as_deref().and_then(|ar| asked.get(&super::requests::requested(ar, &al.title)));
+        // By the record each album is (C49b): its id names it.
+        let requester = |al: &source::Album| crate::serve::ids::record_number(&al.id).and_then(|record| asked.get(&record));
         let mut sources: Vec<AlbumsSourceView> = ids
             .into_iter()
             .map(|id| {
