@@ -4269,6 +4269,7 @@ mod tests {
             tracks: vec![track(1, "One"), track(2, "Two"), track(3, "Three")],
             released: None,
             label: None,
+            account: None,
             about: None,
             credits: None,
             tags: Vec::new(),

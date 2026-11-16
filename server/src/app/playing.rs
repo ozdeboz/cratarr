@@ -148,6 +148,12 @@ pub struct AlbumMore {
     /// How many listen to it on Last.fm.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listeners: Option<u64>,
+    /// What a Want of a Bandcamp album sends (W1): Cratarr's record that holds its page (`al-<n>`), else the release group its page
+    /// was found by.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_group: Option<String>,
 }
 
 /// A track the page plays itself (decision 0022) as the player shows it: its playlists, and whether it can be added

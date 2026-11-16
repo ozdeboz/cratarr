@@ -73,6 +73,10 @@ pub struct Album {
     pub released: Option<String>,
     /// Its label: the page's publisher, where that is not the artist themselves.
     pub label: Option<String>,
+    /// The account whose page it is (its `og:site_name`): a label's, where a label's own account lists its artists' releases (W1,
+    /// `named_by_page`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// What the page says about it, and its credits, as written there.
     pub about: Option<String>,
     pub credits: Option<String>,
@@ -476,6 +480,7 @@ pub fn parse_album(html: &str, url: &str) -> Result<Album> {
         tracks,
         released,
         label,
+        account: meta(html, "og:site_name").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()),
         about: text(current.about),
         credits: text(current.credits),
         tags,
@@ -617,6 +622,23 @@ pub fn label_release(artist: &str, title: &str, label: Option<&str>) -> Named {
     match dash_at(title).map(|(at, len)| (title[..at].trim(), title[at + len..].trim())) {
         Some((who, what)) if !who.is_empty() && !what.is_empty() => Named { artist: who.to_string(), title: what.to_string(), label: Some(artist.to_string()) },
         _ => Named { artist: artist.to_string(), title: title.to_string(), label: Some(artist.to_string()) },
+    }
+}
+
+/// The names a Want with a Bandcamp page names its record by (W1): the album as Bandcamp lists it, its own artist (not a track's,
+/// which a track's menu sends), a label's release sorted out with the page's account as the label (`label_release`), its publisher
+/// credited where that names none. The page not read (Bandcamp's bot check among the reasons) leaves the names sent, sorted out as
+/// names alone are: nothing is done to get past the check. Pure.
+pub fn named_by_page(read: Option<&Album>, artist: &str, title: &str) -> Named {
+    match read.filter(|a| !a.artist.trim().is_empty() && !a.title.trim().is_empty()) {
+        Some(a) => {
+            let mut named = label_release(&a.artist, &a.title, a.account.as_deref());
+            if named.label.is_none() {
+                named.label = a.label.clone();
+            }
+            named
+        }
+        None => label_release(artist, title, None),
     }
 }
 

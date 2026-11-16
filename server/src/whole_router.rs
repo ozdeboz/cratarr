@@ -71,6 +71,8 @@ impl Whole {
         let cfg = crate::config::Config::from_lookup(|_| None).unwrap();
         let saved = crate::settings::Saved { music_folder: Some(dir.to_string_lossy().into_owned()), ..Default::default() };
         let app = crate::app::App::new(cfg, saved, crate::settings::Origin::Env, Some(Arc::clone(&served))).await.unwrap();
+        // As `main` does: the server answers from the app's catalogue (requests, the record pages).
+        served.attach_catalogue(app.library.catalogue());
         let router = super::routes(app.clone(), Arc::clone(&served));
         Self { dir, served, app, router }
     }
@@ -106,6 +108,71 @@ impl Drop for Whole {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// `body` posted as JSON to `path` with that cookie: the answer as `Whole::send` gives it.
+async fn post(w: &Whole, cookie: &str, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    w.send(("cookie", cookie), Method::POST, path, Body::from(body.to_string())).await
+}
+
+/// W1: a Want over HTTP takes the record it names, by each way a card can name one: its id as the lists serve it (any other kind
+/// of id refused), its release group, its Bandcamp page as written (made plain; another site's page refused), its names (a record
+/// not had made), and the names of an album the library has (that record).
+#[tokio::test]
+async fn every_kind_of_want_takes_its_record_over_http() {
+    let w = Whole::open("wants").await;
+    let me = w.session("me");
+    let cat = w.served.catalogue().clone();
+    let record_of = |answer: &serde_json::Value| answer["request"]["record"].as_i64();
+    let set = |record: i64, source: &str, kind: &str, value: &str| assert!(cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new(source, kind, value), "link").unwrap());
+    let shown = cat.record_for_tests("Tide Tables (Deluxe)", 0);
+    let (status, answer) = post(&w, &me, "/api/requests/want", serde_json::json!({ "record": crate::serve::ids::record(shown) })).await;
+    assert_eq!((status, record_of(&answer)), (StatusCode::OK, Some(shown)), "by its id: {answer}");
+    for other in [serde_json::json!({ "record": "ar-1" }), serde_json::json!({ "record": shown })] {
+        assert!(!post(&w, &me, "/api/requests/want", other.clone()).await.0.is_success(), "{other}");
+    }
+    let grouped = cat.record_for_tests("Two Rooms", 0);
+    let group = "00000000-0000-4000-8000-000000000301";
+    set(grouped, "musicbrainz", "release-group", group);
+    let (_, answer) = post(&w, &me, "/api/requests/want", serde_json::json!({ "release_group": group, "artist": "Glass Harbour", "album": "Two Rooms, Live" })).await;
+    assert_eq!(record_of(&answer), Some(grouped), "by its group: {answer}");
+    let paged = cat.record_for_tests("Night Walks (Live)", 0);
+    set(paged, "bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks");
+    let (_, answer) = post(&w, &me, "/api/requests/want", serde_json::json!({ "artist": "Kite Theory", "album": "Night Walks", "page": "http://kitetheory.bandcamp.com/album/night-walks?from=search" })).await;
+    assert_eq!(record_of(&answer), Some(paged), "by its page, made plain: {answer}");
+    let elsewhere = serde_json::json!({ "artist": "Kite Theory", "album": "Night Walks", "page": "https://example.org/album/night-walks" });
+    assert!(!post(&w, &me, "/api/requests/want", elsewhere).await.0.is_success(), "not Bandcamp's");
+    let (_, answer) = post(&w, &me, "/api/requests/want", serde_json::json!({ "artist": "Orbit Lane", "album": "Quiet Lanes" })).await;
+    let made = record_of(&answer).unwrap();
+    assert!(![shown, grouped, paged].contains(&made) && cat.record(made).unwrap().unwrap().title == "Quiet Lanes", "by its names, made: {answer}");
+    let owned = cat.record_for_tests("Harbour Lights", 2);
+    let (_, answer) = post(&w, &me, "/api/requests/want", serde_json::json!({ "artist": "Glass Harbour", "album": "Harbour Lights" })).await;
+    assert_eq!(record_of(&answer), Some(owned), "the library's own: {answer}");
+}
+
+/// W1: the Bandcamp album view says what a Want of it sends: the record that holds its page.
+#[tokio::test]
+async fn the_bandcamp_album_view_names_the_record_that_holds_its_page() {
+    let w = Whole::open("bandcamp-record").await;
+    let me = w.session("me");
+    let page = "https://kitetheory.bandcamp.com/album/night-walks-w1";
+    crate::bandcamp::Bandcamp::get().keep(crate::bandcamp::Album {
+        url: page.into(),
+        title: "Night Walks".into(),
+        artist: "Kite Theory".into(),
+        cover: None,
+        tracks: Vec::new(),
+        released: None,
+        label: None,
+        account: Some("Kite Theory".into()),
+        about: None,
+        credits: None,
+        tags: Vec::new(),
+    });
+    let held = w.served.catalogue().record_for_tests("Night Walks", 0);
+    assert!(w.served.catalogue().set_reference(&crate::serve::ids::record(held), &crate::catalogue::records::Ref::new("bandcamp", "album", page), "link").unwrap());
+    let (status, view) = w.ask(&me, Method::GET, &format!("/api/albums/bandcamp/{}", crate::bandcamp::track_id(page, 0))).await;
+    assert_eq!((status, view["record"].as_str()), (StatusCode::OK, Some(crate::serve::ids::record(held).as_str())), "{view}");
 }
 
 #[tokio::test]

@@ -159,35 +159,51 @@ fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Reques
 /// "Title", the label credited), then the record of its release group, else a record had of its names, else a new record not
 /// had (`Catalogue::record_for_request`). Blocking.
 pub fn record_of_album(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<i64> {
-    record_of_album_paged(cat, release_group, artist, album, year, cover, None)
+    record_of_album_paged(cat, release_group, crate::bandcamp::label_release(artist, album, None), year, cover, None)
 }
 
-/// `record_of_album`, its Bandcamp album page given (R22): kept on the record as a reference (`search`), so a record only
-/// Bandcamp lists is judged by Bandcamp's list.
-fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
-    let named = crate::bandcamp::label_release(artist, album, None);
+/// `record_of_album`, its names sorted out by the caller, its Bandcamp album page given (R22): kept on the record as a reference
+/// (`search`), so a record only Bandcamp lists is judged by Bandcamp's list.
+fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, named: crate::bandcamp::Named, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
     let wanted = crate::catalogue::records::Wanted { group: release_group.map(str::to_string), artist: named.artist, title: named.title, label: named.label, year, cover, page };
     cat.record_for_request(&wanted)
 }
 
 /// `record_of_album` for a Want (R22, N2): its Bandcamp album page the card's, else the one Discover found for it by its release
-/// group or by its names (`bandcamp_found`, as a page is found when an album is opened), else, once its record is known, the one
-/// found by a release group the record holds (the owner's GROUCH request: 0.16 found its page by the group its card knew, and it
-/// was asked for by Bandcamp's names).
+/// group or by its names (`bandcamp_found`, as a page is found when an album is opened), made plain; else, once its record is
+/// known, the one found by a release group the record holds (the owner's GROUCH request: 0.16 found its page by the group its card
+/// knew, and it was asked for by Bandcamp's names). Where neither its group nor its page names a record yet and it has no group, its
+/// record is named as Bandcamp lists the album (W1, `bandcamp::named_by_page`, read as kept): Bandcamp's bot check leaves the names
+/// sent.
 #[allow(clippy::too_many_arguments)]
 async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
-    let (cat, ud, artist, album) = (serve.catalogue().clone(), serve.userdata.clone(), artist.to_string(), album.to_string());
+    let (cat, ud) = (serve.catalogue().clone(), serve.userdata.clone());
+    let group = release_group.filter(|g| !g.is_empty());
+    let (page, known) = {
+        let (cat, ud, group, artist, album) = (cat.clone(), ud.clone(), group.clone(), artist.to_string(), album.to_string());
+        tokio::task::spawn_blocking(move || -> Result<(Option<String>, bool)> {
+            let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
+            let page = match page.filter(|p| !p.is_empty()) {
+                Some(page) => Some(page),
+                None => match group.as_deref().map(found).transpose()?.flatten() {
+                    Some(page) => Some(page),
+                    None => found(&requested(&artist, &album))?,
+                },
+            }
+            .and_then(|p| crate::bandcamp::album_page(&p));
+            let known = cat.record_named_by(group.as_deref(), page.as_deref())?.is_some();
+            Ok((page, known))
+        })
+        .await??
+    };
+    let read = match &page {
+        Some(p) if !known && group.is_none() => crate::bandcamp::Bandcamp::get().album(p).await.ok(),
+        _ => None,
+    };
+    let named = crate::bandcamp::named_by_page(read.as_ref(), artist, album);
     tokio::task::spawn_blocking(move || -> Result<i64> {
         let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
-        let group = release_group.as_deref().filter(|g| !g.is_empty());
-        let page = match page.filter(|p| !p.is_empty()) {
-            Some(page) => Some(page),
-            None => match group.map(found).transpose()?.flatten() {
-                Some(page) => Some(page),
-                None => found(&requested(&artist, &album))?,
-            },
-        };
-        let record = record_of_album_paged(&cat, group, &artist, &album, year, cover, page.clone())?;
+        let record = record_of_album_paged(&cat, group.as_deref(), named, year, cover, page.clone())?;
         if page.is_none() {
             let refs = cat.references_of(&crate::serve::ids::record(record))?;
             if !refs.iter().any(|(r, _)| r.source == "bandcamp" && r.kind == "album")
@@ -902,6 +918,39 @@ mod tests {
         serve.userdata.set_bandcamp_found(group, 1, Some("https://kitetheory.bandcamp.com/album/night-walks")).unwrap();
         let asked = record_of_album_in(&serve, None, "Kite Theory", "Night Walks", None, None, None).await.unwrap();
         assert_eq!((asked, page_of(asked).as_deref()), (listed, Some("https://kitetheory.bandcamp.com/album/night-walks")), "by the group its record holds");
+    }
+
+    /// W1: a Want with a Bandcamp page that names no record yet is named as Bandcamp lists the album, as kept from its read: its own
+    /// artist, not a track's sent, and a label's release sorted out with the page's account as its label.
+    #[tokio::test]
+    async fn a_want_with_a_page_is_named_as_bandcamp_lists_the_album() {
+        let serve = served();
+        let page = "https://paperlantern.bandcamp.com/album/tape-club-harbour-songs";
+        crate::bandcamp::Bandcamp::get().keep(crate::bandcamp::Album {
+            url: page.into(),
+            title: "Tape Club - Harbour Songs".into(),
+            artist: "Paper Lantern".into(),
+            cover: None,
+            tracks: Vec::new(),
+            released: None,
+            label: None,
+            account: Some("Paper Lantern".into()),
+            about: None,
+            credits: None,
+            tags: Vec::new(),
+        });
+        let record = record_of_album_in(&serve, None, "A Track's Singer", "Tape Club - Harbour Songs", None, None, Some(page.into())).await.unwrap();
+        let row = serve.catalogue().record(record).unwrap().unwrap();
+        assert_eq!((row.artist.as_str(), row.title.as_str()), ("Tape Club", "Harbour Songs"));
+        let label = serve.catalogue().label_for("Paper Lantern").unwrap();
+        assert!(serve.catalogue().label_records(label).unwrap().iter().any(|(r, _)| *r == record), "the account its label");
+    }
+
+    /// W1: a page Bandcamp did not let be read (its bot check) leaves the names sent, sorted out as names alone are.
+    #[test]
+    fn a_page_not_read_leaves_the_names_sent() {
+        let named = crate::bandcamp::named_by_page(None, "Paper Lantern", "Tape Club - Harbour Songs");
+        assert_eq!((named.artist.as_str(), named.title.as_str(), named.label), ("Paper Lantern", "Tape Club - Harbour Songs", None));
     }
 
     /// R30 (N15): who asked for what is kept with the marks (`MARKS_KEEP`): the Albums page, asking at every open, reads the

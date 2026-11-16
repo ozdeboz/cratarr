@@ -864,6 +864,19 @@ fn live_holds_group(db: &Connection, q: &Requested) -> Result<bool> {
 
 /// The record a release group names where a request asks for it (R13, F2): its oldest live, had holder; else its oldest live
 /// one; a retired one only where no live record holds it (OQ16: a retired record stays its group's record not had).
+/// The live record that holds a Bandcamp album page (W1), merges followed: a page is one record's alone (`put_reference`).
+fn page_record_in(db: &Connection, page: &str) -> Result<Option<i64>> {
+    for subject in subjects_in(db, &Ref::new("bandcamp", "album", page))? {
+        if let Some(id) = ids::record_number(&subject)
+            && let Some(id) = merged_end(db, id)?
+            && db.prepare_cached("SELECT retired_at IS NULL FROM records WHERE id = ?1")?.query_row([id], |r| r.get::<_, bool>(0))?
+        {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
 fn group_record_in(tx: &Connection, group: &Ref) -> Result<Option<i64>> {
     let mut holders: Vec<(bool, bool, i64)> = Vec::new();
     for subject in subjects_in(tx, group)? {
@@ -878,6 +891,26 @@ fn group_record_in(tx: &Connection, group: &Ref) -> Result<Option<i64>> {
 }
 
 impl Catalogue {
+    /// The record a Want's release group names, else the one its Bandcamp page does (W1, as `request_record_in` takes them first),
+    /// on a reader: whether the Want names a record already, so its album need not be read to name one. Blocking.
+    pub fn record_named_by(&self, group: Option<&str>, page: Option<&str>) -> Result<Option<i64>> {
+        let read = |db: &Connection| -> Result<Option<i64>> {
+            if let Some(g) = group.map(str::to_ascii_lowercase).filter(|g| is_mbid(g))
+                && let Some(record) = group_record_in(db, &Ref::new("musicbrainz", "release-group", &g))?
+            {
+                return Ok(Some(record));
+            }
+            match page {
+                Some(page) => page_record_in(db, page),
+                None => Ok(None),
+            }
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// These records as requests read them (R16, F5), on one reader connection and never under the writer's lock, which a build
     /// holds for its whole record pass: each followed through its merges, then read as the pages read records (`read_records_in`:
     /// rows and references in one query each, holders by the had rule in a few). By the id asked; one not known is left out.
@@ -1324,7 +1357,8 @@ pub struct Wanted {
 }
 
 /// The record an album asked for is, in the caller's transaction (C49a): the record its release group names (`group_record_in`:
-/// the oldest live one, had first; a retired one only where no live record holds it, OQ16), else the live record had of its names
+/// the oldest live one, had first; a retired one only where no live record holds it, OQ16), else the live record that holds its
+/// Bandcamp page (W1, merges followed), else the live record had of its names
 /// as the import matcher finds an album (R14), else, with no group, the oldest live record not had of its names nothing contradicts,
 /// else a new record not had, credited to its artist (`listing`). Its label, where a label named it, credited too (`listing`);
 /// its Bandcamp album page, where one was found for it (by its names, or by its release group, R19), a reference (`search`), so
@@ -1337,6 +1371,11 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
     let by_group = match &group {
         Some(g) => group_record_in(tx, g)?,
         None => None,
+    };
+    // Else the live record that holds its Bandcamp page (W1): the page a card knows names the record its list showed.
+    let by_page = match (by_group, w.page.as_deref()) {
+        (None, Some(page)) => page_record_in(tx, page)?,
+        _ => None,
     };
     // Had by its names (R14, F6), as the import matcher finds an album by its artist (`Matcher::find_album_by`): by title and
     // artist, then loosely (brackets, a leading "The", accents and "&" aside); never by a title alone, whoever's it is: the request
@@ -1384,7 +1423,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
             None => true,
         })
     };
-    let (found, by_names) = match by_group {
+    let (found, by_names) = match by_group.or(by_page) {
         Some(record) => (Some(record), false),
         None => match by_names()? {
             Some(record) if agrees(record)? => (Some(record), true),
@@ -2297,6 +2336,19 @@ mod tests {
         assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000202"), "files").unwrap());
         let wanted = crate::app::requests::record_of_album(&cat, Some("00000000-0000-4000-8000-000000000203"), "Glass Harbour", "Glass Harbour", None, None).unwrap();
         assert_ne!(wanted, owned);
+    }
+
+    /// W1: a Want's Bandcamp page finds the live record that holds it, merges followed, before its names: the record its list
+    /// showed, whatever it is called there.
+    #[test]
+    fn a_wants_page_finds_the_record_that_holds_it() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let page = "https://kitetheory.bandcamp.com/album/night-walks";
+        let held = cat.record_for_tests("Night Walks (Live)", 0);
+        assert!(cat.set_reference(&ids::record(held), &Ref::new("bandcamp", "album", page), "link").unwrap());
+        let wanted = Wanted { artist: "Kite Theory".into(), title: "Night Walks".into(), page: Some(page.into()), ..Wanted::default() };
+        assert_eq!(cat.record_for_request(&wanted).unwrap(), held);
+        assert_eq!(cat.record_named_by(None, Some(page)).unwrap(), Some(held));
     }
 
     /// R28 (N11): of two records the library holds under one loose name, a request found by its loose names takes the older, as

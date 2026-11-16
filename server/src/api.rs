@@ -1682,6 +1682,20 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
     let tags: Vec<String> = a.tags.iter().filter(|t| !genres.iter().any(|g| g.eq_ignore_ascii_case(t))).cloned().collect();
     let mut links = vec![crate::app::discover::Link { name: "Bandcamp".into(), url: a.url.clone() }];
     links.extend(known.as_ref().map(|k| k.links.clone()).unwrap_or_default().into_iter().filter(|l| l.name != "Bandcamp"));
+    // What a Want of it sends (W1): the record that holds its page, else the release group Discover found its page by.
+    let (record, release_group) = match ctx.served.clone() {
+        Some(s) => {
+            let page = a.url.clone();
+            tokio::task::spawn_blocking(move || {
+                let record = s.catalogue().record_named_by(None, Some(&page)).ok().flatten();
+                let group = if record.is_none() { s.userdata.bandcamp_found_group(&page).ok().flatten() } else { None };
+                (record.map(crate::serve::ids::record), group)
+            })
+            .await
+            .unwrap_or_default()
+        }
+        None => (None, None),
+    };
     let more = crate::app::AlbumMore {
         released: a.released.clone(),
         label: a.label.clone(),
@@ -1691,6 +1705,8 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
         links,
         listeners: known.as_ref().and_then(|k| k.listeners),
         words: None,
+        record,
+        release_group,
     };
     let rows = a
         .tracks
@@ -5000,9 +5016,10 @@ async fn discover_want(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serd
 
 #[derive(Deserialize)]
 struct WantAlbum {
-    /// The record wanted (C49b), a record not had a page shows: asked for by its id. Else by the names below.
+    /// The record wanted (C49b), a record not had a page shows: its id as the lists serve it (`al-<n>`, W1), any other refused.
+    /// Else by its release group, its Bandcamp page, then its names below.
     #[serde(default)]
-    record: Option<i64>,
+    record: Option<String>,
     #[serde(default)]
     release_group: Option<String>,
     #[serde(default)]
@@ -5023,9 +5040,19 @@ struct WantAlbum {
 async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
-    let r = match b.record {
-        Some(record) => crate::app::requests::ask_record(&app, &serve, &account, record).await,
-        None => crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover, b.page).await,
+    let r = match b.record.as_deref() {
+        Some(id) => {
+            let record = crate::serve::ids::record_number(id).ok_or_else(|| ToggleError::Refused("That is not a record's id.".into()))?;
+            crate::app::requests::ask_record(&app, &serve, &account, record).await
+        }
+        None => {
+            // Its page made plain (W1): an album's page on Bandcamp, else refused.
+            let page = match b.page.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+                Some(p) => Some(crate::bandcamp::album_page(p).ok_or_else(|| ToggleError::Refused("That is not an album's page on Bandcamp.".into()))?),
+                None => None,
+            };
+            crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover, page).await
+        }
     }
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "request": r })))
@@ -7576,6 +7603,7 @@ mod tests {
             tracks: vec![crate::bandcamp::Track { n: 1, title: "One".into(), artist: None, duration_secs: Some(12.5), stream: Some(stream), page: None }],
             released: None,
             label: None,
+            account: None,
             about: None,
             credits: None,
             tags: Vec::new(),

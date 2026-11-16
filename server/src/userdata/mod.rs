@@ -1480,6 +1480,14 @@ impl UserData {
         Ok(self.db().query_row("SELECT at, page FROM bandcamp_found WHERE album = ?1", [album], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
     }
 
+    /// The release group an album's page on Bandcamp was found by (W1), where Discover found it by one: what a Want of it sends.
+    pub fn bandcamp_found_group(&self, page: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album FROM bandcamp_found WHERE page = ?1 ORDER BY at DESC")?;
+        let keys: Vec<String> = st.query_map([page], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(keys.into_iter().find(|k| crate::app::discogs::is_mbid(k)))
+    }
+
     /// Every album page found on Bandcamp since `since` (epoch seconds), by the album's key: what lists of albums not in
     /// the library show without looking again (0.9.5).
     pub fn bandcamp_pages(&self, since: i64) -> Result<std::collections::HashMap<String, String>> {
