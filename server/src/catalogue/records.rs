@@ -481,18 +481,17 @@ pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, 
             return Ok(Put::Retired);
         }
         let holders: Vec<(String, String)> = {
-            let mut st = tx.prepare_cached("SELECT subject, how FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject <> ?4")?;
+            let mut st = tx.prepare_cached("SELECT subject, how FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject <> ?4 ORDER BY subject")?;
             st.query_map(params![r.source, r.kind, r.value, subject], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<rusqlite::Result<_>>()?
         };
-        for (holder, held_how) in holders {
-            if !retired(tx, &holder)? {
-                if held_how == "hand" && how != "hand" {
-                    return Ok(Put::Held);
-                }
-                if !takes && how != "hand" {
-                    return Ok(Put::Held);
-                }
+        // Decided over every holder before any lets go: a refusal leaves each where it was, though the caller commits. (The
+        // schema holds one holder, `references_one`; the rule stands without counting on it.)
+        for (holder, held_how) in &holders {
+            if !retired(tx, holder)? && ((held_how == "hand" && how != "hand") || (!takes && how != "hand")) {
+                return Ok(Put::Held);
             }
+        }
+        for (holder, _) in holders {
             tx.prepare_cached("DELETE FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject = ?4")?.execute(params![r.source, r.kind, r.value, holder])?;
             taken.push(holder);
         }
@@ -1431,6 +1430,22 @@ mod tests {
         assert!(cat.set_reference(&live, &shore, "files").unwrap(), "a retired record gives up its release to the live one, even a hand's");
         assert_eq!(cat.subject_of(&shore).unwrap(), [live]);
         assert_eq!(cat.references_of(&old).unwrap().into_iter().map(|(r, _)| r.kind).collect::<Vec<_>>(), ["release-group"], "it keeps its group");
+    }
+
+    /// A refused write deletes nothing: every holder is weighed before any lets go, so a guess held beside a hand (made here
+    /// with the one-holder index dropped, the guess first) is still there after a certain match is refused by the hand.
+    #[test]
+    fn a_refused_write_deletes_nothing() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let [guess, pasted, matched] = ["Guess", "Pasted", "Match"].map(|t| ids::record(cat.record_for_tests(t, 1)));
+        assert!(guess < pasted, "the guess comes first");
+        cat.db().execute_batch("DROP INDEX references_one").unwrap();
+        for (subject, how) in [(&guess, "search"), (&pasted, "hand")] {
+            cat.db().execute("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, 'musicbrainz', 'release', 'r1', 1, ?2)", params![subject, how]).unwrap();
+        }
+        let release = Ref::new("musicbrainz", "release", "r1");
+        assert!(!cat.take_reference(&matched, &release, "files").unwrap(), "a hand holds it");
+        assert_eq!(cat.subject_of(&release).unwrap(), [guess, pasted], "nothing let go of");
     }
 
     /// Each source's list kept by record, and the count's source: worked out until chosen by hand, then the hand's.
