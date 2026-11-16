@@ -150,6 +150,18 @@ async fn every_kind_of_want_takes_its_record_over_http() {
     assert_eq!(record_of(&answer), Some(owned), "the library's own: {answer}");
 }
 
+/// W2 (B1): a Want over HTTP by the names of an album whose title differs from an owned album's only in brackets is a record of
+/// its own: never the owned album, which the had rule would count as the remixes.
+#[tokio::test]
+async fn a_want_by_names_beside_an_owned_look_alike_is_not_it_over_http() {
+    let w = Whole::open("look-alike").await;
+    let me = w.session("me");
+    let owned = w.served.catalogue().record_for_tests("Further", 2);
+    let (status, answer) = post(&w, &me, "/api/requests/want", serde_json::json!({ "artist": "Glass Harbour", "album": "Further (Remixes)" })).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_ne!(answer["request"]["record"].as_i64(), Some(owned), "{answer}");
+}
+
 /// W1: the Bandcamp album view says what a Want of it sends: the record that holds its page.
 #[tokio::test]
 async fn the_bandcamp_album_view_names_the_record_that_holds_its_page() {

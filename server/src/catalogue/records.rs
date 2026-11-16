@@ -1377,24 +1377,31 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         (None, Some(page)) => page_record_in(tx, page)?,
         _ => None,
     };
-    // Had by its names (R14, F6), as the import matcher finds an album by its artist (`Matcher::find_album_by`): by title and
-    // artist, then loosely (brackets, a leading "The", accents and "&" aside); never by a title alone, whoever's it is: the request
-    // keeps its record for good, and a name alone never joins two records. Of one name, the oldest.
+    // What it was asked by, which a record found by its names must not say is another's (R21, W2): its release group and its
+    // Bandcamp page.
+    let asked: Vec<(String, String, String)> =
+        group.iter().map(|g| (g.source.clone(), g.kind.clone(), g.value.clone())).chain(w.page.iter().map(|p| ("bandcamp".to_string(), "album".to_string(), p.clone()))).collect();
+    let agrees = |record: i64| -> Result<bool> { Ok(asked.is_empty() || !contradicts(&asked, &refs_in(tx, &ids::record(record))?)) };
+    // Had by its names (W2, B1): the had rule's own, its artist and title folded alike (`identity::fold`, which keeps what is in
+    // brackets), never loosely: "Tide Tables (Remixes)" is not the owned "Tide Tables". Never by a title alone, whoever's it is
+    // (R14). Of one name, the oldest that nothing it was asked by contradicts.
     let by_names = || -> Result<Option<i64>> {
-        if fold(&w.title).is_empty() {
+        let (artist, title) = (fold(&w.artist), fold(&w.title));
+        if title.is_empty() {
             return Ok(None);
         }
         let mut st = tx.prepare_cached(
             "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
              WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
-             ORDER BY r.id DESC",
+             ORDER BY r.id",
         )?;
-        let mut had = crate::app::import::Matcher::default();
-        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
-            let (id, artist, title) = row?;
-            had.add_album(&id.to_string(), &title, Some(&artist));
+        let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        for (id, ..) in rows.into_iter().filter(|(_, a, t)| fold(a) == artist && fold(t) == title) {
+            if agrees(id)? {
+                return Ok(Some(id));
+            }
         }
-        Ok(had.find_album_by(&w.title, &w.artist).and_then(|id| id.parse().ok()))
+        Ok(None)
     };
     // With no release group, the oldest live record not had of its names (folded) that nothing contradicts (R14, F3): what
     // another request of the album made, so two requests of one album share its record, at the step and after.
@@ -1417,22 +1424,16 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         }
         Ok(None)
     };
-    let agrees = |record: i64| -> Result<bool> {
-        Ok(match &group {
-            Some(g) => !contradicts(&[(g.source.clone(), g.kind.clone(), g.value.clone())], &refs_in(tx, &ids::record(record))?),
-            None => true,
-        })
-    };
-    let (found, by_names) = match by_group.or(by_page) {
-        Some(record) => (Some(record), false),
+    // Which, and whether it is an owned record found by its names, onto which nothing it was asked by is written (W2, B2).
+    let (found, by_names, owned) = match by_group.or(by_page) {
+        Some(record) => (Some(record), false, false),
         None => match by_names()? {
-            Some(record) if agrees(record)? => (Some(record), true),
-            Some(_) => (None, false),
+            Some(record) => (Some(record), true, true),
             None if group.is_none() => {
                 let record = not_had_by_names()?;
-                (record, record.is_some())
+                (record, record.is_some(), false)
             }
-            None => (None, false),
+            None => (None, false, false),
         },
     };
     let (record, made) = match found {
@@ -1451,6 +1452,8 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         tx.prepare_cached("INSERT OR IGNORE INTO record_labels (record, label, catno, how) VALUES (?1, ?2, '', 'listing')")?.execute(params![record, id])?;
     }
     let paged = match w.page.as_deref() {
+        // Never onto an owned record found by its names (W2, B2): the page there would make another album had.
+        Some(_) if owned => None,
         Some(page) => {
             let (r, subject) = (Ref::new("bandcamp", "album", page), ids::record(record));
             if subjects_in(tx, &r)?.contains(&subject) { None } else { Some(put_reference(tx, &subject, &r, "search", at, false)?.kept()) }
@@ -1954,7 +1957,22 @@ impl Carrying<'_> {
         let pages: std::collections::HashMap<String, &str> = c.pages.iter().map(|p| (lower(&p.key), p.page.as_str())).collect();
         let mut given: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         let (mut made, mut paged) = (0, 0);
-        let (mut made_for, mut found_by_names) = (Vec::new(), Vec::new());
+        let (mut made_for, mut found_by_names, mut look_alikes) = (Vec::new(), Vec::new(), Vec::new());
+        // The owned albums the import matcher finds loosely (W2, B1): no request takes one any more, exact folded names alone do;
+        // each request one would have been, listed whole for the rehearsal to check.
+        let owned: Vec<(i64, String, String)> = self
+            .tx
+            .prepare(
+                "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
+                 WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
+                 ORDER BY r.id DESC",
+            )?
+            .query_map([], |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut loosely = crate::app::import::Matcher::default();
+        for (id, artist, title) in &owned {
+            loosely.add_album(&id.to_string(), title, Some(artist));
+        }
         for r in &c.requests {
             let named = crate::bandcamp::label_release(&r.artist, &r.album, None);
             // Its page as `bandcamp_found` kept it, by its names or by its release group (R19, F13): where its record is made only
@@ -1980,6 +1998,11 @@ impl Carrying<'_> {
                 let (artist, title): (String, String) = self.tx.query_row("SELECT COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id = ?1", [record], |x| Ok((x.get(0)?, x.get(1)?)))?;
                 found_by_names.push(format!("{} {} - {} -> {artist} - {title}", r.id, r.artist, r.album));
             }
+            if let Some(alike) = loosely.find_album_by(&w.title, &w.artist).and_then(|id| id.parse::<i64>().ok()).filter(|id| *id != record)
+                && let Some((_, artist, title)) = owned.iter().find(|(id, ..)| *id == alike)
+            {
+                look_alikes.push(format!("{} {} - {} ~ {artist} - {title}", r.id, r.artist, r.album));
+            }
             paged += u64::from(page == Some(true));
             if page == Some(false) {
                 self.refused.push(format!("{} bandcamp:album:{}", ids::record(record), put.as_deref().unwrap_or_default()));
@@ -1993,7 +2016,7 @@ impl Carrying<'_> {
         self.tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![REQUEST_RECORDS, serde_json::to_string(&given)?])?;
         self.counts = vec![("records_made_for_requests", made), ("pages_for_requests", paged)];
         // Each, whole, for a rehearsal to check (R14, F6): a request given a record not had where 0.16 judged it by names.
-        self.lists = vec![("records_made_for", made_for), ("requests_found_by_names", found_by_names)];
+        self.lists = vec![("records_made_for", made_for), ("requests_found_by_names", found_by_names), ("requests_beside_owned_look_alikes", look_alikes)];
         Ok(())
     }
 
@@ -2222,13 +2245,14 @@ mod tests {
         assert_eq!(cat.merge(gone, live).unwrap(), live);
     }
 
-    /// R14 (F6): a Want for an album the library has under looser names (in brackets, a leading "The") names its record, as the
-    /// import matcher finds an album.
+    /// R14 (F6), W2 (B1): a Want for an album the library has finds it by its own names, folded as the had rule folds them, never by
+    /// looser ones: "Tide Tables (Deluxe Edition)" is another album than the owned "Tide Tables".
     #[test]
-    fn a_request_for_an_album_had_by_a_loose_name_finds_it() {
+    fn a_request_for_an_album_had_by_a_loose_name_is_another() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let had = cat.record_for_tests("Tide Tables", 2);
-        assert_eq!(crate::app::requests::record_of_album(&cat, None, "The Glass Harbour", "Tide Tables (Deluxe Edition)", None, None).unwrap(), had);
+        assert_ne!(crate::app::requests::record_of_album(&cat, None, "The Glass Harbour", "Tide Tables (Deluxe Edition)", None, None).unwrap(), had);
+        assert_eq!(crate::app::requests::record_of_album(&cat, None, "GLASS HARBOUR", "Tide Tables", None, None).unwrap(), had, "its own names, folded");
     }
 
     /// A record not had of `artist`'s, as their list keeps one: an album, titled `title`, holding `refs`.
@@ -2313,8 +2337,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// R21 (N1): a Want for "Tide Tables (Remixes)" by its own release group is not the owned "Tide Tables", whose files name
-    /// another group, though the loose names agree: it is a record of its own, holding the group asked for.
+    /// R21 (N1), W2 (B1): a Want for "Tide Tables (Remixes)" by its own release group is not the owned "Tide Tables", whose files
+    /// name another group, though the loose names agree: it is a record of its own, holding the group asked for. Nor is a Want by
+    /// its names only: the owned album is found by its own names, folded, never loosely.
     #[test]
     fn a_want_for_a_remix_album_is_not_the_owned_album_of_its_name() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
@@ -2325,7 +2350,19 @@ mod tests {
         assert_ne!(wanted, owned);
         assert!(cat.references_of(&ids::record(wanted)).unwrap().iter().any(|(r, _)| r.value == asked));
         let untagged = crate::app::requests::record_of_album(&cat, None, "Glass Harbour", "Tide Tables (Deluxe)", None, None).unwrap();
-        assert_eq!(untagged, owned, "with no group, the owned album by its names (F6)");
+        assert_ne!(untagged, owned, "by its names only, not the owned album its loose names match (W2)");
+        assert_eq!(crate::app::requests::record_of_album(&cat, None, "Glass Harbour", "TIDE TABLES", None, None).unwrap(), owned, "its own names, folded");
+    }
+
+    /// W2: a Want whose Bandcamp page is another than the one an owned album of its names holds is not that album: its page says
+    /// they are two.
+    #[test]
+    fn a_want_whose_page_is_another_is_not_the_owned_album_of_its_name() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let owned = cat.record_for_tests("Two Rooms", 2);
+        assert!(cat.set_reference(&ids::record(owned), &Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/two-rooms"), "link").unwrap());
+        let wanted = Wanted { artist: "Glass Harbour".into(), title: "Two Rooms".into(), page: Some("https://glassharbour.bandcamp.com/album/two-rooms-live".into()), ..Wanted::default() };
+        assert_ne!(cat.record_for_request(&wanted).unwrap(), owned);
     }
 
     /// R21 (N1): a self-titled Want by its release group is not another self-titled album of the artist the library holds.
@@ -2351,14 +2388,14 @@ mod tests {
         assert_eq!(cat.record_named_by(None, Some(page)).unwrap(), Some(held));
     }
 
-    /// R28 (N11): of two records the library holds under one loose name, a request found by its loose names takes the older, as
-    /// one found by its exact names does.
+    /// R28 (N11): of two albums under one loose name, the import matcher's loose step finds the older, as its exact step does, the
+    /// albums being added newest first (the step's look-alikes, W2).
     #[test]
-    fn a_request_by_loose_names_takes_the_older_record() {
-        let cat = Catalogue::open(None, Vec::new()).unwrap();
-        let older = cat.record_for_tests("Tide Tables (Remaster)", 2);
-        cat.record_for_tests("Tide Tables (Live)", 2);
-        assert_eq!(crate::app::requests::record_of_album(&cat, None, "The Glass Harbour", "Tide Tables (Deluxe)", None, None).unwrap(), older);
+    fn the_loose_matcher_keeps_the_older_record() {
+        let mut m = crate::app::import::Matcher::default();
+        m.add_album("2", "Tide Tables (Live)", Some("Glass Harbour"));
+        m.add_album("1", "Tide Tables (Remaster)", Some("Glass Harbour"));
+        assert_eq!(m.find_album_by("Tide Tables (Deluxe)", "The Glass Harbour"), Some("1"));
     }
 
     /// R26 (N8): a request's record holding a release group and its own release (a deluxe edition from a label's list) is not had

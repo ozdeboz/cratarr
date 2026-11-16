@@ -613,6 +613,21 @@ mod tests {
         assert_eq!(page, "https://paperlantern.bandcamp.com/album/tape-club-long-player-paper-lantern");
     }
 
+    /// W2 (B1): a request whose names only loosely match an owned album (brackets aside) is no longer given that album: it gets a
+    /// record of its own, and the step lists it beside its look-alike for the rehearsal to check.
+    #[test]
+    fn the_step_lists_requests_beside_owned_look_alikes() {
+        let data = Data::new("look-alikes");
+        data.batch("userdata.sqlite", "INSERT INTO request (id, user, album_key, artist_key, album, artist, year, at, status) VALUES (15, 'ann', 'glassharbour|tidetablesdeluxe', 'glass harbour', 'Tide Tables (Deluxe)', 'Glass Harbour', 2012, 1793950900, 'approved')");
+        data.run();
+        let record = |id: i64| data.sql::<i64>("userdata.sqlite", &format!("SELECT record FROM request WHERE id = {id}"));
+        assert_ne!(record(15), record(6), "not the owned Tide Tables");
+        let (_, ud) = data.open();
+        let report = &ud.migration_report().unwrap()[PART].1;
+        let alikes: Vec<&str> = report["requests_beside_owned_look_alikes"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect();
+        assert!(alikes.iter().any(|l| l.starts_with("15 Glass Harbour - Tide Tables (Deluxe) ~ ") && l.ends_with("- Tide Tables")), "{report}");
+    }
+
     /// R14 (F3): two requests of one album with no release group share one record not had: the second finds what the first made.
     #[test]
     fn two_requests_of_one_album_without_a_group_share_a_record() {

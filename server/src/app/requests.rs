@@ -133,7 +133,10 @@ fn asked_of(cat: &crate::catalogue::Catalogue, record: i64, key: Option<String>,
     let row = cat.record(record)?.context("That record is gone")?;
     let held: Vec<String> = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().filter(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").map(|(r, _)| r.value).collect();
     let group = group_asked(asked, &held);
+    // Never onto an owned record (W2, B2): one found by its names, where the group would make another album had.
+    let owned = cat.requested(&[row.id])?.get(&row.id).is_some_and(|q| q.holder == Some(row.id));
     if held.is_empty()
+        && !owned
         && let Some(g) = &group
     {
         cat.set_reference(&crate::serve::ids::record(row.id), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", g), "search")?;
@@ -944,6 +947,21 @@ mod tests {
         assert_eq!((row.artist.as_str(), row.title.as_str()), ("Tape Club", "Harbour Songs"));
         let label = serve.catalogue().label_for("Paper Lantern").unwrap();
         assert!(serve.catalogue().label_records(label).unwrap().iter().any(|(r, _)| *r == record), "the account its label");
+    }
+
+    /// W2 (B2): a Want's release group and Bandcamp page are never written onto an owned record found by its names: the had rule
+    /// would count another album had. The request keeps the group it asked with.
+    #[tokio::test]
+    async fn an_asked_group_is_never_written_onto_an_owned_record_found_by_names() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let owned = cat.record_for_tests("Two Rooms", 2);
+        let group = "00000000-0000-4000-8000-000000000302";
+        let record = record_of_album_in(&serve, Some(group.into()), "Glass Harbour", "Two Rooms", None, None, Some("https://glassharbour.bandcamp.com/album/two-rooms".into())).await.unwrap();
+        assert_eq!(record, owned, "its own names, nothing it holds against them");
+        let asked = asked_of(cat, record, None, Some(group.into())).unwrap();
+        assert_eq!(asked.release_group.as_deref(), Some(group), "the request keeps what it asked");
+        assert!(cat.references_of(&crate::serve::ids::record(owned)).unwrap().is_empty(), "nothing written onto the owned record");
     }
 
     /// W1: a page Bandcamp did not let be read (its bot check) leaves the names sent, sorted out as names alone are.
