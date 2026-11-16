@@ -751,9 +751,13 @@ fn holders_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Resu
     }
     let candidates: Vec<i64> = holding.values().flatten().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     let live = live_had_of(db, &candidates)?;
+    // A holder whose identifying references contradict the record's is another record (R26, N8): the standard edition, naming its
+    // release, does not hold the files of the deluxe one asked for, though both hold their release group.
+    let theirs_by_ref = refs_of(db, &candidates)?;
     let mut by_names: Vec<i64> = Vec::new();
     for &r in &rest {
-        let held = own_of(r).iter().filter(|(s, ..)| s == "musicbrainz").filter_map(|(_, k, v)| holding.get(&(k.clone(), v.clone()))).flatten().copied().filter(|h| *h != r && live.contains(h)).min();
+        let agrees = |h: &i64| !contradicts(own_of(r), theirs_by_ref.get(h).map_or(&none[..], Vec::as_slice));
+        let held = own_of(r).iter().filter(|(s, ..)| s == "musicbrainz").filter_map(|(_, k, v)| holding.get(&(k.clone(), v.clone()))).flatten().copied().filter(|h| *h != r && live.contains(h) && agrees(h)).min();
         match held {
             Some(h) => {
                 out.insert(r, h);
@@ -2286,6 +2290,28 @@ mod tests {
         assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000202"), "files").unwrap());
         let wanted = crate::app::requests::record_of_album(&cat, Some("00000000-0000-4000-8000-000000000203"), "Glass Harbour", "Glass Harbour", None, None).unwrap();
         assert_ne!(wanted, owned);
+    }
+
+    /// R26 (N8): a request's record holding a release group and its own release (a deluxe edition from a label's list) is not had
+    /// by the standard edition the library holds, which names another release of the group; a record of the group alone is had by it.
+    #[test]
+    fn a_deluxe_request_is_not_had_by_the_standard_edition() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let group = "00000000-0000-4000-8000-000000000220";
+        let (deluxe, standard) = ("00000000-0000-4000-8000-000000000221", "00000000-0000-4000-8000-000000000222");
+        let refs = |record: i64, of: &[(&str, &str)], how: &str| {
+            for (kind, value) in of {
+                assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", kind, value), how).unwrap());
+            }
+        };
+        let owned = cat.record_for_tests("Tide Tables", 2);
+        refs(owned, &[("release-group", group), ("release", standard)], "files");
+        let asked = cat.record_for_tests("Tide Tables (Deluxe Edition)", 0);
+        refs(asked, &[("release-group", group), ("release", deluxe)], "link");
+        let plain = cat.record_for_tests("Tide Tables (asked for)", 0);
+        refs(plain, &[("release-group", group)], "link");
+        let read = cat.requested(&[asked, plain]).unwrap();
+        assert_eq!((read[&asked].holder, read[&plain].holder), (None, Some(owned)));
     }
 
     /// R14 (run 7): a request's record is kept for good, so it never takes another artist's album by its title alone, though the

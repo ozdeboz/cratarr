@@ -640,12 +640,16 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             i.record.record = o.record;
         }
     }
+    // A record already had, by its own files or a record holding them (the one had rule, R26, N9), is not searched: an item of it
+    // not in flight goes, and none is made for it (Clear placed, or Lidarr's delivery, is no reason to fetch it again).
+    let had: std::collections::HashSet<i64> = of.iter().flatten().filter(|o| o.had()).map(|o| o.record).collect();
+    k.items.retain(|i| !had.contains(&i.record.record) || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed));
     for (r, o) in approved.iter().zip(of) {
         if k.dropped.contains(&r.id) {
             continue;
         }
-        // No record yet (0.17's step gives each one at the start): taken once it has one.
-        let Some(o) = o else { continue };
+        // No record yet (0.17's step gives each one at the start): taken once it has one; a had one, never.
+        let Some(o) = o.as_ref().filter(|o| !o.had()) else { continue };
         if k.items.iter().any(|i| i.record.request == r.id || i.record.record == o.record) {
             continue;
         }
@@ -1464,6 +1468,39 @@ mod tests {
         assert_eq!(record_now(&k, "ss-9", &at_start), at_start, "one gone from the list: as it was");
     }
 
+    /// A request's record as `records_of` reads it, had: a record holding its files.
+    fn had(n: i64) -> Option<super::super::requests::RecordOf> {
+        Some(super::super::requests::RecordOf { holder: Some(n + 1000), ..of(n).unwrap() })
+    }
+
+    /// R26 (N9): Soulseek takes no record already had (its own files, or a record holding them), and an item of one not in flight
+    /// goes; one being fetched stays as it is.
+    #[test]
+    fn soulseek_takes_no_record_already_had() {
+        let mut k = Kept::default();
+        let both = [asked(1, None), asked(2, None)];
+        take_requests(&mut k, &both, &[had(101), of(102)]);
+        assert_eq!(k.items.iter().map(|i| i.record.record).collect::<Vec<_>>(), [102]);
+        k.items[0].state = State::Fetching;
+        take_requests(&mut k, &both, &[had(101), had(102)]);
+        assert_eq!(k.items.len(), 1, "in flight: as it was");
+        k.items[0].state = State::Found;
+        take_requests(&mut k, &both, &[had(101), had(102)]);
+        assert!(k.items.is_empty(), "found, not fetched: gone, its album had");
+    }
+
+    /// R26 (N9): a request still approved after its album was placed and had is not searched again when the administrator clears
+    /// the placed ones.
+    #[test]
+    fn clearing_placed_does_not_search_them_again() {
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None)], &[of(101)]);
+        k.items[0].state = State::Placed;
+        k.items.retain(|i| i.state != State::Placed);
+        take_requests(&mut k, &[asked(1, None)], &[had(101)]);
+        assert!(k.items.is_empty());
+    }
+
     /// C51b (row 9.26): an item 0.16 kept, by its release group, is given its request's record and goes on as it was: its
     /// state, batch, folder, tick and names kept, no second item made for it, and written back with its record.
     #[test]
@@ -1569,18 +1606,15 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
-    /// C51b: a record with no list to judge by says why, in few words: its only list behind Bandcamp's bot check (the owner's
-    /// case where Bandcamp answers so); no reference at all; files where no list agrees (none until one is chosen). A source out
-    /// of reach is no "none": it waits for a round.
+    /// C51b: a record with no list to judge by says why, in few words: no reference at all. A source out of reach is no "none":
+    /// it waits for a round. A record had (FX01's Tide Tables, its files and no list agreeing) is no Soulseek's (R26, N9): no
+    /// item is made for it.
     #[tokio::test]
     async fn a_record_with_no_tracklist_says_why() {
         let (cat, items, d) = fx01("no-list");
         let checked = |_| std::future::ready(Err(anyhow::Error::from(crate::bandcamp::NotRead)));
         assert_eq!(listing(of_request(&items, 8), &cat, checked).await, Listing::None("No list to judge by".into()), "Quiet Lanes holds no reference");
-        // Tide Tables, had, its files and no list agreeing (FX01's counts MusicBrainz's): none counts until one is chosen.
-        let tide = of_request(&items, 6);
-        cat.set_counting(tide.record.record, None, true).unwrap();
-        assert_eq!(listing(tide, &cat, checked).await, Listing::None("No list counts until one is chosen".into()));
+        assert!(items.iter().all(|i| i.record.request != 6), "Tide Tables is had");
         let away = |_| std::future::ready(Err(anyhow::anyhow!("MusicBrainz could not be reached")));
         assert!(matches!(listing(of_request(&items, 2), &cat, away).await, Listing::Later(_, ROUND_AT_LEAST)), "Harbour Lights holds its release group");
         drop(cat);
