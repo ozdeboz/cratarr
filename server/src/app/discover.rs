@@ -2334,20 +2334,20 @@ mod listing_tests {
         assert_eq!(label_named(&search, "Warp Records").as_deref(), Some(imprint));
         assert_eq!(label_named(&search, "warp").as_deref(), Some(imprint));
         assert_eq!(label_named(&search, "Wharf"), None);
+        // A real answer (`inc=release-groups+artist-credits`, captured 2026-11-16 on the owner's yes), trimmed.
         let v = fixture("label releases");
         let listed = label_listings(&v);
         assert_eq!(
-            listed.iter().map(|l| (l.title.as_str(), l.kind.as_deref(), l.year, l.released.as_deref())).collect::<Vec<_>>(),
+            listed.iter().map(|l| (l.title.as_str(), l.artist.as_str(), l.kind.as_deref(), l.year, l.released.as_deref())).collect::<Vec<_>>(),
             [
-                ("Surfing on Sine Waves", Some("album"), Some(1992), Some("1992")),
-                ("Pioneers of the Hypnotic Groove", Some("album"), Some(1991), Some("1991-05-21")),
-                ("Hothead EP", Some("single"), Some(1993), Some("1993-02-22")),
-                ("Testone (remixes)", Some("single"), Some(1990), Some("1990-01-30")),
+                ("Surfing on Sine Waves", "Polygon Window", Some("album"), Some(1992), Some("1992")),
+                ("Hothead EP", "DIY", Some("single"), Some(1993), Some("1993-02-22")),
+                ("Hey! Hey! Can U Relate", "DJ Mink featuring The K.I.D & Carruthers", Some("single"), Some(1990), Some("1990-04-23")),
             ],
-            "two releases of one group: one record, by its group's title (the release says \"Hothead\")"
+            "two releases of one group, one record, by its group's title (the release says \"Hothead\"); each artist as the release credits              them, joined as it joins them: the names the files and `track_fetch` give, not MusicBrainz's own (\"DiY\", \"The K.I.D.\")"
         );
         assert_eq!(listed[0].refs, [Ref::new("musicbrainz", "release-group", "0afb7bd6-33a9-3a01-8765-f1de0a1f0972")]);
-        assert_eq!(next_offset(&v, "release"), Some(5));
+        assert_eq!(next_offset(&v, "release"), Some(4));
     }
 }
 
