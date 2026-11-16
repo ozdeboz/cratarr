@@ -58,6 +58,11 @@ pub fn artist(id: i64) -> String {
     format!("{ARTIST}{id}")
 }
 
+/// The artist a served id names, where it is one of the catalogue's (`ar-<digits>`).
+pub fn artist_number(id: &str) -> Option<i64> {
+    id.strip_prefix(ARTIST).filter(|_| for_life(id)).and_then(|n| n.parse().ok())
+}
+
 /// What a label's id starts with (0100): a number for life, as an artist's. Only the server knows labels yet, so the prefix
 /// is its own, not the rules crate's.
 pub const LABEL: &str = "la-";

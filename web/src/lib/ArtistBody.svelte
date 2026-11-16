@@ -222,24 +222,25 @@
   <section aria-label="Not in your library">
     <SectionHead title="Not in your library" />
     <ul class="grid">
-      {#each missingShown as m (m.release_group)}
-        {@const page = bandcampOf(m.release_group, m.bandcamp)}
+      {#each missingShown as m (m.release_group ?? m.record)}
+        {@const key = m.release_group ?? m.record}
+        {@const page = bandcampOf(key, m.bandcamp)}
         <li class="missing">
           <AlbumCard
             source="musicbrainz"
-            album={{ id: m.release_group, title: m.title, year: m.year }}
+            album={{ id: key, title: m.title, year: m.year }}
             cover={m.cover}
-            busy={finding === m.release_group}
-            request={m.request ?? (asked.includes(m.release_group) ? { state: 'wanted' } : null)}
-            onopen={() => elsewhere?.open({ release_group: m.release_group, title: m.title, artist: m.artist, year: m.year, cover: m.cover, bandcamp: page })}
+            busy={finding === key}
+            request={m.request ?? (asked.includes(key) ? { state: 'wanted' } : null)}
+            onopen={() => elsewhere?.open({ release_group: m.release_group ?? null, title: m.title, artist: m.artist, year: m.year, cover: m.cover, bandcamp: page })}
           />
           <!-- On Bandcamp: Play on its cover, as Discover's cards have it (beside the card's button, over its cover). -->
           {#if page}<CoverPlay bandcamp
               label={m.title}
-              busy={bandcampPlay.key === m.release_group}
-              problem={bandcampFailed[m.release_group] ?? null}
-              onplay={() => playOnBandcamp(m.release_group, page, m.title)}
-              onproblem={() => (playProblem = { title: `${m.title} did not play`, text: bandcampFailed[m.release_group], retry: () => playOnBandcamp(m.release_group, page, m.title) })}
+              busy={bandcampPlay.key === key}
+              problem={bandcampFailed[key] ?? null}
+              onplay={() => playOnBandcamp(key, page, m.title)}
+              onproblem={() => (playProblem = { title: `${m.title} did not play`, text: bandcampFailed[key], retry: () => playOnBandcamp(key, page, m.title) })}
             />{/if}
         </li>
       {/each}

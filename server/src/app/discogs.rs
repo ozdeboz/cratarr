@@ -591,7 +591,6 @@ const ARTIST_PAGES: u32 = 10;
 
 /// An artist's own records at Discogs (S11, role Main): every page of their list up to `ARTIST_PAGES`, oldest first, at
 /// Discogs' pace. Empty where Discogs has no such artist or is switched off.
-#[allow(dead_code)] // an artist's missing list (C53a)
 pub async fn artist_masters(artist: u64) -> Result<Vec<Listed>> {
     let mut out: Vec<Listed> = Vec::new();
     let mut page = 1;

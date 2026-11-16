@@ -584,8 +584,12 @@ struct Group {
 /// group a listing by its MusicBrainz id, its type in the library's words ("album", "ep"), its first release date and genres.
 /// The artist's name is left for whoever knows it.
 pub(super) fn discography_listings(groups: &str) -> Result<Vec<crate::catalogue::records::Listing>> {
-    let groups: Vec<Group> = serde_json::from_str(groups)?;
-    Ok(groups
+    Ok(group_listings(serde_json::from_str(groups)?))
+}
+
+/// Release groups as records a list names (`discography_listings`).
+fn group_listings(groups: Vec<Group>) -> Vec<crate::catalogue::records::Listing> {
+    groups
         .into_iter()
         .map(|g| crate::catalogue::records::Listing {
             kind: crate::serve::library::release_words(g.kind.as_deref()).0,
@@ -599,7 +603,7 @@ pub(super) fn discography_listings(groups: &str) -> Result<Vec<crate::catalogue:
             genres: g.genres,
             ..Default::default()
         })
-        .collect())
+        .collect()
 }
 
 /// An artist the library has, with how much the account plays them.
@@ -1432,18 +1436,6 @@ async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<
     Ok(s.artists.into_iter().find(|a| a.score >= 95 && loose(&a.name) == loose(name)).map(|a| a.id))
 }
 
-/// A release group's first credited artist on MusicBrainz (their id).
-async fn artist_of_group(http: &reqwest::Client, release_group: &str) -> Result<Option<String>> {
-    let v: serde_json::Value = http
-        .get(format!("https://musicbrainz.org/ws/2/release-group/{release_group}?inc=artist-credits&fmt=json"))
-        .asked()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(v["artist-credit"].as_array().and_then(|c| c.first()).and_then(|c| c["artist"]["id"].as_str()).map(str::to_string))
-}
-
 /// How many full-length studio albums an artist (their MusicBrainz id) has released (0.9.3; the owner: "how many
 /// full-length studio albums. That's the golden standard."): their release groups of the primary type Album with no
 /// secondary type (no compilation, live album, remix, soundtrack…), out by today, as the discographies count them.
@@ -1767,87 +1759,301 @@ pub fn suggestion_on_bandcamp(serve: &crate::serve::Serve, account: &str, page: 
     Ok(kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.bandcamp.as_deref().is_some_and(|b| bare(b) == page))))
 }
 
-/// An album of an artist's the library has none of (0.9.3, the owner: an artist's page shows their missing albums).
+/// A record of an artist's the library has none of (0.9.3, the owner: an artist's page shows their missing albums; C53a: a record
+/// not had, by its id): its names, year and type, its cover, its pages elsewhere, an open request's mark.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Missing {
-    pub release_group: String,
+    /// The record's id (`al-<n>`).
+    pub record: String,
     pub title: String,
+    pub artist: String,
     pub year: Option<i32>,
     pub kind: Option<String>,
     pub cover: String,
-    /// Its page on Bandcamp where an open of it found one lately (0.9.5: its cover's play button, as Discover's).
+    /// Its MusicBrainz release group, where it holds one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_group: Option<String>,
+    /// Its Bandcamp album page, where it holds one (0.9.5: its cover's play button, as Discover's).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
     /// An open request's mark (0.9.5): wanted, or coming and how far; none without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<super::requests::Mark>,
+    /// A retired record's (OQ16): when it went from Music, "Was in Music until <date>".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub was_until: Option<i64>,
 }
 
-/// An artist's albums and EPs the library has none of, newest first: their discography as Discover keeps it (read now
-/// and kept where it is not, or old), by the library's MusicBrainz id for them, else MusicBrainz's sure match by name;
-/// what the library has left out as every source's is (by release group, else by name and artist).
-/// `mbid`, `release_group` (0.9.6): what tells the artist where the name may not (an artist not in the library, from
-/// a Bandcamp album or a suggestion): their MusicBrainz id, else a release group of theirs; else the library's id for
-/// the name, else MusicBrainz's sure match for it.
-pub async fn missing_albums(
-    serve: &Arc<crate::serve::Serve>,
-    cat: Arc<crate::catalogue::Catalogue>,
-    name: &str,
-    mbid: Option<&str>,
-    release_group: Option<&str>,
-) -> Result<Vec<Missing>> {
-    let http = http()?;
-    let hinted = match (mbid.filter(|m| super::discogs::is_mbid(m)), release_group.filter(|g| super::discogs::is_mbid(g))) {
-        (Some(m), _) => Some(m.to_string()),
-        (None, Some(g)) => artist_of_group(&http, g).await.unwrap_or_default(),
-        (None, None) => None,
-    };
-    let (lib, n) = (serve.library.clone(), name.to_string());
-    let known = match hinted {
-        Some(m) => Some(m),
-        None => tokio::task::spawn_blocking(move || lib.artist_by_name(&n)).await??.and_then(|(_, m)| m).filter(|m| !m.is_empty()),
-    };
-    let Some(mbid) = (match known {
-        Some(m) => Some(m),
-        None => mb_artist_by_name(&http, name).await?,
-    }) else {
-        return Ok(Vec::new());
-    };
-    let (ud, key) = (serve.userdata.clone(), mbid.clone());
-    let kept = tokio::task::spawn_blocking(move || ud.discography(&key)).await??;
-    let now = super::moment::now_secs();
-    let groups: Vec<Group> = match kept.filter(|(at, _)| now - at <= DISCOGRAPHY_FRESH_SECS).and_then(|(_, json)| serde_json::from_str(&json).ok()) {
-        Some(g) => g,
-        None => {
-            let g = mb_discography(&http, &mbid, &today()).await?;
-            let (ud, key, json) = (serve.userdata.clone(), mbid.clone(), serde_json::to_string(&g)?);
-            tokio::task::spawn_blocking(move || ud.set_discography(&key, now, &json)).await??;
-            g
+impl Missing {
+    /// A record not had as the lists show it: its cover its own, else its release group's.
+    pub fn of(q: crate::catalogue::records::Requested) -> Self {
+        let group = q.groups.first().cloned();
+        Missing {
+            record: crate::serve::ids::record(q.row.id),
+            cover: q.row.cover.clone().or_else(|| group.as_ref().map(|g| format!("/api/covers/release-group/{g}"))).unwrap_or_default(),
+            title: q.row.title,
+            artist: q.row.artist,
+            year: q.row.year,
+            kind: q.row.kind,
+            release_group: group,
+            bandcamp: q.bandcamp,
+            request: None,
+            was_until: q.row.retired_at,
         }
-    };
-    let dir = serve.data_dir.clone().context("Cratarr's data folder is needed")?;
-    let (lib, ud, artist) = (serve.library.clone(), serve.userdata.clone(), name.to_string());
-    let mut out = tokio::task::spawn_blocking(move || -> Result<Vec<Missing>> {
-        let names = lib.artist_albums()?.into_iter().map(|r| r.1).collect::<Vec<_>>();
-        let have = have(Path::new(&dir), &cat, names)?;
-        let pages = ud.bandcamp_pages(now - BANDCAMP_FOUND_SECS)?;
-        Ok(groups
-            .into_iter()
-            .filter(|g| !have.has(&Candidate { album: g.title.clone(), artist: artist.clone(), release_group: Some(g.id.clone()), ..Candidate::default() }))
-            .map(|g| Missing {
-                cover: format!("/api/covers/release-group/{}", g.id),
-                bandcamp: pages.get(&g.id).cloned(),
-                request: None,
-                release_group: g.id,
-                title: g.title,
-                year: g.year,
-                kind: g.kind,
-            })
-            .collect())
+    }
+}
+
+/// An artist as their lists are read (C53a): their id and name, and what each source knows them by.
+pub struct ArtistAsked {
+    pub id: i64,
+    pub name: String,
+    pub refs: Vec<crate::catalogue::records::Ref>,
+}
+
+impl ArtistAsked {
+    /// What `source` knows them by.
+    fn at(&self, source: &str) -> Option<&str> {
+        self.refs.iter().find(|r| r.source == source && r.kind == "artist").map(|r| r.value.as_str())
+    }
+}
+
+/// What one source lists of an artist (C53a): what it knows them by, how that was found now (none: known before), and the records
+/// it lists. None: the source does not know them.
+pub type ListRead = Option<(crate::catalogue::records::Ref, Option<&'static str>, Vec<crate::catalogue::records::Listing>)>;
+
+/// One of the sources an artist's records are read from (C53a): MusicBrainz, Discogs and Bandcamp (`artist_sources`); the tests'
+/// stand in for them.
+pub trait ArtistList: Send + Sync {
+    /// Its name, as `references.source` has it.
+    fn source(&self) -> &'static str;
+    /// Whether it is switched on: one switched off is not read.
+    fn on(&self) -> bool {
+        true
+    }
+    /// The artist's list there.
+    fn read<'a>(&'a self, artist: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead>;
+}
+
+/// MusicBrainz's list of an artist: their release groups, as a discography is read (`mb_discography`), by the id the files gave
+/// them, else MusicBrainz's sure match for their name.
+struct MusicBrainzList;
+
+impl ArtistList for MusicBrainzList {
+    fn source(&self) -> &'static str {
+        "musicbrainz"
+    }
+
+    fn on(&self) -> bool {
+        super::switches::is_on(super::switches::MUSICBRAINZ)
+    }
+
+    fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+        Box::pin(async move {
+            let http = http()?;
+            let (mbid, how) = match a.at("musicbrainz") {
+                Some(id) => (id.to_string(), None),
+                None => match mb_artist_by_name(&http, &a.name).await? {
+                    Some(id) => (id, Some("search")),
+                    None => return Ok(None),
+                },
+            };
+            let listings = group_listings(mb_discography(&http, &mbid, &today()).await?);
+            Ok(Some((crate::catalogue::records::Ref::new("musicbrainz", "artist", &mbid), how, listings)))
+        })
+    }
+}
+
+/// Discogs' list of an artist: their own records there, a master or a release with none (`discogs::artist_masters`), by the id
+/// their facts there were found by (MusicBrainz's link, else their name).
+struct DiscogsList;
+
+impl ArtistList for DiscogsList {
+    fn source(&self) -> &'static str {
+        "discogs"
+    }
+
+    fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+        Box::pin(async move {
+            let (id, how) = match a.at("discogs").and_then(|v| v.parse::<u64>().ok()) {
+                Some(id) => (id, None),
+                None => match super::discogs::artist_facts(a.at("musicbrainz"), &a.name).await? {
+                    Some(f) => (f.id, Some("search")),
+                    None => return Ok(None),
+                },
+            };
+            let listings = super::discogs::artist_masters(id).await?.iter().map(discogs_listing).collect();
+            Ok(Some((crate::catalogue::records::Ref::new("discogs", "artist", &id.to_string()), how, listings)))
+        })
+    }
+}
+
+/// A row of Discogs' list as a record a list names (C53a): its master, or the release Discogs gives no master of; typed where its
+/// row says a format (a master's type comes with its main release, when that is read).
+fn discogs_listing(l: &super::discogs::Listed) -> crate::catalogue::records::Listing {
+    crate::catalogue::records::Listing {
+        title: l.title.clone(),
+        year: l.year,
+        kind: crate::serve::library::release_words(l.format.as_deref().unwrap_or_default().split(',')).0,
+        cover: l.thumb.clone(),
+        refs: vec![crate::catalogue::records::Ref::new("discogs", if l.master { "master" } else { "release" }, &l.id.to_string())],
+        ..Default::default()
+    }
+}
+
+/// Bandcamp's list of an artist: the albums on their page (`Bandcamp::releases`), by the page MusicBrainz links them to, else a
+/// search for their name. Its bot check is no answer about the artist: the read fails, and their list waits.
+struct BandcampList;
+
+impl ArtistList for BandcampList {
+    fn source(&self) -> &'static str {
+        "bandcamp"
+    }
+
+    fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+        Box::pin(async move {
+            let bc = crate::bandcamp::Bandcamp::get();
+            let (page, how) = match a.at("bandcamp") {
+                Some(page) => (page.to_string(), None),
+                None => {
+                    let linked = match a.at("musicbrainz") {
+                        Some(id) => own_bandcamp(&mb_artist_urls(&http()?, id).await.unwrap_or_default()),
+                        None => None,
+                    };
+                    match linked {
+                        Some(page) => (page, Some("link")),
+                        None => match bc.search_artist(&a.name).await?.into_iter().find(|(n, _)| same(n, &a.name)) {
+                            Some((_, page)) => (page, Some("search")),
+                            None => return Ok(None),
+                        },
+                    }
+                }
+            };
+            let listings = bc
+                .releases(&page)
+                .await?
+                .into_iter()
+                .map(|(title, album)| crate::catalogue::records::Listing { title, refs: vec![crate::catalogue::records::Ref::new("bandcamp", "album", &album)], ..Default::default() })
+                .collect();
+            Ok(Some((crate::catalogue::records::Ref::new("bandcamp", "artist", &page), how, listings)))
+        })
+    }
+}
+
+/// The three sources an artist's records are read from (C53a).
+pub fn artist_sources() -> Vec<Arc<dyn ArtistList>> {
+    vec![Arc::new(MusicBrainzList), Arc::new(DiscogsList), Arc::new(BandcampList)]
+}
+
+/// An artist's list at one source, as it stands: being read now; read (or known not to be there) at a time; failed at a time.
+#[derive(Debug, Clone, Copy)]
+enum Reading {
+    Now,
+    Done(i64),
+    Failed(i64),
+}
+
+/// Who is being read where: by catalogue (its address), artist and source.
+type Readings = std::sync::Mutex<HashMap<(usize, i64, &'static str), Reading>>;
+
+fn readings() -> &'static Readings {
+    static READINGS: std::sync::OnceLock<Readings> = std::sync::OnceLock::new();
+    READINGS.get_or_init(Default::default)
+}
+
+/// How long an artist's list at a source is good for, before it is read again (as a discography was).
+const LIST_FRESH_SECS: i64 = DISCOGRAPHY_FRESH_SECS;
+/// How long a source that did not answer (its bot check, out of reach, too slow) is left before it is asked again.
+const LIST_RETRY_SECS: i64 = 15 * 60;
+/// The longest a list's read may take: past it, it counts as not read, and `looking` ends.
+const LIST_READ_AT_MOST: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 300 });
+
+/// Ends a list's read, whatever becomes of its task: what it came to, else failed (a panic, a task dropped).
+struct Settles(Option<(usize, i64, &'static str)>, Option<Reading>);
+
+impl Drop for Settles {
+    fn drop(&mut self) {
+        if let Some(key) = self.0.take() {
+            let state = self.1.unwrap_or(Reading::Failed(super::moment::now_secs()));
+            readings().lock().unwrap_or_else(|p| p.into_inner()).insert(key, state);
+        }
+    }
+}
+
+/// Each of an artist's lists that is old or never read (`read_at`), read now in a task of its own (C53a); whether any is being
+/// read (`looking`). A source being read is not asked twice; one that did not answer is asked again after `LIST_RETRY_SECS`.
+fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>, read_at: &HashMap<String, i64>, sources: &[Arc<dyn ArtistList>], now: i64) -> bool {
+    let mut looking = false;
+    for source in sources.iter().filter(|s| s.on()) {
+        let key = (Arc::as_ptr(cat) as usize, artist.id, source.source());
+        {
+            let mut all = readings().lock().unwrap_or_else(|p| p.into_inner());
+            let due = match all.get(&key) {
+                Some(Reading::Now) => {
+                    looking = true;
+                    false
+                }
+                Some(Reading::Done(at)) => now - at > LIST_FRESH_SECS,
+                Some(Reading::Failed(at)) => now - at > LIST_RETRY_SECS,
+                None => read_at.get(source.source()).is_none_or(|at| now - at > LIST_FRESH_SECS),
+            };
+            if !due {
+                continue;
+            }
+            all.insert(key, Reading::Now);
+        }
+        looking = true;
+        let (cat, artist, source) = (cat.clone(), artist.clone(), source.clone());
+        tokio::spawn(async move {
+            let mut settles = Settles(Some(key), None);
+            let at = |done: bool| if done { Reading::Done(super::moment::now_secs()) } else { Reading::Failed(super::moment::now_secs()) };
+            settles.1 = Some(match tokio::time::timeout(LIST_READ_AT_MOST, read_one(&cat, &artist, source.as_ref())).await {
+                Ok(Ok(())) => at(true),
+                Ok(Err(e)) => {
+                    tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: {e:#}");
+                    at(false)
+                }
+                Err(_) => {
+                    tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: no answer in time");
+                    at(false)
+                }
+            });
+        });
+    }
+    looking
+}
+
+/// One source's list of the artist read and kept (C53a): what it knows them by (where found now), its rows as records not had
+/// credited to them (`keep_listing`: each found by its references first), and when it was read. A source that does not know them
+/// keeps nothing.
+async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<()> {
+    let Some((known, how, listings)) = source.read(artist).await? else { return Ok(()) };
+    let (cat, id, name) = (cat.clone(), artist.id, artist.name.clone());
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        if let Some(how) = how {
+            cat.set_reference(&crate::serve::ids::artist(id), &known, how)?;
+        }
+        let listings: Vec<crate::catalogue::records::Listing> = listings.into_iter().map(|l| crate::catalogue::records::Listing { artist: name.clone(), ..l }).collect();
+        cat.keep_listing(Some(id), &listings, "link")?;
+        cat.artist_list_read(id, &known.source)
     })
-    .await??;
+    .await?
+}
+
+/// An artist's records the library has none of (C53a), newest first: the rows kept, at once (`Catalogue::missing_of`: by the one
+/// had rule, a retired record per OQ16, each album once), while their lists at MusicBrainz, Discogs and Bandcamp are read in the
+/// background where old or never read, each kept as records not had; whether any is being read (`looking`), so the page asks
+/// again until none is. A source that does not answer is not read this time. No such artist: no list.
+pub async fn missing_albums(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Result<(Vec<Missing>, bool)> {
+    let c = cat.clone();
+    let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { return Ok((Vec::new(), false)) };
+    let read_at: HashMap<String, i64> = refs.iter().filter(|(r, _)| r.kind == "artist").filter_map(|(r, row)| Some((r.source.clone(), row.read_at?))).collect();
+    let asked = Arc::new(ArtistAsked { id: artist, name, refs: refs.into_iter().map(|(r, _)| r).collect() });
+    let looking = read_lists(&cat, &asked, &read_at, sources, super::moment::now_secs());
+    let c = cat.clone();
+    let rows = tokio::task::spawn_blocking(move || c.missing_of(artist)).await??;
+    let mut out: Vec<Missing> = rows.into_iter().map(Missing::of).collect();
     out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.title.cmp(&b.title)));
-    Ok(out)
+    Ok((out, looking))
 }
 
 /// How long an album's page found on Bandcamp (or not found) is kept before it is looked for again.
@@ -2284,6 +2490,138 @@ pub fn undo(serve: &crate::serve::Serve, account: &str, token: &str) -> Result<S
         Ok(format!("{UNDO}{answer}:{key}"))
     } else {
         self::answer(serve, account, key, answer)
+    }
+}
+
+#[cfg(test)]
+mod missing_tests {
+    use super::*;
+    use crate::catalogue::Catalogue;
+    use crate::catalogue::records::{Listing, Ref};
+
+    const GROUP_1: &str = "00000000-0000-4000-8000-000000000170";
+    const GROUP_2: &str = "00000000-0000-4000-8000-000000000171";
+
+    /// A source of the test's own: its answer for every artist.
+    struct Stub(&'static str, fn(&ArtistAsked) -> Result<ListRead>);
+
+    impl ArtistList for Stub {
+        fn source(&self) -> &'static str {
+            self.0
+        }
+
+        fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+            let answer = (self.1)(a);
+            Box::pin(async move { answer })
+        }
+    }
+
+    /// A source that never answers.
+    struct Silent;
+
+    impl ArtistList for Silent {
+        fn source(&self) -> &'static str {
+            "discogs"
+        }
+
+        fn read<'a>(&'a self, _: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    fn listing(title: &str, refs: &[(&str, &str, &str)]) -> Listing {
+        Listing { title: title.into(), kind: Some("album".into()), year: Some(2019), refs: refs.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect(), ..Listing::default() }
+    }
+
+    /// The list once no read runs: `looking` must end (a test fails rather than waits for good).
+    async fn settled(cat: &Arc<Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Vec<Missing> {
+        for _ in 0..500 {
+            let (list, looking) = missing_albums(cat.clone(), artist, sources).await.unwrap();
+            if !looking {
+                return list;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("still looking")
+    }
+
+    /// C53a: an artist's three lists are one list: a record MusicBrainz and Discogs both list (by its master, which MusicBrainz
+    /// links) is one row, and so is Bandcamp's album of the same title, which links to nothing; each source read, its time kept.
+    #[tokio::test]
+    async fn one_list() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let sources: Vec<Arc<dyn ArtistList>> = vec![
+            Arc::new(Stub("musicbrainz", |_| {
+                let rows = vec![listing("Night Walks", &[("musicbrainz", "release-group", GROUP_1), ("discogs", "master", "3001")]), listing("Paper Kites", &[("musicbrainz", "release-group", GROUP_2)])];
+                Ok(Some((Ref::new("musicbrainz", "artist", "00000000-0000-4000-8000-000000000270"), Some("search"), rows)))
+            })),
+            Arc::new(Stub("discogs", |_| Ok(Some((Ref::new("discogs", "artist", "9001"), Some("search"), vec![listing("Night Walks", &[("discogs", "master", "3001")]), listing("Undertow", &[("discogs", "master", "3003")])]))))),
+            Arc::new(Stub("bandcamp", |_| {
+                let rows = vec![listing("Night Walks", &[("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks")])];
+                Ok(Some((Ref::new("bandcamp", "artist", "https://kitetheory.bandcamp.com"), Some("search"), rows)))
+            })),
+        ];
+        let mut titles: Vec<String> = settled(&cat, artist, &sources).await.into_iter().map(|m| m.title).collect();
+        titles.sort();
+        assert_eq!(titles, ["Night Walks", "Paper Kites", "Undertow"]);
+        let known = cat.artist_known(artist).unwrap().unwrap().1;
+        assert_eq!(known.iter().filter(|(_, row)| row.read_at.is_some()).count(), 3, "each list read, its time kept: {known:?}");
+    }
+
+    /// C53a: an artist no source knows has no list, and nothing is looked for long; an id no artist has, the same.
+    #[tokio::test]
+    async fn an_artist_known_to_none_has_no_list() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artist = cat.artist_for("Nobody Knows").unwrap();
+        let none: fn(&ArtistAsked) -> Result<ListRead> = |_| Ok(None);
+        let sources: Vec<Arc<dyn ArtistList>> = ["musicbrainz", "discogs", "bandcamp"].into_iter().map(|s| Arc::new(Stub(s, none)) as Arc<dyn ArtistList>).collect();
+        assert!(settled(&cat, artist, &sources).await.is_empty());
+        assert_eq!(missing_albums(cat.clone(), artist + 1000, &sources).await.unwrap(), (Vec::new(), false), "no such artist");
+    }
+
+    /// C53a: a source answering with its bot check (Bandcamp's artist page) or not at all is not read this time: the list shows
+    /// what is kept, `looking` ends, and the source's list has no time kept, so it is asked again later, not at once.
+    #[tokio::test]
+    async fn a_source_behind_its_check_ends_looking() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artist = cat.artist_for("Paper Lantern").unwrap();
+        cat.keep_listing(Some(artist), &[Listing { artist: "Paper Lantern".into(), ..listing("After Hours", &[("musicbrainz", "release-group", GROUP_1)]) }], "link").unwrap();
+        let sources: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Stub("bandcamp", |_| Err(anyhow::Error::from(crate::bandcamp::NotRead)))), Arc::new(Silent)];
+        let listed: Vec<String> = settled(&cat, artist, &sources).await.into_iter().map(|m| m.title).collect();
+        assert_eq!(listed, ["After Hours"], "what is kept");
+        assert!(cat.artist_known(artist).unwrap().unwrap().1.is_empty(), "no list read");
+        assert!(!missing_albums(cat.clone(), artist, &sources).await.unwrap().1, "not asked again at once");
+    }
+
+    /// C53a's timing at production's size (about 9,000 records not had from 688 discographies, a few hundred an artist; 5,000
+    /// records had): an artist page of 300 records not had answers from kept rows. `rt.sh test --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn an_artist_page_at_production_size() {
+        let d = std::env::temp_dir().join(format!("cratarr-missing-size-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let cat = Catalogue::open(Some(&d.join("catalogue.sqlite")), Vec::new()).unwrap();
+        let made = std::time::Instant::now();
+        let artists: Vec<i64> = (0..688).map(|n| cat.artist_for(&format!("Artist {n}")).unwrap()).collect();
+        for (n, artist) in artists.iter().enumerate() {
+            let rows: Vec<Listing> = (0..if n == 0 { 300 } else { 13 })
+                .map(|i| Listing { artist: format!("Artist {n}"), ..listing(&format!("Record {n}-{i}"), &[("musicbrainz", "release-group", &format!("{n:08}-0000-4000-8000-{i:012}"))]) })
+                .collect();
+            cat.keep_listing(Some(*artist), &rows, "link").unwrap();
+        }
+        for i in 0..5_000 {
+            cat.record_for_tests(&format!("Had {i}"), 1);
+        }
+        println!("made in {:?}", made.elapsed());
+        for _ in 0..3 {
+            let at = std::time::Instant::now();
+            let rows = cat.missing_of(artists[0]).unwrap();
+            println!("an artist page of {} records not had: {:?}", rows.len(), at.elapsed());
+        }
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
     }
 }
 

@@ -2375,9 +2375,14 @@ export const getDiscoverArtist = (name: string) =>
  *  asked (0.9.3). */
 export const getDiscoverArtistAlbums = (name: string) =>
   quietly<{ albums: number | null }>(`/api/discover/artist/albums?name=${encodeURIComponent(name)}`);
-/** An album missing from an artist the library has (their discography as MusicBrainz lists it, 0.9.3). */
+/** A record of an artist's the library has none of (0.9.3; a record not had, C53a: MusicBrainz's, Discogs' or Bandcamp's list). */
 export type MissingAlbum = {
-  release_group: string;
+  /** The record's id (`al-<n>`). */
+  record: string;
+  /** Its MusicBrainz release group, where it has one. */
+  release_group?: string | null;
+  /** A retired record's (OQ16): when it went from Music. */
+  was_until?: number | null;
   title: string;
   artist: string;
   year: number | null;

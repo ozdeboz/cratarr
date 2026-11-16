@@ -63,10 +63,12 @@
   // A missing album opened: from Bandcamp where it is there, else its menu.
   let finding = $state<string | null>(null);
   let menuFor = $state<MissingAlbum | null>(null);
+  /** A missing record's key on this page: its release group, else its id. */
+  const keyOf = (a: MissingAlbum) => a.release_group ?? a.record;
   async function open(a: MissingAlbum) {
-    finding = a.release_group;
+    finding = keyOf(a);
     try {
-      const { page } = await findOnBandcamp(a.artist, a.title, a.release_group);
+      const { page } = await findOnBandcamp(a.artist, a.title, a.release_group ?? undefined);
       if (page) viewOver(albumSubject(BANDCAMP, albumIdOf(page)));
       else menuFor = a;
     } catch {
@@ -79,8 +81,8 @@
   async function want(a: MissingAlbum) {
     menuFor = null;
     try {
-      const { request } = await wantAlbum({ release_group: a.release_group, artist: a.artist, album: a.title, year: a.year, cover: a.cover });
-      asked = [...asked, a.release_group];
+      const { request } = await wantAlbum({ release_group: a.release_group ?? undefined, artist: a.artist, album: a.title, year: a.year, cover: a.cover });
+      asked = [...asked, keyOf(a)];
       if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
     } catch (e) {
       toast.fail(e, 'Could not ask for it');
@@ -112,11 +114,11 @@
   {:else}
     <p class="note">From the discographies of {missing.artists} of your artists, as MusicBrainz lists them.</p>
     <ul class="rows">
-      {#each shownMissing as a (a.release_group)}
+      {#each shownMissing as a (keyOf(a))}
         <li>
           <Row size="large" title={a.title} label={`Open ${a.title}`} onclick={() => open(a)}>
-            {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(a.release_group) ? { state: 'wanted' } : null)} small />{#if finding === a.release_group}<CoverBusy small />{/if}</span>{/snippet}
-            {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''}{a.kind && a.kind !== 'Album' ? ` · ${a.kind}` : ''}{#if asked.includes(a.release_group)}<span class="asked"> · asked for</span>{/if}{/snippet}
+            {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(keyOf(a)) ? { state: 'wanted' } : null)} small />{#if finding === keyOf(a)}<CoverBusy small />{/if}</span>{/snippet}
+            {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''}{a.kind && a.kind !== 'Album' ? ` · ${a.kind}` : ''}{#if asked.includes(keyOf(a))}<span class="asked"> · asked for</span>{/if}{/snippet}
           </Row>
         </li>
       {/each}
@@ -159,14 +161,14 @@
   <MenuSheet label={a.title} title={a.title} images={a.cover ? [a.cover] : []} chips={[a.artist, ...(a.year ? [String(a.year)] : [])]} copy={`${a.artist} – ${a.title}`} onclose={() => (menuFor = null)}>
     <MenuCards>
       <MenuGroup label="Discover">
-        {#if asked.includes(a.release_group)}
+        {#if asked.includes(keyOf(a))}
           <MenuEntry icon="inbox" label="Requested" onclick={() => ((menuFor = null), (location.hash = hrefOf('requests')))} />
         {:else}
           <MenuEntry icon="circlePlus" label="Want" onclick={() => want(a)} />
         {/if}
       </MenuGroup>
       <MenuGroup>
-        <MenuEntry icon="externalLink" label="MusicBrainz" onclick={() => ((link = { url: `https://musicbrainz.org/release-group/${a.release_group}`, name: 'MusicBrainz' }), (menuFor = null))} />
+        {#if a.release_group}<MenuEntry icon="externalLink" label="MusicBrainz" onclick={() => ((link = { url: `https://musicbrainz.org/release-group/${a.release_group}`, name: 'MusicBrainz' }), (menuFor = null))} />{/if}
         <MenuEntry icon="search" label="Search YouTube" onclick={() => ((link = { url: `https://www.youtube.com/results?search_query=${encodeURIComponent(`${a.artist} ${a.title}`)}`, name: 'YouTube' }), (menuFor = null))} />
       </MenuGroup>
     </MenuCards>

@@ -5030,16 +5030,36 @@ async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_jso
 
 /// An artist's missing albums (0.9.3): their albums and EPs the library has none of, newest first; read when asked
 /// (a MusicBrainz call or two the first time, kept for every account).
-async fn artist_missing(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+/// An artist asked for by id (`ar-<n>`), else by name: the first artist of it (C55).
+#[derive(Deserialize)]
+struct ArtistQuery {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: String,
+}
+
+/// An artist's records the library has none of (C53a): `{ albums, looking }`, the kept rows at once and `looking` while their
+/// lists are read in the background, so the page asks again until it is false.
+async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
-    let mut albums = crate::app::discover::missing_albums(&serve, app.library.catalogue(), q.name.trim(), q.mbid.as_deref(), q.release_group.as_deref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let cat = app.library.catalogue();
+    let artist = match q.id.as_deref().and_then(crate::serve::ids::artist_number) {
+        Some(id) => Some(id),
+        None => {
+            let (c, name) = (cat.clone(), q.name.trim().to_string());
+            tokio::task::spawn_blocking(move || c.artist_of(&name)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?.map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        }
+    };
+    let Some(artist) = artist else { return Ok(Json(json!({ "albums": [], "looking": false }))) };
+    let (mut albums, looking) = crate::app::discover::missing_albums(cat, artist, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     if let Some(marks) = request_marks(&app, &serve).await {
         for a in &mut albums {
-            a.request = crate::app::requests::mark_of(&marks, Some(&a.release_group), q.name.trim(), &a.title);
+            a.request = crate::serve::ids::record_number(&a.record).and_then(|r| marks.of_record(r));
         }
     }
-    Ok(Json(json!({ "albums": albums, "looking": false })))
+    Ok(Json(json!({ "albums": albums, "looking": looking })))
 }
 
 #[derive(Deserialize)]
@@ -6135,11 +6155,6 @@ async fn library_find(ctx: Ctx, Query(q): Query<FindQuery>) -> Result<Json<serde
 #[derive(Deserialize)]
 struct AboutQuery {
     name: String,
-    /// The artist's MusicBrainz id, or a release group of theirs, where known (0.9.6: an artist not in the library).
-    #[serde(default)]
-    mbid: Option<String>,
-    #[serde(default)]
-    release_group: Option<String>,
 }
 
 /// About an artist, for their page (the owner, 2026-10-23): TheAudioDB's description and whether there is a photo
