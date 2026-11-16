@@ -1089,8 +1089,9 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         Some(g) => group_record_in(tx, g)?,
         None => None,
     };
-    // Had by its names (R14, F6), as the import matcher finds an album (`Matcher::find_album`): by title and artist, then loosely
-    // (brackets, a leading "The", accents and "&" aside), then by a title only one album has; of one name, the oldest.
+    // Had by its names (R14, F6), as the import matcher finds an album by its artist (`Matcher::find_album_by`): by title and
+    // artist, then loosely (brackets, a leading "The", accents and "&" aside); never by a title alone, whoever's it is: the request
+    // keeps its record for good, and a name alone never joins two records. Of one name, the oldest.
     let by_names = || -> Result<Option<i64>> {
         if fold(&w.title).is_empty() {
             return Ok(None);
@@ -1105,7 +1106,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
             let (id, artist, title) = row?;
             had.add_album(&id.to_string(), &title, Some(&artist));
         }
-        Ok(had.find_album(&w.title, Some(&w.artist)).and_then(|id| id.parse().ok()))
+        Ok(had.find_album_by(&w.title, &w.artist).and_then(|id| id.parse().ok()))
     };
     // With no release group, the oldest live record not had of its names (folded) that nothing contradicts (R14, F3): what
     // another request of the album made, so two requests of one album share its record, at the step and after.
@@ -1901,6 +1902,17 @@ mod tests {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let had = cat.record_for_tests("Tide Tables", 2);
         assert_eq!(crate::app::requests::record_of_album(&cat, None, "The Glass Harbour", "Tide Tables (Deluxe Edition)", None, None).unwrap(), had);
+    }
+
+    /// R14 (run 7): a request's record is kept for good, so it never takes another artist's album by its title alone, though the
+    /// library holds one album of that title (the import matcher's last step, which the request does without).
+    #[test]
+    fn a_request_never_takes_another_artists_album_by_its_title() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let had = cat.record_for_tests("Tide Tables", 2);
+        let asked = crate::app::requests::record_of_album(&cat, None, "Orbit Lane", "Tide Tables", None, None).unwrap();
+        assert_ne!(asked, had);
+        assert!(!cat.record(asked).unwrap().unwrap().had);
     }
 
     /// R13 (F2): a Want by a release group a retired record holds (the owner rejected its copy) names the live record that holds

@@ -120,12 +120,13 @@ impl Matcher {
 
     /// The album a source names: by name and artist, then loosely, then by name alone where only one has it.
     pub fn find_album(&self, name: &str, artist: Option<&str>) -> Option<&str> {
-        let artist = artist.unwrap_or_default();
-        self.albums
-            .get(&(key(name), key(artist)))
-            .or_else(|| self.loose_albums.get(&(loose(name), loose(artist))))
-            .map(String::as_str)
-            .or_else(|| self.album_names.get(&key(name)).filter(|a| a.len() == 1).map(|a| a[0].as_str()))
+        self.find_album_by(name, artist.unwrap_or_default()).or_else(|| self.album_names.get(&key(name)).filter(|a| a.len() == 1).map(|a| a[0].as_str()))
+    }
+
+    /// The album of this name by this artist: by name and artist, then loosely; never by a name alone. What a request's record
+    /// is found by (R14), as it is kept for good: a name alone never joins two records.
+    pub fn find_album_by(&self, name: &str, artist: &str) -> Option<&str> {
+        self.albums.get(&(key(name), key(artist))).or_else(|| self.loose_albums.get(&(loose(name), loose(artist)))).map(String::as_str)
     }
 
     /// The song a source's track is: its recording's, else its artist's and title's, else its album's and title's; of
