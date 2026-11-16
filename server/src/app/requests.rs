@@ -189,7 +189,12 @@ pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_g
     if !rights(serve).request {
         bail!("Requesting albums is not on for this account");
     }
+    // An album with no title would be a record named nothing for life (W6).
+    if album.trim().is_empty() {
+        bail!("An album needs its title");
+    }
     let release_group = release_group.filter(|g| !g.is_empty());
+    let cover = cover.filter(|c| cover_kept(c));
     let key = release_group.clone().unwrap_or_else(|| format!("{}|{}", super::import::key(artist), super::import::key(album)));
     if let Some(r) = open_request(serve, account, &key)? {
         return Ok(r);
@@ -240,9 +245,29 @@ fn group_asked(asked: Option<String>, held: &[String]) -> Option<String> {
     asked.map(|g| g.to_ascii_lowercase()).filter(|g| super::discogs::is_mbid(g)).or_else(|| held.first().cloned())
 }
 
-/// The account's open request (pending or approved) for an album by its key, where there is one.
+/// The account's open request (pending or approved) for an album by its key, where there is one, among all its requests (W6).
 fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Request>> {
-    Ok(serve.userdata.requests(Some(account), None, LIST)?.into_iter().find(|r| r.album_key == key && (r.status == PENDING || r.status == APPROVED)))
+    serve.userdata.open_request(account, None, key)
+}
+
+/// Whether a Want's cover is one every account may be shown (W6): Cratarr's own (`/api/covers/…`), or the Cover Art Archive's,
+/// Bandcamp's, Spotify's or Discogs' images over https. Any other address is left out.
+fn cover_kept(cover: &str) -> bool {
+    if cover.starts_with("/api/covers/") {
+        return true;
+    }
+    let Ok(u) = reqwest::Url::parse(cover) else { return false };
+    let host = u.host_str().unwrap_or_default().to_ascii_lowercase();
+    u.scheme() == "https" && ["coverartarchive.org", "archive.org", "bcbits.com", "scdn.co", "discogs.com"].iter().any(|h| host == *h || host.ends_with(&format!(".{h}")))
+}
+
+/// Views as a viewer may read them (W6): an administrator the fetchers' own words too; any other account the states alone, never
+/// Lidarr's text (its errors name its address).
+fn shown_to(mut views: Vec<View>, administering: bool) -> Vec<View> {
+    if !administering {
+        views.iter_mut().for_each(|v| v.request.fetched = None);
+    }
+    views
 }
 
 /// The record an album asked for by its names is (C49a): its names as a label's own account gives them sorted out first (S12,
@@ -250,13 +275,13 @@ fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Reques
 /// "Title", the label credited), then the record of its release group, else a record had of its names, else a new record not
 /// had (`Catalogue::record_for_request`). Blocking.
 pub fn record_of_album(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<i64> {
-    record_of_album_paged(cat, release_group, crate::bandcamp::label_release(artist, album, None), year, cover, None)
+    record_of_album_paged(cat, release_group, crate::bandcamp::label_release(artist, album, None), Vec::new(), year, cover, None)
 }
 
 /// `record_of_album`, its names sorted out by the caller, its Bandcamp album page given (R22): kept on the record as a reference
 /// (`search`), so a record only Bandcamp lists is judged by Bandcamp's list.
-fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, named: crate::bandcamp::Named, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
-    let wanted = crate::catalogue::records::Wanted { group: release_group.map(str::to_string), artist: named.artist, title: named.title, label: named.label, year, cover, page };
+fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, named: crate::bandcamp::Named, artists: Vec<String>, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
+    let wanted = crate::catalogue::records::Wanted { group: release_group.map(str::to_string), artist: named.artist, artists, title: named.title, label: named.label, year, cover, page };
     cat.record_for_request(&wanted)
 }
 
@@ -292,9 +317,11 @@ async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist
         _ => None,
     };
     let named = crate::bandcamp::named_by_page(read.as_ref(), artist, album);
+    // Its credit split as the record pass splits a file's (W6, the library's rules).
+    let artists = serve.rules().values("albumartist", std::slice::from_ref(&named.artist));
     tokio::task::spawn_blocking(move || -> Result<i64> {
         let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
-        let record = record_of_album_paged(&cat, group.as_deref(), named, year, cover, page.clone())?;
+        let record = record_of_album_paged(&cat, group.as_deref(), named, artists, year, cover, page.clone())?;
         if page.is_none() {
             let refs = cat.references_of(&crate::serve::ids::record(record))?;
             if !refs.iter().any(|(r, _)| r.source == "bandcamp" && r.kind == "album")
@@ -324,8 +351,7 @@ struct Asked {
 /// where the account may, and handed to the fetcher).
 async fn ask_for(app: &super::App, serve: &Serve, account: &str, s: Asked) -> Result<Request> {
     let may = rights(serve);
-    let open = serve.userdata.requests(Some(account), None, LIST)?;
-    if let Some(r) = open.into_iter().find(|r| (r.record == Some(s.record) || r.album_key == s.key) && (r.status == PENDING || r.status == APPROVED)) {
+    if let Some(r) = serve.userdata.open_request(account, Some(s.record), &s.key)? {
         return Ok(r);
     }
     let now = super::moment::now_secs();
@@ -348,7 +374,11 @@ async fn ask_for(app: &super::App, serve: &Serve, account: &str, s: Asked) -> Re
         fetched: None,
         record: Some(s.record),
     };
-    r.id = serve.userdata.add_request(&r)?;
+    r.id = match serve.userdata.add_request(&r) {
+        Ok(id) => id,
+        // Asked twice at once (W6): the account's one open request of the record is the answer.
+        Err(e) => return serve.userdata.open_request(account, Some(s.record), &r.album_key)?.ok_or(e),
+    };
     if approved {
         r.fetched = Some(hand(app, serve, &r).await);
     }
@@ -390,9 +420,14 @@ pub async fn arrived_for(serve: &Serve, record: i64, came: Option<i64>) -> Vec<R
 /// item unless it is under way. Wanted again, it is a new request.
 pub async fn reject(lidarr: Option<&dyn Fetcher>, serve: &Serve, rs: &[Request]) {
     for r in rs {
-        if let Err(e) = serve.userdata.set_request_status(r.id, REJECTED, Some(REJECTED_WHY), None) {
-            tracing::warn!("request {}: not closed as rejected: {e:#}", r.id);
-            continue;
+        match serve.userdata.set_request_status(r.id, APPROVED, REJECTED, Some(REJECTED_WHY), None) {
+            Ok(true) => {}
+            // Answered otherwise meanwhile (W6): as it is.
+            Ok(false) => continue,
+            Err(e) => {
+                tracing::warn!("request {}: not closed as rejected: {e:#}", r.id);
+                continue;
+            }
         }
         if let (Some(f), Some(group)) = (lidarr, r.release_group.as_deref())
             && let Err(e) = f.cancel(group).await
@@ -483,14 +518,17 @@ pub async fn decide(app: &super::App, serve: &Serve, by: &str, ids: &[i64], appr
             out.push((id, format!("Already {}", r.status)));
             continue;
         }
+        // Written where it is still pending (W6): another's answer meanwhile wins.
         if approve {
-            if !retry {
-                serve.userdata.set_request_status(id, APPROVED, None, Some(by))?;
+            if !retry && !serve.userdata.set_request_status(id, PENDING, APPROVED, None, Some(by))? {
+                out.push((id, "Answered meanwhile".to_string()));
+                continue;
             }
             out.push((id, hand(app, serve, &r).await));
-        } else {
-            serve.userdata.set_request_status(id, DECLINED, reason, Some(by))?;
+        } else if serve.userdata.set_request_status(id, PENDING, DECLINED, reason, Some(by))? {
             out.push((id, "Declined".to_string()));
+        } else {
+            out.push((id, "Answered meanwhile".to_string()));
         }
     }
     Ok(out)
@@ -513,7 +551,10 @@ pub async fn cancel(app: &super::App, serve: &Serve, account: &str, id: i64) -> 
         PENDING | APPROVED => bail!("Only a request still waiting can be taken back"),
         s => bail!("That request is {s} already"),
     }
-    serve.userdata.set_request_status(id, CANCELLED, None, Some(account))
+    if !serve.userdata.set_request_status(id, &r.status, CANCELLED, None, Some(account))? {
+        bail!("That request was answered meanwhile");
+    }
+    Ok(())
 }
 
 /// The Requests page's lists, each request with its album's state.
@@ -528,7 +569,8 @@ pub async fn list(app: &super::App, serve: &Serve, account: &str) -> Result<List
         None => None,
     };
     let fetchers = connected(f.is_some()).await;
-    Ok(Listing { mine, waiting, may, fetchers })
+    let administering = crate::serve::access::administering();
+    Ok(Listing { mine: shown_to(mine, administering), waiting: waiting.map(|w| shown_to(w, administering)), may, fetchers })
 }
 
 /// The account's requests by their suggestion's key, for Discover's cards: the newest of each album, with its state.
@@ -544,7 +586,7 @@ pub async fn of_suggestions(app: &super::App, serve: &Serve, account: &str, keys
         return Ok(Vec::new());
     }
     let f = fetcher(app);
-    Ok(views(serve, f.as_deref(), newest).await.into_iter().map(|v| (v.request.album_key.clone(), v)).collect())
+    Ok(shown_to(views(serve, f.as_deref(), newest).await, crate::serve::access::administering()).into_iter().map(|v| (v.request.album_key.clone(), v)).collect())
 }
 
 /// What Lidarr is looking for and fetching now (the page's "Lidarr is looking for these"); asked while the page is
@@ -1131,6 +1173,44 @@ mod tests {
         assert_eq!((row.artist.as_str(), row.title.as_str()), ("Tape Club", "Harbour Songs"));
         let label = serve.catalogue().label_for("Paper Lantern").unwrap();
         assert!(serve.catalogue().label_records(label).unwrap().iter().any(|(r, _)| *r == record), "the account its label");
+    }
+
+    /// W6 (H): an account has one open request of a record: found by its record wherever it is among the account's requests (past
+    /// its newest 200), and a second open one is not kept; a status write checks the status it replaces.
+    #[tokio::test]
+    async fn an_account_has_one_open_request_of_a_record() {
+        let serve = served();
+        let record = record_of_album(serve.catalogue(), None, "Glass Harbour", "Two Rooms", None, None).unwrap();
+        let first = serve.userdata.add_request(&asked_for(record)).unwrap();
+        for n in 0..210 {
+            serve.userdata.add_request(&Request { status: DECLINED.into(), album_key: format!("k{n}"), record: None, ..asked_for(record) }).unwrap();
+        }
+        assert_eq!(serve.userdata.open_request("bob", Some(record), "another key").unwrap().map(|r| r.id), Some(first), "past the newest 200");
+        assert!(serve.userdata.add_request(&asked_for(record)).is_err(), "no second open one");
+        assert!(!serve.userdata.set_request_status(first, PENDING, DECLINED, None, Some("ann")).unwrap(), "it is approved, not pending");
+        assert_eq!(serve.userdata.request(first).unwrap().unwrap().status, APPROVED);
+    }
+
+    /// W6 (H): a Want's cover is kept only from Cratarr's own covers and the known image hosts.
+    #[test]
+    fn a_wants_cover_is_kept_only_from_known_hosts() {
+        for kept in ["/api/covers/release-group/00000000-0000-4000-8000-000000000116", "https://coverartarchive.org/release-group/x/front", "https://f4.bcbits.com/img/a1_16.jpg", "https://i.scdn.co/image/ab67", "https://i.discogs.com/x.jpg"] {
+            assert!(cover_kept(kept), "{kept}");
+        }
+        for left in ["https://example.org/a.jpg", "http://coverartarchive.org/x", "javascript:alert(1)", "https://notbcbits.com/a.jpg"] {
+            assert!(!cover_kept(left), "{left}");
+        }
+    }
+
+    /// W6 (H): an account other than an administrator reads each request's state, never the fetchers' own words (Lidarr's errors
+    /// name its address).
+    #[test]
+    fn others_see_the_state_words_not_lidarrs() {
+        let r = Request { fetched: Some("Not handed over to Lidarr: error sending request for url (http://192.168.1.20:8686/api/v1/album)".into()), ..asked_for(1) };
+        let v = View { request: r, state: RequestState::Wanted { lidarr: None, soulseek: None }, album_state: Album::Unknown, hand_over_again: true };
+        assert_eq!(shown_to(vec![v.clone()], false)[0].request.fetched, None);
+        assert_eq!(shown_to(vec![v.clone()], false)[0].state, v.state, "the state stays");
+        assert!(shown_to(vec![v], true)[0].request.fetched.is_some(), "an administrator's");
     }
 
     /// W5 (G1): every view reads one state of a request (`request_state`): the Requests page (and Hand over again on it, open while

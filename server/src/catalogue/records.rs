@@ -1407,6 +1407,8 @@ pub struct CarriedRequest {
 pub struct Wanted {
     pub group: Option<String>,
     pub artist: String,
+    /// Its credit split as the record pass splits a file's (W6: the library's rules), the first its artist; none, the credit whole.
+    pub artists: Vec<String>,
     pub title: String,
     pub label: Option<String>,
     pub year: Option<i32>,
@@ -1497,12 +1499,18 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
     let (record, made) = match found {
         Some(record) => (record, false),
         None => {
-            let artist = match w.artist.trim() {
-                "" => None,
-                name => Some(super::artists::artists_in(tx, &std::collections::BTreeSet::from([name.to_string()]), at)?[&ids::artist_key(name)]),
-            };
+            // Credited as the record pass credits its files (W6): each artist its credit names, split by the library's rules, the first
+            // its artist; a credit not split, whole.
+            let names: Vec<String> = if w.artists.is_empty() { vec![w.artist.trim().to_string()] } else { w.artists.iter().map(|a| a.trim().to_string()).collect() };
+            let names: Vec<String> = names.into_iter().filter(|n| !n.is_empty()).collect();
+            let credited = super::artists::artists_in(tx, &names.iter().cloned().collect(), at)?;
+            let artist = names.first().map(|n| credited[&ids::artist_key(n)]);
             let listing = Listing { title: w.title.clone(), artist: w.artist.clone(), year: w.year, cover: w.cover.clone(), refs: group.clone().into_iter().collect(), ..Listing::default() };
-            (keep_listing_in(tx, artist, &[listing], "link", at)?[0], true)
+            let record = keep_listing_in(tx, artist, &[listing], "link", at)?[0];
+            for (position, name) in names.iter().enumerate().skip(1) {
+                tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, credited[&ids::artist_key(name)], position as i64])?;
+            }
+            (record, true)
         }
     };
     if let Some(label) = w.label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
@@ -2036,7 +2044,7 @@ impl Carrying<'_> {
             // Its page as `bandcamp_found` kept it, by its names or by its release group (R19, F13): where its record is made only
             // here, the pages part found none to give it to. Counted where it is put now; one another record holds is reported so.
             let page = pages.get(&lower(&r.key)).or_else(|| r.group.as_deref().and_then(|g| pages.get(&lower(g)))).map(|p| p.to_string());
-            let w = Wanted { group: r.group.clone(), artist: named.artist, title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
+            let w = Wanted { group: r.group.clone(), artist: named.artist, artists: Vec::new(), title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
             let RequestRecord { record, made: new, by_names, paged: mut page } = request_record_in(self.tx, &w, r.at)?;
             // Else by a release group its record holds (R22, the owner's GROUCH request: 0.16 found its page by the group its card
             // knew, and it was asked for by Bandcamp's names).
@@ -2410,6 +2418,24 @@ mod tests {
         let untagged = crate::app::requests::record_of_album(&cat, None, "Glass Harbour", "Tide Tables (Deluxe)", None, None).unwrap();
         assert_ne!(untagged, owned, "by its names only, not the owned album its loose names match (W2)");
         assert_eq!(crate::app::requests::record_of_album(&cat, None, "Glass Harbour", "TIDE TABLES", None, None).unwrap(), owned, "its own names, folded");
+    }
+
+    /// W6 (H): a Want credited to two artists credits each, as the record pass credits a file's, the first its artist; not one
+    /// artist named "A / B" for life.
+    #[test]
+    fn a_want_credited_to_two_artists_credits_each() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let wanted = Wanted { artist: "Noor Field / Kite Theory".into(), artists: vec!["Noor Field".into(), "Kite Theory".into()], title: "Together".into(), ..Wanted::default() };
+        let record = cat.record_for_request(&wanted).unwrap();
+        let names: Vec<String> = cat
+            .db()
+            .prepare("SELECT a.name FROM record_artists ra JOIN artists a ON a.id = ra.artist WHERE ra.record = ?1 ORDER BY ra.position")
+            .unwrap()
+            .query_map([record], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(names, ["Noor Field", "Kite Theory"]);
     }
 
     /// W4 (D1): a copy whose files are all in the trash makes no request had: the album deleted (rejected) is not "In the library"

@@ -162,6 +162,15 @@ async fn a_want_by_names_beside_an_owned_look_alike_is_not_it_over_http() {
     assert_ne!(answer["request"]["record"].as_i64(), Some(owned), "{answer}");
 }
 
+/// W6 (H): a Want with no title is refused over HTTP: it would make a record named nothing for life.
+#[tokio::test]
+async fn a_want_with_no_title_is_refused() {
+    let w = Whole::open("no-title").await;
+    let me = w.session("me");
+    let (status, answer) = post(&w, &me, "/api/requests/want", serde_json::json!({ "artist": "Glass Harbour", "album": "  " })).await;
+    assert!(!status.is_success(), "{answer}");
+}
+
 /// W1: the Bandcamp album view says what a Want of it sends: the record that holds its page.
 #[tokio::test]
 async fn the_bandcamp_album_view_names_the_record_that_holds_its_page() {

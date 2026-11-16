@@ -5348,6 +5348,10 @@ async fn requests(ctx: Ctx) -> Result<Json<crate::app::requests::Listing>, ApiEr
 async fn requests_watching(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     discoverer(&ctx)?;
+    // Lidarr's queue is an administrator's to read (W6): others read their requests' states.
+    if !crate::serve::access::administering() {
+        return Ok(Json(serde_json::Value::Null));
+    }
     let w = crate::app::requests::watching(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!(w)))
 }

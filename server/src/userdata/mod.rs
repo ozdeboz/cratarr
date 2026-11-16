@@ -625,6 +625,16 @@ fn add_request_record(conn: &Connection) -> Result<()> {
         conn.execute_batch("ALTER TABLE request ADD COLUMN record INTEGER")?;
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS request_record ON request (record)")?;
+    // One open request of an account's for a record (W6, H): a second one from before the index is closed as asked twice, the
+    // approved kept over the pending, the older over the newer; then the index holds it so.
+    conn.execute(
+        "UPDATE request SET status = 'cancelled', reason = 'Asked twice', decided_at = ?1
+         WHERE record IS NOT NULL AND status IN ('pending', 'approved') AND EXISTS (SELECT 1 FROM request o WHERE o.id != request.id
+           AND o.user = request.user AND o.record = request.record AND o.status IN ('pending', 'approved')
+           AND (o.status = 'approved' AND request.status = 'pending' OR o.status = request.status AND o.id < request.id))",
+        [now()],
+    )?;
+    conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS request_open_once ON request (user, record) WHERE record IS NOT NULL AND status IN ('pending', 'approved')")?;
     Ok(())
 }
 
@@ -1670,13 +1680,26 @@ impl UserData {
         Ok(self.db().query_row(&format!("SELECT {REQUEST_COLUMNS} FROM request WHERE id = ?1"), [id], request_row).optional()?)
     }
 
-    /// A request answered or withdrawn: its status, why, by whom (now).
-    pub fn set_request_status(&self, id: i64, status: &str, reason: Option<&str>, by: Option<&str>) -> Result<()> {
-        self.db().execute(
-            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1",
-            params![id, status, reason, by, now()],
-        )?;
-        Ok(())
+    /// A request answered, withdrawn or closed: its status, why, by whom (now), where it still has the status it was read with
+    /// (`from`, W6): an answer meanwhile wins. Whether it was written.
+    pub fn set_request_status(&self, id: i64, from: &str, status: &str, reason: Option<&str>, by: Option<&str>) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1 AND status = ?6",
+            params![id, status, reason, by, now(), from],
+        )? > 0)
+    }
+
+    /// The account's open request (pending or approved) of a record, else of an album's key (W6): looked for by these among all its
+    /// requests, not its newest.
+    pub fn open_request(&self, user: &str, record: Option<i64>, key: &str) -> Result<Option<Request>> {
+        Ok(self
+            .db()
+            .query_row(
+                &format!("SELECT {REQUEST_COLUMNS} FROM request WHERE user = ?1 AND status IN ('pending', 'approved') AND (record = ?2 OR album_key = ?3) ORDER BY record = ?2 DESC, id LIMIT 1"),
+                params![user, record, key],
+                request_row,
+            )
+            .optional()?)
     }
 
     /// What the fetcher said of a request it was handed.
@@ -1687,7 +1710,14 @@ impl UserData {
 
     /// A request's record (C49a), where it has none yet: 0.17's step's, given once. Whether it was given.
     pub fn give_request_record(&self, id: i64, record: i64) -> Result<bool> {
-        Ok(self.db().execute("UPDATE request SET record = ?2 WHERE id = ?1 AND record IS NULL", params![id, record])? > 0)
+        let db = self.db();
+        // A second open request of the account's for that record is closed as asked twice first (W6, as `set_request_record`).
+        db.execute(
+            "UPDATE request SET status = 'cancelled', reason = 'Asked twice', decided_at = ?3 WHERE id = ?1 AND record IS NULL AND status IN ('pending', 'approved')
+             AND EXISTS (SELECT 1 FROM request o WHERE o.id != ?1 AND o.user = request.user AND o.record = ?2 AND o.status IN ('pending', 'approved'))",
+            params![id, record, now()],
+        )?;
+        Ok(db.execute("UPDATE request SET record = ?2 WHERE id = ?1 AND record IS NULL", params![id, record])? > 0)
     }
 
     /// Every request's record, as (request, record): none where it has none. Blocking.
@@ -1700,7 +1730,15 @@ impl UserData {
 
     /// A request given its record again (R19): the one it named is gone from the catalogue. Blocking.
     pub fn set_request_record(&self, id: i64, record: i64) -> Result<()> {
-        self.db().execute("UPDATE request SET record = ?2 WHERE id = ?1", params![id, record])?;
+        let db = self.db();
+        // A second open request of the account's for that record (the step finding two of one album) is closed as asked twice first
+        // (W6: one open request of an account's for a record).
+        db.execute(
+            "UPDATE request SET status = 'cancelled', reason = 'Asked twice', decided_at = ?3 WHERE id = ?1 AND status IN ('pending', 'approved')
+             AND EXISTS (SELECT 1 FROM request o WHERE o.id != ?1 AND o.user = request.user AND o.record = ?2 AND o.status IN ('pending', 'approved'))",
+            params![id, record, now()],
+        )?;
+        db.execute("UPDATE request SET record = ?2 WHERE id = ?1", params![id, record])?;
         Ok(())
     }
 
@@ -2723,7 +2761,8 @@ mod tests {
         assert_eq!(u.requests(None, Some("pending"), 10).unwrap().len(), 2);
         assert_eq!(u.requests(None, None, 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![b, a], "newest first");
         assert_eq!(u.requests(Some("me"), None, 10).unwrap().len(), 1, "each account its own");
-        u.set_request_status(b, "declined", Some("Not on Soulseek"), Some("admin")).unwrap();
+        assert!(u.set_request_status(b, "pending", "declined", Some("Not on Soulseek"), Some("admin")).unwrap());
+        assert!(!u.set_request_status(b, "pending", "approved", None, Some("admin")).unwrap(), "answered meanwhile: the first answer stays");
         let d = u.request(b).unwrap().unwrap();
         assert_eq!((d.status.as_str(), d.reason.as_deref(), d.decided_by.as_deref()), ("declined", Some("Not on Soulseek"), Some("admin")));
         assert!(d.decided_at.is_some());
