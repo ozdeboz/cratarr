@@ -178,7 +178,7 @@ fn source_name(source: &str) -> &'static str {
 pub async fn tracklist<R, F>(cat: &Arc<Catalogue>, record: i64, read: R) -> Result<std::result::Result<(String, Vec<RefTrack>), String>>
 where
     R: Fn(Ref) -> F,
-    F: std::future::Future<Output = Result<Option<Vec<RefTrack>>>>,
+    F: std::future::Future<Output = Result<Option<Read>>>,
 {
     let c = cat.clone();
     let Some((row, refs, kept)) = tokio::task::spawn_blocking(move || -> Result<_> {
@@ -192,11 +192,16 @@ where
         return Ok(Err("No such record".into()));
     };
     let kept_of = |source: &str| kept.iter().find(|(s, l)| s == source && !l.is_empty()).map(|(_, l)| l.clone());
-    let keep = |source: &'static str, list: Vec<RefTrack>, count: bool| {
+    let keep = |source: &'static str, list: Vec<RefTrack>, release: Option<Ref>, count: bool| {
         let (c, id) = (cat.clone(), row.id);
         async move {
             tokio::task::spawn_blocking(move || -> Result<()> {
                 c.set_reference_tracks(id, source, &list)?;
+                // The release a release group's list was read from (R25, N6): kept, as found, so the record knows which edition
+                // its list is, and a release its files name later is told from it.
+                if let Some(release) = release {
+                    c.set_reference(&ids::record(id), &release, "search")?;
+                }
                 if count {
                     c.set_counting(id, Some(source), false)?;
                 }
@@ -215,14 +220,14 @@ where
     for source in sources {
         if let Some(list) = kept_of(source) {
             if row.counting.is_none() {
-                keep(source, list.clone(), true).await?;
+                keep(source, list.clone(), None, true).await?;
             }
             return Ok(Ok((source.to_string(), list)));
         }
         let Some((r, _)) = main_ref(&refs, source) else { continue };
         match read(r.clone()).await {
-            Ok(Some(list)) if !list.is_empty() => {
-                keep(source, list.clone(), row.counting.is_none()).await?;
+            Ok(Some((list, release))) if !list.is_empty() => {
+                keep(source, list.clone(), release, row.counting.is_none()).await?;
                 return Ok(Ok((source.to_string(), list)));
             }
             Ok(_) => why.push(format!("{} has no list of it", source_name(source))),
@@ -237,6 +242,10 @@ where
     }
     Ok(Err(if why.is_empty() { "No list to judge by".to_string() } else { why.join("; ") }))
 }
+
+/// A list read through a reference (`tracklist`'s reader): its tracks, and the release they were read from where the reference was
+/// a release group's (R25: kept as a reference).
+pub type Read = (Vec<RefTrack>, Option<Ref>);
 
 /// A source switched off: no answer about any record, and none against it (R23).
 #[derive(Debug)]
@@ -254,7 +263,7 @@ impl std::error::Error for SwitchedOff {}
 /// of its releases (the first official one with tracks, else the first with tracks, as 0.16's Soulseek chose); a Discogs
 /// release's, a master's main release's; a Bandcamp album's. None where the source has no such thing (an answer "not found");
 /// Bandcamp's bot check is its `NotRead`. Every MusicBrainz question in its turn (S10).
-pub async fn read_reference(r: Ref) -> Result<Option<Vec<RefTrack>>> {
+pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
     let not_found = |e: &anyhow::Error| e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status) == Some(reqwest::StatusCode::NOT_FOUND);
     let release = |id: String| async move {
         match super::track_fetch::release_by_id(&id).await {
@@ -267,18 +276,18 @@ pub async fn read_reference(r: Ref) -> Result<Option<Vec<RefTrack>>> {
         return Err(SwitchedOff("MusicBrainz").into());
     }
     match (r.source.as_str(), r.kind.as_str()) {
-        ("musicbrainz", "release") => release(r.value).await,
+        ("musicbrainz", "release") => Ok(release(r.value).await?.map(|list| (list, None))),
         ("musicbrainz", "release-group") => match release_of_group(&r.value).await? {
-            Some(id) => release(id).await,
+            Some(id) => Ok(release(id.clone()).await?.map(|list| (list, Some(Ref::new("musicbrainz", "release", &id))))),
             None => Ok(None),
         },
-        ("discogs", "release") => Ok(super::discogs::release_raw(r.value.parse()?).await?.map(|v| list_of_discogs(&v))),
+        ("discogs", "release") => Ok(super::discogs::release_raw(r.value.parse()?).await?.map(|v| (list_of_discogs(&v), None))),
         ("discogs", "master") => match super::discogs::master(r.value.parse()?).await?.and_then(|m| m.main_release) {
-            Some(main) => Ok(super::discogs::release_raw(main).await?.map(|v| list_of_discogs(&v))),
+            Some(main) => Ok(super::discogs::release_raw(main).await?.map(|v| (list_of_discogs(&v), None))),
             None => Ok(None),
         },
         ("bandcamp", "album") => match crate::bandcamp::Bandcamp::get().album(&r.value).await {
-            Ok(a) => Ok(Some(list_of_bandcamp(&a))),
+            Ok(a) => Ok(Some((list_of_bandcamp(&a), None))),
             Err(e) if crate::bandcamp::not_read(&e) => Err(e),
             // Bandcamp has no such page (`Bandcamp::text` says its status in words).
             Err(e) if e.to_string().starts_with("Bandcamp answered 404") => Ok(None),
@@ -1051,7 +1060,7 @@ mod tests {
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let both = wanted(&cat, "Night Walks", &[("musicbrainz", "release", "r5"), ("discogs", "release", "2000005")]);
         let off = |r: Ref| {
-            std::future::ready(if r.source == "musicbrainz" { Err(anyhow::Error::from(SwitchedOff("MusicBrainz"))) } else { Ok(Some(list(&[("Lamplight", Some(200_000))]))) })
+            std::future::ready(if r.source == "musicbrainz" { Err(anyhow::Error::from(SwitchedOff("MusicBrainz"))) } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None))) })
         };
         assert_eq!(tracklist(&cat, both, off).await.unwrap().unwrap().0, "discogs");
         let alone = wanted(&cat, "Undated", &[("musicbrainz", "release", "r6")]);
@@ -1086,15 +1095,28 @@ mod tests {
 
     /// A reader answering each reference by its source: a list of `titles` for those named, the rest as `other` says; it
     /// counts what it was asked.
-    fn reader(lists: &'static [(&'static str, &'static [&'static str])], asked: Arc<std::sync::Mutex<Vec<String>>>, other: fn() -> Result<Option<Vec<RefTrack>>>) -> impl Fn(Ref) -> std::future::Ready<Result<Option<Vec<RefTrack>>>> {
+    fn reader(lists: &'static [(&'static str, &'static [&'static str])], asked: Arc<std::sync::Mutex<Vec<String>>>, other: fn() -> Result<Option<Read>>) -> impl Fn(Ref) -> std::future::Ready<Result<Option<Read>>> {
         move |r: Ref| {
             asked.lock().unwrap().push(format!("{}:{}", r.source, r.kind));
             let answer = match lists.iter().find(|(s, _)| *s == r.source) {
-                Some((_, titles)) => Ok(Some(list(&titles.iter().map(|t| (*t, Some(200_000))).collect::<Vec<_>>()))),
+                Some((_, titles)) => Ok(Some((list(&titles.iter().map(|t| (*t, Some(200_000))).collect::<Vec<_>>()), None))),
                 None => other(),
             };
             std::future::ready(answer)
         }
+    }
+
+    /// R25 (N6): the release a release group's list was read from is kept as the record's reference, as found (`search`), so the
+    /// record knows which edition its list is.
+    #[tokio::test]
+    async fn a_groups_release_read_is_kept_as_a_reference() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Signal", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000190")]);
+        let release = "00000000-0000-4000-8000-000000000191";
+        let read = |_| std::future::ready(Ok(Some((list(&[("Signal", Some(200_000))]), Some(Ref::new("musicbrainz", "release", release))))));
+        tracklist(&cat, record, read).await.unwrap().unwrap();
+        let refs = cat.references_of(&ids::record(record)).unwrap();
+        assert!(refs.iter().any(|(r, row)| (r.kind.as_str(), r.value.as_str(), row.how.as_str()) == ("release", release, "search")), "{refs:?}");
     }
 
     /// C51a: a record's counting list is read once and kept: asked again, the kept list answers and nothing is read.

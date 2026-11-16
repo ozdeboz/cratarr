@@ -411,6 +411,25 @@ fn let_go_list(tx: &Connection, record: i64, files: &[super::identity::Listed]) 
     Ok(())
 }
 
+/// A record's count worked out again against its files (R25, N6), unless chosen by hand, in the caller's transaction: what
+/// `references::work_out_in` does, for a record an album has just joined. A record not had that a list counted before its album
+/// came (Soulseek's search, `tracklist`, in the design's order) keeps that count only where the list agrees with the files that
+/// came; else none counts until one is chosen, the owner's rule for a record with files (`identity::counting`).
+pub(super) fn recount_in(tx: &Connection, record: i64, files: &[super::identity::Listed]) -> Result<()> {
+    if files.is_empty() || tx.query_row("SELECT counted_by_hand FROM records WHERE id = ?1", [record], |r| r.get::<_, bool>(0))? {
+        return Ok(());
+    }
+    let kept: Vec<(String, Vec<RefTrack>)> = {
+        let mut st = tx.prepare_cached("SELECT source, tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
+        let rows: Vec<(String, String)> = st.query_map([record], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        rows.into_iter().filter_map(|(source, tracks)| Some((source, serde_json::from_str(&tracks).ok()?))).collect()
+    };
+    let lists: Vec<(&str, &[RefTrack])> = kept.iter().map(|(s, l)| (s.as_str(), l.as_slice())).filter(|(_, l)| !l.is_empty()).collect();
+    let worked = super::identity::counting(None, &lists, files);
+    tx.execute("UPDATE records SET counting = ?2 WHERE id = ?1 AND counted_by_hand = 0", params![record, worked])?;
+    Ok(())
+}
+
 /// What the records of a pass name at MusicBrainz now, each by its first-ranked copy (`first_ranked`: its release and release
 /// group, `most_named` of that copy's files), kept as their `files` references in the record pass's transaction: a release or a
 /// release group they named before and name no more is let go of (a retag), a release with its list and count (`let_go_list`),

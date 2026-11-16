@@ -495,13 +495,19 @@ pub fn approve(app: &Arc<super::App>, picked: &[(String, Option<usize>)]) -> Vie
 
 /// A record searched now, whatever its wait (and from the ladder's first rung).
 pub fn search_now(app: &Arc<super::App>, id: &str) -> View {
-    with_item(id, |i| {
-        if matches!(i.state, State::Waiting | State::Found | State::Stuck) {
-            (i.state, i.due, i.why) = (State::Waiting, 0, None);
-        }
-    });
+    with_item(id, search_again);
     wake();
     view(app)
+}
+
+/// An item searched again by hand (Search now): due now, its word gone, and its list read again, as its record counts now (R25,
+/// N7: a list chosen by hand since reaches it; the folders found by the old one go with it). One in flight is left as it is.
+fn search_again(i: &mut Item) {
+    if matches!(i.state, State::Waiting | State::Found | State::Stuck) {
+        (i.state, i.due, i.why, i.chosen) = (State::Waiting, 0, None, None);
+        i.tracks.clear();
+        i.folders.clear();
+    }
 }
 
 /// A record taken off the list (not while it is fetched): its Request is not taken in again. What it fetched goes with
@@ -710,7 +716,7 @@ const CHECKED_AGAIN_SECS: i64 = 86_400;
 async fn listing<R, F>(it: &Item, cat: &Arc<crate::catalogue::Catalogue>, read: R) -> Listing
 where
     R: Fn(crate::catalogue::records::Ref) -> F,
-    F: std::future::Future<Output = Result<Option<Vec<Track>>>>,
+    F: std::future::Future<Output = Result<Option<super::references::Read>>>,
 {
     if it.record.record == 0 {
         return Listing::None("No record to judge it by".into());
@@ -1510,10 +1516,38 @@ mod tests {
     }
 
     /// A Bandcamp album's list, as a stub reader answers it: two tracks, no recordings.
-    fn bandcamp_list(r: crate::catalogue::records::Ref) -> std::future::Ready<Result<Option<Vec<Track>>>> {
+    fn bandcamp_list(r: crate::catalogue::records::Ref) -> std::future::Ready<Result<Option<crate::app::references::Read>>> {
         assert_eq!((r.source.as_str(), r.value.as_str()), ("bandcamp", "https://paperlantern.bandcamp.com/album/after-hours"));
         let list = [("Night Ferry", 241_000), ("Last Lights", 198_000)].into_iter().zip(1..).map(|((t, ms), n)| Track { disc: 1, position: n, title: t.into(), length_ms: Some(ms), recording: None }).collect();
-        std::future::ready(Ok(Some(list)))
+        std::future::ready(Ok(Some((list, None))))
+    }
+
+    /// R25 (N7): Search now reads the record's counting list again, so a list chosen by hand since reaches the item; one in
+    /// flight keeps what it has.
+    #[test]
+    fn search_now_reads_the_counting_list_again() {
+        let item = |state: State| Item {
+            id: "ss-1".into(),
+            record: record("Air", "Moon Safari", Some(1998)),
+            state,
+            tracks: vec![track(1, "La Femme d'argent", 431)],
+            folders: Vec::new(),
+            chosen: None,
+            failed: Vec::new(),
+            misses: 2,
+            due: 9,
+            why: Some("No folder holds every track of its release".into()),
+            batch: None,
+            percent: 0.0,
+            placed: None,
+            set_aside: Vec::new(),
+        };
+        let mut found = item(State::Found);
+        search_again(&mut found);
+        assert_eq!((found.state, found.tracks.len(), found.due, found.why), (State::Waiting, 0, 0, None));
+        let mut fetching = item(State::Fetching);
+        search_again(&mut fetching);
+        assert_eq!((fetching.state, fetching.tracks.len()), (State::Fetching, 1), "in flight: as it was");
     }
 
     /// C51b, the owner's production case (FX01's look-alike, "Tape Club - After Hours (Paper Lantern)" asked by the label's own

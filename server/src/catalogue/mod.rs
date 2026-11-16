@@ -2818,6 +2818,9 @@ impl Catalogue {
                                         if let Some(((folder, dir), _)) = &at {
                                             tx.execute("DELETE FROM expected WHERE folder = ?1 AND dir = ?2", params![folder, dir])?;
                                         }
+                                        // Its count against the files that came (R25, N6): a list that counted before them keeps
+                                        // counting only where it agrees.
+                                        records::recount_in(tx, r, &a.facts.tracks)?;
                                         r
                                     }
                                     None => {
@@ -5480,6 +5483,26 @@ mod tests {
         assert_eq!(state(), (vec![mbid(1)], 1, Some("musicbrainz".to_string())), "kept: its release, its list and its count");
         cat.keep_files_names(&[naming("Tide Tables", &[1, 2], &mbid(2), 2), incoming]).unwrap();
         assert_eq!(state(), (vec![mbid(2)], 0, None), "a retag lets them go");
+    }
+
+    /// R25 (N6): a record not had that a list counted before its album came (Soulseek's search) works its count out against the
+    /// files that came: where the list disagrees, none counts until one is chosen; where it agrees, it still counts.
+    #[test]
+    fn a_count_given_before_the_album_came_goes_where_the_files_disagree() {
+        let cat = tracks(4);
+        let list = |ids: &[i64]| -> Vec<identity::RefTrack> { ids.iter().zip(1..).map(|(t, position)| identity::RefTrack { disc: 1, position, title: format!("Track {t}"), length_ms: Some(200_000), recording: None }).collect() };
+        let (odd_group, fits_group) = ("00000000-0000-4000-8000-000000000180", "00000000-0000-4000-8000-000000000181");
+        let (odd, fits) = (not_had(&cat, "Lost Tapes", &[("release-group", odd_group)]), not_had(&cat, "Night Walks", &[("release-group", fits_group)]));
+        for (record, ids) in [(odd, &[1, 2, 9][..]), (fits, &[3, 4][..])] {
+            cat.set_reference_tracks(record, "musicbrainz", &list(ids)).unwrap();
+            cat.set_counting(record, Some("musicbrainz"), false).unwrap();
+        }
+        let first = AlbumCopy { group: Some(odd_group.into()), ..arriving("Lost Tapes", &[1, 2], "Lost Tapes") };
+        let second = AlbumCopy { group: Some(fits_group.into()), ..arriving("Night Walks", &[3, 4], "Night Walks") };
+        cat.assign_records(&[first, second]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 3)), (Some(odd), Some(fits)));
+        assert_eq!(cat.record(odd).unwrap().unwrap().counting, None, "a list of three against two files");
+        assert_eq!(cat.record(fits).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"));
     }
 
     /// R14 (F6): a had record's title and artist follow its first-ranked copy at each build: a retag shows.
