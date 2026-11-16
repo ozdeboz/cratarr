@@ -985,18 +985,17 @@ fn safe(s: &str) -> String {
 
 /// Where a record goes in its library: Artist/Record (Year), a number added where that is taken.
 fn place_in(lib: &Path, r: &Record) -> PathBuf {
+    folders_for(lib, r).next().expect("the numbers go on")
+}
+
+/// The folders a record may go in, in turn, none that is there already: Artist/Record (Year), then numbered (`place_in`).
+fn folders_for(lib: &Path, r: &Record) -> impl Iterator<Item = PathBuf> {
     let name = match r.year {
         Some(y) => format!("{} ({y})", safe(&r.album)),
         None => safe(&r.album),
     };
     let base = lib.join(safe(&r.artist)).join(&name);
-    let mut to = base.clone();
-    let mut n = 2;
-    while to.exists() {
-        to = base.with_file_name(format!("{name} {n}"));
-        n += 1;
-    }
-    to
+    (1..).map(move |n| if n == 1 { base.clone() } else { base.with_file_name(format!("{name} {n}")) }).filter(|to| !to.exists())
 }
 
 /// The checked files into the Soulseek library, each copied in under a hidden name and then renamed (no walk sees a
@@ -1004,17 +1003,29 @@ fn place_in(lib: &Path, r: &Record) -> PathBuf {
 /// (`Catalogue::expect_record`, C50), so its tracks join that record rather than make another, and again once the last file
 /// has landed, from when the expectation waits its week (F9).
 fn place(r: &Record, files: &[PathBuf]) -> Result<PathBuf> {
-    let to = place_in(&library()?, r);
-    let expect = || -> Result<()> {
-        if r.record != 0
-            && let Some(served) = crate::serve::instance()
-            && let Some((folder, dir)) = served.catalogue().place_of_path(&to)
-        {
-            served.catalogue().expect_record(folder, &dir, r.record)?;
+    let served = crate::serve::instance();
+    place_with(&library()?, r, files, |to| match served.as_ref().filter(|_| r.record != 0).and_then(|s| Some((s, s.catalogue().place_of_path(to)?))) {
+        Some((s, (folder, dir))) => s.catalogue().expect_record(folder, &dir, r.record),
+        None => Ok(true),
+    })
+}
+
+/// How many folders a record is offered before its placing gives up: each was another record's expectation.
+const FOLDERS_AT_MOST: usize = 50;
+
+/// `place`, `expect` telling the catalogue that the album arriving in a folder is the record, and whether it took that. A
+/// folder another record is still expected in is passed over for the next free one, numbered as a folder that is there already
+/// (R27, N10): an album placed there would join that other record. Said again once the last file has landed; a failure then is
+/// said in the log and the files stay placed: they are in Incoming, and fetching them again would not help.
+fn place_with(lib: &Path, r: &Record, files: &[PathBuf], expect: impl Fn(&Path) -> Result<bool>) -> Result<PathBuf> {
+    let mut to = None;
+    for folder in folders_for(lib, r).take(FOLDERS_AT_MOST) {
+        if expect(&folder)? {
+            to = Some(folder);
+            break;
         }
-        Ok(())
-    };
-    expect()?;
+    }
+    let to = to.context("Another record is expected in every folder it could go in")?;
     std::fs::create_dir_all(&to).with_context(|| format!("{} cannot be made", to.display()))?;
     for f in files {
         let name = f.file_name().context("no file name")?;
@@ -1024,7 +1035,9 @@ fn place(r: &Record, files: &[PathBuf]) -> Result<PathBuf> {
         }
         std::fs::rename(&hidden, to.join(name))?;
     }
-    expect()?;
+    if let Err(e) = expect(&to) {
+        tracing::warn!(target: "soulseek", folder = %to.display(), reason = %format!("{e:#}"), "placed, but its record could not be told of its folder again");
+    }
     Ok(to)
 }
 
@@ -1424,6 +1437,32 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// R27 (N10): a folder another record is expected in is passed over: the files go into the next free one, numbered, so their
+    /// album cannot join that other record; a failure to say so again once they are placed leaves them placed.
+    #[test]
+    fn a_refused_expectation_places_the_files_elsewhere() {
+        let d = data_folder("refused");
+        let (lib, from) = (d.join("soulseek"), d.join("fetched"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::write(from.join("01 Pier.flac"), b"flac").unwrap();
+        let r = record("Glass Harbour", "Harbour Lights", Some(2014));
+        let taken = lib.join("Glass Harbour").join("Harbour Lights (2014)");
+        let asked = Mutex::new(0);
+        let expect = |to: &Path| -> Result<bool> {
+            let mut n = asked.lock().unwrap();
+            *n += 1;
+            match *n {
+                3 => bail!("the catalogue could not be written"),
+                _ => Ok(to != taken.as_path()),
+            }
+        };
+        let to = place_with(&lib, &r, &[from.join("01 Pier.flac")], expect).unwrap();
+        assert_eq!(to, lib.join("Glass Harbour").join("Harbour Lights (2014) 2"));
+        assert!(to.join("01 Pier.flac").exists() && !taken.exists());
+        assert_eq!(*asked.lock().unwrap(), 3, "told again once placed");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// R24 (N4): the queue 0.16 kept is copied aside once, before 0.17 writes its own over it: a rollback finds it; a later start,
