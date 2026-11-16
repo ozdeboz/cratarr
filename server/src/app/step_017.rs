@@ -648,7 +648,7 @@ mod tests {
         let counting = |cat: &Catalogue, record: i64| cat.record(record).unwrap().unwrap().counting;
         assert_eq!((counting(&cat, 7), counting(&cat, 12)), (None, None), "no count from 0.16's certain matches");
         assert_eq!(cat.lists_to_read(100).unwrap(), [(1, mb(1)), (7, mb(7)), (10, FERRY.to_string()), (12, mb(30))], "Two Rooms' is a hand's, and Ferry Lights' younger copy holds none");
-        assert!(!cat.unreferenced().unwrap().contains(&12), "Undertow waits for its list");
+        assert!(!cat.unreferenced(true).unwrap().contains(&12), "Undertow waits for its list");
 
         let cat = std::sync::Arc::new(cat);
         let titled = |titles: &[&str], ms: i64| -> Vec<crate::catalogue::identity::Listed> { titles.iter().map(|t| crate::catalogue::identity::Listed::of(t, ms)).collect() };
@@ -679,7 +679,7 @@ mod tests {
         assert_eq!(counting(&cat, 7).as_deref(), Some("musicbrainz"), "Signal's list agrees with its file");
         assert_eq!(counting(&cat, 12), None, "Undertow's does not");
         assert_eq!(counting(&cat, 10), None, "no list");
-        assert!(cat.unreferenced().unwrap().contains(&12), "on Health's item now");
+        assert!(cat.unreferenced(true).unwrap().contains(&12), "on Health's item now");
         assert!(cat.lists_to_read(100).unwrap().is_empty());
         assert_eq!(crate::app::references::read_lists(&cat, files, |_| async { Ok(None) }, 100).await.unwrap(), 0, "nothing waits");
         let report = &ud.migration_report().unwrap()[PART].1;

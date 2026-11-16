@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS record_labels (
 CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, record);
 -- 0.17's step: a record whose certain match from 0.16 names a release whose list is still to be read (`references::read_lists`).
 -- It counts nothing and waits off Health's references item until the list is read and held against its files.
-CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TEXT NOT NULL, at INTEGER NOT NULL);
+-- `tries`: questions that failed for it; let go after a few (R7).
+CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TEXT NOT NULL, at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0);
 ";
 
 /// A chain of merges longer than this is a loop: the record it began at answers none.
@@ -631,21 +632,22 @@ impl Catalogue {
     }
 
     /// The records no reference speaks for (Health's references item), in one query: had, with none counting and not checked
-    /// by hand, and no release its files name nor a link pasted. A record whose certain match from 0.16 waits for its list
-    /// (`lists_to_read`) waits off it: what 0.16 left off the item stays off until the list is read, and goes on it only where
-    /// the list does not agree. Blocking.
-    pub fn unreferenced(&self) -> Result<Vec<i64>> {
+    /// by hand, and no release its files name nor a link pasted. While the lists are read (`lists_read`: MusicBrainz switched
+    /// on), a record whose certain match from 0.16 waits for its list (`lists_to_read`) waits off it: what 0.16 left off the
+    /// item stays off until the list is read, and goes on it only where the list does not agree. With MusicBrainz off no list
+    /// comes, and it is on the item (R7). Blocking.
+    pub fn unreferenced(&self, lists_read: bool) -> Result<Vec<i64>> {
         let db = self.db();
         let mut st = db.prepare_cached(
             "SELECT r.id FROM records r
              WHERE r.retired_at IS NULL AND r.merged_into IS NULL AND r.counting IS NULL AND r.checked_by_hand = 0
                AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
-               AND NOT EXISTS (SELECT 1 FROM lists_to_read w WHERE w.record = r.id)
+               AND NOT (?1 AND EXISTS (SELECT 1 FROM lists_to_read w WHERE w.record = r.id))
                AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || r.id
                  AND (f.how = 'hand' OR (f.how = 'files' AND f.source = 'musicbrainz' AND f.kind = 'release')))
              ORDER BY r.id",
         )?;
-        let rows = st.query_map([], |r| r.get(0))?;
+        let rows = st.query_map([lists_read], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -663,11 +665,11 @@ impl Catalogue {
         rows.into_iter().map(|(source, tracks)| Ok((source, serde_json::from_str(&tracks)?))).collect()
     }
 
-    /// Records waiting for their certain match's list (0.17's step, `lists_to_read`), the oldest first: (record, release), up
-    /// to `n`. Blocking.
+    /// Records waiting for their certain match's list (0.17's step, `lists_to_read`), those tried least first, then the oldest:
+    /// (record, release), up to `n`. Blocking.
     pub fn lists_to_read(&self, n: usize) -> Result<Vec<(i64, String)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT record, release FROM lists_to_read ORDER BY record LIMIT ?1")?;
+        let mut st = db.prepare_cached("SELECT record, release FROM lists_to_read ORDER BY tries, record LIMIT ?1")?;
         let rows = st.query_map([n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -676,6 +678,20 @@ impl Catalogue {
     pub fn list_read(&self, record: i64) -> Result<()> {
         self.db().execute("DELETE FROM lists_to_read WHERE record = ?1", [record])?;
         Ok(())
+    }
+
+    /// A question for a record's list failed: counted, and the record let go of at the `most`th, so a release that always
+    /// fails lets the rest through and goes on Health's item. Whether it was let go of. Blocking.
+    pub fn list_failed(&self, record: i64, most: i64) -> Result<bool> {
+        let db = self.db();
+        db.execute("UPDATE lists_to_read SET tries = tries + 1 WHERE record = ?1", [record])?;
+        Ok(db.execute("DELETE FROM lists_to_read WHERE record = ?1 AND tries >= ?2", params![record, most])? > 0)
+    }
+
+    /// Tests elsewhere: a record waiting for its release's list, as 0.17's step leaves a certain match.
+    #[cfg(test)]
+    pub fn wait_for_list_for_tests(&self, record: i64, release: &str) {
+        self.db().execute("INSERT INTO lists_to_read (record, release, at) VALUES (?1, ?2, 1)", params![record, release]).unwrap();
     }
 
     /// A source's tracklist of a record, in place of what it gave before. Blocking.

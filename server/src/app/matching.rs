@@ -234,7 +234,8 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
     {
         let (ud, served) = (served.userdata.clone(), served.clone());
         // One running for the account already: it is left to finish (asked again later, it takes the rest).
-        let _ = super::tasks::spawn(KIND, &account, false, move |h| async move {
+        // Behind any page's question (R7), as the background asker's: the task runs on while its account browses.
+        let _ = super::tasks::spawn(KIND, &account, false, move |h| super::musicbrainz::behind(async move {
             let http = super::discover::http()?;
             let total = due.len() as u64;
             for (i, album) in due.into_iter().enumerate() {
@@ -258,7 +259,7 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
                 .await??;
             }
             anyhow::Ok(())
-        });
+        }));
     }
     Ok(kept.into_iter().filter_map(|(a, (_, json))| Some((a, serde_json::from_str(&json?).ok()?))).collect())
 }

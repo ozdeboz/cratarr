@@ -60,7 +60,8 @@ pub fn start() {
     tokio::spawn(async {
         tokio::time::sleep(START_AFTER).await;
         loop {
-            if let Err(e) = round().await {
+            // Its questions to MusicBrainz behind any page's, as the background asker's (R7): no one waits for a round.
+            if let Err(e) = super::musicbrainz::behind(round()).await {
                 tracing::info!("harvest: a round stopped: {e:#}");
             }
             tokio::time::sleep(ROUND).await;

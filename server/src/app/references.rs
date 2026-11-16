@@ -193,9 +193,18 @@ where
     for (record, release) in waiting {
         let list = match read(release.clone()).await {
             Ok(list) => list,
-            Err(e) => {
+            // MusicBrainz out of reach: the rest wait for the next pass, nothing counted against them.
+            Err(e) if out_of_reach(&e) => {
                 tracing::info!(target: "library", "the lists 0.17's step left: stopped after {read_n}: {e:#}");
                 break;
+            }
+            // This release's question failed: counted against it, and the rest go on (R7).
+            Err(e) => {
+                let cat = cat.clone();
+                if tokio::task::spawn_blocking(move || cat.list_failed(record, LIST_TRIES)).await?? {
+                    tracing::info!(target: "library", "the lists 0.17's step left: record {record} let go of after {LIST_TRIES} tries: {e:#}");
+                }
+                continue;
             }
         };
         read_n += 1;
@@ -205,13 +214,25 @@ where
                 && cat.subject_of(&Ref::new("musicbrainz", "release", &release))? == [ids::record(record)]
             {
                 cat.set_reference_tracks(record, "musicbrainz", &list)?;
-                work_out_in(&cat, record, &files(record)?)?;
+                // No files to hold it against (the record not served now): kept, and nothing counts by it (R7).
+                let files = files(record)?;
+                if !files.is_empty() {
+                    work_out_in(&cat, record, &files)?;
+                }
             }
             cat.list_read(record)
         })
         .await??;
     }
     Ok(read_n)
+}
+
+/// How many failed questions a record's list is asked again after, before the record is let go of to Health's item.
+const LIST_TRIES: i64 = 3;
+
+/// Whether an error is MusicBrainz out of reach (no answer at all, or switched off), not an answer about one release.
+fn out_of_reach(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<reqwest::Error>().is_some_and(|r| r.is_connect() || r.is_timeout()) || !super::switches::is_on(super::switches::MUSICBRAINZ)
 }
 
 /// How many lists `lists_pass` reads in one pass.
@@ -226,7 +247,8 @@ pub async fn lists_pass() -> Result<usize> {
     let read = |release: String| async move {
         let read = match super::track_fetch::release_by_id(&release).await {
             Ok(v) => Ok(Some(list_of_release(&v))),
-            Err(e) if e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status) == Some(reqwest::StatusCode::NOT_FOUND) => Ok(None),
+            // MusicBrainz will not answer for it (no such release, an id it refuses): no list, let go of at once (R7).
+            Err(e) if e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status).is_some_and(|s| s.is_client_error()) => Ok(None),
             Err(e) => Err(e),
         };
         tokio::time::sleep(std::time::Duration::from_secs(super::musicbrainz::PACE_SECS)).await;
@@ -562,7 +584,7 @@ pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<Ref
 pub fn unreferenced(served: &crate::serve::Serve) -> Result<Vec<(String, String, String)>> {
     let listed: std::collections::HashSet<String> = served.library.album_ids()?.into_iter().collect();
     let mut out = Vec::new();
-    for record in served.catalogue().unreferenced()? {
+    for record in served.catalogue().unreferenced(super::switches::is_on(super::switches::MUSICBRAINZ))? {
         let album = ids::record(record);
         if !listed.contains(&album) {
             continue;
@@ -735,6 +757,59 @@ mod tests {
         assert_eq!(counting().as_deref(), Some("discogs"), "chosen by hand, whatever arrives");
     }
 
+    /// A record waiting for a list, its release its own, and a list of `titles` for it.
+    fn waiting(cat: &Catalogue, title: &str, release: &str) -> i64 {
+        let record = cat.record_for_tests(title, 1);
+        assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release", release), "search").unwrap());
+        cat.wait_for_list_for_tests(record, release);
+        record
+    }
+
+    fn files_none() -> Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync> {
+        Arc::new(|_| Ok(Vec::new()))
+    }
+
+    /// R7 (N3): a list read for a record with no files to hold it against (not served now) is kept, and nothing counts by it:
+    /// the record waits no more, and is on Health's item.
+    #[tokio::test]
+    async fn a_list_read_with_no_files_counts_nothing() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = waiting(&cat, "Signal", "r7");
+        let read = |_| async { Ok(Some(list(&[("Signal", Some(180_000))]))) };
+        assert_eq!(read_lists(&cat, files_none(), read, 10).await.unwrap(), 1);
+        assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "no files, no count");
+        assert_eq!(cat.reference_tracks(record).unwrap().len(), 1, "the list kept");
+        assert!(cat.lists_to_read(10).unwrap().is_empty());
+        assert_eq!(cat.unreferenced(true).unwrap(), [record]);
+    }
+
+    /// R7 (N4): a release whose question always fails lets the rest through: the others are read in the same pass, and it is
+    /// let go of after its tries, onto Health's item; MusicBrainz refusing it (a 4xx, `lists_pass`) lets it go at once.
+    #[tokio::test]
+    async fn a_release_that_always_fails_lets_the_rest_through() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (broken, fine) = (waiting(&cat, "Broken", "r1"), waiting(&cat, "Signal", "r2"));
+        let files: Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync> = Arc::new(|_| Ok(files(&[("Signal", 180_000)])));
+        let read = |release: String| async move { if release == "r1" { anyhow::bail!("not understood") } else { Ok(Some(list(&[("Signal", Some(180_000))]))) } };
+        assert_eq!(read_lists(&cat, files.clone(), read, 10).await.unwrap(), 1, "the other read in the same pass");
+        assert_eq!(cat.record(fine).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"));
+        assert_eq!(cat.lists_to_read(10).unwrap(), [(broken, "r1".to_string())], "tried again later");
+        for _ in 1..LIST_TRIES {
+            read_lists(&cat, files.clone(), read, 10).await.unwrap();
+        }
+        assert!(cat.lists_to_read(10).unwrap().is_empty(), "let go of after its tries");
+        assert_eq!(cat.unreferenced(true).unwrap(), [broken]);
+    }
+
+    /// R7 (N4): with MusicBrainz switched off no list comes, so a record waiting for one is on Health's item.
+    #[test]
+    fn with_musicbrainz_off_waiting_records_are_on_health() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let record = waiting(&cat, "Signal", "r7");
+        assert!(cat.unreferenced(true).unwrap().is_empty(), "MusicBrainz on: it waits");
+        assert_eq!(cat.unreferenced(false).unwrap(), [record], "off: on the item");
+    }
+
     /// Health's item: what 0.16 left off it stays off, in one query. A guess confirmed and checked by hand, the record's.
     #[test]
     fn a_record_no_reference_speaks_for_is_healths() {
@@ -752,6 +827,6 @@ mod tests {
         assert_eq!(cat.confirm_reference(&guessed_id, "musicbrainz").unwrap(), 2);
         assert!(cat.references_of(&guessed_id).unwrap().iter().all(|(_, row)| row.confirmed));
         had(&cat, "Not Had", 0);
-        assert_eq!(cat.unreferenced().unwrap(), [alone, guessed], "a guess and a group are no reference that speaks");
+        assert_eq!(cat.unreferenced(true).unwrap(), [alone, guessed], "a guess and a group are no reference that speaks");
     }
 }
