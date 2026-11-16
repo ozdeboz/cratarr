@@ -212,7 +212,8 @@ ${prefs.playlistOrder}`,
 
   // The pill's last button (lib/ContentControls): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
-  // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change; one line says so.
+  // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change. Nothing says so while the list shows
+  // (0.17, the owner: not "New playlists need Cratarr"): those this device holds are browsed and played as ever.
   usePageAction(() =>
     server ? { icon: 'plus', label: 'New playlist', run: () => (naming = true) } : reach.away ? null : { icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) },
   );
@@ -272,13 +273,15 @@ ${prefs.playlistOrder}`,
   {:else}
   <!-- The search, size, favourites-only and New playlist are the pill's (lib/ContentControls), the order the list's header,
        what is ticked the select bar's (decided 2026-10-15/16). -->
-  {#if error}
+  <!-- Out of reach the list is this device's (lib/live, through the read door); where it holds none, one line, never "Cannot reach …
+       Try again" (0.17, the owner: one offline mode). Reached, a failure says so with Try again, as ever. -->
+  {#if error && !reach.away}
     <Notice text={error} onretry={refresh} />
   {/if}
-  {#if reach.away}<p class="away">New playlists need Cratarr.</p>{/if}
 
   {#if error && !view}
     <!-- Not read: the Notice alone, never "No playlists match." under it (the owner, 2026-11-02). -->
+    {#if reach.away}<p class="away">Playlists need Cratarr.</p>{/if}
   {:else if !view || waiting}
     <PageLoading />
   {:else if listed.shows === 'asking'}

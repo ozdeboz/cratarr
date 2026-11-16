@@ -509,6 +509,23 @@ fn marks_that_say_nothing_of_the_rest_are_an_account_with_nothing_set() {
 }
 
 #[test]
+fn the_playlists_and_their_rows_are_answered_here_as_the_server_gives_them() {
+    // Track 99 is no track this device holds: a library it cannot see.
+    let list = List { id: "pl-1".into(), name: "Mix".into(), tracks: vec![3, 99, 1] };
+    let mut d = device_of(Own { crates: vec![crate_of("dub", dub())], lists: vec![list], ..Own::default() }, &[]);
+    let lists = ask(&mut d, json!({ "ask": "playlists" }));
+    assert_eq!(lists, json!([{ "id": "pl-1", "name": "Mix", "member": false, "count": 2, "dead": 0, "links": [], "spoken": [], "mine": true }]));
+    let rows = ask(&mut d, json!({ "ask": "playlist_rows", "id": "pl-1" }));
+    assert_eq!(rows["source"], "cratarr");
+    let ids: Vec<&str> = rows["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["tr-3", "tr-1"], "in its order, what this device holds");
+    assert_eq!(rows["rows"][0]["album"], "Second");
+    assert!(d.ask(&json!({ "ask": "playlist_rows", "id": "pl-9" }).to_string()).is_none(), "one it does not hold: nothing to say");
+    let mut none_held = device_of(Own::default(), &[]);
+    assert!(none_held.ask(&json!({ "ask": "playlists" }).to_string()).is_none(), "nothing of the account held: no list, rather than an empty one");
+}
+
+#[test]
 fn made_ready_as_it_opens_the_first_sounds_like_and_pick_make_nothing() {
     let mut d = device();
     assert!(d.alike.get().is_none() && d.radio.get().is_none(), "nothing made at open itself");

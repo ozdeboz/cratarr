@@ -8,7 +8,7 @@ import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
-import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick } from './deviceAnswers.svelte';
+import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick, devicePlaylistRows, devicePlaylists } from './deviceAnswers.svelte';
 import { cratarrBusy } from './waiting.svelte';
 import { deviceAlbums, deviceArtist, deviceRecord, deviceSearch, readsNow } from './deviceIndex.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
@@ -994,9 +994,12 @@ export const appendTracks = (id: string, source: string, ids: string[]) =>
   }));
 
 export const playlistRows = (id: string, source?: string) =>
-  quietly<{ source: string; rows: PlaylistRow[] }>(
-    `/api/playlists/${encodeURIComponent(id)}/rows${source ? `?source=${encodeURIComponent(source)}` : ''}`,
+  read(
+    () => quietly<{ source: string; rows: PlaylistRow[] }>(`/api/playlists/${encodeURIComponent(id)}/rows${source ? `?source=${encodeURIComponent(source)}` : ''}`),
+    () => devicePlaylistRows(id, source),
   );
+/** The playlists as `/api/state` lists them, through the door (0.17): from this device while reads come from it. */
+export const readPlaylists = (source?: string) => read(() => getState(source).then((s) => s.playlists), () => devicePlaylists(source));
 
 /** Saves a playlist edited in its view (decision 0023): its lines reordered or some left out (`entries`), replacing
  *  `expected` (the lines as the view showed them); refused when it changed since. */

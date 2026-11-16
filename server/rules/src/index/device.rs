@@ -157,6 +157,10 @@ pub enum Asked {
     /// What the first ask of each kind would make, made now (0.17): the similarity and Radio's index, half a second on a tablet. The
     /// app and the page ask it as the device opens, so the first Sounds like or pick after it is answered at once.
     Warm,
+    /// The account's playlists, as `/api/state` lists them (0.17: the Playlists page with Cratarr out of reach).
+    Playlists,
+    /// A playlist's rows, as `/api/playlists/{id}/rows` gives them: its tracks this device holds, in its order.
+    PlaylistRows { id: String },
 }
 
 /// A crate's row, in the names a page's lists give it (the server's `PlaylistRow`).
@@ -320,6 +324,9 @@ impl Device {
                 self.radio();
                 Some(json!({}))
             }
+            // Nothing of the account held, as for its crates: no list is a wrong answer then.
+            Asked::Playlists => (!self.own.crates.is_empty()).then(|| self.playlists()),
+            Asked::PlaylistRows { id } => self.playlist_rows(&id),
         };
         answer.map(|a| a.to_string())
     }
@@ -630,6 +637,29 @@ impl Device {
 
     /// The Crates page's list. A Sounds like costs a pass over the library for each answer, so its sizes for the other two settings of
     /// the toggle are left unknown; the list says so as it does of favourites not read.
+    /// The account's playlists in the shape `/api/state` gives them: each its own, its count the tracks this device holds of it (one
+    /// it does not hold, of a library it cannot see, it cannot say is missing, so none is said to be).
+    fn playlists(&self) -> Json {
+        let lists: Vec<Json> = self
+            .own
+            .lists
+            .iter()
+            .map(|l| {
+                let count = l.tracks.iter().filter(|t| self.place.contains_key(t)).count();
+                json!({ "id": l.id, "name": l.name, "member": false, "count": count, "dead": 0, "links": [], "spoken": [], "mine": true })
+            })
+            .collect();
+        Json::Array(lists)
+    }
+
+    /// A playlist's rows as `/api/playlists/{id}/rows` gives them, its tracks this device holds in its order; none for one it does not
+    /// hold.
+    fn playlist_rows(&self, id: &str) -> Option<Json> {
+        let list = self.own.lists.iter().find(|l| l.id == id)?;
+        let rows: Vec<Row> = list.tracks.iter().filter_map(|t| self.place.get(t)).map(|&at| self.row(&self.facts[at].rel)).collect();
+        Some(json!({ "source": SOURCE, "rows": rows }))
+    }
+
     fn crates(&self, without: &[String], now: i64) -> Json {
         let (by, artists) = (self.by(), self.own.artists_out.iter().cloned().collect::<HashSet<String>>());
         let excluded: Vec<String> = self.own.excluded.iter().map(|t| ids::song(*t)).collect();
