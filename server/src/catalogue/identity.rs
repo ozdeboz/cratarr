@@ -291,6 +291,51 @@ pub fn same_record(a: &RecordFacts, b: &RecordFacts) -> bool {
     }
 }
 
+/// A subject's id at a source: `kind` is `release-group`, `release`, `master`, `album`, `artist` or `label`, `value` the source's
+/// id (a MusicBrainz id, a Discogs number, a page as `bandcamp::page` makes it). Kept in `references` (`catalogue::records`);
+/// here, as what links two listings (`same_listing`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Ref {
+    pub source: String,
+    pub kind: String,
+    pub value: String,
+}
+
+impl Ref {
+    pub fn new(source: &str, kind: &str, value: &str) -> Self {
+        Self { source: source.to_string(), kind: kind.to_string(), value: value.to_string() }
+    }
+}
+
+/// A record as a listing knows it (`same_listing`): what it is at its sources, what those sources say it is at others
+/// (MusicBrainz's Discogs and Bandcamp links), its artist and title folded, and its tracks where a list gives every length.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Known {
+    pub refs: Vec<Ref>,
+    pub says: Vec<Ref>,
+    pub artist: String,
+    pub title: String,
+    pub tracks: Vec<Listed>,
+}
+
+/// Whether two listings are one record (decision 0100 point 4; the map's `same_release`, named apart from [`same_release`], the
+/// very same MusicBrainz release). A link from either side to the other's decides, both ways: a release or an album page names
+/// one record, so the same value is one record and another is two; two release groups or masters that differ are two, and the
+/// same one says nothing, as a deluxe edition and the standard one share theirs (G1). Without a link, the artist, the title and
+/// the tracks, by [`same_tracks`]. Else two: a name alone never merges, nor a list with no lengths (OQ8 (a)).
+pub fn same_listing(a: &Known, b: &Known) -> bool {
+    let links = |k: &Known| k.refs.iter().chain(&k.says).cloned().collect::<Vec<Ref>>();
+    let (left, right) = (links(a), links(b));
+    let pairs = || left.iter().flat_map(|x| right.iter().filter(move |y| x.source == y.source && x.kind == y.kind).map(move |y| (x, y)));
+    if pairs().any(|(x, y)| matches!(x.kind.as_str(), "release" | "album") && x.value == y.value) {
+        return true;
+    }
+    if pairs().any(|(x, y)| x.value != y.value) {
+        return false;
+    }
+    !a.title.is_empty() && a.artist == b.artist && a.title == b.title && same_tracks(&a.tracks, &b.tracks)
+}
+
 /// A track of a source's tracklist (0100, `reference_tracks`): its place, its title as the source writes it, and its length and
 /// MusicBrainz recording where the source gives them. Discogs may give no length, and only MusicBrainz gives a recording.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -633,6 +678,52 @@ mod tests {
         let new = vec![f("n/01 A.flac", 100_000, Some("r1"), Some("A"), None), f("n/02 B.flac", 100_000, None, Some("B"), None)];
         let gone = vec![f("o/01 A.flac", 100_000, Some("r1"), Some("A"), None), f("o/02 B.flac", 100_000, None, Some("B"), None)];
         assert_eq!(match_moves(&new, &gone), vec![(0, 0), (1, 1)]);
+    }
+
+    fn known(refs: &[(&str, &str, &str)], says: &[(&str, &str, &str)], title: &str, tracks: &[(&str, i64)]) -> Known {
+        let links = |l: &[(&str, &str, &str)]| l.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect();
+        Known { refs: links(refs), says: links(says), artist: fold("Glass Harbour"), title: fold(title), tracks: tracks.iter().map(|(t, ms)| Listed::of(t, *ms)).collect() }
+    }
+
+    const TWO: [(&str, i64); 2] = [("Slack Water", 200_000), ("Neap", 180_000)];
+
+    /// 0100 point 4: a link from one side to the other's names the very record, whatever either calls it.
+    #[test]
+    fn a_link_decides_yes() {
+        let mb = known(&[("musicbrainz", "release", "r1"), ("musicbrainz", "release-group", "g1")], &[("discogs", "release", "2000001")], "Tide Tables", &[]);
+        let discogs = known(&[("discogs", "release", "2000001"), ("discogs", "master", "1000001")], &[], "Tide Tables (Remastered)", &[]);
+        assert!(same_listing(&mb, &discogs) && same_listing(&discogs, &mb), "MusicBrainz's link to Discogs' release, either way round");
+        let page = known(&[("bandcamp", "album", "https://glassharbour.bandcamp.com/album/tide-tables")], &[], "Tide Tables", &[]);
+        let linked = known(&[("musicbrainz", "release", "r1")], &[("bandcamp", "album", "https://glassharbour.bandcamp.com/album/tide-tables")], "Another Name", &[]);
+        assert!(same_listing(&page, &linked), "MusicBrainz's link to a Bandcamp album");
+        let pressing = known(&[("musicbrainz", "release", "r1")], &[("discogs", "release", "2000009")], "Tide Tables", &[]);
+        assert!(same_listing(&mb, &pressing), "the same release, whatever another source's pressing");
+    }
+
+    #[test]
+    fn a_link_decides_no() {
+        let a = known(&[("musicbrainz", "release", "r1")], &[("discogs", "release", "2000001")], "Tide Tables", &TWO);
+        assert!(!same_listing(&a, &known(&[("discogs", "release", "2000002")], &[], "Tide Tables", &TWO)), "another release: two, though name and tracks are one");
+        let group = |g: &str| known(&[("musicbrainz", "release-group", g)], &[], "Tide Tables", &TWO);
+        assert!(!same_listing(&group("g1"), &group("g2")), "another release group");
+        let deluxe = known(&[("musicbrainz", "release-group", "g1")], &[], "Tide Tables", &[("Slack Water", 200_000), ("Neap", 180_000), ("Bonus", 90_000)]);
+        assert!(!same_listing(&group("g1"), &deluxe), "one group says nothing (a deluxe edition shares it, G1), and the tracks are others");
+    }
+
+    #[test]
+    fn a_tracklist_merges() {
+        let bandcamp = known(&[("bandcamp", "album", "https://glassharbour.bandcamp.com/album/tide-tables")], &[], "Tide Tables", &[("Slack Water", 201_000), ("Neap (feat. A Guest)", 180_000)]);
+        assert!(same_listing(&known(&[("musicbrainz", "release-group", "g1")], &[], "Tide Tables", &TWO), &bandcamp), "no link between them: artist, title and tracks");
+        let group = known(&[("musicbrainz", "release-group", "g1")], &[], "Tide Tables", &TWO);
+        assert!(same_listing(&group, &group.clone()), "one group says nothing, and the tracks do");
+    }
+
+    #[test]
+    fn a_name_alone_never_merges() {
+        let (mb, discogs) = (known(&[("musicbrainz", "release-group", "g1")], &[], "Tide Tables", &[]), known(&[("discogs", "master", "1000001")], &[], "Tide Tables", &[]));
+        assert!(!same_listing(&mb, &discogs), "no link, no tracks: two");
+        assert!(!same_listing(&known(&[], &[], "Tide Tables", &[]), &known(&[], &[], "Tide Tables", &[])));
+        assert!(!same_listing(&known(&[], &[], "", &TWO), &known(&[], &[], "", &TWO)), "nor tracks with no name");
     }
 
     /// A source's list, each (title, length) in order.

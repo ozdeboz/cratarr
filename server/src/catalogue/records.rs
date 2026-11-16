@@ -12,7 +12,7 @@
 //!
 //! The table is `"references"`, quoted in every statement: REFERENCES is SQLite's keyword, with no fallback to a name.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::identity::RefTrack;
@@ -52,23 +52,165 @@ CREATE TABLE IF NOT EXISTS record_labels (
 CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, record);
 ";
 
+/// A chain of merges longer than this is a loop: the record it began at answers none.
+const MERGES: usize = 32;
+
+/// The record `id` is now, its merges followed. None: no such id, or merges that go round.
+fn merged_end(db: &Connection, mut id: i64) -> Result<Option<i64>> {
+    for _ in 0..MERGES {
+        let into: Option<Option<i64>> = db.prepare_cached("SELECT merged_into FROM records WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?;
+        match into {
+            None => return Ok(None),
+            Some(Some(next)) if next != id => id = next,
+            Some(_) => return Ok(Some(id)),
+        }
+    }
+    Ok(None)
+}
+
+/// Whether a track holds the record: one had.
+fn had(tx: &Connection, record: i64) -> Result<bool> {
+    Ok(tx.prepare_cached("SELECT EXISTS (SELECT 1 FROM tracks WHERE record = ?1 AND retired_at IS NULL)")?.query_row([record], |r| r.get(0))?)
+}
+
+/// A record a list names (an artist's discography's row, a label's), before it has an id: what it is at its source and what
+/// that source says it is elsewhere, and what a record not had shows (0100).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Listing {
+    pub title: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub kind: Option<String>,
+    pub released: Option<String>,
+    pub genres: Vec<String>,
+    pub cover: Option<String>,
+    pub refs: Vec<Ref>,
+    pub says: Vec<Ref>,
+}
+
+/// `Catalogue::keep_listing` in the caller's transaction, found at `at`.
+pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64) -> Result<Vec<i64>> {
+    let mut out = Vec::with_capacity(list.len());
+    for l in list {
+        let found = match found_by_reference(tx, l)? {
+            Some(r) => Some(r),
+            None => found_by_listing(tx, l)?,
+        };
+        let record = match found {
+            Some(r) => r,
+            None => {
+                let genres = (!l.genres.is_empty()).then(|| l.genres.join(&GENRES_APART.to_string()));
+                tx.prepare_cached("INSERT INTO records (born, title, artist, year, kind, released, genres, cover) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?
+                    .execute(params![at, l.title, l.artist, l.year, l.kind, l.released, genres, l.cover])?;
+                let record = tx.last_insert_rowid();
+                if let Some(artist) = artist {
+                    tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position) VALUES (?1, ?2, 0)")?.execute(params![record, artist])?;
+                }
+                record
+            }
+        };
+        for r in &l.refs {
+            put_reference(tx, &ids::record(record), r, how, at, false)?;
+        }
+        out.push(record);
+    }
+    Ok(out)
+}
+
+/// The record a listing's references name: one a release or an album page names first, else the oldest of its release group
+/// or master (G1: any of them is it, for a list that names the group), each as merged now.
+fn found_by_reference(tx: &Connection, l: &Listing) -> Result<Option<i64>> {
+    let mut refs: Vec<&Ref> = l.refs.iter().collect();
+    refs.sort_by_key(|r| !ONE_SUBJECT.contains(&r.kind.as_str()));
+    for r in refs {
+        let mut holders: Vec<i64> = Vec::new();
+        for subject in subjects_in(tx, r)? {
+            if let Some(id) = ids::record_number(&subject)
+                && let Some(record) = merged_end(tx, id)?
+            {
+                holders.push(record);
+            }
+        }
+        if let Some(record) = holders.into_iter().min() {
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
+}
+
+/// The record of a listing's name that `identity::same_listing` says it is, a link of one to the other's deciding, as a name
+/// alone never does: the oldest where several are.
+fn found_by_listing(tx: &Connection, l: &Listing) -> Result<Option<i64>> {
+    use super::identity::{Known, fold, same_listing};
+    let (artist, title) = (fold(&l.artist), fold(&l.title));
+    let known = |refs: Vec<Ref>, says: Vec<Ref>| Known { refs, says, artist: artist.clone(), title: title.clone(), tracks: Vec::new() };
+    let listing = known(l.refs.clone(), l.says.clone());
+    let named: Vec<i64> = {
+        let mut st = tx.prepare_cached("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL ORDER BY id")?;
+        let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        rows.into_iter().filter(|(_, a, t)| fold(a) == artist && fold(t) == title).map(|(id, ..)| id).collect()
+    };
+    for record in named {
+        let refs: Vec<Ref> = {
+            let mut st = tx.prepare_cached("SELECT source, kind, value FROM \"references\" WHERE subject = ?1")?;
+            st.query_map([ids::record(record)], |r| Ok(Ref { source: r.get(0)?, kind: r.get(1)?, value: r.get(2)? }))?.collect::<rusqlite::Result<_>>()?
+        };
+        if same_listing(&listing, &known(refs, Vec::new())) {
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
+}
+
+/// `from` merged into `into` in the caller's transaction (G3): its references go to `into`, but where `into` holds one already,
+/// kept the surer way, and confirmed where either was; its lists where `into` has none from that source; its count where `into`
+/// has none, and its checks; its artists (after `into`'s) and labels; the facts `into` lacks. `from` answers through
+/// `merged_into` from then on, and so does every record merged into it before. A record with copies keeps its id, and two with
+/// copies are one only by their files: the record pass's, refused here.
+pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<()> {
+    if from == into {
+        return Ok(());
+    }
+    anyhow::ensure!(!had(tx, from)?, "a record with copies keeps its id: merge the other into it, and two with copies are one only by their files");
+    let (subject, target) = (ids::record(from), ids::record(into));
+    let refs: Vec<(Ref, String, i64, bool)> = {
+        let mut st = tx.prepare("SELECT source, kind, value, how, at, confirmed FROM \"references\" WHERE subject = ?1")?;
+        st.query_map([&subject], |r| Ok((Ref { source: r.get(0)?, kind: r.get(1)?, value: r.get(2)? }, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    tx.execute("DELETE FROM \"references\" WHERE subject = ?1", [&subject])?;
+    for (r, how, at, confirmed) in &refs {
+        put_reference(tx, &target, r, how, *at, false)?;
+        if *confirmed {
+            tx.execute("UPDATE \"references\" SET confirmed = 1 WHERE subject = ?1 AND source = ?2 AND kind = ?3 AND value = ?4", params![target, r.source, r.kind, r.value])?;
+        }
+    }
+    tx.execute("INSERT OR IGNORE INTO reference_tracks (record, source, tracks, at) SELECT ?2, source, tracks, at FROM reference_tracks WHERE record = ?1", params![from, into])?;
+    tx.execute("DELETE FROM reference_tracks WHERE record = ?1", [from])?;
+    tx.execute(
+        "UPDATE records SET
+           counted_by_hand = CASE WHEN counting IS NULL AND counted_by_hand = 0 THEN (SELECT counted_by_hand FROM records WHERE id = ?1) ELSE counted_by_hand END,
+           counting = COALESCE(counting, (SELECT counting FROM records WHERE id = ?1)),
+           checked_by_hand = max(checked_by_hand, (SELECT checked_by_hand FROM records WHERE id = ?1)),
+           title = COALESCE(title, (SELECT title FROM records WHERE id = ?1)), artist = COALESCE(artist, (SELECT artist FROM records WHERE id = ?1)),
+           year = COALESCE(year, (SELECT year FROM records WHERE id = ?1)), kind = COALESCE(kind, (SELECT kind FROM records WHERE id = ?1)),
+           released = COALESCE(released, (SELECT released FROM records WHERE id = ?1)), genres = COALESCE(genres, (SELECT genres FROM records WHERE id = ?1)),
+           cover = COALESCE(cover, (SELECT cover FROM records WHERE id = ?1))
+         WHERE id = ?2",
+        params![from, into],
+    )?;
+    let after: i64 = tx.query_row("SELECT COALESCE(max(position) + 1, 0) FROM record_artists WHERE record = ?1", [into], |r| r.get(0))?;
+    tx.execute("INSERT OR IGNORE INTO record_artists (record, artist, position) SELECT ?2, artist, position + ?3 FROM record_artists WHERE record = ?1", params![from, into, after])?;
+    tx.execute("DELETE FROM record_artists WHERE record = ?1", [from])?;
+    tx.execute("INSERT OR IGNORE INTO record_labels (record, label, catno) SELECT ?2, label, catno FROM record_labels WHERE record = ?1", params![from, into])?;
+    tx.execute("DELETE FROM record_labels WHERE record = ?1", [from])?;
+    tx.execute("UPDATE records SET merged_into = ?2 WHERE id = ?1 OR merged_into = ?1", params![from, into])?;
+    Ok(())
+}
+
 /// The kinds a source gives to one subject alone (G1): what `references_one` holds unique.
 const ONE_SUBJECT: [&str; 4] = ["release", "album", "artist", "label"];
 
-/// A subject's id at a source: `kind` is `release-group`, `release`, `master`, `album`, `artist` or `label`, `value` the source's
-/// id (a MusicBrainz id, a Discogs number, a page as `bandcamp::page` makes it).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Ref {
-    pub source: String,
-    pub kind: String,
-    pub value: String,
-}
-
-impl Ref {
-    pub fn new(source: &str, kind: &str, value: &str) -> Self {
-        Self { source: source.to_string(), kind: kind.to_string(), value: value.to_string() }
-    }
-}
+pub use super::identity::Ref;
 
 /// What is kept beside a reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,12 +429,58 @@ fn subjects_in(db: &Connection, r: &Ref) -> Result<Vec<String>> {
 }
 
 impl Catalogue {
-    /// A record by its id for life, as it stands: had or not, retired or not. None: no such id. Blocking.
+    /// A record by its id for life: had or not, retired or not, and where it was merged into another (G3), that one, so an id
+    /// any page or list keeps answers for good. None: no such id. Blocking.
     pub fn record(&self, id: i64) -> Result<Option<RecordRow>> {
+        let read = |db: &Connection| -> Result<Option<RecordRow>> {
+            Ok(match merged_end(db, id)? {
+                Some(id) => record_in(db, id)?,
+                None => None,
+            })
+        };
         match self.reader() {
-            Some(c) => record_in(&c, id),
-            None => record_in(&self.db(), id),
+            Some(c) => read(&c),
+            None => read(&self.db()),
         }
+    }
+
+    /// Records a list names, kept (C47): each found by its references first, else by `identity::same_listing` among the
+    /// records of its name, else a record not had of its own, credited to `artist` where the list is one artist's. Its
+    /// references are kept, found `how`. Their ids, in the list's order. Blocking.
+    #[cfg_attr(not(test), allow(dead_code))] // an artist's and a label's listings as they are read (C53a, C56)
+    pub fn keep_listing(&self, artist: Option<i64>, list: &[Listing], how: &str) -> Result<Vec<i64>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let kept = keep_listing_in(&tx, artist, list, how, now())?;
+        tx.commit()?;
+        Ok(kept)
+    }
+
+    /// Two records found to be one (G3, OQ13 (a)): the one with copies keeps its id, else the older; the other answers through
+    /// `merged_into` for good. The id kept. Blocking.
+    #[cfg_attr(not(test), allow(dead_code))] // a tracklist read that shows two records are one (C51a)
+    pub fn merge(&self, a: i64, b: i64) -> Result<i64> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let (a, b) = (merged_end(&tx, a)?.context("no such record")?, merged_end(&tx, b)?.context("no such record")?);
+        let into = match (had(&tx, a)?, had(&tx, b)?) {
+            (true, false) => a,
+            (false, true) => b,
+            _ => a.min(b),
+        };
+        merge_records_in(&tx, if into == a { b } else { a }, into)?;
+        tx.commit()?;
+        Ok(into)
+    }
+
+    /// `from` merged into `into`, as `merge` decides and does it (`merge_records_in`). Blocking.
+    #[cfg_attr(not(test), allow(dead_code))] // a tracklist read that shows two records are one (C51a)
+    pub fn merge_records(&self, from: i64, into: i64) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        merge_records_in(&tx, from, into)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// What a subject is known by at each source, by source and kind. Blocking.
@@ -799,6 +987,79 @@ mod tests {
         assert_eq!(cat.subject_of(&page).unwrap(), [other.clone()]);
         assert!(how(&tide).is_empty(), "the other let go of it");
         assert!(!cat.set_reference(&tide, &page, "files").unwrap(), "and a file's tag does not take it back");
+    }
+
+    /// G3, OQ13 (a): two records found to be one; the one with copies keeps its id and all the other knew, and the other's id
+    /// answers by it for good, through a chain of merges too. Two with copies are one only by their files.
+    #[test]
+    fn a_merged_record_answers_by_its_new_id() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (had, not_had) = (cat.record_for_tests("Tide Tables", 2), cat.record_for_tests("Tide Tables", 0));
+        let (had_id, not_had_id) = (ids::record(had), ids::record(not_had));
+        let (group, release) = (Ref::new("musicbrainz", "release-group", "g1"), Ref::new("musicbrainz", "release", "r1"));
+        let page = Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/tide-tables");
+        cat.set_reference(&had_id, &group, "files").unwrap();
+        cat.set_reference(&had_id, &release, "files").unwrap();
+        cat.set_reference(&not_had_id, &group, "link").unwrap();
+        cat.set_reference(&not_had_id, &page, "search").unwrap();
+        cat.confirm_reference(&not_had_id, "bandcamp").unwrap();
+        let list = [RefTrack { disc: 1, position: 1, title: "Slack Water".into(), length_ms: None, recording: None }];
+        cat.set_reference_tracks(not_had, "bandcamp", &list).unwrap();
+        cat.set_counting(not_had, Some("bandcamp"), true).unwrap();
+        cat.set_checked_by_hand(not_had, true).unwrap();
+        cat.db().execute("UPDATE records SET released = '2012-03-05', genres = 'ambient' WHERE id = ?1", [not_had]).unwrap();
+
+        assert_eq!(cat.merge(not_had, had).unwrap(), had, "the one with copies keeps its id, whichever is named first");
+        let row = cat.record(not_had).unwrap().unwrap();
+        assert_eq!(row.id, had, "the old id answers by the new");
+        assert_eq!((row.counting.as_deref(), row.counted_by_hand, row.checked_by_hand), (Some("bandcamp"), true, true), "its choices came along");
+        assert_eq!((row.released.as_deref(), row.genres.as_slice()), (Some("2012-03-05"), &["ambient".to_string()][..]), "and what the record lacked");
+        assert_eq!(cat.subject_of(&page).unwrap(), [had_id.clone()]);
+        assert!(cat.references_of(&not_had_id).unwrap().is_empty());
+        let how = cat.references_of(&had_id).unwrap().into_iter().map(|(r, row)| (r.kind, row.how, row.confirmed)).collect::<Vec<_>>();
+        let by = |kind: &str, how: &str, confirmed: bool| (kind.to_string(), how.to_string(), confirmed);
+        assert_eq!(how, [by("album", "search", true), by("release", "files", false), by("release-group", "files", false)], "one group, kept the surer way");
+        assert_eq!(cat.reference_tracks(had).unwrap(), [("bandcamp".to_string(), list.to_vec())]);
+
+        let third = cat.record_for_tests("Tide Tables", 0);
+        assert_eq!(cat.merge(third, not_had).unwrap(), had, "merged into one that was merged: into where it went");
+        assert_eq!(cat.record(third).unwrap().map(|r| r.id), Some(had));
+        let fourth = cat.record_for_tests("Tide Tables", 0);
+        cat.merge_records(fourth, not_had).unwrap();
+        assert_eq!(cat.record(fourth).unwrap().map(|r| r.id), Some(had), "merged by hand into a merged one: the chain is followed");
+        let other = cat.record_for_tests("Other", 1);
+        assert!(cat.merge(had, other).is_err(), "two with copies");
+        assert_eq!(cat.record(had).unwrap().map(|r| r.id), Some(had));
+    }
+
+    /// A list's records found by their references, else by a link of the record's name, else records not had of their own,
+    /// credited to the list's artist; read again, the same ones (C47, C48b).
+    #[test]
+    fn a_listing_finds_its_record_by_a_link_and_is_a_record_not_had_otherwise() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let tide = cat.record_for_tests("Tide Tables", 2);
+        cat.set_reference(&ids::record(tide), &Ref::new("discogs", "release", "2000001"), "search").unwrap();
+        let artist = cat.artist_for("Glass Harbour").unwrap();
+        let listing = |title: &str, group: &str, says: &[Ref]| Listing {
+            title: title.into(),
+            artist: "Glass Harbour".into(),
+            year: Some(2016),
+            kind: Some("album".into()),
+            released: Some("2016-09-30".into()),
+            genres: vec!["ambient".into()],
+            refs: vec![Ref::new("musicbrainz", "release-group", group)],
+            says: says.to_vec(),
+            ..Listing::default()
+        };
+        let list = [listing("Tide Tables", "g1", &[Ref::new("discogs", "release", "2000001")]), listing("Deep Water", "g2", &[]), listing("Tide Tables", "g3", &[])];
+        let kept = cat.keep_listing(Some(artist), &list, "link").unwrap();
+        assert_eq!(kept[0], tide, "MusicBrainz's link to the record's Discogs release");
+        assert!(kept[1] != tide && kept[2] != tide && kept[1] != kept[2], "a name alone is no link: Tide Tables of another group is a record of its own");
+        let deep = cat.record(kept[1]).unwrap().unwrap();
+        assert_eq!((deep.title.as_str(), deep.year, deep.kind.as_deref(), deep.had), ("Deep Water", Some(2016), Some("album"), false));
+        assert_eq!(cat.record_artists(kept[1]).unwrap(), [artist]);
+        assert!(cat.references_of(&ids::record(tide)).unwrap().iter().any(|(r, row)| r.value == "g1" && row.how == "link"), "the record found learns its group");
+        assert_eq!(cat.keep_listing(Some(artist), &list, "link").unwrap(), kept, "read again: the same records");
     }
 
     /// Each source's list kept by record, and the count's source: worked out until chosen by hand, then the hand's.
