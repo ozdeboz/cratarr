@@ -230,7 +230,7 @@
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>
     {#if requests.error && !view}
-      <Notice text={requests.error} onretry={loadRequests} />
+      <Notice text={requests.error} onretry={loadRequests} away="Requests need Cratarr." />
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
@@ -240,7 +240,7 @@
       </Group>
     {:else if list === 'soulseek'}
       {#if soulseek.error && !soulseek.view}
-        <Notice text={soulseek.error} onretry={loadSoulseek} />
+        <Notice text={soulseek.error} onretry={loadSoulseek} away="Soulseek needs Cratarr." />
       {:else if !soulseek.view}
         <PageLoading />
       {:else}
@@ -289,7 +289,7 @@
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetchers.includes('lidarr')}<PageLoading />{:else}<p class="note">Lidarr is not connected: {#if me.admin}<a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>{:else}an administrator can connect it{/if}.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} away="Lidarr is asked through Cratarr." />{:else if view.fetchers.includes('lidarr')}<PageLoading />{:else}<p class="note">Lidarr is not connected: {#if me.admin}<a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>{:else}an administrator can connect it{/if}.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}

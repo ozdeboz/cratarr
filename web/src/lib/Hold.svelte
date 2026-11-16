@@ -9,7 +9,7 @@
   import { mount, setContext, tick, unmount, untrack, type Snippet } from 'svelte';
   import { HOLD, type HoldPlace } from './holdPlace.svelte';
   import { LOADER_AFTER_MS, loaderSizeIn } from './loader';
-  import MarkLoader from './MarkLoader.svelte';
+  import Asking from './Asking.svelte';
 
   // `seeThrough`: opening, the place is not there at all until its content is ready (the phone's panel over the page):
   // what was tapped shows the loading sign meanwhile (lib/panel `opening`); after HOLD_MAX_MS the place, empty, with the
@@ -71,7 +71,8 @@
       if (z !== 'auto') at.style.zIndex = z;
       frame.after(at);
       signAt = at;
-      sign = mount(MarkLoader, { target: at, props: { size: loaderSizeIn(frame) } });
+      // The one loader, which says what it waits for (lib/waiting): a busy Cratarr, the library on this device opening.
+      sign = mount(Asking, { target: at, props: { size: loaderSizeIn(frame), now: true, room: 'given' } });
     }, LOADER_AFTER_MS);
   }
 

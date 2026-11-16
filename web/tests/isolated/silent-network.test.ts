@@ -8,6 +8,7 @@ import '../harness/pageGlobals.ts';
 
 const { getHomeNew, UNREACHED, watch } = await import('../../src/lib/api.ts');
 const { reach, reached } = await import('../../src/lib/reach.svelte.ts');
+const { cratarrBusy, waitingFor } = await import('../../src/lib/waiting.svelte.ts');
 
 watch.afterMs = 30;
 watch.probeMs = 30;
@@ -49,4 +50,24 @@ test('an answer in time asks nothing more', async () => {
   const asked = network('silent', 5);
   await getHomeNew();
   assert.deepEqual(asked, ['/api/home/new']);
+});
+
+test('while a busy Cratarr is waited for, every loader says so in its line, and no longer than it waits', async () => {
+  reached();
+  network('ok', 150);
+  assert.equal(waitingFor(), null, 'an answer on its way says nothing more');
+  const home = getHomeNew();
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(cratarrBusy.asks, 1);
+  assert.equal(waitingFor(), 'Waiting for Cratarr');
+  await home;
+  assert.equal(cratarrBusy.asks, 0);
+  assert.equal(waitingFor(), null);
+});
+
+test('a silent network is no busy Cratarr: its wait ends as out of reach, nothing left counted', async () => {
+  reached();
+  network('silent', null);
+  await assert.rejects(getHomeNew());
+  assert.equal(cratarrBusy.asks, 0);
 });

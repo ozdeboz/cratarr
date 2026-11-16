@@ -489,7 +489,7 @@
       <FileChanges thing={healthThing(panel.viewed)} />
     {:else if !p}
       <!-- Not found after a failed read is not "gone" (the owner, 2026-11-02: errors are never shown as nothing). -->
-      {#if health.reportError || health.error}<Notice text={health.reportError ?? health.error ?? ''} onretry={loadHealth} />{:else if health.loaded}<p class="muted">This is no longer a problem.</p>{/if}
+      {#if health.reportError || health.error}<Notice text={health.reportError ?? health.error ?? ''} onretry={loadHealth} away="Health needs Cratarr." />{:else if health.loaded}<p class="muted">This is no longer a problem.</p>{/if}
     {:else}
       <!-- How it stands, and what it means behind its (i). -->
       <p class="state" class:urgent={p.urgent}>

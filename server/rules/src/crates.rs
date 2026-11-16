@@ -139,9 +139,10 @@ pub enum Value {
         count: usize,
     },
     /// A `Like` or a `Moment` worked out (`resolved`): the lines of those tracks, and the same closest first
-    /// (`closest_first`). Never kept.
+    /// (`closest_first`); a Like's `alike`, how alike each of `ranked` is (0 to 100, the curve's scale), none where not
+    /// known. Never kept.
     #[serde(skip)]
-    Within { lines: Arc<FxHashSet<String>>, ranked: Arc<Vec<String>> },
+    Within { lines: Arc<FxHashSet<String>>, ranked: Arc<Vec<String>>, alike: Arc<Vec<f32>> },
 }
 
 /// How a Sounds like reads several seeds (0.13, decision 0088): blended into one sound, what is like all of them
@@ -197,7 +198,7 @@ pub const fn home_crate(id: &str) -> bool {
 
 /// A crate of exactly these lines, in this order (a Home shelf's).
 pub fn lines_crate(id: &str, name: &str, lines: Vec<String>) -> CrateDef {
-    let within = Condition::new("like", false, Value::Within { lines: Arc::new(lines.iter().cloned().collect()), ranked: Arc::new(lines) });
+    let within = Condition::new("like", false, Value::Within { lines: Arc::new(lines.iter().cloned().collect()), ranked: Arc::new(lines), alike: Arc::default() });
     CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![within] }
 }
 
@@ -1557,11 +1558,13 @@ pub fn resolved_in(conditions: &[Condition], alike: &Alike, among: &[&Facts], by
                     lean_unlisted(&mut ranked, |l| listed.contains(l));
                     ranked.truncate(*count);
                 }
-                Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) }, ..c.clone() }
+                let how: HashMap<&str, f64> = picks.iter().map(|(f, x)| (f.rel.as_str(), *x)).collect();
+                let alike: Vec<f32> = ranked.iter().map(|l| how.get(l.as_str()).copied().unwrap_or(0.0) as f32).collect();
+                Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked), alike: Arc::new(alike) }, ..c.clone() }
             }
             Value::Moment { target, count } => {
                 let ranked: Vec<String> = nearest(among, &Scales::of(among), target).into_iter().take(*count).map(|(f, _)| f.rel.clone()).collect();
-                Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) }, ..c.clone() }
+                Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked), alike: Arc::default() }, ..c.clone() }
             }
             _ => c.clone(),
         })
@@ -2299,9 +2302,13 @@ impl<'a, A: Fn() -> &'a Alike> View<'a, A> {
 
     /// The crate's lines, newest first; a Sounds like crate's closest first (`closest_first`).
     pub fn select(&self, conditions: &[Condition], every: bool) -> Vec<String> {
-        let resolved = self.resolved(conditions, every);
-        let mut lines: Vec<String> = select(self.files_of(every), &resolved, &self.world).into_iter().map(str::to_string).collect();
-        closest_first(&mut lines, &resolved);
+        self.select_in(&self.resolved(conditions, every), every)
+    }
+
+    /// `select` of conditions already worked out (`resolved`), for an order that reads them too (`most_alike`).
+    pub fn select_in(&self, resolved: &[Condition], every: bool) -> Vec<String> {
+        let mut lines: Vec<String> = select(self.files_of(every), resolved, &self.world).into_iter().map(str::to_string).collect();
+        closest_first(&mut lines, resolved);
         lines
     }
 
@@ -2309,12 +2316,16 @@ impl<'a, A: Fn() -> &'a Alike> View<'a, A> {
     /// with every cause lifted, and with `explain` what keeps each track out, all read from the one judgement
     /// (`Verdicts`): `causes` among the conditions, and `off`, the libraries switched off that hold these files.
     pub fn select_saying(&self, conditions: &[Condition], causes: &[Cause], off: &[String], explain: bool) -> (Vec<String>, Vec<Reason>, usize, Option<Judged>) {
-        let resolved = self.resolved(conditions, false);
+        self.select_saying_in(&self.resolved(conditions, false), conditions, causes, off, explain)
+    }
+
+    /// `select_saying` with `conditions` already worked out (`resolved`), for an order that reads them too (`most_alike`).
+    pub fn select_saying_in(&self, resolved: &[Condition], conditions: &[Condition], causes: &[Cause], off: &[String], explain: bool) -> (Vec<String>, Vec<Reason>, usize, Option<Judged>) {
         let ranked: Vec<bool> = conditions.iter().map(|c| c.value.ranks()).collect();
         let at: Vec<std::ops::Range<usize>> = causes.iter().map(|c| c.at.clone()).collect();
-        let (lines, verdicts) = select_saying(self.files.iter(), |f| !on_for(&f.folders, self.switched_off), &resolved, &ranked, &at, explain, &self.world);
+        let (lines, verdicts) = select_saying(self.files.iter(), |f| !on_for(&f.folders, self.switched_off), resolved, &ranked, &at, explain, &self.world);
         let mut lines: Vec<String> = lines.into_iter().map(str::to_string).collect();
-        closest_first(&mut lines, &resolved);
+        closest_first(&mut lines, resolved);
         // The causes as the verdicts' bits number them: the libraries switched off last, when any of this source's is.
         let mut named: Vec<BlockCause> = causes.iter().map(|c| BlockCause { kind: c.kind, key: c.key.clone(), label: c.label.clone() }).collect();
         if !off.is_empty() {
@@ -2370,6 +2381,34 @@ pub fn shown_saying(own: &[Condition], left: &[String], tracks: Favourites, albu
         add(Why::Filter, Some(c.axis.clone()), axis_label(&c.axis).unwrap_or(c.axis.as_str()), vec![c.clone()]);
     }
     (shown, causes)
+}
+
+/// Whether a crate's conditions have a Sounds like that ranks what it holds (its on, not left out): its Best match is Most alike.
+pub fn ranks_alike(conditions: &[Condition]) -> bool {
+    conditions.iter().any(|c| c.enabled && !c.not && matches!(c.value, Value::Like { .. }))
+}
+
+/// Most alike (0.17; the owner, 2026-11-08: "the user would expect matching here to mean matching the similarity condition"): a
+/// crate with a Sounds like, its lines closest to that sound first, by the whole percent its curve shows; the taste (`fit`, as
+/// `by_fit` reads it) only among lines as alike. `resolved`: the crate's conditions worked out (`View::resolved`); none ranked
+/// there, Best match as it was, by the taste alone. `down` turns it all round.
+pub fn most_alike(mut lines: Vec<String>, resolved: &[Condition], fit: impl Fn(&str) -> Option<f64>, down: bool) -> Vec<String> {
+    let alike = resolved.iter().find_map(|c| match &c.value {
+        Value::Within { ranked, alike, .. } if c.enabled && !c.not && alike.len() == ranked.len() && !alike.is_empty() => Some((ranked, alike)),
+        _ => None,
+    });
+    let Some((ranked, alike)) = alike else { return by_fit(lines, fit, down) };
+    let band: HashMap<&str, i32> = ranked.iter().zip(alike.iter()).map(|(l, x)| (l.as_str(), x.floor() as i32)).collect();
+    let fits: HashMap<String, f64> = lines.iter().filter_map(|l| Some((l.clone(), fit(l)?))).collect();
+    let key = |l: &String| (band.get(l.as_str()).copied().unwrap_or(i32::MIN), fits.get(l).copied().unwrap_or(f64::NEG_INFINITY));
+    lines.sort_by(|a, b| {
+        let (ka, kb) = (key(a), key(b));
+        kb.0.cmp(&ka.0).then(kb.1.total_cmp(&ka.1))
+    });
+    if down {
+        lines.reverse();
+    }
+    lines
 }
 
 /// Lines by how well each fits the taste (Best match, decision 0094), the best first; those it knows nothing of after, in their own
@@ -2549,9 +2588,28 @@ mod tests {
 
 
     #[test]
+    fn most_alike_goes_by_the_whole_percent_and_the_taste_only_among_those_as_alike() {
+        let ranked: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+        let alike = vec![90.4, 63.9, 63.2, 40.0];
+        let like = Condition::new("like", false, Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked), alike: Arc::new(alike) });
+        let fit = |l: &str| match l {
+            "a" => Some(0.1),
+            "b" => Some(0.2),
+            "c" => Some(0.9),
+            "d" => Some(1.0),
+            _ => None,
+        };
+        let lines: Vec<String> = ["d", "c", "b", "a"].map(String::from).to_vec();
+        assert_eq!(most_alike(lines.clone(), std::slice::from_ref(&like), fit, false), ["a", "c", "b", "d"], "b and c both 63 %: the taste between them");
+        assert_eq!(most_alike(lines.clone(), std::slice::from_ref(&like), fit, true), ["d", "b", "c", "a"]);
+        assert_eq!(most_alike(lines.clone(), &[], fit, false), ["d", "c", "b", "a"], "no Sounds like: Best match, the taste alone");
+        assert_eq!(most_alike(lines, &[Condition { enabled: false, ..like }], fit, false), ["d", "c", "b", "a"], "one switched off ranks nothing");
+    }
+
+    #[test]
     fn a_sounds_like_crate_is_closest_first_as_made() {
         let ranked: Vec<String> = ["b", "c", "a"].map(String::from).to_vec();
-        let like = Condition::new("like", false, Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) });
+        let like = Condition::new("like", false, Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked), alike: Arc::default() });
         let mut lines: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
         closest_first(&mut lines, std::slice::from_ref(&like));
         assert_eq!(lines, ["b", "c", "a"]);

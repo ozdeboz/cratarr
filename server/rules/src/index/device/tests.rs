@@ -103,6 +103,18 @@ fn best_match_goes_by_the_servers_last_fits_those_it_knows_nothing_of_after() {
 }
 
 #[test]
+fn a_sounds_like_opens_most_alike_the_taste_only_among_those_as_alike() {
+    // The taste would put six first and two last; how alike they are goes before it.
+    let marks = [Mark { track: 6, fit: Some(0.9), ..Mark::default() }, Mark { track: 2, fit: Some(0.1), ..Mark::default() }];
+    let mut d = device_of(Own::default(), &marks);
+    let closest = tracks(&mut d, "like:tr-1@10", own_order());
+    assert_eq!(tracks(&mut d, "like:tr-1@10", json!({})), closest, "closest first, as its own order");
+    let mut down = closest.clone();
+    down.reverse();
+    assert_eq!(tracks(&mut d, "like:tr-1@10", json!({ "down": true })), down);
+}
+
+#[test]
 fn a_list_orders_by_a_field_as_the_servers_does() {
     let mut d = device();
     assert_eq!(tracks(&mut d, "dub", json!({ "order": "title" })), [1, 6, 3, 2], "two 9 before two 10: numbers by what they count");
@@ -497,6 +509,46 @@ fn marks_that_say_nothing_of_the_rest_are_an_account_with_nothing_set() {
 }
 
 #[test]
+fn the_playlists_and_their_rows_are_answered_here_as_the_server_gives_them() {
+    // Track 99 is no track this device holds: a library it cannot see.
+    let list = List { id: "pl-1".into(), name: "Mix".into(), tracks: vec![3, 99, 1] };
+    let mut d = device_of(Own { crates: vec![crate_of("dub", dub())], lists: vec![list], ..Own::default() }, &[]);
+    let lists = ask(&mut d, json!({ "ask": "playlists" }));
+    assert_eq!(lists, json!([{ "id": "pl-1", "name": "Mix", "member": false, "count": 2, "dead": 0, "links": [], "spoken": [], "mine": true }]));
+    let rows = ask(&mut d, json!({ "ask": "playlist_rows", "id": "pl-1" }));
+    assert_eq!(rows["source"], "cratarr");
+    let ids: Vec<&str> = rows["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["tr-3", "tr-1"], "in its order, what this device holds");
+    assert_eq!(rows["rows"][0]["album"], "Second");
+    assert!(d.ask(&json!({ "ask": "playlist_rows", "id": "pl-9" }).to_string()).is_none(), "one it does not hold: nothing to say");
+    let mut none_held = device_of(Own::default(), &[]);
+    assert!(none_held.ask(&json!({ "ask": "playlists" }).to_string()).is_none(), "nothing of the account held: no list, rather than an empty one");
+}
+
+#[test]
+fn made_ready_as_it_opens_the_first_sounds_like_and_pick_make_nothing() {
+    let mut d = device();
+    assert!(d.alike.get().is_none() && d.radio.get().is_none(), "nothing made at open itself");
+    assert_eq!(d.ask(r#"{"ask":"warm"}"#).as_deref(), Some("{}"));
+    assert!(d.alike.get().is_some(), "the similarity");
+    assert!(d.radio.get().is_some(), "Radio's index");
+    let made = d.radio.get().map(|r| Arc::as_ptr(&r.like));
+    pick(&mut d, json!({ "mode": "similar", "last": "tr-1", "count": 1 }));
+    assert_eq!(d.radio.get().map(|r| Arc::as_ptr(&r.like)), made, "the one made, not another");
+}
+
+#[test]
+fn radios_index_made_at_once_is_the_one_made_in_two_steps() {
+    let index = Index::build(1, &rows()).unwrap();
+    let d = device();
+    let at_once = index.radio(&d.facts, &HashMap::new());
+    let songs = at_once.songs.iter().map(|s| crate::radio::Song { like: crate::similarity::Track { artists: s.like.artists.clone(), ..crate::similarity::Track::default() }, ..s.clone() }).collect();
+    let in_two = crate::radio::Index::new(songs).with_facts(&d.facts);
+    assert_eq!(format!("{:?}", at_once.songs), format!("{:?}", in_two.songs));
+    assert_eq!(format!("{:?}", at_once.like), format!("{:?}", in_two.like));
+}
+
+#[test]
 fn one_copy_of_a_sound_serves_the_crates_and_radio() {
     let mut d = device();
     tracks(&mut d, "like:tr-1", own_order());
@@ -533,11 +585,16 @@ fn measured_device_answers_at_34_000_tracks() {
     let unsent: Vec<Json> = tracks.iter().step_by(700).map(|t| json!({ "track": ids::song(*t), "at": NOW * 1000, "counts": true })).collect();
     let plays = json!({ "ask": "plays", "plays": unsent }).to_string();
     let first_pick = json!({ "ask": "pick", "mode": "radio", "draw": 7, "seed": [seeds[1]], "exclude": [seeds[1]], "last": seeds[1], "count": 5, "now": NOW });
-    for (what, asked) in [("the Crates page", json!({ "ask": "crates", "now": NOW })), ("Pick: radio", first_pick)] {
+    let first_like = json!({ "ask": "rows", "id": format!("like:{}@200", seeds[0]), "offset": 0, "limit": 100, "now": NOW });
+    for (what, asked) in [("the Crates page", json!({ "ask": "crates", "now": NOW })), ("Pick: radio", first_pick), ("Sounds like, 1 seed", first_like)] {
         let asked = asked.to_string();
         let at = Instant::now();
         let mut d = Device::new(index.clone(), Some(&sounds), &marks);
         let opened = at.elapsed();
+        // As the app and the page make it ready as it opens (0.17), beside the ask that opened it.
+        let at = Instant::now();
+        d.ask(r#"{"ask":"warm"}"#).unwrap();
+        let ready = at.elapsed();
         let at = Instant::now();
         d.ask(&plays).unwrap();
         let told = at.elapsed();
@@ -547,7 +604,7 @@ fn measured_device_answers_at_34_000_tracks() {
         let at = Instant::now();
         d.ask(&plays).unwrap();
         d.ask(&asked).unwrap();
-        println!("As the app asks, {what}: opened {opened:?}, plays told {told:?}, first ask {first:?}, then plays and ask {:?}", at.elapsed());
+        println!("As the app asks, {what}: opened {opened:?}, made ready {ready:?}, plays told {told:?}, first ask {first:?}, then plays and ask {:?}", at.elapsed());
     }
     let at = Instant::now();
     let mut d = Device::new(index, Some(&sounds), &marks);

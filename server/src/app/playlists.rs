@@ -1187,6 +1187,7 @@ mod undo_tests {
         assert!(said(s.crate_save(None, "Years", years.clone()).await.err()).contains("Year"));
         assert!(said(s.crate_page(&years, None, 0, 50, &CrateLook::default()).await.err()).contains("Year"));
         assert!(said(s.crate_lines_in_order(&years, None, &CrateLook::default()).await.err()).contains("Year"), "what Play plays");
+        assert!(said(s.crate_profile(&years, None, &[]).await.err()).contains("Year"), "its profile, asked while it is made");
         let curve = s.like_curve(&["tr-1".to_string()], &[], crates::LikeMode::Either, None, &[], false, None, &years).await;
         assert!(said(curve.err()).contains("Year"));
         let jazz_funk = vec![crates::Condition::new("genre", false, crates::Value::AllOf { values: vec!["Jazz".into(), "Funk".into()] })];
@@ -2953,6 +2954,16 @@ impl PlaylistService {
         Ok((lib.source, lines))
     }
 
+    /// The profile of what these conditions select from the libraries not in `without` (0.17, the owner: a crate being made or
+    /// changed shows its profile only when asked, folded until its pill opens it), as a saved crate's is counted (`filter`).
+    pub async fn crate_profile(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<crates::Profile, ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want, without).await?;
+        let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
+        let mine: Vec<&crates::Facts> = lib.files().filter(|f| chosen.contains(f.rel.as_str())).collect();
+        let library: Vec<&crates::Facts> = lib.files().collect();
+        Ok(crates::profile(&mine, &library))
+    }
+
     /// The library a crate is worked out from, and its lines.
     async fn crate_selection(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<(CrateLibrary, Vec<String>), ToggleError> {
         let lib = self.crate_library_for(conditions, want, without).await?;
@@ -3512,7 +3523,9 @@ impl PlaylistService {
             };
             let alike = lib.alike();
             let song = |line: &str| Some(crate::serve::ids::song(lib.files[alike.place_of_line(line)?].track?));
-            Arc::new(by_fit(lines, |l| fit.get(&song(l)?).copied(), look.down))
+            let fit = |l: &str| fit.get(&song(l)?).copied();
+            // A Sounds like's crate: Most alike, its closeness first and the taste among those as alike (0.17).
+            if crates::ranks_alike(conditions) { Arc::new(crates::most_alike(lines, &lib.resolved(conditions), fit, look.down)) } else { Arc::new(by_fit(lines, fit, look.down)) }
         } else {
             let mut rows = self.rows_of(lines, &lib.source).await?;
             self.with_plays_and_added(&mut rows, lib).await;

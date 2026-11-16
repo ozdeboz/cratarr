@@ -2565,6 +2565,9 @@ struct Preview {
     /// Its first records' covers asked too (the search crate card, 0.13): how many, at most `CRATE_COVERS`.
     #[serde(default)]
     covers: usize,
+    /// Its profile asked too (0.17: a crate being made, its profile's pill opened).
+    #[serde(default)]
+    profile: bool,
 }
 
 /// The preview's answer: the page, and the names of the library ids its conditions hold (0.13, decision 0088), as the
@@ -2576,6 +2579,8 @@ struct Previewed {
     names: std::collections::BTreeMap<String, crate::crates::Named>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     covers: Vec<crate::app::home::WeekCover>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<crate::crates::Profile>,
 }
 
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, RawQuery(raw): RawQuery, Json(p): Json<Preview>) -> Result<Response, ApiError> {
@@ -2585,7 +2590,8 @@ async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, RawQu
     let names = app.playlists.condition_names(&p.conditions).await?;
     let n = p.covers.min(crate::app::home::CRATE_COVERS);
     let covers = if n > 0 { app.crate_covers(&p.conditions, q.source.as_deref(), &look, n).await? } else { Vec::new() };
-    Ok(Json(Previewed { page, names, covers }).into_response())
+    let profile = if p.profile { Some(app.playlists.crate_profile(&p.conditions, q.source.as_deref(), &look.without).await?) } else { None };
+    Ok(Json(Previewed { page, names, covers, profile }).into_response())
 }
 
 /// The Filter sheet (decision 0061): which of the list in view's items pass these conditions, how many of how many,

@@ -71,7 +71,7 @@
 </script>
 
 {#if error}
-  <Notice text={error} onretry={() => readAgain++} />
+  <Notice text={error} onretry={() => readAgain++} away="Health needs Cratarr." />
 {:else if lines === null}
   <p class="muted">…</p>
 {:else if !lines.length}
@@ -90,7 +90,7 @@
             <button type="submit" disabled={m.busy}>Search</button>
           </form>
           {#if m.error}
-            <Notice text={m.error} onretry={() => search(m)} />
+            <Notice text={m.error} onretry={() => search(m)} away="" />
           {:else if m.found}
             {#if !m.found.length}
               <p class="muted">Nothing found.</p>

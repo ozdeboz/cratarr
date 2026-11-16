@@ -108,9 +108,11 @@ const sameOrigin = (url) => {
 /** A request of the page's, sent on as it came (its body as it comes; the session's cookies to Cratarr alone, none to
  *  another site), the answer streamed back. A redirect is handed back as one, so the page follows it itself and its
  *  address says where it went (the sign-in); `net.fetch` follows it here instead, and its manual mode only refuses it.
- *  An answer the page lets go of before its end (a closed event stream, a seek in a stream) ends the request too. */
-function sendOn(req) {
+ *  An answer the page lets go of before its end (a closed event stream, a seek in a stream) ends the request too, and
+ *  so does `signal` before the answer begins (page.js: Cratarr did not answer in time). */
+function sendOn(req, signal) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
     const r = net.request({
       method: req.method,
       url: req.url,
@@ -126,11 +128,19 @@ function sendOn(req) {
       r.setHeader('Sec-Fetch-Mode', 'navigate');
       r.setHeader('Sec-Fetch-Dest', 'document');
     }
+    const letGo = () => {
+      r.abort();
+      reject(signal.reason);
+    };
+    signal?.addEventListener('abort', letGo, { once: true });
+    const begun = () => signal?.removeEventListener('abort', letGo);
     r.on('redirect', (status, _method, url) => {
+      begun();
       r.abort();
       resolve(new Response(null, { status, headers: { location: url } }));
     });
     r.on('response', (res) => {
+      begun();
       let ended = false;
       res.on('end', () => (ended = true));
       res.on('close', () => ended || r.abort());
@@ -153,6 +163,7 @@ async function hearPage() {
     const answer = await net.fetch(`${origin}/api/health`, { bypassCustomProtocolHandlers: true, signal: AbortSignal.timeout(8_000) });
     const body = await answer.json();
     if (body?.status !== 'ok' || typeof body.playlists !== 'number') return;
+    page.reached();
     const web = buildOf(body.web);
     if (JSON.stringify(web) === JSON.stringify(told)) return;
     told = web;

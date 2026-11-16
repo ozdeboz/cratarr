@@ -3,7 +3,7 @@
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
 import { pageQueries, type Chip } from './quickCrate';
-import { ownOrderOf } from './crateRecords';
+import { bestMatchLabel, ownOrderOf, ranksAlike } from './crateRecords';
 import { keepWhile, type Kept } from './keepWhile.svelte';
 import { matches } from './search';
 import { isLossless } from './copiesRule';
@@ -98,10 +98,10 @@ export const CRATE_ORDERS: OrderField<CrateOrder>[] = [
  *  (lib/crateRecords ownOrderOf), after Best match, which a crate opens on (decision 0094, amended). Best match on every
  *  list of Cratarr's own (`taste`; decision 0094 #3): a crate's first, the others' after their own order. */
 export type TrackOrder = 'bestMatch' | 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
-export function trackOrders(kind: PanelKind, crate?: string | null, taste = true): OrderField<TrackOrder>[] {
+export function trackOrders(kind: PanelKind, crate?: string | null, taste = true, alike = ranksAlike(crate)): OrderField<TrackOrder>[] {
   const own = kind === 'crate' ? ownOrderOf(crate) : { playlist: 'Playlist order', album: 'Track number', artist: 'Newest album first' }[kind];
   return [
-    ...(kind === 'crate' ? [{ value: 'bestMatch' as const, label: 'Best match' }] : []),
+    ...(kind === 'crate' ? [{ value: 'bestMatch' as const, label: bestMatchLabel(alike) }] : []),
     ...(own ? [{ value: 'own' as const, label: own }] : []),
     ...(kind !== 'crate' && taste ? [{ value: 'bestMatch' as const, label: 'Best match' }] : []),
     { value: 'title', label: 'Title' },

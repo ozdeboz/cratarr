@@ -49,7 +49,7 @@
   <button type="submit" disabled={busy}>Search</button>
 </form>
 {#if error}
-  <Notice text={error} onretry={search} />
+  <Notice text={error} onretry={search} away="Health needs Cratarr." />
 {:else if found}
   {#if !found.length}
     <p class="muted">Nothing found.</p>

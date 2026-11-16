@@ -6,7 +6,8 @@
 // change at all as an error. Playlist taps made meanwhile wait (`queued`) and go to the track they were made on once
 // the server confirms it; otherwise they are dropped, never added to another track.
 import { untrack } from 'svelte';
-import { ApiError, getState, setMember, type NowPlaying, type State } from './api';
+import { ApiError, getState, readPlaylists, setMember, type NowPlaying, type State } from './api';
+import { readsNow } from './deviceIndex.svelte';
 import { prefs } from './prefs.svelte';
 import { outputNow } from './outputNow.svelte';
 import { canPlayHere, local } from './localPlayer.svelte';
@@ -162,6 +163,16 @@ async function flush(view: State) {
 /** Ask the server now (pages call it after an action that changed playlists; the shell's poll while the live channel
  *  is down). */
 export async function refresh() {
+  // Reads from this device (Cratarr out of reach, lib/deviceIndex): its playlists as it holds them, the rest as it was; nothing plays
+  // on a Cratarr player it cannot reach (0.17, the owner: every page answers from the device where it can).
+  if (readsNow().from === 'device') {
+    const playlists = await readPlaylists(prefs.source || undefined).catch(() => null);
+    if (playlists) {
+      live.view = { now_playing: live.view?.now_playing ?? null, sources: live.view?.sources ?? [], playlists };
+      live.error = null;
+      return;
+    }
+  }
   try {
     take(await getState(prefs.source || undefined));
     if (unreachable) {

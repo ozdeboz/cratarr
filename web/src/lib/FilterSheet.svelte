@@ -21,7 +21,7 @@
   import Icon from './Icon.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { keepWhile } from './keepWhile.svelte';
-  import MarkLoader from './MarkLoader.svelte';
+  import Asking from './Asking.svelte';
   import { prefs, type PanelKind } from './prefs.svelte';
   import { known, libraryShown, noChoice, remember, showLibrary } from './sources.svelte';
   import { toast } from './toast.svelte';
@@ -184,7 +184,7 @@
     <!-- While a changed filter's answer is on its way: the last count, at 300 ms dimmed with the loading sign after it
          (the owner, 2026-10-27: it took long with nothing saying so). -->
     {#if counted && filtersOn(list)}<p class="count" class:pending={countWait.loader} aria-busy={counted.pending}>
-        {counted.shown.toLocaleString()} of {counted.total.toLocaleString()}{#if countWait.loader}<MarkLoader size={18} />{/if}
+        {counted.shown.toLocaleString()} of {counted.total.toLocaleString()}{#if countWait.loader}<Asking size={18} now room="inline" />{/if}
       </p>{/if}
     {#if conditioned}
       <div>

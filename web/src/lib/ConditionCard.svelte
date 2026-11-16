@@ -28,7 +28,7 @@
   import TempoRange from './TempoRange.svelte';
   import { WORD_AXES, wordShown } from './facts';
   import { changed } from './filterRow';
-  import { countAt, minAt, SEEDS_LISTED, type Named } from './quickCrate';
+  import { countCut, cutAt, minAt, SEEDS_LISTED, type Named } from './quickCrate';
   import Seg from './Seg.svelte';
   import { search } from './api';
   import { layerIn, typesSaid } from './recordTypeRules';
@@ -283,9 +283,9 @@
           <div class="near">
             <LikeCurve
               curve={c}
-              count={l.min !== undefined ? countAt(c, l.min) : l.count}
+              count={l.min !== undefined ? cutAt(c, l.min, l.count) : l.count}
               onpreview={(n) => (dragged = n)}
-              onchange={(n) => change({ value: l.min !== undefined ? { ...l, min: minAt(c, n) } : { ...l, count: n } })}
+              onchange={(n) => change({ value: l.min !== undefined ? { ...l, min: minAt(c, n), count: countCut(c, n) } : { ...l, count: n } })}
             />
           </div>
         {/if}

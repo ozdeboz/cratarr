@@ -6,7 +6,8 @@
   import ChoiceRow from './ChoiceRow.svelte';
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
   import { KIND_NAMES, readWords, words } from '../words.svelte';
-  import { folderStatus, getCatalogue, type Fetcher, type FolderStatus, type CatalogueKind, type ServerLibrary } from '../api';
+  import { folderStatus, getCatalogue, getUsers, type Fetcher, type FolderStatus, type CatalogueKind, type ServerLibrary } from '../api';
+  import { ownMusicOff, withOwnMusic } from '../ownMusic';
   import MenuSheet from '../MenuSheet.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
@@ -71,6 +72,15 @@
   // The own-music folder (decision 0101 point 9): one setting, a subfolder per account in it, made at its first use.
   let browsingOwn = $state<Draft | null>(null);
   const ownOf = (d: Draft) => (typeof d.values.own_music === 'string' ? d.values.own_music.trim() : '');
+  // Own music per account, on or off (0.17, the owner): off, no Your music anywhere for it and no Add to Your music. Every account
+  // a switch, on unless switched off.
+  let accounts = $state<string[]>([]);
+  $effect(() => {
+    getUsers().then(
+      (u) => (accounts = u.filter((x) => x.active).map((x) => x.name)),
+      () => {},
+    );
+  });
 
   function addFolder(d: Draft, path: string) {
     const now = chosenOf(d);
@@ -344,7 +354,12 @@
     {#if d.kind === 'cratarr'}
       <Group title="Own music" more="Everyone's own music: a folder for each person lies in this one, made the first time something is added to it. Keep it outside the folders above.">
         <Item name="Folder" value={ownOf(d) || 'Not set'} onclick={() => (browsingOwn = d)} />
-        {#if ownOf(d)}<Item name="No own music" kind="danger" onclick={() => (d.values.own_music = '')} />{/if}
+        {#if ownOf(d)}
+          {#each accounts as a (a)}
+            <Item name={a} toggle={{ checked: !ownMusicOff(d.values).includes(a), onchange: (on) => (d.values.own_music_off = withOwnMusic(ownMusicOff(d.values), a, on)) }} />
+          {/each}
+          <Item name="No own music" kind="danger" onclick={() => (d.values.own_music = '')} />
+        {/if}
       </Group>
     {/if}
   {:else}

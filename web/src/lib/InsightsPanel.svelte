@@ -15,6 +15,7 @@
   import ContentControls from './ContentControls.svelte';
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
   import { insights, mapFull } from './insights.svelte';
+  import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import { backOne, INSIGHTS, isStep, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs, { type Level, type Siblings } from './Crumbs.svelte';
@@ -119,7 +120,7 @@
     {:else if view === 'map'}
       <InsightsMap />
     {:else if insights.error}
-      <p class="error" role="alert">{insights.error}</p>
+      <Notice text={insights.error} away="Insights need Cratarr." />
     {:else if !insights.data}
       <PageLoading />
     {:else}
@@ -166,10 +167,6 @@
     min-height: 0;
     overflow-y: auto;
     padding: 16px clamp(12px, 2vw, 24px) calc(var(--mini-h, 0px) + 16px);
-  }
-
-  .error {
-    color: var(--danger-ink);
   }
 
   /* Its glass handed to App's row on a phone (lib/glass): the view starts under it, its first heading where the page's

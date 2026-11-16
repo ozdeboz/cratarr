@@ -192,7 +192,7 @@
   </section>
 {:else if q && (shownGroups.length || asked || failed)}
   <section class="global" aria-label="Everywhere">
-    {#if failed}<Notice text={failed} onretry={searchAgain} />{/if}
+    {#if failed}<Notice text={failed} onretry={searchAgain} away="Search needs Cratarr." />{/if}
     {#if quickOn()}
       <SearchCrateCard {q} />
     {/if}

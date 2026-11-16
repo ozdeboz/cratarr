@@ -73,6 +73,11 @@ fi
 # --- a copy still running: quit, and back from the new files ---
 APP_EXE='/opt/${sanitizedProductName}/${executable}'
 say() { command -v logger >/dev/null 2>&1 && logger -t cratarr-desktop -- "$*"; return 0; }
+# Whether a process's command line holds an argument (`--type`, `--hidden`). Chromium writes its processes' command
+# lines again as one string, the arguments joined by spaces, so an argument is looked for anywhere in it: read as
+# separate entries (until 2026-11-08), a helper could be taken for the app and stopped before it, and `--hidden` was
+# never seen, so the app came back with its window shown (desktop/after-install.test.js).
+cmdline_has() { tr '\0' ' ' < "$1/cmdline" 2>/dev/null | grep -qE -- "(^| )$2( |=|\$)"; }
 # Whether any process of the app (its main or a helper) still runs for this user.
 running_for() {
   for p in /proc/[0-9]*; do
@@ -99,11 +104,11 @@ for proc in /proc/[0-9]*; do
     "$APP_EXE" | "$APP_EXE (deleted)") ;;
     *) continue ;;
   esac
-  tr '\0' '\n' < "$proc/cmdline" | grep -q '^--type=' && continue
+  cmdline_has "$proc" --type && continue
   pid=$(basename "$proc")
   owner=$(stat -c %U "$proc" 2>/dev/null) || continue
   hidden=''
-  tr '\0' '\n' < "$proc/cmdline" | grep -qx -- '--hidden' && hidden='--hidden'
+  cmdline_has "$proc" --hidden && hidden='--hidden'
   # What its session gave it (the display, the session bus), to start the new one there.
   envfile=$(mktemp) || continue
   tr '\0' '\n' < "$proc/environ" 2>/dev/null | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|XDG_DATA_DIRS|HOME|USER|LOGNAME|LANG|LANGUAGE|LC_ALL)=' > "$envfile"

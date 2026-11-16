@@ -77,8 +77,8 @@
 
 <main>
   <!-- Either answer failed: said in place, never "All good." (the owner, 2026-11-02: errors are never shown as nothing). -->
-  {#if health.reportError}<Notice text={health.reportError} onretry={loadHealth} />{/if}
-  {#if health.error && health.error !== health.reportError}<Notice text={health.error} onretry={loadHealth} />{/if}
+  {#if health.reportError}<Notice text={health.reportError} onretry={loadHealth} away="Health needs Cratarr." />{/if}
+  {#if health.error && health.error !== health.reportError}<Notice text={health.error} onretry={loadHealth} away={health.reportError ? '' : 'Health needs Cratarr.'} />{/if}
   {#if !health.loaded}
     <PageLoading />
   {:else if !list.length && !facts}

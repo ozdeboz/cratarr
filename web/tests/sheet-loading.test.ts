@@ -8,10 +8,11 @@ const lib = new URL('../src/lib/', import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, lib), 'utf8');
 const svelte = (readdirSync(lib, { recursive: true }) as string[]).map((f) => f.replaceAll('\\', '/')).filter((f) => f.endsWith('.svelte'));
 
-test('no sheet has a MarkLoader of its own but the sign beside the filter\'s count and a list\'s "more is coming"', () => {
-  const own = svelte.filter((f) => read(f).includes('<MenuSheet') && read(f).includes('<MarkLoader')).sort();
-  assert.deepEqual(own, ['FilterSheet.svelte', 'PlaylistView.svelte']);
-  assert.match(read('FilterSheet.svelte'), /\{#if countWait\.loader\}<MarkLoader size=\{18\} \/>/);
+test('every wait goes through Asking or PageLoading, which say what it waits for (lib/waiting): no MarkLoader of its own anywhere else', () => {
+  const own = svelte.filter((f) => /import MarkLoader/.test(read(f))).sort();
+  assert.deepEqual(own, ['Asking.svelte', 'PageLoading.svelte']);
+  assert.match(read('FilterSheet.svelte'), /\{#if countWait\.loader\}<Asking size=\{18\} now room="inline" \/>/, "the sign beside the filter's count");
+  for (const f of ['Asking.svelte', 'PageLoading.svelte']) assert.match(read(f), /waitingFor\(\)/, f);
 });
 
 test("a sheet's steps have none either", () => {

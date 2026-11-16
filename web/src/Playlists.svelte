@@ -212,7 +212,8 @@ ${prefs.playlistOrder}`,
 
   // The pill's last button (lib/ContentControls): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
-  // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change; one line says so.
+  // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change. Nothing says so while the list shows
+  // (0.17, the owner: not "New playlists need Cratarr"): those this device holds are browsed and played as ever.
   usePageAction(() =>
     server ? { icon: 'plus', label: 'New playlist', run: () => (naming = true) } : reach.away ? null : { icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) },
   );
@@ -272,10 +273,11 @@ ${prefs.playlistOrder}`,
   {:else}
   <!-- The search, size, favourites-only and New playlist are the pill's (lib/ContentControls), the order the list's header,
        what is ticked the select bar's (decided 2026-10-15/16). -->
+  <!-- Out of reach the list is this device's (lib/live, through the read door); where it holds none, one line, never "Cannot reach …
+       Try again" (0.17, the owner: one offline mode). Reached, a failure says so with Try again, as ever. -->
   {#if error}
-    <Notice text={error} onretry={refresh} />
+    <Notice text={error} onretry={refresh} away={view ? '' : 'Playlists need Cratarr.'} />
   {/if}
-  {#if reach.away}<p class="away">New playlists need Cratarr.</p>{/if}
 
   {#if error && !view}
     <!-- Not read: the Notice alone, never "No playlists match." under it (the owner, 2026-11-02). -->
@@ -286,7 +288,7 @@ ${prefs.playlistOrder}`,
     <Asking now={kept.loader} />
   {:else if listed.shows === 'failed'}
     <!-- None by name, the server's search failed: said so, never "No playlists match." (lib/search listShows). -->
-    <Notice text={deepOf.error() ?? "The playlists couldn't be searched."} onretry={deepOf.again} />
+    <Notice text={deepOf.error() ?? "The playlists couldn't be searched."} onretry={deepOf.again} away="Searching their tracks needs Cratarr." />
   {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
     {#if !pageView.none}<p class="empty">No playlists match.</p>{/if}
@@ -386,12 +388,6 @@ ${prefs.playlistOrder}`,
 {/if}
 
 <style>
-  .away {
-    margin: 0 0 8px;
-    color: var(--muted);
-    font-size: 13px;
-  }
-
   /* The page answers to its own width (beside the player or not), not the window's: a container. */
   main {
     position: relative;

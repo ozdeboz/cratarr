@@ -128,7 +128,8 @@ impl Active {
             used.extend(self.placement.libraries.iter().filter(|l| std::path::Path::new(&l.id).parent() == Some(own.as_path())).map(|l| Used {
                 id: l.id.clone(),
                 kind: LibraryKind::Own,
-                owner: std::path::Path::new(&l.id).file_name().map(|n| n.to_string_lossy().into_owned()),
+                // An account own music is switched off for owns none (0.17): no Your music anywhere.
+                owner: std::path::Path::new(&l.id).file_name().map(|n| n.to_string_lossy().into_owned()).filter(|a| self.cfg.own_music_on(a)),
             }));
         }
         used
@@ -151,7 +152,7 @@ impl Active {
 
     /// Where `account`'s own music lies, made or not, as a library's id; none without an own-music folder.
     pub(super) fn own_of(&self, account: &str) -> Option<String> {
-        self.cfg.own_music().map(|own| own.join(account).display().to_string())
+        self.cfg.own_music().filter(|_| self.cfg.own_music_on(account)).map(|own| own.join(account).display().to_string())
     }
 
     /// The libraries whose records are kept: the main ones and everyone's own music, out of a fetcher's reach.
@@ -640,6 +641,9 @@ impl Library {
         let live = self.live();
         let Some(at) = live.iter().position(|a| a.cfg.own_music().is_some()) else { return Ok(None) };
         let a = &live[at];
+        if !a.cfg.own_music_on(account) {
+            return Ok(None);
+        }
         let own = a.cfg.own_music().unwrap_or_default();
         anyhow::ensure!(placement::safe_relative(account) && !account.contains(['/', '\\']) && !account.starts_with('.'), "{account:?} can't name a folder");
         let folder = own.join(account);
@@ -901,6 +905,21 @@ mod switched_off_tests {
         assert_eq!(a.kept(), ["/music", "/own/ann"]);
         assert_eq!(a.quality_of("/own/ann"), Quality::Cd, "as a main library, without a setting of its own");
         assert_eq!(a.colour_of("/own/ann").as_deref(), Some(crate::settings::PALETTE[2]), "after Incoming's and the main libraries'");
+    }
+
+    /// 0.17, the owner: own music per account, on or off. Off, the account owns none: no Your music, nothing to add to.
+    #[test]
+    fn own_music_switched_off_for_an_account_is_none_of_theirs() {
+        let placed = |id: &str| crate::placement::PlacedLibrary { id: id.into(), name: id.into(), folders: vec![id.into()], paths: Vec::new(), read_only: false };
+        let values = [(crate::settings::OWN_MUSIC.to_string(), serde_json::json!("/own")), (crate::settings::OWN_MUSIC_OFF.to_string(), serde_json::json!(["bo"]))].into_iter().collect();
+        let cfg = SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: Libraries(vec![LibrarySetting::new("/music", LibraryKind::Main)]), values };
+        let placement = Placement { roots: Vec::new(), libraries: vec![placed("/music"), placed("/own/ann"), placed("/own/bo")] };
+        let a = Active { cfg, source: None, placement, error: None };
+        let own: Vec<(String, Option<String>)> = a.libraries().into_iter().filter(|u| u.kind == LibraryKind::Own).map(|u| (u.id, u.owner)).collect();
+        assert_eq!(own, [("/own/ann".to_string(), Some("ann".to_string())), ("/own/bo".to_string(), None)], "the folder stays, no one's");
+        assert_eq!(a.own_of("ann").as_deref(), Some("/own/ann"));
+        assert_eq!(a.own_of("bo"), None, "nothing to add to");
+        assert_eq!(a.own_of("cy").as_deref(), Some("/own/cy"), "on for everyone not named");
     }
 
     /// A second main library's track was on no list of folders here, so it could not be added to a playlist, one by one or among

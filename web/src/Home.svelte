@@ -338,6 +338,9 @@
   // bottom; one slow answer holds those under it no longer than PATIENCE, then each shows as it comes.
   let exploreIn = $state(false);
   let statusIn = $state(false);
+  /** Artists to explore and System status failed (their own Notices say nothing out of reach: Home's one line does). */
+  let exploreFailed = $state(false);
+  let statusFailed = $state(false);
   const PATIENCE = 4000;
   let patient = $state(!kept.seen);
   onMount(() => {
@@ -585,8 +588,11 @@
   {#if loading}<PageLoading />{/if}
   <!-- Its sections in the user's order, those switched on (Settings › Home; the owner, 2026-10-24). -->
   {#each order as part, i (part)}
-    {#if failedOf(part) && turn(part)}{@render failedPart(part)}{:else if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
+    <!-- Out of reach, a section the device cannot answer, with nothing kept, is left out: one line under Home says so (0.17, the
+         owner: one offline mode, not a "Cannot reach … Try again" per section). -->
+    {#if failedOf(part) && turn(part)}{#if !away()}{@render failedPart(part)}{/if}{:else if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
   {/each}
+  {#if away() && (order.some((p) => failedOf(p)) || exploreFailed || statusFailed)}<p class="away">The rest of Home needs Cratarr.</p>{/if}
   {/if}
 </div>
 
@@ -773,12 +779,12 @@
 
 {#snippet explorePart()}
   <!-- Artists to explore (lib/ArtistsToExplore; the owner, 2026-10-23). -->
-  <div class="turn" class:held={!turn('explore')}><ArtistsToExplore onsettled={() => (exploreIn = true)} /></div>
+  <div class="turn" class:held={!turn('explore')}><ArtistsToExplore onsettled={() => (exploreIn = true)} bind:failed={exploreFailed} /></div>
 {/snippet}
 
 {#snippet statusPart()}
   <!-- System status (lib/HomeStatus): an administrator's, shown only when something waits. -->
-  <div class="turn" class:held={!turn('status')}><HomeStatus onsettled={() => (statusIn = true)} /></div>
+  <div class="turn" class:held={!turn('status')}><HomeStatus onsettled={() => (statusIn = true)} bind:failed={statusFailed} /></div>
 {/snippet}
 
 {#snippet favAlbumsPart()}
@@ -1010,6 +1016,13 @@
 
   .failed {
     margin: 0 16px;
+  }
+
+  /* What Home cannot show out of reach, in one line (as the menus' "The rest needs Cratarr."). */
+  .away {
+    margin: 8px 16px;
+    color: var(--muted);
+    font-size: 13px;
   }
 
   .shelf {

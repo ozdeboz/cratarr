@@ -1,13 +1,15 @@
-import { signOutOwed } from './account';
+import { accountKey, signOutOwed } from './account';
 import { track } from './progress.svelte';
-import { keepAndTry, laterKey } from './later.svelte';
+import { keepAndTry, later as outbox, laterKey } from './later.svelte';
+import { heartKey, heartsWaiting } from './outbox';
 import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
-import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick } from './deviceAnswers.svelte';
+import { deviceCrate, deviceCrateRows, deviceCrates, deviceCrateTempo, devicePick, devicePlaylistRows, devicePlaylists } from './deviceAnswers.svelte';
+import { cratarrBusy } from './waiting.svelte';
 import { deviceAlbums, deviceArtist, deviceRecord, deviceSearch, readsNow } from './deviceIndex.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
@@ -172,12 +174,24 @@ function watched(path: string, init?: RequestInit): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    /** Counted among those waiting on a busy Cratarr (lib/waiting), from its first look that found it there till it ends. */
+    let busy = false;
+    const settle = () => {
+      done = true;
+      clearTimeout(timer);
+      if (busy) cratarrBusy.asks--;
+      busy = false;
+    };
     const look = () => {
       timer = setTimeout(() => {
         void answers().then((there) => {
           if (done) return;
-          if (there) return look();
-          done = true;
+          if (there) {
+            if (!busy) cratarrBusy.asks++;
+            busy = true;
+            return look();
+          }
+          settle();
           gone.abort();
           reject(new TypeError('Cratarr does not answer'));
         });
@@ -186,14 +200,12 @@ function watched(path: string, init?: RequestInit): Promise<Response> {
     look();
     fetch(path, { ...init, signal }).then(
       (r) => {
-        done = true;
-        clearTimeout(timer);
+        settle();
         resolve(r);
       },
       (e) => {
         if (done) return;
-        done = true;
-        clearTimeout(timer);
+        settle();
         reject(e);
       },
     );
@@ -572,16 +584,16 @@ export const deleteCrate = (id: string) => request<{ deleted: string } & Undo>(`
 /** A crate's card's covers (0.13): a record's, by its first playable track. */
 export type CrateCover = { track: string; album_id?: string | null };
 /** `look.covers`: its first records' covers asked too, as many (at most 6; the search crate card's strip). */
-export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> & { covers?: number } = {}, offset = 0) => {
+export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> & { covers?: number; profile?: boolean } = {}, offset = 0) => {
   const q = new URLSearchParams({ limit: String(limit) });
   if (offset) q.set('offset', String(offset));
   if (source) q.set('source', source);
   if (look.order) q.set('order', look.order);
   if (look.down) q.set('down', 'true');
-  return quietly<{ source: string; total: number; rows: PlaylistRow[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; names?: Record<string, CrateName>; covers?: CrateCover[] }>(`/api/crates/preview?${q}`, {
+  return quietly<{ source: string; total: number; rows: PlaylistRow[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; names?: Record<string, CrateName>; covers?: CrateCover[]; profile?: ListProfileData }>(`/api/crates/preview?${q}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}), ...(look.covers ? { covers: look.covers } : {}) }),
+    body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}), ...(look.covers ? { covers: look.covers } : {}), ...(look.profile ? { profile: true } : {}) }),
   });
 };
 /** The list in view a filter is on (decision 0061): the Library's albums (on `source`) or its artists, the playlists,
@@ -982,9 +994,12 @@ export const appendTracks = (id: string, source: string, ids: string[]) =>
   }));
 
 export const playlistRows = (id: string, source?: string) =>
-  quietly<{ source: string; rows: PlaylistRow[] }>(
-    `/api/playlists/${encodeURIComponent(id)}/rows${source ? `?source=${encodeURIComponent(source)}` : ''}`,
+  read(
+    () => quietly<{ source: string; rows: PlaylistRow[] }>(`/api/playlists/${encodeURIComponent(id)}/rows${source ? `?source=${encodeURIComponent(source)}` : ''}`),
+    () => devicePlaylistRows(id, source),
   );
+/** The playlists as `/api/state` lists them, through the door (0.17): from this device while reads come from it. */
+export const readPlaylists = (source?: string) => read(() => getState(source).then((s) => s.playlists), () => devicePlaylists(source));
 
 /** Saves a playlist edited in its view (decision 0023): its lines reordered or some left out (`entries`), replacing
  *  `expected` (the lines as the view showed them); refused when it changed since. */
@@ -1980,7 +1995,11 @@ export const trackDetails = (source: string, id: string) =>
  *  server's player's. `favorite` null: not known. */
 export type TrackState = { addable: boolean; album_id: string | null; favorite: boolean | null; playlists: Playlist[]; info: TrackInfo | null };
 
-export const trackState = (source: string, id: string) => quietly<TrackState>(`${trackPath(source, id)}/playlists`).then((s) => knownState(source, id, s));
+export const trackState = (source: string, id: string) =>
+  quietly<TrackState>(`${trackPath(source, id)}/playlists`).then((s) => {
+    const waiting = heartsWaiting(outbox.list, accountKey()).get(heartKey(`${trackPath(source, id)}/favorite`));
+    return knownState(source, id, waiting === undefined ? s : { ...s, favorite: waiting });
+  });
 /** Each track's state as last told, for a change kept for later to answer with (lib/later). */
 const trackStates = new Map<string, TrackState>();
 const knownState = (source: string, id: string, s: TrackState) => (trackStates.set(`${source}/${id}`, s), s);
@@ -2030,12 +2049,43 @@ export const getFavorites = (source: string, ids: string[]) =>
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ids }),
+  }).then((found) => {
+    const waiting = heartsWaiting(outbox.list, accountKey());
+    for (const id of ids) {
+      const on = waiting.get(heartKey(`${trackPath(source, id)}/favorite`));
+      if (on !== undefined) found[id] = on;
+    }
+    return found;
   });
 
+/** A list of hearts as read, with those whose change waits in the outbox as they will be: `of` names an item's heart path. */
+function withWaiting(list: string[], of: (item: string) => string, waitingOf: (key: string) => string | null): string[] {
+  const out = new Set(list);
+  for (const [key, on] of heartsWaiting(outbox.list, accountKey())) {
+    const item = waitingOf(key);
+    if (item === null || heartKey(of(item)) !== key) continue;
+    if (on) out.add(item);
+    else out.delete(item);
+  }
+  return [...out];
+}
+
 /** The favourite albums of a server (their ids): the Library's Favourites only and the albums' hearts. */
-export const getFavoriteAlbums = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/albums`);
+export const getFavoriteAlbums = (source: string) => {
+  const at = `/api/albums/${encodeURIComponent(source)}/`;
+  const path = (id: string) => `${at}${encodeURIComponent(id)}/favorite`;
+  return quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/albums`).then((list) =>
+    withWaiting(list, path, (key) => (key.startsWith(at) && key.endsWith('/favorite') ? decodeURIComponent(key.slice(at.length, -'/favorite'.length)) : null)),
+  );
+};
 /** A server's favourite artists, by name (the Library's Artists, Favourites only). */
-export const getFavoriteArtists = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/artists`);
+export const getFavoriteArtists = (source: string) => {
+  const at = `/api/artists/${encodeURIComponent(source)}/favorite`;
+  const path = (name: string) => `${at}?name=${encodeURIComponent(name)}`;
+  return quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/artists`).then((list) =>
+    withWaiting(list, path, (key) => (key.startsWith(`${at}?`) ? new URLSearchParams(key.slice(at.length + 1)).get('name') : null)),
+  );
+};
 /** Cratarr's own favourite tracks as rows (Home's Favourite tracks), at most 100. */
 export const getFavoriteTracks = () => quietly<{ source: string; rows: PlaylistRow[] }>('/api/favorites/cratarr/tracks');
 

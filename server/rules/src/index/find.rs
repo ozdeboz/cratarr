@@ -81,12 +81,26 @@ impl Ask {
     }
 }
 
+/// A row's rank by its own name, as the server ranks a name ([`matcher::rank_in`]: a direct hit from 3, a near spelling from 1 to 2);
+/// where that is no direct hit, by its best direct hit among its other names, between the two (from 2 to 3). So a record's exact title
+/// brings its tracks above a near spelling in another track's title.
+fn rank_of(line: &str, words: &[String], at: usize, of: usize) -> f32 {
+    let mut names = line.split(APART).filter(|name| !name.is_empty());
+    let own = matcher::rank_in(&words_of(names.next().unwrap_or_default()), words, at, of);
+    if own >= 3.0 {
+        return own;
+    }
+    // A direct hit ranks below 7: its quarter fits below 3.
+    let through = names.map(|name| matcher::rank_in(&words_of(name), words, at, of)).filter(|rank| *rank >= 3.0).map(|rank| 2.0 + (rank - 3.0) / 4.0);
+    through.fold(own, f32::max)
+}
+
 /// The rows the words find, best first, each with its rank. Its order among equals is the rows', as the server's is the order its
 /// tables gave.
 fn found(lines: &Lines, words: &[String], off: impl Fn(usize) -> bool) -> Vec<(usize, f32)> {
     let rows: Vec<usize> = (0..lines.len()).filter(|&row| !off(row) && matcher::typos_in(&words_of(lines.line(row)), words).is_some()).collect();
     let of = rows.len();
-    let mut out: Vec<(usize, f32)> = rows.into_iter().enumerate().map(|(at, row)| (row, matcher::rank_in(&words_of(lines.own(row)), words, at, of))).collect();
+    let mut out: Vec<(usize, f32)> = rows.into_iter().enumerate().map(|(at, row)| (row, rank_of(lines.line(row), words, at, of))).collect();
     out.sort_by(|a, b| b.1.total_cmp(&a.1));
     out
 }
@@ -403,6 +417,34 @@ mod tests {
     fn what_the_name_holds_comes_before_what_it_is_found_through() {
         // Blue Notes' Other has the word in its record's title alone.
         assert_eq!(names(&find(&ask("blue")), "tracks", "title"), ["Blue Train", "Blue in Green", "So What", "Other"]);
+    }
+
+    #[test]
+    fn a_records_exact_title_brings_its_tracks_above_a_near_spelling() {
+        let mut more = rows();
+        more.artists.push(Artist { id: 9, name: "Chassol".into(), sort: "chassol".into(), spelled: Vec::new() });
+        more.artists.push(Artist { id: 10, name: "India Jordan".into(), sort: "india jordan".into(), spelled: Vec::new() });
+        more.records.push(record(6, "Emerald Alley", "India Jordan", &[10], 2021, 1));
+        more.records.push(record(7, "Indiamore", "Chassol", &[9], 2013, 1));
+        // The near spelling's row comes first, so only the rank can put it below.
+        more.tracks.push(track(7, 6, 1, "Emerald Alley (Indian Morning Theme)", "India Jordan", &[10]));
+        more.tracks.push(track(8, 7, 1, "Little Krishna & The Girls", "Chassol", &[9]));
+        more.tracks.push(track(9, 7, 2, "Pipe Dance", "Chassol", &[9]));
+        let index = Index::build(4, &more).unwrap();
+        let found: serde_json::Value = serde_json::from_str(&index.found_json(&index.finder(), &ask("indiamore"))).unwrap();
+        assert_eq!(names(&found, "tracks", "title"), ["Little Krishna & The Girls", "Pipe Dance", "Emerald Alley (Indian Morning Theme)"]);
+        assert_eq!(found["tracks"]["rows"][0]["on"], "artist", "found through its record, and it says so as before");
+    }
+
+    #[test]
+    fn a_direct_hit_on_a_tracks_own_name_stays_above_one_through_its_record() {
+        let mut more = rows();
+        more.records.push(record(8, "Debut Again", "Various", &[], 2003, 1));
+        more.tracks.push(track(10, 8, 1, "Elsewhere", "Various", &[]));
+        more.tracks.push(track(11, 3, 3, "Debut", "Miles Davis", &[7]));
+        let index = Index::build(4, &more).unwrap();
+        let found: serde_json::Value = serde_json::from_str(&index.found_json(&index.finder(), &ask("debut"))).unwrap();
+        assert_eq!(names(&found, "tracks", "title")[0], "Debut");
     }
 
     #[test]

@@ -64,7 +64,7 @@
 
 <main>
   {#if crates.error && !crates.list}
-    <Notice text={crates.error} onretry={loadCrates} />
+    <Notice text={crates.error} onretry={loadCrates} away="Crates need Cratarr." />
   {:else if !crates.list}
     <PageLoading />
   {:else if listed.shows === 'asking'}
@@ -72,7 +72,7 @@
     <Asking now={kept.loader} />
   {:else if listed.shows === 'failed'}
     <!-- None by name, the server's search failed: said so, never "No crates match." (lib/search listShows). -->
-    <Notice text={deepOf.error() ?? "The crates couldn't be searched."} onretry={deepOf.again} />
+    <Notice text={deepOf.error() ?? "The crates couldn't be searched."} onretry={deepOf.again} away="Searching their tracks needs Cratarr." />
   {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
     {#if !pageView.none}<p class="empty">No crates match.</p>{/if}

@@ -209,7 +209,7 @@
 
 {#if v.view === 'plan'}
   {#if failed}
-    <Notice text={failed} onretry={() => readAgain++} />
+    <Notice text={failed} onretry={() => readAgain++} away="Changes to files need Cratarr." />
   {:else if !plan || (plan.making && !plan.records.length)}
     <Asking />
   {:else if !plan.records.length}
@@ -251,7 +251,7 @@
       </Group>
     {/if}
   {:else if fileRuns.error && !fileRuns.list}
-    <Notice text={fileRuns.error} onretry={loadRuns} />
+    <Notice text={fileRuns.error} onretry={loadRuns} away="Changes to files need Cratarr." />
   {:else if !fileRuns.list}
     <Asking />
   {:else}
@@ -259,7 +259,7 @@
   {/if}
 {:else if v.view === 'run'}
   {#if failed}
-    <Notice text={failed} onretry={() => readAgain++} />
+    <Notice text={failed} onretry={() => readAgain++} away="Changes to files need Cratarr." />
   {:else if !run}
     <Asking />
   {:else}
@@ -283,7 +283,7 @@
     {/if}
   {/if}
 {:else if fileRuns.error}
-  <Notice text={fileRuns.error} onretry={loadRuns} />
+  <Notice text={fileRuns.error} onretry={loadRuns} away="Changes to files need Cratarr." />
 {:else if !fileRuns.list}
   <Asking />
 {:else if !fileRuns.list.length}

@@ -10,7 +10,7 @@ import type { IndexEngine } from './indexEngine';
 import { readBytes } from './indexStore';
 import { untrack } from 'svelte';
 import { whenReached } from './reach.svelte';
-import type { Crate, CrateFavourites, CrateLook, QueueTrack, TempoBands } from './api';
+import type { Crate, CrateFavourites, CrateLook, Playlist, PlaylistRow, QueueTrack, TempoBands } from './api';
 
 /** Where the app answers. */
 const APP_ANSWER = '/__device/answer';
@@ -51,7 +51,11 @@ function ready(e: IndexEngine, who: string): Promise<boolean> {
       if (sounds) e.loadSounds(sounds);
       if (own) e.loadOwn(own);
       toldPlays = '[]';
-      return e.openDevice();
+      // What the first ask of each kind would make (the similarity, Radio's index) made now, while the page says it opens the library
+      // here: the first Sounds like or pick after it is answered at once (0.17).
+      const open = e.openDevice();
+      if (open) e.ask({ ask: 'warm' });
+      return open;
     });
     made.set(e, done);
   }
@@ -99,6 +103,12 @@ export const deviceCrateRows = async <T>(id: string, offset: number, limit: numb
 
 export const deviceCrateTempo = async (id: string, source: string | undefined, favourites: CrateFavourites | undefined, albums: CrateFavourites | undefined, look: CrateLook) =>
   ours(source) ? deviceAsk<TempoBands>({ ask: 'tempo', id, ...lookOf(favourites, albums, look), now: now() }) : null;
+
+/** The account's playlists, as `/api/state` lists them, and a playlist's rows, as `/api/playlists/{id}/rows` gives them: the tracks this
+ *  device holds of it (0.17: the Playlists page and a playlist's panel with Cratarr out of reach). */
+export const devicePlaylists = async (source?: string) => (ours(source) ? deviceAsk<Playlist[]>({ ask: 'playlists' }) : null);
+export const devicePlaylistRows = async (id: string, source?: string) =>
+  ours(source) ? deviceAsk<{ source: string; rows: PlaylistRow[] }>({ ask: 'playlist_rows', id }) : null;
 
 /** What comes next among what plays here, with no notice of what cannot. The draw is what `rng` is on the server: this pick's own. */
 export const devicePick = (ask: Record<string, unknown>) => deviceAsk<{ tracks: QueueTrack[] }>({ ask: 'pick', ...ask, here: heldHere.tracks(), draw: Math.floor(Math.random() * Number.MAX_SAFE_INTEGER), now: now() });
