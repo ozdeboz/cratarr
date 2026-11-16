@@ -414,6 +414,53 @@ mod tests {
         assert!(differed(report, "references: held by another record").contains(&format!("al-11 musicbrainz:release:{FERRY}")), "{report}");
     }
 
+    /// R11: two 0.16 hand links on one release go by the records' age, the older keeping it, whatever their keys' order
+    /// (al-10 before al-11, and al-11 is the younger): Ferry Lights' two copies were each pasted Discogs' release.
+    #[test]
+    fn two_hand_links_on_one_release_go_by_age() {
+        let data = Data::new("hand-age");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        assert_eq!(cat.subject_of(&Ref::new("discogs", "release", "2000020")).unwrap(), ["al-10"]);
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert!(differed(report, "references: held by another record").contains(&"al-11 discogs:release:2000020".to_string()), "{report}");
+    }
+
+    /// R11 (finding 4): the step run again (its marks gone) keeps what was chosen since: a link pasted on another record, and a
+    /// source chosen by hand, stand over 0.16's.
+    #[test]
+    fn a_step_run_again_keeps_what_was_chosen_since() {
+        let data = Data::new("chosen-since");
+        data.run();
+        {
+            let (cat, _) = data.open();
+            assert!(cat.set_reference("al-9", &Ref::new("musicbrainz", "release", &mb(2)), "hand").unwrap(), "pasted on the other copy");
+            cat.set_counting(2, Some("musicbrainz"), true).unwrap();
+        }
+        data.batch("catalogue.sqlite", "DELETE FROM meta WHERE key GLOB '017:*'");
+        data.run();
+        let (cat, _) = data.open();
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", &mb(2))).unwrap(), ["al-9"], "the link pasted since stands");
+        let two = cat.record(2).unwrap().unwrap();
+        assert_eq!((two.counting.as_deref(), two.counted_by_hand), (Some("musicbrainz"), true), "the source chosen since stands");
+    }
+
+    /// R11 (N14): a mark whose report cannot be read is a part done with its report missing: the start goes on, the part is not
+    /// run again, and the migration report is the other parts'.
+    #[test]
+    fn an_unreadable_mark_does_not_stop_the_start() {
+        let data = Data::new("unreadable-mark");
+        data.run();
+        data.batch("catalogue.sqlite", "UPDATE meta SET value = '{not a report' WHERE key = '017:pages'");
+        data.batch("userdata.sqlite", "DELETE FROM migration_report WHERE part = 'references'");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).expect("the start goes on");
+        assert_eq!(data.marks().len(), PARTS_017.len(), "no part run again");
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert!(report["tables"].as_array().unwrap().iter().all(|t| t["name"] != "bandcamp_found"), "{report}");
+        assert!(report["tables"].as_array().unwrap().iter().any(|t| t["name"] == "record_references"));
+    }
+
     /// R5: an id in capitals is the same id: Ferry Lights' two matches name one release, one in capitals, and the older copy
     /// keeps it; Undertow's page, kept by its release group in capitals, is its.
     #[test]
@@ -758,12 +805,18 @@ mod tests {
         assert_eq!(listed(report, "bandcamp_found").0, 0, "Harbour Lights', a record not had now (C48b)");
         assert_eq!(
             differed(report, "references: held by another record"),
-            [format!("al-9 musicbrainz:release:{}", mb(2)), format!("al-11 musicbrainz:release:{FERRY}"), format!("al-4 musicbrainz:release:{}", mb(1)), "al-4 discogs:release:2000003".to_string()],
-            "Two Rooms' hand, Ferry Lights' older copy, Undated's tag and its search"
+            [
+                "al-11 discogs:release:2000020".to_string(),
+                format!("al-9 musicbrainz:release:{}", mb(2)),
+                format!("al-11 musicbrainz:release:{FERRY}"),
+                format!("al-4 musicbrainz:release:{}", mb(1)),
+                "al-4 discogs:release:2000003".to_string()
+            ],
+            "Ferry Lights' younger copy's hand, Two Rooms' hand, Ferry Lights' older copy, Undated's tag and its search"
         );
         assert_eq!(differed(report, "references: a retired record's"), [format!("al-6 musicbrainz:release:{}", mb(6)), "al-6 discogs:release:2000006".to_string()]);
         assert_eq!((report["counted_by_hand"].as_u64(), report["checked_by_hand"].as_u64()), (Some(4), Some(2)));
         assert_eq!(report["counted_by_a_match"], serde_json::Value::Null, "the step claims no count (R3)");
-        assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM record_references"), 6, "kept one version");
+        assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM record_references"), 8, "kept one version");
     }
 }

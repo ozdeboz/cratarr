@@ -1023,14 +1023,31 @@ impl Carrying<'_> {
         Ok(out)
     }
 
-    /// 1. A link pasted by hand names what it names, whoever held it.
+    /// 1. A link pasted by hand names what it names, whoever held it but another hand: two of 0.16's on one release go by the
+    ///    records' age, the older keeping it (R11), and one pasted in 0.17 since a step that ran before stays where it was put.
     fn hand(&mut self, c: &Carry, now: i64) -> Result<()> {
         let (mut links, mut put) = (0, 0);
         self.unmatched.entry(UNLINKED).or_default();
+        let mut chosen: Vec<(i64, &CarriedChoice)> = Vec::new();
         for choice in &c.chosen {
-            let Some(record) = self.record("record_references", &choice.album)? else { continue };
+            if let Some(record) = self.record("record_references", &choice.album)? {
+                chosen.push((record, choice));
+            }
+        }
+        chosen.sort_by_key(|(record, _)| *record);
+        for (record, choice) in chosen {
             self.moved += 1;
             for link in &choice.links {
+                let subject = ids::record(record);
+                let by_hand: Option<String> = self
+                    .tx
+                    .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject <> ?4 AND how = 'hand' LIMIT 1")?
+                    .query_row(params![link.source, link.kind, link.value, subject], |r| r.get(0))
+                    .optional()?;
+                if by_hand.is_some_and(|other| ONE_SUBJECT.contains(&link.kind.as_str()) && !retired(self.tx, &other).unwrap_or(false)) {
+                    self.refused.push(named(&subject, link));
+                    continue;
+                }
                 self.put(record, link, "hand", now, true)?;
             }
             links += (choice.links.len() + choice.unlinked.len()) as u64;
@@ -1233,8 +1250,9 @@ impl Carrying<'_> {
         self.unmatched.entry(UNCONFIRMED).or_default();
         for choice in &c.chosen {
             let Some(record) = self.found(&choice.album)? else { continue };
+            // A count chosen by hand since (the step run again) stands: 0.14's choice is the older (R11).
             if let Some(source) = &choice.counting {
-                by_hand += self.tx.execute("UPDATE records SET counting = ?2, counted_by_hand = 1 WHERE id = ?1", params![record, source])? as u64;
+                by_hand += self.tx.execute("UPDATE records SET counting = ?2, counted_by_hand = 1 WHERE id = ?1 AND counted_by_hand = 0", params![record, source])? as u64;
             }
             if choice.checked {
                 checked += self.tx.execute("UPDATE records SET checked_by_hand = 1 WHERE id = ?1", [record])? as u64;
@@ -1326,8 +1344,16 @@ impl Catalogue {
         let mut merged: Option<(crate::moved::Report, serde_json::Map<String, serde_json::Value>)> = None;
         for part in PARTS_017 {
             let Some(text) = self.meta(&mark_017(part)) else { continue };
-            let v: serde_json::Value = serde_json::from_str(&text)?;
-            let report: crate::moved::Report = serde_json::from_value(v.clone())?;
+            // A mark whose report cannot be read is a part done with its report missing (R11): the part stays done, and the
+            // start goes on.
+            let read = serde_json::from_str::<serde_json::Value>(&text).and_then(|v| Ok((serde_json::from_value::<crate::moved::Report>(v.clone())?, v)));
+            let (report, v) = match read {
+                Ok(read) => read,
+                Err(e) => {
+                    tracing::warn!(target: "library", part, reason = %e, "0.17's step: a part's report cannot be read; left out of the migration report");
+                    continue;
+                }
+            };
             let (all, counts) = merged.get_or_insert_with(Default::default);
             all.merge(report);
             for (field, n) in v.as_object().into_iter().flatten().filter(|(k, _)| !matches!(k.as_str(), "tables" | "unmatched" | "differed")) {

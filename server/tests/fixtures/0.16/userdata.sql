@@ -223,15 +223,17 @@ CREATE TABLE excluded_artist (
 
 -- 0.14's choices (`app::references::Chosen`), under the records' ids since 0.16: "Use this", a link pasted by hand, a guess
 -- confirmed with nothing chosen, AcoustID counting (it has no list) with links as 0.16 kept them (Discogs' older link to a
--- master, a MusicBrainz release's id cut short) and a guess confirmed it has none of, a retired record's, and a row whose
--- JSON cannot be read.
+-- master, a MusicBrainz release's id cut short) and a guess confirmed it has none of, a retired record's, a row whose JSON
+-- cannot be read, and one Discogs release pasted on both copies of Ferry Lights.
 INSERT INTO record_references (album, chosen) VALUES
   ('al-1', '{"counting":"musicbrainz","by_hand":false,"links":{},"confirmed":["musicbrainz"]}'),
   ('al-2', '{"counting":"discogs","by_hand":true,"links":{"discogs":"https://www.discogs.com/release/2000002-Noor-Field-Two-Rooms","musicbrainz":"https://musicbrainz.org/release/00000000-0000-4000-8000-000000000002"},"confirmed":[]}'),
   ('al-3', '{"counting":null,"by_hand":false,"links":{},"confirmed":["bandcamp"]}'),
   ('al-5', '{"counting":"acoustid","by_hand":false,"links":{"discogs":"https://www.discogs.com/master/view/1000005","musicbrainz":"https://musicbrainz.org/release/00000000-0000-4000-8000-00000000000"},"confirmed":["bandcamp"]}'),
   ('al-6', '{"counting":"musicbrainz","by_hand":true,"links":{"musicbrainz":"https://musicbrainz.org/release/00000000-0000-4000-8000-000000000006"},"confirmed":["discogs"]}'),
-  ('al-12', '{"counting":"musicbrainz","by_hand":tr');
+  ('al-12', '{"counting":"musicbrainz","by_hand":tr'),
+  ('al-10', '{"counting":null,"by_hand":false,"links":{"discogs":"https://www.discogs.com/release/2000020-Kite-Theory-Ferry-Lights"},"confirmed":[]}'),
+  ('al-11', '{"counting":null,"by_hand":false,"links":{"discogs":"https://www.discogs.com/release/2000020"},"confirmed":[]}');
 
 -- Matching's finds (`app::matching::Match`): certain (Signal's with nothing chosen), likely with a length MusicBrainz lacks,
 -- none, two copies' certain matches on one release (one naming it in capitals), one whose release names each track
