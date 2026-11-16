@@ -213,7 +213,6 @@
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import WorkMenu from './WorkMenu.svelte';
   import WorkSheet from './WorkSheet.svelte';
-  import MarkLoader from './MarkLoader.svelte';
   import Cover, { coverBroke, coverBroken, mosaicOf } from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
   import Asking from './Asking.svelte';
@@ -2708,7 +2707,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {/if}
       </ol>
       {/if}
-      {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
+      {#if crate && rows.length < total}<div class="loading" bind:this={more}><Asking size={40} now room="given" /></div>{/if}
       <!-- Each list's own kind of similar ones at its foot (the owner, 2026-10-23); a crate's once all its rows are in. -->
       <!-- One's own playlist: tracks to add to it (lib/SuggestedTracks; the owner, 2026-10-23). -->
       {#if !own}
@@ -3896,7 +3895,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     color: var(--danger-ink);
   }
 
-  /* The loading sign, small, where more is coming (lib/MarkLoader.svelte). */
+  /* The loading sign, small, where more is coming (lib/Asking). */
   .loading {
     display: grid;
     place-items: center;
