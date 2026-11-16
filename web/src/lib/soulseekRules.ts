@@ -3,7 +3,7 @@
 // Cratarr by their record's list, finds folders that hold every track, and fetches only what is ticked.
 
 export type SoulseekState = 'waiting' | 'searching' | 'found' | 'approved' | 'fetching' | 'checking' | 'placed' | 'stuck';
-export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number };
+export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number; unchecked?: string | null };
 export type SoulseekItem = {
   id: string;
   /** The catalogue's record it fetches (`record`), named as the record is. */
@@ -29,10 +29,11 @@ export type SoulseekItem = {
 };
 export type SoulseekView = { items: SoulseekItem[]; library?: string | null };
 
-/** A folder as a line: its format, how soon (a free slot, else its queue), its extra files, whose. */
+/** A folder as a line: what could not be checked (found by titles alone, R33), its format, how soon (a free slot, else its
+ * queue), its extra files, whose. */
 export function folderLine(f: SoulseekFolder): string {
   const mb = f.speed > 0 ? `${(f.speed / 1_000_000).toFixed(1)} MB/s` : null;
-  return [f.format.toUpperCase(), f.free_slot ? 'free slot' : `queue ${f.queue}`, mb, f.extra ? `${f.extra} extra file${f.extra === 1 ? '' : 's'}` : null, f.user]
+  return [f.unchecked, f.format.toUpperCase(), f.free_slot ? 'free slot' : `queue ${f.queue}`, mb, f.extra ? `${f.extra} extra file${f.extra === 1 ? '' : 's'}` : null, f.user]
     .filter(Boolean)
     .join(' · ');
 }

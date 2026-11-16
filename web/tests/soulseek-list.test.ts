@@ -24,6 +24,7 @@ const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
 
 test("a record's row says where it stands", () => {
   assert.equal(folderLine(folder('ann')), 'FLAC · free slot · 2.5 MB/s · ann');
+  assert.equal(folderLine({ ...folder('bob'), unchecked: 'No track lengths to check' }), 'No track lengths to check · FLAC · free slot · 2.5 MB/s · bob');
   assert.equal(itemLine(item('1', 'found')), 'M. Rivers · 1998 · FLAC · free slot · 2.5 MB/s · ann');
   assert.equal(itemLine(item('1', 'waiting')), 'M. Rivers · 1998 · Waiting to be searched');
   assert.equal(itemLine(item('1', 'waiting', { misses: 3, due: 1_000 + 86_400 }), 1_000), 'M. Rivers · 1998 · Not found · 3 times · again tomorrow');

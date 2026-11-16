@@ -164,18 +164,33 @@ fn source_name(source: &str) -> &'static str {
     }
 }
 
-/// A record's list, the one that counts (C51a, Q31: what judges a Soulseek folder), read once through `read` and kept
-/// (`reference_tracks`), with its source:
-/// - **Counted** (by hand, or worked out): that source's list, kept or read now.
+/// The lists a record's Soulseek folders are judged by (R33, N17, as the owner amended it): the first in the design's order whose
+/// every track has its length, folders judged by titles and lengths; and the first without them, read before it, judged by titles
+/// and count only where the first finds no folder (`soulseek::untimed_folders`). One at least.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Judging {
+    pub timed: Option<(String, Vec<RefTrack>)>,
+    pub untimed: Option<(String, Vec<RefTrack>)>,
+}
+
+/// Whether every track of a list has its length: a list a folder can be judged by, by titles and lengths (R33).
+pub fn timed(list: &[RefTrack]) -> bool {
+    list.iter().all(|t| t.length_ms.is_some_and(|ms| ms > 0))
+}
+
+/// A record's lists, the one that counts first (C51a, Q31: what judges a Soulseek folder), each read once through `read` and kept
+/// (`reference_tracks`), with its source (`Judging`):
+/// - **Counted** (by hand, or worked out): that source's list, kept or read now; where it has no lengths, the others in the
+///   design's order, for one with them (R33), the count left as it is.
 /// - **Not had**: no files to hold a list against, so "none until chosen" is not its case: its references count in the
 ///   design's order (`identity::COUNTING_ORDER`: MusicBrainz's release, else its release group's; Discogs'; Bandcamp's album),
-///   the first whose list answers, and that source counts from then on. One that answers nothing (no such release, Bandcamp's
-///   bot check) gives way to the next.
+///   the first whose list answers, and that source counts from then on, lengths or none. One that answers nothing (no such
+///   release) gives way to the next, and so does one without lengths, for judging (R33).
 /// - **Had, no count**: its files and no list agree, so none counts until an administrator picks one (the owner, 2026-11-16):
 ///   nothing is read.
 ///
 /// `Ok(Err(why))`: no list to judge by, and why in few words. `Err`: a source could not be reached; asked again later.
-pub async fn tracklist<R, F>(cat: &Arc<Catalogue>, record: i64, read: R) -> Result<std::result::Result<(String, Vec<RefTrack>), String>>
+pub async fn tracklist<R, F>(cat: &Arc<Catalogue>, record: i64, read: R) -> Result<std::result::Result<Judging, String>>
 where
     R: Fn(Ref) -> F,
     F: std::future::Future<Output = Result<Option<Read>>>,
@@ -211,31 +226,61 @@ where
         }
     };
     let sources: Vec<&'static str> = match row.counting.as_deref() {
-        Some(counting) => identity::COUNTING_ORDER.iter().copied().filter(|s| *s == counting).collect(),
+        // Its own first; the others in the order where its own has no lengths (R33).
+        Some(counting) => identity::COUNTING_ORDER.iter().copied().filter(|s| *s == counting).chain(identity::COUNTING_ORDER.iter().copied().filter(|s| *s != counting)).collect(),
         None if row.had => return Ok(Err("No list counts until one is chosen".into())),
         None => identity::COUNTING_ORDER.to_vec(),
     };
+    let mut counted = row.counting.is_some();
+    let mut judging = Judging::default();
     let mut why: Vec<String> = Vec::new();
     let mut off = None;
-    for source in sources {
-        if let Some(list) = kept_of(source) {
-            if row.counting.is_none() {
-                keep(source, list.clone(), None, true).await?;
-            }
-            return Ok(Ok((source.to_string(), list)));
+    for (n, source) in sources.into_iter().enumerate() {
+        if n > 0 && row.counting.is_some() && judging.untimed.is_none() {
+            break;
         }
-        let Some((r, _)) = main_ref(&refs, source) else { continue };
-        match read(r.clone()).await {
-            Ok(Some((list, release))) if !list.is_empty() => {
-                keep(source, list.clone(), release, row.counting.is_none()).await?;
-                return Ok(Ok((source.to_string(), list)));
+        let list = match kept_of(source) {
+            Some(list) => {
+                if !counted {
+                    keep(source, list.clone(), None, true).await?;
+                    counted = true;
+                }
+                list
             }
-            Ok(_) => why.push(format!("{} has no list of it", source_name(source))),
-            // Switched off (R23, N16): passed over for the next list; where none answers, out of reach until it is on again.
-            Err(e) if e.is::<SwitchedOff>() => off = Some(e),
-            // Out of reach, Bandcamp's bot check among them (R23, N3): asked again later, nothing said against the record.
-            Err(e) => return Err(e),
+            None => {
+                let Some((r, _)) = main_ref(&refs, source) else { continue };
+                match read(r.clone()).await {
+                    Ok(Some((list, release))) if !list.is_empty() => {
+                        keep(source, list.clone(), release, !counted).await?;
+                        counted = true;
+                        list
+                    }
+                    Ok(_) => {
+                        why.push(format!("{} has no list of it", source_name(source)));
+                        continue;
+                    }
+                    // Switched off (R23, N16): passed over for the next list; where none answers, out of reach until it is on again.
+                    Err(e) if e.is::<SwitchedOff>() => {
+                        off = Some(e);
+                        continue;
+                    }
+                    // Out of reach, Bandcamp's bot check among them (R23, N3): asked again later, nothing said against the record.
+                    Err(e) => return Err(e),
+                }
+            }
+        };
+        if timed(&list) {
+            judging.timed = Some((source.to_string(), list));
+            break;
         }
+        // Without its tracks' lengths (R33, N17): no judge of a folder by itself, but the fallback where the next list with them
+        // finds none; kept, and counting where nothing does, as the record page may show it.
+        if judging.untimed.is_none() {
+            judging.untimed = Some((source.to_string(), list));
+        }
+    }
+    if judging.timed.is_some() || judging.untimed.is_some() {
+        return Ok(Ok(judging));
     }
     if let Some(e) = off {
         return Err(e);
@@ -1062,9 +1107,24 @@ mod tests {
         let off = |r: Ref| {
             std::future::ready(if r.source == "musicbrainz" { Err(anyhow::Error::from(SwitchedOff("MusicBrainz"))) } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None))) })
         };
-        assert_eq!(tracklist(&cat, both, off).await.unwrap().unwrap().0, "discogs");
+        assert_eq!(tracklist(&cat, both, off).await.unwrap().unwrap().timed.unwrap().0, "discogs");
         let alone = wanted(&cat, "Undated", &[("musicbrainz", "release", "r6")]);
         assert!(tracklist(&cat, alone, off).await.unwrap_err().is::<SwitchedOff>());
+    }
+
+    /// R33 (N17, the owner's): a list without its tracks' lengths judges no Soulseek folder by itself: kept, and counting where
+    /// nothing counts, it gives way to the next list in the design's order that has them, and stands beside it as the fallback.
+    #[tokio::test]
+    async fn a_list_without_lengths_gives_way_to_the_next_with_them() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Night Walks", &[("discogs", "release", "2000007"), ("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks")]);
+        let read = |r: Ref| std::future::ready(Ok(Some((list(&[("Lamplight", if r.source == "discogs" { None } else { Some(200_000) })]), None))));
+        let first = tracklist(&cat, record, read).await.unwrap().unwrap();
+        assert_eq!((first.timed.map(|(s, _)| s), first.untimed.map(|(s, _)| s)), (Some("bandcamp".to_string()), Some("discogs".to_string())));
+        assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("discogs"), "the first list counts, lengths or none");
+        let nothing = |_| std::future::ready(Err::<Option<Read>, _>(anyhow::anyhow!("nothing is read again")));
+        let again = tracklist(&cat, record, nothing).await.unwrap().unwrap();
+        assert_eq!(again.timed.map(|(s, _)| s).as_deref(), Some("bandcamp"), "both kept: the counted list first, then the next");
     }
 
     /// R15 (F4): a release MusicBrainz says it will not give (a 404) has no list, at once; its rate limit (a 429) is no such answer.
@@ -1126,8 +1186,8 @@ mod tests {
         let record = wanted(&cat, "Signal", &[("musicbrainz", "release", "r7")]);
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
         let read = reader(&[("musicbrainz", &["Signal"])], asked.clone(), || Ok(None));
-        let (source, first) = tracklist(&cat, record, &read).await.unwrap().unwrap();
-        let (_, again) = tracklist(&cat, record, &read).await.unwrap().unwrap();
+        let (source, first) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
+        let (_, again) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
         assert_eq!((source.as_str(), first.len(), again), ("musicbrainz", 1, first.clone()));
         assert_eq!(asked.lock().unwrap().len(), 1, "read once");
         assert_eq!(cat.reference_tracks(record).unwrap(), [("musicbrainz".to_string(), first)], "kept");
@@ -1142,7 +1202,7 @@ mod tests {
         cat.set_counting(record, Some("discogs"), true).unwrap();
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
         let read = reader(&[("musicbrainz", &["Hall"]), ("discogs", &["Hall", "Stair"])], asked.clone(), || Ok(None));
-        let (source, list) = tracklist(&cat, record, &read).await.unwrap().unwrap();
+        let (source, list) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
         assert_eq!((source.as_str(), list.len()), ("discogs", 2));
         assert_eq!(*asked.lock().unwrap(), ["discogs:release"]);
     }
@@ -1155,12 +1215,12 @@ mod tests {
         let all = wanted(&cat, "Night Walks", &[("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks"), ("discogs", "release", "2000003"), ("musicbrainz", "release", "r3")]);
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
         let every = reader(&[("musicbrainz", &["Lamplight"]), ("discogs", &["Lamplight"]), ("bandcamp", &["Lamplight"])], asked.clone(), || Ok(None));
-        assert_eq!(tracklist(&cat, all, &every).await.unwrap().unwrap().0, "musicbrainz");
+        assert_eq!(tracklist(&cat, all, &every).await.unwrap().unwrap().timed.unwrap().0, "musicbrainz");
         assert_eq!(cat.record(all).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"), "it counts from then on");
         let gone = wanted(&cat, "Undated", &[("bandcamp", "album", "https://kitetheory.bandcamp.com/album/undated"), ("musicbrainz", "release", "r4")]);
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mb_gone = reader(&[("bandcamp", &["Morning"])], asked.clone(), || Ok(None));
-        assert_eq!(tracklist(&cat, gone, &mb_gone).await.unwrap().unwrap().0, "bandcamp", "MusicBrainz has no such release: the next");
+        assert_eq!(tracklist(&cat, gone, &mb_gone).await.unwrap().unwrap().timed.unwrap().0, "bandcamp", "MusicBrainz has no such release: the next");
         assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release", "bandcamp:album"]);
     }
 

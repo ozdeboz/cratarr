@@ -7,7 +7,11 @@
 //! - **Judged by its list:** each request's record is judged by its counting list (`references::tracklist`, Q31): for a record
 //!   not had, its references' in order, MusicBrainz's release (or one of its release group's), Discogs', Bandcamp's album. A
 //!   Soulseek folder is a candidate only when every track of the list is one of its files, by title and length (`folders_of`),
-//!   never because its name looks right. A record with no list to judge by is Stuck, saying why.
+//!   never because its name looks right. A list without its tracks' lengths gives way to the next in the order that has them;
+//!   where no list with lengths finds a folder in any rung of a search, the same answers are judged by it, by titles and count,
+//!   each such folder said to have no lengths to check beside its tick (R33, the owner's: `untimed_folders`), and gated by
+//!   that list. A record with no list to judge by is Stuck, saying why; so is one that even its list without lengths finds no
+//!   folder for, by titles, in a search every rung of which answered.
 //! - **Searched on a ladder** (`ladder`): the record and its year, its title stripped of what is in brackets, the main
 //!   artist only, then the artist with a wildcard for the artists Soulseek's server filters; none twice; one search at a
 //!   time, paced. Not found, it is searched again later (`wait_after`): at once after none or one miss, four hours after
@@ -42,7 +46,7 @@ use crate::slskd::{Answer, Away, Offered, Slskd};
 /// The fetcher's name in a library's setting (`settings::LibrarySetting::fetcher`).
 pub const FETCHER: &str = "soulseek";
 /// Between two searches: gentle with Soulseek.
-const PACE: Duration = Duration::from_secs(5);
+const PACE: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 5 });
 /// A search is followed this long at most.
 const SEARCH_AT_MOST: Duration = Duration::from_secs(120);
 /// A fetch nobody's queue starts in this long is given up on that user.
@@ -103,6 +107,10 @@ pub struct Folder {
     pub extra: usize,
     /// Each track's file, in the release's order.
     pub files: Vec<Offered>,
+    /// What could not be checked, said beside its tick: a folder found by titles alone, by a list without lengths, where no list
+    /// with them found one (R33, `NO_LENGTHS`). Its files are gated by that list (`judged_by`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unchecked: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,8 +136,13 @@ pub struct Item {
     pub id: String,
     pub record: Record,
     pub state: State,
+    /// The list folders are judged by, by titles and lengths: the record's first with every track's length (R33).
     #[serde(default)]
     pub tracks: Vec<Track>,
+    /// The record's list without lengths, read before that one in the design's order, or where it has none (R33): a search's
+    /// answers are judged by it, by titles and count, only where `tracks` finds no folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub untimed: Vec<Track>,
     #[serde(default)]
     pub folders: Vec<Folder>,
     /// The folder approved (of `folders`).
@@ -414,6 +427,7 @@ pub fn folders_of(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Ve
                 speed: a.upload_speed,
                 extra: files.len() - picked.len(),
                 files: picked,
+                unchecked: None,
             });
         }
     }
@@ -426,6 +440,36 @@ pub fn folders_of(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Ve
             .then(b.speed.cmp(&a.speed))
     });
     out
+}
+
+/// What a folder found by titles alone says beside its tick (R33).
+const NO_LENGTHS: &str = "No track lengths to check";
+
+/// The folders among a search's answers that hold every track of a list without lengths (R33, the owner's fallback where no list
+/// with them finds one): each track's file by its title alone, and no other audio file, so its count is the list's. Each says it
+/// has no lengths to check. Those whose files' lengths agree with the most others, track by track, come first (`agreeing`), then
+/// as `folders_of` ranks.
+pub fn untimed_folders(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Vec<Folder> {
+    let titles: Vec<Track> = tracks.iter().map(|t| Track { length_ms: None, ..t.clone() }).collect();
+    let found: Vec<Folder> = folders_of(answers, &titles, failed).into_iter().filter(|f| f.extra == 0).map(|f| Folder { unchecked: Some(NO_LENGTHS.into()), ..f }).collect();
+    let mut ranked: Vec<(usize, Folder)> = agreeing(&found).into_iter().zip(found).collect();
+    ranked.sort_by(|(a, _), (b, _)| b.cmp(a));
+    ranked.into_iter().map(|(_, f)| f).collect()
+}
+
+/// How many of the other folders each one's files agree with, track by track, in length (within the slack; a file of no known
+/// length agrees with none): folders found by titles alone are ranked by it, an edition several users share being likelier the
+/// record's than one alone. Pure.
+fn agreeing(folders: &[Folder]) -> Vec<usize> {
+    let alike = |a: &Folder, b: &Folder| {
+        a.files.len() == b.files.len() && a.files.iter().zip(&b.files).all(|(x, y)| matches!((x.length, y.length), (Some(p), Some(q)) if (p - q).abs() * 1000 <= LENGTH_SLACK_MS))
+    };
+    folders.iter().enumerate().map(|(i, a)| folders.iter().enumerate().filter(|(j, b)| *j != i && alike(a, b)).count()).collect()
+}
+
+/// The list a folder's files are gated by: the one it was found by (R33), without lengths for one found by titles alone.
+fn judged_by<'a>(it: &'a Item, f: &Folder) -> &'a [Track] {
+    if f.unchecked.is_some() { &it.untimed } else { &it.tracks }
 }
 
 /// After a folder's user failed (`user`): the record's next folder, approved by the same tick, else searched again at
@@ -506,6 +550,7 @@ fn search_again(i: &mut Item) {
     if matches!(i.state, State::Waiting | State::Found | State::Stuck) {
         (i.state, i.due, i.why, i.chosen) = (State::Waiting, 0, None, None);
         i.tracks.clear();
+        i.untimed.clear();
         i.folders.clear();
     }
 }
@@ -659,6 +704,7 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             record: Record { record: o.record, artist: o.artist.clone(), album: o.title.clone(), year: o.year, request: r.id },
             state: State::Waiting,
             tracks: Vec::new(),
+            untimed: Vec::new(),
             folders: Vec::new(),
             chosen: None,
             failed: Vec::new(),
@@ -704,8 +750,8 @@ fn next_of(items: &[Item], now: i64) -> Option<String> {
 /// What a record not searched yet is judged by (C51b).
 #[derive(Debug, PartialEq)]
 enum Listing {
-    /// Its counting list: whose, and its tracks.
-    Ready(String, Vec<Track>),
+    /// Its lists: the one with lengths, the one without them (R33); one at least.
+    Ready(super::references::Judging),
     /// No list to judge by: why, in few words.
     None(String),
     /// A source out of reach: nothing is known of the record yet, so it waits, as with slskd away: why, and how long (a round;
@@ -726,7 +772,7 @@ where
         return Listing::None("No record to judge it by".into());
     }
     match super::references::tracklist(cat, it.record.record, read).await {
-        Ok(Ok((source, list))) => Listing::Ready(source, list),
+        Ok(Ok(lists)) => Listing::Ready(lists),
         Ok(Err(why)) => Listing::None(why),
         Err(e) if crate::bandcamp::not_read(&e) => Listing::Later("Bandcamp didn't answer".into(), CHECKED_AGAIN_SECS),
         Err(e) => Listing::Later(format!("{e:#}"), ROUND_AT_LEAST),
@@ -738,11 +784,12 @@ async fn search(id: &str) {
     let Some(it) = item(id) else { return };
     let Some(served) = crate::serve::instance() else { return };
     with_item(id, |i| i.state = State::Searching);
-    if it.tracks.is_empty() {
+    if it.tracks.is_empty() && it.untimed.is_empty() {
         match listing(&it, served.catalogue(), super::references::read_reference).await {
-            Listing::Ready(source, tracks) => {
-                tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), list = %source, "judged by its list");
-                with_item(id, |i| i.tracks = tracks);
+            Listing::Ready(lists) => {
+                let source = |l: &Option<(String, Vec<Track>)>| l.as_ref().map_or_else(String::new, |(s, _)| s.clone());
+                tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), list = %source(&lists.timed), untimed = %source(&lists.untimed), "judged by its list");
+                with_item(id, |i| (i.tracks, i.untimed) = (lists.timed.map(|(_, l)| l).unwrap_or_default(), lists.untimed.map(|(_, l)| l).unwrap_or_default()));
             }
             Listing::None(why) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Stuck, Some(why), now() + wait_after(3))),
             Listing::Later(why, wait) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(why), now() + wait)),
@@ -757,20 +804,35 @@ async fn search(id: &str) {
 
 /// The ladder's rungs in turn, through this slskd, until one finds folders.
 async fn search_through(id: &str, slskd: &Slskd) {
+    search_with(id, |q: String| async move { answers(slskd, &q).await }).await;
+}
+
+/// `search_through`, each rung's answers from `ask`: folders by the list with lengths, from the first rung where it finds any;
+/// where none does, every rung's answers together by the list without lengths, by titles and count (R33): no search more.
+async fn search_with<A, F>(id: &str, ask: A)
+where
+    A: Fn(String) -> F,
+    F: std::future::Future<Output = Result<Vec<Answer>>>,
+{
     let Some(it) = item(id) else { return };
+    let record = format!("{} - {}", it.record.artist, it.record.album);
     let mut why = None;
-    for (n, q) in ladder(&it.record).iter().enumerate() {
+    let mut heard: Vec<Answer> = Vec::new();
+    for (n, q) in ladder(&it.record).into_iter().enumerate() {
         if n > 0 {
             tokio::time::sleep(PACE).await;
         }
-        match answers(slskd, q).await {
+        match ask(q.clone()).await {
             Ok(a) => {
                 let found = folders_of(&a, &it.tracks, &it.failed);
                 if !found.is_empty() {
-                    tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), search = %q, folders = found.len(), "found");
+                    tracing::info!(target: "soulseek", record = %record, search = %q, folders = found.len(), "found");
                     return with_item(id, |i| {
                         (i.folders, i.state, i.misses, i.why) = (found.into_iter().take(SHOWN).collect(), State::Found, 0, None);
                     });
+                }
+                if !it.untimed.is_empty() {
+                    heard.extend(a);
                 }
             }
             // slskd away says nothing of the record: no miss, or a week's wait would meet it when slskd came back.
@@ -778,9 +840,23 @@ async fn search_through(id: &str, slskd: &Slskd) {
             Err(e) => why = Some(format!("{e:#}")),
         }
     }
+    let found = untimed_folders(&heard, &it.untimed, &it.failed);
+    if !found.is_empty() {
+        tracing::info!(target: "soulseek", record = %record, folders = found.len(), "found by titles alone: no list with lengths found a folder");
+        return with_item(id, |i| {
+            (i.folders, i.state, i.misses, i.why) = (found.into_iter().take(SHOWN).collect(), State::Found, 0, None);
+        });
+    }
+    // Not found. Where even its list without lengths finds nothing by titles, every rung having answered, it is Stuck, saying so
+    // (R33, the owner's: the fallback was the last way): Search now, or another list, takes it up again. Else searched again later.
+    let stuck = !it.untimed.is_empty() && why.is_none();
     with_item(id, |i| {
         i.misses += 1;
-        (i.state, i.why, i.due) = (State::Waiting, why.or_else(|| Some("No folder holds every track of its release".into())), now() + wait_after(i.misses));
+        (i.state, i.why, i.due) = if stuck {
+            (State::Stuck, Some("No folder holds every track, even by titles".into()), now() + wait_after(3))
+        } else {
+            (State::Waiting, why.or_else(|| Some("No folder holds every track of its release".into())), now() + wait_after(i.misses))
+        };
     });
 }
 
@@ -860,7 +936,7 @@ where
     with_item(id, |i| (i.state, i.percent) = (State::Checking, 100.0));
     let dir = folder.join(crate::slskd::FOLDER).join(&batch);
     let release: Vec<ReleaseTrack> =
-        it.tracks.iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, t.recording.as_deref().unwrap_or_default())).collect();
+        judged_by(&it, &f).iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, t.recording.as_deref().unwrap_or_default())).collect();
     let checked = match check(&dir, &f, &release, &gate).await {
         Ok(verdict) => verdict,
         Err(why) => {
@@ -1137,12 +1213,13 @@ mod tests {
 
     #[test]
     fn a_failed_user_hands_the_record_to_its_next_folder_or_back_to_the_search() {
-        let f = |user: &str| Folder { user: user.into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: Vec::new() };
+        let f = |user: &str| Folder { user: user.into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: Vec::new(), unchecked: None };
         let mut i = Item {
             id: "ss-1".into(),
             record: record("Air", "Moon Safari", Some(1998)),
             state: State::Fetching,
             tracks: Vec::new(),
+            untimed: Vec::new(),
             folders: vec![f("a"), f("b")],
             chosen: Some(0),
             failed: Vec::new(),
@@ -1174,12 +1251,14 @@ mod tests {
             speed: 1,
             extra: 0,
             files: vec![file(r"d\01 One.flac", 100), file(r"d\02 Two.flac", 200)],
+            unchecked: None,
         };
         let i = Item {
             id: id.into(),
             record: record("Air", "Moon Safari", Some(1998)),
             state,
             tracks: vec![track(1, "One", 100), track(2, "Two", 200)],
+            untimed: Vec::new(),
             folders: vec![f("a"), f("b")],
             chosen: Some(0),
             failed: Vec::new(),
@@ -1257,7 +1336,7 @@ mod tests {
     async fn a_file_that_failed_settles_the_folder_with_acoustid_away() {
         let d = fetched_to("settled", "b");
         let dir = d.join(crate::slskd::FOLDER).join("b");
-        let f = Folder { user: "a".into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: vec![file(r"d\01 One.flac", 100), file(r"d\02 Two.flac", 200)] };
+        let f = Folder { user: "a".into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: vec![file(r"d\01 One.flac", 100), file(r"d\02 Two.flac", 200)], unchecked: None };
         let release: Vec<ReleaseTrack> = [(1, "One"), (2, "Two")].iter().map(|(n, t)| super::super::track_fetch::track_for(1, *n, t, "Air", None, "r")).collect();
         let first = |file: PathBuf, _| std::future::ready(if file.ends_with("01 One.flac") { Err(anyhow::anyhow!("2 frames would not decode")) } else { Err(acoustid_away()) });
         let why = check(&dir, &f, &release, &first).await.unwrap().unwrap_err();
@@ -1439,6 +1518,112 @@ mod tests {
         d
     }
 
+    /// A list's track as a list without lengths gives it (R33): no length, no recording.
+    fn no_length(n: u32, title: &str) -> Track {
+        Track { length_ms: None, recording: None, ..track(n, title, 0) }
+    }
+
+    /// An item waiting to be searched under `id`, judged by `timed` (with lengths) and `untimed` (without); its record.
+    fn waiting_with(id: &str, timed: Vec<Track>, untimed: Vec<Track>) -> Record {
+        let r = record("Air", "Moon Safari", Some(1998));
+        let i = Item {
+            id: id.into(),
+            record: r.clone(),
+            state: State::Waiting,
+            tracks: timed,
+            untimed,
+            folders: Vec::new(),
+            chosen: None,
+            failed: Vec::new(),
+            misses: 0,
+            due: 0,
+            why: None,
+            batch: None,
+            percent: 0.0,
+            placed: None,
+            set_aside: Vec::new(),
+        };
+        kept(|k| k.items.push(i));
+        r
+    }
+
+    /// Each search's answers in turn as `rungs` gives them (none after), the searches counted in `asked`.
+    fn answering(rungs: Vec<Vec<Answer>>, asked: &std::sync::atomic::AtomicUsize) -> impl Fn(String) -> std::future::Ready<Result<Vec<Answer>>> + '_ {
+        move |_: String| std::future::ready(Ok(rungs.get(asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst)).cloned().unwrap_or_default()))
+    }
+
+    /// A user's folder of the record's two tracks: by title and length, as the list with lengths has them.
+    fn exact_folder(user: &str) -> Answer {
+        answer(user, true, vec![file(r"x\Air\Moon Safari\01 One.flac", 100), file(r"x\Air\Moon Safari\02 Two.flac", 200)])
+    }
+
+    /// A user's folder of the record's two tracks by title, their lengths another edition's.
+    fn titled_folder(user: &str) -> Answer {
+        answer(user, true, vec![file(r"y\Air\Moon Safari\01 One.flac", 150), file(r"y\Air\Moon Safari\02 Two.flac", 260)])
+    }
+
+    /// R33 (N17, as the owner amended it): where the list with lengths finds no folder in any rung of the search, the same answers
+    /// are judged by the list without them, by titles and count: a folder is found, and no search more is made for it.
+    #[tokio::test]
+    async fn a_list_without_lengths_is_used_only_when_lists_with_lengths_find_nothing() {
+        let r = waiting_with("ss-r33-only", vec![track(1, "One", 100), track(2, "Two", 200)], vec![no_length(1, "One"), no_length(2, "Two")]);
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        search_with("ss-r33-only", answering(vec![vec![titled_folder("near")]], &asked)).await;
+        let i = item("ss-r33-only").unwrap();
+        assert_eq!((i.state, i.folders.iter().map(|f| f.user.as_str()).collect::<Vec<_>>()), (State::Found, vec!["near"]));
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), ladder(&r).len(), "every rung by the list with lengths first; none more");
+    }
+
+    /// R33: a folder found by titles alone says so beside its tick, and its files are gated by the list it was found by.
+    #[tokio::test]
+    async fn a_fallback_folder_says_it_has_no_lengths_to_check() {
+        waiting_with("ss-r33-says", Vec::new(), vec![no_length(1, "One"), no_length(2, "Two")]);
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        search_with("ss-r33-says", answering(vec![vec![titled_folder("near")]], &asked)).await;
+        let i = item("ss-r33-says").unwrap();
+        assert_eq!((i.state, i.folders[0].unchecked.as_deref()), (State::Found, Some("No track lengths to check")));
+        let gated = judged_by(&i, &i.folders[0]);
+        assert!(gated.len() == 2 && gated.iter().all(|t| t.length_ms.is_none()), "by the list without lengths");
+    }
+
+    /// R33: a folder the list with lengths finds, in any rung, is all that is offered: one found by titles alone in an earlier rung
+    /// is not.
+    #[tokio::test]
+    async fn with_lists_with_lengths_finding_a_folder_no_fallback_is_offered() {
+        waiting_with("ss-r33-strict", vec![track(1, "One", 100), track(2, "Two", 200)], vec![no_length(1, "One"), no_length(2, "Two")]);
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        search_with("ss-r33-strict", answering(vec![vec![titled_folder("near")], vec![exact_folder("exact"), titled_folder("near")]], &asked)).await;
+        let i = item("ss-r33-strict").unwrap();
+        assert_eq!(i.folders.iter().map(|f| (f.user.as_str(), f.unchecked.is_some())).collect::<Vec<_>>(), [("exact", false)]);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2, "found at the second rung");
+    }
+
+    /// R33: where even the titles find no folder (a track none holds; another count of tracks), the item is Stuck, saying so; with
+    /// a list with lengths alone, a miss is searched again later, as ever.
+    #[tokio::test]
+    async fn with_no_list_matching_even_by_titles_the_item_says_so() {
+        for (id, list) in [("ss-r33-none", vec![no_length(1, "One"), no_length(2, "Two"), no_length(3, "Three")]), ("ss-r33-count", vec![no_length(1, "One")])] {
+            waiting_with(id, Vec::new(), list);
+            let asked = std::sync::atomic::AtomicUsize::new(0);
+            search_with(id, answering(vec![vec![titled_folder("near")]], &asked)).await;
+            let i = item(id).unwrap();
+            assert_eq!((i.state, i.why.as_deref(), i.misses, i.folders.len()), (State::Stuck, Some("No folder holds every track, even by titles"), 1, 0), "{id}");
+        }
+        waiting_with("ss-r33-timed", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
+        search_with("ss-r33-timed", answering(vec![vec![titled_folder("near")]], &std::sync::atomic::AtomicUsize::new(0))).await;
+        let i = item("ss-r33-timed").unwrap();
+        assert_eq!((i.state, i.why.as_deref()), (State::Waiting, Some("No folder holds every track of its release")));
+    }
+
+    /// R33: of the folders found by titles alone, those whose files agree in length with others, track by track, come first.
+    #[test]
+    fn fallback_folders_whose_lengths_agree_come_first() {
+        let list = [no_length(1, "One"), no_length(2, "Two")];
+        let at = |user: &str, one: i64, two: i64| answer(user, true, vec![file(&format!(r"{user}\01 One.flac"), one), file(&format!(r"{user}\02 Two.flac"), two)]);
+        let found = untimed_folders(&[at("odd", 300, 50), at("first", 100, 200), at("second", 101, 199)], &list, &[]);
+        assert_eq!(found.iter().map(|f| f.user.as_str()).collect::<Vec<_>>(), ["first", "second", "odd"]);
+    }
+
     /// R27 (N10): a folder another record is expected in is passed over: the files go into the next free one, numbered, so their
     /// album cannot join that other record; a failure to say so again once they are placed leaves them placed.
     #[test]
@@ -1607,6 +1792,7 @@ mod tests {
             record: record("Air", "Moon Safari", Some(1998)),
             state,
             tracks: vec![track(1, "La Femme d'argent", 431)],
+            untimed: vec![no_length(1, "La Femme d'argent")],
             folders: Vec::new(),
             chosen: None,
             failed: Vec::new(),
@@ -1620,7 +1806,7 @@ mod tests {
         };
         let mut found = item(State::Found);
         search_again(&mut found);
-        assert_eq!((found.state, found.tracks.len(), found.due, found.why), (State::Waiting, 0, 0, None));
+        assert_eq!((found.state, found.tracks.len(), found.untimed.len(), found.due, found.why), (State::Waiting, 0, 0, 0, None));
         let mut fetching = item(State::Fetching);
         search_again(&mut fetching);
         assert_eq!((fetching.state, fetching.tracks.len()), (State::Fetching, 1), "in flight: as it was");
@@ -1635,7 +1821,8 @@ mod tests {
         let (cat, items, d) = fx01("bandcamp-list");
         let it = of_request(&items, 11);
         assert_eq!((it.record.artist.as_str(), it.record.album.as_str(), it.state), ("Tape Club", "After Hours", State::Waiting), "taken, though it has no release group");
-        let Listing::Ready(source, tracks) = listing(it, &cat, bandcamp_list).await else { panic!("no list") };
+        let Listing::Ready(lists) = listing(it, &cat, bandcamp_list).await else { panic!("no list") };
+        let (source, tracks) = lists.timed.expect("Bandcamp's list has lengths");
         assert_eq!((source.as_str(), tracks.len()), ("bandcamp", 2));
         assert!(tracks.iter().all(|t| t.recording.is_none()), "no recording: AcoustID's check skipped at the gate");
         assert_eq!(ladder(&it.record)[0], "Tape Club After Hours 2020");

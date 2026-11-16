@@ -355,7 +355,7 @@
        now, out of the list. -->
   <MenuSheet label={i.record.album} title={i.record.album} chips={[i.record.artist, ...(i.record.year ? [String(i.record.year)] : [])]} onclose={() => (slskOpen = null)}>
     {#if tickable(i)}
-      <Group title="Folders" more="Each holds every track of the record, by title and length. The ticked record is fetched from the one chosen.">
+      <Group title="Folders" more="Each holds every track of the record, by title and length where its list has lengths. The ticked record is fetched from the one chosen.">
         <ChoiceList
           label="Folder"
           options={i.folders.map((f, n) => ({ value: String(n), label: f.dir.split(/[\\/]/).pop() || f.dir, line: folderLine(f) }))}
