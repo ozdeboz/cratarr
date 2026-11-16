@@ -5440,6 +5440,48 @@ mod tests {
         assert_eq!(cat.db().query_row("SELECT count(*) FROM expected", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "used up");
     }
 
+    /// R17 (F7): a record not had, credited as a listing named it, goes by its files once an album joins it: the artist they credit
+    /// in place of the listing's, and their own row of a label the listing named too; a label they do not name stays (R9).
+    #[test]
+    fn a_joined_record_is_credited_as_its_files_say() {
+        let cat = tracks(2);
+        let group = "00000000-0000-4000-8000-000000000107";
+        let wanted = not_had(&cat, "Two Rooms", &[("release-group", group)]);
+        let (listed, kite, lantern) = (cat.artist_for("No\u{f6}r Field").unwrap(), cat.label_for("Kite Records").unwrap(), cat.label_for("Paper Lantern").unwrap());
+        cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", params![wanted, listed]).unwrap();
+        for label in [kite, lantern] {
+            cat.db().execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, '', 'listing')", params![wanted, label]).unwrap();
+        }
+        let arrival = AlbumCopy { group: Some(group.into()), artists: vec!["Noor Field".into()], labels: vec![("Kite Records".into(), "KR-7".into())], ..arriving("Two Rooms", &[1, 2], "Noor Field/Two Rooms") };
+        cat.assign_records(&[arrival]).unwrap();
+        assert_eq!(record_of(&cat, 1), Some(wanted));
+        assert_eq!(cat.record_artists(wanted).unwrap(), [cat.artist_of("Noor Field").unwrap().unwrap()]);
+        assert_eq!(cat.label_records(kite).unwrap(), [(wanted, "KR-7".to_string())], "the files' row of it in place of the listing's");
+        assert_eq!(cat.label_records(lantern).unwrap(), [(wanted, String::new())], "a label the files do not name stays");
+    }
+
+    /// R17 (F8): a build without the copy that names the record's release (its library not read this time, its files gone for a
+    /// pass) keeps the release, its list and its count: they are let go of only when the first-ranked copy names another release.
+    #[test]
+    fn a_copy_missing_for_one_build_keeps_the_records_list() {
+        let cat = tracks(2);
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        let (main, incoming) = (naming("Tide Tables", &[1, 2], &mbid(1), 2), AlbumCopy { folder: 1, ..album("Tide Tables", &[1, 2]) });
+        cat.assign_records(&[main, incoming.clone()]).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        let list: Vec<identity::RefTrack> = [1, 2].iter().zip(1..).map(|(t, position)| identity::RefTrack { disc: 1, position, title: format!("Track {t}"), length_ms: Some(200_000), recording: None }).collect();
+        cat.set_reference_tracks(record, "musicbrainz", &list).unwrap();
+        cat.set_counting(record, Some("musicbrainz"), false).unwrap();
+        let state = || {
+            let refs: Vec<String> = cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().map(|(r, _)| r.value).collect();
+            (refs, cat.reference_tracks(record).unwrap().len(), cat.record(record).unwrap().unwrap().counting)
+        };
+        cat.keep_files_names(&[incoming.clone()]).unwrap();
+        assert_eq!(state(), (vec![mbid(1)], 1, Some("musicbrainz".to_string())), "kept: its release, its list and its count");
+        cat.keep_files_names(&[naming("Tide Tables", &[1, 2], &mbid(2), 2), incoming]).unwrap();
+        assert_eq!(state(), (vec![mbid(2)], 0, None), "a retag lets them go");
+    }
+
     /// R14 (F6): a had record's title and artist follow its first-ranked copy at each build: a retag shows.
     #[test]
     fn a_records_names_follow_a_retag() {

@@ -385,7 +385,7 @@ fn first_ranked<'a>(albums: &'a [super::AlbumCopy], records: &[Option<i64>]) -> 
     first.into_iter().map(|(record, (_, a))| (record, a)).collect()
 }
 
-/// A record's MusicBrainz list once its files let go of the release it was read for (R8): gone, unless the count was chosen by
+/// A record's MusicBrainz list once its files name another release than the one it was read for (R8, R17): gone, unless the count was chosen by
 /// hand from it, and the count worked out again from the lists left and the files (`identity::counting`), unless chosen by
 /// hand. With no files to hold a list against, nothing counts.
 fn let_go_list(tx: &Connection, record: i64, files: &[super::identity::Listed]) -> Result<()> {
@@ -427,7 +427,11 @@ pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], rec
     };
     for (subject, kind, value) in &held {
         let Some((record, a)) = ids::record_number(subject).and_then(|record| Some((record, *first.get(&record)?))) else { continue };
-        if !now.contains(&(subject.clone(), kind.as_str(), value.as_str())) {
+        // Let go of on a retag only (R17, F8): the copy that counts names another of its kind. One that names none (the copy that
+        // named it missing for a build, an untagged Incoming copy ranked first meanwhile) leaves it, and its list, as they are.
+        let named_now = if kind == "release" { a.facts.release.as_deref() } else { a.group.as_deref() };
+        let names_other = named_now.is_some_and(|v| is_mbid(v) && !v.eq_ignore_ascii_case(value));
+        if names_other && !now.contains(&(subject.clone(), kind.as_str(), value.as_str())) {
             tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1 AND source = 'musicbrainz' AND kind = ?2 AND value = ?3")?.execute(params![subject, kind, value])?;
             if kind == "release" {
                 let_go_list(tx, record, &a.facts.tracks)?;
@@ -480,6 +484,12 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
                 ids.push(*id);
             }
         }
+        // Credited as its files say once it holds them (R17, F7): the artists a listing credited it (a request's names, a
+        // discography's) give way wherever the files credit one; a listing's row of a label gives way to the files' own row of
+        // that label. A label the files do not name stays, as a merge brought it (R9).
+        if !ids.is_empty() {
+            tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND how = 'listing'")?.execute([record])?;
+        }
         if held_artists.get(&record).map_or(&[][..], Vec::as_slice) != ids.as_slice() {
             tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND how = 'files'")?.execute([record])?;
             for (position, artist) in ids.iter().enumerate() {
@@ -502,6 +512,9 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         let mut named: Vec<(i64, String)> = a.labels.iter().filter_map(|(name, catno)| Some((*labels.get(&ids::artist_key(name))?, catno.clone()))).collect();
         named.sort();
         named.dedup();
+        for (label, _) in &named {
+            tx.prepare_cached("DELETE FROM record_labels WHERE record = ?1 AND label = ?2 AND how = 'listing'")?.execute(params![record, label])?;
+        }
         if held_labels.get(&record).map_or(&[][..], Vec::as_slice) != named.as_slice() {
             tx.prepare_cached("DELETE FROM record_labels WHERE record = ?1 AND how = 'files'")?.execute([record])?;
             for (label, catno) in &named {
@@ -769,11 +782,13 @@ impl Catalogue {
         let mut db = self.db();
         let tx = db.transaction()?;
         let (a, b) = (merged_end(&tx, a)?.context("no such record")?, merged_end(&tx, b)?.context("no such record")?);
-        let into = match (had(&tx, a)?, had(&tx, b)?) {
-            (true, false) => a,
-            (false, true) => b,
-            _ => a.min(b),
+        // Into the one that holds tracks, else the live one (R17: `merge_records_in` refuses a retired record as the end), else the
+        // older.
+        let key = |id: i64| -> Result<(bool, bool, i64)> {
+            let retired: bool = tx.query_row("SELECT retired_at IS NOT NULL FROM records WHERE id = ?1", [id], |r| r.get(0))?;
+            Ok((!had(&tx, id)?, retired, id))
         };
+        let into = if key(a)? <= key(b)? { a } else { b };
         merge_records_in(&tx, if into == a { b } else { a }, into)?;
         tx.commit()?;
         Ok(into)
@@ -1848,6 +1863,15 @@ mod tests {
         assert_eq!(most_named([a, b, b]).as_deref(), Some("abcdef00-0000-4000-8000-000000000002"));
         assert_eq!(most_named([b, a]).as_deref(), Some(a), "as often: the lower");
         assert_eq!(most_named(["", " "]), None);
+    }
+
+    /// R17 (R9's rest): two records not had merge into the live one: a retired one, older or not, is never the end.
+    #[test]
+    fn a_merge_goes_into_the_live_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (gone, live) = (cat.record_for_tests("Undertow", 0), cat.record_for_tests("Undertow (asked for)", 0));
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [gone]).unwrap();
+        assert_eq!(cat.merge(gone, live).unwrap(), live);
     }
 
     /// R14 (F6): a Want for an album the library has under looser names (in brackets, a leading "The") names its record, as the
