@@ -185,6 +185,20 @@ INSERT INTO tags (folder, rel, n, raw, name, value) VALUES
   (0, 'Glass Harbour/Partial Shore (2011)/01 Sandbar.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000060'),
   (0, 'Glass Harbour/Partial Shore (2011)/02 Groyne.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000006'),
   (0, 'Glass Harbour/Partial Shore (2011)/05 Breakwater.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000006');
+-- Tide Tables' files name their album artist and MusicBrainz's id for them: how the step names a discography's artist.
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES
+  (0, 'Glass Harbour/Tide Tables (2012)/01 Slack Water.flac', 2, 'ALBUMARTIST', 'albumartist', 'Glass Harbour'),
+  (0, 'Glass Harbour/Tide Tables (2012)/01 Slack Water.flac', 3, 'MUSICBRAINZ_ALBUMARTISTID', 'musicbrainz_albumartistid', '00000000-0000-4000-8000-000000000201'),
+  (0, 'Glass Harbour/Tide Tables (2012)/02 Neap.flac', 2, 'ALBUMARTIST', 'albumartist', 'Glass Harbour'),
+  (0, 'Glass Harbour/Tide Tables (2012)/02 Neap.flac', 3, 'MUSICBRAINZ_ALBUMARTISTID', 'musicbrainz_albumartistid', '00000000-0000-4000-8000-000000000201'),
+  (0, 'Glass Harbour/Tide Tables (2012)/03 Spring Tide.flac', 2, 'ALBUMARTIST', 'albumartist', 'Glass Harbour'),
+  (0, 'Glass Harbour/Tide Tables (2012)/03 Spring Tide.flac', 3, 'MUSICBRAINZ_ALBUMARTISTID', 'musicbrainz_albumartistid', '00000000-0000-4000-8000-000000000201'),
+  (0, 'Glass Harbour/Tide Tables (2012)/04 Ebb.flac', 2, 'ALBUMARTIST', 'albumartist', 'Glass Harbour'),
+  (0, 'Glass Harbour/Tide Tables (2012)/04 Ebb.flac', 3, 'MUSICBRAINZ_ALBUMARTISTID', 'musicbrainz_albumartistid', '00000000-0000-4000-8000-000000000201'),
+  (0, 'Glass Harbour/Tide Tables (2012)/05 Flood.flac', 2, 'ALBUMARTIST', 'albumartist', 'Glass Harbour'),
+  (0, 'Glass Harbour/Tide Tables (2012)/05 Flood.flac', 3, 'MUSICBRAINZ_ALBUMARTISTID', 'musicbrainz_albumartistid', '00000000-0000-4000-8000-000000000201'),
+  (0, 'Glass Harbour/Tide Tables (2012)/06 Low Water.flac', 2, 'ALBUMARTIST', 'albumartist', 'Glass Harbour'),
+  (0, 'Glass Harbour/Tide Tables (2012)/06 Low Water.flac', 3, 'MUSICBRAINZ_ALBUMARTISTID', 'musicbrainz_albumartistid', '00000000-0000-4000-8000-000000000201');
 -- 0.16's first start, done.
 INSERT INTO meta (key, value) VALUES
   ('first_records', '{"records":6,"copies":6,"tracks_merged":0,"bases_on_two_records":0,"artists":6,"shapes_moved":0,"shapes_left":0,"beats_moved":0,"beats_left":0}'),

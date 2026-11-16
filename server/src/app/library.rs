@@ -940,7 +940,7 @@ mod switched_off_tests {
         let marks = || marks_017(&d);
         let err = started(&d, &db).await.err().expect("the start stops");
         assert!(format!("{err:#}").contains("0.17's step did not finish"), "{err:#}");
-        assert_eq!(marks(), ["017:certain", "017:discogs", "017:files", "017:hand", "017:likely", "017:links"], "the parts before the pages done");
+        assert_eq!(marks(), ["017:certain", "017:discography", "017:discogs", "017:files", "017:hand", "017:likely", "017:links"], "the parts before the pages done");
         assert!(!db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
 
         catalogue().execute_batch("DROP TRIGGER no_pages").unwrap();

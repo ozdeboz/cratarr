@@ -733,6 +733,10 @@ pub struct KeptFor017 {
     pub pages: Vec<(String, i64, Option<String>)>,
     /// `mb_releases` MusicBrainz knew: (release, when, what was read).
     pub releases: Vec<(String, i64, String)>,
+    /// `discography` (C48b): (artist's MusicBrainz id, when read, its release groups as JSON).
+    pub discographies: Vec<(String, i64, String)>,
+    /// `related_artists`' finds (JSON), for the names of the artists in them, by MusicBrainz id.
+    pub related: Vec<String>,
 }
 
 impl UserData {
@@ -751,6 +755,8 @@ impl UserData {
             discogs: rows(&db, "SELECT subject, at, facts FROM discogs_facts WHERE subject GLOB 'album:*' ORDER BY subject", three)?,
             pages: rows(&db, "SELECT album, at, page FROM bandcamp_found ORDER BY album", three)?,
             releases: rows(&db, "SELECT release, at, facts FROM mb_releases WHERE found <> 0 ORDER BY release", |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?,
+            discographies: rows(&db, "SELECT artist, at, groups FROM discography ORDER BY artist", |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?,
+            related: rows(&db, "SELECT found FROM related_artists ORDER BY artist", |r| r.get(0))?,
         })
     }
 

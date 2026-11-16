@@ -18,6 +18,11 @@
 //!   the second time and leaves it.
 //! - **Failed, it stops the start**, as 0.16's first start does: what it has not carried would be read as never known.
 //! - **Old tables kept** one version, read by nothing else: none is emptied or dropped.
+//! - **The discographies** (C48b, a part of its own): each artist's albums and EPs as MusicBrainz listed them (`discography`)
+//!   become records not had, but for those a record holds already by its release group, credited to the artist and found
+//!   `link`; the artist's reference is read when the discography was. `related_artists` and the matches are read for the names
+//!   of artists nothing here names. Before the pages, so a record not had gets the page kept by its group. `discography` stays
+//!   as it was, read by Discover as before.
 //! - **One release on two records** (G1): who keeps it goes by the order the parts run in: a link pasted by hand, a certain
 //!   match (MusicBrainz matched the record's tracks to it; two on one release, the older record), the files' own (the older
 //!   record first), a likely match. A retired record holds none.
@@ -25,7 +30,7 @@
 use anyhow::Result;
 
 use crate::catalogue::Catalogue;
-use crate::catalogue::records::{Carry, CarriedChoice, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, Ref};
+use crate::catalogue::records::{Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, Ref};
 use crate::userdata::UserData;
 
 /// The migration report's part, as `/api/admin/migration` lists it.
@@ -60,6 +65,9 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
     }
     Ok(())
 }
+
+/// Words that join two artists in a credit: a match's credit with one is no one artist's name.
+const JOINS: [&str; 7] = [" & ", ", ", " feat", " ft.", " with ", " x ", " vs"];
 
 /// What the user data's rows say, read: each row's JSON as 0.16 wrote it. A row that carries nothing is noted by why, for the
 /// report: nothing found (asked in vain), a miss, a page that is no album's, a release with no Discogs link, JSON that cannot
@@ -133,18 +141,46 @@ fn carry_of(kept: &crate::userdata::KeptFor017) -> Carry {
             Err(_) => note("mb_releases: not read", release),
         }
     }
+    // The discographies' artists by the names they may go by: a related artist's (MusicBrainz's own name for that id), then a
+    // match's credit of one artist.
+    let mut names: std::collections::HashMap<String, Vec<(String, &'static str)>> = std::collections::HashMap::new();
+    for json in &kept.related {
+        let Ok(found) = serde_json::from_str::<super::related::Found>(json) else { continue };
+        for a in found.artists {
+            if let Some(id) = a.mbid {
+                names.entry(id.to_ascii_lowercase()).or_default().push((a.name, "link"));
+            }
+        }
+    }
+    for (_, _, json) in &kept.matches {
+        let Some(Ok(m)) = json.as_deref().map(serde_json::from_str::<super::matching::Match>) else { continue };
+        let lower = m.artist.to_lowercase();
+        if let Some(id) = m.artist_id.filter(|_| !m.artist.is_empty() && !JOINS.iter().any(|j| lower.contains(j))) {
+            names.entry(id.to_ascii_lowercase()).or_default().push((m.artist, "search"));
+        }
+    }
+    let mut discographies = Vec::new();
+    for (artist, at, groups) in &kept.discographies {
+        let mbid = artist.to_ascii_lowercase();
+        match super::discover::discography_listings(groups) {
+            Ok(listings) => discographies.push(CarriedDiscography { names: names.get(&mbid).cloned().unwrap_or_default(), mbid, at: *at, listings }),
+            Err(_) => note("discography: not read", artist),
+        }
+    }
     Carry {
         chosen,
         matches,
         discogs,
         pages,
         links,
+        discographies,
         read: vec![
             ("record_references", kept.chosen.len() as u64),
             ("album_matches", kept.matches.len() as u64),
             ("discogs_facts: albums", kept.discogs.len() as u64),
             ("bandcamp_found", kept.pages.len() as u64),
             ("mb_releases", kept.releases.len() as u64),
+            ("discography", kept.discographies.len() as u64),
         ],
         noted,
     }
@@ -391,7 +427,7 @@ mod tests {
         assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", FERRY)).unwrap(), ["al-10"]);
         assert_eq!(cat.subject_of(&Ref::new("bandcamp", "album", "https://orbitlane.bandcamp.com/album/undertow")).unwrap(), ["al-12"]);
         let report = &ud.migration_report().unwrap()[PART].1;
-        assert_eq!(listed(report, "bandcamp_found").1, [mb(111)], "Harbour Lights alone found no record: {report}");
+        assert!(listed(report, "bandcamp_found").1.is_empty(), "Harbour Lights' found its record not had (C48b): {report}");
     }
 
     /// R5: a row keeps when it was first found: a match's, a page's and a link's as 0.16 found them, a hand's when the step
@@ -516,6 +552,7 @@ mod tests {
             ("discogs_facts: albums", "SELECT count(*) FROM discogs_facts WHERE subject LIKE 'album:%'"),
             ("bandcamp_found", "SELECT count(*) FROM bandcamp_found"),
             ("mb_releases", "SELECT count(*) FROM mb_releases WHERE found <> 0"),
+            ("discography", "SELECT count(*) FROM discography"),
         ] {
             let rows = data.sql::<i64>("userdata.sqlite", sql) as u64;
             let (before, moved) = table(report, name);
@@ -547,6 +584,51 @@ mod tests {
             assert_eq!(listed(report, &format!("{table}: not read")).0, 1, "{table}: {report}");
         }
         assert!(refs(&cat, 5).contains(&by("discogs", "master", "1000005", "hand", false)), "{:?}", refs(&cat, 5));
+    }
+
+    /// C48b: each artist's albums and EPs as MusicBrainz listed them are records: one a record holds already found by its
+    /// release group, the rest records not had, credited to the artist, who is named by their files, a related artist's name or
+    /// a match's; a Bandcamp page kept by a group, the record of it now.
+    #[test]
+    fn a_discography_becomes_records_not_had() {
+        let data = Data::new("discography");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        let of = |n: u32| -> Vec<i64> { cat.subject_of(&Ref::new("musicbrainz", "release-group", &mb(n))).unwrap().iter().filter_map(|s| crate::serve::ids::record_number(s)).collect() };
+        assert_eq!((of(101), of(102), of(103)), (vec![1], vec![2, 9], vec![3]), "a group a record holds is that record");
+        let [lights] = of(111)[..] else { panic!("{:?}", of(111)) };
+        let lights = cat.record(lights).unwrap().unwrap();
+        assert_eq!(
+            (lights.title.as_str(), lights.artist.as_str(), lights.year, lights.kind.as_deref(), lights.released.as_deref(), lights.genres.as_slice(), lights.had),
+            ("Harbour Lights", "Glass Harbour", Some(2014), Some("ep"), Some("2014-06"), &["ambient".to_string()][..], false)
+        );
+        let artist = |name: &str| cat.artist_of(name).unwrap().unwrap();
+        for (n, name) in [(111, "Glass Harbour"), (112, "Glass Harbour"), (113, "Kite Theory"), (114, "Noor Field"), (115, "Tape Club"), (116, "Tape Club")] {
+            let [record] = of(n)[..] else { panic!("{n}: {:?}", of(n)) };
+            assert!(!cat.record(record).unwrap().unwrap().had, "{n}");
+            assert_eq!(cat.record_artists(record).unwrap(), [artist(name)], "{n}");
+        }
+        assert!(cat.references_of(&crate::serve::ids::record(of(111)[0])).unwrap().iter().any(|(r, row)| r.source == "bandcamp" && row.how == "search"), "Harbour Lights' page, kept by its group");
+        let named = |name: &str| cat.references_of(&crate::serve::ids::artist(artist(name))).unwrap().into_iter().map(|(r, row)| (r.value, row.how, row.read_at)).collect::<Vec<_>>();
+        assert_eq!(named("Glass Harbour"), [(mb(201), "files".to_string(), Some(1793900000))], "as their files call them, read when the discography was");
+        assert_eq!(named("Tape Club"), [(mb(204), "link".to_string(), Some(1793950000))], "a related artist's name");
+        assert_eq!(named("Noor Field"), [(mb(202), "search".to_string(), Some(1793900000))], "a match's credit");
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert_eq!((report["records_found"].as_u64(), report["records_not_had"].as_u64(), report["listed"].as_u64()), (Some(3), Some(7), Some(10)), "{report}");
+    }
+
+    /// C48b: read again (its mark gone), the discographies find the records they made, and make none: by their release groups.
+    #[test]
+    fn a_second_read_finds_the_same_records() {
+        let data = Data::new("discography-again");
+        let records = "SELECT id, title, artist, kind FROM records ORDER BY id";
+        data.run();
+        let (first, refs) = (data.rows_of("catalogue.sqlite", records), data.rows());
+        assert!(first.len() > 12, "{first:?}");
+        data.batch("catalogue.sqlite", "DELETE FROM meta WHERE key = '017:discography'");
+        data.run();
+        assert_eq!(data.rows_of("catalogue.sqlite", records), first);
+        assert_eq!(data.rows(), refs);
     }
 
     fn refs(cat: &Catalogue, record: i64) -> Vec<(String, String, String, String, bool)> {
@@ -652,7 +734,7 @@ mod tests {
 
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!(listed(report, "album_matches").0, 1, "{report}");
-        assert_eq!(listed(report, "bandcamp_found").0, 1, "Harbour Lights, a record not had: C48b's");
+        assert_eq!(listed(report, "bandcamp_found").0, 0, "Harbour Lights', a record not had now (C48b)");
         assert_eq!(
             differed(report, "references: held by another record"),
             [format!("al-9 musicbrainz:release:{}", mb(2)), format!("al-11 musicbrainz:release:{FERRY}"), format!("al-4 musicbrainz:release:{}", mb(1)), "al-4 discogs:release:2000003".to_string()],

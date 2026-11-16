@@ -706,9 +706,10 @@ impl Catalogue {
 /// 0.17's step's parts, in the order they run, as who keeps a release two records name goes by it (G1): a link pasted by hand;
 /// a certain match, MusicBrainz having matched the record's own tracks to the release; what the files name, the older record
 /// first; a likely match; MusicBrainz's verified Discogs links, before a Discogs search by names, which can find another
-/// record's; Bandcamp's pages; 0.14's choices, which confirm what the parts before wrote. No part counts: a certain match's
+/// record's; the discographies (C48b), records not had found by the release groups the parts before kept; Bandcamp's pages,
+/// a record not had's among them; 0.14's choices, which confirm what the parts before wrote. No part counts: a certain match's
 /// list is read after (`lists_to_read`), and counts where it agrees with the files.
-pub const PARTS_017: [&str; 8] = ["hand", "certain", "files", "likely", "links", "discogs", "pages", "chosen"];
+pub const PARTS_017: [&str; 9] = ["hand", "certain", "files", "likely", "links", "discogs", "discography", "pages", "chosen"];
 
 /// A part's mark in `meta`, holding its report: there, the part is done. One a part, so a data folder that ran an earlier
 /// version of the step, with fewer parts, runs the ones it lacks.
@@ -724,6 +725,7 @@ fn table_017(part: &str) -> Option<&'static str> {
         "certain" => "album_matches",
         "links" => "mb_releases",
         "discogs" => "discogs_facts: albums",
+        "discography" => "discography",
         "pages" => "bandcamp_found",
         _ => return None,
     })
@@ -748,6 +750,7 @@ pub struct Carry {
     pub discogs: Vec<CarriedDiscogs>,
     pub pages: Vec<CarriedPage>,
     pub links: Vec<CarriedLinks>,
+    pub discographies: Vec<CarriedDiscography>,
     /// Each table's rows as read: the report's before and after alike, as nothing is taken out of it.
     pub read: Vec<(&'static str, u64)>,
     /// Rows read that carry nothing, by why ("<table>: <why>": nothing found, a miss, not read, ...): their keys, which the
@@ -792,6 +795,34 @@ pub struct CarriedPage {
     pub key: String,
     pub at: i64,
     pub page: String,
+}
+
+/// One artist's discography (`discography`, C48b): their MusicBrainz id, when it was read, its release groups as listings, and
+/// the names they may go by where nothing here names them yet: (name, how found), a related artist's first, then a match's.
+#[derive(Debug, Clone, Default)]
+pub struct CarriedDiscography {
+    pub mbid: String,
+    pub at: i64,
+    pub listings: Vec<Listing>,
+    pub names: Vec<(String, &'static str)>,
+}
+
+/// What the files call each MusicBrainz artist id: the album artist most of the files tagged with it alone give.
+fn files_artists(tx: &Connection) -> Result<std::collections::HashMap<String, String>> {
+    let mut st = tx.prepare(
+        "SELECT lower(i.value), n.value FROM tags i JOIN tags n ON n.folder = i.folder AND n.rel = i.rel AND n.name = 'albumartist'
+         JOIN files f ON f.folder = i.folder AND f.rel = i.rel
+         WHERE i.name = 'musicbrainz_albumartistid' AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL
+         GROUP BY lower(i.value), n.value ORDER BY count(*) DESC, n.value",
+    )?;
+    let mut out = std::collections::HashMap::new();
+    for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (id, name) = row?;
+        if is_mbid(&id) {
+            out.entry(id).or_insert(name);
+        }
+    }
+    Ok(out)
 }
 
 /// MusicBrainz's verified Discogs links of a release (`mb_releases`), and when it was read.
@@ -981,19 +1012,73 @@ impl Carrying<'_> {
         Ok(())
     }
 
-    /// 7. Bandcamp's pages: where exactly one live record is what a page was kept by, its release group or its names.
+    /// 7. The discographies (C48b): each artist's albums and EPs as MusicBrainz listed them become records (`keep_listing_in`):
+    ///    one a record holds already by its release group found again, another a record not had, credited to the artist and
+    ///    found `link`. The artist is named by their MusicBrainz reference, else as their files call them, else by a related
+    ///    artist's name or a match's credit, which then keeps that id as their reference; read when the discography was.
+    fn discography(&mut self, c: &Carry) -> Result<()> {
+        let files = files_artists(self.tx)?;
+        let records = |tx: &Connection| -> Result<u64> { Ok(tx.query_row("SELECT count(*) FROM records", [], |r| r.get::<_, i64>(0))? as u64) };
+        let (before, mut found, mut listed) = (records(self.tx)?, 0, 0);
+        for d in &c.discographies {
+            let reference = Ref::new("musicbrainz", "artist", &d.mbid);
+            let known = subjects_in(self.tx, &reference)?.iter().find_map(|s| s.strip_prefix(ids::ARTIST)?.parse::<i64>().ok());
+            let artist = match known {
+                Some(id) => id,
+                None => {
+                    let Some((name, how)) = files.get(&d.mbid).map(|name| (name.clone(), "files")).or_else(|| d.names.first().map(|(n, how)| (n.clone(), *how))) else {
+                        self.unmatched.entry("discography").or_default().push(d.mbid.clone());
+                        continue;
+                    };
+                    let id = super::artists::artists_in(self.tx, &std::collections::BTreeSet::from([name.clone()]), d.at)?[&ids::artist_key(&name)];
+                    if put_reference(self.tx, &ids::artist(id), &reference, how, d.at, false)? == Put::Held {
+                        self.refused.push(named(&ids::artist(id), &reference));
+                    }
+                    id
+                }
+            };
+            self.moved += 1;
+            let name: String = self.tx.query_row("SELECT name FROM artists WHERE id = ?1", [artist], |r| r.get(0))?;
+            let listings: Vec<Listing> = d.listings.iter().map(|l| Listing { artist: name.clone(), ..l.clone() }).collect();
+            let made = records(self.tx)?;
+            let kept = keep_listing_in(self.tx, Some(artist), &listings, "link", d.at)?;
+            found += kept.len() as u64 - (records(self.tx)? - made);
+            listed += kept.len() as u64;
+            self.tx.execute(
+                "UPDATE \"references\" SET read_at = max(COALESCE(read_at, 0), ?2) WHERE subject = ?1 AND source = 'musicbrainz' AND kind = 'artist'",
+                params![ids::artist(artist), d.at],
+            )?;
+        }
+        self.counts = vec![("records_not_had", records(self.tx)? - before), ("records_found", found), ("listed", listed)];
+        Ok(())
+    }
+
+    /// 8. Bandcamp's pages: where exactly one live record is what a page was kept by, its release group or its names. By names,
+    ///    the records had come first: 0.16 kept a page by names for an album it had, and a discography's record not had of the
+    ///    same names (C48b) is another edition, which MusicBrainz lists apart.
     fn pages(&mut self, c: &Carry) -> Result<()> {
-        let mut names: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+        let mut names: std::collections::HashMap<String, (Vec<i64>, Vec<i64>)> = std::collections::HashMap::new();
         {
-            let mut st = self.tx.prepare("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL ORDER BY id")?;
-            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
-                let (id, artist, title) = row?;
-                names.entry(format!("{}|{}", cratarr_rules::names::key(&artist), cratarr_rules::names::key(&title))).or_default().push(id);
+            let mut st = self.tx.prepare(
+                "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, ''), EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
+                 FROM records r WHERE r.merged_into IS NULL AND r.retired_at IS NULL ORDER BY r.id",
+            )?;
+            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))? {
+                let (id, artist, title, had) = row?;
+                let (all, had_ones) = names.entry(format!("{}|{}", cratarr_rules::names::key(&artist), cratarr_rules::names::key(&title))).or_default();
+                all.push(id);
+                if had {
+                    had_ones.push(id);
+                }
             }
         }
         self.unmatched.entry(SEVERAL).or_default();
         for p in &c.pages {
-            let records = if is_mbid(&p.key) { self.holders(&Ref::new("musicbrainz", "release-group", &p.key))? } else { names.get(&p.key).cloned().unwrap_or_default() };
+            let records = if is_mbid(&p.key) {
+                self.holders(&Ref::new("musicbrainz", "release-group", &p.key))?
+            } else {
+                names.get(&p.key).map(|(all, had)| if had.is_empty() { all.clone() } else { had.clone() }).unwrap_or_default()
+            };
             match records[..] {
                 [record] => {
                     self.put(record, &Ref::new("bandcamp", "album", &p.page), "search", p.at, false)?;
@@ -1006,7 +1091,7 @@ impl Carrying<'_> {
         Ok(())
     }
 
-    /// 8. 0.14's choices: the source chosen, by hand; checked by hand; its guesses confirmed, each source of which the record
+    /// 9. 0.14's choices: the source chosen, by hand; checked by hand; its guesses confirmed, each source of which the record
     ///    holds no reference listed.
     fn chosen(&mut self, c: &Carry) -> Result<()> {
         let (mut by_hand, mut checked, mut confirmed, mut asked, mut found) = (0, 0, 0, 0, 0);
@@ -1057,6 +1142,7 @@ fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_
         "likely" => w.matches(c, false)?,
         "links" => w.links(c)?,
         "discogs" => w.discogs(c)?,
+        "discography" => w.discography(c)?,
         "pages" => w.pages(c)?,
         "chosen" => w.chosen(c)?,
         _ => anyhow::bail!("0.17's step has no part {part}"),

@@ -291,6 +291,10 @@ INSERT INTO discography (artist, at, groups) VALUES
   ('00000000-0000-4000-8000-000000000203', 1780000000, '[{"id":"00000000-0000-4000-8000-000000000103","title":"Night Walks","kind":"EP","year":2020,"genres":[]},{"id":"00000000-0000-4000-8000-000000000113","title":"Paper Kites","kind":"Album","year":2018,"genres":[]}]'),
   ('00000000-0000-4000-8000-000000000204', 1793950000, '[{"id":"00000000-0000-4000-8000-000000000115","title":"Lost Tapes","kind":"Album","year":1999,"genres":[],"date":"1999"},{"id":"00000000-0000-4000-8000-000000000116","title":"Long Player","kind":"Album","year":2015,"genres":["rock"],"date":"2015-05-01"}]');
 
+-- Related artists (0.9.2) by the artist's MusicBrainz id: a related artist's discography above is theirs, and this names them.
+INSERT INTO related_artists (artist, at, found) VALUES
+  ('00000000-0000-4000-8000-000000000201', 1793950000, '{"at":1793950000,"artists":[{"name":"Tape Club","mbid":"00000000-0000-4000-8000-000000000204","why":["Listened alongside"],"score":1.0},{"name":"Kite Theory","mbid":"00000000-0000-4000-8000-000000000203","why":["Worked together"],"score":0.6}]}');
+
 -- Requests (0070), by names: with a release group (Soulseek fetches those, `soulseek.json`), one for a record owned by its
 -- group; without one (production: 8 of 87), owned by names, not owned, and cancelled.
 INSERT INTO request (id, user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched) VALUES

@@ -577,6 +577,25 @@ struct Group {
     date: Option<String>,
 }
 
+/// An artist's discography as kept (`discography`'s JSON, a list of `Group`) as records a list names (0100, C48b): each release
+/// group a listing by its MusicBrainz id, its type in the library's words ("album", "ep"), its first release date and genres.
+/// The artist's name is left for whoever knows it.
+pub(super) fn discography_listings(groups: &str) -> Result<Vec<crate::catalogue::records::Listing>> {
+    let groups: Vec<Group> = serde_json::from_str(groups)?;
+    Ok(groups
+        .into_iter()
+        .map(|g| crate::catalogue::records::Listing {
+            kind: crate::serve::library::release_words(g.kind.as_deref()).0,
+            refs: vec![crate::catalogue::records::Ref::new("musicbrainz", "release-group", &g.id.to_ascii_lowercase())],
+            title: g.title,
+            year: g.year,
+            released: g.date,
+            genres: g.genres,
+            ..Default::default()
+        })
+        .collect())
+}
+
 /// An artist the library has, with how much the account plays them.
 #[derive(Debug, Clone)]
 pub(super) struct OwnArtist {
