@@ -601,7 +601,9 @@ impl Library {
         self.catalogue.folders().iter().filter(|(_, p)| main.contains(&p.as_path())).map(|(id, _)| id).collect()
     }
 
-    /// Whether the catalogue's folder `folder` is a main library's: Keep's target, Replace's, out of Lidarr's reach.
+    /// Whether the catalogue's folder `folder` is a main library's: Keep's target, Replace's, out of Lidarr's reach. What
+    /// decides that reads `main_folders`; only the tests ask it of one folder.
+    #[cfg(test)]
     pub(super) fn is_main(&self, folder: i64) -> bool {
         self.main_folders().contains(&folder)
     }
