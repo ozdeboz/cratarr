@@ -362,9 +362,17 @@ where
 /// How many failed questions a record's list is asked again after, before the record is let go of to Health's item.
 const LIST_TRIES: i64 = 3;
 
-/// Whether an error is MusicBrainz out of reach (no answer at all, or switched off), not an answer about one release.
+/// Whether an error is MusicBrainz out of reach, not an answer about one release: no answer at all, busy or down (a 5xx), limiting
+/// its rate (429, R15), or switched off.
 fn out_of_reach(e: &anyhow::Error) -> bool {
-    e.downcast_ref::<reqwest::Error>().is_some_and(|r| r.is_connect() || r.is_timeout()) || !super::switches::is_on(super::switches::MUSICBRAINZ)
+    let busy = |s: reqwest::StatusCode| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS;
+    e.downcast_ref::<reqwest::Error>().is_some_and(|r| r.is_connect() || r.is_timeout() || r.status().is_some_and(busy)) || !super::switches::is_on(super::switches::MUSICBRAINZ)
+}
+
+/// Whether MusicBrainz answered that it will not give this release (no such release, an id it refuses: a 4xx other than its
+/// rate limit's 429, which is out of reach).
+fn no_such(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status).is_some_and(|s| s.is_client_error() && s != reqwest::StatusCode::TOO_MANY_REQUESTS)
 }
 
 /// How many lists `lists_pass` reads in one pass.
@@ -380,7 +388,7 @@ pub async fn lists_pass() -> Result<usize> {
         let read = match super::track_fetch::release_by_id(&release).await {
             Ok(v) => Ok(Some(list_of_release(&v))),
             // MusicBrainz will not answer for it (no such release, an id it refuses): no list, let go of at once (R7).
-            Err(e) if e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status).is_some_and(|s| s.is_client_error()) => Ok(None),
+            Err(e) if no_such(&e) => Ok(None),
             Err(e) => Err(e),
         };
         tokio::time::sleep(std::time::Duration::from_secs(super::musicbrainz::PACE_SECS)).await;
@@ -931,6 +939,52 @@ mod tests {
         }
         assert!(cat.lists_to_read(10).unwrap().is_empty(), "let go of after its tries");
         assert_eq!(cat.unreferenced(true).unwrap(), [broken]);
+    }
+
+    /// A server of the test's own answering every question with `status`: what MusicBrainz busy, down or limiting its rate is to
+    /// a reader, as `error_for_status` gives it.
+    async fn serving(status: u16) -> String {
+        let app = axum::Router::new().fallback(move || async move { axum::http::StatusCode::from_u16(status).unwrap() });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/ws/2/release/r1", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        url
+    }
+
+    /// The error a reader meets asking `url`.
+    async fn asked(url: String) -> anyhow::Error {
+        reqwest::get(url).await.unwrap().error_for_status().unwrap_err().into()
+    }
+
+    /// R15 (F4): MusicBrainz busy or down (a 5xx) or limiting its rate (a 429) is out of reach, never the release's own failure:
+    /// each pass stops at it, and no record waiting for a list is counted against or let go of, however many passes it lasts.
+    #[tokio::test]
+    async fn a_musicbrainz_outage_lets_no_record_go() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let mut waits = vec![waiting(&cat, "Signal", "r1"), waiting(&cat, "Lamplight", "r2")];
+        waits.sort();
+        for status in [503, 502, 429] {
+            let url = serving(status).await;
+            let read = |_| {
+                let url = url.clone();
+                async move { Err(asked(url).await) }
+            };
+            for _ in 0..=LIST_TRIES {
+                assert_eq!(read_lists(&cat, files_none(), read, 10).await.unwrap(), 0);
+            }
+            let mut left: Vec<i64> = cat.lists_to_read(10).unwrap().into_iter().map(|(r, _)| r).collect();
+            left.sort();
+            assert_eq!(left, waits, "{status}: both still wait");
+        }
+        assert!(cat.unreferenced(true).unwrap().is_empty(), "none on Health's item");
+    }
+
+    /// R15 (F4): a release MusicBrainz says it will not give (a 404) has no list, at once; its rate limit (a 429) is no such answer.
+    #[tokio::test]
+    async fn a_musicbrainz_rate_limit_is_no_answer_about_a_release() {
+        assert!(no_such(&asked(serving(404).await).await));
+        assert!(!no_such(&asked(serving(429).await).await));
+        assert!(!no_such(&asked(serving(503).await).await));
     }
 
     /// R7 (N4): with MusicBrainz switched off no list comes, so a record waiting for one is on Health's item.
