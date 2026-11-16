@@ -631,6 +631,7 @@ async fn round(app: &super::App, serve: &Serve, asked_at: &mut i64) -> Result<()
         }
     }
     stop_arrived(lidarr.as_deref(), serve).await;
+    retry_stops(lidarr.as_deref(), serve).await;
     Ok(())
 }
 
@@ -721,20 +722,63 @@ pub async fn cancel(app: &super::App, serve: &Serve, account: &str, id: i64) -> 
     let manage = rights(serve).manage_requests;
     match r.status.as_str() {
         PENDING if r.user == account || manage => {}
-        APPROVED if manage => {
-            // The release group its record holds (`shown`): the one Lidarr was told to want.
-            let group = shown(r.clone(), named(serve, std::slice::from_ref(&r)).await.pop().flatten().as_ref()).release_group;
-            if let (Some(f), Some(rg)) = (fetcher(app), group.as_deref()) {
-                f.cancel(rg).await?;
-            }
-        }
+        APPROVED if manage => {}
         PENDING | APPROVED => bail!("Only a request still waiting can be taken back"),
         s => bail!("That request is {s} already"),
     }
+    // Written first (X2): the fetchers are told after, as far as they can be, and again at the requests' round where they could
+    // not be (`retry_stops`). Soulseek, woken, gives its item to another request of the record, or drops it unless it is under way.
     if !serve.userdata.set_request_status(id, &r.status, CANCELLED, None, Some(account))? {
         bail!("That request was answered meanwhile");
     }
+    if r.status == APPROVED {
+        tell_stopped(fetcher(app).as_deref(), serve, &r).await;
+        super::soulseek::wake();
+    }
     Ok(())
+}
+
+/// What a request taken back says once Lidarr was told to stop looking for its album (X2), and while it is still to be told.
+const LIDARR_TOLD: &str = "Lidarr told to stop";
+const LIDARR_TO_TELL: &str = "Lidarr to be told to stop";
+/// What one says where another open request still wants its record, so Lidarr goes on (X2).
+const LIDARR_KEPT: &str = "Lidarr goes on for another request";
+
+/// Lidarr told to stop looking for a request's album, taken back (X2): by the group it was asked with (kept on the request, X1),
+/// else its record's; only where no other open request names the record. Best effort: one not told says so, and the requests' round
+/// tells it again (`retry_stops`). A request Lidarr never took is left as it is.
+async fn tell_stopped(lidarr: Option<&dyn Fetcher>, serve: &Serve, r: &Request) {
+    let Some(said) = r.fetched.clone().filter(|f| f.contains("Lidarr") && !f.starts_with("Not handed over")) else { return };
+    let said = said.trim_end_matches(&format!("; {LIDARR_TO_TELL}")).to_string();
+    let of = named(serve, std::slice::from_ref(r)).await.pop().flatten();
+    let open: Vec<Request> = serve.userdata.requests(None, None, OPEN).unwrap_or_default().into_iter().filter(|o| o.id != r.id && (o.status == PENDING || o.status == APPROVED)).collect();
+    let others = named(serve, &open).await;
+    let record = of.as_ref().map(|o| o.record).or(r.record);
+    let words = if others.iter().flatten().any(|o| Some(o.record) == record) {
+        LIDARR_KEPT
+    } else {
+        match (lidarr, r.release_group.clone().or_else(|| of.as_ref()?.groups.first().cloned())) {
+            (Some(f), Some(group)) => match f.cancel(&group).await {
+                Ok(()) => LIDARR_TOLD,
+                Err(e) => {
+                    tracing::warn!("request {}: Lidarr not told to stop yet: {e:#}", r.id);
+                    LIDARR_TO_TELL
+                }
+            },
+            (None, Some(_)) => LIDARR_TO_TELL,
+            (_, None) => return,
+        }
+    };
+    let _ = serve.userdata.set_request_fetched(r.id, &format!("{said}; {words}"));
+}
+
+/// The requests taken back whose Lidarr is still to be told to stop, told again (X2, at the requests' round). Their ids.
+async fn retry_stops(lidarr: Option<&dyn Fetcher>, serve: &Serve) -> Vec<i64> {
+    let waiting: Vec<Request> = serve.userdata.requests(None, Some(CANCELLED), OPEN).unwrap_or_default().into_iter().filter(|r| r.fetched.as_deref().is_some_and(|f| f.ends_with(LIDARR_TO_TELL))).collect();
+    for r in &waiting {
+        tell_stopped(lidarr, serve, r).await;
+    }
+    waiting.iter().map(|r| r.id).collect()
 }
 
 /// The Requests page's lists, each request with its album's state.
@@ -1392,6 +1436,45 @@ mod tests {
         assert!(stop_arrived(Some(&lidarr), &serve).await.is_empty(), "once");
     }
 
+    /// X2: a request taken back is cancelled first; Lidarr, out of reach then, is told to stop at a later round, by the group it was
+    /// asked with.
+    #[tokio::test]
+    async fn cancelling_writes_first_and_tells_lidarr_after() {
+        let serve = served();
+        let group = "00000000-0000-4000-8000-000000000306";
+        let record = record_of_album(serve.catalogue(), Some(group), "Glass Harbour", "Two Rooms", None, None).unwrap();
+        let mut r = Request { release_group: Some(group.into()), fetched: Some("Lidarr added it and is looking for it".into()), ..asked_for(record) };
+        r.id = serve.userdata.add_request(&r).unwrap();
+        assert!(serve.userdata.set_request_status(r.id, APPROVED, CANCELLED, None, Some("ann")).unwrap());
+        let lidarr = Wanting::default();
+        lidarr.2.store(true, std::sync::atomic::Ordering::SeqCst);
+        tell_stopped(Some(&lidarr), &serve, &r).await;
+        let now = serve.userdata.request(r.id).unwrap().unwrap();
+        assert_eq!(now.status, CANCELLED, "written first");
+        assert!(now.fetched.as_deref().unwrap().ends_with(LIDARR_TO_TELL));
+        lidarr.2.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(retry_stops(Some(&lidarr), &serve).await, [r.id]);
+        assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()]);
+        assert!(serve.userdata.request(r.id).unwrap().unwrap().fetched.as_deref().unwrap().ends_with(LIDARR_TOLD));
+        assert!(retry_stops(Some(&lidarr), &serve).await.is_empty(), "told once");
+    }
+
+    /// X2: taking back one of two requests of a record leaves Lidarr looking for it, for the other.
+    #[tokio::test]
+    async fn cancelling_one_of_two_requests_keeps_lidarr_looking() {
+        let serve = served();
+        let group = "00000000-0000-4000-8000-000000000307";
+        let record = record_of_album(serve.catalogue(), Some(group), "Glass Harbour", "Two Rooms", None, None).unwrap();
+        let mut bob = Request { release_group: Some(group.into()), fetched: Some("Lidarr added it and is looking for it".into()), ..asked_for(record) };
+        bob.id = serve.userdata.add_request(&bob).unwrap();
+        serve.userdata.add_request(&Request { user: "ann".into(), ..bob.clone() }).unwrap();
+        assert!(serve.userdata.set_request_status(bob.id, APPROVED, CANCELLED, None, Some("bob")).unwrap());
+        let lidarr = Wanting::default();
+        tell_stopped(Some(&lidarr), &serve, &bob).await;
+        assert!(lidarr.1.lock().unwrap().is_empty(), "ann's still wants it");
+        assert!(serve.userdata.request(bob.id).unwrap().unwrap().fetched.as_deref().unwrap().ends_with(LIDARR_KEPT));
+    }
+
     /// X1: a fetcher out of reach for over an hour shows on Health.
     #[test]
     fn a_dead_fetcher_shows_on_health() {
@@ -1623,9 +1706,10 @@ mod tests {
         serve
     }
 
-    /// The Lidarr a test hands requests to: what it was asked to want, and to stop wanting; the release group it finds.
+    /// The Lidarr a test hands requests to: what it was asked to want, and to stop wanting; the release group it finds; and whether it
+    /// is out of reach (the third).
     #[derive(Default)]
-    struct Wanting(Mutex<Vec<(Option<String>, String, String)>>, Mutex<Vec<String>>);
+    struct Wanting(Mutex<Vec<(Option<String>, String, String)>>, Mutex<Vec<String>>, std::sync::atomic::AtomicBool);
 
     const FOUND: &str = "00000000-0000-4000-8000-000000000131";
 
@@ -1640,6 +1724,9 @@ mod tests {
         }
 
         fn cancel<'a>(&'a self, release_group: &'a str) -> crate::source::Fut<'a, ()> {
+            if self.2.load(std::sync::atomic::Ordering::SeqCst) {
+                return Box::pin(async { Err(anyhow::anyhow!("Lidarr could not be reached")) });
+            }
             self.1.lock().unwrap().push(release_group.to_string());
             Box::pin(async { Ok(()) })
         }

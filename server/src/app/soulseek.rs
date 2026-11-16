@@ -62,8 +62,6 @@ const READ_AGAIN: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 4 })
 const SLSKD_AGAIN: i64 = 300;
 /// Folders a record shows, best first.
 const SHOWN: usize = 5;
-/// The most approved Requests read.
-const REQUESTS_AT_MOST: usize = 1000;
 /// The shortest wait between two rounds of searches for one record (the ladder's "at once" still waits this).
 const ROUND_AT_LEAST: i64 = 15 * 60;
 /// A file's length may be this far from its track's.
@@ -185,8 +183,12 @@ pub struct SetAside {
 struct Kept {
     next: u64,
     items: Vec<Item>,
-    /// Requests taken off the list: not taken in again.
+    /// Records taken off the list (X2: by record, so another request of one does not bring it back): not taken in again while a
+    /// request names them.
     #[serde(default)]
+    dropped_records: Vec<i64>,
+    /// Requests taken off the list, as 0.16 and 0.17's previews kept them: read once, each made its record (`take_requests`).
+    #[serde(default, skip_serializing)]
     dropped: Vec<i64>,
     /// A file that could not be read nor set aside: nothing is written over it (R24).
     #[serde(skip)]
@@ -615,7 +617,12 @@ fn dropped(id: &str, now: i64) -> Option<String> {
     kept(|k| {
         let at = k.items.iter().position(|i| i.id == id && !fetched(i, now))?;
         let i = k.items.remove(at);
-        k.dropped.push(i.record.request);
+        // By its record (X2); one with no record yet by its request, made its record when it has one.
+        if i.record.record != 0 {
+            k.dropped_records.push(i.record.record);
+        } else {
+            k.dropped.push(i.record.request);
+        }
         i.batch
     })
 }
@@ -709,7 +716,8 @@ pub fn start(app: &Arc<super::App>) {
 async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>) -> Result<()> {
     let (ud, cat, kinds) = (served.userdata.clone(), served.catalogue().clone(), served.library.kinds());
     let (approved, of) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let approved = ud.requests(None, Some(super::requests::APPROVED), REQUESTS_AT_MOST)?;
+        // Every approved request (X2), not the newest thousand: those whose record is complete give no item (`take_requests`).
+        let approved = ud.requests(None, Some(super::requests::APPROVED), usize::MAX)?;
         let of = super::requests::records_held(&cat, &approved, &kinds)?;
         Ok((approved, of))
     })
@@ -788,8 +796,25 @@ async fn cancel_fetch(slskd: &Slskd, downloads: &Path, it: &Item) {
 /// folder and its tick, and is written back with its record.
 fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>], firsts: &[i64]) -> Vec<Item> {
     let ids: std::collections::HashSet<i64> = approved.iter().map(|r| r.id).collect();
-    k.items.retain(|i| ids.contains(&i.record.request) || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed));
-    k.dropped.retain(|r| ids.contains(r));
+    let record_of: BTreeMap<i64, i64> = approved.iter().zip(of).filter_map(|(r, o)| Some((r.id, o.as_ref()?.record))).collect();
+    // A request that left (cancelled, declined, rejected): its item goes to another approved request of its record, keeping its tick
+    // and folders (X2); else it goes, unless it is under way (fetched, checked or placed): one ticked, not started, goes with it.
+    for i in k.items.iter_mut().filter(|i| !ids.contains(&i.record.request) && i.record.record != 0) {
+        if let Some(other) = record_of.iter().filter(|(_, record)| **record == i.record.record).map(|(id, _)| *id).min() {
+            i.record.request = other;
+        }
+    }
+    k.items.retain(|i| ids.contains(&i.record.request) || matches!(i.state, State::Fetching | State::Checking | State::Placed));
+    // Taken off by record (X2): 0.16's, by request, made their records once; one no request names any more forgotten.
+    for id in std::mem::take(&mut k.dropped) {
+        match record_of.get(&id) {
+            Some(record) if !k.dropped_records.contains(record) => k.dropped_records.push(*record),
+            Some(_) => {}
+            None if ids.contains(&id) => k.dropped.push(id),
+            None => {}
+        }
+    }
+    k.dropped_records.retain(|record| record_of.values().any(|r| r == record));
     for i in k.items.iter_mut().filter(|i| i.record.record == 0) {
         if let Some((_, Some(o))) = approved.iter().zip(of).find(|(r, _)| r.id == i.record.request) {
             i.record.record = o.record;
@@ -803,7 +828,7 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
     let stopped: Vec<Item> = k.items.iter().filter(|i| had.contains(&i.record.record) && matches!(i.state, State::Approved | State::Fetching)).cloned().collect();
     k.items.retain(|i| !had.contains(&i.record.record) || matches!(i.state, State::Checking | State::Placed));
     for (n, (r, o)) in approved.iter().zip(of).enumerate() {
-        if k.dropped.contains(&r.id) {
+        if k.dropped.contains(&r.id) || o.as_ref().is_some_and(|o| k.dropped_records.contains(&o.record)) {
             continue;
         }
         // No record yet (0.17's step gives each one at the start): taken once it has one; a had one, never.
@@ -1607,7 +1632,7 @@ mod tests {
         // Every record, with a release group or none (C51b); one with no record yet waits for one; one record taken once.
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), vec![(1, 101), (2, 102), (3, 103)]);
         assert_eq!(k.items[1].record.album, "Album 102", "named as its record is");
-        // Taken off: not taken in again while it stays approved.
+        // Taken off (as 0.16 kept it, by request): not taken in again while it stays approved.
         k.dropped.push(3);
         k.items.retain(|i| i.record.request != 3);
         take_requests(&mut k, &[asked(1, Some("rg1")), asked(3, Some("rg3"))], &[of(101), of(103)], &[]);
@@ -1616,7 +1641,7 @@ mod tests {
         k.items[0].state = State::Found;
         take_requests(&mut k, &[], &[], &[]);
         assert!(k.items.is_empty());
-        assert!(k.dropped.is_empty(), "a dropped one no longer approved is forgotten");
+        assert!(k.dropped.is_empty() && k.dropped_records.is_empty(), "a dropped one no longer approved is forgotten");
     }
 
     /// A data folder of the test's own.
@@ -1804,6 +1829,36 @@ mod tests {
     /// A request's record as `records_of` reads it, had: a record holding its files.
     fn had(n: i64) -> Option<super::super::requests::RecordOf> {
         Some(super::super::requests::RecordOf { holder: Some(n + 1000), holding: super::super::requests::Holding::Done, ..of(n).unwrap() })
+    }
+
+    /// X2: an item whose request was taken back goes to another approved request of its record, keeping its tick and folders; with
+    /// none, one ticked and not started goes with it, while one being fetched stays.
+    #[test]
+    fn a_ticked_item_goes_with_its_request_or_to_the_other() {
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(101), of(103)], &[]);
+        assert_eq!(k.items.len(), 2, "one item a record");
+        for i in &mut k.items {
+            (i.state, i.chosen) = (State::Approved, Some(0));
+        }
+        take_requests(&mut k, &[asked(2, None)], &[of(101)], &[]);
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record, i.state, i.chosen)).collect::<Vec<_>>(), [(2, 101, State::Approved, Some(0))], "to the other, ticked; 103's ticked one gone");
+        k.items[0].state = State::Fetching;
+        take_requests(&mut k, &[], &[], &[]);
+        assert_eq!(k.items.len(), 1, "under way: it stays");
+    }
+
+    /// X2: a record taken off the list stays off, whichever request of it there is.
+    #[test]
+    fn out_of_the_list_is_kept_by_record() {
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
+        let i = k.items.remove(0);
+        k.dropped_records.push(i.record.record);
+        take_requests(&mut k, &[asked(1, None), asked(2, None)], &[of(101), of(101)], &[]);
+        assert!(k.items.is_empty(), "another request of it does not bring it back");
+        take_requests(&mut k, &[], &[], &[]);
+        assert!(k.dropped_records.is_empty(), "named by none, forgotten");
     }
 
     /// X1: Soulseek's first search is five minutes after the request was handed to Lidarr, which goes first.
