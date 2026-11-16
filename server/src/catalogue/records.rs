@@ -1298,9 +1298,10 @@ pub struct Wanted {
 /// as the import matcher finds an album (R14), else, with no group, the oldest live record not had of its names nothing contradicts,
 /// else a new record not had, credited to its artist (`listing`). Its label, where a label named it, credited too (`listing`);
 /// its Bandcamp album page, where one was found for it (by its names, or by its release group, R19), a reference (`search`), so
-/// Soulseek can judge by Bandcamp's list (C51b). Its id, whether it was made now, and what became of the page: put on it now
-/// (true), held by another record (false), or none (no page, or the record held it already).
-pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<(i64, bool, Option<bool>)> {
+/// Soulseek can judge by Bandcamp's list (C51b). A request with a release group takes a record by its names only where nothing
+/// the record holds contradicts that group (R21, N1): "Album (Remixes)" asked by its group is not the owned "Album", nor another
+/// self-titled album. What it came to (`RequestRecord`).
+pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<RequestRecord> {
     use super::identity::fold;
     let group = w.group.as_deref().map(str::to_ascii_lowercase).filter(|g| is_mbid(g)).map(|g| Ref::new("musicbrainz", "release-group", &g));
     let by_group = match &group {
@@ -1347,12 +1348,22 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         }
         Ok(None)
     };
-    let found = match by_group {
-        Some(record) => Some(record),
+    let agrees = |record: i64| -> Result<bool> {
+        Ok(match &group {
+            Some(g) => !contradicts(&[(g.source.clone(), g.kind.clone(), g.value.clone())], &refs_in(tx, &ids::record(record))?),
+            None => true,
+        })
+    };
+    let (found, by_names) = match by_group {
+        Some(record) => (Some(record), false),
         None => match by_names()? {
-            Some(record) => Some(record),
-            None if group.is_none() => not_had_by_names()?,
-            None => None,
+            Some(record) if agrees(record)? => (Some(record), true),
+            Some(_) => (None, false),
+            None if group.is_none() => {
+                let record = not_had_by_names()?;
+                (record, record.is_some())
+            }
+            None => (None, false),
         },
     };
     let (record, made) = match found {
@@ -1377,7 +1388,17 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         }
         None => None,
     };
-    Ok((record, made, paged))
+    Ok(RequestRecord { record, made, by_names, paged })
+}
+
+/// What `request_record_in` came to: the record, whether it was made now, whether it was found by its names (R21: each listed in
+/// the step's report), and what became of the page: put on it now (true), held by another record (false), or none (no page, or
+/// the record held it already).
+pub(super) struct RequestRecord {
+    pub record: i64,
+    pub made: bool,
+    pub by_names: bool,
+    pub paged: Option<bool>,
 }
 
 /// How long a folder expected for a record waits for its album (`expect_record`).
@@ -1862,15 +1883,19 @@ impl Carrying<'_> {
         let pages: std::collections::HashMap<&str, &str> = c.pages.iter().map(|p| (p.key.as_str(), p.page.as_str())).collect();
         let mut given: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         let (mut made, mut paged) = (0, 0);
-        let mut made_for = Vec::new();
+        let (mut made_for, mut found_by_names) = (Vec::new(), Vec::new());
         for r in &c.requests {
             let named = crate::bandcamp::label_release(&r.artist, &r.album, None);
             // Its page as `bandcamp_found` kept it, by its names or by its release group (R19, F13): where its record is made only
             // here, the pages part found none to give it to. Counted where it is put now; one another record holds is reported so.
             let page = pages.get(r.key.as_str()).map(|p| p.to_string());
             let w = Wanted { group: r.group.clone(), artist: named.artist, title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
-            let (record, new, page) = request_record_in(self.tx, &w, r.at)?;
+            let RequestRecord { record, made: new, by_names, paged: page } = request_record_in(self.tx, &w, r.at)?;
             made += u64::from(new);
+            if by_names {
+                let (artist, title): (String, String) = self.tx.query_row("SELECT COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id = ?1", [record], |x| Ok((x.get(0)?, x.get(1)?)))?;
+                found_by_names.push(format!("{} {} - {} -> {artist} - {title}", r.id, r.artist, r.album));
+            }
             paged += u64::from(page == Some(true));
             if page == Some(false) {
                 self.refused.push(format!("{} bandcamp:album:{}", ids::record(record), w.page.as_deref().unwrap_or_default()));
@@ -1884,7 +1909,7 @@ impl Carrying<'_> {
         self.tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![REQUEST_RECORDS, serde_json::to_string(&given)?])?;
         self.counts = vec![("records_made_for_requests", made), ("pages_for_requests", paged)];
         // Each, whole, for a rehearsal to check (R14, F6): a request given a record not had where 0.16 judged it by names.
-        self.lists = vec![("records_made_for", made_for)];
+        self.lists = vec![("records_made_for", made_for), ("requests_found_by_names", found_by_names)];
         Ok(())
     }
 
@@ -2015,7 +2040,7 @@ impl Catalogue {
     pub fn record_for_request(&self, w: &Wanted) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let (record, ..) = request_record_in(&tx, w, now())?;
+        let record = request_record_in(&tx, w, now())?.record;
         tx.commit()?;
         Ok(record)
     }
@@ -2202,6 +2227,31 @@ mod tests {
         assert_eq!(cat.readers_for_tests() - opened, 1, "one reader for every artist");
         drop(cat);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// R21 (N1): a Want for "Tide Tables (Remixes)" by its own release group is not the owned "Tide Tables", whose files name
+    /// another group, though the loose names agree: it is a record of its own, holding the group asked for.
+    #[test]
+    fn a_want_for_a_remix_album_is_not_the_owned_album_of_its_name() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (owned_group, asked) = ("00000000-0000-4000-8000-000000000200", "00000000-0000-4000-8000-000000000201");
+        let owned = cat.record_for_tests("Tide Tables", 2);
+        assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", owned_group), "files").unwrap());
+        let wanted = crate::app::requests::record_of_album(&cat, Some(asked), "Glass Harbour", "Tide Tables (Remixes)", None, None).unwrap();
+        assert_ne!(wanted, owned);
+        assert!(cat.references_of(&ids::record(wanted)).unwrap().iter().any(|(r, _)| r.value == asked));
+        let untagged = crate::app::requests::record_of_album(&cat, None, "Glass Harbour", "Tide Tables (Deluxe)", None, None).unwrap();
+        assert_eq!(untagged, owned, "with no group, the owned album by its names (F6)");
+    }
+
+    /// R21 (N1): a self-titled Want by its release group is not another self-titled album of the artist the library holds.
+    #[test]
+    fn a_self_titled_want_is_not_another_self_titled_album() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let owned = cat.record_for_tests("Glass Harbour", 2);
+        assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000202"), "files").unwrap());
+        let wanted = crate::app::requests::record_of_album(&cat, Some("00000000-0000-4000-8000-000000000203"), "Glass Harbour", "Glass Harbour", None, None).unwrap();
+        assert_ne!(wanted, owned);
     }
 
     /// R14 (run 7): a request's record is kept for good, so it never takes another artist's album by its title alone, though the

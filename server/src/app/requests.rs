@@ -119,29 +119,34 @@ pub async fn ask_record(app: &super::App, serve: &Serve, account: &str, record: 
     asked_record(app, serve, account, record, None, None).await
 }
 
-/// The request for `record`: its names, year, cover and release group the record's (`group_asked`: the one it was asked with
-/// where the record holds it), its key the one given (Discover's, so its suggestion leaves it), else the record's group, else its
-/// names'.
+/// The request for `record` (`asked_of`), asked for and handed over.
 async fn asked_record(app: &super::App, serve: &Serve, account: &str, record: i64, key: Option<String>, asked: Option<String>) -> Result<Request> {
     let cat = serve.catalogue().clone();
-    let (row, group) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let row = cat.record(record)?.context("That record is gone")?;
-        let held: Vec<String> = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().filter(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").map(|(r, _)| r.value).collect();
-        Ok((row, group_asked(asked, &held)))
-    })
-    .await??;
-    let key = key.or_else(|| group.clone()).unwrap_or_else(|| format!("{}|{}", super::import::key(&row.artist), super::import::key(&row.title)));
-    let asked = Asked { record: row.id, key, artist_key: super::import::loose(&row.artist), release_group: group, album: row.title, artist: row.artist, year: row.year, cover: row.cover };
+    let asked = tokio::task::spawn_blocking(move || asked_of(&cat, record, key, asked)).await??;
     ask_for(app, serve, account, asked).await
 }
 
-/// The release group a request names (F15): the one it was asked with, where its record holds it, or holds none; else the
-/// record's first. A record may hold two (a file's tag and a match that disagree): the one asked for is the one wanted. Pure.
-fn group_asked(asked: Option<String>, held: &[String]) -> Option<String> {
-    match asked.map(|g| g.to_ascii_lowercase()) {
-        Some(g) if held.is_empty() || held.contains(&g) => Some(g),
-        _ => held.first().cloned(),
+/// What a request for `record` is made of: its names, year and cover the record's; its release group the one it was asked with
+/// (`group_asked`), and that group on the record too, as found by names (`search`), where the record holds none (R21, N1); its
+/// key the one given (Discover's, so its suggestion leaves it), else its group, else its names'. Blocking.
+fn asked_of(cat: &crate::catalogue::Catalogue, record: i64, key: Option<String>, asked: Option<String>) -> Result<Asked> {
+    let row = cat.record(record)?.context("That record is gone")?;
+    let held: Vec<String> = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().filter(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").map(|(r, _)| r.value).collect();
+    let group = group_asked(asked, &held);
+    if held.is_empty()
+        && let Some(g) = &group
+    {
+        cat.set_reference(&crate::serve::ids::record(row.id), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", g), "search")?;
     }
+    let key = key.or_else(|| group.clone()).unwrap_or_else(|| format!("{}|{}", super::import::key(&row.artist), super::import::key(&row.title)));
+    Ok(Asked { record: row.id, key, artist_key: super::import::loose(&row.artist), release_group: group, album: row.title, artist: row.artist, year: row.year, cover: row.cover })
+}
+
+/// The release group a request names (F15, R21): the one it was asked with, whatever its record holds (a record found by names
+/// holds no group against it, `request_record_in`), else the record's first. A record may hold two (a file's tag and a match that
+/// disagree): the one asked for is the one wanted. Pure.
+fn group_asked(asked: Option<String>, held: &[String]) -> Option<String> {
+    asked.map(|g| g.to_ascii_lowercase()).filter(|g| super::discogs::is_mbid(g)).or_else(|| held.first().cloned())
 }
 
 /// The account's open request (pending or approved) for an album by its key, where there is one.
@@ -780,8 +785,24 @@ mod tests {
         let both = [first.clone(), second.clone()];
         assert_eq!(group_asked(Some(second.to_uppercase()), &both), Some(second.clone()));
         assert_eq!(group_asked(None, &both), Some(first.clone()), "none asked: the record's first");
-        assert_eq!(group_asked(Some("00000000-0000-4000-8000-000000000159".into()), &both), Some(first.clone()), "one it does not hold: the record's");
+        assert_eq!(group_asked(Some("00000000-0000-4000-8000-000000000159".into()), &both), Some("00000000-0000-4000-8000-000000000159".into()), "the one asked, always (R21)");
         assert_eq!(group_asked(Some(second.clone()), &[]), Some(second), "a record holding none: the one asked");
+    }
+
+    /// R21 (N1): a request keeps the release group it was asked for, and its record, holding none, takes it as found by names
+    /// (`search`); a record holding another keeps its own, and the request still names the one asked.
+    #[test]
+    fn a_want_keeps_the_release_group_it_asked_for() {
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let (asked, other) = ("00000000-0000-4000-8000-000000000204", "00000000-0000-4000-8000-000000000205");
+        let bare = cat.record_for_tests("Undertow", 0);
+        let request = asked_of(&cat, bare, None, Some(asked.to_uppercase())).unwrap();
+        assert_eq!((request.release_group.as_deref(), request.key.as_str()), (Some(asked), asked));
+        let refs = cat.references_of(&crate::serve::ids::record(bare)).unwrap();
+        assert!(refs.iter().any(|(r, row)| (r.value.as_str(), row.how.as_str()) == (asked, "search")), "{refs:?}");
+        let holding = cat.record_for_tests("Quiet Lanes", 0);
+        assert!(cat.set_reference(&crate::serve::ids::record(holding), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", other), "link").unwrap());
+        assert_eq!(asked_of(&cat, holding, None, Some(asked.into())).unwrap().release_group.as_deref(), Some(asked));
     }
 
     /// F15: Lidarr is asked with the release group the request names, where its record holds several.

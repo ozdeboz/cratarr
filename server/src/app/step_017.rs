@@ -624,6 +624,8 @@ mod tests {
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!((report["records_made_for_requests"].as_u64(), report["pages_for_requests"].as_u64()), (Some(3), Some(1)), "Quiet Lanes, Nowhere Fast, After Hours: {report}");
         assert_eq!(report["records_made_for"], serde_json::json!(["8 Orbit Lane - Quiet Lanes", "9 Tape Club - Nowhere Fast", "11 Tape Club - After Hours"]), "each, whole");
+        let by_names: Vec<&str> = report["requests_found_by_names"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect();
+        assert!(by_names.iter().any(|r| r.starts_with("7 Noor Field - Two Rooms -> ")), "R21: each found by names, listed: {by_names:?}");
     }
 
     /// R5: an id in capitals is the same id: Ferry Lights' two matches name one release, one in capitals, and the older copy
