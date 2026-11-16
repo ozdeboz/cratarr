@@ -186,10 +186,16 @@ impl Bandcamp {
 
     async fn text(&self, url: &str) -> Result<String> {
         let resp = self.send(self.http.get(url)).await?;
-        if !resp.status().is_success() {
-            bail!("Bandcamp answered {}", resp.status());
+        let status = resp.status();
+        let body = resp.text().await?;
+        // Its bot check in place of the page, whatever the status: not read, and nothing is done to get past it.
+        if is_check(&body) {
+            return Err(NotRead.into());
         }
-        Ok(resp.text().await?)
+        if !status.is_success() {
+            bail!("Bandcamp answered {status}");
+        }
+        Ok(body)
     }
 
     /// An album's page read (kept a few minutes); a track without a stream on it read from its own page.
@@ -276,13 +282,27 @@ impl Bandcamp {
         Ok(parse_artists(&resp.text().await?))
     }
 
-    /// An artist's releases on their own page (`/music`): (title, album page).
+    /// An artist's albums on their own page (`/music`): (title, album page). Not read (`NotRead`) where Bandcamp answers with
+    /// its bot check.
     pub async fn releases(&self, artist_page: &str) -> Result<Vec<(String, String)>> {
-        let base = page(artist_page).context("Not a page on Bandcamp")?;
+        let (html, url) = self.music(artist_page).await?;
+        Ok(parse_releases(&html, &url).into_iter().map(|r| (r.title, r.page)).collect())
+    }
+
+    /// A label's albums on its own page (S12), read as an artist's: each named as the label names its artists' releases,
+    /// sorted out (`label_listed`). Not read (`NotRead`) where Bandcamp answers with its bot check.
+    #[allow(dead_code)] // a label's page (C56)
+    pub async fn label_releases(&self, label_page: &str) -> Result<Vec<(Named, String)>> {
+        let (html, url) = self.music(label_page).await?;
+        Ok(label_listed(&html, &url))
+    }
+
+    /// An account's `/music` page, and its address.
+    async fn music(&self, account_page: &str) -> Result<(String, String)> {
+        let base = page(account_page).context("Not a page on Bandcamp")?;
         let mut u = reqwest::Url::parse(&base)?;
         u.set_path("/music");
-        let html = self.text(u.as_str()).await?;
-        Ok(parse_releases(&html, u.as_str()))
+        Ok((self.text(u.as_str()).await?, u.to_string()))
     }
 
 }
@@ -498,29 +518,40 @@ fn sized(cover: &str, n: u32) -> String {
     }
 }
 
-/// An artist's `/music` page: each release's title and page, from its grid (and the rest of it, which the page keeps in
-/// `data-client-items`).
-pub fn parse_releases(html: &str, url: &str) -> Vec<(String, String)> {
+/// An album on an account's `/music` page: its title, the artist the grid names where it is not the account's own (a label's
+/// artists), and its page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Release {
+    pub title: String,
+    pub artist: Option<String>,
+    pub page: String,
+}
+
+/// An account's `/music` page, an artist's or a label's: each album's title, artist and page, from its grid (and the rest of
+/// it, which the page keeps in `data-client-items`). Albums alone (S12): a track's page is no record's.
+pub fn parse_releases(html: &str, url: &str) -> Vec<Release> {
     let base = reqwest::Url::parse(url).ok();
-    let full = |href: &str| base.as_ref().and_then(|b| b.join(href).ok()).and_then(|u| album_page(u.as_str()));
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut add = |title: String, href: &str| {
-        if let Some(u) = full(href)
+    let full = |href: &str| base.as_ref().and_then(|b| b.join(href).ok()).filter(|u| u.path().starts_with("/album/")).and_then(|u| album_page(u.as_str()));
+    let mut out: Vec<Release> = Vec::new();
+    let mut add = |title: String, artist: Option<String>, href: &str| {
+        if let Some(page) = full(href)
             && !title.is_empty()
-            && !out.iter().any(|(_, x)| *x == u)
+            && !out.iter().any(|r| r.page == page)
         {
-            out.push((title, u));
+            out.push(Release { title, artist: artist.filter(|a| !a.is_empty()), page });
         }
     };
     for item in html.split("<li data-item-id=").skip(1) {
         let item = item.split("</li>").next().unwrap_or(item);
         let (Some(href), Some(title)) = (between(item, "href=\"", "\""), between(item, "class=\"title\">", "<")) else { continue };
-        add(text(&title), &href);
+        add(text(&title), between(item, "class=\"artist-override\">", "<").map(|a| text(&a)), &href);
     }
     #[derive(Deserialize)]
     struct Client {
         #[serde(default)]
         title: String,
+        #[serde(default)]
+        artist: String,
         #[serde(default)]
         page_url: String,
     }
@@ -528,10 +559,86 @@ pub fn parse_releases(html: &str, url: &str) -> Vec<(String, String)> {
         && let Ok(items) = serde_json::from_str::<Vec<Client>>(&unescape(&more))
     {
         for c in items {
-            add(c.title, &c.page_url);
+            add(c.title, Some(c.artist), &c.page_url);
         }
     }
     out
+}
+
+/// A label's `/music` page read as an artist's (S12): each album named as the label names its artists' (`label_release`),
+/// the label the account (the page's own name, `og:site_name`), the artist the grid's, else the account's. Pure.
+pub fn label_listed(html: &str, url: &str) -> Vec<(Named, String)> {
+    let account = meta(html, "og:site_name").unwrap_or_default();
+    parse_releases(html, url)
+        .into_iter()
+        .map(|r| {
+            let artist = r.artist.unwrap_or_else(|| account.clone());
+            (label_release(&artist, &r.title, Some(&account).filter(|a| !a.is_empty()).map(String::as_str)), r.page)
+        })
+        .collect()
+}
+
+/// A release as a label names it, sorted out (`label_release`): its artist, its title, and the label where it is a label's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    pub artist: String,
+    pub title: String,
+    pub label: Option<String>,
+}
+
+/// A release named the way a label's own account names its artists' on Bandcamp, sorted out (S12; C49a's rule too). The
+/// owner's 0.16.2 case: "GROUCH - further (Up Records)" by "Up Records". Where the album's artist is the label's own (the
+/// `label` the caller knows, an account or a publisher; or the name the title closes on in brackets, the label crediting
+/// itself), the artist is the title's before " - ", the title what follows, a closing "(Label)" goes, and the label is that
+/// account. The label's own release with no artist before a dash (its compilation) keeps the label as its artist. Any other
+/// release is as named: a real artist's title with a dash in it, and a closing "(Remastered)" that names no label, stay.
+/// Pure.
+pub fn label_release(artist: &str, title: &str, label: Option<&str>) -> Named {
+    let same = |a: &str, b: &str| {
+        let (a, b) = (cratarr_rules::names::key(a), cratarr_rules::names::key(b));
+        !a.is_empty() && a == b
+    };
+    let (artist, title) = (artist.trim(), title.trim());
+    // The title's closing brackets: what comes before, and what they say.
+    let closing = title.strip_suffix(')').and_then(|t| t.rfind('(').map(|at| (t[..at].trim_end(), &t[at + 1..])));
+    let labels = label.is_some_and(|l| same(l, artist)) || closing.is_some_and(|(_, inside)| same(inside, artist));
+    if !labels {
+        return Named { artist: artist.to_string(), title: title.to_string(), label: None };
+    }
+    let title = match closing {
+        Some((before, inside)) if same(inside, artist) && !before.is_empty() => before,
+        _ => title,
+    };
+    let dash = [" - ", " \u{2013} ", " \u{2014} "].iter().filter_map(|d| title.find(d).map(|at| (at, d.len()))).min();
+    match dash.map(|(at, len)| (title[..at].trim(), title[at + len..].trim())) {
+        Some((who, what)) if !who.is_empty() && !what.is_empty() => Named { artist: who.to_string(), title: what.to_string(), label: Some(artist.to_string()) },
+        _ => Named { artist: artist.to_string(), title: title.to_string(), label: Some(artist.to_string()) },
+    }
+}
+
+/// Bandcamp answered with its bot check (a "Client Challenge" page) in place of the page asked for: the page is not read, and
+/// says so. Nothing is done to get past it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotRead;
+
+impl std::fmt::Display for NotRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("not read: Bandcamp answered with its bot check")
+    }
+}
+
+impl std::error::Error for NotRead {}
+
+/// Whether a read failed for Bandcamp's bot check (`NotRead`), to show as "not read".
+#[cfg_attr(not(test), allow(dead_code))] // a label's page (C56)
+pub fn not_read(e: &anyhow::Error) -> bool {
+    e.is::<NotRead>()
+}
+
+/// Whether a page Bandcamp sent is its bot check, not the page asked for: its title, or the check's own assets, near its top.
+/// Pure.
+pub fn is_check(html: &str) -> bool {
+    ["<title>Client Challenge</title>", "/_fs-ch-"].iter().any(|mark| html.find(mark).is_some_and(|at| at < 4096))
 }
 
 /// An attribute's value (`name="…"` or `name='…'`), as it is written (still escaped).
@@ -688,15 +795,71 @@ mod tests {
                 Moon Safari &amp; More
             </p></a></li><li data-item-id="track-2"><a href="/track/kelly"><p class="title">Kelly</p></a></li></ol>"#
         );
-        let r = parse_releases(&html, "https://air.bandcamp.com/music");
+        let r: Vec<(String, String)> = parse_releases(&html, "https://air.bandcamp.com/music").into_iter().map(|r| (r.title, r.page)).collect();
         assert_eq!(
             r,
-            vec![
-                ("Moon Safari & More".to_string(), "https://air.bandcamp.com/album/moon-safari".to_string()),
-                ("Kelly".to_string(), "https://air.bandcamp.com/track/kelly".to_string()),
-                ("Talkie Walkie".to_string(), "https://air.bandcamp.com/album/talkie-walkie".to_string()),
+            vec![("Moon Safari & More".to_string(), "https://air.bandcamp.com/album/moon-safari".to_string()), ("Talkie Walkie".to_string(), "https://air.bandcamp.com/album/talkie-walkie".to_string())],
+            "albums alone (S12): a track's page is no record's"
+        );
+    }
+
+    /// S12: a release named the way a label's own account names its artists' is sorted out by one rule. The owner's case and
+    /// its counter-cases: a real artist whose title has a dash, a closing "(Remastered)" that names no label, a compilation
+    /// of the label's own.
+    #[test]
+    fn a_labels_release_is_named_by_one_rule() {
+        let named = |artist: &str, title: &str, label: Option<&str>| {
+            let n = label_release(artist, title, label);
+            (n.artist, n.title, n.label)
+        };
+        let up = Some("Up Records".to_string());
+        assert_eq!(named("Up Records", "GROUCH - further (Up Records)", None), ("GROUCH".into(), "further".into(), up.clone()), "the label credits itself");
+        assert_eq!(named("Up Records", "GROUCH - further (Up Records)", Some("Up Records")), ("GROUCH".into(), "further".into(), up.clone()));
+        assert_eq!(named("Up Records", "GROUCH \u{2013} further", Some("up records")), ("GROUCH".into(), "further".into(), up.clone()), "the account known as the label");
+        assert_eq!(named("Kite Theory", "Night Walks - Part One", Some("Up Records")), ("Kite Theory".into(), "Night Walks - Part One".into(), None), "a real artist's dash");
+        assert_eq!(named("Kite Theory", "Night Walks - Part One", None), ("Kite Theory".into(), "Night Walks - Part One".into(), None));
+        assert_eq!(named("Up Records", "GROUCH - further (Remastered)", Some("Up Records")), ("GROUCH".into(), "further (Remastered)".into(), up.clone()), "brackets that name no label stay");
+        assert_eq!(named("Up Records", "GROUCH - further (Remastered)", None), ("Up Records".into(), "GROUCH - further (Remastered)".into(), None), "nothing says it is a label's");
+        assert_eq!(named("Up Records", "Summer Sampler 2019", Some("Up Records")), ("Up Records".into(), "Summer Sampler 2019".into(), up.clone()), "the label's own compilation");
+        assert_eq!(named("Up Records", "Summer Sampler (Up Records)", None), ("Up Records".into(), "Summer Sampler".into(), up), "its compilation, crediting itself");
+    }
+
+    /// S12: a label's page read as an artist's: its albums, the label's artists' as the grid names them, the label's own split
+    /// by the rule, a track's page left out.
+    #[test]
+    fn a_labels_page_is_read_as_an_artists() {
+        let more = r#"[{"title":"Summer Sampler 2019","artist":"","page_url":"/album/summer-sampler-2019"}]"#.replace('"', "&quot;");
+        let html = format!(
+            r#"<html><head><meta property="og:site_name" content="Up Records"></head><body><ol id="music-grid" data-client-items="{more}">
+            <li data-item-id="album-1"><a href="/album/further"><p class="title">GROUCH - further (Up Records)</p></a></li>
+            <li data-item-id="album-2"><a href="/album/night-walks-part-one"><p class="title">Night Walks - Part One <br><span class="artist-override">Kite Theory</span></p></a></li>
+            <li data-item-id="track-3"><a href="/track/a-single"><p class="title">GROUCH - a single</p></a></li></ol></body></html>"#
+        );
+        let listed: Vec<(String, String, Option<String>, String)> = label_listed(&html, "https://uprecords.bandcamp.com/music").into_iter().map(|(n, page)| (n.artist, n.title, n.label, page)).collect();
+        let up = Some("Up Records".to_string());
+        assert_eq!(
+            listed,
+            [
+                ("GROUCH".into(), "further".into(), up.clone(), "https://uprecords.bandcamp.com/album/further".into()),
+                ("Kite Theory".into(), "Night Walks - Part One".into(), None, "https://uprecords.bandcamp.com/album/night-walks-part-one".into()),
+                ("Up Records".into(), "Summer Sampler 2019".into(), up, "https://uprecords.bandcamp.com/album/summer-sampler-2019".into()),
             ]
         );
+    }
+
+    /// S12: Bandcamp's bot check in place of a page (a stand-in written here, not a captured one) is not read: told apart from
+    /// a page, and said as such; a page that merely mentions a challenge further down is a page.
+    #[test]
+    fn a_check_page_is_not_read() {
+        let check = r#"<!DOCTYPE html><html lang="en"><head><link href="/_fs-ch-stand-in/assets/styles.css" rel="stylesheet" /><title>Client Challenge</title></head>
+            <body><noscript>JavaScript is needed to go on.</noscript><div id="loading-error">There was a problem.</div><script src="/_fs-ch-stand-in/script.js"></script></body></html>"#;
+        assert!(is_check(check));
+        let page = format!(r#"<html><head><meta property="og:site_name" content="Up Records"></head><body>{}<p>Client Challenge EP</p></body></html>"#, "<div></div>".repeat(500));
+        assert!(!is_check(&page));
+        assert!(label_listed(check, "https://uprecords.bandcamp.com/music").is_empty());
+        let e = anyhow::Error::from(NotRead);
+        assert!(not_read(&e) && !not_read(&anyhow::anyhow!("Bandcamp answered 503")));
+        assert_eq!(e.to_string(), "not read: Bandcamp answered with its bot check");
     }
 
     #[test]
