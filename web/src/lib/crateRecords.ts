@@ -12,12 +12,11 @@ export const RECORD_CRATES: readonly string[] = ['home:new', 'home:graves'];
 /** How crate `id` shows: as chosen for it, else as its kind starts. */
 export const crateViewOf = (id: string, kept: Readonly<Record<string, CrateView>>): CrateView => kept[id] ?? (RECORD_CRATES.includes(id) ? 'records' : 'tracks');
 
-/** A crate's own order, named by what it is (decision 0094 #6), where it has one: New for you's as Home showed it, a
- *  Sounds like crate's closest first. One's own crate, a genre and Grave digging have none (its newest added first was
- *  Added). */
+/** A crate's own order, named by what it is (decision 0094 #6), where it has one: New for you's as Home showed it. One's own
+ *  crate, a genre and Grave digging have none (its newest added first was Added); nor has a Sounds like crate since 0.17: its
+ *  closest first is Most alike, its Best match (`ranksAlike`), and two names for nearly one order were one too many. */
 export function ownOrderOf(crate: string | null | undefined): string | null {
   if (crate === 'home:new') return 'As on Home';
-  if (crate?.startsWith('like:')) return 'Closest first';
   return null;
 }
 
