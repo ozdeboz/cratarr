@@ -405,6 +405,17 @@ impl Library {
         let kinds = kinds_of(&folders, &catalogue.folders());
         let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds, rules: tag_rules.clone() };
         start.run().await.context("the first start of 0.16 did not finish")?;
+        // 0.17's step, once (`step_017`): what 0.16 knew of each record's references, into the catalogue's tables, before
+        // anything reads them. With the ids lost it waits, as the first start does. Cut off or failed, it wrote nothing and
+        // goes again at the next start; meanwhile the music plays, the references are thinner.
+        if !catalogue.ids_lost() {
+            let (cat, ud) = (catalogue.clone(), playlists_db.clone());
+            match tokio::task::spawn_blocking(move || super::step_017::run(&cat, &ud)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step did not finish: it goes again at the next start"),
+                Err(e) => tracing::error!(target: "library", reason = %e, "0.17's step stopped: it goes again at the next start"),
+            }
+        }
         follow_paths(&catalogue, &playlists_db).context("following the libraries' paths")?;
         if !catalogue.ids_lost() {
             playlists_db.set_meta(TOP_KEY, &catalogue.top_id().to_string())?;

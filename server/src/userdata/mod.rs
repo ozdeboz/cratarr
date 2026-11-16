@@ -720,7 +720,40 @@ pub(crate) fn put_migration_part(conn: &Connection, part: &str, report: &serde_j
     Ok(())
 }
 
+/// What 0.17's step carries (`app::step_017`), each table as 0.16 kept it: (key, when, what it holds, as JSON or a page).
+#[derive(Debug, Default)]
+pub struct KeptFor017 {
+    /// `record_references`: (album, 0.14's choices).
+    pub chosen: Vec<(String, String)>,
+    /// `album_matches`: (album, when, the match; none: looked for in vain).
+    pub matches: Vec<(String, i64, Option<String>)>,
+    /// `discogs_facts`: (subject, when, the facts; none: asked in vain), every kind of subject.
+    pub discogs: Vec<(String, i64, Option<String>)>,
+    /// `bandcamp_found`: (release group or `key(artist)|key(album)`, when, the page; none: a miss).
+    pub pages: Vec<(String, i64, Option<String>)>,
+    /// `mb_releases` MusicBrainz knew: (release, when, what was read).
+    pub releases: Vec<(String, i64, String)>,
+}
+
 impl UserData {
+    /// What 0.17's step carries, read under one hold of the database, each table in its keys' order. Blocking.
+    pub fn kept_for_017(&self) -> Result<KeptFor017> {
+        let db = self.db();
+        fn rows<T>(db: &Connection, sql: &str, row: impl FnMut(&rusqlite::Row) -> rusqlite::Result<T>) -> Result<Vec<T>> {
+            let mut st = db.prepare(sql)?;
+            let out = st.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
+            Ok(out)
+        }
+        let three = |r: &rusqlite::Row| Ok((r.get(0)?, r.get(1)?, r.get(2)?));
+        Ok(KeptFor017 {
+            chosen: rows(&db, "SELECT album, chosen FROM record_references ORDER BY album", |r| Ok((r.get(0)?, r.get(1)?)))?,
+            matches: rows(&db, "SELECT album, at, found FROM album_matches ORDER BY album", three)?,
+            discogs: rows(&db, "SELECT subject, at, facts FROM discogs_facts ORDER BY subject", three)?,
+            pages: rows(&db, "SELECT album, at, page FROM bandcamp_found ORDER BY album", three)?,
+            releases: rows(&db, "SELECT release, at, facts FROM mb_releases WHERE found <> 0 ORDER BY release", |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?,
+        })
+    }
+
     /// A part of the migration report (`put_migration_part`), in a transaction of its own.
     pub fn set_migration_part(&self, part: &str, report: &serde_json::Value) -> Result<()> {
         put_migration_part(&self.db(), part, report)

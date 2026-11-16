@@ -162,15 +162,6 @@ impl UserData {
         Ok(self.db().query_row("SELECT chosen FROM record_references WHERE album = ?1", [album], |r| r.get(0)).optional()?)
     }
 
-    /// Every record's chosen references, by album: what 0.17's step moves.
-    #[cfg_attr(not(test), allow(dead_code))] // read by 0.17's step (C44)
-    pub fn all_record_references(&self) -> Result<std::collections::HashMap<String, String>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT album, chosen FROM record_references")?;
-        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
     /// What hearing a record's copy in catalogue folder `folder` found (`app::intake_card`), and when; with none named, the
     /// last heard of the record. One from before copies goes for any.
     pub fn intake_heard(&self, album: &str, folder: Option<i64>) -> Result<Option<(i64, String)>> {
