@@ -528,9 +528,11 @@ mod tests {
         assert!(had >= 5 && retired >= 1, "{had} had, {retired} retired");
         let records: BTreeSet<String> = column("catalogue.sqlite", "SELECT 'al-' || id FROM records").into_iter().collect();
 
+        let albums = column("userdata.sqlite", "SELECT album FROM record_references");
         let chosen: Vec<(String, crate::app::references::Chosen)> =
-            column("userdata.sqlite", "SELECT album FROM record_references").into_iter().map(|a| (a.clone(), serde_json::from_str(&ud.record_references(&a).unwrap().unwrap()).unwrap())).collect();
+            albums.iter().filter_map(|a| Some((a.clone(), serde_json::from_str(&ud.record_references(a).unwrap().unwrap()).ok()?))).collect();
         assert!(chosen.len() >= 4 && chosen.iter().all(|(a, _)| records.contains(a)), "each on a record of the catalogue: {chosen:?}");
+        assert_eq!(albums.len(), chosen.len() + 1, "one whose JSON cannot be read");
         assert!(chosen.iter().any(|(_, c)| c.by_hand && !c.links.is_empty()), "a link pasted, checked by hand");
         assert!(chosen.iter().any(|(_, c)| c.counting.as_deref() == Some("acoustid")), "AcoustID counting, which has no list");
         assert!(chosen.iter().any(|(_, c)| c.counting.is_none() && !c.confirmed.is_empty()), "a guess confirmed, nothing chosen");
@@ -547,7 +549,8 @@ mod tests {
 
         let matched = column("userdata.sqlite", "SELECT album FROM album_matches");
         let found = ud.album_matches(&matched).unwrap();
-        let read: Vec<crate::app::matching::Match> = found.values().filter_map(|(_, j)| j.as_deref()).map(|j| serde_json::from_str(j).unwrap()).collect();
+        let read: Vec<crate::app::matching::Match> = found.values().filter_map(|(_, j)| serde_json::from_str(j.as_deref()?).ok()).collect();
+        assert_eq!(found.values().filter(|(_, j)| j.is_some()).count(), read.len() + 1, "one whose JSON cannot be read");
         assert!(read.iter().any(|m| m.certain) && read.iter().any(|m| !m.certain), "certain and likely");
         assert!(found.values().any(|(_, j)| j.is_none()), "one looked for in vain");
         assert!(matched.iter().any(|a| !records.contains(a)), "one 0.16's first start could not move");
@@ -561,7 +564,9 @@ mod tests {
         assert!(pages.iter().any(|k| k.contains('|')) && pages.iter().any(|k| !k.contains('|')), "by names and by release group: {pages:?}");
         assert!(pages.iter().any(|k| ud.bandcamp_found(k).unwrap().unwrap().1.is_none()), "a miss, kept");
 
-        let releases: Vec<crate::app::works::Stored> = ud.mb_releases().unwrap().values().map(|j| serde_json::from_str(j).unwrap()).collect();
+        let kept = ud.mb_releases().unwrap();
+        let releases: Vec<crate::app::works::Stored> = kept.values().filter_map(|j| serde_json::from_str(j).ok()).collect();
+        assert_eq!(kept.len(), releases.len() + 1, "one whose JSON cannot be read");
         assert!(releases.iter().any(|s| s.discogs.iter().any(|l| l.starts_with("master:"))) && releases.iter().any(|s| s.discogs.iter().all(|l| l.starts_with("release:"))));
 
         #[derive(serde::Deserialize)]

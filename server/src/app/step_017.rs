@@ -113,7 +113,8 @@ fn carry_of(kept: &crate::userdata::KeptFor017) -> Carry {
     let mut pages = Vec::new();
     for (key, at, page) in &kept.pages {
         match page.as_deref().map(crate::bandcamp::album_page) {
-            Some(Some(page)) => pages.push(CarriedPage { key: key.clone(), at: *at, page }),
+            // A release group in capitals is the same group: the references keep ids as MusicBrainz writes them.
+            Some(Some(page)) => pages.push(CarriedPage { key: if super::discogs::is_mbid(key) { key.to_ascii_lowercase() } else { key.clone() }, at: *at, page }),
             Some(None) => note("bandcamp_found: no album page", key),
             None => note("bandcamp_found: a miss", key),
         }
@@ -295,6 +296,10 @@ mod tests {
         format!("00000000-0000-4000-8000-{n:012}")
     }
 
+    /// Ferry Lights' release and release group, which one of its matches names in capitals.
+    const FERRY: &str = "abcdef00-0000-4000-8000-000000000020";
+    const FERRY_GROUP: &str = "abcdef00-0000-4000-8000-000000000120";
+
     /// The samples of one of the report's `differed` lists.
     fn differed(report: &serde_json::Value, what: &str) -> Vec<String> {
         let list = report["differed"].as_array().unwrap().iter().find(|d| d["what"] == what).unwrap_or_else(|| panic!("no {what}: {report}"));
@@ -370,10 +375,128 @@ mod tests {
         let data = Data::new("age");
         let (cat, ud) = data.open();
         run(&cat, &ud).unwrap();
-        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", &mb(20))).unwrap(), ["al-10"]);
-        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release-group", &mb(120))).unwrap(), ["al-10", "al-11"]);
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", FERRY)).unwrap(), ["al-10"]);
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release-group", FERRY_GROUP)).unwrap(), ["al-10", "al-11"]);
         let report = &ud.migration_report().unwrap()[PART].1;
-        assert!(differed(report, "references: held by another record").contains(&format!("al-11 musicbrainz:release:{}", mb(20))), "{report}");
+        assert!(differed(report, "references: held by another record").contains(&format!("al-11 musicbrainz:release:{FERRY}")), "{report}");
+    }
+
+    /// R5: an id in capitals is the same id: Ferry Lights' two matches name one release, one in capitals, and the older copy
+    /// keeps it; Undertow's page, kept by its release group in capitals, is its.
+    #[test]
+    fn an_id_in_capitals_is_the_same_id() {
+        let data = Data::new("capitals");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", FERRY)).unwrap(), ["al-10"]);
+        assert_eq!(cat.subject_of(&Ref::new("bandcamp", "album", "https://orbitlane.bandcamp.com/album/undertow")).unwrap(), ["al-12"]);
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert_eq!(listed(report, "bandcamp_found").1, [mb(111)], "Harbour Lights alone found no record: {report}");
+    }
+
+    /// R5: a row keeps when it was first found: a match's, a page's and a link's as 0.16 found them, a hand's when the step
+    /// first ran; found again (the step run again, its marks gone), each keeps its first `at`.
+    #[test]
+    fn a_row_keeps_its_at() {
+        let data = Data::new("at");
+        data.run();
+        let at = |subject: &str, source: &str, kind: &str| -> i64 {
+            data.sql("catalogue.sqlite", &format!("SELECT at FROM \"references\" WHERE subject = '{subject}' AND source = '{source}' AND kind = '{kind}'"))
+        };
+        assert_eq!(at("al-7", "musicbrainz", "release"), 1794300000, "Signal's certain match, when it was found");
+        assert_eq!(at("al-1", "bandcamp", "album"), 1793900000, "the page, when it was found");
+        assert_eq!(at("al-1", "discogs", "release"), 1793900000, "MusicBrainz's link, when it was read");
+        data.batch("catalogue.sqlite", "UPDATE \"references\" SET at = 1 WHERE how = 'hand'; DELETE FROM meta WHERE key GLOB '017:*'");
+        data.run();
+        assert_eq!(at("al-2", "discogs", "release"), 1, "a hand's, found again: as first found");
+        assert_eq!(at("al-7", "musicbrainz", "release"), 1794300000);
+    }
+
+    /// R5, measuring: the step over a catalogue as large as production's (5,000 records of 8 tracks, 40,000 files with ten
+    /// tags each, 400,000 tags), with a match for 3,000 records, two in three certain, and 2,000 each of Discogs' facts,
+    /// Bandcamp's pages and MusicBrainz's links; then what every build now reads of the tags (`keep_files_names`). Run by hand:
+    /// `rt.sh test -- --ignored --nocapture the_step_at_production_size`.
+    #[test]
+    #[ignore]
+    fn the_step_at_production_size() {
+        let d = std::env::temp_dir().join(format!("cratarr-step-017-size-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let (records, tracks, matches, others) = (5_000_i64, 8_i64, 3_000_i64, 2_000_i64);
+        let id = |kind: u32, n: i64| format!("{kind:08x}-0000-4000-8000-{n:012}");
+        let cat = Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![PathBuf::from("/music")]).unwrap();
+        let ud = UserData::open(Some(&d.join("userdata.sqlite"))).unwrap();
+        let made = std::time::Instant::now();
+        {
+            let mut db = Connection::open(d.join("catalogue.sqlite")).unwrap();
+            let tx = db.transaction().unwrap();
+            tx.execute("INSERT OR IGNORE INTO folders (id, path, home) VALUES (0, '/music', 0)", []).unwrap();
+            for r in 1..=records {
+                tx.execute("INSERT INTO records (id, born, title, artist) VALUES (?1, 1760000000, ?2, ?3)", rusqlite::params![r, format!("Record {r}"), format!("Artist {}", r % 700)]).unwrap();
+                for n in 1..=tracks {
+                    let track = (r - 1) * tracks + n;
+                    let rel = format!("Artist {}/Record {r}/{n:02} Track.flac", r % 700);
+                    tx.execute("INSERT INTO tracks (id, born, record, disc, number) VALUES (?1, 1760000000, ?2, 1, ?3)", rusqlite::params![track, r, n]).unwrap();
+                    tx.execute(
+                        "INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES (0, ?1, 24000000, 1760000000, 1, 'FLAC', 900, 200000, ?2, 16, 44100, 1760000000)",
+                        rusqlite::params![rel, track],
+                    )
+                    .unwrap();
+                    let tags = [
+                        ("title", format!("Track {n}")),
+                        ("artist", format!("Artist {}", r % 700)),
+                        ("album", format!("Record {r}")),
+                        ("albumartist", format!("Artist {}", r % 700)),
+                        ("tracknumber", n.to_string()),
+                        ("discnumber", "1".to_string()),
+                        ("date", "2012".to_string()),
+                        ("genre", "Electronic".to_string()),
+                        ("musicbrainz_albumid", id(1, r)),
+                        ("musicbrainz_releasegroupid", id(2, r)),
+                    ];
+                    for (i, (name, value)) in tags.iter().enumerate() {
+                        tx.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, ?2, ?3, ?3, ?4)", rusqlite::params![rel, i as i64, name, value]).unwrap();
+                    }
+                }
+            }
+            tx.commit().unwrap();
+            let mut db = Connection::open(d.join("userdata.sqlite")).unwrap();
+            let tx = db.transaction().unwrap();
+            for r in 1..=matches {
+                let found = format!(
+                    r#"{{"release":"{}","release_group":"{}","title":"Record {r}","artist":"Artist","artist_id":"{}","year":2012,"certain":{},"why":"","tracks":[],"lengths":[]}}"#,
+                    id(1, r),
+                    id(2, r),
+                    id(3, r % 700),
+                    r % 3 != 0
+                );
+                tx.execute("INSERT INTO album_matches (album, at, found) VALUES (?1, 1793900000, ?2)", rusqlite::params![format!("al-{r}"), found]).unwrap();
+            }
+            for r in 1..=others {
+                tx.execute("INSERT INTO discogs_facts (subject, at, facts) VALUES (?1, 1793900000, ?2)", rusqlite::params![format!("album:al-{r}"), format!(r#"{{"master":{},"release":{},"genres":[],"styles":[],"labels":[],"credits":[]}}"#, 1_000_000 + r, 2_000_000 + r)]).unwrap();
+                tx.execute("INSERT INTO bandcamp_found (album, at, page) VALUES (?1, 1793900000, ?2)", rusqlite::params![id(2, r + 1_000), format!("https://artist{r}.bandcamp.com/album/record-{r}")]).unwrap();
+                tx.execute(
+                    "INSERT INTO mb_releases (release, found, facts, at) VALUES (?1, 1, ?2, 1793900000)",
+                    rusqlite::params![id(1, r + 2_000), format!(r#"{{"genres":[],"discogs":["release:{}","master:{}"],"performers":[],"performed":false,"tracks":[],"with_parents":true}}"#, 3_000_000 + r, 4_000_000 + r)],
+                )
+                .unwrap();
+            }
+            for r in 1..=500 {
+                tx.execute("INSERT INTO record_references (album, chosen) VALUES (?1, ?2)", rusqlite::params![format!("al-{}", r * 7), r#"{"counting":"musicbrainz","by_hand":false,"links":{},"confirmed":["musicbrainz"]}"#]).unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let made = made.elapsed();
+        let step = std::time::Instant::now();
+        run(&cat, &ud).unwrap();
+        let step = step.elapsed();
+        assert!(cat.references_to_carry().unwrap().is_empty());
+        let references: i64 = Connection::open(d.join("catalogue.sqlite")).unwrap().query_row("SELECT count(*) FROM \"references\"", [], |r| r.get(0)).unwrap();
+        let build = std::time::Instant::now();
+        cat.keep_files_names(&[]).unwrap();
+        let build = build.elapsed();
+        eprintln!("0.17's step at production size: {step:?} for {references} references (made in {made:?}); what a build reads of the tags: {build:?}");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// R2: every row the step reads is in its report: the rows of each table it reads (counted here, apart from the step),
@@ -419,6 +542,10 @@ mod tests {
         assert_eq!(listed(report, "confirmations: no reference").1, ["al-5 bandcamp"]);
         assert_eq!(listed(report, "bandcamp_found: no album page").1, ["noorfield|signal"]);
         assert_eq!(listed(report, "mb_releases: no Discogs link").1, [mb(7)]);
+        assert_eq!(listed(report, "mb_releases").1, [mb(98)], "no record is it");
+        for table in ["record_references", "album_matches", "mb_releases"] {
+            assert_eq!(listed(report, &format!("{table}: not read")).0, 1, "{table}: {report}");
+        }
         assert!(refs(&cat, 5).contains(&by("discogs", "master", "1000005", "hand", false)), "{:?}", refs(&cat, 5));
     }
 
@@ -441,7 +568,7 @@ mod tests {
         run(&cat, &ud).unwrap();
         let counting = |cat: &Catalogue, record: i64| cat.record(record).unwrap().unwrap().counting;
         assert_eq!((counting(&cat, 7), counting(&cat, 12)), (None, None), "no count from 0.16's certain matches");
-        assert_eq!(cat.lists_to_read(100).unwrap(), [(1, mb(1)), (7, mb(7)), (10, mb(20)), (12, mb(30))], "Two Rooms' is a hand's, and Ferry Lights' younger copy holds none");
+        assert_eq!(cat.lists_to_read(100).unwrap(), [(1, mb(1)), (7, mb(7)), (10, FERRY.to_string()), (12, mb(30))], "Two Rooms' is a hand's, and Ferry Lights' younger copy holds none");
         assert!(!cat.unreferenced().unwrap().contains(&12), "Undertow waits for its list");
 
         let cat = std::sync::Arc::new(cat);
@@ -528,12 +655,12 @@ mod tests {
         assert_eq!(listed(report, "bandcamp_found").0, 1, "Harbour Lights, a record not had: C48b's");
         assert_eq!(
             differed(report, "references: held by another record"),
-            [format!("al-9 musicbrainz:release:{}", mb(2)), format!("al-11 musicbrainz:release:{}", mb(20)), format!("al-4 musicbrainz:release:{}", mb(1)), "al-4 discogs:release:2000003".to_string()],
+            [format!("al-9 musicbrainz:release:{}", mb(2)), format!("al-11 musicbrainz:release:{FERRY}"), format!("al-4 musicbrainz:release:{}", mb(1)), "al-4 discogs:release:2000003".to_string()],
             "Two Rooms' hand, Ferry Lights' older copy, Undated's tag and its search"
         );
         assert_eq!(differed(report, "references: a retired record's"), [format!("al-6 musicbrainz:release:{}", mb(6)), "al-6 discogs:release:2000006".to_string()]);
         assert_eq!((report["counted_by_hand"].as_u64(), report["checked_by_hand"].as_u64()), (Some(4), Some(2)));
         assert_eq!(report["counted_by_a_match"], serde_json::Value::Null, "the step claims no count (R3)");
-        assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM record_references"), 5, "kept one version");
+        assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM record_references"), 6, "kept one version");
     }
 }

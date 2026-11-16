@@ -175,13 +175,14 @@ INSERT INTO tags (folder, rel, n, raw, name, value) VALUES
   (0, 'Noor Field/Signal (2021)/01 Signal.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000007'),
   (0, 'Noor Field/Signal (2021)/01 Signal.flac', 1, 'MUSICBRAINZ_RELEASEGROUPID', 'musicbrainz_releasegroupid', '00000000-0000-4000-8000-000000000107'),
   (0, 'Various Artists/Late Train OST (2005)/01 Platform.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000005');
--- Partial Shore came back after it retired (record 8): its files name the release the retired record was linked to.
+-- Partial Shore came back after it retired (record 8): its files name the release the retired record was linked to, its first
+-- file's tag the odd one out.
 INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES
   (0, 'Glass Harbour/Partial Shore (2011)/01 Sandbar.flac', 26000000, 1794600000, 1, 'FLAC', 900, 201000, 35, 16, 44100, 1794600000),
   (0, 'Glass Harbour/Partial Shore (2011)/02 Groyne.flac', 26000001, 1794600000, 1, 'FLAC', 900, 202000, 36, 16, 44100, 1794600000),
   (0, 'Glass Harbour/Partial Shore (2011)/05 Breakwater.flac', 26000002, 1794600000, 1, 'FLAC', 900, 203000, 37, 16, 44100, 1794600000);
 INSERT INTO tags (folder, rel, n, raw, name, value) VALUES
-  (0, 'Glass Harbour/Partial Shore (2011)/01 Sandbar.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000006'),
+  (0, 'Glass Harbour/Partial Shore (2011)/01 Sandbar.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000060'),
   (0, 'Glass Harbour/Partial Shore (2011)/02 Groyne.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000006'),
   (0, 'Glass Harbour/Partial Shore (2011)/05 Breakwater.flac', 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', '00000000-0000-4000-8000-000000000006');
 -- 0.16's first start, done.
