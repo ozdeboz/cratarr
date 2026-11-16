@@ -32,7 +32,7 @@
 //! - **Kept on disk** (`soulseek.json` in the data folder), so a restart forgets nothing: a fetch under way is followed
 //!   again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -41,6 +41,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::track_fetch::{NotAsked, ReleaseTrack};
+use crate::lidarr::Progress;
 use crate::slskd::{Answer, Away, Offered, Slskd};
 
 /// The fetcher's name in a library's setting (`settings::LibrarySetting::fetcher`).
@@ -652,7 +653,7 @@ pub async fn connected() -> bool {
 }
 
 /// The workers started, once: one searches (one search at a time), one fetches (one record at a time).
-pub fn start(_app: &Arc<super::App>) {
+pub fn start(app: &Arc<super::App>) {
     static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let Some(served) = crate::serve::instance() else { return };
     let Some(dir) = served.data_dir.clone() else { return };
@@ -666,7 +667,9 @@ pub fn start(_app: &Arc<super::App>) {
             i.state = State::Waiting;
         }
     });
+    let round_app = app.clone();
     tokio::spawn(async move {
+        let app = round_app;
         loop {
             // Nothing searched until an Incoming library takes Soulseek's records (soularr may still be at work).
             if library().is_err() {
@@ -674,7 +677,7 @@ pub fn start(_app: &Arc<super::App>) {
                 continue;
             }
             // The approved Requests, read each round (they are Cratarr's own: no service asked).
-            if let Err(e) = read_requests(&served).await {
+            if let Err(e) = read_requests(&served, &app).await {
                 tracing::warn!(target: "soulseek", reason = %format!("{e:#}"), "the approved Requests not read");
             }
             match next_search() {
@@ -703,7 +706,7 @@ pub fn start(_app: &Arc<super::App>) {
 /// The approved Requests taken in (decision 0099's amendment: Soulseek never reads Lidarr's Wanted), each by its record
 /// (C51b, `requests::records_of`): one whose record is not on the list yet is added, waiting to be searched; one no longer
 /// approved (cancelled, declined) goes, unless it is fetched or placed.
-async fn read_requests(served: &Arc<crate::serve::Serve>) -> Result<()> {
+async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>) -> Result<()> {
     let (ud, cat, kinds) = (served.userdata.clone(), served.catalogue().clone(), served.library.kinds());
     let (approved, of) = tokio::task::spawn_blocking(move || -> Result<_> {
         let approved = ud.requests(None, Some(super::requests::APPROVED), REQUESTS_AT_MOST)?;
@@ -711,15 +714,79 @@ async fn read_requests(served: &Arc<crate::serve::Serve>) -> Result<()> {
         Ok((approved, of))
     })
     .await??;
-    kept(|k| take_requests(k, &approved, &of));
+    // The owner's 6 November order (X1): Lidarr first, Soulseek five minutes after, or at once where Lidarr is not connected or did
+    // not take it; an album not out yet waits for its release.
+    let lidarr = super::requests::fetcher(app);
+    let firsts: Vec<i64> = approved.iter().zip(&of).map(|(r, o)| first_search(r, o.as_ref().and_then(|o| o.released.as_deref()).and_then(super::requests::release_day), lidarr.is_some())).collect();
+    let taken = kept(|k| take_requests(k, &approved, &of, &firsts));
+    // Lidarr's grab failed or stalls, or it does not know the album, or does not want it: Soulseek's turn now, its release come.
+    if let Some(f) = lidarr {
+        let t = now();
+        let waiting: Vec<(String, i64)> = kept(|k| k.items.iter().filter(|i| i.state == State::Waiting && i.due > t && i.misses == 0).map(|i| (i.id.clone(), i.record.request)).collect());
+        let groups: HashMap<i64, String> = approved.iter().zip(&of).filter_map(|(r, o)| Some((r.id, r.release_group.clone().or_else(|| o.as_ref()?.groups.first().cloned())?))).collect();
+        let unreleased: Vec<i64> = approved.iter().zip(&firsts).filter(|(r, first)| **first > r.decided_at.unwrap_or(r.at) + LIDARR_FIRST).map(|(r, _)| r.id).collect();
+        let asked: Vec<String> = waiting.iter().filter(|(_, r)| !unreleased.contains(r)).filter_map(|(_, r)| groups.get(r).cloned()).collect();
+        if !asked.is_empty()
+            && let Ok(progress) = f.statuses(&asked).await
+        {
+            kept(|k| bring_forward(&mut k.items, &groups, &unreleased, &progress, t));
+        }
+    }
+    // The first arrival stops the other (X1): a fetch under way of a record that arrived otherwise is cancelled in slskd.
+    if !taken.is_empty()
+        && let Ok((slskd, downloads)) = super::track_fetch::slskd_ready().await
+    {
+        for it in &taken {
+            cancel_fetch(&slskd, &downloads, it).await;
+        }
+    }
     Ok(())
+}
+
+/// How long Soulseek leaves a request to Lidarr, which goes first (X1, the owner's 6 November order).
+const LIDARR_FIRST: i64 = 5 * 60;
+
+/// When Soulseek may first search a request's record (X1, the owner's 6 November order): five minutes after it was handed over,
+/// Lidarr first; at once where Lidarr is not connected or did not take it ("Not handed over to Lidarr", as when it does not know
+/// the album); never before its release (`released`, its day) where it is not out yet. Pure.
+pub fn first_search(r: &crate::userdata::Request, released: Option<i64>, lidarr: bool) -> i64 {
+    let handed = r.decided_at.unwrap_or(r.at);
+    let refused = r.fetched.as_deref().is_some_and(|f| f.contains("Not handed over to Lidarr"));
+    let after = if lidarr && !refused { handed + LIDARR_FIRST } else { handed };
+    after.max(released.unwrap_or(0))
+}
+
+/// Items waiting on Lidarr brought forward to `now` where Lidarr cannot fetch their record (X1): its grab failed or stalls, or it
+/// does not know the album, or does not want it. Not those whose release is still to come. Pure.
+fn bring_forward(items: &mut [Item], groups: &HashMap<i64, String>, unreleased: &[i64], progress: &HashMap<String, Progress>, now: i64) {
+    for i in items.iter_mut().filter(|i| i.state == State::Waiting && i.due > now && !unreleased.contains(&i.record.request)) {
+        let Some(p) = groups.get(&i.record.request).and_then(|g| progress.get(g)) else { continue };
+        if matches!(p, Progress::Stuck | Progress::Unknown | Progress::NotWanted) {
+            i.due = now;
+        }
+    }
+}
+
+/// A fetch under way stopped (X1: the first arrival stops the other): its transfers dropped in slskd, what came of them removed
+/// from slskd's batch folder.
+async fn cancel_fetch(slskd: &Slskd, downloads: &Path, it: &Item) {
+    let Some(batch) = &it.batch else { return };
+    if let Some(user) = it.chosen.and_then(|c| it.folders.get(c)).map(|f| f.user.clone())
+        && let Ok(ts) = slskd.transfers(batch).await
+    {
+        for t in ts {
+            slskd.drop_transfer(&user, &t.id).await;
+        }
+    }
+    std::fs::remove_dir_all(downloads.join(crate::slskd::FOLDER).join(batch)).ok();
+    tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "its fetch stopped: it arrived otherwise");
 }
 
 /// [`read_requests`]'s list kept, each request's record as `records_of` read it (`of`, in the requests' order): pure. Every
 /// record is taken, with a release group or none: it is judged by its list, whosever that is (0100). An item 0.16 kept, by its
 /// release group, is given its request's record (row 9.26) and goes on as it was: a fetch under way keeps its batch, its
 /// folder and its tick, and is written back with its record.
-fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>]) {
+fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>], firsts: &[i64]) -> Vec<Item> {
     let ids: std::collections::HashSet<i64> = approved.iter().map(|r| r.id).collect();
     k.items.retain(|i| ids.contains(&i.record.request) || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed));
     k.dropped.retain(|r| ids.contains(r));
@@ -731,8 +798,11 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
     // A record already had, by its own files or a record holding them (the one had rule, R26, N9), is not searched: an item of it
     // not in flight goes, and none is made for it (Clear placed, or Lidarr's delivery, is no reason to fetch it again).
     let had: std::collections::HashSet<i64> = of.iter().flatten().filter(|o| o.had()).map(|o| o.record).collect();
-    k.items.retain(|i| !had.contains(&i.record.record) || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed));
-    for (r, o) in approved.iter().zip(of) {
+    // The first arrival stops the other (X1): one ticked or being fetched goes too, its fetch cancelled by the caller; one checked
+    // or placed is the arrival.
+    let stopped: Vec<Item> = k.items.iter().filter(|i| had.contains(&i.record.record) && matches!(i.state, State::Approved | State::Fetching)).cloned().collect();
+    k.items.retain(|i| !had.contains(&i.record.record) || matches!(i.state, State::Checking | State::Placed));
+    for (n, (r, o)) in approved.iter().zip(of).enumerate() {
         if k.dropped.contains(&r.id) {
             continue;
         }
@@ -759,7 +829,12 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             placed: None,
             set_aside: Vec::new(),
         });
+        // Its first search as the order has it (X1, `first_search`).
+        if let Some(i) = k.items.last_mut() {
+            i.due = firsts.get(n).copied().unwrap_or(0);
+        }
     }
+    stopped.into_iter().filter(|i| i.batch.is_some()).collect()
 }
 
 /// The next record to search: waiting and due, the longest waiting first.
@@ -1522,24 +1597,24 @@ mod tests {
 
     /// A request's record as `records_of` reads it: record `n`, named after its request.
     fn of(n: i64) -> Option<super::super::requests::RecordOf> {
-        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, holder: None, holding: Default::default() })
+        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, holder: None, holding: Default::default(), released: None })
     }
 
     #[test]
     fn only_approved_requests_are_wanted_and_one_taken_off_stays_off() {
         let mut k = Kept::default();
-        take_requests(&mut k, &[asked(1, Some("rg1")), asked(2, None), asked(3, Some("rg3")), asked(4, None), asked(5, None)], &[of(101), of(102), of(103), None, of(101)]);
+        take_requests(&mut k, &[asked(1, Some("rg1")), asked(2, None), asked(3, Some("rg3")), asked(4, None), asked(5, None)], &[of(101), of(102), of(103), None, of(101)], &[]);
         // Every record, with a release group or none (C51b); one with no record yet waits for one; one record taken once.
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), vec![(1, 101), (2, 102), (3, 103)]);
         assert_eq!(k.items[1].record.album, "Album 102", "named as its record is");
         // Taken off: not taken in again while it stays approved.
         k.dropped.push(3);
         k.items.retain(|i| i.record.request != 3);
-        take_requests(&mut k, &[asked(1, Some("rg1")), asked(3, Some("rg3"))], &[of(101), of(103)]);
+        take_requests(&mut k, &[asked(1, Some("rg1")), asked(3, Some("rg3"))], &[of(101), of(103)], &[]);
         assert_eq!(k.items.len(), 1);
         // No longer approved (cancelled): it goes, unless it is being fetched or placed.
         k.items[0].state = State::Found;
-        take_requests(&mut k, &[], &[]);
+        take_requests(&mut k, &[], &[], &[]);
         assert!(k.items.is_empty());
         assert!(k.dropped.is_empty(), "a dropped one no longer approved is forgotten");
     }
@@ -1721,7 +1796,7 @@ mod tests {
         let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"fetching","batch":"b-1"}]}"#;
         let mut k: Kept = serde_json::from_str(raw).unwrap();
         let at_start = k.items[0].record.clone();
-        take_requests(&mut k, &[asked(7, Some("rg"))], &[of(42)]);
+        take_requests(&mut k, &[asked(7, Some("rg"))], &[of(42)], &[]);
         assert_eq!((at_start.record, record_now(&k, "ss-3", &at_start).record), (0, 42));
         assert_eq!(record_now(&k, "ss-9", &at_start), at_start, "one gone from the list: as it was");
     }
@@ -1731,19 +1806,63 @@ mod tests {
         Some(super::super::requests::RecordOf { holder: Some(n + 1000), holding: super::super::requests::Holding::Done, ..of(n).unwrap() })
     }
 
-    /// R26 (N9): Soulseek takes no record already had (its own files, or a record holding them), and an item of one not in flight
-    /// goes; one being fetched stays as it is.
+    /// X1: Soulseek's first search is five minutes after the request was handed to Lidarr, which goes first.
+    #[test]
+    fn soulseek_waits_five_minutes_for_lidarr() {
+        let r = crate::userdata::Request { decided_at: Some(1_000), fetched: Some("Lidarr added it and is looking for it".into()), ..asked(1, None) };
+        assert_eq!(first_search(&r, None, true), 1_000 + LIDARR_FIRST);
+        let mut k = Kept::default();
+        take_requests(&mut k, &[r.clone()], &[of(101)], &[first_search(&r, None, true)]);
+        assert_eq!(k.items[0].due, 1_000 + LIDARR_FIRST);
+    }
+
+    /// X1: Soulseek starts at once where Lidarr does not know the album (its want failed), or is not connected.
+    #[test]
+    fn soulseek_starts_at_once_when_lidarr_does_not_know_it() {
+        let refused = crate::userdata::Request { decided_at: Some(1_000), fetched: Some("Not handed over to Lidarr: Lidarr does not know Two Rooms by Glass Harbour".into()), ..asked(1, None) };
+        assert_eq!(first_search(&refused, None, true), 1_000);
+        let r = crate::userdata::Request { decided_at: Some(1_000), ..asked(2, None) };
+        assert_eq!(first_search(&r, None, false), 1_000, "no Lidarr");
+    }
+
+    /// X1: a grab Lidarr reports failed or stalled hands the record to Soulseek at once; one it fetches still waits its turn, as
+    /// does one whose release is to come.
+    #[test]
+    fn a_failed_grab_hands_over_to_soulseek() {
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(102), of(103)], &[5_000, 5_000, 90_000]);
+        let groups: HashMap<i64, String> = [(1, "g1".to_string()), (2, "g2".to_string()), (3, "g3".to_string())].into();
+        let progress: HashMap<String, Progress> = [("g1".to_string(), Progress::Stuck), ("g2".to_string(), Progress::Fetching { done: 0.4 }), ("g3".to_string(), Progress::Stuck)].into();
+        bring_forward(&mut k.items, &groups, &[3], &progress, 1_000);
+        assert_eq!(k.items.iter().map(|i| i.due).collect::<Vec<_>>(), [1_000, 5_000, 90_000]);
+    }
+
+    /// X1: the first arrival stops the other: Soulseek's item of a record that arrived otherwise goes, a fetch under way with it
+    /// (handed back to be cancelled in slskd); one checked or placed is that arrival, and stays.
+    #[test]
+    fn the_first_arrival_cancels_soulseeks_fetch() {
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None), asked(2, None)], &[of(101), of(102)], &[]);
+        (k.items[0].state, k.items[0].batch) = (State::Fetching, Some("b1".into()));
+        k.items[1].state = State::Placed;
+        let stopped = take_requests(&mut k, &[asked(1, None), asked(2, None)], &[had(101), had(102)], &[]);
+        assert_eq!(stopped.iter().map(|i| i.record.record).collect::<Vec<_>>(), [101]);
+        assert_eq!(k.items.iter().map(|i| i.record.record).collect::<Vec<_>>(), [102]);
+    }
+
+    /// R26 (N9), X1: Soulseek takes no record already had (its own files, or a record holding them); an item of one goes, unless it
+    /// is being checked or placed (that arrival itself); one being fetched goes too, its fetch cancelled (X1).
     #[test]
     fn soulseek_takes_no_record_already_had() {
         let mut k = Kept::default();
         let both = [asked(1, None), asked(2, None)];
-        take_requests(&mut k, &both, &[had(101), of(102)]);
+        take_requests(&mut k, &both, &[had(101), of(102)], &[]);
         assert_eq!(k.items.iter().map(|i| i.record.record).collect::<Vec<_>>(), [102]);
-        k.items[0].state = State::Fetching;
-        take_requests(&mut k, &both, &[had(101), had(102)]);
-        assert_eq!(k.items.len(), 1, "in flight: as it was");
+        k.items[0].state = State::Checking;
+        take_requests(&mut k, &both, &[had(101), had(102)], &[]);
+        assert_eq!(k.items.len(), 1, "being checked: as it was");
         k.items[0].state = State::Found;
-        take_requests(&mut k, &both, &[had(101), had(102)]);
+        take_requests(&mut k, &both, &[had(101), had(102)], &[]);
         assert!(k.items.is_empty(), "found, not fetched: gone, its album had");
     }
 
@@ -1752,10 +1871,10 @@ mod tests {
     #[test]
     fn clearing_placed_does_not_search_them_again() {
         let mut k = Kept::default();
-        take_requests(&mut k, &[asked(1, None)], &[of(101)]);
+        take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
         k.items[0].state = State::Placed;
         k.items.retain(|i| i.state != State::Placed);
-        take_requests(&mut k, &[asked(1, None)], &[had(101)]);
+        take_requests(&mut k, &[asked(1, None)], &[had(101)], &[]);
         assert!(k.items.is_empty());
     }
 
@@ -1769,7 +1888,7 @@ mod tests {
             "chosen":0,"batch":"b-1","percent":40.0}]}"#;
         let mut k: Kept = serde_json::from_str(raw).unwrap();
         assert_eq!((k.items[0].record.record, k.items[0].tracks[0].recording.as_deref()), (0, Some("rec-1")), "read as 0.16 kept it");
-        take_requests(&mut k, &[asked(7, Some("rg-moon"))], &[of(42)]);
+        take_requests(&mut k, &[asked(7, Some("rg-moon"))], &[of(42)], &[]);
         assert_eq!(k.items.len(), 1, "no second item for its request");
         let i = &k.items[0];
         assert_eq!((i.record.record, i.state, i.batch.as_deref(), i.chosen, i.percent), (42, State::Fetching, Some("b-1"), Some(0), 40.0));
@@ -1802,7 +1921,7 @@ mod tests {
         let approved = ud.requests(None, Some(super::super::requests::APPROVED), 100).unwrap();
         let of = super::super::requests::records_of(&cat, &approved).unwrap();
         let mut k = Kept::default();
-        take_requests(&mut k, &approved, &of);
+        take_requests(&mut k, &approved, &of, &[]);
         (cat, k.items, d)
     }
 

@@ -1168,6 +1168,12 @@ impl Catalogue {
         Ok(kept)
     }
 
+    /// Tests elsewhere: the catalogue's connection, to set what no call sets (a record's release date).
+    #[cfg(test)]
+    pub fn db_for_tests(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.db()
+    }
+
     /// Tests elsewhere: a copy of the record in catalogue folder `folder`, a file there behind each of its tracks (`copy-<record>/…`).
     #[cfg(test)]
     pub fn copy_for_tests(&self, record: i64, folder: i64) {

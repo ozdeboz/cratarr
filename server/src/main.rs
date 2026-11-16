@@ -332,6 +332,7 @@ async fn main() -> Result<()> {
     app::scrobble::run(served.clone());
     // Soulseek in Cratarr (0.15): Lidarr's Wanted searched, records fetched on a tick, once a library takes them.
     app::soulseek::start(&app);
+    app::requests::start(&app);
     // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).
     let importer = app.clone();
     served.import.connect(std::sync::Arc::new(move || importer.library.connected_sources()));

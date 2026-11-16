@@ -89,6 +89,8 @@ pub enum RequestState {
 pub enum Fetching {
     Looking,
     Fetching { done: f32 },
+    /// Its grab failed or stalls (X1): Soulseek's turn.
+    Stuck,
 }
 
 /// A request's state (W5): `RequestState`, from the request as kept, how its record is held (`holding`), Lidarr's progress for its
@@ -111,6 +113,7 @@ pub fn request_state(r: &Request, held: Holding, lidarr: Option<&Progress>, soul
                 Progress::Looking => Some(Fetching::Looking),
                 Progress::Fetching { done } => Some(Fetching::Fetching { done }),
                 Progress::Fetched { .. } => Some(Fetching::Fetching { done: 1.0 }),
+                Progress::Stuck => Some(Fetching::Stuck),
                 Progress::NotWanted | Progress::Unknown => None,
             });
             RequestState::Wanted { lidarr, soulseek: soulseek.cloned() }
@@ -400,6 +403,62 @@ async fn connected(lidarr: bool) -> Vec<&'static str> {
 /// What a request handed to Soulseek says (`hand`).
 pub const SOULSEEK_SEARCHES: &str = "Soulseek searches for it";
 
+/// What a request of an album not out yet says until it is (X1): both fetchers wait for its release, Lidarr asked then (`start`).
+pub const WAITS_FOR_RELEASE: &str = "Waits for its release:";
+
+/// What a request says once its album arrived and Lidarr was told to stop looking for it (X1: the first arrival stops the other).
+pub const STOPPED_ON_ARRIVAL: &str = "Lidarr told to stop: it arrived";
+
+/// The day a release date names ("2026", "2026-12", "2026-12-04"), at its start, epoch seconds (UTC). Pure.
+pub fn release_day(s: &str) -> Option<i64> {
+    let mut parts = s.trim().split('-');
+    let y: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = match parts.next() {
+        Some(p) => p.parse().ok()?,
+        None => 1,
+    };
+    let d: i64 = match parts.next() {
+        Some(p) => p.parse().ok()?,
+        None => 1,
+    };
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Days from 1970-01-01 (days_from_civil).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era * 146_097 + doe - 719_468) * 86_400)
+}
+
+/// When each fetcher was last found out of reach and has stayed so (X1: a dead fetcher raises a Health item), by its name.
+static DOWN: std::sync::Mutex<std::collections::BTreeMap<&'static str, i64>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// How long a fetcher may be out of reach before Health says so (X1).
+pub const DOWN_FOR: i64 = 3600;
+
+/// What a fetcher's last word was, now: reached, or out of reach (since the first time it was).
+pub fn fetcher_said(fetcher: &'static str, reached: bool) {
+    fetcher_said_at(fetcher, reached, super::moment::now_secs());
+}
+
+/// `fetcher_said`, at `at`.
+pub(crate) fn fetcher_said_at(fetcher: &'static str, reached: bool, at: i64) {
+    let mut down = DOWN.lock().unwrap_or_else(|p| p.into_inner());
+    if reached {
+        down.remove(fetcher);
+    } else {
+        down.entry(fetcher).or_insert(at);
+    }
+}
+
+/// The fetchers out of reach for over `DOWN_FOR` at `now`, each with since when (Health's item).
+pub fn fetchers_down(now: i64) -> Vec<(&'static str, i64)> {
+    DOWN.lock().unwrap_or_else(|p| p.into_inner()).iter().filter(|(_, since)| now - **since > DOWN_FOR).map(|(f, s)| (*f, *s)).collect()
+}
+
 /// The approved requests a copy arrived for (W4): those whose record it is or whose record it holds (R13), asked before it came,
 /// as R32 has it for a requester's rights; each as the pages show it (its record's group). Read before the copy goes, as its going
 /// ends the holding. A copy whose coming is not known arrived for none.
@@ -466,10 +525,25 @@ async fn hand_to(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r:
         }
         return ALREADY_HAD.to_string();
     }
+    // An album not out yet waits for its release, for both fetchers (X1): Lidarr is asked once it is out (`start`'s round), and
+    // Soulseek's turn comes then too (`soulseek::first_search`).
+    if let Some(day) = of.as_ref().and_then(|o| o.released.clone()).filter(|d| release_day(d).is_some_and(|at| at > super::moment::now_secs())) {
+        let said = format!("{WAITS_FOR_RELEASE} {day}");
+        if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {
+            tracing::warn!("request {}: what the fetchers were not told was not kept: {e:#}", r.id);
+        }
+        return said;
+    }
     let mut said = Vec::new();
     if let Some(f) = lidarr {
         said.push(match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
             Ok(handed) => {
+                fetcher_said("lidarr", true);
+                // The group it was asked with kept on the request (X1): what it is told to stop by.
+                let asked = r.release_group.clone().unwrap_or_else(|| handed.release_group.to_ascii_lowercase());
+                if let Err(e) = serve.userdata.keep_request_group(r.id, &asked) {
+                    tracing::warn!("request {}: the group Lidarr was asked by was not kept: {e:#}", r.id);
+                }
                 if r.release_group.is_none()
                     && let Some(record) = r.record
                 {
@@ -482,6 +556,10 @@ async fn hand_to(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r:
                 handed.said
             }
             Err(e) => {
+                // Out of reach, not an answer about the album: Health hears of it after an hour (X1).
+                if e.downcast_ref::<reqwest::Error>().is_some() {
+                    fetcher_said("lidarr", false);
+                }
                 // In the log too (0.9.6: a Lidarr timeout the owner saw left no trace to follow).
                 tracing::warn!("request {}: not handed to Lidarr: {e:#}", r.id);
                 format!("Not handed over to Lidarr: {e:#}")
@@ -497,6 +575,108 @@ async fn hand_to(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r:
         tracing::warn!("request {}: what the fetcher said was not kept: {e:#}", r.id);
     }
     said
+}
+
+/// The requests' round (X1), once a minute: an album now out handed to Lidarr; the first arrival stopping the other fetcher; Lidarr
+/// asked whether it can be reached; and, at the first 0.17 start, the approved requests no fetcher spoke of handed to Lidarr once.
+pub fn start(app: &std::sync::Arc<super::App>) {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    let Some(serve) = crate::serve::instance() else { return };
+    let app = app.clone();
+    tokio::spawn(async move {
+        let mut asked_at = 0;
+        loop {
+            if let Err(e) = round(&app, &serve, &mut asked_at).await {
+                tracing::warn!(target: "requests", reason = %format!("{e:#}"), "the requests' round");
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    });
+}
+
+/// How often Lidarr is asked whether it can be reached (X1), at most.
+const ASK_LIDARR_EVERY: i64 = 300;
+
+/// The migration part that says the first start's hand-over to Lidarr was made (X1).
+const HANDED_AT_START: &str = "requests: handed to Lidarr at 0.17's first start";
+
+/// One round of `start`.
+async fn round(app: &super::App, serve: &Serve, asked_at: &mut i64) -> Result<()> {
+    let lidarr = fetcher(app);
+    let now = super::moment::now_secs();
+    if let Some(f) = lidarr.as_deref()
+        && now - *asked_at >= ASK_LIDARR_EVERY
+    {
+        *asked_at = now;
+        let reached = match super::discover::lidarr(app) {
+            Some(l) => l.version().await.is_ok(),
+            None => true,
+        };
+        fetcher_said("lidarr", reached);
+        if reached && !serve.userdata.migration_report()?.contains_key(HANDED_AT_START) {
+            let handed = hand_over_at_start(f, serve).await;
+            serve.userdata.set_migration_part(HANDED_AT_START, &serde_json::json!({ "handed": handed }))?;
+        }
+    }
+    // Out now: handed to Lidarr, Soulseek's turn coming with it.
+    let approved = serve.userdata.requests(None, Some(APPROVED), OPEN)?;
+    let of = named(serve, &approved).await;
+    for (r, o) in approved.iter().zip(&of) {
+        let out = o.as_ref().and_then(|o| o.released.as_deref()).and_then(release_day).is_none_or(|day| day <= now);
+        if out && r.fetched.as_deref().is_some_and(|f| f.starts_with(WAITS_FOR_RELEASE)) {
+            hand(app, serve, r).await;
+        }
+    }
+    stop_arrived(lidarr.as_deref(), serve).await;
+    Ok(())
+}
+
+/// The approved requests not had that no fetcher has spoken of (none, or "Not handed over"), handed to Lidarr once at the first
+/// 0.17 start, one at a time (X1; the owner's GROUCH request is then asked for by its record's group). Their ids.
+async fn hand_over_at_start(lidarr: &dyn Fetcher, serve: &Serve) -> Vec<i64> {
+    let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
+    let of = named(serve, &approved).await;
+    let mut handed = Vec::new();
+    for (r, o) in approved.iter().zip(&of) {
+        if o.as_ref().is_some_and(RecordOf::had) || !no_fetcher_spoke(r) {
+            continue;
+        }
+        hand_to(Some(lidarr), false, serve, r).await;
+        handed.push(r.id);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    handed
+}
+
+/// The first arrival stops the other (X1, the owner's 6 November order): each approved request whose album arrived or is in the
+/// library, handed to Lidarr, has Lidarr told to stop by the group it was asked with, where no other open request still wants
+/// the record; said on the request, once (`STOPPED_ON_ARRIVAL`). Soulseek drops its own item (`soulseek::take_requests`). The
+/// requests told.
+pub async fn stop_arrived(lidarr: Option<&dyn Fetcher>, serve: &Serve) -> Vec<i64> {
+    let Some(f) = lidarr else { return Vec::new() };
+    let open: Vec<Request> = serve.userdata.requests(None, None, OPEN).unwrap_or_default().into_iter().filter(|r| r.status == PENDING || r.status == APPROVED).collect();
+    let of = named(serve, &open).await;
+    let wanting: Vec<i64> = open.iter().zip(&of).filter_map(|(_, o)| o.as_ref().filter(|o| !o.had()).map(|o| o.record)).collect();
+    let mut told = Vec::new();
+    for (r, o) in open.iter().zip(&of) {
+        let Some(o) = o.as_ref().filter(|o| o.had()) else { continue };
+        let Some(said) = r.fetched.as_deref().filter(|f| f.contains("Lidarr") && !f.starts_with("Not handed over") && !f.contains(STOPPED_ON_ARRIVAL)) else { continue };
+        if r.status != APPROVED || wanting.contains(&o.record) {
+            continue;
+        }
+        let Some(group) = r.release_group.clone().or_else(|| o.groups.first().cloned()) else { continue };
+        match f.cancel(&group).await {
+            Ok(()) => {
+                let _ = serve.userdata.set_request_fetched(r.id, &format!("{said}; {STOPPED_ON_ARRIVAL}"));
+                told.push(r.id);
+            }
+            Err(e) => tracing::warn!("request {}: Lidarr not told to stop: {e:#}", r.id),
+        }
+    }
+    told
 }
 
 /// Requests answered, one or many (the select mode): approved ones handed over, declined ones with the reason, if one
@@ -762,6 +942,8 @@ pub struct RecordOf {
     pub holder: Option<i64>,
     /// How it is held (W4): partly, arrived (in Incoming alone), or done.
     pub holding: Holding,
+    /// When it is first out ("2026-12-04", or a year), as MusicBrainz says: one not out yet waits for it (X1).
+    pub released: Option<String>,
 }
 
 impl RecordOf {
@@ -831,7 +1013,7 @@ pub fn records_held(cat: &crate::catalogue::Catalogue, rs: &[Request], kinds: &[
         .map(|r| {
             let q = read.get(&r.record?)?;
             let holding = holding_of(q, kind);
-            Some(RecordOf { record: q.row.id, groups: q.groups.clone(), title: q.row.title.clone(), artist: q.row.artist.clone(), year: q.row.year, cover: q.row.cover.clone(), holder: q.holder, holding })
+            Some(RecordOf { record: q.row.id, groups: q.groups.clone(), title: q.row.title.clone(), artist: q.row.artist.clone(), year: q.row.year, cover: q.row.cover.clone(), holder: q.holder, holding, released: q.row.released.clone() })
         })
         .collect())
 }
@@ -1175,6 +1357,54 @@ mod tests {
         assert!(serve.catalogue().label_records(label).unwrap().iter().any(|(r, _)| *r == record), "the account its label");
     }
 
+    /// X1: an album not out yet waits for its release: Lidarr is not asked, the request says so, and Soulseek's turn is its release.
+    #[tokio::test]
+    async fn an_unreleased_album_waits_for_its_release() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let record = record_of_album(cat, None, "Glass Harbour", "Next Year", None, None).unwrap();
+        cat.db_for_tests().execute("UPDATE records SET released = '2999-04-01' WHERE id = ?1", [record]).unwrap();
+        let mut r = asked_for(record);
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let lidarr = Wanting::default();
+        assert_eq!(hand_to(Some(&lidarr), true, &serve, &r).await, "Waits for its release: 2999-04-01");
+        assert!(lidarr.0.lock().unwrap().is_empty(), "Lidarr not asked yet");
+        let r = serve.userdata.request(r.id).unwrap().unwrap();
+        let day = release_day("2999-04-01").unwrap();
+        assert_eq!(crate::app::soulseek::first_search(&r, Some(day), true), day, "Soulseek waits for it too");
+        assert_eq!(release_day("1970-01-02"), Some(86_400));
+        assert_eq!(release_day("2000"), release_day("2000-01-01"));
+    }
+
+    /// X1: the first arrival stops the other: Lidarr is told to stop by the group it was asked with, once, where no other open
+    /// request still wants the record.
+    #[tokio::test]
+    async fn the_first_arrival_stops_the_other_fetcher() {
+        let serve = served();
+        let group = "00000000-0000-4000-8000-000000000305";
+        let arrived = serve.catalogue().record_for_tests("Harbour Lights", 2);
+        let mut r = Request { release_group: Some(group.into()), fetched: Some("Lidarr added it and is looking for it".into()), ..asked_for(arrived) };
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let lidarr = Wanting::default();
+        assert_eq!(stop_arrived(Some(&lidarr), &serve).await, [r.id]);
+        assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()]);
+        assert!(serve.userdata.request(r.id).unwrap().unwrap().fetched.unwrap().ends_with(STOPPED_ON_ARRIVAL));
+        assert!(stop_arrived(Some(&lidarr), &serve).await.is_empty(), "once");
+    }
+
+    /// X1: a fetcher out of reach for over an hour shows on Health.
+    #[test]
+    fn a_dead_fetcher_shows_on_health() {
+        fetcher_said_at("lidarr", false, 1_000);
+        fetcher_said_at("lidarr", false, 2_000);
+        assert!(fetchers_down(1_000 + DOWN_FOR).is_empty(), "not an hour yet");
+        assert_eq!(fetchers_down(1_001 + DOWN_FOR), [("lidarr", 1_000)], "since the first time");
+        let f = crate::app::health::fetchers_down(&fetchers_down(1_001 + DOWN_FOR), 1_001 + DOWN_FOR).unwrap();
+        assert_eq!((f.key.as_str(), f.count), ("requests:fetcher-down", 1));
+        fetcher_said_at("lidarr", true, 9_000);
+        assert!(fetchers_down(99_999).is_empty(), "reached again");
+    }
+
     /// W6 (H): an account has one open request of a record: found by its record wherever it is among the account's requests (past
     /// its newest 200), and a second open one is not kept; a status write checks the status it replaces.
     #[tokio::test]
@@ -1445,7 +1675,7 @@ mod tests {
         assert_eq!(hand_to(Some(&lidarr), false, &serve, &r).await, "Lidarr added it and is looking for it");
         assert_eq!(*lidarr.0.lock().unwrap(), [(None, "Tape Club".to_string(), "After Hours".to_string())]);
         let kept = serve.userdata.request(r.id).unwrap().unwrap();
-        assert_eq!((kept.artist.as_str(), kept.album.as_str(), kept.release_group), ("Paper Lantern", "Tape Club - After Hours (Paper Lantern)", None), "as asked");
+        assert_eq!((kept.artist.as_str(), kept.album.as_str(), kept.release_group.as_deref()), ("Paper Lantern", "Tape Club - After Hours (Paper Lantern)", Some(FOUND)), "as asked, the group Lidarr took it by kept (X1)");
         let refs = serve.catalogue().references_of(&crate::serve::ids::record(record)).unwrap();
         assert!(refs.iter().any(|(r, row)| (r.source.as_str(), r.kind.as_str(), r.value.as_str(), row.how.as_str()) == ("musicbrainz", "release-group", FOUND, "search")), "{refs:?}");
         // Asked again, the record names its group.

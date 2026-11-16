@@ -260,6 +260,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "incoming:duplicates" => ("Duplicates", "found"),
         "incoming:failed" => ("Conversions", "failed"),
         "incoming:arrived" => ("Records", "arrived"),
+        "requests:fetcher-down" => ("Fetchers", "down"),
         "playlists:missing" => ("Playlist tracks", "missing"),
         "analysis:audiomuse" => ("Analysis", "to do"),
         "sign-in:refused" => ("Sign-ins", "refused"),
@@ -309,6 +310,7 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "incoming:duplicates" => "Duplicates",
         "incoming:failed" => "Failed conversions",
         "incoming:arrived" => "Arrived",
+        "requests:fetcher-down" => "Fetchers out of reach",
         "playlists:missing" => "Missing tracks",
         // No tool names in the names (the owner, 2026-10-26).
         "analysis:audiomuse" => "Analysis",
@@ -616,21 +618,39 @@ pub fn track_ids(lost: bool) -> Option<Finding> {
     Some(f)
 }
 
-/// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
+/// The fetchers out of reach for over an hour (X1: a dead fetcher raises an alert), each named with since when. None, no finding.
+/// Pure.
+pub fn fetchers_down(down: &[(&'static str, i64)], now: i64) -> Option<Finding> {
+    if down.is_empty() {
+        return None;
+    }
+    let name = |f: &str| if f == "lidarr" { "Lidarr" } else { "Soulseek (slskd)" };
+    let count = down.len() as u64;
+    let mut f = finding("requests", "requests:fetcher-down", Level::Warning, count, n(count, "fetcher can't be reached", "fetchers can't be reached"));
+    f.items = down.iter().map(|(fetcher, since)| Item { title: name(fetcher).to_string(), line: Some(match (now - since) / 60 {
+                m if m < 120 => format!("for {m} min"),
+                m => format!("for {} hours", m / 60),
+            }), ..Item::default() }).collect();
+    Some(f)
+}
+
+/// Requests waiting for an answer (decision 0070), each named, opening the Requests page; and the fetchers out of reach (X1).
 fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
-    let Some(serve) = served else { return Ok(Vec::new()) };
+    let now = super::moment::now_secs();
+    let down = fetchers_down(&super::requests::fetchers_down(now), now);
+    let Some(serve) = served else { return Ok(down.into_iter().collect()) };
     // Those whose state says they wait for an answer (W5): one whose album the library has meanwhile waits for no one. Each by its
     // record's names (C49b): a label's "Artist - Title" is the artist's title.
     let mut waiting = super::requests::waiting(serve)?;
     if waiting.is_empty() {
-        return Ok(Vec::new());
+        return Ok(down.into_iter().collect());
     }
     let count = waiting.len() as u64;
     waiting.truncate(ITEMS);
     let mut f = finding("requests", "requests:waiting", Level::Info, count, format!("{} waiting", n(count, "request", "requests")));
     f.open = Some(Open { page: "requests", switch: None, thing: None });
     f.items = waiting.into_iter().map(|r| Item { title: r.album, line: Some(format!("{} · asked by {}", r.artist, r.user)), ..Item::default() }).collect();
-    Ok(vec![f])
+    Ok(std::iter::once(f).chain(down).collect())
 }
 
 /// A record's files' own problems, of every copy, each by its kind: a file wrong in one copy is that record's, whichever

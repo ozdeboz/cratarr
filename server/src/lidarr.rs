@@ -60,6 +60,8 @@ pub enum Progress {
     Looking,
     Fetching { done: f32 },
     Fetched { tracks: u32, of: u32 },
+    /// Its grab failed, or stalls (its queue row says a warning or an error, or failed): the next fetcher's turn (X1).
+    Stuck,
 }
 
 /// One album Lidarr is looking for or fetching (the Requests page's "Lidarr is looking for these", decision 0070).
@@ -121,6 +123,12 @@ struct StatusMessage {
 }
 
 impl QueueRow {
+    /// Whether its grab failed or stalls (X1): a warning or an error on it, or a state that says it failed.
+    fn stuck(&self) -> bool {
+        let said = |s: &Option<String>, what: &[&str]| s.as_deref().is_some_and(|s| what.iter().any(|w| s.to_ascii_lowercase().starts_with(w)));
+        said(&self.status, &["warning", "error"]) || said(&self.state, &["failed", "importfailed"])
+    }
+
     fn done(&self) -> f32 {
         if self.size > 0.0 { ((self.size - self.sizeleft) / self.size).clamp(0.0, 1.0) as f32 } else { 0.0 }
     }
@@ -403,6 +411,7 @@ impl Lidarr {
                 }
                 let ids: Vec<i64> = known.iter().map(|a| a.id).collect();
                 match queue.iter().flatten().find(|q| q.album_id.is_some_and(|id| ids.contains(&id))) {
+                    Some(q) if q.stuck() => Progress::Stuck,
                     Some(q) => Progress::Fetching { done: q.done() },
                     None if known.iter().any(|a| a.monitored) => Progress::Looking,
                     None => Progress::NotWanted,

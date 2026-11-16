@@ -1708,6 +1708,12 @@ impl UserData {
         Ok(())
     }
 
+    /// The release group a request was handed to Lidarr by, kept where it was asked with none (X1): what Lidarr is told to stop by.
+    pub fn keep_request_group(&self, id: i64, group: &str) -> Result<()> {
+        self.db().execute("UPDATE request SET release_group = ?2 WHERE id = ?1 AND release_group IS NULL", params![id, group])?;
+        Ok(())
+    }
+
     /// A request's record (C49a), where it has none yet: 0.17's step's, given once. Whether it was given.
     pub fn give_request_record(&self, id: i64, record: i64) -> Result<bool> {
         let db = self.db();
