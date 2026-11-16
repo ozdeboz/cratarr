@@ -14,12 +14,16 @@
   import SectionHead from './SectionHead.svelte';
 
   /** `onsettled`: once its artists are in (or refused), so Home can show it in its turn. */
-  let { onsettled }: { onsettled?: () => void } = $props();
+  let { onsettled, failed = $bindable(false) }: { onsettled?: () => void; failed?: boolean } = $props();
+  // Its failure told to Home, whose one line says it out of reach (its own Notice says nothing there).
 
   let artists = $state<ExploredArtist[]>([]);
   let open = $state(0);
   /** Not read: one line in its place with Try again, never left out as if none (the owner, 2026-11-02). */
   let error = $state<string | null>(null);
+  $effect(() => {
+    failed = error !== null;
+  });
   const read = () =>
     getHomeArtists(prefs.source || undefined, hiddenLibraries()).then(
       (d) => ((artists = d.artists), (error = null), onsettled?.()),
@@ -66,7 +70,7 @@
 </script>
 
 {#if error}
-  <section class="failed" aria-label="Artists to explore"><Notice text={`Artists to explore: ${error}`} onretry={read} /></section>
+  <section class="failed" aria-label="Artists to explore"><Notice text={`Artists to explore: ${error}`} onretry={read} away="" /></section>
 {:else if a}
   <section aria-label="Artists to explore">
     <SectionHead title="Artists to explore" />

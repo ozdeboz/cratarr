@@ -211,7 +211,7 @@
   }
 </script>
 
-{#if loadError}<Notice text={loadError} onretry={load} />{/if}
+{#if loadError}<Notice text={loadError} onretry={load} away="Accounts need Cratarr." />{/if}
 {#if users === null}
   {#if !loadError}<PageLoading />{/if}
 {:else if open}

@@ -556,7 +556,7 @@
       <!-- Searching: the server's finds not in yet, so nothing said before the answer (lib/search listShows). -->
       <Asking now={kept.loader} />
     {:else if listShows(albums.length, pageView.query, deepFor, deepFailed?.q) === 'failed' && deepFailed}
-      <Notice text={deepFailed.text} onretry={() => ((deepFailed = null), deepAgain++)} />
+      <Notice text={deepFailed.text} onretry={() => ((deepFailed = null), deepAgain++)} away="Searching their tracks needs Cratarr." />
     {:else if albums.length === 0}
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
            empty column headings, the owner 2026-10-23). Words that match no record say so, not the libraries (under a

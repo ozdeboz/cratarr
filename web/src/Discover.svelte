@@ -339,7 +339,7 @@
   {#if spotifyView}
     <SpotifyLibrary view={spotifyView} />
   {:else if error && !view}
-    <Notice text={error} onretry={load} />
+    <Notice text={error} onretry={load} away="Discover needs Cratarr." />
   {:else if !view}
     <!-- Waiting for the list: a look running says how far it is under the loader too, never only in the pill (the
          owner, 2026-10-25). -->
@@ -358,7 +358,7 @@
       <!-- Nothing found yet: the shared loading sign, not words of its own (the owner, 2026-10-26). -->
       <!-- None found yet and no look running: the list could not be read again, or the look failed (its Look again);
            else the look's end is still being read (the owner, 2026-11-02: errors are never shown as nothing). -->
-      {#if !looking}{#if kept.length || view.found}{#if !(kept.length && pageView.none)}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{/if}{:else if error}<Notice text={error} onretry={load} />{:else if task?.error}<Notice text={task.error} onretry={refresh} />{:else}<PageLoading />{/if}{/if}
+      {#if !looking}{#if kept.length || view.found}{#if !(kept.length && pageView.none)}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{/if}{:else if error}<Notice text={error} onretry={load} away="Discover needs Cratarr." />{:else if task?.error}<Notice text={task.error} onretry={refresh} away="Discover needs Cratarr." />{:else}<PageLoading />{/if}{/if}
     {:else}
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: {#if me.admin}<a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>{:else}an administrator can connect it{/if}.</p>

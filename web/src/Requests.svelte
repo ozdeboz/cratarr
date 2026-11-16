@@ -51,7 +51,7 @@
 
 <main>
   {#if requests.error && !requests.view}
-    <Notice text={requests.error} onretry={loadRequests} />
+    <Notice text={requests.error} onretry={loadRequests} away="Requests need Cratarr." />
   {:else if !requests.view}
     <PageLoading />
   {:else}

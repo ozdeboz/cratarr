@@ -17,11 +17,15 @@
   const MOST = 4;
 
   /** `onsettled`: once its answer is in (or there is none to ask for), so Home can show it in its turn. */
-  let { onsettled }: { onsettled?: () => void } = $props();
+  let { onsettled, failed = $bindable(false) }: { onsettled?: () => void; failed?: boolean } = $props();
+  // Its failure told to Home, whose one line says it out of reach (its own Notice says nothing there).
 
   let findings = $state<HealthFinding[]>([]);
   /** The report not read: one line in its place with Try again, never "nothing waits" (the owner, 2026-11-02). */
   let error = $state<string | null>(null);
+  $effect(() => {
+    failed = error !== null;
+  });
   let readAgain = $state(0);
 
   $effect(() => {
@@ -52,7 +56,7 @@
 </script>
 
 {#if me.admin && error}
-  <section class="failed" aria-label="System status"><Notice text={`System status: ${error}`} onretry={() => readAgain++} /></section>
+  <section class="failed" aria-label="System status"><Notice text={`System status: ${error}`} onretry={() => readAgain++} away="" /></section>
 {:else if me.admin && rows.length}
   <section aria-label="System status">
     <!-- Its arrow: the Health page, where all of it is (decision 0063). -->

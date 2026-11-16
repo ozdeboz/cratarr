@@ -37,7 +37,8 @@ function uses(text: string) {
 const ALLOWED: Record<string, [number, string]> = {
   'App.svelte': [2, 'which page the app opens on away from home; the quick crate card offered'],
   'Home.svelte': [4, 'Radio offered, and the moment offered with nothing of it here; a section the device cannot answer said in one line'],
-  'Playlists.svelte': [3, 'New playlist offered; a failure said with Try again only when reached, one line out of reach where nothing is held'],
+  'Playlists.svelte': [1, 'New playlist offered'],
+  'lib/Notice.svelte': [1, 'a failure out of reach said in its one line (lib/noticeAway), not with Try again'],
   'lib/DownloadsPanel.svelte': [2, 'Retry offered, and its word'],
   'lib/MenuSheet.svelte': [2, 'which of a menu\'s entries are offered'],
   'lib/MenuTable.svelte': [2, 'which of a menu\'s entries are offered, and the word for the rest'],

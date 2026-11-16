@@ -38,7 +38,7 @@
 </script>
 
 {#if error}
-  <Notice text={error} onretry={() => readAgain++} />
+  <Notice text={error} onretry={() => readAgain++} away="Health needs Cratarr." />
 {:else if rows === null}
   <p class="muted">…</p>
 {:else if !rows.length}
