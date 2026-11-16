@@ -4,9 +4,10 @@
 //!
 //! - **What is wanted:** Cratarr's approved Requests, and only those (the owner, 2026-11-03: "The whole idea is that
 //!   Cratarr's Soulseek doesn't need Lidarr"); read each round. One taken off the list stays off.
-//! - **Judged by its release:** each record's release as MusicBrainz lists it (the release group's first official one
-//!   with tracks) is the reference: a Soulseek folder is a candidate only when every track
-//!   of the release is one of its files, by title and length (`folders_of`), never because its name looks right.
+//! - **Judged by its list:** each request's record is judged by its counting list (`references::tracklist`, Q31): for a record
+//!   not had, its references' in order, MusicBrainz's release (or one of its release group's), Discogs', Bandcamp's album. A
+//!   Soulseek folder is a candidate only when every track of the list is one of its files, by title and length (`folders_of`),
+//!   never because its name looks right. A record with no list to judge by is Stuck, saying why.
 //! - **Searched on a ladder** (`ladder`): the record and its year, its title stripped of what is in brackets, the main
 //!   artist only, then the artist with a wildcard for the artists Soulseek's server filters; none twice; one search at a
 //!   time, paced. Not found, it is searched again later (`wait_after`): at once after none or one miss, four hours after
@@ -17,7 +18,8 @@
 //!   minutes; the user is remembered as failed for the record, and the next best folder is fetched without asking
 //!   again. A read of slskd that fails once is not the end of a fetch, and slskd itself away is no failed user: the
 //!   record stays as it is, a fetch under way keeps its batch, and it is taken up again (`hold`).
-//! - **Every file gated** (single-track intake's gate, 0080: decoded whole, the recording's length, its sound, AcoustID).
+//! - **Every file gated** (single-track intake's gate, 0080: decoded whole, the recording's length, its sound, AcoustID; a list
+//!   with no recordings, Discogs' or Bandcamp's, by its titles and lengths, AcoustID's check skipped: OQ9 (a), Q29).
 //!   A folder with a file that fails is set aside whole with why per file (the owner, 2026-11-03), its user remembered,
 //!   and the next folder tried. Only a whole, checked record goes on. AcoustID that could not be asked is no failed file:
 //!   the record is held at its check with its folder, its tick and its user, and asked about again (`hold`).
@@ -34,7 +36,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::track_fetch::{NotAsked, ReleaseTrack, ReleaseView};
+use super::track_fetch::{NotAsked, ReleaseTrack};
 use crate::slskd::{Answer, Away, Offered, Slskd};
 
 /// The fetcher's name in a library's setting (`settings::LibrarySetting::fetcher`).
@@ -66,14 +68,14 @@ const CHECK_AGAIN: i64 = 15 * 60;
 
 // ---- What is kept
 
-/// A record wanted.
+/// A record wanted: the catalogue's (C51b), named as the record is, for the searches and the folder it is put in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Record {
+    /// 0 for an item 0.16 kept, which named its release group instead: given its request's record when the requests are read.
+    #[serde(default)]
+    pub record: i64,
     pub artist: String,
     pub album: String,
-    pub release_group: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub release: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub year: Option<i32>,
     /// The approved Request it fetches (decision 0099's amendment, the owner 2026-11-03: Soulseek fetches only Cratarr's
@@ -81,16 +83,9 @@ pub struct Record {
     pub request: i64,
 }
 
-/// One of the release's tracks, as a folder's files are judged by.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Track {
-    pub disc: u32,
-    pub position: u32,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub length_ms: Option<i64>,
-    pub recording: String,
-}
+/// One of the list's tracks, as a folder's files are judged by: the list's own shape (C51b), a recording only where
+/// MusicBrainz's list gives one. A track 0.16 kept reads as one, with its recording.
+pub type Track = crate::catalogue::identity::RefTrack;
 
 /// A folder of one user's that holds every track of the release.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -560,33 +555,47 @@ pub fn start(_app: &Arc<super::App>) {
     });
 }
 
-/// The approved Requests taken in (decision 0099's amendment: Soulseek never reads Lidarr's Wanted): one with its
-/// release group not on the list yet is added, waiting to be searched; one no longer approved (cancelled, declined)
-/// goes, unless it is fetched or placed.
+/// The approved Requests taken in (decision 0099's amendment: Soulseek never reads Lidarr's Wanted), each by its record
+/// (C51b, `requests::records_of`): one whose record is not on the list yet is added, waiting to be searched; one no longer
+/// approved (cancelled, declined) goes, unless it is fetched or placed.
 async fn read_requests(served: &Arc<crate::serve::Serve>) -> Result<()> {
-    let ud = served.userdata.clone();
-    let approved = tokio::task::spawn_blocking(move || ud.requests(None, Some(super::requests::APPROVED), REQUESTS_AT_MOST)).await??;
-    kept(|k| take_requests(k, &approved));
+    let (ud, cat) = (served.userdata.clone(), served.catalogue().clone());
+    let (approved, of) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let approved = ud.requests(None, Some(super::requests::APPROVED), REQUESTS_AT_MOST)?;
+        let of = super::requests::records_of(&cat, &approved)?;
+        Ok((approved, of))
+    })
+    .await??;
+    kept(|k| take_requests(k, &approved, &of));
     Ok(())
 }
 
-/// [`read_requests`]'s list kept: pure.
-fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request]) {
+/// [`read_requests`]'s list kept, each request's record as `records_of` read it (`of`, in the requests' order): pure. Every
+/// record is taken, with a release group or none: it is judged by its list, whosever that is (0100). An item 0.16 kept, by its
+/// release group, is given its request's record (row 9.26) and goes on as it was: a fetch under way keeps its batch, its
+/// folder and its tick, and is written back with its record.
+fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>]) {
     let ids: std::collections::HashSet<i64> = approved.iter().map(|r| r.id).collect();
     k.items.retain(|i| ids.contains(&i.record.request) || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed));
     k.dropped.retain(|r| ids.contains(r));
-    for r in approved {
+    for i in k.items.iter_mut().filter(|i| i.record.record == 0) {
+        if let Some((_, Some(o))) = approved.iter().zip(of).find(|(r, _)| r.id == i.record.request) {
+            i.record.record = o.record;
+        }
+    }
+    for (r, o) in approved.iter().zip(of) {
         if k.dropped.contains(&r.id) {
             continue;
         }
-        let Some(group) = r.release_group.clone() else { continue };
-        if k.items.iter().any(|i| i.record.request == r.id || i.record.release_group == group) {
+        // No record yet (0.17's step gives each one at the start): taken once it has one.
+        let Some(o) = o else { continue };
+        if k.items.iter().any(|i| i.record.request == r.id || i.record.record == o.record) {
             continue;
         }
         k.next += 1;
         k.items.push(Item {
             id: format!("ss-{}", k.next),
-            record: Record { artist: r.artist.clone(), album: r.album.clone(), release_group: group, release: None, year: r.year, request: r.id },
+            record: Record { record: o.record, artist: o.artist.clone(), album: o.title.clone(), year: o.year, request: r.id },
             state: State::Waiting,
             tracks: Vec::new(),
             folders: Vec::new(),
@@ -631,39 +640,46 @@ fn next_of(items: &[Item], now: i64) -> Option<String> {
         .map(|i| i.id.clone())
 }
 
-/// The release a record is judged by: its own where it names one, else the release group's first official one with
-/// tracks.
-async fn reference(r: &Record) -> Result<ReleaseView> {
-    if let Some(id) = &r.release {
-        return super::track_fetch::release_by_id(id).await;
-    }
-    #[derive(Deserialize)]
-    struct Browse {
-        #[serde(default)]
-        releases: Vec<serde_json::Value>,
-    }
-    let http = super::discover::http()?;
-    let url = format!("https://musicbrainz.org/ws/2/release?release-group={}&inc=media&fmt=json&limit=25", r.release_group);
-    use super::musicbrainz::Asked as _;
-    let b: Browse = http.get(url).asked().await?.error_for_status()?.json().await?;
-    let tracks = |v: &serde_json::Value| v["media"].as_array().map_or(0, |m| m.iter().map(|x| x["track-count"].as_u64().unwrap_or(0)).sum::<u64>());
-    let one = b.releases.iter().filter(|v| tracks(v) > 0).find(|v| v["status"].as_str() == Some("Official")).or_else(|| b.releases.iter().find(|v| tracks(v) > 0));
-    let id = one.and_then(|v| v["id"].as_str()).context("MusicBrainz lists no release of it with tracks")?;
-    super::track_fetch::release_by_id(id).await
+/// What a record not searched yet is judged by (C51b).
+#[derive(Debug, PartialEq)]
+enum Listing {
+    /// Its counting list: whose, and its tracks.
+    Ready(String, Vec<Track>),
+    /// No list to judge by: why, in few words.
+    None(String),
+    /// A source out of reach: nothing is known of the record yet, so it waits for a round, as with slskd away.
+    Later(String),
 }
 
-fn track_of(t: &ReleaseTrack) -> Track {
-    Track { disc: t.disc, position: t.position, title: t.title.clone(), length_ms: t.length_ms, recording: t.recording.clone() }
+/// A record's counting list, read through `read` (`references::tracklist`, kept there once read).
+async fn listing<R, F>(it: &Item, cat: &Arc<crate::catalogue::Catalogue>, read: R) -> Listing
+where
+    R: Fn(crate::catalogue::records::Ref) -> F,
+    F: std::future::Future<Output = Result<Option<Vec<Track>>>>,
+{
+    if it.record.record == 0 {
+        return Listing::None("No record to judge it by".into());
+    }
+    match super::references::tracklist(cat, it.record.record, read).await {
+        Ok(Ok((source, list))) => Listing::Ready(source, list),
+        Ok(Err(why)) => Listing::None(why),
+        Err(e) => Listing::Later(format!("{e:#}")),
+    }
 }
 
-/// One record searched: its release first (once), then the ladder's rungs in turn until one finds folders.
+/// One record searched: its list first (once), then the ladder's rungs in turn until one finds folders.
 async fn search(id: &str) {
     let Some(it) = item(id) else { return };
+    let Some(served) = crate::serve::instance() else { return };
     with_item(id, |i| i.state = State::Searching);
     if it.tracks.is_empty() {
-        match reference(&it.record).await {
-            Ok(v) => with_item(id, |i| i.tracks = v.tracks.iter().map(track_of).collect()),
-            Err(e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Stuck, Some(format!("{e:#}")), now() + wait_after(3))),
+        match listing(&it, served.catalogue(), super::references::read_reference).await {
+            Listing::Ready(source, tracks) => {
+                tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), list = %source, "judged by its list");
+                with_item(id, |i| i.tracks = tracks);
+            }
+            Listing::None(why) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Stuck, Some(why), now() + wait_after(3))),
+            Listing::Later(why) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(why), now() + ROUND_AT_LEAST)),
         }
     }
     let slskd = match super::track_fetch::slskd_ready().await {
@@ -778,7 +794,7 @@ where
     with_item(id, |i| (i.state, i.percent) = (State::Checking, 100.0));
     let dir = folder.join(crate::slskd::FOLDER).join(&batch);
     let release: Vec<ReleaseTrack> =
-        it.tracks.iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, &t.recording)).collect();
+        it.tracks.iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, t.recording.as_deref().unwrap_or_default())).collect();
     let checked = match check(&dir, &f, &release, &gate).await {
         Ok(verdict) => verdict,
         Err(why) => {
@@ -918,9 +934,21 @@ fn place_in(lib: &Path, r: &Record) -> PathBuf {
 }
 
 /// The checked files into the Soulseek library, each copied in under a hidden name and then renamed (no walk sees a
-/// half-written track); the record's folder.
+/// half-written track); the record's folder. The catalogue is told first that the album arriving there is the record
+/// (`Catalogue::expect_record`, C50), so its tracks join that record rather than make another, and again once the last file
+/// has landed, from when the expectation waits its week (F9).
 fn place(r: &Record, files: &[PathBuf]) -> Result<PathBuf> {
     let to = place_in(&library()?, r);
+    let expect = || -> Result<()> {
+        if r.record != 0
+            && let Some(served) = crate::serve::instance()
+            && let Some((folder, dir)) = served.catalogue().place_of_path(&to)
+        {
+            served.catalogue().expect_record(folder, &dir, r.record)?;
+        }
+        Ok(())
+    };
+    expect()?;
     std::fs::create_dir_all(&to).with_context(|| format!("{} cannot be made", to.display()))?;
     for f in files {
         let name = f.file_name().context("no file name")?;
@@ -930,6 +958,7 @@ fn place(r: &Record, files: &[PathBuf]) -> Result<PathBuf> {
         }
         std::fs::rename(&hidden, to.join(name))?;
     }
+    expect()?;
     Ok(to)
 }
 
@@ -957,11 +986,11 @@ mod tests {
     use super::*;
 
     fn record(artist: &str, album: &str, year: Option<i32>) -> Record {
-        Record { artist: artist.into(), album: album.into(), release_group: "rg".into(), release: None, year, request: 1 }
+        Record { record: 1, artist: artist.into(), album: album.into(), year, request: 1 }
     }
 
     fn track(n: u32, title: &str, secs: i64) -> Track {
-        Track { disc: 1, position: n, title: title.into(), length_ms: Some(secs * 1000), recording: format!("rec-{n}") }
+        Track { disc: 1, position: n, title: title.into(), length_ms: Some(secs * 1000), recording: Some(format!("rec-{n}")) }
     }
 
     fn file(path: &str, secs: i64) -> Offered {
@@ -1299,22 +1328,112 @@ mod tests {
         }
     }
 
+    /// A request's record as `records_of` reads it: record `n`, named after its request.
+    fn of(n: i64) -> Option<super::super::requests::RecordOf> {
+        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, had: false })
+    }
+
     #[test]
     fn only_approved_requests_are_wanted_and_one_taken_off_stays_off() {
         let mut k = Kept::default();
-        take_requests(&mut k, &[asked(1, Some("rg1")), asked(2, None), asked(3, Some("rg3"))]);
-        // One without a release group cannot be judged: not taken.
-        assert_eq!(k.items.iter().map(|i| i.record.request).collect::<Vec<_>>(), vec![1, 3]);
+        take_requests(&mut k, &[asked(1, Some("rg1")), asked(2, None), asked(3, Some("rg3")), asked(4, None), asked(5, None)], &[of(101), of(102), of(103), None, of(101)]);
+        // Every record, with a release group or none (C51b); one with no record yet waits for one; one record taken once.
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), vec![(1, 101), (2, 102), (3, 103)]);
+        assert_eq!(k.items[1].record.album, "Album 102", "named as its record is");
         // Taken off: not taken in again while it stays approved.
         k.dropped.push(3);
         k.items.retain(|i| i.record.request != 3);
-        take_requests(&mut k, &[asked(1, Some("rg1")), asked(3, Some("rg3"))]);
+        take_requests(&mut k, &[asked(1, Some("rg1")), asked(3, Some("rg3"))], &[of(101), of(103)]);
         assert_eq!(k.items.len(), 1);
         // No longer approved (cancelled): it goes, unless it is being fetched or placed.
         k.items[0].state = State::Found;
-        take_requests(&mut k, &[]);
+        take_requests(&mut k, &[], &[]);
         assert!(k.items.is_empty());
         assert!(k.dropped.is_empty(), "a dropped one no longer approved is forgotten");
+    }
+
+    /// C51b (row 9.26): an item 0.16 kept, by its release group, is given its request's record and goes on as it was: its
+    /// state, batch, folder, tick and names kept, no second item made for it, and written back with its record.
+    #[test]
+    fn an_old_item_in_flight_keeps_its_record() {
+        let raw = r#"{"next":3,"dropped":[],"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg-moon","release":"rel-moon","request":7},
+            "state":"fetching","tracks":[{"disc":1,"position":1,"title":"La Femme d'argent","length_ms":431000,"recording":"rec-1"}],
+            "folders":[{"user":"whole","dir":"Music\\Air\\Moon Safari","format":"flac","lossless":true,"free_slot":true,"queue":0,"speed":100,"extra":0,"files":[]}],
+            "chosen":0,"batch":"b-1","percent":40.0}]}"#;
+        let mut k: Kept = serde_json::from_str(raw).unwrap();
+        assert_eq!((k.items[0].record.record, k.items[0].tracks[0].recording.as_deref()), (0, Some("rec-1")), "read as 0.16 kept it");
+        take_requests(&mut k, &[asked(7, Some("rg-moon"))], &[of(42)]);
+        assert_eq!(k.items.len(), 1, "no second item for its request");
+        let i = &k.items[0];
+        assert_eq!((i.record.record, i.state, i.batch.as_deref(), i.chosen, i.percent), (42, State::Fetching, Some("b-1"), Some(0), 40.0));
+        assert_eq!((i.record.artist.as_str(), i.record.album.as_str()), ("Air", "Moon Safari"), "its names, and so the folder it goes to, as they were");
+        let again: Kept = serde_json::from_str(&serde_json::to_string(&k).unwrap()).unwrap();
+        assert_eq!(again.items[0].record.record, 42, "written back with it");
+    }
+
+    /// FX01's data after 0.17's step, and the Soulseek items its approved requests make, as `read_requests` takes them; the
+    /// data folder, to remove once the catalogue is let go.
+    fn fx01(name: &str) -> (Arc<crate::catalogue::Catalogue>, Vec<Item>, PathBuf) {
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        crate::fixtures::data_0_16(&d).unwrap();
+        let cat = Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![PathBuf::from("/music")]).unwrap());
+        let ud = crate::userdata::UserData::open(Some(&d.join("userdata.sqlite"))).unwrap();
+        super::super::step_017::run(&cat, &ud).unwrap();
+        let approved = ud.requests(None, Some(super::super::requests::APPROVED), 100).unwrap();
+        let of = super::super::requests::records_of(&cat, &approved).unwrap();
+        let mut k = Kept::default();
+        take_requests(&mut k, &approved, &of);
+        (cat, k.items, d)
+    }
+
+    fn of_request(items: &[Item], request: i64) -> &Item {
+        items.iter().find(|i| i.record.request == request).expect("its item")
+    }
+
+    /// A Bandcamp album's list, as a stub reader answers it: two tracks, no recordings.
+    fn bandcamp_list(r: crate::catalogue::records::Ref) -> std::future::Ready<Result<Option<Vec<Track>>>> {
+        assert_eq!((r.source.as_str(), r.value.as_str()), ("bandcamp", "https://paperlantern.bandcamp.com/album/after-hours"));
+        let list = [("Night Ferry", 241_000), ("Last Lights", 198_000)].into_iter().zip(1..).map(|((t, ms), n)| Track { disc: 1, position: n, title: t.into(), length_ms: Some(ms), recording: None }).collect();
+        std::future::ready(Ok(Some(list)))
+    }
+
+    /// C51b, the owner's production case (FX01's look-alike, "Tape Club - After Hours (Paper Lantern)" asked by the label's own
+    /// account, no release group): its record not had holds only its Bandcamp album, and is searched by Bandcamp's list, named
+    /// as the record is; each track with no recording (judged by titles and lengths, Q29); a Soulseek folder of those titles and
+    /// lengths is a candidate.
+    #[tokio::test]
+    async fn a_labels_bandcamp_only_request_is_searched_by_its_list() {
+        let (cat, items, d) = fx01("bandcamp-list");
+        let it = of_request(&items, 11);
+        assert_eq!((it.record.artist.as_str(), it.record.album.as_str(), it.state), ("Tape Club", "After Hours", State::Waiting), "taken, though it has no release group");
+        let Listing::Ready(source, tracks) = listing(it, &cat, bandcamp_list).await else { panic!("no list") };
+        assert_eq!((source.as_str(), tracks.len()), ("bandcamp", 2));
+        assert!(tracks.iter().all(|t| t.recording.is_none()), "no recording: AcoustID's check skipped at the gate");
+        assert_eq!(ladder(&it.record)[0], "Tape Club After Hours 2020");
+        let answers = [answer("bc", true, vec![file(r"Tape Club\After Hours\01 Night Ferry.flac", 241), file(r"Tape Club\After Hours\02 Last Lights.flac", 198)])];
+        assert_eq!(folders_of(&answers, &tracks, &[]).len(), 1, "judged by Bandcamp's list");
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// C51b: a record with no list to judge by says why, in few words: its only list behind Bandcamp's bot check (the owner's
+    /// case where Bandcamp answers so); no reference at all; files where no list agrees (none until one is chosen). A source out
+    /// of reach is no "none": it waits for a round.
+    #[tokio::test]
+    async fn a_record_with_no_tracklist_says_why() {
+        let (cat, items, d) = fx01("no-list");
+        let checked = |_| std::future::ready(Err(anyhow::Error::from(crate::bandcamp::NotRead)));
+        assert_eq!(listing(of_request(&items, 11), &cat, checked).await, Listing::None("Bandcamp didn't answer".into()));
+        assert_eq!(listing(of_request(&items, 8), &cat, checked).await, Listing::None("No list to judge by".into()), "Quiet Lanes holds no reference");
+        // Tide Tables, had, its files and no list agreeing (FX01's counts MusicBrainz's): none counts until one is chosen.
+        let tide = of_request(&items, 6);
+        cat.set_counting(tide.record.record, None, true).unwrap();
+        assert_eq!(listing(tide, &cat, checked).await, Listing::None("No list counts until one is chosen".into()));
+        let away = |_| std::future::ready(Err(anyhow::anyhow!("MusicBrainz could not be reached")));
+        assert!(matches!(listing(of_request(&items, 2), &cat, away).await, Listing::Later(_)), "Harbour Lights holds its release group");
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

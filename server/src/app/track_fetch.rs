@@ -606,6 +606,11 @@ where
     let f = file.to_path_buf();
     let print = tokio::task::spawn_blocking(move || crate::acoustid::print(&f)).await??;
     refused_for(&print, track.length_ms)?;
+    // A list with no recordings (Discogs', Bandcamp's, C51b): no recording to hold the file against, so AcoustID's check is
+    // skipped and the file passes on its sound and length, as its folder was judged by titles and lengths (OQ9 (a), Q29).
+    if track.recording.is_empty() {
+        return Ok(1.0);
+    }
     let found = lookup(print).await.map_err(|e| NotAsked(format!("{e:#}")))?;
     crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
 }
@@ -1480,6 +1485,21 @@ mod tests {
         let err = take(&from, &d.join("staging/f4/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
         assert_eq!(err.to_string(), "It is 20 s shorter than the recording");
         assert_eq!(std::fs::read(&from).unwrap(), before, "and the original still there");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// C51b, OQ9 (a), Q29: a track whose list gives no recording (Discogs', Bandcamp's) passes the gate on its sound and length,
+    /// AcoustID not asked; off its length it is still refused.
+    #[tokio::test]
+    async fn the_gate_with_no_recording_judges_by_sound_and_length() {
+        let d = dir("trackfile-norecording");
+        let from = d.join("cratarr/Old drive/06 Bloom.flac");
+        old_flac(&from, "trackfile-norecording");
+        let track = ReleaseTrack { recording: String::new(), ..track_of(delight(), "r7", false).unwrap() };
+        assert_eq!(take(&from, &d.join("staging/f1/06 Bloom.flac"), &track, never_asked).await.unwrap(), 1.0, "AcoustID never asked");
+        let longer = ReleaseTrack { length_ms: Some(30_000), ..track.clone() };
+        let err = take(&from, &d.join("staging/f2/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
+        assert_eq!(err.to_string(), "It is 20 s shorter than the recording");
         std::fs::remove_dir_all(&d).ok();
     }
 

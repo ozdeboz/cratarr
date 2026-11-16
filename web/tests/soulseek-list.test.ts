@@ -9,7 +9,7 @@ const folder = (user: string, lossless = true) => ({ user, dir: `Music\\${user}\
 const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
   ({
     id,
-    record: { artist: 'M. Rivers', album: 'Late Set', release_group: 'rg', year: 1998 },
+    record: { record: 1, artist: 'M. Rivers', album: 'Late Set', year: 1998 },
     request: 7,
     state,
     folders: state === 'found' ? [folder('ann'), folder('bo', false)] : [],

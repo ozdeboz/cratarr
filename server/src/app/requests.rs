@@ -213,23 +213,32 @@ async fn connected(lidarr: bool) -> Vec<&'static str> {
     out
 }
 
-/// An approved request handed to every fetcher connected (decision 0099's amendment): Lidarr told to want it, Soulseek
-/// woken to take it in (it reads the approved Requests itself; one without a release group it cannot judge); what each
-/// said (or why it could not), kept on the request. A release group Lidarr found by the album's names is kept on it too:
-/// its state can be read from then on, and Soulseek can judge it.
+/// An approved request handed to every fetcher connected (decision 0099's amendment), as its record is named and referenced
+/// (`shown`, C51b): Lidarr told to want it; Soulseek woken to take it in (it reads the approved Requests itself, each judged
+/// by its record's list; one with none says so on its row). What each said (or why it could not), kept on the request. A
+/// release group Lidarr found by the record's names is kept on the record, as found by names (`search`): its state can be
+/// read from then on.
 async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
     let lidarr = fetcher(app);
     let soulseek = super::soulseek::connected().await;
-    let mut release_group = r.release_group.clone();
+    hand_to(lidarr.as_deref(), soulseek, serve, r).await
+}
+
+/// [`hand`] to Lidarr where it is connected (the tests' stands in for it), and to Soulseek where it is.
+async fn hand_to(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r: &Request) -> String {
+    let r = shown(r.clone(), named(serve, std::slice::from_ref(r)).await.pop().flatten().as_ref());
     let mut said = Vec::new();
     if let Some(f) = lidarr {
         said.push(match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
             Ok(handed) => {
-                if release_group.is_none() {
-                    if let Err(e) = serve.userdata.set_request_release_group(r.id, &handed.release_group) {
+                if r.release_group.is_none()
+                    && let Some(record) = r.record
+                {
+                    let (cat, group) = (serve.catalogue().clone(), handed.release_group.to_ascii_lowercase());
+                    let kept = tokio::task::spawn_blocking(move || cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", &group), "search")).await;
+                    if let Err(e) = kept.map_err(anyhow::Error::from).and_then(|k| k) {
                         tracing::warn!("request {}: its release group was not kept: {e:#}", r.id);
                     }
-                    release_group = Some(handed.release_group);
                 }
                 handed.said
             }
@@ -241,12 +250,8 @@ async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
         });
     }
     if soulseek {
-        said.push(if release_group.is_some() {
-            super::soulseek::wake();
-            "Soulseek searches for it".to_string()
-        } else {
-            "Not handed over to Soulseek: no release group to judge it by".to_string()
-        });
+        super::soulseek::wake();
+        said.push("Soulseek searches for it".to_string());
     }
     let said = if said.is_empty() { "Not handed over: no fetcher is connected, or they are switched off".to_string() } else { said.join("; ") };
     if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {
@@ -295,7 +300,9 @@ pub async fn cancel(app: &super::App, serve: &Serve, account: &str, id: i64) -> 
     match r.status.as_str() {
         PENDING if r.user == account || manage => {}
         APPROVED if manage => {
-            if let (Some(f), Some(rg)) = (fetcher(app), r.release_group.as_deref()) {
+            // The release group its record holds (`shown`): the one Lidarr was told to want.
+            let group = shown(r.clone(), named(serve, std::slice::from_ref(&r)).await.pop().flatten().as_ref()).release_group;
+            if let (Some(f), Some(rg)) = (fetcher(app), group.as_deref()) {
                 f.cancel(rg).await?;
             }
         }
@@ -637,6 +644,72 @@ mod tests {
         let mbid = "00000000-0000-4000-8000-000000000130";
         let by_group = record_of_album(&cat, Some(mbid), "Orbit Lane", "Undertow", None, None).unwrap();
         assert_eq!(record_of_album(&cat, Some(mbid), "Orbit Lane", "Undertow (Deluxe)", None, None).unwrap(), by_group, "its group finds it");
+    }
+
+    /// A server of the tests' own, in memory, its catalogue attached.
+    fn served() -> Arc<Serve> {
+        let serve = Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        serve
+    }
+
+    /// The Lidarr a test hands requests to: what it was asked to want; the release group it finds.
+    #[derive(Default)]
+    struct Wanting(Mutex<Vec<(Option<String>, String, String)>>);
+
+    const FOUND: &str = "00000000-0000-4000-8000-000000000131";
+
+    impl Fetcher for Wanting {
+        fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> crate::source::Fut<'a, crate::lidarr::Handed> {
+            self.0.lock().unwrap().push((release_group.map(str::to_string), artist.to_string(), album.to_string()));
+            Box::pin(async { Ok(crate::lidarr::Handed { said: "Lidarr added it and is looking for it".into(), release_group: FOUND.into() }) })
+        }
+
+        fn statuses<'a>(&'a self, _: &'a [String]) -> crate::source::Fut<'a, HashMap<String, Progress>> {
+            Box::pin(async { Ok(HashMap::new()) })
+        }
+
+        fn cancel<'a>(&'a self, _: &'a str) -> crate::source::Fut<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// C51b: Lidarr is asked for a request as its record is named, a label's release by the artist and title split from what
+    /// the label's page said (S12, the owner's GROUCH case's shape); the request keeps the names it was asked with, and the
+    /// release group Lidarr found goes on the record, found by names (`search`).
+    #[tokio::test]
+    async fn lidarr_is_asked_with_the_records_names() {
+        let serve = served();
+        let record = record_of_album(serve.catalogue(), None, "Paper Lantern", "Tape Club - After Hours (Paper Lantern)", Some(2020), None).unwrap();
+        let mut r = Request {
+            id: 0,
+            user: "bob".into(),
+            album_key: requested("Paper Lantern", "Tape Club - After Hours (Paper Lantern)"),
+            artist_key: "paper lantern".into(),
+            release_group: None,
+            album: "Tape Club - After Hours (Paper Lantern)".into(),
+            artist: "Paper Lantern".into(),
+            year: Some(2020),
+            cover: None,
+            at: 1,
+            status: APPROVED.into(),
+            reason: None,
+            decided_by: Some("ann".into()),
+            decided_at: Some(1),
+            fetched: None,
+            record: Some(record),
+        };
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let lidarr = Wanting::default();
+        assert_eq!(hand_to(Some(&lidarr), false, &serve, &r).await, "Lidarr added it and is looking for it");
+        assert_eq!(*lidarr.0.lock().unwrap(), [(None, "Tape Club".to_string(), "After Hours".to_string())]);
+        let kept = serve.userdata.request(r.id).unwrap().unwrap();
+        assert_eq!((kept.artist.as_str(), kept.album.as_str(), kept.release_group), ("Paper Lantern", "Tape Club - After Hours (Paper Lantern)", None), "as asked");
+        let refs = serve.catalogue().references_of(&crate::serve::ids::record(record)).unwrap();
+        assert!(refs.iter().any(|(r, row)| (r.source.as_str(), r.kind.as_str(), r.value.as_str(), row.how.as_str()) == ("musicbrainz", "release-group", FOUND, "search")), "{refs:?}");
+        // Asked again, the record names its group.
+        hand_to(Some(&lidarr), false, &serve, &r).await;
+        assert_eq!(lidarr.0.lock().unwrap()[1].0.as_deref(), Some(FOUND));
     }
 
     #[test]

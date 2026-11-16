@@ -175,7 +175,6 @@ fn source_name(source: &str) -> &'static str {
 ///   nothing is read.
 ///
 /// `Ok(Err(why))`: no list to judge by, and why in few words. `Err`: a source could not be reached; asked again later.
-#[cfg_attr(not(test), allow(dead_code))] // Soulseek's search (C51b)
 pub async fn tracklist<R, F>(cat: &Arc<Catalogue>, record: i64, read: R) -> Result<std::result::Result<(String, Vec<RefTrack>), String>>
 where
     R: Fn(Ref) -> F,
@@ -237,7 +236,6 @@ where
 /// of its releases (the first official one with tracks, else the first with tracks, as 0.16's Soulseek chose); a Discogs
 /// release's, a master's main release's; a Bandcamp album's. None where the source has no such thing (an answer "not found");
 /// Bandcamp's bot check is its `NotRead`. Every MusicBrainz question in its turn (S10).
-#[allow(dead_code)] // Soulseek's reader (C51b)
 pub async fn read_reference(r: Ref) -> Result<Option<Vec<RefTrack>>> {
     let not_found = |e: &anyhow::Error| e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status) == Some(reqwest::StatusCode::NOT_FOUND);
     let release = |id: String| async move {

@@ -2792,10 +2792,10 @@ impl Catalogue {
                             // A record not had that this album is (C50: expected here, else by its references, else by its
                             // list), else a new record.
                             None => {
-                                let dir = a.files.first().map(|(folder, rel)| (*folder, dir_of(rel).to_string()));
-                                match records::wanted_record(tx, a, dir.as_ref().and_then(|d| expected.get(d)).copied())? {
+                                let at = records::expected_of(&expected, &a.files);
+                                match records::wanted_record(tx, a, at.as_ref().map(|(_, record)| *record))? {
                                     Some(r) => {
-                                        if let Some((folder, dir)) = &dir {
+                                        if let Some(((folder, dir), _)) = &at {
                                             tx.execute("DELETE FROM expected WHERE folder = ?1 AND dir = ?2", params![folder, dir])?;
                                         }
                                         r
@@ -5418,6 +5418,40 @@ mod tests {
         assert_eq!((record_of(&cat, 1), record_of(&cat, 2)), (Some(wanted), Some(wanted)));
         assert!(cat.record(wanted).unwrap().unwrap().had);
         assert_eq!(cat.db().query_row("SELECT count(*) FROM expected", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "used up");
+    }
+
+    /// C51b (F9): a download placed with its discs in folders of their own (`CD1`, `CD2`) joins the record expected for the
+    /// download's folder.
+    #[test]
+    fn a_multi_disc_download_joins_its_expected_record() {
+        let cat = tracks(2);
+        let wanted = not_had(&cat, "Quiet Lanes", &[]);
+        assert!(cat.expect_record(0, "Orbit Lane/Quiet Lanes (2017)", wanted).unwrap());
+        let discs = AlbumCopy { files: vec![(0, "Orbit Lane/Quiet Lanes (2017)/CD1/01.flac".into()), (0, "Orbit Lane/Quiet Lanes (2017)/CD2/01.flac".into())], ..album("Silent Roads", &[1, 2]) };
+        cat.assign_records(&[discs]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 2)), (Some(wanted), Some(wanted)));
+        assert_eq!(cat.db().query_row("SELECT count(*) FROM expected", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "used up");
+    }
+
+    /// C51b (F9): one record is expected in a folder: another's expectation there is refused while the first waits, and the album
+    /// that arrives is the first's; the first said again (its last file landed) waits a week from then; one a week unclaimed
+    /// waits no more.
+    #[test]
+    fn two_records_expected_in_one_folder_do_not_swap() {
+        let cat = tracks(2);
+        let (first, second) = (not_had(&cat, "Quiet Lanes", &[]), not_had(&cat, "Quiet Lanes (Deluxe)", &[]));
+        let at = || cat.db().query_row("SELECT at FROM expected", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert!(cat.expect_record(0, "Orbit Lane/Quiet Lanes", first).unwrap());
+        assert!(!cat.expect_record(0, "Orbit Lane/Quiet Lanes", second).unwrap(), "refused");
+        cat.db().execute("UPDATE expected SET at = at - 3 * 86400", []).unwrap();
+        let before = at();
+        assert!(cat.expect_record(0, "/Orbit Lane/Quiet Lanes/", first).unwrap(), "its own, said again");
+        assert!(at() > before);
+        cat.assign_records(&[arriving("Silent Roads", &[1, 2], "Orbit Lane/Quiet Lanes")]).unwrap();
+        assert_eq!((record_of(&cat, 1), cat.record(second).unwrap().unwrap().had), (Some(first), false));
+        assert!(cat.expect_record(0, "Orbit Lane/Undertow", first).unwrap());
+        cat.db().execute("UPDATE expected SET at = 0", []).unwrap();
+        assert!(cat.expect_record(0, "Orbit Lane/Undertow", second).unwrap(), "one a week unclaimed");
     }
 
     /// C50: an album whose files name a release a record not had holds is that record; one naming its release group too.

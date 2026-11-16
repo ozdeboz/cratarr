@@ -578,7 +578,9 @@ mod tests {
         let kept: Kept = serde_json::from_slice(&std::fs::read(d.join("soulseek.json")).unwrap()).unwrap();
         let states: BTreeSet<String> = kept.items.iter().map(|i| serde_json::to_value(i.state).unwrap().as_str().unwrap().to_string()).collect();
         assert_eq!(states.into_iter().collect::<Vec<_>>(), ["fetching", "found", "placed", "stuck", "waiting"]);
-        assert!(kept.items.iter().all(|i| grouped.iter().any(|r| r.id == i.record.request && r.release_group.as_deref() == Some(i.record.release_group.as_str()))), "each fetches a request by its group");
+        let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(d.join("soulseek.json")).unwrap()).unwrap();
+        let by_group = |i: &serde_json::Value| grouped.iter().any(|r| Some(r.id) == i["record"]["request"].as_i64() && r.release_group.as_deref() == i["record"]["release_group"].as_str());
+        assert!(raw["items"].as_array().unwrap().iter().all(by_group), "each fetches a request by its group, as 0.16 kept them");
         assert!(kept.next as usize >= kept.items.len() && !kept.dropped.is_empty());
         drop((cat, ud));
         std::fs::remove_dir_all(&d).ok();

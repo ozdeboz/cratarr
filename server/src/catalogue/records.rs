@@ -54,8 +54,9 @@ CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, recor
 -- 0.17's step: a record whose certain match from 0.16 names a release whose list is still to be read (`references::read_lists`).
 -- It counts nothing and waits off Health's references item until the list is read and held against its files.
 -- `tries`: questions that failed for it; let go after a few (R7).
--- C50: a folder a fetcher placed for a record not had (`expect_record`): the album that arrives there is that record, its tracks
--- given to it. By the folder's id, which is for life, and the album's folder in it; forgotten after a week unclaimed.
+-- C50: a folder a fetcher placed for a record not had (`expect_record`): the album that arrives there, or in a folder under it,
+-- is that record, its tracks given to it. By the folder's id, which is for life, and the album's folder in it; one record each;
+-- forgotten a week after its last file landed, unclaimed.
 CREATE TABLE IF NOT EXISTS expected (
   folder INTEGER NOT NULL, dir TEXT NOT NULL, record INTEGER NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (folder, dir)) WITHOUT ROWID;
@@ -960,12 +961,28 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
 const EXPECTED_SECS: i64 = 7 * 86_400;
 
 /// The folders expected for records (C50), by (folder, the album's folder in it), those older than `EXPECTED_SECS` let go of
-/// first, in the record pass's transaction.
+/// first, in the record pass's transaction. An album's is [`expected_of`].
 pub(super) fn expected_in(tx: &Connection, now: i64) -> Result<std::collections::HashMap<(i64, String), i64>> {
     tx.execute("DELETE FROM expected WHERE at < ?1", [now - EXPECTED_SECS])?;
     let mut st = tx.prepare_cached("SELECT folder, dir, record FROM expected")?;
     let rows = st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), r.get(2)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The expectation an album's files are under (C51b, F9): its folder's expected directory, the files' own or any above them, so
+/// the discs of a download (`CD1`, `CD2`) join the record expected for the download's folder. The first file's first. The
+/// folder's own root is never one: a fetcher places a record in a directory of its own.
+pub(super) fn expected_of(expected: &std::collections::HashMap<(i64, String), i64>, files: &[(i64, String)]) -> Option<((i64, String), i64)> {
+    files.iter().find_map(|(folder, rel)| {
+        let mut dir = super::dir_of(rel);
+        while !dir.is_empty() {
+            if let Some((key, record)) = expected.get_key_value(&(*folder, dir.to_string())) {
+                return Some((key.clone(), *record));
+            }
+            dir = super::dir_of(dir);
+        }
+        None
+    })
 }
 
 /// The record not had a new album is (C50), where it is one, held in turn: the record expected in its folder (a fetcher placed
@@ -1511,13 +1528,22 @@ fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_
 }
 
 impl Catalogue {
-    /// The album a fetcher placed in `dir` of catalogue folder `folder` is `record` (C50, `wanted_record`): when the record pass
-    /// meets it as a new album, its tracks are given to that record, a record not had, and the expectation is used up. Forgotten
-    /// after a week unclaimed. Blocking.
-    #[cfg_attr(not(test), allow(dead_code))] // Soulseek's `place` (C51b)
-    pub fn expect_record(&self, folder: i64, dir: &str, record: i64) -> Result<()> {
-        self.db().execute("INSERT OR REPLACE INTO expected (folder, dir, record, at) VALUES (?1, ?2, ?3, ?4)", params![folder, dir.trim_matches('/'), record, now()])?;
-        Ok(())
+    /// The album a fetcher placed in `dir` of catalogue folder `folder` is `record` (C50, `wanted_record`), said only once the
+    /// fetcher's gate has accepted its files: when the record pass meets it as a new album, in `dir` or a folder under it (a
+    /// download's discs), its tracks are given to that record, a record not had, and the expectation is used up. Forgotten a
+    /// week after it was last said: a fetcher says it again once its last file has landed (F9). One record per folder: another
+    /// record's expectation, still waiting, is never taken over (logged; false). Blocking.
+    pub fn expect_record(&self, folder: i64, dir: &str, record: i64) -> Result<bool> {
+        let (dir, at) = (dir.trim_matches('/'), now());
+        let kept = self.db().execute(
+            "INSERT INTO expected (folder, dir, record, at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (folder, dir) DO UPDATE SET record = excluded.record, at = excluded.at WHERE expected.record = excluded.record OR expected.at < ?5",
+            params![folder, dir, record, at, at - EXPECTED_SECS],
+        )? > 0;
+        if !kept {
+            tracing::warn!(target: "library", folder, dir, record, "a folder another record is expected in: not expected for this one too");
+        }
+        Ok(kept)
     }
 
     /// The records 0.17's step gave the requests (C49a), by request id, for the user data's `request.record`. Blocking.

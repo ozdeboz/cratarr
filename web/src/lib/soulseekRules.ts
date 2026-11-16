@@ -1,12 +1,13 @@
 // Soulseek in Cratarr (decision 0099 and its amendment), the page's rules, pure: what a record's row says where it
 // stands, which can be ticked, how the list groups, and what Fetch sends. The server searches the requests approved in
-// Cratarr by their release, finds folders that hold every track, and fetches only what is ticked.
+// Cratarr by their record's list, finds folders that hold every track, and fetches only what is ticked.
 
 export type SoulseekState = 'waiting' | 'searching' | 'found' | 'approved' | 'fetching' | 'checking' | 'placed' | 'stuck';
 export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number };
 export type SoulseekItem = {
   id: string;
-  record: { artist: string; album: string; release_group: string; year?: number | null };
+  /** The catalogue's record it fetches (`record`), named as the record is. */
+  record: { record: number; artist: string; album: string; year?: number | null };
   /** The approved Request it fetches (every one is one: decision 0099's amendment). */
   request: number;
   state: SoulseekState;
