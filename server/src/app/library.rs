@@ -406,15 +406,12 @@ impl Library {
         let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds, rules: tag_rules.clone() };
         start.run().await.context("the first start of 0.16 did not finish")?;
         // 0.17's step, once (`step_017`): what 0.16 knew of each record's references, into the catalogue's tables, before
-        // anything reads them. With the ids lost it waits, as the first start does. Cut off or failed, it wrote nothing and
-        // goes again at the next start; meanwhile the music plays, the references are thinner.
+        // anything reads them. With the ids lost it waits, as the first start does. Failed, it stops the start as the first
+        // start does: what it has not carried would be read as never known. The parts it did are done; the next start goes on
+        // from the one that failed.
         if !catalogue.ids_lost() {
             let (cat, ud) = (catalogue.clone(), playlists_db.clone());
-            match tokio::task::spawn_blocking(move || super::step_017::run(&cat, &ud)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step did not finish: it goes again at the next start"),
-                Err(e) => tracing::error!(target: "library", reason = %e, "0.17's step stopped: it goes again at the next start"),
-            }
+            tokio::task::spawn_blocking(move || super::step_017::run(&cat, &ud)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
         }
         follow_paths(&catalogue, &playlists_db).context("following the libraries' paths")?;
         if !catalogue.ids_lost() {
@@ -887,6 +884,33 @@ mod switched_off_tests {
         let lib = Library::new(None, None, Vec::new(), Default::default(), None, db.clone()).await.unwrap();
         assert!(!lib.catalogue().ids_lost());
         assert!(db.first_start_done().unwrap());
+    }
+
+    /// R2: 0.17's step failing stops the start, as 0.16's first start does, the parts before the one that failed done; once
+    /// what stood in its way is gone, the next start finishes it.
+    #[tokio::test]
+    async fn a_step_that_fails_stops_the_start() {
+        let d = std::env::temp_dir().join(format!("cratarr-library-step-fails-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        crate::fixtures::data_0_16(&d).unwrap();
+        let catalogue = || rusqlite::Connection::open(d.join("catalogue.sqlite")).unwrap();
+        catalogue().execute_batch("CREATE TRIGGER no_pages BEFORE INSERT ON meta WHEN NEW.key = '017:pages' BEGIN SELECT RAISE(ABORT, 'no room for the pages'); END;").unwrap();
+        let marks = || -> Vec<String> {
+            let db = catalogue();
+            let mut st = db.prepare("SELECT key FROM meta WHERE key GLOB '017:*' ORDER BY key").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        let db = Arc::new(crate::userdata::UserData::open(Some(&d.join("userdata.sqlite"))).unwrap());
+        let err = started(&d, &db).await.err().expect("the start stops");
+        assert!(format!("{err:#}").contains("0.17's step did not finish"), "{err:#}");
+        assert_eq!(marks(), ["017:certain", "017:discogs", "017:files", "017:hand", "017:likely", "017:links"], "the parts before the pages done");
+        assert!(!db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
+
+        catalogue().execute_batch("DROP TRIGGER no_pages").unwrap();
+        drop(started(&d, &db).await.expect("it starts"));
+        assert_eq!(marks().len(), crate::catalogue::records::PARTS_017.len());
+        assert!(db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// CR3: crates, queues and waiting jobs name albums too, in a store no table scan sees.

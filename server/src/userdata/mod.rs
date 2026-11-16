@@ -727,7 +727,7 @@ pub struct KeptFor017 {
     pub chosen: Vec<(String, String)>,
     /// `album_matches`: (album, when, the match; none: looked for in vain).
     pub matches: Vec<(String, i64, Option<String>)>,
-    /// `discogs_facts`: (subject, when, the facts; none: asked in vain), every kind of subject.
+    /// `discogs_facts` of albums: (`album:<record>`, when, the facts; none: asked in vain).
     pub discogs: Vec<(String, i64, Option<String>)>,
     /// `bandcamp_found`: (release group or `key(artist)|key(album)`, when, the page; none: a miss).
     pub pages: Vec<(String, i64, Option<String>)>,
@@ -748,7 +748,7 @@ impl UserData {
         Ok(KeptFor017 {
             chosen: rows(&db, "SELECT album, chosen FROM record_references ORDER BY album", |r| Ok((r.get(0)?, r.get(1)?)))?,
             matches: rows(&db, "SELECT album, at, found FROM album_matches ORDER BY album", three)?,
-            discogs: rows(&db, "SELECT subject, at, facts FROM discogs_facts ORDER BY subject", three)?,
+            discogs: rows(&db, "SELECT subject, at, facts FROM discogs_facts WHERE subject GLOB 'album:*' ORDER BY subject", three)?,
             pages: rows(&db, "SELECT album, at, page FROM bandcamp_found ORDER BY album", three)?,
             releases: rows(&db, "SELECT release, at, facts FROM mb_releases WHERE found <> 0 ORDER BY release", |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?,
         })

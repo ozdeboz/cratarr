@@ -3,17 +3,22 @@
 //!
 //! - **What it reads**, the user data as 0.16.2 left it, writing nothing there but its report: `record_references` (0.14's
 //!   choices), `album_matches` (matching's finds), `discogs_facts`' album rows, `bandcamp_found`'s pages, `mb_releases`'
-//!   Discogs links; and in the catalogue, the release and release group each record's files name.
-//! - **What it writes**, the catalogue, in one transaction (`Catalogue::carry_references`): `"references"` rows; `records`'
-//!   `counting` and `counted_by_hand`, `checked_by_hand`; `confirmed`. No list: a match keeps its files' names and none of
-//!   MusicBrainz's titles, so a list is read when its record is opened. `kind` stays as 0.16 left it, none: nothing reads it,
-//!   and a record had shows the type its files' tags and the release-type rule give at every build.
-//! - **Once, safe to repeat:** its mark (`meta`, holding the report) is the transaction's last write, so a step cut off wrote
-//!   nothing and runs whole at the next start. The report then goes into the user data's migration report from the mark, which
-//!   a start finding the mark without it does again. Every write finds its row there the second time and leaves it.
+//!   Discogs links; and in the catalogue, the release and release group each record's files name. Every row read is in the
+//!   report: carried, or in a list that says why not (no record, nothing found, not read, ...).
+//! - **What it writes**, the catalogue (`Catalogue::carry_references`): `"references"` rows; `records`' `counting` and
+//!   `counted_by_hand`, `checked_by_hand`; `confirmed`. No list: a match keeps its files' names and none of MusicBrainz's
+//!   titles, so a list is read when its record is opened. `kind` stays as 0.16 left it, none: nothing reads it, and a record
+//!   had shows the type its files' tags and the release-type rule give at every build.
+//! - **In parts, each once, safe to repeat:** each part (`records::PARTS_017`) is a transaction of its own whose last write is
+//!   its mark (`meta`, holding its part of the report), so a part cut off wrote nothing and runs at the next start, the parts
+//!   before it done; a data folder that ran an earlier version runs the parts it lacks. The report goes into the user data's
+//!   migration report from the marks, as one, whenever a part ran, or where it is missing. Every write finds its row there
+//!   the second time and leaves it.
+//! - **Failed, it stops the start**, as 0.16's first start does: what it has not carried would be read as never known.
 //! - **Old tables kept** one version, read by nothing else: none is emptied or dropped.
 //! - **One release on two records** (G1): who keeps it goes by the order the parts run in: a link pasted by hand, a certain
-//!   match (MusicBrainz matched the record's tracks to it), the files' own (the older record first), a likely match.
+//!   match (MusicBrainz matched the record's tracks to it; two on one release, the older record), the files' own (the older
+//!   record first), a likely match. A retired record holds none.
 
 use anyhow::Result;
 
@@ -30,34 +35,38 @@ pub fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
 }
 
 /// `run`, `after` hearing each part done: an error from it stops the step there, as a stop would (what the tests cut it by).
+/// "catalogue" is after the parts, before the report.
 fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) -> Result<()> {
-    if let Some(report) = cat.references_carried()? {
-        if !ud.migration_report()?.contains_key(PART) {
-            ud.set_migration_part(PART, &report)?;
-        }
+    let ran = if cat.references_to_carry()?.is_empty() { Vec::new() } else { cat.carry_references(&carry_of(&ud.kept_for_017()?), after)? };
+    if ran.is_empty() && ud.migration_report()?.contains_key(PART) {
         return Ok(());
     }
-    let carry = carry_of(&ud.kept_for_017()?);
-    let report = cat.carry_references(&carry, after)?;
     after("catalogue")?;
+    let Some(report) = cat.references_carried()? else { return Ok(()) };
     ud.set_migration_part(PART, &report)?;
-    tracing::info!(
-        target: "library",
-        references = report["references"].as_u64().unwrap_or(0),
-        counted_by_hand = report["counted_by_hand"].as_u64().unwrap_or(0),
-        counted_by_a_match = report["counted_by_a_match"].as_u64().unwrap_or(0),
-        checked_by_hand = report["checked_by_hand"].as_u64().unwrap_or(0),
-        "0.17's step: the records' references moved into the catalogue"
-    );
+    if !ran.is_empty() {
+        let references = report["tables"].as_array().and_then(|t| t.iter().find(|t| t["name"] == "references")).and_then(|t| t["after"].as_u64()).unwrap_or(0);
+        tracing::info!(
+            target: "library",
+            parts = ran.join(", "),
+            references,
+            counted_by_hand = report["counted_by_hand"].as_u64().unwrap_or(0),
+            counted_by_a_match = report["counted_by_a_match"].as_u64().unwrap_or(0),
+            checked_by_hand = report["checked_by_hand"].as_u64().unwrap_or(0),
+            "0.17's step: the records' references moved into the catalogue"
+        );
+    }
     Ok(())
 }
 
-/// What the user data's rows say, read: each row's JSON as 0.16 wrote it, a row whose JSON cannot be read named in the report.
+/// What the user data's rows say, read: each row's JSON as 0.16 wrote it. A row that carries nothing is noted by why, for the
+/// report: nothing found (asked in vain), a miss, a page that is no album's, a release with no Discogs link, JSON that cannot
+/// be read.
 fn carry_of(kept: &crate::userdata::KeptFor017) -> Carry {
-    let mut c = Carry::default();
-    let mut unread = |table: &'static str, key: &str| match c.unread.iter_mut().find(|(t, _)| *t == table) {
+    let mut noted: Vec<(&'static str, Vec<String>)> = Vec::new();
+    let mut note = |what: &'static str, key: &str| match noted.iter_mut().find(|(w, _)| *w == what) {
         Some((_, keys)) => keys.push(key.to_string()),
-        None => c.unread.push((table, vec![key.to_string()])),
+        None => noted.push((what, vec![key.to_string()])),
     };
     let mut chosen = Vec::new();
     for (album, json) in &kept.chosen {
@@ -73,51 +82,69 @@ fn carry_of(kept: &crate::userdata::KeptFor017) -> Carry {
                     confirmed: k.confirmed.into_iter().collect(),
                 });
             }
-            Err(_) => unread("record_references", album),
+            Err(_) => note("record_references: not read", album),
         }
     }
     let mut matches = Vec::new();
     for (album, at, json) in &kept.matches {
-        let Some(json) = json else { continue };
+        let Some(json) = json else {
+            note("album_matches: nothing found", album);
+            continue;
+        };
         match serde_json::from_str::<super::matching::Match>(json) {
             Ok(m) => matches.push(CarriedMatch { album: album.clone(), at: *at, release: m.release.to_ascii_lowercase(), group: m.release_group.map(|g| g.to_ascii_lowercase()), certain: m.certain, tracks: m.tracks.len() }),
-            Err(_) => unread("album_matches", album),
+            Err(_) => note("album_matches: not read", album),
         }
     }
     let mut discogs = Vec::new();
     for (subject, at, json) in &kept.discogs {
-        let (Some(album), Some(json)) = (subject.strip_prefix("album:"), json) else { continue };
+        let Some(album) = subject.strip_prefix("album:") else { continue };
+        let Some(json) = json else {
+            note("discogs_facts: albums: nothing found", subject);
+            continue;
+        };
         match serde_json::from_str::<super::discogs::AlbumFacts>(json) {
             Ok(f) => discogs.push(CarriedDiscogs { album: album.to_string(), at: *at, master: f.master, release: f.release }),
-            Err(_) => unread("discogs_facts: albums", subject),
+            Err(_) => note("discogs_facts: albums: not read", subject),
         }
     }
-    let pages = kept
-        .pages
-        .iter()
-        .filter_map(|(key, at, page)| Some(CarriedPage { key: key.clone(), at: *at, page: crate::bandcamp::album_page(page.as_deref()?)? }))
-        .collect();
+    let mut pages = Vec::new();
+    for (key, at, page) in &kept.pages {
+        match page.as_deref().map(crate::bandcamp::album_page) {
+            Some(Some(page)) => pages.push(CarriedPage { key: key.clone(), at: *at, page }),
+            Some(None) => note("bandcamp_found: no album page", key),
+            None => note("bandcamp_found: a miss", key),
+        }
+    }
     let mut links = Vec::new();
     for (release, at, json) in &kept.releases {
         match serde_json::from_str::<super::works::Stored>(json) {
             Ok(s) => {
                 let discogs: Vec<Ref> = s.discogs.iter().filter_map(|l| l.split_once(':')).filter(|(kind, id)| matches!(*kind, "release" | "master") && id.parse::<u64>().is_ok()).map(|(kind, id)| Ref::new("discogs", kind, id)).collect();
-                if !discogs.is_empty() {
+                if discogs.is_empty() {
+                    note("mb_releases: no Discogs link", release);
+                } else {
                     links.push(CarriedLinks { release: release.to_ascii_lowercase(), at: *at, discogs });
                 }
             }
-            Err(_) => unread("mb_releases", release),
+            Err(_) => note("mb_releases: not read", release),
         }
     }
-    c.read = vec![
-        ("record_references", kept.chosen.len() as u64),
-        ("album_matches", kept.matches.len() as u64),
-        ("discogs_facts: albums", kept.discogs.iter().filter(|(s, ..)| s.starts_with("album:")).count() as u64),
-        ("bandcamp_found", kept.pages.len() as u64),
-        ("mb_releases", kept.releases.len() as u64),
-    ];
-    (c.chosen, c.matches, c.discogs, c.pages, c.links) = (chosen, matches, discogs, pages, links);
-    c
+    Carry {
+        chosen,
+        matches,
+        discogs,
+        pages,
+        links,
+        read: vec![
+            ("record_references", kept.chosen.len() as u64),
+            ("album_matches", kept.matches.len() as u64),
+            ("discogs_facts: albums", kept.discogs.len() as u64),
+            ("bandcamp_found", kept.pages.len() as u64),
+            ("mb_releases", kept.releases.len() as u64),
+        ],
+        noted,
+    }
 }
 
 #[cfg(test)]
@@ -128,6 +155,7 @@ mod tests {
     use rusqlite::types::Value;
 
     use super::*;
+    use crate::catalogue::records::PARTS_017;
 
     /// FX01's data folder, its catalogue opened with its one library (`/music`) in use.
     struct Data(PathBuf);
@@ -143,6 +171,11 @@ mod tests {
         fn open(&self) -> (Catalogue, UserData) {
             let cat = Catalogue::open(Some(&self.0.join("catalogue.sqlite")), vec![PathBuf::from("/music")]).unwrap();
             (cat, UserData::open(Some(&self.0.join("userdata.sqlite"))).unwrap())
+        }
+
+        fn run(&self) {
+            let (cat, ud) = self.open();
+            run(&cat, &ud).unwrap();
         }
 
         fn rows_of(&self, file: &str, sql: &str) -> Vec<String> {
@@ -164,18 +197,34 @@ mod tests {
             .concat()
         }
 
-        /// `rows`, its mark and its report.
+        /// `rows`, its marks and its report.
         fn left(&self) -> Vec<String> {
             [
                 self.rows(),
-                self.rows_of("catalogue.sqlite", "SELECT value FROM meta WHERE key = 'references_017'"),
+                self.rows_of("catalogue.sqlite", "SELECT key, value FROM meta WHERE key GLOB '017:*' ORDER BY key"),
                 self.rows_of("userdata.sqlite", "SELECT report FROM migration_report WHERE part = 'references'"),
             ]
             .concat()
         }
 
+        /// A query's one column of text.
+        fn texts(&self, file: &str, sql: &str) -> Vec<String> {
+            let db = Connection::open(self.0.join(file)).unwrap();
+            let mut st = db.prepare(sql).unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        }
+
+        /// The parts marked done.
+        fn marks(&self) -> Vec<String> {
+            self.texts("catalogue.sqlite", "SELECT substr(key, 5) FROM meta WHERE key GLOB '017:*' ORDER BY key")
+        }
+
         fn sql<T: rusqlite::types::FromSql>(&self, file: &str, sql: &str) -> T {
             Connection::open(self.0.join(file)).unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+        }
+
+        fn batch(&self, file: &str, sql: &str) {
+            Connection::open(self.0.join(file)).unwrap().execute_batch(sql).unwrap();
         }
     }
 
@@ -185,47 +234,59 @@ mod tests {
         }
     }
 
-    /// The parts, in the order the step goes through them; "catalogue" is after its commit, before the report.
-    const PARTS: [&str; 10] = ["hand", "certain", "files", "likely", "discogs", "links", "pages", "chosen", "counting", "catalogue"];
-
-    /// Run twice, the second finds its mark and does nothing; its mark gone, it writes nothing new; cut off after any part, the
-    /// next start ends where an uncut step does.
+    /// Run twice, the second finds its marks and does nothing; its marks gone, it writes nothing new; cut off after any part,
+    /// the parts before it are done and that one not, and the next start ends where an uncut step does.
     #[test]
     fn the_references_step_is_safe_to_repeat() {
         let once = Data::new("once");
-        {
-            let (cat, ud) = once.open();
-            run(&cat, &ud).unwrap();
-        }
+        once.run();
         let left = once.left();
         assert!(left.iter().any(|r| r.contains("\"hand\"")), "{left:?}");
-        {
-            let (cat, ud) = once.open();
-            run(&cat, &ud).unwrap();
-        }
-        assert_eq!(once.left(), left, "its mark there: nothing");
-        Connection::open(once.0.join("catalogue.sqlite")).unwrap().execute("DELETE FROM meta WHERE key = 'references_017'", []).unwrap();
-        {
-            let (cat, ud) = once.open();
-            run(&cat, &ud).unwrap();
-        }
-        assert_eq!(once.rows(), left[..once.rows().len()], "its mark gone: every row found as it was left");
-        for part in PARTS {
+        once.run();
+        assert_eq!(once.left(), left, "its marks there: nothing");
+        once.batch("catalogue.sqlite", "DELETE FROM meta WHERE key GLOB '017:*'");
+        once.run();
+        assert_eq!(once.rows(), left[..once.rows().len()], "its marks gone: every row found as it was left");
+        for (n, part) in PARTS_017.into_iter().chain(["catalogue"]).enumerate() {
             let cut = Data::new(&format!("cut-{part}"));
             {
                 let (cat, ud) = cut.open();
                 let err = run_with(&cat, &ud, &|at| if at == part { anyhow::bail!("stopped after {at}") } else { Ok(()) }).unwrap_err();
                 assert_eq!(err.to_string(), format!("stopped after {part}"));
             }
-            if part != "catalogue" {
-                assert_eq!(cut.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\""), 0, "{part}: one transaction, nothing of it");
+            let mut done: Vec<String> = PARTS_017[..n.min(PARTS_017.len())].iter().map(|p| p.to_string()).collect();
+            done.sort();
+            assert_eq!(cut.marks(), done, "cut after {part}: the parts before it done, that one not");
+            if n == 0 {
+                assert_eq!(cut.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\""), 0, "a part is one transaction: nothing of it");
             }
-            {
-                let (cat, ud) = cut.open();
-                run(&cat, &ud).unwrap();
-            }
+            cut.run();
             assert_eq!(cut.left(), left, "cut after {part}, then started again");
         }
+    }
+
+    /// R2: each part has a mark of its own, so a data folder that ran an earlier version of the step, one without a part, runs
+    /// that part at its next start and not the parts it ran: here the pages part is the one it lacked, and a link pasted that
+    /// was let go of since stays let go of. The report is written again, with the new part's.
+    #[test]
+    fn a_later_part_runs_where_an_earlier_part_is_marked() {
+        let data = Data::new("later-part");
+        data.run();
+        let pages = data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp'");
+        assert!(pages > 0);
+        data.batch(
+            "catalogue.sqlite",
+            "DELETE FROM \"references\" WHERE source = 'bandcamp'; DELETE FROM meta WHERE key = '017:pages';
+             DELETE FROM \"references\" WHERE subject = 'al-2' AND source = 'discogs' AND how = 'hand';",
+        );
+        data.batch("userdata.sqlite", "UPDATE migration_report SET report = '{}' WHERE part = 'references'");
+        data.run();
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp'"), pages, "the part it lacked ran");
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE subject = 'al-2' AND source = 'discogs' AND how = 'hand'"), 0, "a part done did not run again");
+        assert_eq!(data.marks().len(), PARTS_017.len());
+        let (_, ud) = data.open();
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert_eq!(table(report, "bandcamp_found").0, data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM bandcamp_found") as u64, "{report}");
     }
 
     fn mb(n: u32) -> String {
@@ -236,6 +297,23 @@ mod tests {
     fn differed(report: &serde_json::Value, what: &str) -> Vec<String> {
         let list = report["differed"].as_array().unwrap().iter().find(|d| d["what"] == what).unwrap_or_else(|| panic!("no {what}: {report}"));
         list["sample"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
+    }
+
+    /// One of the report's `unmatched` lists: its count and samples (none: no such list).
+    fn listed(report: &serde_json::Value, what: &str) -> (u64, Vec<String>) {
+        report["unmatched"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["what"] == what)
+            .map(|u| (u["count"].as_u64().unwrap(), u["sample"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()))
+            .unwrap_or_default()
+    }
+
+    /// A table of the report: its rows before and those carried.
+    fn table(report: &serde_json::Value, name: &str) -> (u64, u64) {
+        let t = report["tables"].as_array().unwrap().iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("no table {name}: {report}"));
+        (t["before"].as_u64().unwrap(), t["moved"].as_u64().unwrap())
     }
 
     /// R1: a certain match never takes what a hand pasted: al-2's MusicBrainz link stays where it was, record 9's certain match
@@ -253,17 +331,93 @@ mod tests {
     }
 
     /// R1: a retired record holds no release: the link pasted while Partial Shore lived is not its, and the release goes to the
-    /// record its files are now (record 8).
+    /// record its files are now (record 8), as does the page Bandcamp was found by its names (R2: a retired record is not one
+    /// of the records of a name).
     #[test]
     fn a_retired_record_gives_its_release_to_a_live_one() {
         let data = Data::new("retired");
         let (cat, ud) = data.open();
         run(&cat, &ud).unwrap();
         assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", &mb(6))).unwrap(), ["al-8"]);
-        assert_eq!(refs(&cat, 8), [by("musicbrainz", "release", &mb(6), "files", false)]);
+        assert_eq!(
+            refs(&cat, 8),
+            [by("bandcamp", "album", "https://glassharbour.bandcamp.com/album/partial-shore", "search", false), by("musicbrainz", "release", &mb(6), "files", false)]
+        );
         assert!(refs(&cat, 6).iter().all(|(_, kind, ..)| kind != "release"), "{:?}", refs(&cat, 6));
         let report = &ud.migration_report().unwrap()[PART].1;
         assert!(differed(report, "references: a retired record's").contains(&format!("al-6 musicbrainz:release:{}", mb(6))), "{report}");
+    }
+
+    /// R2: MusicBrainz's verified Discogs link goes before a Discogs search by names: Undated's search found Night Walks'
+    /// release, which MusicBrainz links to Night Walks' release; Night Walks keeps it, and Undated's is refused.
+    #[test]
+    fn a_verified_link_beats_a_name_search() {
+        let data = Data::new("verified");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        assert_eq!(cat.subject_of(&Ref::new("discogs", "release", "2000003")).unwrap(), ["al-3"]);
+        assert!(refs(&cat, 3).contains(&by("discogs", "release", "2000003", "link", false)), "{:?}", refs(&cat, 3));
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert!(differed(report, "references: held by another record").contains(&"al-4 discogs:release:2000003".to_string()), "{report}");
+    }
+
+    /// R2: two certain matches on one release, the older record keeps it, whatever order their keys come in (al-10 before
+    /// al-11, and al-11 is the younger); both keep the release group, which is every edition's.
+    #[test]
+    fn two_certain_matches_on_one_release_go_by_age() {
+        let data = Data::new("age");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", &mb(20))).unwrap(), ["al-10"]);
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release-group", &mb(120))).unwrap(), ["al-10", "al-11"]);
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert!(differed(report, "references: held by another record").contains(&format!("al-11 musicbrainz:release:{}", mb(20))), "{report}");
+    }
+
+    /// R2: every row the step reads is in its report: the rows of each table it reads (counted here, apart from the step),
+    /// each carried or in a list saying why not; so too each link pasted and each source confirmed, of the records there are.
+    #[test]
+    fn every_row_the_step_reads_is_in_its_report() {
+        let data = Data::new("every-row");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        let report = &ud.migration_report().unwrap()[PART].1;
+        let lists = |name: &str| -> u64 {
+            report["unmatched"].as_array().unwrap().iter().filter(|u| u["what"].as_str().is_some_and(|w| w == name || w.starts_with(&format!("{name}: ")))).map(|u| u["count"].as_u64().unwrap()).sum()
+        };
+        for (name, sql) in [
+            ("record_references", "SELECT count(*) FROM record_references"),
+            ("album_matches", "SELECT count(*) FROM album_matches"),
+            ("discogs_facts: albums", "SELECT count(*) FROM discogs_facts WHERE subject LIKE 'album:%'"),
+            ("bandcamp_found", "SELECT count(*) FROM bandcamp_found"),
+            ("mb_releases", "SELECT count(*) FROM mb_releases WHERE found <> 0"),
+        ] {
+            let rows = data.sql::<i64>("userdata.sqlite", sql) as u64;
+            let (before, moved) = table(report, name);
+            assert_eq!(before, rows, "{name}: every row read");
+            assert_eq!(moved + lists(name), rows, "{name}: each carried or listed: {report}");
+        }
+        let records = data.texts("catalogue.sqlite", "SELECT 'al-' || id FROM records");
+        let (mut links, mut confirmations) = (0, 0);
+        for row in data.texts("userdata.sqlite", "SELECT album || ' ' || chosen FROM record_references") {
+            let (album, json) = row.split_once(' ').unwrap();
+            let (true, Ok(chosen)) = (records.iter().any(|r| r == album), serde_json::from_str::<serde_json::Value>(json)) else { continue };
+            links += chosen["links"].as_object().map_or(0, |l| l.len()) as u64;
+            confirmations += chosen["confirmed"].as_array().map_or(0, |c| c.len()) as u64;
+        }
+        for (name, n) in [("links pasted", links), ("confirmations", confirmations)] {
+            let (before, moved) = table(report, name);
+            assert_eq!(before, n, "{name}: each read");
+            assert_eq!(moved + lists(name), n, "{name}: each carried or listed: {report}");
+        }
+        // FX01's: a link 0.16 kept that names nothing (a release's id cut short), a source confirmed of which the record holds
+        // nothing, a page that is an artist's, a release MusicBrainz links to nothing on Discogs; and Discogs' old link to a
+        // master, which names it.
+        assert_eq!(listed(report, "links pasted: naming no reference").1, [format!("al-5 https://musicbrainz.org/release/{}", &mb(5)[..35])]);
+        assert_eq!(listed(report, "confirmations: no reference").1, ["al-5 bandcamp"]);
+        assert_eq!(listed(report, "bandcamp_found: no album page").1, ["noorfield|signal"]);
+        assert_eq!(listed(report, "mb_releases: no Discogs link").1, [mb(7)]);
+        assert!(refs(&cat, 5).contains(&by("discogs", "master", "1000005", "hand", false)), "{:?}", refs(&cat, 5));
     }
 
     fn refs(cat: &Catalogue, record: i64) -> Vec<(String, String, String, String, bool)> {
@@ -281,7 +435,6 @@ mod tests {
         let data = Data::new("chosen");
         let (cat, ud) = data.open();
         run(&cat, &ud).unwrap();
-        let mb = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
         let counted = |record: i64| cat.record(record).unwrap().map(|r| (r.counting, r.counted_by_hand, r.checked_by_hand, r.kind)).unwrap();
         let chosen = |src: &str| Some(src.to_string());
 
@@ -306,7 +459,8 @@ mod tests {
         assert_eq!(counted(3), (None, false, false, None));
         assert!(refs(&cat, 3).contains(&by("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks", "search", true)));
         assert!(refs(&cat, 3).contains(&by("discogs", "release", "2000003", "link", false)));
-        // Undated: its one file names Tide Tables' release (a tag copied in error): the release stays where it is.
+        // Undated: its one file names Tide Tables' release (a tag copied in error), and Discogs' search by its names found Night
+        // Walks': each stays where it is.
         assert!(refs(&cat, 4).is_empty());
         // Late Train OST: AcoustID counting, as chosen.
         assert_eq!(counted(5).0, chosen("acoustid"));
@@ -318,10 +472,13 @@ mod tests {
         assert!(cat.reference_tracks(7).unwrap().is_empty(), "no list: a match keeps none of MusicBrainz's titles");
 
         let report = &ud.migration_report().unwrap()[PART].1;
-        let unmatched = |what: &str| report["unmatched"].as_array().unwrap().iter().find(|u| u["what"] == what).map(|u| u["count"].as_u64().unwrap()).unwrap_or(0);
-        assert_eq!(unmatched("album_matches"), 1, "{report}");
-        assert_eq!(unmatched("bandcamp_found"), 1, "Harbour Lights, a record not had: C48b's");
-        assert_eq!(differed(report, "references: held by another record"), [format!("al-9 musicbrainz:release:{}", mb(2)), format!("al-4 musicbrainz:release:{}", mb(1))], "Two Rooms' hand, Undated's tag");
+        assert_eq!(listed(report, "album_matches").0, 1, "{report}");
+        assert_eq!(listed(report, "bandcamp_found").0, 1, "Harbour Lights, a record not had: C48b's");
+        assert_eq!(
+            differed(report, "references: held by another record"),
+            [format!("al-9 musicbrainz:release:{}", mb(2)), format!("al-11 musicbrainz:release:{}", mb(20)), format!("al-4 musicbrainz:release:{}", mb(1)), "al-4 discogs:release:2000003".to_string()],
+            "Two Rooms' hand, Ferry Lights' older copy, Undated's tag and its search"
+        );
         assert_eq!(differed(report, "references: a retired record's"), [format!("al-6 musicbrainz:release:{}", mb(6)), "al-6 discogs:release:2000006".to_string()]);
         assert_eq!((report["counted_by_hand"].as_u64(), report["counted_by_a_match"].as_u64(), report["checked_by_hand"].as_u64()), (Some(4), Some(1), Some(2)));
         assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM record_references"), 5, "kept one version");

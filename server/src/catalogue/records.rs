@@ -6,7 +6,7 @@
 //!   group and one master, and two records by the same-record rule, so every record of one is found (G1).
 //! - **Kept as found, the hand first.** A reference is kept with when it was first found and how (`files`, `link`, `search`,
 //!   `hand`): found again it stays as it was, but for a surer way, and a hand never gives way to a guess. A reference one subject
-//!   holds alone goes to another only by hand.
+//!   holds alone goes to another by hand, or to a certain match where no hand holds it; a retired record holds none.
 //! - **The tracklist that counts** is the record's `counting`: worked out from the lists and the files (`identity::counting`)
 //!   until one is chosen by hand (0.14's "Use this"), which a worked-out one never replaces.
 //!
@@ -637,8 +637,41 @@ impl Catalogue {
 
 // ---- 0.17's step (C44, `app::step_017`): what 0.16 knew of each record's references, into these tables once
 
-/// The mark 0.17's step leaves in `meta`, its report in it: there, the step is done.
-const CARRIED: &str = "references_017";
+/// 0.17's step's parts, in the order they run, as who keeps a release two records name goes by it (G1): a link pasted by hand;
+/// a certain match, MusicBrainz having matched the record's own tracks to the release; what the files name, the older record
+/// first; a likely match; MusicBrainz's verified Discogs links, before a Discogs search by names, which can find another
+/// record's; Bandcamp's pages; 0.14's choices, which confirm what the parts before wrote; a certain match's count.
+pub const PARTS_017: [&str; 9] = ["hand", "certain", "files", "likely", "links", "discogs", "pages", "chosen", "counting"];
+
+/// A part's mark in `meta`, holding its report: there, the part is done. One a part, so a data folder that ran an earlier
+/// version of the step, with fewer parts, runs the ones it lacks.
+fn mark_017(part: &str) -> String {
+    format!("017:{part}")
+}
+
+/// The user data's table a part reads and reports: its rows, carried or listed by why not. `likely`, `chosen` and `counting`
+/// read again what `certain` and `hand` report.
+fn table_017(part: &str) -> Option<&'static str> {
+    Some(match part {
+        "hand" => "record_references",
+        "certain" => "album_matches",
+        "links" => "mb_releases",
+        "discogs" => "discogs_facts: albums",
+        "pages" => "bandcamp_found",
+        _ => return None,
+    })
+}
+
+/// The report's lists of references refused or taken, in every part that writes them.
+const HELD: &str = "references: held by another record";
+const RETIRED: &str = "references: a retired record's";
+const TAKEN: &str = "references: taken from another record";
+/// A link pasted that names nothing a reference can be (0.16 kept any link of the three sites).
+const UNLINKED: &str = "links pasted: naming no reference";
+/// A source confirmed in 0.14 of which the record holds no reference.
+const UNCONFIRMED: &str = "confirmations: no reference";
+/// A Bandcamp page kept by names that more than one record has.
+const SEVERAL: &str = "bandcamp_found: several records";
 
 /// What 0.17's step carries, as the user data kept it (`app::step_017` reads it and makes these of it).
 #[derive(Debug, Clone, Default)]
@@ -650,8 +683,9 @@ pub struct Carry {
     pub links: Vec<CarriedLinks>,
     /// Each table's rows as read: the report's before and after alike, as nothing is taken out of it.
     pub read: Vec<(&'static str, u64)>,
-    /// Rows whose JSON could not be read, by table: their keys, in the report as found by nothing.
-    pub unread: Vec<(&'static str, Vec<String>)>,
+    /// Rows read that carry nothing, by why ("<table>: <why>": nothing found, a miss, not read, ...): their keys, which the
+    /// report lists under the part reading that table.
+    pub noted: Vec<(&'static str, Vec<String>)>,
 }
 
 /// 0.14's choices of one album (`record_references`): the source chosen, "Checked by hand", each link pasted (as what it
@@ -726,7 +760,7 @@ fn files_named(tx: &Connection) -> Result<Vec<(i64, &'static str, String)>> {
     Ok(out)
 }
 
-/// The step's writes in its transaction, and what the report says of them.
+/// One part's writes in its transaction, and what its report says of them.
 struct Carrying<'t> {
     tx: &'t Connection,
     /// References another record holds alone, not taken: "<subject> <source>:<kind>:<value>".
@@ -735,221 +769,343 @@ struct Carrying<'t> {
     retired: Vec<String>,
     /// Those taken from another record: "<subject> <source>:<kind>:<value> from <other>".
     taken: Vec<String>,
-    /// What found no record, by where it was kept.
+    /// What found no record or carried nothing, by the report's list.
     unmatched: std::collections::BTreeMap<&'static str, Vec<String>>,
+    /// The rows of the part's table carried.
+    moved: u64,
+    /// The report's tables beside the part's own: (name, rows, carried).
+    tables: Vec<(&'static str, u64, u64)>,
+    /// What the report counts beside its lists.
+    counts: Vec<(&'static str, u64)>,
 }
 
 impl Carrying<'_> {
-    /// The record an album id names: one of the catalogue's, retired or not. None, counted under `table`.
+    /// The record an album id names, one of the catalogue's, retired or not.
+    fn found(&self, album: &str) -> Result<Option<i64>> {
+        let Some(id) = ids::record_number(album) else { return Ok(None) };
+        Ok(self.tx.prepare_cached("SELECT id FROM records WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?)
+    }
+
+    /// `found`; none listed under `table`.
     fn record(&mut self, table: &'static str, album: &str) -> Result<Option<i64>> {
-        let found = match ids::record_number(album) {
-            Some(id) => self.tx.prepare_cached("SELECT id FROM records WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?,
-            None => None,
-        };
+        let found = self.found(album)?;
         if found.is_none() {
             self.unmatched.entry(table).or_default().push(album.to_string());
         }
         Ok(found)
     }
 
+    /// `put_reference`, its refusals and takes listed.
     fn put(&mut self, record: i64, r: &Ref, how: &str, at: i64, takes: bool) -> Result<bool> {
         let subject = ids::record(record);
-        let named = format!("{subject} {}:{}:{}", r.source, r.kind, r.value);
         Ok(match put_reference(self.tx, &subject, r, how, at, takes)? {
             Put::Kept(taken) => {
-                self.taken.extend(taken.into_iter().map(|from| format!("{named} from {from}")));
+                self.taken.extend(taken.into_iter().map(|from| format!("{} from {from}", named(&subject, r))));
                 true
             }
             Put::Held => {
-                self.refused.push(named);
+                self.refused.push(named(&subject, r));
                 false
             }
             Put::Retired => {
-                self.retired.push(named);
+                self.retired.push(named(&subject, r));
                 false
             }
         })
     }
 
-    /// The records a reference names, by their numbers.
+    /// The live records a reference names, by their numbers: a retired one holds no release or page.
     fn holders(&self, r: &Ref) -> Result<Vec<i64>> {
-        Ok(subjects_in(self.tx, r)?.iter().filter_map(|s| ids::record_number(s)).collect())
+        let mut out = Vec::new();
+        for subject in subjects_in(self.tx, r)? {
+            if let Some(id) = ids::record_number(&subject)
+                && !retired(self.tx, &subject)?
+            {
+                out.push(id);
+            }
+        }
+        Ok(out)
     }
-}
 
-impl Catalogue {
-    /// 0.17's step's report, where it is done: its mark. Blocking.
-    pub fn references_carried(&self) -> Result<Option<serde_json::Value>> {
-        Ok(self.meta(CARRIED).map(|v| serde_json::from_str(&v)).transpose()?)
-    }
-
-    /// 0.17's step on the catalogue's side: `c` into the references, in one transaction whose last write is its mark, holding
-    /// the report returned. Who keeps a release two records' files name goes by the order of the parts: a link pasted by hand,
-    /// a certain match, the files' own (the older record first), a likely match. `after` hears each part done, inside the
-    /// transaction: an error from it leaves nothing written. Blocking.
-    pub fn carry_references(&self, c: &Carry, after: &dyn Fn(&str) -> Result<()>) -> Result<serde_json::Value> {
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        let now = now();
-        let count = |tx: &Connection| -> Result<u64> { Ok(tx.query_row("SELECT count(*) FROM \"references\"", [], |r| r.get::<_, i64>(0))? as u64) };
-        let before = count(&tx)?;
-        let files = files_named(&tx)?;
-        let named: std::collections::HashSet<(i64, &str, &str)> = files.iter().map(|(r, k, v)| (*r, *k, v.as_str())).collect();
-        let mut w = Carrying { tx: &tx, refused: Vec::new(), retired: Vec::new(), taken: Vec::new(), unmatched: std::collections::BTreeMap::new() };
-        let mut moved: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
-
-        // 1. A link pasted by hand names what it names, whoever held it.
-        let mut chosen: Vec<(i64, &CarriedChoice)> = Vec::new();
+    /// 1. A link pasted by hand names what it names, whoever held it.
+    fn hand(&mut self, c: &Carry, now: i64) -> Result<()> {
+        let (mut links, mut put) = (0, 0);
+        self.unmatched.entry(UNLINKED).or_default();
         for choice in &c.chosen {
-            let Some(record) = w.record("record_references", &choice.album)? else { continue };
+            let Some(record) = self.record("record_references", &choice.album)? else { continue };
+            self.moved += 1;
             for link in &choice.links {
-                w.put(record, link, "hand", now, true)?;
+                self.put(record, link, "hand", now, true)?;
             }
-            w.unmatched.entry("record_references: links").or_default().extend(choice.unlinked.iter().map(|url| format!("{} {url}", choice.album)));
-            chosen.push((record, choice));
+            links += (choice.links.len() + choice.unlinked.len()) as u64;
+            put += choice.links.len() as u64;
+            self.unmatched.entry(UNLINKED).or_default().extend(choice.unlinked.iter().map(|url| format!("{} {url}", choice.album)));
         }
-        *moved.entry("record_references").or_default() = chosen.len() as u64;
-        after("hand")?;
+        self.tables.push(("links pasted", links, put));
+        Ok(())
+    }
 
-        // 2. A certain match: MusicBrainz matched the record's own tracks to the release, which it takes. The files' word where
-        //    they name it too.
-        let mut matched: Vec<(i64, &CarriedMatch)> = Vec::new();
+    /// Matching's finds of the records there are, the older record first (the lower id, as ids are given in turn); `listed`,
+    /// those of no record listed and the rest counted carried.
+    fn matched<'c>(&mut self, c: &'c Carry, listed: bool) -> Result<Vec<(i64, &'c CarriedMatch)>> {
+        let mut out = Vec::new();
         for m in &c.matches {
-            if let Some(record) = w.record("album_matches", &m.album)? {
-                matched.push((record, m));
+            let record = if listed { self.record("album_matches", &m.album)? } else { self.found(&m.album)? };
+            if let Some(record) = record {
+                out.push((record, m));
             }
         }
-        *moved.entry("album_matches").or_default() = matched.len() as u64;
-        let match_refs = |w: &mut Carrying, record: i64, m: &CarriedMatch| -> Result<()> {
-            let how = |kind: &str, value: &str| if named.contains(&(record, kind, value)) { "files" } else { "search" };
-            w.put(record, &Ref::new("musicbrainz", "release", &m.release), how("release", &m.release), m.at, m.certain)?;
+        if listed {
+            self.moved = out.len() as u64;
+        }
+        out.sort_by_key(|(record, _)| *record);
+        Ok(out)
+    }
+
+    /// 2. and 4. Certain matches, or likely ones: each its release and release group, the files' word where they name it too.
+    /// A certain match takes its release from what the files or a guess gave another record; two on one release, the older
+    /// record keeps it, and one refused it (a hand's, a retired record) lets the next try.
+    fn matches(&mut self, c: &Carry, certain: bool) -> Result<()> {
+        let files = files_named(self.tx)?;
+        let say: std::collections::HashSet<(i64, &str, &str)> = files.iter().map(|(r, k, v)| (*r, *k, v.as_str())).collect();
+        let mut kept: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (record, m) in self.matched(c, certain)?.into_iter().filter(|(_, m)| m.certain == certain) {
+            let how = |kind: &str, value: &str| if say.contains(&(record, kind, value)) { "files" } else { "search" };
+            let release = Ref::new("musicbrainz", "release", &m.release);
+            if kept.contains(m.release.as_str()) {
+                self.refused.push(named_ref(record, &release));
+            } else if self.put(record, &release, how("release", &m.release), m.at, m.certain)? && m.certain {
+                kept.insert(&m.release);
+            }
             if let Some(group) = &m.group {
-                w.put(record, &Ref::new("musicbrainz", "release-group", group), how("release-group", group), m.at, false)?;
+                self.put(record, &Ref::new("musicbrainz", "release-group", group), how("release-group", group), m.at, false)?;
             }
-            Ok(())
-        };
-        for (record, m) in matched.iter().filter(|(_, m)| m.certain) {
-            match_refs(&mut w, *record, m)?;
         }
-        after("certain")?;
+        Ok(())
+    }
 
-        // 3. What the files name, the older record first.
-        let mut by_files = 0;
+    /// 3. What the files name, the older record first.
+    fn files(&mut self, now: i64) -> Result<()> {
+        let files = files_named(self.tx)?;
+        let mut put = 0;
         for (record, kind, value) in &files {
-            by_files += u64::from(w.put(*record, &Ref::new("musicbrainz", kind, value), "files", now, false)?);
+            put += u64::from(self.put(*record, &Ref::new("musicbrainz", kind, value), "files", now, false)?);
         }
-        after("files")?;
+        self.tables.push(("files: musicbrainz", files.len() as u64, put));
+        Ok(())
+    }
 
-        // 4. A likely match, where no one else holds its release.
-        for (record, m) in matched.iter().filter(|(_, m)| !m.certain) {
-            match_refs(&mut w, *record, m)?;
-        }
-        after("likely")?;
-
-        // 5. Discogs' facts: its master and main release, found by the record's name or MusicBrainz's link (`search`, which
-        //    the links below make surer).
-        for d in &c.discogs {
-            let Some(record) = w.record("discogs_facts: albums", &d.album)? else { continue };
-            for (kind, id) in [("master", d.master), ("release", d.release)] {
-                if let Some(id) = id {
-                    w.put(record, &Ref::new("discogs", kind, &id.to_string()), "search", d.at, false)?;
-                }
-            }
-            *moved.entry("discogs_facts: albums").or_default() += 1;
-        }
-        after("discogs")?;
-
-        // 6. MusicBrainz's links: the Discogs master and release of the records its release is, as the parts above left them.
+    /// 5. MusicBrainz's verified links: the Discogs master and release of the records its release is, as the parts above
+    ///    left them.
+    fn links(&mut self, c: &Carry) -> Result<()> {
         for l in &c.links {
-            let holders = w.holders(&Ref::new("musicbrainz", "release", &l.release))?;
+            let holders = self.holders(&Ref::new("musicbrainz", "release", &l.release))?;
             if holders.is_empty() {
-                w.unmatched.entry("mb_releases").or_default().push(l.release.clone());
+                self.unmatched.entry("mb_releases").or_default().push(l.release.clone());
                 continue;
             }
             for record in holders {
                 for r in &l.discogs {
-                    w.put(record, r, "link", l.at, false)?;
+                    self.put(record, r, "link", l.at, false)?;
                 }
             }
-            *moved.entry("mb_releases").or_default() += 1;
+            self.moved += 1;
         }
-        after("links")?;
+        Ok(())
+    }
 
-        // 7. Bandcamp's pages: where exactly one record is what a page was kept by, its release group or its names.
+    /// 6. Discogs' facts: its master and main release, found by the record's names or MusicBrainz's link (`search`): what a
+    ///    verified link gave a record stays its.
+    fn discogs(&mut self, c: &Carry) -> Result<()> {
+        for d in &c.discogs {
+            let Some(record) = self.record("discogs_facts: albums", &d.album)? else { continue };
+            for (kind, id) in [("master", d.master), ("release", d.release)] {
+                if let Some(id) = id {
+                    self.put(record, &Ref::new("discogs", kind, &id.to_string()), "search", d.at, false)?;
+                }
+            }
+            self.moved += 1;
+        }
+        Ok(())
+    }
+
+    /// 7. Bandcamp's pages: where exactly one live record is what a page was kept by, its release group or its names.
+    fn pages(&mut self, c: &Carry) -> Result<()> {
         let mut names: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
         {
-            let mut st = tx.prepare("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL ORDER BY id")?;
+            let mut st = self.tx.prepare("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL ORDER BY id")?;
             for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
                 let (id, artist, title) = row?;
                 names.entry(format!("{}|{}", cratarr_rules::names::key(&artist), cratarr_rules::names::key(&title))).or_default().push(id);
             }
         }
+        self.unmatched.entry(SEVERAL).or_default();
         for p in &c.pages {
-            let records = if is_mbid(&p.key) { w.holders(&Ref::new("musicbrainz", "release-group", &p.key))? } else { names.get(&p.key).cloned().unwrap_or_default() };
+            let records = if is_mbid(&p.key) { self.holders(&Ref::new("musicbrainz", "release-group", &p.key))? } else { names.get(&p.key).cloned().unwrap_or_default() };
             match records[..] {
                 [record] => {
-                    w.put(record, &Ref::new("bandcamp", "album", &p.page), "search", p.at, false)?;
-                    *moved.entry("bandcamp_found").or_default() += 1;
+                    self.put(record, &Ref::new("bandcamp", "album", &p.page), "search", p.at, false)?;
+                    self.moved += 1;
                 }
-                [] => w.unmatched.entry("bandcamp_found").or_default().push(p.key.clone()),
-                _ => w.unmatched.entry("bandcamp_found: several records").or_default().push(p.key.clone()),
+                [] => self.unmatched.entry("bandcamp_found").or_default().push(p.key.clone()),
+                _ => self.unmatched.entry(SEVERAL).or_default().push(p.key.clone()),
             }
         }
-        after("pages")?;
+        Ok(())
+    }
 
-        // 8. 0.14's choices: the source chosen, by hand; checked by hand; its guesses confirmed.
-        let (mut by_hand, mut checked, mut confirmed) = (0, 0, 0);
-        for (record, choice) in &chosen {
+    /// 8. 0.14's choices: the source chosen, by hand; checked by hand; its guesses confirmed, each source of which the record
+    ///    holds no reference listed.
+    fn chosen(&mut self, c: &Carry) -> Result<()> {
+        let (mut by_hand, mut checked, mut confirmed, mut asked, mut found) = (0, 0, 0, 0, 0);
+        self.unmatched.entry(UNCONFIRMED).or_default();
+        for choice in &c.chosen {
+            let Some(record) = self.found(&choice.album)? else { continue };
             if let Some(source) = &choice.counting {
-                by_hand += tx.execute("UPDATE records SET counting = ?2, counted_by_hand = 1 WHERE id = ?1", params![record, source])? as u64;
+                by_hand += self.tx.execute("UPDATE records SET counting = ?2, counted_by_hand = 1 WHERE id = ?1", params![record, source])? as u64;
             }
             if choice.checked {
-                checked += tx.execute("UPDATE records SET checked_by_hand = 1 WHERE id = ?1", [record])? as u64;
+                checked += self.tx.execute("UPDATE records SET checked_by_hand = 1 WHERE id = ?1", [record])? as u64;
             }
             for source in &choice.confirmed {
-                confirmed += tx.execute("UPDATE \"references\" SET confirmed = 1 WHERE subject = ?1 AND source = ?2", params![ids::record(*record), source])? as u64;
+                asked += 1;
+                match self.tx.execute("UPDATE \"references\" SET confirmed = 1 WHERE subject = ?1 AND source = ?2", params![ids::record(record), source])? as u64 {
+                    0 => self.unmatched.entry(UNCONFIRMED).or_default().push(format!("{} {source}", choice.album)),
+                    n => {
+                        found += 1;
+                        confirmed += n;
+                    }
+                }
             }
         }
-        after("chosen")?;
+        self.tables.push(("confirmations", asked, found));
+        self.counts = vec![("counted_by_hand", by_hand), ("checked_by_hand", checked), ("confirmed", confirmed)];
+        Ok(())
+    }
 
-        // 9. A certain match counts where nothing was chosen: its tracks were held against the release's, which is what
-        //    `identity::agrees` does once the list is read (`references::work_out`, when the record is opened).
+    /// 9. A certain match counts where nothing was chosen: its tracks were held against the release's, which is what
+    ///    `identity::agrees` does once the list is read (`references::work_out`, when the record is opened).
+    fn counting(&mut self, c: &Carry) -> Result<()> {
         let mut by_match = 0;
-        for (record, m) in matched.iter().filter(|(_, m)| m.certain) {
-            let holds = w.holders(&Ref::new("musicbrainz", "release", &m.release))?.contains(record);
-            let tracks: i64 = tx.query_row("SELECT count(*) FROM tracks WHERE record = ?1 AND retired_at IS NULL", [record], |r| r.get(0))?;
+        for (record, m) in self.matched(c, false)?.into_iter().filter(|(_, m)| m.certain) {
+            let holds = self.holders(&Ref::new("musicbrainz", "release", &m.release))?.contains(&record);
+            let tracks: i64 = self.tx.query_row("SELECT count(*) FROM tracks WHERE record = ?1 AND retired_at IS NULL", [record], |r| r.get(0))?;
             if holds && tracks as usize == m.tracks {
-                by_match += tx.execute("UPDATE records SET counting = 'musicbrainz' WHERE id = ?1 AND counting IS NULL AND counted_by_hand = 0", [record])? as u64;
+                by_match += self.tx.execute("UPDATE records SET counting = 'musicbrainz' WHERE id = ?1 AND counting IS NULL AND counted_by_hand = 0", [record])? as u64;
             }
         }
-        after("counting")?;
+        self.counts = vec![("counted_by_a_match", by_match)];
+        Ok(())
+    }
+}
 
-        let mut report = crate::moved::Report::default();
-        for (table, rows) in &c.read {
-            report.table(table, *rows, *rows, moved.get(table).copied().unwrap_or(0));
+/// A reference as the report names it: "<subject> <source>:<kind>:<value>".
+fn named(subject: &str, r: &Ref) -> String {
+    format!("{subject} {}:{}:{}", r.source, r.kind, r.value)
+}
+
+fn named_ref(record: i64, r: &Ref) -> String {
+    named(&ids::record(record), r)
+}
+
+/// One part of 0.17's step in the caller's transaction: its writes, and its report.
+fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_json::Value> {
+    let count = || -> Result<u64> { Ok(tx.query_row("SELECT count(*) FROM \"references\"", [], |r| r.get::<_, i64>(0))? as u64) };
+    let before = count()?;
+    let mut w = Carrying { tx, refused: Vec::new(), retired: Vec::new(), taken: Vec::new(), unmatched: std::collections::BTreeMap::new(), moved: 0, tables: Vec::new(), counts: Vec::new() };
+    match part {
+        "hand" => w.hand(c, now)?,
+        "certain" => w.matches(c, true)?,
+        "files" => w.files(now)?,
+        "likely" => w.matches(c, false)?,
+        "links" => w.links(c)?,
+        "discogs" => w.discogs(c)?,
+        "pages" => w.pages(c)?,
+        "chosen" => w.chosen(c)?,
+        "counting" => w.counting(c)?,
+        _ => anyhow::bail!("0.17's step has no part {part}"),
+    }
+    let mut report = crate::moved::Report::default();
+    if let Some(table) = table_017(part) {
+        let rows = c.read.iter().find(|(t, _)| *t == table).map_or(0, |(_, n)| *n);
+        report.table(table, rows, rows, w.moved);
+        report.unmatched(table, w.unmatched.remove(table).unwrap_or_default());
+        for (what, keys) in c.noted.iter().filter(|(what, _)| what.strip_prefix(table).is_some_and(|why| why.starts_with(": "))) {
+            report.unmatched(what, keys.clone());
         }
-        report.table("files: musicbrainz", files.len() as u64, files.len() as u64, by_files);
-        let after_count = count(&tx)?;
-        report.table("references", before, after_count, after_count - before);
-        let (refused, retired, taken, mut unmatched) = (std::mem::take(&mut w.refused), std::mem::take(&mut w.retired), std::mem::take(&mut w.taken), std::mem::take(&mut w.unmatched));
-        for (table, keys) in &c.unread {
-            unmatched.entry(table).or_default().extend(keys.iter().map(|k| format!("{k} (not read)")));
+    }
+    for (name, rows, moved) in std::mem::take(&mut w.tables) {
+        report.table(name, rows, rows, moved);
+    }
+    for (what, keys) in std::mem::take(&mut w.unmatched) {
+        report.unmatched(what, keys);
+    }
+    let after = count()?;
+    report.table("references", before, after, after.saturating_sub(before));
+    report.differed(HELD, std::mem::take(&mut w.refused));
+    report.differed(RETIRED, std::mem::take(&mut w.retired));
+    report.differed(TAKEN, std::mem::take(&mut w.taken));
+    let mut report = serde_json::to_value(&report)?;
+    if let Some(fields) = report.as_object_mut() {
+        for (field, n) in w.counts {
+            fields.insert(field.into(), n.into());
         }
-        for what in ["record_references", "record_references: links", "album_matches", "discogs_facts: albums", "bandcamp_found", "bandcamp_found: several records", "mb_releases"] {
-            report.unmatched(what, unmatched.remove(what).unwrap_or_default());
+    }
+    Ok(report)
+}
+
+impl Catalogue {
+    /// 0.17's step's parts not done (no mark), in order. Blocking.
+    pub fn references_to_carry(&self) -> Result<Vec<&'static str>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT key FROM meta WHERE key GLOB '017:*'")?;
+        let marked: std::collections::HashSet<String> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(PARTS_017.into_iter().filter(|part| !marked.contains(&mark_017(part))).collect())
+    }
+
+    /// 0.17's step's report, of the parts done: their marks' reports as one, in the parts' order (`moved::Report::merge`), the
+    /// counts summed. None: no part done. Blocking.
+    pub fn references_carried(&self) -> Result<Option<serde_json::Value>> {
+        let mut merged: Option<(crate::moved::Report, serde_json::Map<String, serde_json::Value>)> = None;
+        for part in PARTS_017 {
+            let Some(text) = self.meta(&mark_017(part)) else { continue };
+            let v: serde_json::Value = serde_json::from_str(&text)?;
+            let report: crate::moved::Report = serde_json::from_value(v.clone())?;
+            let (all, counts) = merged.get_or_insert_with(Default::default);
+            all.merge(report);
+            for (field, n) in v.as_object().into_iter().flatten().filter(|(k, _)| !matches!(k.as_str(), "tables" | "unmatched" | "differed")) {
+                let sum = counts.get(field).and_then(serde_json::Value::as_u64).unwrap_or(0) + n.as_u64().unwrap_or(0);
+                counts.insert(field.clone(), sum.into());
+            }
         }
-        report.differed("references: held by another record", refused);
-        report.differed("references: a retired record's", retired);
-        report.differed("references: taken from another record", taken);
+        let Some((report, counts)) = merged else { return Ok(None) };
         let mut report = serde_json::to_value(&report)?;
         if let Some(fields) = report.as_object_mut() {
-            for (field, n) in [("references", after_count), ("counted_by_hand", by_hand), ("counted_by_a_match", by_match), ("checked_by_hand", checked), ("confirmed", confirmed)] {
-                fields.insert(field.into(), n.into());
-            }
+            fields.extend(counts);
         }
-        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![CARRIED, report.to_string()])?;
-        tx.commit()?;
-        Ok(report)
+        Ok(Some(report))
+    }
+
+    /// 0.17's step on the catalogue's side: each part not done, in turn, in a transaction of its own whose last write is its
+    /// mark, holding the part's report. Each begins IMMEDIATE, so no writer comes between what it reads and what it writes, and
+    /// finds its mark inside it. `after` hears each part done, inside its transaction: an error from it leaves that part
+    /// unwritten, the parts before it done. The parts run now. Blocking.
+    pub fn carry_references(&self, c: &Carry, after: &dyn Fn(&str) -> Result<()>) -> Result<Vec<&'static str>> {
+        let mut db = self.db();
+        let mut ran = Vec::new();
+        for part in PARTS_017 {
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let mark = mark_017(part);
+            if tx.query_row("SELECT 1 FROM meta WHERE key = ?1", [&mark], |_| Ok(())).optional()?.is_some() {
+                continue;
+            }
+            let report = carry_part(&tx, c, part, now())?;
+            after(part)?;
+            tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![mark, report.to_string()])?;
+            tx.commit()?;
+            ran.push(part);
+        }
+        Ok(ran)
     }
 }
 

@@ -81,7 +81,8 @@ pub struct Chosen {
 }
 
 /// What a pasted link names: a MusicBrainz release or release group, a Discogs release or master (a language before it, a
-/// name after its number), a Bandcamp album page. None for anything else.
+/// name after its number, or Discogs' older `/master/view/N`, which 0.16 kept as pasted), a Bandcamp album page. None for
+/// anything else.
 pub fn ref_of_link(url: &str) -> Option<Ref> {
     let url = url.trim();
     let u = reqwest::Url::parse(url).ok()?;
@@ -96,9 +97,10 @@ pub fn ref_of_link(url: &str) -> Option<Ref> {
         return super::discogs::is_mbid(&id).then(|| Ref::new("musicbrainz", kind, &id));
     }
     if host == "discogs.com" || host.ends_with(".discogs.com") {
-        let at = segments.iter().position(|s| *s == "release" || *s == "master")?;
+        let kind = segments.iter().position(|s| *s == "release" || *s == "master")?;
+        let at = if segments.get(kind + 1) == Some(&"view") { kind + 1 } else { kind };
         let number: u64 = segments.get(at + 1)?.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
-        return Some(Ref::new("discogs", segments[at], &number.to_string()));
+        return Some(Ref::new("discogs", segments[kind], &number.to_string()));
     }
     if host.ends_with(".bandcamp.com") && u.path().starts_with("/album/") {
         return crate::bandcamp::album_page(url).map(|page| Ref::new("bandcamp", "album", &page));
@@ -528,6 +530,7 @@ mod tests {
         assert_eq!(r("https://www.discogs.com/release/123-Air-Moon-Safari"), named("discogs", "release", "123"));
         assert_eq!(r("https://www.discogs.com/de/master/456"), named("discogs", "master", "456"));
         assert_eq!(r("https://www.discogs.com/Air-Moon-Safari/master/0456"), named("discogs", "master", "456"));
+        assert_eq!(r("https://www.discogs.com/master/view/456"), named("discogs", "master", "456"), "Discogs' older link, kept by 0.16");
         assert_eq!(r("  https://air.bandcamp.com/album/moon-safari?from=search  "), named("bandcamp", "album", "https://air.bandcamp.com/album/moon-safari"));
         assert_eq!(r("https://air.bandcamp.com/track/la-femme"), None, "a track, not an album");
         assert_eq!(r("https://example.org/release/1"), None);

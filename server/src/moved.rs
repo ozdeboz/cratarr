@@ -82,6 +82,34 @@ impl Report {
         self.differed.extend(other.differed);
     }
 
+    /// A later part of one step after these, as one report: a table both read keeps its rows before from the first and takes
+    /// its rows after from the later, their moves summed; a list both have sums its counts, the later's samples after these.
+    pub fn merge(&mut self, other: Report) {
+        for t in other.tables {
+            match self.tables.iter_mut().find(|s| s.name == t.name) {
+                Some(s) => {
+                    s.after = t.after;
+                    s.moved += t.moved;
+                    s.merged += t.merged;
+                }
+                None => self.tables.push(t),
+            }
+        }
+        for (into, from) in [(&mut self.unmatched, other.unmatched), (&mut self.differed, other.differed)] {
+            for u in from {
+                match into.iter_mut().find(|s| s.what == u.what) {
+                    Some(s) => {
+                        s.count += u.count;
+                        s.sample.extend(u.sample);
+                        s.sample.dedup();
+                        s.sample.truncate(SAMPLES);
+                    }
+                    None => into.push(u),
+                }
+            }
+        }
+    }
+
     /// The rows of one table, by its name.
     #[cfg(test)]
     pub fn table_named(&self, name: &str) -> Option<&Table> {

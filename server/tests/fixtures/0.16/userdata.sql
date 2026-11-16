@@ -222,46 +222,56 @@ CREATE TABLE excluded_artist (
 -- Discogs' are 1000NNN for masters and 2000NNN for releases.
 
 -- 0.14's choices (`app::references::Chosen`), under the records' ids since 0.16: "Use this", a link pasted by hand, a guess
--- confirmed with nothing chosen, AcoustID counting (it has no list), and a retired record's.
+-- confirmed with nothing chosen, AcoustID counting (it has no list) with links as 0.16 kept them (Discogs' older link to a
+-- master, a MusicBrainz release's id cut short) and a guess confirmed it has none of, and a retired record's.
 INSERT INTO record_references (album, chosen) VALUES
   ('al-1', '{"counting":"musicbrainz","by_hand":false,"links":{},"confirmed":["musicbrainz"]}'),
   ('al-2', '{"counting":"discogs","by_hand":true,"links":{"discogs":"https://www.discogs.com/release/2000002-Noor-Field-Two-Rooms","musicbrainz":"https://musicbrainz.org/release/00000000-0000-4000-8000-000000000002"},"confirmed":[]}'),
   ('al-3', '{"counting":null,"by_hand":false,"links":{},"confirmed":["bandcamp"]}'),
-  ('al-5', '{"counting":"acoustid","by_hand":false,"links":{},"confirmed":[]}'),
+  ('al-5', '{"counting":"acoustid","by_hand":false,"links":{"discogs":"https://www.discogs.com/master/view/1000005","musicbrainz":"https://musicbrainz.org/release/00000000-0000-4000-8000-00000000000"},"confirmed":["bandcamp"]}'),
   ('al-6', '{"counting":"musicbrainz","by_hand":true,"links":{"musicbrainz":"https://musicbrainz.org/release/00000000-0000-4000-8000-000000000006"},"confirmed":["discogs"]}');
 
 -- Matching's finds (`app::matching::Match`): certain (Signal's with nothing chosen), likely with a length MusicBrainz lacks,
--- none, and one under an id 0.16's first start could not move (a row no list matched stays as it was).
+-- none, two copies' certain matches on one release, and one under an id 0.16's first start could not move (a row no list
+-- matched stays as it was).
 INSERT INTO album_matches (album, at, found) VALUES
   ('al-1', 1793900000, '{"release":"00000000-0000-4000-8000-000000000001","release_group":"00000000-0000-4000-8000-000000000101","title":"Tide Tables","artist":"Glass Harbour","artist_id":"00000000-0000-4000-8000-000000000201","year":2012,"certain":true,"why":"Tide Tables, 2012, CD · all 6 tracks within 2 s","tracks":[["01 Slack Water.flac","00000000-0000-4000-8000-000000000301","00000000-0000-4000-8000-000000000201"],["02 Neap.flac","00000000-0000-4000-8000-000000000302","00000000-0000-4000-8000-000000000201"],["03 Spring Tide.flac","00000000-0000-4000-8000-000000000303","00000000-0000-4000-8000-000000000201"],["04 Ebb.flac","00000000-0000-4000-8000-000000000304","00000000-0000-4000-8000-000000000201"],["05 Flood.flac","00000000-0000-4000-8000-000000000305","00000000-0000-4000-8000-000000000201"],["06 Low Water.flac","00000000-0000-4000-8000-000000000306","00000000-0000-4000-8000-000000000201"]],"lengths":[181,203,240,198,215,262]}'),
   ('al-3', 1793900000, '{"release":"00000000-0000-4000-8000-000000000003","release_group":"00000000-0000-4000-8000-000000000103","title":"Night Walks","artist":"Kite Theory","artist_id":"00000000-0000-4000-8000-000000000203","year":2020,"certain":false,"why":"Night Walks, 2020, Digital Media · 3 of 3 tracks within 5 s","tracks":[["01 Lamplight.mp3","00000000-0000-4000-8000-000000000311","00000000-0000-4000-8000-000000000203"],["02 Crossing.mp3","00000000-0000-4000-8000-000000000312","00000000-0000-4000-8000-000000000203"],["03 Home.mp3","00000000-0000-4000-8000-000000000313","00000000-0000-4000-8000-000000000203"]],"lengths":[200,null,187]}'),
   ('al-4', 1793900000, NULL),
   ('al-9', 1794600200, '{"release":"00000000-0000-4000-8000-000000000002","release_group":"00000000-0000-4000-8000-000000000102","title":"Two Rooms","artist":"Noor Field","artist_id":"00000000-0000-4000-8000-000000000202","year":2019,"certain":true,"why":"Two Rooms, 2019, CD · all 6 tracks within 2 s","tracks":[],"lengths":[]}'),
   ('al-7', 1794300000, '{"release":"00000000-0000-4000-8000-000000000007","release_group":"00000000-0000-4000-8000-000000000107","title":"Signal","artist":"Noor Field","artist_id":"00000000-0000-4000-8000-000000000202","year":2021,"certain":true,"why":"Signal, 2021, Digital Media · all 1 tracks within 2 s","tracks":[["01 Signal.flac","00000000-0000-4000-8000-000000000371","00000000-0000-4000-8000-000000000202"]],"lengths":[215]}'),
+  ('al-10', 1794700050, '{"release":"00000000-0000-4000-8000-000000000020","release_group":"00000000-0000-4000-8000-000000000120","title":"Ferry Lights","artist":"Kite Theory","artist_id":"00000000-0000-4000-8000-000000000203","year":2016,"certain":true,"why":"Ferry Lights, 2016, CD · all 2 tracks within 2 s","tracks":[],"lengths":[]}'),
+  ('al-11', 1794700150, '{"release":"00000000-0000-4000-8000-000000000020","release_group":"00000000-0000-4000-8000-000000000120","title":"Ferry Lights","artist":"Kite Theory","artist_id":"00000000-0000-4000-8000-000000000203","year":2016,"certain":true,"why":"Ferry Lights, 2016, CD · all 2 tracks within 2 s","tracks":[],"lengths":[]}'),
   ('al-7Qm2VxRb9KfPz3LcWnTd5h', 1780000000, '{"release":"00000000-0000-4000-8000-000000000010","release_group":"00000000-0000-4000-8000-000000000110","title":"Junk Dates","artist":"Orbit Lane","artist_id":"00000000-0000-4000-8000-000000000205","year":2010,"certain":true,"why":"Junk Dates, 2010, CD · all 2 tracks within 2 s","tracks":[["01 Zero.flac","00000000-0000-4000-8000-000000000341",null],["02 One.flac","00000000-0000-4000-8000-000000000342",null]],"lengths":[180,175]}');
 
 -- What Discogs said (`app::discogs::AlbumFacts`): an album's by `album:<record>`, with a master, with a release and no master,
--- asked in vain; and a release group of Discover's (`rg:`), which is no album's.
+-- a search by names that found another record's release (Undated's: Night Walks'), asked in vain; and a release group of
+-- Discover's (`rg:`), which is no album's.
 INSERT INTO discogs_facts (subject, at, facts) VALUES
   ('album:al-1', 1793900000, '{"master":1000001,"release":2000001,"year":2012,"genres":["Electronic"],"styles":["Dub Techno","Ambient"],"labels":[{"name":"Low Tide Records","catno":"LTR-012"}],"credits":[{"name":"Glass Harbour","role":"Written-By"},{"name":"Pressing Plant Mastering","role":"Mastered By","tracks":"1 to 6"}],"url":"https://www.discogs.com/master/1000001"}'),
   ('album:al-2', 1793900000, '{"master":null,"release":2000002,"year":2019,"genres":["Electronic"],"styles":["Minimal"],"labels":[{"name":"Not On Label (Noor Field Self-released)","catno":"none"}],"credits":[],"url":"https://www.discogs.com/release/2000002"}'),
-  ('album:al-4', 1793900000, NULL),
+  ('album:al-4', 1793900000, '{"master":null,"release":2000003,"year":2020,"genres":["Electronic"],"styles":["Ambient"],"labels":[{"name":"Paper Lantern","catno":"PL-03"}],"credits":[],"url":"https://www.discogs.com/release/2000003"}'),
+  ('album:al-5', 1793900000, NULL),
   ('album:al-6', 1780000000, '{"master":1000006,"release":2000006,"year":2011,"genres":["Electronic"],"styles":["Ambient"],"labels":[{"name":"Low Tide Records","catno":"LTR-009"}],"credits":[],"url":"https://www.discogs.com/master/1000006"}'),
   ('rg:00000000-0000-4000-8000-000000000112', 1793950000, '{"master":1000012,"release":2000012,"year":2016,"genres":["Electronic"],"styles":["Ambient"],"labels":[{"name":"Low Tide Records","catno":"LTR-020"}],"credits":[],"url":"https://www.discogs.com/master/1000012"}');
 
 -- Albums found on Bandcamp (0.9.3), by release group, else `key(artist)|key(album)`: an owned record's by its group and by
--- its names, a miss, and a record not had (a request's).
+-- its names, a miss, a record not had (a request's), a page by names a retired record and a live one share, and an artist's
+-- page, which is no album's.
 INSERT INTO bandcamp_found (album, at, page) VALUES
   ('00000000-0000-4000-8000-000000000101', 1793900000, 'https://glassharbour.bandcamp.com/album/tide-tables'),
   ('kitetheory|nightwalksep', 1793900000, 'https://kitetheory.bandcamp.com/album/night-walks'),
   ('kitetheory|undated', 1793900000, NULL),
-  ('00000000-0000-4000-8000-000000000111', 1793950000, 'https://glassharbour.bandcamp.com/album/harbour-lights');
+  ('00000000-0000-4000-8000-000000000111', 1793950000, 'https://glassharbour.bandcamp.com/album/harbour-lights'),
+  ('glassharbour|partialshore', 1794600000, 'https://glassharbour.bandcamp.com/album/partial-shore'),
+  ('noorfield|signal', 1794300000, 'https://noorfield.bandcamp.com/music');
 
 -- Releases the works' pass read (`app::works::Stored`), with MusicBrainz's verified Discogs links: a release and its master,
--- a release alone, and one MusicBrainz did not know.
+-- a release alone, one it links to nothing on Discogs, and one MusicBrainz did not know.
 INSERT INTO mb_releases (release, found, facts, at) VALUES
   ('00000000-0000-4000-8000-000000000001', 1, '{"genres":["ambient","dub techno"],"discogs":["release:2000001","master:1000001"],"performers":[],"performed":false,"tracks":[],"with_parents":true}', 1793900000),
   ('00000000-0000-4000-8000-000000000003', 1, '{"genres":[],"discogs":["release:2000003"],"performers":[],"performed":false,"tracks":[],"with_parents":true}', 1793900000),
+  ('00000000-0000-4000-8000-000000000007', 1, '{"genres":[],"discogs":[],"performers":[],"performed":false,"tracks":[],"with_parents":true}', 1794300000),
   ('00000000-0000-4000-8000-000000000099', 0, '{}', 1793900000);
 
 -- Discover's discographies (`app::discover::Group`), by the artist's MusicBrainz id: one read before 0.9.17 kept dates, and a
