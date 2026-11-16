@@ -104,6 +104,11 @@ pub fn record(record: i64) -> String {
     format!("{ALBUM}{record}")
 }
 
+/// The record a served id names, where it is one of the catalogue's (`al-<digits>`); a hash from before 0.16 is none.
+pub fn record_number(id: &str) -> Option<i64> {
+    id.strip_prefix(ALBUM).filter(|_| for_life(id)).and_then(|n| n.parse().ok())
+}
+
 /// The highest number named in `text` as a record's or an artist's id for life, `al-<digits>` or `ar-<digits>`, 0 for
 /// none: in a column, a key (`like:al-12`, `album:cratarr/al-12`) or a whole JSON store. A hash is no number: it runs on
 /// in letters, and 22 digits of one, if it ever came to that, are no id anyone was given.

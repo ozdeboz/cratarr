@@ -14,7 +14,6 @@ mod id3;
 pub mod identity;
 mod index_log;
 pub mod normalise;
-#[cfg_attr(not(test), allow(dead_code))] // read and written by app::references and 0.17's step from C43a on
 pub mod records;
 pub mod tags;
 pub mod walk;

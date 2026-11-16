@@ -134,6 +134,30 @@ fn record_in(db: &Connection, id: i64) -> Result<Option<RecordRow>> {
         .optional()?)
 }
 
+/// `set_reference` in the caller's transaction, found at `at`. `takes`: one another subject holds alone comes here, as by hand.
+pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, at: i64, takes: bool) -> Result<bool> {
+    if ONE_SUBJECT.contains(&r.kind.as_str()) && subjects_in(tx, r)?.iter().any(|s| s != subject) {
+        if !takes {
+            return Ok(false);
+        }
+        tx.prepare_cached("DELETE FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject <> ?4")?.execute(params![r.source, r.kind, r.value, subject])?;
+    }
+    let had: Option<String> = tx
+        .prepare_cached("SELECT how FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject = ?4")?
+        .query_row(params![r.source, r.kind, r.value, subject], |r| r.get(0))
+        .optional()?;
+    match had {
+        None => {
+            tx.prepare_cached("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?.execute(params![subject, r.source, r.kind, r.value, at, how])?;
+        }
+        Some(was) if sureness(how) > sureness(&was) => {
+            tx.prepare_cached("UPDATE \"references\" SET how = ?5 WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject = ?4")?.execute(params![r.source, r.kind, r.value, subject, how])?;
+        }
+        Some(_) => {}
+    }
+    Ok(true)
+}
+
 fn subjects_in(db: &Connection, r: &Ref) -> Result<Vec<String>> {
     let mut st = db.prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?;
     let rows = st.query_map(params![r.source, r.kind, r.value], |r| r.get(0))?;
@@ -166,33 +190,55 @@ impl Catalogue {
     pub fn set_reference(&self, subject: &str, r: &Ref, how: &str) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        if ONE_SUBJECT.contains(&r.kind.as_str()) {
-            let others: Vec<String> = subjects_in(&tx, r)?.into_iter().filter(|s| s != subject).collect();
-            if !others.is_empty() {
-                if how != "hand" {
-                    return Ok(false);
-                }
-                tx.execute("DELETE FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject <> ?4", params![r.source, r.kind, r.value, subject])?;
-            }
-        }
-        let had: Option<String> = tx
-            .query_row("SELECT how FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject = ?4", params![r.source, r.kind, r.value, subject], |r| r.get(0))
-            .optional()?;
-        match had {
-            None => {
-                tx.execute("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![subject, r.source, r.kind, r.value, now(), how])?;
-            }
-            Some(was) if sureness(how) > sureness(&was) => {
-                tx.execute("UPDATE \"references\" SET how = ?5 WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject = ?4", params![r.source, r.kind, r.value, subject, how])?;
-            }
-            Some(_) => {}
-        }
+        let kept = put_reference(&tx, subject, r, how, now(), how == "hand")?;
         tx.commit()?;
-        Ok(true)
+        Ok(kept)
+    }
+
+    /// Tests elsewhere: a record of this title with `tracks` tracks on it (none: a record not had), no file behind them. Its id.
+    #[cfg(test)]
+    pub fn record_for_tests(&self, title: &str, tracks: usize) -> i64 {
+        let db = self.db();
+        db.execute("INSERT INTO records (born, title, artist) VALUES (1, ?1, 'Glass Harbour')", [title]).unwrap();
+        let record = db.last_insert_rowid();
+        for n in 1..=tracks as i64 {
+            db.execute("INSERT INTO tracks (born, record, disc, number) VALUES (1, ?1, 1, ?2)", params![record, n]).unwrap();
+        }
+        record
+    }
+
+    /// A subject's references of `source` found by guessing, confirmed once (0.14's "That's it"): they stay guesses, said to
+    /// be right. How many. Blocking.
+    pub fn confirm_reference(&self, subject: &str, source: &str) -> Result<usize> {
+        Ok(self.db().execute("UPDATE \"references\" SET confirmed = 1 WHERE subject = ?1 AND source = ?2", params![subject, source])?)
+    }
+
+    /// 0.14's "Checked by hand": its own facts are the record's reference. Blocking.
+    pub fn set_checked_by_hand(&self, record: i64, checked: bool) -> Result<()> {
+        self.db().execute("UPDATE records SET checked_by_hand = ?2 WHERE id = ?1", params![record, checked])?;
+        Ok(())
+    }
+
+    /// The records no reference speaks for (Health's references item), in one query: had, with none counting and not checked
+    /// by hand, and no release its files name nor a link pasted. A certain match counts (0.17's step, `work_out` after it), so
+    /// what 0.16 left off the item stays off. Blocking.
+    pub fn unreferenced(&self) -> Result<Vec<i64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT r.id FROM records r
+             WHERE r.retired_at IS NULL AND r.merged_into IS NULL AND r.counting IS NULL AND r.checked_by_hand = 0
+               AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
+               AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || r.id
+                 AND (f.how = 'hand' OR (f.how = 'files' AND f.source = 'musicbrainz' AND f.kind = 'release')))
+             ORDER BY r.id",
+        )?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The subjects a reference names: one, for a release, an album page, an artist or a label; for a release group or a master,
     /// every record of it (G1). None: no subject known by it. Blocking.
+    #[cfg_attr(not(test), allow(dead_code))] // a record found by its reference: C50's arrivals, C53a's missing list
     pub fn subject_of(&self, r: &Ref) -> Result<Vec<String>> {
         subjects_in(&self.db(), r)
     }

@@ -305,14 +305,12 @@ pub struct RefTrack {
 }
 
 /// The sources in the order one counts where nothing else decides (decision 0100: MusicBrainz, then Discogs, then Bandcamp).
-#[cfg_attr(not(test), allow(dead_code))] // worked out by the references' writers from C43b on
 pub const COUNTING_ORDER: [&str; 3] = ["musicbrainz", "discogs", "bandcamp"];
 
 /// Whether a source's tracklist agrees with a record's files, both in order (0100: "the source whose tracklist agrees with the
 /// files"): as many tracks, each one track by [`Listed::same_track`], its name, its guests and its length. A length the list does
 /// not give passes on the title, so a list with none agrees where every title does (OQ8 (a)). It may count, and no more: two
 /// folders are one record by [`same_tracks`] alone, which reads no source's list. An empty list says nothing.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn agrees(list: &[RefTrack], files: &[Listed]) -> bool {
     !list.is_empty() && list.len() == files.len() && list.iter().zip(files).all(|(t, f)| Listed::of(&t.title, t.length_ms.unwrap_or(f.duration_ms)).same_track(f))
 }
@@ -321,7 +319,6 @@ pub fn agrees(list: &[RefTrack], files: &[Listed]) -> bool {
 /// whose list agrees with the files ([`agrees`]), the first in [`COUNTING_ORDER`] where several do; with no files to hold a list
 /// against, the first in that order with a list. Where the files have every list against them, none counts until one is chosen:
 /// the one that counts is the one that fits, and Health's references item asks for the choice. None with no list at all.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn counting(chosen: Option<&str>, lists: &[(&str, &[RefTrack])], files: &[Listed]) -> Option<String> {
     if let Some(chosen) = chosen {
         return Some(chosen.to_string());
