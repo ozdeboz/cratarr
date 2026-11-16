@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS record_labels (
   record INTEGER NOT NULL, label INTEGER NOT NULL, catno TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (record, label, catno)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, record);
+-- 0.17's step: a record whose certain match from 0.16 names a release whose list is still to be read (`references::read_lists`).
+-- It counts nothing and waits off Health's references item until the list is read and held against its files.
+CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TEXT NOT NULL, at INTEGER NOT NULL);
 ";
 
 /// A chain of merges longer than this is a loop: the record it began at answers none.
@@ -582,14 +585,16 @@ impl Catalogue {
     }
 
     /// The records no reference speaks for (Health's references item), in one query: had, with none counting and not checked
-    /// by hand, and no release its files name nor a link pasted. A certain match counts (0.17's step, `work_out` after it), so
-    /// what 0.16 left off the item stays off. Blocking.
+    /// by hand, and no release its files name nor a link pasted. A record whose certain match from 0.16 waits for its list
+    /// (`lists_to_read`) waits off it: what 0.16 left off the item stays off until the list is read, and goes on it only where
+    /// the list does not agree. Blocking.
     pub fn unreferenced(&self) -> Result<Vec<i64>> {
         let db = self.db();
         let mut st = db.prepare_cached(
             "SELECT r.id FROM records r
              WHERE r.retired_at IS NULL AND r.merged_into IS NULL AND r.counting IS NULL AND r.checked_by_hand = 0
                AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
+               AND NOT EXISTS (SELECT 1 FROM lists_to_read w WHERE w.record = r.id)
                AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || r.id
                  AND (f.how = 'hand' OR (f.how = 'files' AND f.source = 'musicbrainz' AND f.kind = 'release')))
              ORDER BY r.id",
@@ -600,7 +605,6 @@ impl Catalogue {
 
     /// The subjects a reference names: one, for a release, an album page, an artist or a label; for a release group or a master,
     /// every record of it (G1). None: no subject known by it. Blocking.
-    #[cfg_attr(not(test), allow(dead_code))] // a record found by its reference: C50's arrivals, C53a's missing list
     pub fn subject_of(&self, r: &Ref) -> Result<Vec<String>> {
         subjects_in(&self.db(), r)
     }
@@ -611,6 +615,21 @@ impl Catalogue {
         let mut st = db.prepare_cached("SELECT source, tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
         let rows: Vec<(String, String)> = st.query_map([record], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         rows.into_iter().map(|(source, tracks)| Ok((source, serde_json::from_str(&tracks)?))).collect()
+    }
+
+    /// Records waiting for their certain match's list (0.17's step, `lists_to_read`), the oldest first: (record, release), up
+    /// to `n`. Blocking.
+    pub fn lists_to_read(&self, n: usize) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT record, release FROM lists_to_read ORDER BY record LIMIT ?1")?;
+        let rows = st.query_map([n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A record's list read (or none to read): it waits no more. Blocking.
+    pub fn list_read(&self, record: i64) -> Result<()> {
+        self.db().execute("DELETE FROM lists_to_read WHERE record = ?1", [record])?;
+        Ok(())
     }
 
     /// A source's tracklist of a record, in place of what it gave before. Blocking.
@@ -640,8 +659,9 @@ impl Catalogue {
 /// 0.17's step's parts, in the order they run, as who keeps a release two records name goes by it (G1): a link pasted by hand;
 /// a certain match, MusicBrainz having matched the record's own tracks to the release; what the files name, the older record
 /// first; a likely match; MusicBrainz's verified Discogs links, before a Discogs search by names, which can find another
-/// record's; Bandcamp's pages; 0.14's choices, which confirm what the parts before wrote; a certain match's count.
-pub const PARTS_017: [&str; 9] = ["hand", "certain", "files", "likely", "links", "discogs", "pages", "chosen", "counting"];
+/// record's; Bandcamp's pages; 0.14's choices, which confirm what the parts before wrote. No part counts: a certain match's
+/// list is read after (`lists_to_read`), and counts where it agrees with the files.
+pub const PARTS_017: [&str; 8] = ["hand", "certain", "files", "likely", "links", "discogs", "pages", "chosen"];
 
 /// A part's mark in `meta`, holding its report: there, the part is done. One a part, so a data folder that ran an earlier
 /// version of the step, with fewer parts, runs the ones it lacks.
@@ -649,8 +669,8 @@ fn mark_017(part: &str) -> String {
     format!("017:{part}")
 }
 
-/// The user data's table a part reads and reports: its rows, carried or listed by why not. `likely`, `chosen` and `counting`
-/// read again what `certain` and `hand` report.
+/// The user data's table a part reads and reports: its rows, carried or listed by why not. `likely` and `chosen` read again
+/// what `certain` and `hand` report.
 fn table_017(part: &str) -> Option<&'static str> {
     Some(match part {
         "hand" => "record_references",
@@ -700,7 +720,7 @@ pub struct CarriedChoice {
     pub confirmed: Vec<String>,
 }
 
-/// Matching's find (`album_matches`): its release and release group, certain or likely, how many tracks it matched, and when.
+/// Matching's find (`album_matches`): its release and release group, certain or likely, and when.
 #[derive(Debug, Clone)]
 pub struct CarriedMatch {
     pub album: String,
@@ -708,7 +728,6 @@ pub struct CarriedMatch {
     pub release: String,
     pub group: Option<String>,
     pub certain: bool,
-    pub tracks: usize,
 }
 
 /// What Discogs said of an album (`discogs_facts`, `album:`): its master and its main release, and when.
@@ -864,8 +883,10 @@ impl Carrying<'_> {
 
     /// 2. and 4. Certain matches, or likely ones: each its release and release group, the files' word where they name it too.
     /// A certain match takes its release from what the files or a guess gave another record; two on one release, the older
-    /// record keeps it, and one refused it (a hand's, a retired record) lets the next try.
+    /// record keeps it, and one refused it (a hand's, a retired record) lets the next try. A record a certain match's release
+    /// is now waits for its list (`lists_to_read`): 0.16 kept none, and the match counts nothing until it agrees.
     fn matches(&mut self, c: &Carry, certain: bool) -> Result<()> {
+        let mut waiting = 0;
         let files = files_named(self.tx)?;
         let say: std::collections::HashSet<(i64, &str, &str)> = files.iter().map(|(r, k, v)| (*r, *k, v.as_str())).collect();
         let mut kept: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -876,10 +897,18 @@ impl Carrying<'_> {
                 self.refused.push(named_ref(record, &release));
             } else if self.put(record, &release, how("release", &m.release), m.at, m.certain)? && m.certain {
                 kept.insert(&m.release);
+                waiting += self.tx.execute(
+                    "INSERT OR IGNORE INTO lists_to_read (record, release, at) SELECT ?1, ?2, ?3
+                     WHERE NOT EXISTS (SELECT 1 FROM reference_tracks WHERE record = ?1 AND source = 'musicbrainz')",
+                    params![record, m.release, m.at],
+                )? as u64;
             }
             if let Some(group) = &m.group {
                 self.put(record, &Ref::new("musicbrainz", "release-group", group), how("release-group", group), m.at, false)?;
             }
+        }
+        if certain {
+            self.counts = vec![("lists_to_read", waiting)];
         }
         Ok(())
     }
@@ -982,21 +1011,6 @@ impl Carrying<'_> {
         self.counts = vec![("counted_by_hand", by_hand), ("checked_by_hand", checked), ("confirmed", confirmed)];
         Ok(())
     }
-
-    /// 9. A certain match counts where nothing was chosen: its tracks were held against the release's, which is what
-    ///    `identity::agrees` does once the list is read (`references::work_out`, when the record is opened).
-    fn counting(&mut self, c: &Carry) -> Result<()> {
-        let mut by_match = 0;
-        for (record, m) in self.matched(c, false)?.into_iter().filter(|(_, m)| m.certain) {
-            let holds = self.holders(&Ref::new("musicbrainz", "release", &m.release))?.contains(&record);
-            let tracks: i64 = self.tx.query_row("SELECT count(*) FROM tracks WHERE record = ?1 AND retired_at IS NULL", [record], |r| r.get(0))?;
-            if holds && tracks as usize == m.tracks {
-                by_match += self.tx.execute("UPDATE records SET counting = 'musicbrainz' WHERE id = ?1 AND counting IS NULL AND counted_by_hand = 0", [record])? as u64;
-            }
-        }
-        self.counts = vec![("counted_by_a_match", by_match)];
-        Ok(())
-    }
 }
 
 /// A reference as the report names it: "<subject> <source>:<kind>:<value>".
@@ -1022,7 +1036,6 @@ fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_
         "discogs" => w.discogs(c)?,
         "pages" => w.pages(c)?,
         "chosen" => w.chosen(c)?,
-        "counting" => w.counting(c)?,
         _ => anyhow::bail!("0.17's step has no part {part}"),
     }
     let mut report = crate::moved::Report::default();

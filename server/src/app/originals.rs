@@ -34,18 +34,30 @@ pub fn start() {
                 continue;
             }
             super::musicbrainz::PASS_RUNNING.store(true, std::sync::atomic::Ordering::Relaxed);
-            let asked = pass().await.unwrap_or_else(|e| {
-                tracing::info!("original years: MusicBrainz could not be asked now: {e:#}");
-                0
-            });
-            // Nothing left of these: the works (0.10, `works`), in turn with them, so the two keep one pace.
-            let asked = match asked {
-                0 => super::works::pass().await.unwrap_or_else(|e| {
-                    tracing::info!("works: MusicBrainz could not be asked now: {e:#}");
+            // Its questions behind any page's (`musicbrainz::behind`): no one waits for these.
+            let asked = super::musicbrainz::behind(async {
+                // The lists 0.17's step left (`references::lists_pass`) first: their records wait off Health's item.
+                let asked = super::references::lists_pass().await.unwrap_or_else(|e| {
+                    tracing::info!("the lists 0.17's step left: MusicBrainz could not be asked now: {e:#}");
                     0
-                }),
-                n => n,
-            };
+                });
+                if asked > 0 {
+                    return asked;
+                }
+                let asked = pass().await.unwrap_or_else(|e| {
+                    tracing::info!("original years: MusicBrainz could not be asked now: {e:#}");
+                    0
+                });
+                // Nothing left of these: the works (0.10, `works`), in turn with them, so the two keep one pace.
+                match asked {
+                    0 => super::works::pass().await.unwrap_or_else(|e| {
+                        tracing::info!("works: MusicBrainz could not be asked now: {e:#}");
+                        0
+                    }),
+                    n => n,
+                }
+            })
+            .await;
             super::musicbrainz::PASS_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
             // Settings shows when it asks next (0.9.6).
             let wait = if asked == 0 { IDLE } else { Duration::ZERO };

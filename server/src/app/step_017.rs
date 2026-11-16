@@ -6,9 +6,11 @@
 //!   Discogs links; and in the catalogue, the release and release group each record's files name. Every row read is in the
 //!   report: carried, or in a list that says why not (no record, nothing found, not read, ...).
 //! - **What it writes**, the catalogue (`Catalogue::carry_references`): `"references"` rows; `records`' `counting` and
-//!   `counted_by_hand`, `checked_by_hand`; `confirmed`. No list: a match keeps its files' names and none of MusicBrainz's
-//!   titles, so a list is read when its record is opened. `kind` stays as 0.16 left it, none: nothing reads it, and a record
-//!   had shows the type its files' tags and the release-type rule give at every build.
+//!   `counted_by_hand` as chosen by hand, `checked_by_hand`; `confirmed`; `lists_to_read`. No list: a match keeps its files'
+//!   names and none of MusicBrainz's titles. So no count either: a record whose certain match's release it now holds waits
+//!   off Health's references item until the background asker reads the release's list behind any page's question
+//!   (`references::lists_pass`), and MusicBrainz counts only where it agrees with the files. `kind` stays as 0.16 left it,
+//!   none: nothing reads it, and a record had shows the type its files' tags and the release-type rule give at every build.
 //! - **In parts, each once, safe to repeat:** each part (`records::PARTS_017`) is a transaction of its own whose last write is
 //!   its mark (`meta`, holding its part of the report), so a part cut off wrote nothing and runs at the next start, the parts
 //!   before it done; a data folder that ran an earlier version runs the parts it lacks. The report goes into the user data's
@@ -51,7 +53,7 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
             parts = ran.join(", "),
             references,
             counted_by_hand = report["counted_by_hand"].as_u64().unwrap_or(0),
-            counted_by_a_match = report["counted_by_a_match"].as_u64().unwrap_or(0),
+            lists_to_read = report["lists_to_read"].as_u64().unwrap_or(0),
             checked_by_hand = report["checked_by_hand"].as_u64().unwrap_or(0),
             "0.17's step: the records' references moved into the catalogue"
         );
@@ -92,7 +94,7 @@ fn carry_of(kept: &crate::userdata::KeptFor017) -> Carry {
             continue;
         };
         match serde_json::from_str::<super::matching::Match>(json) {
-            Ok(m) => matches.push(CarriedMatch { album: album.clone(), at: *at, release: m.release.to_ascii_lowercase(), group: m.release_group.map(|g| g.to_ascii_lowercase()), certain: m.certain, tracks: m.tracks.len() }),
+            Ok(m) => matches.push(CarriedMatch { album: album.clone(), at: *at, release: m.release.to_ascii_lowercase(), group: m.release_group.map(|g| g.to_ascii_lowercase()), certain: m.certain }),
             Err(_) => note("album_matches: not read", album),
         }
     }
@@ -428,8 +430,58 @@ mod tests {
         (source.into(), kind.into(), value.into(), how.into(), confirmed)
     }
 
+    /// R3: a certain match from 0.16 counts nothing until its list is read and agrees with the files: the step claims no count,
+    /// and the record waits off Health's references item meanwhile. Read, Signal's list agrees and MusicBrainz counts; Undertow's
+    /// names each track "(Remastered)", which its files do not: nothing counts, and Health lists it. Ferry Lights' release is
+    /// no more (none read): nothing counts. Each waits no more.
+    #[tokio::test]
+    async fn a_certain_match_counts_nothing_until_its_list_agrees() {
+        let data = Data::new("waits");
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        let counting = |cat: &Catalogue, record: i64| cat.record(record).unwrap().unwrap().counting;
+        assert_eq!((counting(&cat, 7), counting(&cat, 12)), (None, None), "no count from 0.16's certain matches");
+        assert_eq!(cat.lists_to_read(100).unwrap(), [(1, mb(1)), (7, mb(7)), (10, mb(20)), (12, mb(30))], "Two Rooms' is a hand's, and Ferry Lights' younger copy holds none");
+        assert!(!cat.unreferenced().unwrap().contains(&12), "Undertow waits for its list");
+
+        let cat = std::sync::Arc::new(cat);
+        let titled = |titles: &[&str], ms: i64| -> Vec<crate::catalogue::identity::Listed> { titles.iter().map(|t| crate::catalogue::identity::Listed::of(t, ms)).collect() };
+        let undertow = ["Ebb Line", "Slack", "Undertow"];
+        let files: std::sync::Arc<dyn Fn(i64) -> anyhow::Result<Vec<crate::catalogue::identity::Listed>> + Send + Sync> = std::sync::Arc::new(move |record| {
+            Ok(match record {
+                7 => titled(&["Signal"], 180_000),
+                12 => titled(&undertow, 200_000),
+                _ => Vec::new(),
+            })
+        });
+        let list = |titles: Vec<String>, ms: i64| -> Vec<crate::catalogue::identity::RefTrack> {
+            titles.into_iter().zip(1..).map(|(title, position)| crate::catalogue::identity::RefTrack { disc: 1, position, title, length_ms: Some(ms), recording: None }).collect()
+        };
+        let read = |release: String| {
+            let read = if release == mb(7) {
+                Some(list(vec!["Signal".into()], 180_500))
+            } else if release == mb(30) {
+                Some(list(undertow.iter().map(|t| format!("{t} (Remastered)")).collect(), 200_000))
+            } else if release == mb(1) {
+                Some(list(["Slack Water", "Neap", "Spring Tide", "Ebb", "Flood", "Low Water"].iter().map(|t| t.to_string()).collect(), 190_000))
+            } else {
+                None
+            };
+            async move { Ok(read) }
+        };
+        assert_eq!(crate::app::references::read_lists(&cat, files.clone(), read, 100).await.unwrap(), 4);
+        assert_eq!(counting(&cat, 7).as_deref(), Some("musicbrainz"), "Signal's list agrees with its file");
+        assert_eq!(counting(&cat, 12), None, "Undertow's does not");
+        assert_eq!(counting(&cat, 10), None, "no list");
+        assert!(cat.unreferenced().unwrap().contains(&12), "on Health's item now");
+        assert!(cat.lists_to_read(100).unwrap().is_empty());
+        assert_eq!(crate::app::references::read_lists(&cat, files, |_| async { Ok(None) }, 100).await.unwrap(), 0, "nothing waits");
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert_eq!(report["lists_to_read"].as_u64(), Some(4), "{report}");
+    }
+
     /// What 0.14 chose stands after the step: a source chosen, a link pasted, checked by hand, a guess confirmed; a retired
-    /// record's too. A certain match counts where nothing was chosen. Who keeps one release two records' files name.
+    /// record's too. Nothing counts that was not chosen (R3). Who keeps one release two records' files name.
     #[test]
     fn a_chosen_source_survives_the_step() {
         let data = Data::new("chosen");
@@ -467,8 +519,8 @@ mod tests {
         // Partial Shore, retired: its choices all the same, and its master; no release (R1).
         assert_eq!(counted(6), (chosen("musicbrainz"), true, true, None));
         assert_eq!(refs(&cat, 6), [by("discogs", "master", "1000006", "search", true)], "Discogs confirmed in 0.14");
-        // Signal: nothing chosen, a certain match over its one track: MusicBrainz counts, worked out.
-        assert_eq!(counted(7), (chosen("musicbrainz"), false, false, None));
+        // Signal: nothing chosen, a certain match over its one track: nothing counts until its list is read (R3).
+        assert_eq!(counted(7), (None, false, false, None));
         assert!(cat.reference_tracks(7).unwrap().is_empty(), "no list: a match keeps none of MusicBrainz's titles");
 
         let report = &ud.migration_report().unwrap()[PART].1;
@@ -480,7 +532,8 @@ mod tests {
             "Two Rooms' hand, Ferry Lights' older copy, Undated's tag and its search"
         );
         assert_eq!(differed(report, "references: a retired record's"), [format!("al-6 musicbrainz:release:{}", mb(6)), "al-6 discogs:release:2000006".to_string()]);
-        assert_eq!((report["counted_by_hand"].as_u64(), report["counted_by_a_match"].as_u64(), report["checked_by_hand"].as_u64()), (Some(4), Some(1), Some(2)));
+        assert_eq!((report["counted_by_hand"].as_u64(), report["checked_by_hand"].as_u64()), (Some(4), Some(2)));
+        assert_eq!(report["counted_by_a_match"], serde_json::Value::Null, "the step claims no count (R3)");
         assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM record_references"), 5, "kept one version");
     }
 }

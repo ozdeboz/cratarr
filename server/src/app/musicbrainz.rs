@@ -2,7 +2,7 @@
 //! last reached it, the last time it could not, and how far the background pass (original years and release types) has
 //! come. Every question to MusicBrainz notes its answer (`reach`).
 
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -18,30 +18,81 @@ const APART: Duration = Duration::from_millis(1100);
 
 /// The questions to MusicBrainz in turn, each `APART` after the one before, whoever asked it (S10, 0100's map 1.11). A page, a
 /// pass and a Soulseek fetch asking at once share the one second between them, which a sleep of each caller's own after its
-/// question could not: it saw only its own. They go in the order they came. The wait is before a question, not after it, so
-/// one asked after a quiet while goes at once.
+/// question could not: it saw only its own. They go in the order they came, but for the background asker's (`behind`): one of
+/// those goes only when no other question waits, so a page asking meanwhile goes first, however long the pass. The wait is
+/// before a question, not after it, so one asked after a quiet while goes at once.
 struct Turn {
     /// When the next question may go; none before the first.
     next: tokio::sync::Mutex<Option<tokio::time::Instant>>,
+    /// Questions waiting that are not the background's.
+    waiting: AtomicUsize,
+    /// Told when none waits any more.
+    quiet: tokio::sync::Notify,
+}
+
+/// A question waiting that is not the background's, counted while it waits, a question dropped meanwhile too.
+struct Waiting<'t>(&'t Turn);
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if self.0.waiting.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.0.quiet.notify_waiters();
+        }
+    }
 }
 
 impl Turn {
     const fn new() -> Self {
-        Self { next: tokio::sync::Mutex::const_new(None) }
+        Self { next: tokio::sync::Mutex::const_new(None), waiting: AtomicUsize::new(0), quiet: tokio::sync::Notify::const_new() }
     }
 
-    /// Waits for a question's turn, and takes it.
-    async fn take(&self) {
-        let mut next = self.next.lock().await;
-        if let Some(at) = *next {
-            tokio::time::sleep_until(at).await;
+    /// Waits for a question's turn, and takes it. One `behind` waits while another waits, and holds no place in the line while
+    /// it sleeps: woken, it looks again, so a question that came meanwhile goes before it.
+    async fn take(&self, behind: bool) {
+        if !behind {
+            self.waiting.fetch_add(1, Ordering::SeqCst);
+            let _waiting = Waiting(self);
+            let mut next = self.next.lock().await;
+            if let Some(at) = *next {
+                tokio::time::sleep_until(at).await;
+            }
+            *next = Some(tokio::time::Instant::now() + APART);
+            return;
         }
-        *next = Some(tokio::time::Instant::now() + APART);
+        loop {
+            let quiet = self.quiet.notified();
+            if self.waiting.load(Ordering::SeqCst) > 0 {
+                quiet.await;
+                continue;
+            }
+            let mut next = self.next.lock().await;
+            match *next {
+                Some(at) if at > tokio::time::Instant::now() => {
+                    drop(next);
+                    tokio::time::sleep_until(at).await;
+                }
+                _ if self.waiting.load(Ordering::SeqCst) > 0 => {}
+                _ => {
+                    *next = Some(tokio::time::Instant::now() + APART);
+                    return;
+                }
+            }
+        }
     }
 }
 
 /// The server's one turn.
 static TURN: Turn = Turn::new();
+
+tokio::task_local! {
+    /// Set for the background asker's questions (`behind`).
+    static BEHIND: bool;
+}
+
+/// `f`'s questions to MusicBrainz go behind any other's (`Turn`): the background asker's passes, which no one waits for.
+pub async fn behind<F: std::future::Future>(f: F) -> F::Output {
+    BEHIND.scope(true, f).await
+}
 
 /// A question to MusicBrainz: refused while it is switched off (0.9.6), asked in the server's one turn (`Turn`), its answer
 /// noted. Every question to MusicBrainz goes through this, so no caller paces itself.
@@ -55,7 +106,7 @@ impl Asked for reqwest::RequestBuilder {
             if !super::switches::is_on(super::switches::MUSICBRAINZ) {
                 anyhow::bail!("MusicBrainz is switched off");
             }
-            TURN.take().await;
+            TURN.take(BEHIND.try_with(|b| *b).unwrap_or(false)).await;
             Ok(super::reach::Sent::sent(self).await?)
         }
     }
@@ -129,7 +180,7 @@ mod tests {
 
     /// When a question asked at `start` went.
     async fn went(turn: &Turn, start: Instant) -> Duration {
-        turn.take().await;
+        turn.take(false).await;
         Instant::now() - start
     }
 
@@ -147,8 +198,30 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_ask_after_a_quiet_while_goes_at_once() {
         let turn = Turn::new();
-        turn.take().await;
+        turn.take(false).await;
         tokio::time::sleep(Duration::from_secs(5)).await;
         assert_eq!(went(&turn, Instant::now()).await, Duration::ZERO);
+    }
+
+    /// R3: the background asker's question waits while a page's waits: the page goes first, though it came after it, and the
+    /// background's a turn later; with none waiting it goes at its turn as any other.
+    #[tokio::test(start_paused = true)]
+    async fn a_page_asks_before_the_background() {
+        let (turn, start) = (Turn::new(), Instant::now());
+        turn.take(false).await;
+        let background = async {
+            turn.take(true).await;
+            Instant::now() - start
+        };
+        let page = async {
+            tokio::task::yield_now().await;
+            went(&turn, start).await
+        };
+        let (background, page) = tokio::join!(background, page);
+        assert_eq!((page, background), (APART, APART * 2));
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let quiet = Instant::now();
+        turn.take(true).await;
+        assert_eq!(Instant::now() - quiet, Duration::ZERO);
     }
 }

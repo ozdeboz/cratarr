@@ -159,8 +159,8 @@ fn files_of(served: &crate::serve::Serve, album: &str) -> Result<Vec<Listed>> {
 }
 
 /// The source that counts for a record (`identity::counting`), from the lists kept and its files, and kept, unless chosen by
-/// hand. One counted before any list of it was read (0.17's step, by a certain match) stands until its list is read or another
-/// source's agrees. Its counting now. Blocking.
+/// hand. No list, no count: a certain match from 0.16 counts once its list is read and agrees (`read_lists`). Its counting
+/// now. Blocking.
 pub fn work_out_in(cat: &Catalogue, record: i64, files: &[Listed]) -> Result<Option<String>> {
     let Some(row) = cat.record(record)? else { return Ok(None) };
     if row.counted_by_hand {
@@ -168,13 +168,71 @@ pub fn work_out_in(cat: &Catalogue, record: i64, files: &[Listed]) -> Result<Opt
     }
     let kept = cat.reference_tracks(record)?;
     let lists: Vec<(&str, &[RefTrack])> = kept.iter().map(|(s, l)| (s.as_str(), l.as_slice())).filter(|(_, l)| !l.is_empty()).collect();
-    let worked = identity::counting(None, &lists, files);
-    let unread = row.counting.as_deref().is_some_and(|c| !lists.iter().any(|(s, _)| *s == c));
-    let counting = if worked.is_none() && unread { row.counting.clone() } else { worked };
+    let counting = identity::counting(None, &lists, files);
     if counting != row.counting {
         cat.set_counting(record, counting.as_deref(), false)?;
     }
     Ok(counting)
+}
+
+/// The lists of records waiting since 0.17's step (`Catalogue::lists_to_read`, 0.16's certain matches), up to `n`, the oldest
+/// first: each release's list read (`read`; none, MusicBrainz has no such release), kept where the record still holds the
+/// release, and held against its files (`files`) by `work_out_in`, so MusicBrainz counts only where the list agrees
+/// (`identity::agrees`). Either way the record waits no more: on Health's references item where nothing speaks for it. A
+/// question that fails stops the pass there; the rest wait for the next. How many were read.
+pub async fn read_lists<R, F>(cat: &Arc<Catalogue>, files: Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync>, read: R, n: usize) -> Result<usize>
+where
+    R: Fn(String) -> F,
+    F: std::future::Future<Output = Result<Option<Vec<RefTrack>>>>,
+{
+    let waiting = {
+        let cat = cat.clone();
+        tokio::task::spawn_blocking(move || cat.lists_to_read(n)).await??
+    };
+    let mut read_n = 0;
+    for (record, release) in waiting {
+        let list = match read(release.clone()).await {
+            Ok(list) => list,
+            Err(e) => {
+                tracing::info!(target: "library", "the lists 0.17's step left: stopped after {read_n}: {e:#}");
+                break;
+            }
+        };
+        read_n += 1;
+        let (cat, files) = (cat.clone(), files.clone());
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            if let Some(list) = list.filter(|l| !l.is_empty())
+                && cat.subject_of(&Ref::new("musicbrainz", "release", &release))? == [ids::record(record)]
+            {
+                cat.set_reference_tracks(record, "musicbrainz", &list)?;
+                work_out_in(&cat, record, &files(record)?)?;
+            }
+            cat.list_read(record)
+        })
+        .await??;
+    }
+    Ok(read_n)
+}
+
+/// How many lists `lists_pass` reads in one pass.
+const LISTS: usize = 200;
+
+/// The background asker's pass over the lists 0.17's step left to read (`read_lists`), each a question to MusicBrainz on its
+/// turn, behind a page's (`musicbrainz::behind`, which the asker sets), every other turn at most. How many were read.
+pub async fn lists_pass() -> Result<usize> {
+    let Some(served) = crate::serve::instance() else { return Ok(0) };
+    let cat = served.catalogue().clone();
+    let files: Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync> = Arc::new(move |record| files_of(&served, &ids::record(record)));
+    let read = |release: String| async move {
+        let read = match super::track_fetch::release_by_id(&release).await {
+            Ok(v) => Ok(Some(list_of_release(&v))),
+            Err(e) if e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status) == Some(reqwest::StatusCode::NOT_FOUND) => Ok(None),
+            Err(e) => Err(e),
+        };
+        tokio::time::sleep(std::time::Duration::from_secs(super::musicbrainz::PACE_SECS)).await;
+        read
+    };
+    read_lists(&cat, files, read, LISTS).await
 }
 
 /// `work_out_in` for an album of Cratarr's own library. Blocking.
@@ -675,19 +733,6 @@ mod tests {
         cat.set_reference_tracks(record, "musicbrainz", &fits).unwrap();
         work_out_in(&cat, record, &tracks).unwrap();
         assert_eq!(counting().as_deref(), Some("discogs"), "chosen by hand, whatever arrives");
-    }
-
-    /// A count from before any list of its source (0.17's step, by a certain match) stands until that list is read.
-    #[test]
-    fn a_count_from_before_its_list_stands_until_its_list_is_read() {
-        let cat = Catalogue::open(None, Vec::new()).unwrap();
-        let (record, _) = had(&cat, "Tide Tables", 2);
-        let tracks = files(&[("Slack Water", 200_000), ("Neap", 180_000)]);
-        cat.set_counting(record, Some("musicbrainz"), false).unwrap();
-        cat.set_reference_tracks(record, "discogs", &list(&[("Slack Water", None)])).unwrap();
-        assert_eq!(work_out_in(&cat, record, &tracks).unwrap().as_deref(), Some("musicbrainz"), "another's list that does not fit");
-        cat.set_reference_tracks(record, "musicbrainz", &list(&[("Other", Some(1_000)), ("Neap", Some(180_000))])).unwrap();
-        assert_eq!(work_out_in(&cat, record, &tracks).unwrap(), None, "its own list read, and it does not fit");
     }
 
     /// Health's item: what 0.16 left off it stays off, in one query. A guess confirmed and checked by hand, the record's.

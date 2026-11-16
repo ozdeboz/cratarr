@@ -83,7 +83,8 @@ CREATE TABLE index_floor (one INTEGER PRIMARY KEY CHECK (one = 1), rev INTEGER N
 
 -- The rows: made up (0093), as 0.16.2's first start and the passes after it left them. 0.16 wrote no record's `kind` or
 -- `counting`. Records 1 to 5 are had; 6 is retired, its tracks retired with it; 7 came after the first start; 8 is Partial
--- Shore come back; 9 a second copy of Two Rooms; 10 and 11 two copies of one release, the younger's key the later.
+-- Shore come back; 9 a second copy of Two Rooms; 10 and 11 two copies of one release, the younger's key the later; 12 a record
+-- whose certain match is a remaster's.
 INSERT INTO records (id, born, retired_at, title, artist, year, kind, counting) VALUES
   (1, 1760000000, NULL, 'Tide Tables', 'Glass Harbour', 2012, NULL, NULL),
   (2, 1760000100, NULL, 'Two Rooms', 'Noor Field', 2019, NULL, NULL),
@@ -95,7 +96,8 @@ INSERT INTO records (id, born, retired_at, title, artist, year, kind, counting) 
   (8, 1794600000, NULL, 'Partial Shore', 'Glass Harbour', 2011, NULL, NULL),
   (9, 1794600100, NULL, 'Two Rooms', 'Noor Field', 2019, NULL, NULL),
   (10, 1794700000, NULL, 'Ferry Lights', 'Kite Theory', 2016, NULL, NULL),
-  (11, 1794700100, NULL, 'Ferry Lights', 'Kite Theory', 2016, NULL, NULL);
+  (11, 1794700100, NULL, 'Ferry Lights', 'Kite Theory', 2016, NULL, NULL),
+  (12, 1794800000, NULL, 'Undertow', 'Orbit Lane', 2018, NULL, NULL);
 INSERT INTO tracks (id, born, retired_at, record, disc, number) VALUES
   (1, 1760000000, NULL, 1, 1, 1), (2, 1760000000, NULL, 1, 1, 2), (3, 1760000000, NULL, 1, 1, 3),
   (4, 1760000000, NULL, 1, 1, 4), (5, 1760000000, NULL, 1, 1, 5), (6, 1760000000, NULL, 1, 1, 6),
@@ -108,7 +110,8 @@ INSERT INTO tracks (id, born, retired_at, record, disc, number) VALUES
   (29, 1794600100, NULL, 9, 1, 1), (30, 1794600100, NULL, 9, 1, 2), (31, 1794600100, NULL, 9, 1, 3),
   (32, 1794600100, NULL, 9, 2, 1), (33, 1794600100, NULL, 9, 2, 2), (34, 1794600100, NULL, 9, 2, 3),
   (35, 1794600000, NULL, 8, 1, 1), (36, 1794600000, NULL, 8, 1, 2), (37, 1794600000, NULL, 8, 1, 5),
-  (38, 1794700000, NULL, 10, 1, 1), (39, 1794700000, NULL, 10, 1, 2), (40, 1794700100, NULL, 11, 1, 1), (41, 1794700100, NULL, 11, 1, 2);
+  (38, 1794700000, NULL, 10, 1, 1), (39, 1794700000, NULL, 10, 1, 2), (40, 1794700100, NULL, 11, 1, 1), (41, 1794700100, NULL, 11, 1, 2),
+  (42, 1794800000, NULL, 12, 1, 1), (43, 1794800000, NULL, 12, 1, 2), (44, 1794800000, NULL, 12, 1, 3);
 -- A retired track keeps its record and says what it was, as `REMEMBER` writes it.
 INSERT INTO tracks (id, born, retired_at, record, disc, number, was_rel, was_ms, was_title, was_artist, was_album) VALUES
   (25, 1760000500, 1794500000, 6, 1, 1, 'Glass Harbour/Partial Shore (2011)/01 Sandbar.flac', 201000, 'Sandbar', 'Glass Harbour', 'Partial Shore'),
