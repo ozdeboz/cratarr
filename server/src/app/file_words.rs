@@ -168,7 +168,7 @@ pub async fn apply(app: &Arc<super::App>, plan: &str, albums: Vec<String>, stamp
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
     let name = format!("{PREFIX}{}", kind.name());
-    anyhow::ensure!(!file_runs::busy(&name), "Already writing");
+    anyhow::ensure!(!file_runs::busy(&app.journal, &name), "Already writing");
     let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
         if !super::words::catalogue::writes(&served, kind.name()) {
             bail!("Writing {}s into the files is switched off", kind.name());

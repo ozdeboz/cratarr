@@ -478,7 +478,7 @@ impl IncomingService {
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
-        let run = crate::app::file_runs::track("replace", format!("Replaced: {}", at.album.title));
+        let run = crate::app::file_runs::track(&self.journal, "replace", format!("Replaced: {}", at.album.title));
         let done = self.replacing(at, into, year, converted, job).await;
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(at, into)),

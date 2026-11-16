@@ -1160,7 +1160,7 @@ impl IncomingService {
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
         let (what, title) = self.adopted_named(&at.source, at.dir.folder, target, &at.album.title);
-        let run = super::file_runs::track(what, title);
+        let run = super::file_runs::track(&self.journal, what, title);
         let done = self.keep_moving(at, target, year, converted, job).await;
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(at, target)),

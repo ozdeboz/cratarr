@@ -280,7 +280,12 @@ pub struct Journal {
     tell_undone: tokio::sync::broadcast::Sender<EventId>,
     /// Runs still writing, by id (`run_writing`).
     writing: Mutex<Vec<EventId>>,
+    /// Which journal this is in the process (`key`).
+    key: u64,
 }
+
+/// The next journal's key: one a journal opened, never twice in a process.
+static NEXT_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Journal {
     /// `file`: the journal; `None` keeps it in memory (no data folder).
@@ -297,7 +302,14 @@ impl Journal {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
             }
         }
-        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default() })
+        let key = NEXT_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default(), key })
+    }
+
+    /// Which journal this is among those open in the process: what keeps one journal's runs from another's where both
+    /// number them from 1 (`file_runs`' live runs). A server opens one; its tests open many.
+    pub fn key(&self) -> u64 {
+        self.key
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {

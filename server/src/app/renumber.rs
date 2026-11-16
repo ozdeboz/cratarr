@@ -588,7 +588,7 @@ pub async fn plan(account: &str, album: &str) -> Result<super::file_runs::PlanVi
 /// files changed since (its stamp).
 pub async fn apply_plan(app: &std::sync::Arc<super::App>, account: &str, album: &str, stamps: Option<std::collections::HashMap<String, String>>) -> Result<super::file_runs::Status> {
     let kind = format!("{KIND}:{album}");
-    anyhow::ensure!(!super::file_runs::busy(&kind), "Already writing");
+    anyhow::ensure!(!super::file_runs::busy(&app.journal, &kind), "Already writing");
     let preview = looked(account, album)?.context("The release is still being looked up")?;
     let (a, served) = (album.to_string(), crate::serve::instance().context("Cratarr's own library is not open")?);
     let p = tokio::task::spawn_blocking(move || -> Result<super::file_runs::Proposal> { Ok(super::file_runs::ticked(proposal(&served, &a, &preview)?, &[a.clone()], stamps.as_ref())) }).await??;

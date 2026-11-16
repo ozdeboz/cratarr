@@ -188,8 +188,9 @@ const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The one lock over every change to the library's files: a second run waits. Taken by `turn`.
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-/// Runs waiting or writing, by id.
-static LIVE_RUNS: Mutex<Option<HashMap<String, Status>>> = Mutex::new(None);
+/// Runs waiting or writing, by their journal (`Journal::key`) and id: a kept run's id is its journal's number for it, and two
+/// journals number theirs alike (in one process, tests open many). An Undo going in one is no run of another's.
+static LIVE_RUNS: Mutex<Option<HashMap<(u64, String), Status>>> = Mutex::new(None);
 /// Records' states from runs (waiting, writing, written, changed), by album.
 static STATES: Mutex<Option<HashMap<String, FilesState>>> = Mutex::new(None);
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -204,13 +205,14 @@ pub fn subscribe() -> tokio::sync::broadcast::Receiver<Status> {
     channel().subscribe()
 }
 
-fn tell(s: &Status) {
+/// A run's status as it goes, `journal` the key of the journal it is kept in.
+fn tell(journal: u64, s: &Status) {
     let mut live = LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner());
     let live = live.get_or_insert_with(HashMap::new);
     if s.state == "done" {
-        live.remove(&s.id);
+        live.remove(&(journal, s.id.clone()));
     } else {
-        live.insert(s.id.clone(), s.clone());
+        live.insert((journal, s.id.clone()), s.clone());
     }
     let _ = channel().send(s.clone());
 }
@@ -227,8 +229,9 @@ pub fn state_of(album: &str, now: i64) -> Option<FilesState> {
 }
 
 /// Whether a writer has a run waiting or writing.
-pub fn busy(what: &str) -> bool {
-    LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|l| l.values().any(|s| s.what == what && s.state != "done"))
+pub fn busy(journal: &Journal, what: &str) -> bool {
+    let key = journal.key();
+    LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|l| l.iter().any(|((j, _), s)| *j == key && s.what == what && s.state != "done"))
 }
 
 /// A field's values as compared: each item split where several are kept in one (ID3v2's NUL, a "; "), trimmed, a
@@ -657,13 +660,13 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
     for (album, _) in &albums {
         set_state(album, FilesState { state: "waiting".into(), done: None, of: None, run: Some(id.clone()), at: None });
     }
-    tell(&status);
+    tell(app.journal.key(), &status);
     let (app, first) = (app.clone(), status.clone());
     let account = crate::serve::who::current().map(|w| w.user);
     tokio::spawn(async move {
         let _turn = turn(&app.journal).await;
         status.state = "writing";
-        tell(&status);
+        tell(app.journal.key(), &status);
         let at = super::moment::now_secs();
         // Shared with the blocking pool: a file written whole goes into it from there.
         let entry = Arc::new(Mutex::new(RunEntry::begin(app.journal.clone(), &p, at, account.as_deref(), i64::from(app.incoming.trash_days()) * 86_400)));
@@ -717,7 +720,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
                 },
             );
             status.done += 1;
-            tell(&status);
+            tell(app.journal.key(), &status);
             tokio::time::sleep(PACE).await;
         }
         let kept = entry.lock().unwrap_or_else(|e| e.into_inner()).end();
@@ -731,10 +734,10 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         status.state = "done";
         status.at = Some(at);
         tracing::info!(target: "library", what = %status.what, albums = status.of, failed = status.failed.len(), "files changed");
-        tell(&status);
+        tell(app.journal.key(), &status);
         if let Some(kept) = &status.undo {
             // Its id from now on: the kept run's.
-            LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).remove(&id);
+            LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).remove(&(app.journal.key(), id.clone()));
             let _ = channel().send(Status { id: kept.clone(), ..status.clone() });
         }
     });
@@ -782,7 +785,8 @@ fn kept_status(id: i64, at: i64, run: &FileRun, undone: bool) -> Status {
 
 /// Every run since `since`: those going, then those kept and the album actions, newest first.
 pub fn runs(app: &super::App, since: i64) -> Result<Vec<Status>> {
-    let mut out: Vec<Status> = LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.values().cloned().collect()).unwrap_or_default();
+    let key = app.journal.key();
+    let mut out: Vec<Status> = LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.iter().filter(|((j, _), _)| *j == key).map(|(_, s)| s.clone()).collect()).unwrap_or_default();
     out.retain(|s| s.state != "done");
     let mut kept: Vec<Status> = app.journal.file_runs_since(since)?.into_iter().map(|(id, at, run, undone)| kept_status(id, at, &run, undone)).collect();
     kept.extend(app.journal.album_events_since(since)?.iter().filter(|(id, ..)| !out.iter().any(|s| s.id == format!("{MOVE}{id}"))).map(|(id, at, e, undone)| moved_status(app, *id, *at, e, *undone)));
@@ -811,10 +815,12 @@ fn moved_status(app: &super::App, id: i64, at: i64, e: &crate::journal::Event, u
 /// with its Undo; or failed, with why.
 pub struct Tracked {
     status: Status,
+    /// The journal its Undo is kept in (`Journal::key`).
+    journal: u64,
 }
 
-/// An album action starting (`what`: keep, move, replace; `title` as the list names it): told moving.
-pub fn track(what: &str, title: String) -> Tracked {
+/// An album action starting (`what`: keep, move, replace; `title` as the list names it), kept in `journal`: told moving.
+pub fn track(journal: &Journal, what: &str, title: String) -> Tracked {
     let status = Status {
         id: format!("{LIVE}{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
         what: what.into(),
@@ -828,8 +834,8 @@ pub fn track(what: &str, title: String) -> Tracked {
         undone: false,
         albums: 1,
     };
-    tell(&status);
-    Tracked { status }
+    tell(journal.key(), &status);
+    Tracked { status, journal: journal.key() }
 }
 
 impl Tracked {
@@ -848,7 +854,7 @@ impl Tracked {
     {
         self.status.state = "adding";
         self.status.done = 1;
-        tell(&self.status);
+        tell(self.journal, &self.status);
         tokio::spawn(async move {
             let started = std::time::Instant::now();
             while started.elapsed() < ADDING_MOST && !added().await {
@@ -862,7 +868,7 @@ impl Tracked {
         self.status.state = "done";
         self.status.at = Some(super::moment::now_secs());
         self.status.undo = undo.map(|id| format!("{MOVE}{id}"));
-        tell(&self.status);
+        tell(self.journal, &self.status);
         // Its id from now on: the journal's, as the list reads it.
         if let Some(kept) = self.status.undo.clone() {
             let _ = channel().send(Status { id: kept, ..self.status.clone() });
@@ -937,7 +943,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
         let id: i64 = key.parse().context("Not an album action")?;
         let entry = app.journal.get(id)?.context("That is no longer kept")?;
         let status = moved_status(app, id, entry.at, &entry.event, true);
-        tell(&status);
+        tell(app.journal.key(), &status);
         return Ok(status);
     }
     let id = kept_id(token)?;
@@ -961,7 +967,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
     for album in &todo {
         set_state(album, FilesState { state: "waiting".into(), done: None, of: None, run: Some(token.to_string()), at: None });
     }
-    tell(&status);
+    tell(app.journal.key(), &status);
     let (app, token, first) = (app.clone(), token.to_string(), status.clone());
     tokio::spawn(async move {
         let _turn = turn(&app.journal).await;
@@ -969,7 +975,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
         // wrote. Its files by their place in this reading, so an album's are found here and not before.
         let Ok(Some((mut run, at, _))) = app.journal.file_run(id) else { return };
         status.state = "writing";
-        tell(&status);
+        tell(app.journal.key(), &status);
         for album in todo {
             let files: Vec<(usize, FileWrite)> = run.files.iter().enumerate().filter(|(_, f)| f.album == album && !f.undone).map(|(i, f)| (i, f.clone())).collect();
             let of = files.len();
@@ -1018,14 +1024,14 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
                 tracing::warn!(target: "library", reason = %format!("{e:#}"), "an undo's progress not kept");
             }
             status.done += 1;
-            tell(&status);
+            tell(app.journal.key(), &status);
             tokio::time::sleep(PACE).await;
         }
         let all = run.files.iter().all(|f| f.undone);
         let failed = std::mem::take(&mut status.failed);
         status = Status { failed, ..kept_status(id, at, &run, all) };
         tracing::info!(target: "library", what = %status.what, undone = all, failed = status.failed.len(), "file changes undone");
-        tell(&status);
+        tell(app.journal.key(), &status);
     });
     Ok(first)
 }
@@ -1381,6 +1387,24 @@ mod tests {
         assert_eq!(cut.failed.iter().map(|f| f.why.as_str()).collect::<Vec<_>>(), [CUT]);
     }
 
+    /// Two journals number their runs alike, each from 1: an Undo going in one is no run of the other's (the gate of
+    /// 2026-11-16 saw another test's Undo on this list above). The one lock holds the Undo waiting while both lists are read.
+    #[tokio::test]
+    async fn an_undo_under_way_is_on_its_own_journals_list_alone() {
+        let (one, two) = (app("undo-own-one").await, app("undo-own-two").await);
+        let p = proposal(vec![tag_write("a", Path::new("/m/a.flac"), &["ep"])]);
+        let now = super::super::moment::now_secs();
+        let id = RunEntry::begin(one.journal.clone(), &p, now, None, 1000).id.unwrap();
+        one.journal.run_ended(id);
+        let held = turn(&one.journal).await;
+        assert_eq!(undo(&one, &format!("{RUN}{id}"), None).await.unwrap().state, "waiting");
+        assert_eq!(RunEntry::begin(two.journal.clone(), &p, now, None, 1000).id, Some(id), "numbered alike");
+        assert!(runs(&two, 0).unwrap().iter().all(|s| s.id != format!("{RUN}{id}")), "the other journal's Undo is none of this one's runs");
+        assert!(runs(&one, 0).unwrap().iter().any(|s| s.id == format!("{RUN}{id}") && s.state == "waiting"), "its own, waiting its turn");
+        assert!(busy(&one.journal, "types") && !busy(&two.journal, "types"), "busy, as its own list says");
+        drop(held);
+    }
+
     /// Inside the second before the next save, so the entry still says the first album was not finished with.
     #[tokio::test]
     async fn a_run_cut_off_says_on_its_page_what_was_written_whatever_its_entry_got_to() {
@@ -1454,7 +1478,7 @@ mod tests {
         let cut = cut_after_the_first(&app.journal, &p);
 
         start(&app, Proposal { kind: "settle-later".into(), ..proposal(vec![tag_write("b", &two, &["ep"])]) });
-        until("the second run", || !busy("settle-later")).await;
+        until("the second run", || !busy(&app.journal, "settle-later")).await;
         assert!(ep(&one) && ep(&two));
         let later = app.journal.file_runs_since(0).unwrap().into_iter().map(|(id, ..)| id).find(|id| *id != cut).unwrap();
 
