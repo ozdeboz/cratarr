@@ -282,6 +282,9 @@ async fn connected(lidarr: bool) -> Vec<&'static str> {
 /// What a request handed to Soulseek says (`hand`).
 pub const SOULSEEK_SEARCHES: &str = "Soulseek searches for it";
 
+/// What a request of a record the library has says, handed to no fetcher (W3).
+pub const ALREADY_HAD: &str = "Already in the library";
+
 /// An approved request handed to every fetcher connected (decision 0099's amendment), as its record is named and referenced
 /// (`shown`, C51b): Lidarr told to want it; Soulseek woken to take it in (it reads the approved Requests itself, each judged
 /// by its record's list; one with none says so on its row). What each said (or why it could not), kept on the request. A
@@ -295,7 +298,16 @@ async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
 
 /// [`hand`] to Lidarr where it is connected (the tests' stands in for it), and to Soulseek where it is.
 async fn hand_to(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r: &Request) -> String {
-    let r = shown(r.clone(), named(serve, std::slice::from_ref(r)).await.pop().flatten().as_ref());
+    let of = named(serve, std::slice::from_ref(r)).await.pop().flatten();
+    let r = shown(r.clone(), of.as_ref());
+    // Its record had (W3, F4): no fetcher's to fetch, so neither is asked (Lidarr would fetch it again where its own folder no
+    // longer holds it, and Soulseek takes no item of it, R26). It reads as had; C52 makes the asker's copy of it (OQ3).
+    if of.as_ref().is_some_and(RecordOf::had) {
+        if let Err(e) = serve.userdata.set_request_fetched(r.id, ALREADY_HAD) {
+            tracing::warn!("request {}: what the fetchers were not told was not kept: {e:#}", r.id);
+        }
+        return ALREADY_HAD.to_string();
+    }
     let mut said = Vec::new();
     if let Some(f) = lidarr {
         said.push(match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
@@ -947,6 +959,24 @@ mod tests {
         assert_eq!((row.artist.as_str(), row.title.as_str()), ("Tape Club", "Harbour Songs"));
         let label = serve.catalogue().label_for("Paper Lantern").unwrap();
         assert!(serve.catalogue().label_records(label).unwrap().iter().any(|(r, _)| *r == record), "the account its label");
+    }
+
+    /// W3 (F4): a Want of an album the library has is handed to no fetcher: Lidarr is not asked (it would fetch it again where its
+    /// folder no longer holds it), and nothing says Soulseek searches for it. It reads as had.
+    #[tokio::test]
+    async fn a_want_of_a_had_album_is_not_handed_to_lidarr() {
+        let serve = served();
+        let owned = serve.catalogue().record_for_tests("Harbour Lights", 2);
+        let mut r = asked_for(owned);
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let lidarr = Wanting::default();
+        assert_eq!(hand_to(Some(&lidarr), true, &serve, &r).await, ALREADY_HAD);
+        assert!(lidarr.0.lock().unwrap().is_empty(), "Lidarr not asked");
+        let wanted = record_of_album(serve.catalogue(), None, "Glass Harbour", "Quiet Lanes", None, None).unwrap();
+        let mut other = asked_for(wanted);
+        other.id = serve.userdata.add_request(&other).unwrap();
+        hand_to(Some(&lidarr), false, &serve, &other).await;
+        assert_eq!(lidarr.0.lock().unwrap().len(), 1, "one not had is handed over");
     }
 
     /// W2 (B2): a Want's release group and Bandcamp page are never written onto an owned record found by its names: the had rule
