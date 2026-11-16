@@ -443,7 +443,8 @@ pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], rec
 /// album artists in order (`record_artists`), each artist's MusicBrainz id as a `files` reference where the files give one
 /// id for each, and the labels with their catalogue numbers (`record_labels`). A record of several copies goes by its
 /// first-ranked copy (`first_ranked`, R8). What a record holds already is left alone, so a pass over a library as it was writes
-/// nothing; what its files say now takes the place of what they said before.
+/// nothing; what its files say now takes the place of what they said before: its title and artist too (R14, F6), as a request's
+/// record and the had rule read them.
 pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>], at: i64) -> Result<()> {
     let first = first_ranked(albums, records);
     let names: std::collections::BTreeSet<String> = first.values().flat_map(|a| a.artists.iter().cloned()).collect();
@@ -462,6 +463,7 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         out
     };
     for (record, a) in first {
+        tx.prepare_cached("UPDATE records SET title = ?2, artist = ?3 WHERE id = ?1 AND ?2 <> '' AND (title IS NOT ?2 OR artist IS NOT ?3)")?.execute(params![record, a.title, a.artist])?;
         let mut ids: Vec<i64> = Vec::new();
         for name in &a.artists {
             if let Some(id) = artists.get(&ids::artist_key(name))
@@ -608,6 +610,17 @@ fn refs_in(db: &Connection, subject: &str) -> Result<Vec<(String, String, String
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// Whether two records' references say they are two (`IDENTIFYING`): both hold one source's same kind, with no value in common.
+fn contradicts(mine: &[(String, String, String)], theirs: &[(String, String, String)]) -> bool {
+    fn values<'r>(refs: &'r [(String, String, String)], source: &str, kind: &str) -> Vec<&'r str> {
+        refs.iter().filter(|(s, k, _)| s == source && k == kind).map(|(.., v)| v.as_str()).collect()
+    }
+    IDENTIFYING.iter().any(|(source, kind)| {
+        let (a, b) = (values(mine, source, kind), values(theirs, source, kind));
+        !a.is_empty() && !b.is_empty() && !a.iter().any(|v| b.contains(v))
+    })
+}
+
 /// Which record holds a record's files (R13, the one rule for "had", C53a's too), `record` a merge's end: the record itself
 /// where it holds live tracks; else the oldest live, had record that holds its MusicBrainz release or release group (an album
 /// that arrived as a record of its own, its group known since by its tags, a match or Lidarr); else the oldest live, had record
@@ -647,15 +660,8 @@ fn holder_in(db: &Connection, record: i64, names: &mut HadNames) -> Result<Optio
         }
         *names = Some(by_name);
     }
-    let values = |refs: &[(String, String, String)], source: &str, kind: &str| refs.iter().filter(|(s, k, _)| s == source && k == kind).map(|(.., v)| v.clone()).collect::<Vec<_>>();
-    let contradicts = |other: &[(String, String, String)]| {
-        IDENTIFYING.iter().any(|(source, kind)| {
-            let (mine, theirs) = (values(&own, source, kind), values(other, source, kind));
-            !mine.is_empty() && !theirs.is_empty() && !mine.iter().any(|v| theirs.contains(v))
-        })
-    };
     for &id in names.as_ref().and_then(|n| n.get(&key)).map(Vec::as_slice).unwrap_or_default() {
-        if id != record && !contradicts(&refs_in(db, &ids::record(id))?) {
+        if id != record && !contradicts(&own, &refs_in(db, &ids::record(id))?) {
             return Ok(Some(id));
         }
     }
@@ -1021,7 +1027,8 @@ pub struct Wanted {
 }
 
 /// The record an album asked for is, in the caller's transaction (C49a): the record its release group names (`group_record_in`:
-/// the oldest live one, had first; a retired one only where no live record holds it, OQ16), else the oldest live record had of its names,
+/// the oldest live one, had first; a retired one only where no live record holds it, OQ16), else the live record had of its names
+/// as the import matcher finds an album (R14), else, with no group, the oldest live record not had of its names nothing contradicts,
 /// else a new record not had, credited to its artist (`listing`). Its label, where a label named it, credited too (`listing`);
 /// its Bandcamp album page, where it has no release group, a reference (`search`), so Soulseek can judge by Bandcamp's list
 /// (C51b). Its id, and whether it was made now.
@@ -1032,19 +1039,52 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         Some(g) => group_record_in(tx, g)?,
         None => None,
     };
+    // Had by its names (R14, F6), as the import matcher finds an album (`Matcher::find_album`): by title and artist, then loosely
+    // (brackets, a leading "The", accents and "&" aside), then by a title only one album has; of one name, the oldest.
     let by_names = || -> Result<Option<i64>> {
-        let (artist, title) = (fold(&w.artist), fold(&w.title));
+        if fold(&w.title).is_empty() {
+            return Ok(None);
+        }
         let mut st = tx.prepare_cached(
             "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
              WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
+             ORDER BY r.id DESC",
+        )?;
+        let mut had = crate::app::import::Matcher::default();
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+            let (id, artist, title) = row?;
+            had.add_album(&id.to_string(), &title, Some(&artist));
+        }
+        Ok(had.find_album(&w.title, Some(&w.artist)).and_then(|id| id.parse().ok()))
+    };
+    // With no release group, the oldest live record not had of its names (folded) that nothing contradicts (R14, F3): what
+    // another request of the album made, so two requests of one album share its record, at the step and after.
+    let not_had_by_names = || -> Result<Option<i64>> {
+        let (artist, title) = (fold(&w.artist), fold(&w.title));
+        if title.is_empty() {
+            return Ok(None);
+        }
+        let mut st = tx.prepare_cached(
+            "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
+             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)
              ORDER BY r.id",
         )?;
         let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-        Ok(rows.into_iter().find(|(_, a, t)| !title.is_empty() && fold(a) == artist && fold(t) == title).map(|(id, ..)| id))
+        let mine: Vec<(String, String, String)> = w.page.iter().map(|p| ("bandcamp".to_string(), "album".to_string(), p.clone())).collect();
+        for (id, ..) in rows.into_iter().filter(|(_, a, t)| fold(a) == artist && fold(t) == title) {
+            if !contradicts(&mine, &refs_in(tx, &ids::record(id))?) {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
     };
     let found = match by_group {
         Some(record) => Some(record),
-        None => by_names()?,
+        None => match by_names()? {
+            Some(record) => Some(record),
+            None if group.is_none() => not_had_by_names()?,
+            None => None,
+        },
     };
     let (record, made) = match found {
         Some(record) => (record, false),
@@ -1260,6 +1300,8 @@ struct Carrying<'t> {
     tables: Vec<(&'static str, u64, u64)>,
     /// What the report counts beside its lists.
     counts: Vec<(&'static str, u64)>,
+    /// What the report lists whole beside its samples (the requests part's).
+    lists: Vec<(&'static str, Vec<String>)>,
 }
 
 impl Carrying<'_> {
@@ -1537,6 +1579,7 @@ impl Carrying<'_> {
         let pages: std::collections::HashMap<&str, &str> = c.pages.iter().map(|p| (p.key.as_str(), p.page.as_str())).collect();
         let mut given: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         let (mut made, mut paged) = (0, 0);
+        let mut made_for = Vec::new();
         for r in &c.requests {
             let named = crate::bandcamp::label_release(&r.artist, &r.album, None);
             let page = r.group.is_none().then(|| pages.get(r.key.as_str()).map(|p| p.to_string())).flatten();
@@ -1544,11 +1587,16 @@ impl Carrying<'_> {
             let w = Wanted { group: r.group.clone(), artist: named.artist, title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
             let (record, new) = request_record_in(self.tx, &w, r.at)?;
             made += u64::from(new);
+            if new {
+                made_for.push(format!("{} {} - {}", r.id, w.artist, w.title));
+            }
             given.insert(r.id, record);
             self.moved += 1;
         }
         self.tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![REQUEST_RECORDS, serde_json::to_string(&given)?])?;
         self.counts = vec![("records_made_for_requests", made), ("pages_for_requests", paged)];
+        // Each, whole, for a rehearsal to check (R14, F6): a request given a record not had where 0.16 judged it by names.
+        self.lists = vec![("records_made_for", made_for)];
         Ok(())
     }
 
@@ -1596,7 +1644,7 @@ fn named_ref(record: i64, r: &Ref) -> String {
 fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_json::Value> {
     let count = || -> Result<u64> { Ok(tx.query_row("SELECT count(*) FROM \"references\"", [], |r| r.get::<_, i64>(0))? as u64) };
     let before = count()?;
-    let mut w = Carrying { tx, refused: Vec::new(), retired: Vec::new(), taken: Vec::new(), unmatched: std::collections::BTreeMap::new(), moved: 0, tables: Vec::new(), counts: Vec::new() };
+    let mut w = Carrying { tx, refused: Vec::new(), retired: Vec::new(), taken: Vec::new(), unmatched: std::collections::BTreeMap::new(), moved: 0, tables: Vec::new(), counts: Vec::new(), lists: Vec::new() };
     match part {
         "hand" => w.hand(c, now)?,
         "certain" => w.matches(c, true)?,
@@ -1634,6 +1682,9 @@ fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_
     if let Some(fields) = report.as_object_mut() {
         for (field, n) in w.counts {
             fields.insert(field.into(), n.into());
+        }
+        for (field, items) in w.lists {
+            fields.insert(field.into(), items.into());
         }
     }
     Ok(report)
@@ -1701,6 +1752,14 @@ impl Catalogue {
             let (all, counts) = merged.get_or_insert_with(Default::default);
             all.merge(report);
             for (field, n) in v.as_object().into_iter().flatten().filter(|(k, _)| !matches!(k.as_str(), "tables" | "unmatched" | "differed")) {
+                // A list (`Carrying::lists`) whole, its parts' one after another; a count summed.
+                if let Some(items) = n.as_array() {
+                    let all = counts.entry(field.clone()).or_insert_with(|| serde_json::Value::Array(Vec::new()));
+                    if let Some(all) = all.as_array_mut() {
+                        all.extend(items.iter().cloned());
+                    }
+                    continue;
+                }
                 let sum = counts.get(field).and_then(serde_json::Value::as_u64).unwrap_or(0) + n.as_u64().unwrap_or(0);
                 counts.insert(field.clone(), sum.into());
             }
@@ -1748,6 +1807,15 @@ mod tests {
         assert_eq!(most_named([a, b, b]).as_deref(), Some("abcdef00-0000-4000-8000-000000000002"));
         assert_eq!(most_named([b, a]).as_deref(), Some(a), "as often: the lower");
         assert_eq!(most_named(["", " "]), None);
+    }
+
+    /// R14 (F6): a Want for an album the library has under looser names (in brackets, a leading "The") names its record, as the
+    /// import matcher finds an album.
+    #[test]
+    fn a_request_for_an_album_had_by_a_loose_name_finds_it() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let had = cat.record_for_tests("Tide Tables", 2);
+        assert_eq!(crate::app::requests::record_of_album(&cat, None, "The Glass Harbour", "Tide Tables (Deluxe Edition)", None, None).unwrap(), had);
     }
 
     /// R13 (F2): a Want by a release group a retired record holds (the owner rejected its copy) names the live record that holds

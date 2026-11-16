@@ -5420,6 +5420,17 @@ mod tests {
         assert_eq!(cat.db().query_row("SELECT count(*) FROM expected", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "used up");
     }
 
+    /// R14 (F6): a had record's title and artist follow its first-ranked copy at each build: a retag shows.
+    #[test]
+    fn a_records_names_follow_a_retag() {
+        let cat = tracks(2);
+        cat.assign_records(&[album("Tide Tables", &[1, 2])]).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        cat.keep_files_names(&[copy(None, "Glass Harbour", "Tide Tables (Remastered)", &[(1, "Track 1", 200_000), (2, "Track 2", 200_000)])]).unwrap();
+        let row = cat.record(record).unwrap().unwrap();
+        assert_eq!((row.artist.as_str(), row.title.as_str()), ("Glass Harbour", "Tide Tables (Remastered)"));
+    }
+
     /// C51b (F9): a download placed with its discs in folders of their own (`CD1`, `CD2`) joins the record expected for the
     /// download's folder.
     #[test]

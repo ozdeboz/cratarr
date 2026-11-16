@@ -511,6 +511,17 @@ mod tests {
         assert_eq!(data.rows_of("userdata.sqlite", "SELECT id, record FROM request ORDER BY id"), given, "the step again: each as it was");
     }
 
+    /// R14 (F3): two requests of one album with no release group share one record not had: the second finds what the first made.
+    #[test]
+    fn two_requests_of_one_album_without_a_group_share_a_record() {
+        let data = Data::new("requests-share");
+        data.batch("userdata.sqlite", "INSERT INTO request (id, user, album_key, artist_key, album, artist, year, at, status) VALUES (12, 'ann', 'orbitlane|quietlanes', 'orbit lane', 'Quiet Lanes', 'Orbit Lane', 2017, 1793950900, 'approved')");
+        data.run();
+        let record = |id: i64| data.sql::<i64>("userdata.sqlite", &format!("SELECT record FROM request WHERE id = {id}"));
+        assert_eq!(record(12), record(8));
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM records WHERE title = 'Quiet Lanes'"), 1);
+    }
+
     /// C51b: the requests 0.16 could not hand to Soulseek for want of a release group (FX01's 7, 8 and 11) say Soulseek searches
     /// for them, as 0.17's Soulseek takes them in; the page no longer shows them as not handed over.
     #[test]
@@ -543,6 +554,7 @@ mod tests {
         assert!(refs(&cat, hours.id).contains(&by("bandcamp", "album", "https://paperlantern.bandcamp.com/album/after-hours", "search", false)), "{:?}", refs(&cat, hours.id));
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!((report["records_made_for_requests"].as_u64(), report["pages_for_requests"].as_u64()), (Some(3), Some(1)), "Quiet Lanes, Nowhere Fast, After Hours: {report}");
+        assert_eq!(report["records_made_for"], serde_json::json!(["8 Orbit Lane - Quiet Lanes", "9 Tape Club - Nowhere Fast", "11 Tape Club - After Hours"]), "each, whole");
     }
 
     /// R5: an id in capitals is the same id: Ferry Lights' two matches name one release, one in capitals, and the older copy
