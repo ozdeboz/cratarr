@@ -1682,6 +1682,20 @@ impl UserData {
         Ok(self.db().execute("UPDATE request SET record = ?2 WHERE id = ?1 AND record IS NULL", params![id, record])? > 0)
     }
 
+    /// Every request's record, as (request, record): none where it has none. Blocking.
+    pub fn request_records(&self) -> Result<Vec<(i64, Option<i64>)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, record FROM request ORDER BY id")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A request given its record again (R19): the one it named is gone from the catalogue. Blocking.
+    pub fn set_request_record(&self, id: i64, record: i64) -> Result<()> {
+        self.db().execute("UPDATE request SET record = ?2 WHERE id = ?1", params![id, record])?;
+        Ok(())
+    }
+
     /// What a fetcher said on approved requests (`fetched`), `old` said as `new` wherever it is in it (0.17's step). How many.
     pub fn reword_fetched(&self, old: &str, new: &str) -> Result<usize> {
         Ok(self.db().execute("UPDATE request SET fetched = replace(fetched, ?1, ?2) WHERE status = 'approved' AND instr(fetched, ?1) > 0", params![old, new])?)

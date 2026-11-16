@@ -988,6 +988,8 @@ const UNLINKED: &str = "links pasted: naming no reference";
 const UNCONFIRMED: &str = "confirmations: no reference";
 /// A Bandcamp page kept by names that more than one record has.
 const SEVERAL: &str = "bandcamp_found: several records";
+/// A request's Bandcamp page the pages part found no record for: the requests part makes the record and carries it (R19).
+const BY_REQUESTS: &str = "bandcamp_found: a request's, its record made by the requests part";
 
 /// What 0.17's step carries, as the user data kept it (`app::step_017` reads it and makes these of it).
 #[derive(Debug, Clone, Default)]
@@ -1077,9 +1079,10 @@ pub struct Wanted {
 /// the oldest live one, had first; a retired one only where no live record holds it, OQ16), else the live record had of its names
 /// as the import matcher finds an album (R14), else, with no group, the oldest live record not had of its names nothing contradicts,
 /// else a new record not had, credited to its artist (`listing`). Its label, where a label named it, credited too (`listing`);
-/// its Bandcamp album page, where it has no release group, a reference (`search`), so Soulseek can judge by Bandcamp's list
-/// (C51b). Its id, and whether it was made now.
-pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<(i64, bool)> {
+/// its Bandcamp album page, where one was found for it (by its names, or by its release group, R19), a reference (`search`), so
+/// Soulseek can judge by Bandcamp's list (C51b). Its id, whether it was made now, and what became of the page: put on it now
+/// (true), held by another record (false), or none (no page, or the record held it already).
+pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<(i64, bool, Option<bool>)> {
     use super::identity::fold;
     let group = w.group.as_deref().map(str::to_ascii_lowercase).filter(|g| is_mbid(g)).map(|g| Ref::new("musicbrainz", "release-group", &g));
     let by_group = match &group {
@@ -1148,12 +1151,14 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         let id = super::labels::labels_in(tx, &std::collections::BTreeSet::from([label.to_string()]), at)?[&ids::artist_key(label)];
         tx.prepare_cached("INSERT OR IGNORE INTO record_labels (record, label, catno, how) VALUES (?1, ?2, '', 'listing')")?.execute(params![record, id])?;
     }
-    if group.is_none()
-        && let Some(page) = w.page.as_deref()
-    {
-        put_reference(tx, &ids::record(record), &Ref::new("bandcamp", "album", page), "search", at, false)?;
-    }
-    Ok((record, made))
+    let paged = match w.page.as_deref() {
+        Some(page) => {
+            let (r, subject) = (Ref::new("bandcamp", "album", page), ids::record(record));
+            if subjects_in(tx, &r)?.contains(&subject) { None } else { Some(put_reference(tx, &subject, &r, "search", at, false)?.kept()) }
+        }
+        None => None,
+    };
+    Ok((record, made, paged))
 }
 
 /// How long a folder expected for a record waits for its album (`expect_record`).
@@ -1610,6 +1615,7 @@ impl Carrying<'_> {
             }
         }
         self.unmatched.entry(SEVERAL).or_default();
+        let requested: std::collections::HashSet<&str> = c.requests.iter().map(|r| r.key.as_str()).collect();
         for p in &c.pages {
             let records = if is_mbid(&p.key) {
                 self.holders(&Ref::new("musicbrainz", "release-group", &p.key))?
@@ -1621,6 +1627,8 @@ impl Carrying<'_> {
                     self.put(record, &Ref::new("bandcamp", "album", &p.page), "search", p.at, false)?;
                     self.moved += 1;
                 }
+                // A request's, its record made by the requests part after, which carries it (R19, F13): listed so, not as left over.
+                [] if requested.contains(p.key.as_str()) => self.unmatched.entry(BY_REQUESTS).or_default().push(p.key.clone()),
                 [] => self.unmatched.entry("bandcamp_found").or_default().push(p.key.clone()),
                 _ => self.unmatched.entry(SEVERAL).or_default().push(p.key.clone()),
             }
@@ -1638,11 +1646,16 @@ impl Carrying<'_> {
         let mut made_for = Vec::new();
         for r in &c.requests {
             let named = crate::bandcamp::label_release(&r.artist, &r.album, None);
-            let page = r.group.is_none().then(|| pages.get(r.key.as_str()).map(|p| p.to_string())).flatten();
-            paged += u64::from(page.is_some());
+            // Its page as `bandcamp_found` kept it, by its names or by its release group (R19, F13): where its record is made only
+            // here, the pages part found none to give it to. Counted where it is put now; one another record holds is reported so.
+            let page = pages.get(r.key.as_str()).map(|p| p.to_string());
             let w = Wanted { group: r.group.clone(), artist: named.artist, title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
-            let (record, new) = request_record_in(self.tx, &w, r.at)?;
+            let (record, new, page) = request_record_in(self.tx, &w, r.at)?;
             made += u64::from(new);
+            paged += u64::from(page == Some(true));
+            if page == Some(false) {
+                self.refused.push(format!("{} bandcamp:album:{}", ids::record(record), w.page.as_deref().unwrap_or_default()));
+            }
             if new {
                 made_for.push(format!("{} {} - {}", r.id, w.artist, w.title));
             }
@@ -1768,15 +1781,22 @@ impl Catalogue {
     /// The records 0.17's step gave the requests (C49a), by request id, for the user data's `request.record`. Blocking.
     pub fn request_records_017(&self) -> Result<Vec<(i64, i64)>> {
         let Some(text) = self.meta(REQUEST_RECORDS) else { return Ok(Vec::new()) };
-        let given: std::collections::BTreeMap<i64, i64> = serde_json::from_str(&text)?;
-        Ok(given.into_iter().collect())
+        match serde_json::from_str::<std::collections::BTreeMap<i64, i64>>(&text) {
+            Ok(given) => Ok(given.into_iter().collect()),
+            // Unreadable (R19, F12, as the marks are read): left out, and the start goes on; a request it would have given one is
+            // given its record again (`step_017`).
+            Err(e) => {
+                tracing::warn!(target: "library", reason = %e, "0.17's step: the records it gave the requests cannot be read; left out");
+                Ok(Vec::new())
+            }
+        }
     }
 
     /// The record an album asked for is, found or made (`request_record_in`, C49a). Blocking.
     pub fn record_for_request(&self, w: &Wanted) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let (record, _) = request_record_in(&tx, w, now())?;
+        let (record, ..) = request_record_in(&tx, w, now())?;
         tx.commit()?;
         Ok(record)
     }

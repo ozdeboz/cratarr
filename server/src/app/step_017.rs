@@ -39,6 +39,24 @@ pub const PART: &str = "references";
 /// What 0.16 said on an approved request it could not hand to Soulseek, for want of a release group.
 const SOULSEEK_016: &str = "Not handed over to Soulseek: no release group to judge it by";
 
+/// The requests with no record still (the step's map unreadable, R19: F12), or naming one the catalogue no longer knows (a
+/// catalogue restored from a backup older than the request, fresh track ids: F14), each given the record its release group and
+/// names find, as a Want's is (`requests::record_of_album`). At every start; after the first, none is left. Blocking.
+fn give_again(cat: &Catalogue, ud: &UserData) -> Result<()> {
+    let all = ud.request_records()?;
+    let known = cat.requested(&all.iter().filter_map(|(_, record)| *record).collect::<Vec<_>>())?;
+    for (id, record) in all {
+        if record.is_some_and(|r| known.contains_key(&r)) {
+            continue;
+        }
+        let Some(r) = ud.request(id)? else { continue };
+        let given = super::requests::record_of_album(cat, r.release_group.as_deref(), &r.artist, &r.album, r.year, r.cover.clone())?;
+        ud.set_request_record(id, given)?;
+        tracing::info!(target: "library", request = id, record = given, "a request given its record again");
+    }
+    Ok(())
+}
+
 /// The step at a start: done before, or done now. Blocking.
 pub fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
     run_with(cat, ud, &|_| Ok(()))
@@ -57,6 +75,7 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
     // not handed over; 0.17's Soulseek takes in every record, judged by its list (C51b): said again, as a hand-over now says
     // it. At every start, as above: after the first, nothing says it any more.
     ud.reword_fetched(SOULSEEK_016, super::requests::SOULSEEK_SEARCHES)?;
+    give_again(cat, ud)?;
     if ran.is_empty() && ud.migration_report()?.contains_key(PART) {
         return Ok(());
     }
@@ -511,6 +530,56 @@ mod tests {
         assert_eq!(data.rows_of("userdata.sqlite", "SELECT id, record FROM request ORDER BY id"), given, "the step again: each as it was");
     }
 
+    /// R19 (F12): an unreadable map of the records the step gave the requests does not stop a start: it is left out, and a request
+    /// still with no record is given one again, the one its names find.
+    #[test]
+    fn an_unreadable_request_map_does_not_stop_the_start() {
+        let data = Data::new("request-map");
+        data.run();
+        let record = || data.sql::<Option<i64>>("userdata.sqlite", "SELECT record FROM request WHERE id = 8");
+        let before = record();
+        data.batch("catalogue.sqlite", "UPDATE meta SET value = 'not a map' WHERE key = 'requests_017'");
+        data.batch("userdata.sqlite", "UPDATE request SET record = NULL WHERE id = 8");
+        data.run();
+        assert_eq!(record(), before);
+    }
+
+    /// R19 (F14): a request naming a record the catalogue no longer knows (a catalogue restored from a backup older than the
+    /// request) is given one again at the next start: the one its release group finds.
+    #[test]
+    fn a_request_whose_record_is_unknown_gets_one_again() {
+        let data = Data::new("request-unknown");
+        data.run();
+        let record = || data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 6");
+        let before = record();
+        data.batch("userdata.sqlite", "UPDATE request SET record = 99999 WHERE id = 6");
+        data.run();
+        assert_eq!(record(), before);
+    }
+
+    /// R19 (F13): the requests part counts the pages it kept; a request with a release group whose page was found by it, its record
+    /// made only by the requests part, gets the page too; a page the requests part carries is no page left over.
+    #[test]
+    fn the_requests_part_keeps_and_counts_its_pages_truly() {
+        let data = Data::new("request-pages");
+        let group = "00000000-0000-4000-8000-000000000117";
+        data.batch(
+            "userdata.sqlite",
+            &format!(
+                "INSERT INTO request (id, user, album_key, artist_key, release_group, album, artist, year, at, status) VALUES (13, 'ann', '{group}', 'kite theory', '{group}', 'Far Coast', 'Kite Theory', 2021, 1793951000, 'approved');
+                 INSERT INTO bandcamp_found (album, at, page) VALUES ('{group}', 1793951000, 'https://kitetheory.bandcamp.com/album/far-coast');"
+            ),
+        );
+        data.run();
+        let record = data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 13");
+        let page = data.sql::<String>("catalogue.sqlite", &format!("SELECT value FROM \"references\" WHERE subject = 'al-{record}' AND source = 'bandcamp'"));
+        assert_eq!(page, "https://kitetheory.bandcamp.com/album/far-coast");
+        let (_, ud) = data.open();
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert_eq!(report["pages_for_requests"].as_u64(), Some(2), "After Hours' and Far Coast's: {report}");
+        assert!(listed(report, "bandcamp_found").1.is_empty(), "{report}");
+    }
+
     /// R14 (F3): two requests of one album with no release group share one record not had: the second finds what the first made.
     #[test]
     fn two_requests_of_one_album_without_a_group_share_a_record() {
@@ -567,7 +636,7 @@ mod tests {
         assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", FERRY)).unwrap(), ["al-10"]);
         assert_eq!(cat.subject_of(&Ref::new("bandcamp", "album", "https://orbitlane.bandcamp.com/album/undertow")).unwrap(), ["al-12"]);
         let report = &ud.migration_report().unwrap()[PART].1;
-        assert_eq!(listed(report, "bandcamp_found").1, ["paperlantern|tapeclubafterhourspaperlantern"], "a request's, taken by the requests part (C49a): {report}");
+        assert!(listed(report, "bandcamp_found").1.is_empty(), "a request's page, carried by the requests part, is no page left over (R19): {report}");
     }
 
     /// R5: a row keeps when it was first found: a match's, a page's and a link's as 0.16 found them, a hand's when the step
@@ -899,7 +968,7 @@ mod tests {
 
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!(listed(report, "album_matches").0, 1, "{report}");
-        assert_eq!(listed(report, "bandcamp_found").1, ["paperlantern|tapeclubafterhourspaperlantern"], "Harbour Lights' found its record not had (C48b); After Hours' is a request's, its record made by the requests part (C49a)");
+        assert!(listed(report, "bandcamp_found").1.is_empty(), "Harbour Lights' found its record not had (C48b); After Hours' is a request's, carried by the requests part (C49a, R19): {report}");
         assert_eq!(
             differed(report, "references: held by another record"),
             [

@@ -298,6 +298,11 @@ pub fn work_out_in(cat: &Catalogue, record: i64, files: &[Listed]) -> Result<Opt
     if row.counted_by_hand {
         return Ok(row.counting);
     }
+    // No files to hold its lists against: a had record (not served now) counts nothing new; one not had counts its lists in the
+    // design's order (R7, R19; C51a's rule). The one rule for a list read, a match kept and Discogs' facts.
+    if files.is_empty() && row.had {
+        return Ok(row.counting);
+    }
     let kept = cat.reference_tracks(record)?;
     let lists: Vec<(&str, &[RefTrack])> = kept.iter().map(|(s, l)| (s.as_str(), l.as_slice())).filter(|(_, l)| !l.is_empty()).collect();
     let counting = identity::counting(None, &lists, files);
@@ -346,11 +351,8 @@ where
                 && cat.subject_of(&Ref::new("musicbrainz", "release", &release))? == [ids::record(record)]
             {
                 cat.set_reference_tracks(record, "musicbrainz", &list)?;
-                // No files to hold it against (the record not served now): kept, and nothing counts by it (R7).
-                let files = files(record)?;
-                if !files.is_empty() {
-                    work_out_in(&cat, record, &files)?;
-                }
+                // Held against its files as a match kept and Discogs' facts are (`work_out_in`: with none, a had record counts nothing).
+                work_out_in(&cat, record, &files(record)?)?;
             }
             cat.list_read(record)
         })
@@ -895,6 +897,21 @@ mod tests {
         cat.set_reference_tracks(record, "musicbrainz", &fits).unwrap();
         work_out_in(&cat, record, &tracks).unwrap();
         assert_eq!(counting().as_deref(), Some("discogs"), "chosen by hand, whatever arrives");
+    }
+
+    /// R19 (R7's rest): with no files to hold its lists against, a had record (not served now) counts nothing new, and a record not
+    /// had counts its lists in the design's order (C51a's rule): one rule for a list read, a match kept and Discogs' facts.
+    #[test]
+    fn with_no_files_a_had_record_counts_nothing_and_one_not_had_counts_in_order() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (had, not_had) = (cat.record_for_tests("Signal", 1), cat.record_for_tests("Lamplight", 0));
+        for record in [had, not_had] {
+            cat.set_reference_tracks(record, "bandcamp", &list(&[("Lamplight", Some(200_000))])).unwrap();
+            cat.set_reference_tracks(record, "discogs", &list(&[("Lamplight", Some(200_000))])).unwrap();
+        }
+        assert_eq!(work_out_in(&cat, had, &[]).unwrap(), None);
+        assert_eq!(cat.record(had).unwrap().unwrap().counting, None);
+        assert_eq!(work_out_in(&cat, not_had, &[]).unwrap().as_deref(), Some("discogs"), "Discogs before Bandcamp");
     }
 
     /// A record waiting for a list, its release its own, and a list of `titles` for it.
