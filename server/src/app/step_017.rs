@@ -30,7 +30,7 @@
 use anyhow::Result;
 
 use crate::catalogue::Catalogue;
-use crate::catalogue::records::{Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, Ref};
+use crate::catalogue::records::{JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, Ref};
 use crate::userdata::UserData;
 
 /// The migration report's part, as `/api/admin/migration` lists it.
@@ -65,9 +65,6 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
     }
     Ok(())
 }
-
-/// Words that join two artists in a credit: a match's credit with one is no one artist's name.
-const JOINS: [&str; 7] = [" & ", ", ", " feat", " ft.", " with ", " x ", " vs"];
 
 /// What the user data's rows say, read: each row's JSON as 0.16 wrote it. A row that carries nothing is noted by why, for the
 /// report: nothing found (asked in vain), a miss, a page that is no album's, a release with no Discogs link, JSON that cannot

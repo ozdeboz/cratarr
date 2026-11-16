@@ -806,23 +806,72 @@ pub struct CarriedDiscography {
     pub names: Vec<(String, &'static str)>,
 }
 
-/// What the files call each MusicBrainz artist id: the album artist most of the files tagged with it alone give.
+/// The words that join two artists in one credit ("A & B", "A feat. B"), lower case: a credit with one is no one artist's
+/// name, and the artists it names are what lies between them (`credited_apart`).
+pub const JOINS: [&str; 11] = [" & ", ", ", " feat. ", " feat ", " featuring ", " ft. ", " ft ", " with ", " x ", " vs. ", " vs "];
+
+/// The artists a credit names, apart: split at the words that join two (`JOINS`), each as written. One artist's credit is
+/// itself; a band whose name holds such a word ("Earth, Wind & Fire") splits too, so a caller pairs the parts with something
+/// that counts them.
+pub fn credited_apart(credit: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = credit.trim();
+    loop {
+        // ASCII lower case keeps every byte where it was, so a place found in it is the same place in `rest`.
+        let lower = rest.to_ascii_lowercase();
+        let Some((at, len)) = JOINS.iter().filter_map(|j| lower.find(j).map(|at| (at, j.len()))).min() else { break };
+        out.push(rest[..at].trim().to_string());
+        rest = rest[at + len..].trim_start();
+    }
+    out.push(rest.trim().to_string());
+    out.retain(|n| !n.is_empty());
+    out
+}
+
+/// What the files call each MusicBrainz artist id (R6): each file's album artists (the `albumartists` it lists, else its
+/// `albumartist` apart, `credited_apart`) paired in order with its album artist ids, where there are as many of each, as the
+/// record pass pairs them (`record_credits`); for each id, the name most files pair with it, the lower where as many. A
+/// collaboration names each of its artists by their own id, never the two names together, and a file whose names and ids do
+/// not pair names no one.
 fn files_artists(tx: &Connection) -> Result<std::collections::HashMap<String, String>> {
     let mut st = tx.prepare(
-        "SELECT lower(i.value), n.value FROM tags i JOIN tags n ON n.folder = i.folder AND n.rel = i.rel AND n.name = 'albumartist'
-         JOIN files f ON f.folder = i.folder AND f.rel = i.rel
-         WHERE i.name = 'musicbrainz_albumartistid' AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL
-         GROUP BY lower(i.value), n.value ORDER BY count(*) DESC, n.value",
+        "SELECT g.folder, g.rel, g.name, g.value FROM tags g JOIN files f ON f.folder = g.folder AND f.rel = g.rel
+         WHERE g.name IN ('albumartist', 'albumartists', 'musicbrainz_albumartistid') AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL
+         ORDER BY g.folder, g.rel, g.n",
     )?;
-    let mut out = std::collections::HashMap::new();
-    for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-        let (id, name) = row?;
-        if is_mbid(&id) {
-            out.entry(id).or_insert(name);
+    let rows: Vec<(i64, String, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
+    let mut said: std::collections::BTreeMap<String, std::collections::BTreeMap<String, usize>> = std::collections::BTreeMap::new();
+    let mut pair = |artist: Option<&str>, artists: &[&str], ids: &[String]| {
+        let names: Vec<String> = if artists.is_empty() { artist.map(credited_apart).unwrap_or_default() } else { artists.iter().map(|a| a.trim().to_string()).collect() };
+        if names.len() == ids.len() {
+            for (id, name) in ids.iter().zip(names) {
+                if is_mbid(id) {
+                    *said.entry(id.clone()).or_default().entry(name).or_default() += 1;
+                }
+            }
         }
+    };
+    let mut i = 0;
+    while i < rows.len() {
+        let file = (rows[i].0, rows[i].1.as_str());
+        let (mut artist, mut artists, mut ids): (Option<&str>, Vec<&str>, Vec<String>) = (None, Vec::new(), Vec::new());
+        while i < rows.len() && (rows[i].0, rows[i].1.as_str()) == file {
+            let (_, _, name, value) = &rows[i];
+            match name.as_str() {
+                "albumartist" => artist = artist.or(Some(value.as_str())),
+                "albumartists" => artists.push(value.as_str()),
+                _ => ids.extend(value.split([';', '/', ',']).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty())),
+            }
+            i += 1;
+        }
+        pair(artist, &artists, &ids);
     }
-    Ok(out)
+    Ok(said.into_iter().filter_map(|(id, names)| Some((id, names.into_iter().max_by(|(a, x), (b, y)| x.cmp(y).then(b.cmp(a)))?.0))).collect())
 }
+
+/// A discography whose artist's name is held by an artist with another MusicBrainz id (N13): two artists of one name, which
+/// nothing tells apart yet.
+const SHARED_NAME: &str = "discography: a name two ids share";
 
 /// MusicBrainz's verified Discogs links of a release (`mb_releases`), and when it was read.
 #[derive(Debug, Clone)]
@@ -1015,8 +1064,11 @@ impl Carrying<'_> {
     ///    one a record holds already by its release group found again, another a record not had, credited to the artist and
     ///    found `link`. The artist is named by their MusicBrainz reference, else as their files call them, else by a related
     ///    artist's name or a match's credit, which then keeps that id as their reference; read when the discography was.
+    ///    A name its artist holds another MusicBrainz id for is two artists of one name: listed, and no records made for it,
+    ///    until same-name artists are told apart.
     fn discography(&mut self, c: &Carry) -> Result<()> {
         let files = files_artists(self.tx)?;
+        self.unmatched.entry(SHARED_NAME).or_default();
         let records = |tx: &Connection| -> Result<u64> { Ok(tx.query_row("SELECT count(*) FROM records", [], |r| r.get::<_, i64>(0))? as u64) };
         let (before, mut found, mut listed) = (records(self.tx)?, 0, 0);
         for d in &c.discographies {
@@ -1030,6 +1082,15 @@ impl Carrying<'_> {
                         continue;
                     };
                     let id = super::artists::artists_in(self.tx, &std::collections::BTreeSet::from([name.clone()]), d.at)?[&ids::artist_key(&name)];
+                    let other: Option<String> = self
+                        .tx
+                        .prepare_cached("SELECT value FROM \"references\" WHERE subject = ?1 AND source = 'musicbrainz' AND kind = 'artist' AND value <> ?2 LIMIT 1")?
+                        .query_row(params![ids::artist(id), d.mbid], |r| r.get(0))
+                        .optional()?;
+                    if other.is_some() {
+                        self.unmatched.entry(SHARED_NAME).or_default().push(format!("{} {name}", d.mbid));
+                        continue;
+                    }
                     if put_reference(self.tx, &ids::artist(id), &reference, how, d.at, false)? == Put::Held {
                         self.refused.push(named(&ids::artist(id), &reference));
                     }
@@ -1430,6 +1491,56 @@ mod tests {
         assert!(cat.set_reference(&live, &shore, "files").unwrap(), "a retired record gives up its release to the live one, even a hand's");
         assert_eq!(cat.subject_of(&shore).unwrap(), [live]);
         assert_eq!(cat.references_of(&old).unwrap().into_iter().map(|(r, _)| r.kind).collect::<Vec<_>>(), ["release-group"], "it keeps its group");
+    }
+
+    /// A discography's listing for a test: one album of `title`, by its release group.
+    fn group_listing(title: &str, group: &str) -> Listing {
+        Listing { title: title.into(), kind: Some("album".into()), refs: vec![Ref::new("musicbrainz", "release-group", group)], ..Default::default() }
+    }
+
+    /// The step's discographies alone, carried: `discographies` and nothing else.
+    fn carry_discographies(cat: &Catalogue, discographies: Vec<CarriedDiscography>) -> serde_json::Value {
+        let read = discographies.len() as u64;
+        cat.carry_references(&Carry { discographies, read: vec![("discography", read)], ..Carry::default() }, &|_| Ok(())).unwrap();
+        cat.references_carried().unwrap().unwrap()
+    }
+
+    /// R6 (N1): a collaboration's files ("A & B", two ids) name each artist by their own id, as a solo album's do; no artist of
+    /// the two names together is made, and each discography's records not had are credited to its own artist.
+    #[test]
+    fn a_collaboration_names_each_artist_by_their_own_id() {
+        let cat = crate::catalogue::tests::tracks(3);
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        for (track, rel, artist, ids) in [(1, "A/01.flac", "Glass Harbour & Tape Club", format!("{}; {}", mbid(201), mbid(204))), (2, "B/01.flac", "Glass Harbour", mbid(201)), (3, "C/01.flac", "Earth, Wind & Fire", mbid(209))] {
+            crate::catalogue::tests::file_of_track(&cat, rel, track);
+            cat.tag_for_tests(0, rel, &[("albumartist", artist), ("musicbrainz_albumartistid", &ids)]);
+        }
+        let discography = |n: u32, title: &str, group: u32| CarriedDiscography { mbid: mbid(n), at: 7, listings: vec![group_listing(title, &mbid(group))], names: Vec::new() };
+        let report = carry_discographies(&cat, vec![discography(204, "Lost Tapes", 115), discography(201, "Harbour Lights", 111), discography(209, "Gratitude", 120)]);
+        let held = |name: &str| cat.artist_of(name).unwrap().map(|id| cat.references_of(&ids::artist(id)).unwrap().into_iter().map(|(r, _)| r.value).collect::<Vec<_>>());
+        assert_eq!(held("Tape Club"), Some(vec![mbid(204)]), "named by the collaboration's own pairing");
+        assert_eq!(held("Glass Harbour"), Some(vec![mbid(201)]));
+        assert_eq!(cat.artist_of("Glass Harbour & Tape Club").unwrap(), None, "no joint artist");
+        assert_eq!(cat.artist_of("Earth").unwrap(), None, "three names for one id pair with nothing");
+        let credited = |group: u32| cat.subject_of(&Ref::new("musicbrainz", "release-group", &mbid(group))).unwrap().iter().map(|s| cat.record_artists(ids::record_number(s).unwrap()).unwrap()).collect::<Vec<_>>();
+        assert_eq!(credited(115), [vec![cat.artist_of("Tape Club").unwrap().unwrap()]]);
+        assert!(credited(120).is_empty(), "{report}");
+    }
+
+    /// R6 (N13): a discography whose artist's name is held by an artist with another MusicBrainz id is two artists of one name:
+    /// listed, no records made, and the id the artist held stays theirs alone.
+    #[test]
+    fn a_name_holding_another_id_makes_no_records() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        let rone = cat.artist_for("Rone").unwrap();
+        assert!(cat.set_reference(&ids::artist(rone), &Ref::new("musicbrainz", "artist", &mbid(301)), "files").unwrap());
+        let other = CarriedDiscography { mbid: mbid(302), at: 7, listings: vec![group_listing("Elsewhere", &mbid(130))], names: vec![("Rone".into(), "link")] };
+        let report = carry_discographies(&cat, vec![other]);
+        assert!(cat.subject_of(&Ref::new("musicbrainz", "release-group", &mbid(130))).unwrap().is_empty(), "no record made");
+        assert_eq!(cat.references_of(&ids::artist(rone)).unwrap().into_iter().map(|(r, _)| r.value).collect::<Vec<_>>(), [mbid(301)]);
+        let shared = report["unmatched"].as_array().unwrap().iter().find(|u| u["what"] == SHARED_NAME).cloned().unwrap();
+        assert_eq!(shared["sample"], serde_json::json!([format!("{} Rone", mbid(302))]), "{report}");
     }
 
     /// A refused write deletes nothing: every holder is weighed before any lets go, so a guess held beside a hand (made here
