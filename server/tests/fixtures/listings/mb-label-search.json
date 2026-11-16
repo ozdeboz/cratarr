@@ -1,0 +1,20 @@
+{
+ "count": 2,
+ "offset": 0,
+ "labels": [
+  {
+   "id": "46f0f4cd-8aab-4b33-b698-f459faf64190",
+   "type": "Original Production",
+   "score": 100,
+   "name": "Warp",
+   "disambiguation": "UK independent label"
+  },
+  {
+   "id": "2cb2c4ce-38de-4d05-8953-447ab73a2c62",
+   "type": "Original Production",
+   "score": 62,
+   "name": "Warp Records",
+   "disambiguation": "record company, use “Warp” for imprints"
+  }
+ ]
+}

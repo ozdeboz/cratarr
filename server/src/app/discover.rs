@@ -575,6 +575,9 @@ struct Group {
     /// Its first release's date, as MusicBrainz writes it (kept from 0.9.17; older ones have none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     date: Option<String>,
+    /// Its pages elsewhere as MusicBrainz links them (`inc=url-rels`, 0.17; older ones have none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    links: Vec<String>,
 }
 
 /// An artist's discography as kept (`discography`'s JSON, a list of `Group`) as records a list names (0100, C48b): each release
@@ -586,7 +589,10 @@ pub(super) fn discography_listings(groups: &str) -> Result<Vec<crate::catalogue:
         .into_iter()
         .map(|g| crate::catalogue::records::Listing {
             kind: crate::serve::library::release_words(g.kind.as_deref()).0,
-            refs: vec![crate::catalogue::records::Ref::new("musicbrainz", "release-group", &g.id.to_ascii_lowercase())],
+            // Its Discogs master, where MusicBrainz links it (S13): every edition's, as the release group is.
+            refs: std::iter::once(crate::catalogue::records::Ref::new("musicbrainz", "release-group", &g.id.to_ascii_lowercase()))
+                .chain(super::discogs::id_in(&g.links, "master").map(|m| crate::catalogue::records::Ref::new("discogs", "master", &m.to_string())))
+                .collect(),
             title: g.title,
             year: g.year,
             released: g.date,
@@ -647,49 +653,54 @@ async fn related_discography(serve: &Arc<crate::serve::Serve>, http: &reqwest::C
     groups
 }
 
-async fn mb_discography(http: &reqwest::Client, artist: &str, today: &str) -> Result<Vec<Group>> {
-    #[derive(Deserialize)]
-    struct Genre {
-        name: String,
-        #[serde(default)]
-        count: i64,
-    }
-    #[derive(Deserialize)]
-    struct Rg {
-        id: String,
-        title: String,
-        #[serde(rename = "primary-type")]
-        primary: Option<String>,
-        #[serde(rename = "secondary-types", default)]
-        secondary: Vec<String>,
-        #[serde(rename = "first-release-date", default)]
-        first: String,
-        #[serde(default)]
-        genres: Vec<Genre>,
-    }
+/// A release group as MusicBrainz's browse gives it (S13).
+#[derive(Deserialize)]
+struct Rg {
+    id: String,
+    title: String,
+    #[serde(rename = "primary-type")]
+    primary: Option<String>,
+    #[serde(rename = "secondary-types", default)]
+    secondary: Vec<String>,
+    #[serde(rename = "first-release-date", default)]
+    first: String,
+    #[serde(default)]
+    genres: Vec<MbGenre>,
+    /// Its links (`inc=url-rels`): pages elsewhere, Discogs' master among them.
+    #[serde(default)]
+    relations: Vec<MbRelation>,
+}
+
+#[derive(Deserialize)]
+struct MbGenre {
+    name: String,
+    #[serde(default)]
+    count: i64,
+}
+
+/// One page of MusicBrainz's release-group browse, read (S13): an artist's albums and EPs that are out (first released by
+/// `today`; MusicBrainz's dates may be only a year, which sorts before any day of it) and their own (no secondary type: no
+/// compilation, live album, remix, soundtrack, demo...), each with its genres (MusicBrainz's own, the most given first,
+/// `GENRES` at most) and its links (`inc=url-rels`): a Discogs master among them is the record's for free. Pure.
+fn groups_of(v: &serde_json::Value, today: &str) -> Vec<Group> {
     #[derive(Deserialize)]
     struct Browse {
         #[serde(rename = "release-groups", default)]
         groups: Vec<Rg>,
     }
-    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release-group")?;
-    url.query_pairs_mut().append_pair("artist", artist).append_pair("type", "album|ep").append_pair("inc", "genres").append_pair("fmt", "json").append_pair("limit", "100");
-    // MusicBrainz busy (503, the owner's sync 2026-10-25): once more after a pause, not the artist lost.
-    let mut again = true;
-    let b: Browse = loop {
-        let r = http.get(url.clone()).asked().await?;
-        if r.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE && std::mem::take(&mut again) {
-            tokio::time::sleep(MB_BUSY_PAUSE).await;
-            continue;
-        }
-        break r.error_for_status()?.json().await?;
-    };
-    Ok(b.groups
+    let Ok(b) = Browse::deserialize(v) else { return Vec::new() };
+    b.groups
         .into_iter()
-        .filter(|g| g.secondary.is_empty() && !g.first.is_empty() && g.first.as_str() <= today)
+        .filter(|g| matches!(g.primary.as_deref(), Some("Album" | "EP")) && g.secondary.is_empty() && !g.first.is_empty() && g.first.as_str() <= today)
         .map(|g| {
             let mut genres = g.genres;
             genres.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+            let mut links: Vec<String> = Vec::new();
+            for url in g.relations.into_iter().filter_map(|r| r.url) {
+                if !links.contains(&url.resource) {
+                    links.push(url.resource);
+                }
+            }
             Group {
                 year: g.first.get(..4).and_then(|y| y.parse().ok()),
                 kind: g.primary,
@@ -697,9 +708,114 @@ async fn mb_discography(http: &reqwest::Client, artist: &str, today: &str) -> Re
                 id: g.id,
                 title: g.title,
                 date: Some(g.first),
+                links,
             }
         })
-        .collect())
+        .collect()
+}
+
+/// Where the next page of a MusicBrainz browse starts (`what`: "release-group", "release"): past this page's rows, while
+/// there are more than that; none at the end, or on a page with no rows (an offset past the end answers none, and the count).
+fn next_offset(v: &serde_json::Value, what: &str) -> Option<usize> {
+    let count = v[format!("{what}-count").as_str()].as_u64()? as usize;
+    let offset = v[format!("{what}-offset").as_str()].as_u64().unwrap_or(0) as usize;
+    let rows = v[format!("{what}s").as_str()].as_array().map_or(0, Vec::len);
+    (rows > 0 && offset + rows < count).then_some(offset + rows)
+}
+
+/// One page of a MusicBrainz browse or search (`path` under /ws/2/, its query without paging), from `offset`, in MusicBrainz's
+/// turn; once more after a pause when MusicBrainz is busy (503, the owner's sync 2026-10-25), not the read lost.
+async fn mb_page(http: &reqwest::Client, path: &str, query: &[(&str, &str)], offset: usize) -> Result<serde_json::Value> {
+    let mut url = reqwest::Url::parse(&format!("https://musicbrainz.org/ws/2/{path}"))?;
+    url.query_pairs_mut().extend_pairs(query).append_pair("fmt", "json").append_pair("limit", "100").append_pair("offset", &offset.to_string());
+    let mut again = true;
+    loop {
+        let r = http.get(url.clone()).asked().await?;
+        if r.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE && std::mem::take(&mut again) {
+            tokio::time::sleep(MB_BUSY_PAUSE).await;
+            continue;
+        }
+        return Ok(r.error_for_status()?.json().await?);
+    }
+}
+
+/// How many release groups of an artist's are read, at most (five pages of MusicBrainz's 100).
+const MOST_GROUPS: usize = 500;
+
+/// An artist's albums and EPs on MusicBrainz (`groups_of`), with their links, every page of them up to `MOST_GROUPS`.
+async fn mb_discography(http: &reqwest::Client, artist: &str, today: &str) -> Result<Vec<Group>> {
+    let mut groups = Vec::new();
+    let mut offset = 0;
+    loop {
+        let v = mb_page(http, "release-group", &[("artist", artist), ("type", "album|ep"), ("inc", "genres+url-rels")], offset).await?;
+        groups.extend(groups_of(&v, today));
+        match next_offset(&v, "release-group") {
+            Some(next) if next < MOST_GROUPS => offset = next,
+            _ => break,
+        }
+    }
+    Ok(groups)
+}
+
+/// A label's MusicBrainz id by its name (S13): of the search's labels of that name, the "Records" or "Recordings" a sleeve
+/// adds taken off both, the one named shortest (MusicBrainz names an imprint without the word, the company behind it with
+/// it), then the best scored. None where no label is called so. Pure.
+fn label_named(v: &serde_json::Value, name: &str) -> Option<String> {
+    let bare = |n: &str| {
+        let folded = key(n);
+        ["recordings", "records"].iter().find_map(|w| folded.strip_suffix(w).filter(|b| !b.is_empty()).map(str::to_string)).unwrap_or(folded)
+    };
+    let wanted = bare(name);
+    v["labels"]
+        .as_array()?
+        .iter()
+        .filter_map(|l| Some((l["id"].as_str()?, l["name"].as_str()?, l["score"].as_i64().unwrap_or(0))))
+        .filter(|(_, n, _)| bare(n) == wanted)
+        .min_by_key(|(_, n, score)| (n.chars().count(), -score))
+        .map(|(id, ..)| id.to_string())
+}
+
+/// A label's MusicBrainz id by its name (`label_named`), MusicBrainz's search asked in its turn.
+#[allow(dead_code)] // a label's page (C56)
+async fn mb_label_by_name(http: &reqwest::Client, name: &str) -> Result<Option<String>> {
+    let query = format!("label:\"{}\"", name.replace('"', ""));
+    Ok(label_named(&mb_page(http, "label", &[("query", &query)], 0).await?, name))
+}
+
+/// A page of a label's releases on MusicBrainz, read (S13): each release group once, as a record a list names, by its
+/// release group, with its first release's date and year, its type in the library's words, and its artist as credited
+/// where the answer has it (`inc=artist-credits`). Every type: a label's list is its catalogue. Pure.
+fn label_listings(v: &serde_json::Value) -> Vec<crate::catalogue::records::Listing> {
+    let mut out: Vec<crate::catalogue::records::Listing> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for r in v["releases"].as_array().into_iter().flatten() {
+        let g = &r["release-group"];
+        let (Some(id), Some(title)) = (g["id"].as_str(), g["title"].as_str()) else { continue };
+        if !seen.insert(id.to_ascii_lowercase()) {
+            continue;
+        }
+        let first = g["first-release-date"].as_str().filter(|d| !d.is_empty());
+        let words = g["primary-type"].as_str().into_iter().chain(g["secondary-types"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str));
+        let artist: String = r["artist-credit"].as_array().into_iter().flatten().map(|c| format!("{}{}", c["name"].as_str().unwrap_or_default(), c["joinphrase"].as_str().unwrap_or_default())).collect();
+        out.push(crate::catalogue::records::Listing {
+            title: title.to_string(),
+            artist: artist.trim().to_string(),
+            year: first.and_then(|d| d.get(..4)?.parse().ok()),
+            kind: crate::serve::library::release_words(words).0,
+            released: first.map(str::to_string),
+            refs: vec![crate::catalogue::records::Ref::new("musicbrainz", "release-group", &id.to_ascii_lowercase())],
+            ..Default::default()
+        });
+    }
+    out
+}
+
+/// A page of a label's releases on MusicBrainz from `offset` (`label_listings`; a label runs to thousands, OQ10, so a page at
+/// a time), and where the next starts, none at the end.
+#[allow(dead_code)] // a label's page (C56)
+async fn mb_label_releases(http: &reqwest::Client, label: &str, offset: usize) -> Result<(Vec<crate::catalogue::records::Listing>, Option<usize>)> {
+    let v = mb_page(http, "release", &[("label", label), ("inc", "release-groups+artist-credits")], offset).await?;
+    Ok((label_listings(&v), next_offset(&v, "release")))
 }
 
 /// Gaps in the library's artists' discographies (0069 amended, 0.9: "first"): each artist's albums and EPs, as
@@ -2168,6 +2284,70 @@ pub fn undo(serve: &crate::serve::Serve, account: &str, token: &str) -> Result<S
         Ok(format!("{UNDO}{answer}:{key}"))
     } else {
         self::answer(serve, account, key, answer)
+    }
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::*;
+    use crate::catalogue::records::Ref;
+
+    fn fixture(name: &str) -> serde_json::Value {
+        let text = match name {
+            "groups" => include_str!("../../tests/fixtures/listings/mb-release-groups-url-rels.json"),
+            "offset 100" => include_str!("../../tests/fixtures/listings/mb-release-groups-offset100.json"),
+            "label search" => include_str!("../../tests/fixtures/listings/mb-label-search.json"),
+            _ => include_str!("../../tests/fixtures/listings/mb-label-releases.json"),
+        };
+        serde_json::from_str(text).unwrap()
+    }
+
+    /// S13: an artist's release groups with their links (`inc=url-rels`, MusicBrainz's answer trimmed): the albums and EPs of
+    /// their own that are out, each with its pages elsewhere, a Discogs master among them, which a kept discography's listing
+    /// takes as a reference; where the next page starts, and none past the end.
+    #[test]
+    fn an_artists_groups_carry_their_links_and_their_pages() {
+        let v = fixture("groups");
+        let groups = groups_of(&v, "2026-11-16");
+        assert_eq!(
+            groups.iter().map(|g| (g.title.as_str(), g.kind.as_deref(), g.year)).collect::<Vec<_>>(),
+            [("Trans Canada Highway", Some("EP"), Some(2006)), ("Music Has the Right to Children", Some("Album"), Some(1998)), ("Inferno", Some("Album"), Some(2026)), ("Hi Scores", Some("EP"), Some(1996))],
+            "no demo, compilation or single"
+        );
+        assert_eq!(super::super::discogs::id_in(&groups[1].links, "master"), Some(1893), "{:?}", groups[1].links);
+        assert_eq!(groups[1].links.len(), 3, "AllMusic, Discogs, Wikidata, each once");
+        assert!(groups_of(&v, "2026-01-01").iter().all(|g| g.title != "Inferno"), "not out on that day");
+        assert_eq!(next_offset(&v, "release-group"), Some(7));
+        assert_eq!(next_offset(&fixture("offset 100"), "release-group"), None, "past the end: the count and no rows");
+        let listings = discography_listings(&serde_json::to_string(&groups).unwrap()).unwrap();
+        assert_eq!(listings[1].refs, [Ref::new("musicbrainz", "release-group", &groups[1].id), Ref::new("discogs", "master", "1893")]);
+        let kept_before: Vec<Group> = serde_json::from_str(r#"[{"id":"x","title":"Old","kind":"Album","year":2001}]"#).unwrap();
+        assert!(kept_before[0].links.is_empty(), "a discography kept before links were read");
+    }
+
+    /// S13: a label by its name, with "Records" or without: the imprint, which MusicBrainz names shorter than the company
+    /// behind it; none for another name. A label's releases, each release group once, with its type and first year.
+    #[test]
+    fn a_label_by_its_name_and_its_releases() {
+        let search = fixture("label search");
+        let imprint = "46f0f4cd-8aab-4b33-b698-f459faf64190";
+        assert_eq!(label_named(&search, "Warp Records").as_deref(), Some(imprint));
+        assert_eq!(label_named(&search, "warp").as_deref(), Some(imprint));
+        assert_eq!(label_named(&search, "Wharf"), None);
+        let v = fixture("label releases");
+        let listed = label_listings(&v);
+        assert_eq!(
+            listed.iter().map(|l| (l.title.as_str(), l.kind.as_deref(), l.year, l.released.as_deref())).collect::<Vec<_>>(),
+            [
+                ("Surfing on Sine Waves", Some("album"), Some(1992), Some("1992")),
+                ("Pioneers of the Hypnotic Groove", Some("album"), Some(1991), Some("1991-05-21")),
+                ("Hothead EP", Some("single"), Some(1993), Some("1993-02-22")),
+                ("Testone (remixes)", Some("single"), Some(1990), Some("1990-01-30")),
+            ],
+            "two releases of one group: one record, by its group's title (the release says \"Hothead\")"
+        );
+        assert_eq!(listed[0].refs, [Ref::new("musicbrainz", "release-group", "0afb7bd6-33a9-3a01-8765-f1de0a1f0972")]);
+        assert_eq!(next_offset(&v, "release"), Some(5));
     }
 }
 

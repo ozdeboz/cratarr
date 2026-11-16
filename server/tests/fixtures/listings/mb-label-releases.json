@@ -1,0 +1,75 @@
+{
+ "release-count": 2551,
+ "release-offset": 0,
+ "releases": [
+  {
+   "id": "04372bd3-c811-45b4-8aef-bcb2369da885",
+   "title": "Surfing on Sine Waves",
+   "date": "1993-01-11",
+   "status": "Official",
+   "release-group": {
+    "id": "0afb7bd6-33a9-3a01-8765-f1de0a1f0972",
+    "title": "Surfing on Sine Waves",
+    "primary-type": "Album",
+    "secondary-types": [],
+    "first-release-date": "1992"
+   }
+  },
+  {
+   "id": "1c232cae-2945-4e3d-a94a-99b4fb165b88",
+   "title": "Surfing on Sine Waves",
+   "date": "1993-01-11",
+   "status": "Official",
+   "release-group": {
+    "id": "0afb7bd6-33a9-3a01-8765-f1de0a1f0972",
+    "title": "Surfing on Sine Waves",
+    "primary-type": "Album",
+    "secondary-types": [],
+    "first-release-date": "1992"
+   }
+  },
+  {
+   "id": "0a09492f-8bf9-45cf-bb72-29094fd197aa",
+   "title": "Pioneers of the Hypnotic Groove",
+   "date": "1991-05-21",
+   "status": "Official",
+   "release-group": {
+    "id": "cae76439-79b3-3535-af7a-73173ba5e805",
+    "title": "Pioneers of the Hypnotic Groove",
+    "primary-type": "Album",
+    "secondary-types": [
+     "Compilation"
+    ],
+    "first-release-date": "1991-05-21"
+   }
+  },
+  {
+   "id": "0c61ca70-9487-4bf2-a28e-acff92305686",
+   "title": "Hothead",
+   "date": "1993-02-22",
+   "status": "Official",
+   "release-group": {
+    "id": "6f2d6d6e-270c-366a-99e9-789c1b5861b7",
+    "title": "Hothead EP",
+    "primary-type": "Single",
+    "secondary-types": [],
+    "first-release-date": "1993-02-22"
+   }
+  },
+  {
+   "id": "13f576db-62bb-49f4-917a-e5313bd760eb",
+   "title": "Testone (remixes)",
+   "date": "1990-01-30",
+   "status": "Official",
+   "release-group": {
+    "id": "db747b1b-8d02-431d-a8b2-11f89ec697d6",
+    "title": "Testone (remixes)",
+    "primary-type": "Single",
+    "secondary-types": [
+     "Remix"
+    ],
+    "first-release-date": "1990-01-30"
+   }
+  }
+ ]
+}
