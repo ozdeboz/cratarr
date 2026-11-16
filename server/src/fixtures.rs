@@ -393,6 +393,21 @@ pub fn make_layout(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(made)
 }
 
+/// A data folder as 0.16.2 left it, for 0.17's step (FX01, `tests/fixtures/0.16`, from tag v0.16.2's schema, as 0093 keeps no
+/// binaries in git): the catalogue's records and their tracks, and what the user data and `soulseek.json` hold of them. Made up,
+/// each table in the shapes production's rows have (read 2026-11-16): requests with a release group and without, choices of
+/// every kind, discographies read before dates were kept and after, a row 0.16's first start could not move. Its ids are the
+/// records' own (`al-<record>`), as that start left them, and it is done in both. No library is behind it: nothing reads a file.
+#[cfg(test)]
+pub fn data_0_16(data: &Path) -> Result<()> {
+    std::fs::create_dir_all(data)?;
+    for (file, sql) in [("catalogue.sqlite", include_str!("../tests/fixtures/0.16/catalogue.sql")), ("userdata.sqlite", include_str!("../tests/fixtures/0.16/userdata.sql"))] {
+        rusqlite::Connection::open(data.join(file))?.execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;"))?;
+    }
+    std::fs::write(data.join("soulseek.json"), include_str!("../tests/fixtures/0.16/soulseek.json"))?;
+    Ok(())
+}
+
 /// Writes an album under `root`, `n` choosing its tones and cover. Its folder.
 fn write_album(root: &Path, n: u32, a: &Album) -> Result<PathBuf> {
     let folder = root.join(a.artist).join(format!("{} ({})", a.title, a.year.unwrap_or("no year")));
@@ -485,6 +500,82 @@ mod tests {
         let again = make(&d).unwrap();
         assert_eq!(again, albums);
         assert_eq!(std::fs::read(&tide).unwrap().len(), std::fs::read(&tide).unwrap().len());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// What 0.17's step carries, as 0.16.2 left it, opened by today's catalogue and user data and read by the readers 0.16.2 had:
+    /// each table holds every shape of row the step meets, and none of it fails to read.
+    #[test]
+    fn the_0_16_data_opens() {
+        use std::collections::BTreeSet;
+
+        use crate::catalogue::Catalogue;
+        use crate::userdata::UserData;
+        let d = std::env::temp_dir().join(format!("cratarr-data-0-16-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        data_0_16(&d).unwrap();
+        let cat = Catalogue::open(Some(&d.join("catalogue.sqlite")), Vec::new()).unwrap();
+        let ud = UserData::open(Some(&d.join("userdata.sqlite"))).unwrap();
+        assert!(cat.first_records_given().unwrap() && ud.first_start_done().unwrap(), "0.16's first start is over in both");
+        let count = |file: &str, sql: &str| -> i64 { rusqlite::Connection::open(d.join(file)).unwrap().query_row(sql, [], |r| r.get(0)).unwrap() };
+        let column = |file: &str, sql: &str| -> Vec<String> {
+            let db = rusqlite::Connection::open(d.join(file)).unwrap();
+            let mut st = db.prepare(sql).unwrap();
+            st.query_map([], |r| r.get::<_, String>(0)).unwrap().map(Result::unwrap).collect()
+        };
+        let had = count("catalogue.sqlite", "SELECT count(*) FROM records r WHERE retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL)");
+        let retired = count("catalogue.sqlite", "SELECT count(*) FROM records r WHERE retired_at IS NOT NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id)");
+        assert!(had >= 5 && retired >= 1, "{had} had, {retired} retired");
+        let records: BTreeSet<String> = column("catalogue.sqlite", "SELECT 'al-' || id FROM records").into_iter().collect();
+
+        let chosen: Vec<(String, crate::app::references::Chosen)> =
+            column("userdata.sqlite", "SELECT album FROM record_references").into_iter().map(|a| (a.clone(), serde_json::from_str(&ud.record_references(&a).unwrap().unwrap()).unwrap())).collect();
+        assert!(chosen.len() >= 4 && chosen.iter().all(|(a, _)| records.contains(a)), "each on a record of the catalogue: {chosen:?}");
+        assert!(chosen.iter().any(|(_, c)| c.by_hand && !c.links.is_empty()), "a link pasted, checked by hand");
+        assert!(chosen.iter().any(|(_, c)| c.counting.as_deref() == Some("acoustid")), "AcoustID counting, which has no list");
+        assert!(chosen.iter().any(|(_, c)| c.counting.is_none() && !c.confirmed.is_empty()), "a guess confirmed, nothing chosen");
+
+        let groups: Vec<serde_json::Value> = column("userdata.sqlite", "SELECT groups FROM discography").iter().flat_map(|g| serde_json::from_str::<Vec<serde_json::Value>>(g).unwrap()).collect();
+        assert!(count("userdata.sqlite", "SELECT count(*) FROM discography") >= 3);
+        assert!(groups.iter().all(|g| g["id"].is_string() && g["title"].is_string() && g["genres"].is_array()), "{groups:?}");
+        assert!(groups.iter().any(|g| g.get("date").is_none()) && groups.iter().any(|g| g["date"].is_string()), "read before dates were kept, and after");
+
+        let requests = ud.requests(None, None, 100).unwrap();
+        let (grouped, named): (Vec<_>, Vec<_>) = requests.iter().partition(|r| r.release_group.is_some());
+        assert!(!grouped.is_empty(), "with a release group");
+        assert!(named.iter().any(|r| r.status == "approved") && named.iter().any(|r| r.status == "cancelled"), "without one, as production's: {named:?}");
+
+        let matched = column("userdata.sqlite", "SELECT album FROM album_matches");
+        let found = ud.album_matches(&matched).unwrap();
+        let read: Vec<crate::app::matching::Match> = found.values().filter_map(|(_, j)| j.as_deref()).map(|j| serde_json::from_str(j).unwrap()).collect();
+        assert!(read.iter().any(|m| m.certain) && read.iter().any(|m| !m.certain), "certain and likely");
+        assert!(found.values().any(|(_, j)| j.is_none()), "one looked for in vain");
+        assert!(matched.iter().any(|a| !records.contains(a)), "one 0.16's first start could not move");
+
+        let facts: Vec<crate::app::discogs::AlbumFacts> = ud.discogs_facts_of("album:").unwrap().iter().map(|(_, j)| serde_json::from_str(j).unwrap()).collect();
+        assert!(facts.iter().any(|f| f.master.is_some()) && facts.iter().any(|f| f.master.is_none() && f.release.is_some()), "a master, and a release with none");
+        assert!(count("userdata.sqlite", "SELECT count(*) FROM discogs_facts WHERE subject LIKE 'album:%' AND facts IS NULL") > 0, "asked, nothing found");
+        assert!(count("userdata.sqlite", "SELECT count(*) FROM discogs_facts WHERE subject NOT LIKE 'album:%'") > 0, "rows that are no album's");
+
+        let pages = column("userdata.sqlite", "SELECT album FROM bandcamp_found");
+        assert!(pages.iter().any(|k| k.contains('|')) && pages.iter().any(|k| !k.contains('|')), "by names and by release group: {pages:?}");
+        assert!(pages.iter().any(|k| ud.bandcamp_found(k).unwrap().unwrap().1.is_none()), "a miss, kept");
+
+        let releases: Vec<crate::app::works::Stored> = ud.mb_releases().unwrap().values().map(|j| serde_json::from_str(j).unwrap()).collect();
+        assert!(releases.iter().any(|s| s.discogs.iter().any(|l| l.starts_with("master:"))) && releases.iter().any(|s| s.discogs.iter().all(|l| l.starts_with("release:"))));
+
+        #[derive(serde::Deserialize)]
+        struct Kept {
+            next: u64,
+            items: Vec<crate::app::soulseek::Item>,
+            dropped: Vec<i64>,
+        }
+        let kept: Kept = serde_json::from_slice(&std::fs::read(d.join("soulseek.json")).unwrap()).unwrap();
+        let states: BTreeSet<String> = kept.items.iter().map(|i| serde_json::to_value(i.state).unwrap().as_str().unwrap().to_string()).collect();
+        assert_eq!(states.into_iter().collect::<Vec<_>>(), ["fetching", "found", "placed", "stuck", "waiting"]);
+        assert!(kept.items.iter().all(|i| grouped.iter().any(|r| r.id == i.record.request && r.release_group.as_deref() == Some(i.record.release_group.as_str()))), "each fetches a request by its group");
+        assert!(kept.next as usize >= kept.items.len() && !kept.dropped.is_empty());
+        drop((cat, ud));
         std::fs::remove_dir_all(&d).ok();
     }
 
