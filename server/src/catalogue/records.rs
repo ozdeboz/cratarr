@@ -315,8 +315,9 @@ pub fn most_named<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<Strin
     counts.into_iter().max_by(|(a, x), (b, y)| x.cmp(y).then(b.cmp(a))).map(|(value, _)| value)
 }
 
-/// What each record's files name at MusicBrainz, as their tags say now (`most_named`): (record, `release` or `release-group`,
-/// id), the records in order. A value that is no MusicBrainz id names nothing.
+/// What each record's files name at MusicBrainz, as their tags say now (`most_named`), all its copies' files together: (record,
+/// `release` or `release-group`, id), the records in order. A value that is no MusicBrainz id names nothing. 0.17's step's, which
+/// has no copies ranked; the first build after it keeps what each record's first-ranked copy names (`files_references`).
 fn files_named(tx: &Connection) -> Result<Vec<(i64, &'static str, String)>> {
     let mut st = tx.prepare(
         "SELECT t.record, g.name, g.folder, g.rel, g.value FROM tags g
@@ -344,22 +345,68 @@ fn files_named(tx: &Connection) -> Result<Vec<(i64, &'static str, String)>> {
     Ok(out)
 }
 
-/// What the records of a pass name at MusicBrainz now (`files_named`), kept as their `files` references in the record pass's
-/// transaction: a release or a release group they named before and name no more is let go of (a retag), one they name now
-/// kept. Those kept already are left as they are, so a pass over a library as it was writes nothing; one a search found
-/// becomes the files'. In the records' order: where one release's files make two records (G1, a bonus track, another master),
-/// the older record keeps the release and the newer only the group, until a certain match or a link pasted says which it is.
-pub(super) fn files_references(tx: &Connection, records: &[Option<i64>], at: i64) -> Result<()> {
-    let ours: std::collections::HashSet<i64> = records.iter().flatten().copied().collect();
-    let named: Vec<(i64, &str, String)> = files_named(tx)?.into_iter().filter(|(record, ..)| ours.contains(record)).collect();
+/// Each record's copy that counts in a pass (`records[i]` is `albums[i]`'s): the first by kind, then the largest, then the first
+/// listed, as `assign` keeps the record with (CR18). What its files name and credit is the record's: an Incoming copy nobody
+/// has checked does not decide.
+fn first_ranked<'a>(albums: &'a [super::AlbumCopy], records: &[Option<i64>]) -> std::collections::BTreeMap<i64, &'a super::AlbumCopy> {
+    let key = |i: usize, a: &super::AlbumCopy| (a.rank, a.tracks.len(), std::cmp::Reverse(i));
+    let mut first: std::collections::BTreeMap<i64, (usize, &super::AlbumCopy)> = std::collections::BTreeMap::new();
+    for (i, (a, record)) in albums.iter().zip(records).enumerate() {
+        let Some(record) = record else { continue };
+        if first.get(record).is_none_or(|&(j, b)| key(i, a) > key(j, b)) {
+            first.insert(*record, (i, a));
+        }
+    }
+    first.into_iter().map(|(record, (_, a))| (record, a)).collect()
+}
+
+/// A record's MusicBrainz list once its files let go of the release it was read for (R8): gone, unless the count was chosen by
+/// hand from it, and the count worked out again from the lists left and the files (`identity::counting`), unless chosen by
+/// hand. With no files to hold a list against, nothing counts.
+fn let_go_list(tx: &Connection, record: i64, files: &[super::identity::Listed]) -> Result<()> {
+    let (counting, by_hand): (Option<String>, bool) = tx.query_row("SELECT counting, counted_by_hand FROM records WHERE id = ?1", [record], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    if by_hand && counting.as_deref() == Some("musicbrainz") {
+        return Ok(());
+    }
+    if tx.execute("DELETE FROM reference_tracks WHERE record = ?1 AND source = 'musicbrainz'", [record])? == 0 || by_hand {
+        return Ok(());
+    }
+    let kept: Vec<(String, Vec<RefTrack>)> = {
+        let mut st = tx.prepare_cached("SELECT source, tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
+        let rows: Vec<(String, String)> = st.query_map([record], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        rows.into_iter().filter_map(|(source, tracks)| Some((source, serde_json::from_str(&tracks).ok()?))).collect()
+    };
+    let lists: Vec<(&str, &[RefTrack])> = kept.iter().map(|(s, l)| (s.as_str(), l.as_slice())).filter(|(_, l)| !l.is_empty()).collect();
+    let worked = if files.is_empty() { None } else { super::identity::counting(None, &lists, files) };
+    tx.execute("UPDATE records SET counting = ?2 WHERE id = ?1 AND counted_by_hand = 0", params![record, worked])?;
+    Ok(())
+}
+
+/// What the records of a pass name at MusicBrainz now, each by its first-ranked copy (`first_ranked`: its release and release
+/// group, `most_named` of that copy's files), kept as their `files` references in the record pass's transaction: a release or a
+/// release group they named before and name no more is let go of (a retag), a release with its list and count (`let_go_list`),
+/// and one they name now kept. Those kept already are left as they are, so a pass over a library as it was writes nothing; one
+/// a search found becomes the files'. In the records' order: where one release's files make two records (G1, a bonus track,
+/// another master), the older record keeps the release and the newer only the group, until a certain match or a link pasted
+/// says which it is.
+pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>], at: i64) -> Result<()> {
+    let first = first_ranked(albums, records);
+    let named: Vec<(i64, &str, String)> = first
+        .iter()
+        .flat_map(|(record, a)| [("release", a.facts.release.clone()), ("release-group", a.group.clone())].into_iter().filter_map(move |(kind, v)| Some((*record, kind, v.filter(|v| is_mbid(v))?))))
+        .collect();
     let now: std::collections::HashSet<(String, &str, &str)> = named.iter().map(|(record, kind, value)| (ids::record(*record), *kind, value.as_str())).collect();
     let held: Vec<(String, String, String)> = {
         let mut st = tx.prepare_cached("SELECT subject, kind, value FROM \"references\" WHERE source = 'musicbrainz' AND kind IN ('release', 'release-group') AND how = 'files'")?;
         st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
     };
     for (subject, kind, value) in &held {
-        if ids::record_number(subject).is_some_and(|record| ours.contains(&record)) && !now.contains(&(subject.clone(), kind.as_str(), value.as_str())) {
+        let Some((record, a)) = ids::record_number(subject).and_then(|record| Some((record, *first.get(&record)?))) else { continue };
+        if !now.contains(&(subject.clone(), kind.as_str(), value.as_str())) {
             tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1 AND source = 'musicbrainz' AND kind = ?2 AND value = ?3")?.execute(params![subject, kind, value])?;
+            if kind == "release" {
+                let_go_list(tx, record, &a.facts.tracks)?;
+            }
         }
     }
     let known: std::collections::HashSet<(String, String, String)> = {
@@ -377,16 +424,11 @@ pub(super) fn files_references(tx: &Connection, records: &[Option<i64>], at: i64
 
 /// Who each album's files credit and what labels they name, kept for its record in the record pass's transaction (C46): the
 /// album artists in order (`record_artists`), each artist's MusicBrainz id as a `files` reference where the files give one
-/// id for each, and the labels with their catalogue numbers (`record_labels`). A record of several copies goes by its first
-/// album here. What a record holds already is left alone, so a pass over a library as it was writes nothing; what its files
-/// say now takes the place of what they said before.
+/// id for each, and the labels with their catalogue numbers (`record_labels`). A record of several copies goes by its
+/// first-ranked copy (`first_ranked`, R8). What a record holds already is left alone, so a pass over a library as it was writes
+/// nothing; what its files say now takes the place of what they said before.
 pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>], at: i64) -> Result<()> {
-    let mut first: std::collections::BTreeMap<i64, &super::AlbumCopy> = std::collections::BTreeMap::new();
-    for (a, record) in albums.iter().zip(records) {
-        if let Some(record) = record {
-            first.entry(*record).or_insert(a);
-        }
-    }
+    let first = first_ranked(albums, records);
     let names: std::collections::BTreeSet<String> = first.values().flat_map(|a| a.artists.iter().cloned()).collect();
     let artists = super::artists::artists_in(tx, &names, at)?;
     let label_names: std::collections::BTreeSet<String> = first.values().flat_map(|a| a.labels.iter().map(|(l, _)| l.clone())).collect();

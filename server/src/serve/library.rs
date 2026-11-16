@@ -1695,6 +1695,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                     title: fold(&first.album),
                     tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
+                group: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_releasegroupid"))),
                 artists: first.album_artists.clone(),
                 artist_ids: first.row.all("musicbrainz_albumartistid").flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect(),
                 labels: labels_of_album(&list),

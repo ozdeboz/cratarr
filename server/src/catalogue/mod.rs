@@ -192,6 +192,9 @@ fn holds_nothing(path: &str) -> bool {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AlbumCopy {
     pub facts: identity::RecordFacts,
+    /// The MusicBrainz release group most of its files name (`records::most_named`): with `facts.release`, its record's `files`
+    /// references where it is the record's first-ranked copy.
+    pub group: Option<String>,
     /// Its album artists in the order its files credit them, split as the library splits them (the first is the album's
     /// artist), and the MusicBrainz artist ids the files give them, in the same order: its record's `record_artists`, and
     /// each artist's `files` reference where there is one id for each.
@@ -2558,7 +2561,7 @@ impl Catalogue {
         let tx = db.transaction()?;
         let read_half_way = self.read_half_way.swap(false, Ordering::SeqCst);
         let (given, records) = Self::assign(&tx, albums, now(), read_half_way || self.copies_are_moving())?;
-        records::files_references(&tx, &records, now())?;
+        records::files_references(&tx, albums, &records, now())?;
         records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
         Ok(given)
@@ -2585,7 +2588,7 @@ impl Catalogue {
             }
             records
         };
-        records::files_references(&tx, &records, now())?;
+        records::files_references(&tx, albums, &records, now())?;
         records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
         Ok(())
@@ -5303,22 +5306,16 @@ mod tests {
         assert!(record_retired(&cat, lone), "its one track went to a record already there");
     }
 
-    /// What an album's files name at MusicBrainz is their record's `files` reference (C43b), as their tags say (R4). One
+    /// What an album's files name at MusicBrainz is their record's `files` reference (C43b), as its copy's files say (R8). One
     /// release's files on two records (G1, a bonus track): the older keeps the release, the newer its group, until a certain
     /// match or a hand says otherwise.
     #[test]
     fn a_files_release_is_a_files_reference() {
         let cat = tracks(6);
         let (release, group) = ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000101");
-        for track in 1..=6 {
-            let rel = format!("A/{track:02}.flac");
-            file_of_track(&cat, &rel, track);
-            let tags: &[(&str, &str)] = if track < 6 { &[("musicbrainz_albumid", release), ("musicbrainz_releasegroupid", group)] } else { &[("musicbrainz_albumid", "not a release")] };
-            cat.tag_for_tests(0, &rel, tags);
-        }
         let tagged = |title: &str, ids: &[i64], release: &str| {
             let a = album(title, ids);
-            AlbumCopy { facts: identity::RecordFacts { release: Some(release.into()), ..a.facts.clone() }, ..a }
+            AlbumCopy { facts: identity::RecordFacts { release: Some(release.into()), ..a.facts.clone() }, group: Some(group.into()), ..a }
         };
         let refs = |record: i64| -> Vec<(String, String, String)> {
             cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().map(|(r, row)| (r.kind, r.value, row.how)).collect()
@@ -5327,13 +5324,57 @@ mod tests {
         cat.assign_records(&[tagged("Tide Tables", &[1, 2], release)]).unwrap();
         let first = record_of(&cat, 1).unwrap();
         assert_eq!(refs(first), [by_files("release", release), by_files("release-group", group)]);
-        let (bonus, junk) = (tagged("Tide Tables", &[3, 4, 5], release), tagged("Junk", &[6], "not a release"));
+        let (bonus, junk) = (tagged("Tide Tables", &[3, 4, 5], release), AlbumCopy { group: None, ..tagged("Junk", &[6], "not a release") });
         cat.assign_records(&[tagged("Tide Tables", &[1, 2], release), bonus, junk]).unwrap();
         let (second, third) = (record_of(&cat, 3).unwrap(), record_of(&cat, 6).unwrap());
         assert_ne!(first, second, "a bonus track: two records");
         assert_eq!(refs(first), [by_files("release", release), by_files("release-group", group)]);
         assert_eq!(refs(second), [by_files("release-group", group)], "the older keeps the release");
         assert!(refs(third).is_empty(), "a tag that is no MusicBrainz id names nothing");
+    }
+
+    /// A copy of `title` over `ids` whose files name `release`, ranked `rank`.
+    fn naming(title: &str, ids: &[i64], release: &str, rank: u8) -> AlbumCopy {
+        let a = album(title, ids);
+        AlbumCopy { facts: identity::RecordFacts { release: Some(release.into()), ..a.facts.clone() }, rank, ..a }
+    }
+
+    /// R8 (N7): a retag that lets go of a release takes the MusicBrainz list read for it, and the count is worked out again
+    /// from what is left; a count chosen by hand from that list keeps it.
+    #[test]
+    fn a_retag_drops_the_old_releases_list_and_count() {
+        let cat = tracks(4);
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        cat.assign_records(&[naming("Tide Tables", &[1, 2], &mbid(1), 0), naming("Two Rooms", &[3, 4], &mbid(3), 0)]).unwrap();
+        let (worked, chosen) = (record_of(&cat, 1).unwrap(), record_of(&cat, 3).unwrap());
+        for (record, ids, by_hand) in [(worked, [1, 2], false), (chosen, [3, 4], true)] {
+            let list: Vec<identity::RefTrack> = ids.iter().zip(1..).map(|(t, position)| identity::RefTrack { disc: 1, position, title: format!("Track {t}"), length_ms: Some(200_000), recording: None }).collect();
+            cat.set_reference_tracks(record, "musicbrainz", &list).unwrap();
+            cat.set_counting(record, Some("musicbrainz"), by_hand).unwrap();
+        }
+        cat.keep_files_names(&[naming("Tide Tables", &[1, 2], &mbid(2), 0), naming("Two Rooms", &[3, 4], &mbid(4), 0)]).unwrap();
+        let state = |record: i64| (cat.reference_tracks(record).unwrap().len(), cat.record(record).unwrap().unwrap().counting);
+        assert_eq!(state(worked), (0, None), "the old release's list gone, and its count");
+        assert_eq!(state(chosen), (1, Some("musicbrainz".to_string())), "chosen by hand: kept");
+        assert_eq!(cat.references_of(&crate::serve::ids::record(worked)).unwrap().into_iter().map(|(r, _)| r.value).collect::<Vec<_>>(), [mbid(2)]);
+    }
+
+    /// R8 (N9): a record's `files` release is what its first-ranked copy names (CR18): Music's over an Incoming copy of its
+    /// tracks naming another, at a build with every record settled, wherever each comes in the list.
+    #[test]
+    fn the_main_librarys_copy_names_the_records_release() {
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        for (incoming_first, label) in [(true, "Incoming listed first"), (false, "Music listed first")] {
+            let cat = tracks(2);
+            let (main, incoming) = (naming("Tide Tables", &[1, 2], &mbid(1), 2), AlbumCopy { folder: 1, ..naming("Tide Tables", &[1, 2], &mbid(9), 0) });
+            cat.assign_records(std::slice::from_ref(&main)).unwrap();
+            let record = record_of(&cat, 1).unwrap();
+            let albums = if incoming_first { [incoming, main] } else { [main, incoming] };
+            cat.keep_files_names(&albums).unwrap();
+            assert_eq!(record_of(&cat, 2), Some(record), "{label}: one record");
+            let releases: Vec<String> = cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().filter(|(r, _)| r.kind == "release").map(|(r, _)| r.value).collect();
+            assert_eq!(releases, [mbid(1)], "{label}");
+        }
     }
 
     /// Only a record tracks left retires for having none: one that never had any is one not had, whatever else a pass moves.
