@@ -174,6 +174,9 @@ struct Kept {
     /// Requests taken off the list: not taken in again.
     #[serde(default)]
     dropped: Vec<i64>,
+    /// A file that could not be read nor set aside: nothing is written over it (R24).
+    #[serde(skip)]
+    frozen: bool,
 }
 
 static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
@@ -182,9 +185,10 @@ static FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 fn kept<T>(f: impl FnOnce(&mut Kept) -> T) -> T {
     let mut g = KEPT.lock().unwrap_or_else(|e| e.into_inner());
-    let k = g.get_or_insert_with(|| FILE.get().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default());
+    let k = g.get_or_insert_with(|| FILE.get().map(|p| load(p)).unwrap_or_default());
     let out = f(k);
     if let Some(p) = FILE.get()
+        && !k.frozen
         && let Ok(b) = serde_json::to_vec(k)
     {
         let part = p.with_extension("json.part");
@@ -193,6 +197,53 @@ fn kept<T>(f: impl FnOnce(&mut Kept) -> T) -> T {
         }
     }
     out
+}
+
+/// The queue as the data folder keeps it (`soulseek.json`); none yet, an empty one (R24, N4). One 0.16 wrote, its items naming
+/// their release group, is copied once to `soulseek.json.016` before 0.17 first writes over it, so a rollback finds it. One that
+/// cannot be read is set aside whole (`soulseek.json.unreadable-<time>`) and said in the log as an error, never emptied; where it
+/// cannot be set aside either, nothing is written to it.
+fn load(p: &Path) -> Kept {
+    let bytes = match std::fs::read(p) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Kept::default(),
+        Err(e) => return set_aside_unreadable(p, &format!("{e}")),
+    };
+    match serde_json::from_slice::<Kept>(&bytes) {
+        Ok(k) => {
+            let of_016 = serde_json::from_slice::<serde_json::Value>(&bytes).ok().is_some_and(|v| v["items"].as_array().is_some_and(|items| items.iter().any(|i| i["record"].get("release_group").is_some())));
+            let old = p.with_extension("json.016");
+            if of_016
+                && !old.exists()
+                && let Err(e) = std::fs::copy(p, &old)
+            {
+                tracing::error!(target: "soulseek", file = %old.display(), reason = %e, "0.16's Soulseek queue could not be kept aside");
+            }
+            k
+        }
+        Err(e) => set_aside_unreadable(p, &format!("{e}")),
+    }
+}
+
+/// An unreadable queue set aside under its time (`load`), a new one begun in its place.
+fn set_aside_unreadable(p: &Path, why: &str) -> Kept {
+    let aside = p.with_extension(format!("json.unreadable-{}", now()));
+    match std::fs::rename(p, &aside) {
+        Ok(()) => {
+            tracing::error!(target: "soulseek", file = %p.display(), aside = %aside.display(), reason = why, "the Soulseek queue could not be read: set aside, a new one begun");
+            Kept::default()
+        }
+        Err(e) => {
+            tracing::error!(target: "soulseek", file = %p.display(), reason = why, error = %e, "the Soulseek queue could not be read nor set aside: nothing is written to it");
+            Kept { frozen: true, ..Kept::default() }
+        }
+    }
+}
+
+/// The record an item is placed for, as the list holds it now (R24, N5), not as it was when its fetch began: an item 0.16 kept is
+/// given its record by the first round of requests, which can come while its first fetch at the upgrade start runs.
+fn record_now(k: &Kept, id: &str, was: &Record) -> Record {
+    k.items.iter().find(|i| i.id == id).map_or_else(|| was.clone(), |i| i.record.clone())
 }
 
 fn with_item(id: &str, f: impl FnOnce(&mut Item)) {
@@ -811,7 +862,7 @@ where
         slskd.drop_transfer(&f.user, &t.id).await;
     }
     match checked {
-        Ok(files) => match place(&it.record, &files) {
+        Ok(files) => match place(&kept(|k| record_now(k, id, &it.record)), &files) {
             Ok(to) => {
                 std::fs::remove_dir_all(&dir).ok();
                 tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), to = %to.display(), "placed in Incoming");
@@ -1355,6 +1406,56 @@ mod tests {
         take_requests(&mut k, &[], &[]);
         assert!(k.items.is_empty());
         assert!(k.dropped.is_empty(), "a dropped one no longer approved is forgotten");
+    }
+
+    /// A data folder of the test's own.
+    fn data_folder(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// R24 (N4): the queue 0.16 kept is copied aside once, before 0.17 writes its own over it: a rollback finds it; a later start,
+    /// its queue 0.17's, copies nothing over that copy.
+    #[test]
+    fn the_016_queue_is_kept_aside_once() {
+        let d = data_folder("keep-016");
+        let p = d.join("soulseek.json");
+        let old = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
+        std::fs::write(&p, old).unwrap();
+        assert_eq!(load(&p).items.len(), 1);
+        assert_eq!(std::fs::read_to_string(d.join("soulseek.json.016")).unwrap(), old);
+        std::fs::write(&p, serde_json::to_vec(&Kept::default()).unwrap()).unwrap();
+        load(&p);
+        assert_eq!(std::fs::read_to_string(d.join("soulseek.json.016")).unwrap(), old, "once");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// R24 (N4): a queue that cannot be read is set aside whole and a new one begun, never emptied in its place.
+    #[test]
+    fn an_unreadable_queue_is_set_aside_not_emptied() {
+        let d = data_folder("unreadable");
+        let p = d.join("soulseek.json");
+        std::fs::write(&p, b"{\"next\": 3, \"items\": [ not json").unwrap();
+        assert!(load(&p).items.is_empty());
+        let aside: Vec<PathBuf> = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.path()).filter(|f| f.to_string_lossy().contains("soulseek.json.unreadable-")).collect();
+        assert_eq!(aside.len(), 1, "set aside");
+        assert_eq!(std::fs::read(&aside[0]).unwrap(), b"{\"next\": 3, \"items\": [ not json");
+        assert!(!p.exists(), "nothing written in its place yet");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// R24 (N5): an item 0.16 kept, its fetch begun at the upgrade start before the first round of requests gave it its record, is
+    /// placed for its record as the list holds it once the fetch is done.
+    #[test]
+    fn an_old_item_fetched_first_at_start_is_placed_for_its_record() {
+        let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"fetching","batch":"b-1"}]}"#;
+        let mut k: Kept = serde_json::from_str(raw).unwrap();
+        let at_start = k.items[0].record.clone();
+        take_requests(&mut k, &[asked(7, Some("rg"))], &[of(42)]);
+        assert_eq!((at_start.record, record_now(&k, "ss-3", &at_start).record), (0, 42));
+        assert_eq!(record_now(&k, "ss-9", &at_start), at_start, "one gone from the list: as it was");
     }
 
     /// C51b (row 9.26): an item 0.16 kept, by its release group, is given its request's record and goes on as it was: its
