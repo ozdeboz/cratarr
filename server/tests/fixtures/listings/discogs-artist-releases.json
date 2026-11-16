@@ -1,0 +1,86 @@
+{
+ "pagination": {
+  "page": 1,
+  "pages": 6,
+  "per_page": 100,
+  "items": 563
+ },
+ "releases": [
+  {
+   "id": 406662,
+   "title": "Twoism",
+   "type": "master",
+   "main_release": 15288,
+   "artist": "Boards Of Canada",
+   "role": "Main",
+   "year": 1995,
+   "thumb": ""
+  },
+  {
+   "id": 2059417,
+   "title": "A Few Old Tunes",
+   "type": "master",
+   "main_release": 690476,
+   "artist": "Boards Of Canada",
+   "role": "Main",
+   "year": 1996,
+   "thumb": ""
+  },
+  {
+   "id": 14936,
+   "title": "Aquarius",
+   "type": "release",
+   "artist": "Boards Of Canada",
+   "role": "Main",
+   "year": 1998,
+   "thumb": "",
+   "format": "7\", Ltd",
+   "label": "Skam",
+   "status": "Accepted"
+  },
+  {
+   "id": 2601,
+   "title": "Pin Skeeling",
+   "type": "master",
+   "main_release": 3213,
+   "artist": "Tape Club",
+   "role": "Remix",
+   "year": 1998,
+   "thumb": ""
+  },
+  {
+   "id": 21756928,
+   "title": "Self Titled",
+   "type": "release",
+   "artist": "Gator (4), Mobil (3)",
+   "role": "Appearance",
+   "year": 2002,
+   "thumb": "",
+   "format": "CDr, Ltd, Mixtape",
+   "label": "Not On Label",
+   "status": "Accepted"
+  },
+  {
+   "id": 2657,
+   "title": "Dead Dogs Two",
+   "type": "master",
+   "main_release": 233063,
+   "artist": "cLOUDDEAD",
+   "role": "Producer",
+   "year": 2004,
+   "thumb": ""
+  },
+  {
+   "id": 41971,
+   "title": "Demon. 1",
+   "type": "release",
+   "artist": "Orbit Lane",
+   "role": "Remix",
+   "year": 1997,
+   "thumb": "",
+   "format": "12\"",
+   "label": "Musik Aus Strom",
+   "status": "Accepted"
+  }
+ ]
+}

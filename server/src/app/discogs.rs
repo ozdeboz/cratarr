@@ -531,6 +531,187 @@ pub(super) async fn release_group_of(http: &reqwest::Client, release: &str) -> R
     Ok(v["release-group"]["id"].as_str().map(str::to_string))
 }
 
+// ---- An artist's and a label's lists (0100, S11)
+
+/// A row of an artist's or a label's list at Discogs (S11): a master, or a release Discogs gives no master of (G5: a row of
+/// its own, typed once read); its title and artist as credited (Discogs' "(2)" and the "*" of a name's variation taken off),
+/// its year (none for Discogs' 0), its picture, and what a release's row says besides: its format and, on a label's list, its
+/// catalogue number. A master's main release, whose list is the master's.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Listed {
+    pub id: u64,
+    pub master: bool,
+    pub main_release: Option<u64>,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub thumb: Option<String>,
+    pub format: Option<String>,
+    pub catno: Option<String>,
+}
+
+/// One page of an artist's (`/artists/{id}/releases`) or a label's (`/labels/{id}/releases`) list, read: its rows, each once
+/// (a label's lists a release once for each time it names the label), and of an artist's only those they made themselves,
+/// role Main: their remixes, appearances and productions are other artists' records. Pure.
+fn listed_of(v: &Value) -> Vec<Listed> {
+    let mut out: Vec<Listed> = Vec::new();
+    for r in v["releases"].as_array().into_iter().flatten() {
+        if r["role"].as_str().is_some_and(|role| role != "Main") {
+            continue;
+        }
+        let (Some(id), Some(title)) = (r["id"].as_u64(), r["title"].as_str()) else { continue };
+        let master = r["type"].as_str() == Some("master");
+        if out.iter().any(|l| l.id == id && l.master == master) {
+            continue;
+        }
+        let text = |k: &str| r[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        out.push(Listed {
+            id,
+            master,
+            main_release: r["main_release"].as_u64().filter(|_| master),
+            title: title.trim().to_string(),
+            artist: clean_name(r["artist"].as_str().unwrap_or_default().trim().trim_end_matches('*')),
+            year: r["year"].as_i64().filter(|y| *y > 0).map(|y| y as i32),
+            thumb: text("thumb"),
+            format: text("format"),
+            catno: text("catno"),
+        });
+    }
+    out
+}
+
+/// How many pages a list has, as its page says (one where it does not).
+fn pages_of(v: &Value) -> u32 {
+    v["pagination"]["pages"].as_u64().map_or(1, |p| p.max(1) as u32)
+}
+
+/// How many pages of 100 an artist's list is read to: nearly every artist's is shorter, and the few with thousands of rows are
+/// mostly others' records they appear on.
+const ARTIST_PAGES: u32 = 10;
+
+/// An artist's own records at Discogs (S11, role Main): every page of their list up to `ARTIST_PAGES`, oldest first, at
+/// Discogs' pace. Empty where Discogs has no such artist or is switched off.
+#[allow(dead_code)] // an artist's missing list (C53a)
+pub async fn artist_masters(artist: u64) -> Result<Vec<Listed>> {
+    let mut out: Vec<Listed> = Vec::new();
+    let mut page = 1;
+    loop {
+        let Some(v) = get(&format!("/artists/{artist}/releases?sort=year&sort_order=asc&per_page=100&page={page}")).await? else { break };
+        for l in listed_of(&v) {
+            if !out.iter().any(|o| o.id == l.id && o.master == l.master) {
+                out.push(l);
+            }
+        }
+        if page >= pages_of(&v).min(ARTIST_PAGES) {
+            break;
+        }
+        page += 1;
+    }
+    Ok(out)
+}
+
+/// A label as Discogs knows it (S11): its name, its profile in plain words, its page, its own links, and the label it belongs
+/// to.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct LabelFacts {
+    pub id: u64,
+    pub name: String,
+    pub profile: String,
+    pub url: String,
+    pub urls: Vec<String>,
+    pub parent: Option<(u64, String)>,
+}
+
+/// A label's own answer (`/labels/{id}`), read. Pure.
+fn label_of(v: &Value) -> Option<LabelFacts> {
+    let id = v["id"].as_u64()?;
+    Some(LabelFacts {
+        id,
+        name: clean_name(v["name"].as_str()?),
+        profile: plain_text(v["profile"].as_str().unwrap_or_default()),
+        url: v["uri"].as_str().map_or_else(|| format!("https://www.discogs.com/label/{id}"), str::to_string),
+        urls: strings(&v["urls"]),
+        parent: v["parent_label"]["id"].as_u64().zip(v["parent_label"]["name"].as_str().map(clean_name)),
+    })
+}
+
+/// A label at Discogs (S11); none where Discogs has no such label or is switched off.
+#[allow(dead_code)] // a label's page (C56)
+pub async fn label(id: u64) -> Result<Option<LabelFacts>> {
+    Ok(get(&format!("/labels/{id}")).await?.as_ref().and_then(label_of))
+}
+
+/// One page of a label's list at Discogs (S11), oldest first: a label's runs to thousands (OQ10), so it is read a page of
+/// 100 at a time, the next when it is asked for. Its rows and how many pages there are; none where Discogs has no such label.
+#[allow(dead_code)] // a label's page (C56)
+pub async fn label_releases(id: u64, page: u32) -> Result<Option<(Vec<Listed>, u32)>> {
+    let Some(v) = get(&format!("/labels/{id}/releases?sort=year&sort_order=asc&per_page=100&page={}", page.max(1))).await? else { return Ok(None) };
+    Ok(Some((listed_of(&v), pages_of(&v))))
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::*;
+
+    fn fixture(name: &str) -> Value {
+        let text = match name {
+            "artist" => include_str!("../../tests/fixtures/listings/discogs-artist-releases.json"),
+            "label releases" => include_str!("../../tests/fixtures/listings/discogs-label-releases.json"),
+            _ => include_str!("../../tests/fixtures/listings/discogs-label.json"),
+        };
+        serde_json::from_str(text).unwrap()
+    }
+
+    /// S11: an artist's list (a page of Discogs' own answer, trimmed): their masters and the release they have no master of,
+    /// role Main alone; how many pages it has.
+    #[test]
+    fn an_artists_list_is_their_own_records() {
+        let v = fixture("artist");
+        let listed = listed_of(&v);
+        let rows: Vec<(u64, bool, Option<u64>, &str, &str, Option<i32>)> = listed.iter().map(|l| (l.id, l.master, l.main_release, l.title.as_str(), l.artist.as_str(), l.year)).collect();
+        assert_eq!(
+            rows,
+            [
+                (406662, true, Some(15288), "Twoism", "Boards Of Canada", Some(1995)),
+                (2059417, true, Some(690476), "A Few Old Tunes", "Boards Of Canada", Some(1996)),
+                (14936, false, None, "Aquarius", "Boards Of Canada", Some(1998)),
+            ],
+            "no remix, appearance or production of theirs"
+        );
+        assert_eq!((listed[0].thumb.as_deref(), listed[2].format.as_deref()), (None, Some("7\", Ltd")));
+        assert_eq!(pages_of(&v), 6);
+    }
+
+    /// S11: a label's list: each release once, its catalogue number and format, the "*" of a name's variation taken off, no
+    /// year for Discogs' 0; and the label itself, its profile in plain words.
+    #[test]
+    fn a_labels_list_and_the_label() {
+        let v = fixture("label releases");
+        let listed = listed_of(&v);
+        assert_eq!(listed.iter().map(|l| l.id).collect::<Vec<_>>(), [136, 137, 1384, 2801], "each once");
+        assert_eq!(
+            (listed[0].artist.as_str(), listed[0].catno.as_deref(), listed[0].format.as_deref(), listed[0].year, listed[0].master),
+            ("Glass Harbour", Some("WAP 67"), Some("12\", EP, Mono, Ltd"), Some(1995), false)
+        );
+        assert!(listed[0].thumb.is_some() && listed[1].thumb.is_none());
+        assert_eq!(listed[2].year, None, "Discogs' 0: no year");
+        assert_eq!(pages_of(&v), 86);
+        let label = label_of(&fixture("label")).unwrap();
+        assert_eq!(
+            label,
+            LabelFacts {
+                id: 23528,
+                name: "Warp Records".into(),
+                profile: "British electronic label. Since 1989.".into(),
+                url: "https://www.discogs.com/label/23528-Warp-Records".into(),
+                urls: vec!["http://warp.net".into(), "http://warppublishing.net".into(), "http://warprecords.bandcamp.com/music".into()],
+                parent: Some((264514, "Warp Records Limited".into())),
+            }
+        );
+        assert_eq!(pages_of(&serde_json::json!({})), 1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
