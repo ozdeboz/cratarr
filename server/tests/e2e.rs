@@ -2450,14 +2450,17 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     let ann = s.sign_in("ann", "ann's password").await;
     ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
     let bob = s.sign_in("bob", "bob's password").await;
-    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
-    user.busy_timeout(Duration::from_secs(10)).unwrap();
-    user.execute("INSERT INTO request (user, album_key, artist_key, album, artist, at, status) VALUES ('bob', 'k', 'k', 'Both Shores', 'Salt Meridian', 1, 'approved')", []).unwrap();
-    drop(user);
     let path = |p: &Path| p.to_string_lossy().to_string();
     let copies = |a: &Value| a["copies"].as_array().cloned().unwrap_or_default();
     let holds = |a: &Value, p: &Path| copies(a).iter().any(|c| c["library"].as_str() == Some(&*path(p)));
     s.until("both copies read", Duration::from_secs(120), || async { bob.albums().await.iter().any(|a| a["title"] == "Both Shores" && holds(a, &music) && holds(a, &incoming)) }).await;
+    // His request names the record (C49a, C49b): the album's id says which.
+    let id = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap()["id"].as_str().unwrap().to_string();
+    let record: i64 = id.trim_start_matches("al-").parse().unwrap();
+    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    user.busy_timeout(Duration::from_secs(10)).unwrap();
+    user.execute("INSERT INTO request (user, album_key, artist_key, album, artist, at, status, record) VALUES ('bob', 'k', 'k', 'Both Shores', 'Salt Meridian', 1, 'approved', ?1)", [record]).unwrap();
+    drop(user);
     let album = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap();
     let of = |p: &Path| copies(&album).into_iter().find(|c| c["library"].as_str() == Some(&*path(p))).unwrap();
     assert_eq!((of(&incoming)["deletable"].as_bool(), of(&music)["deletable"].as_bool()), (Some(true), Some(false)), "{album}");
