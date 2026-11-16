@@ -1059,12 +1059,7 @@ fn safe(s: &str) -> String {
     t.trim().trim_matches('.').to_string()
 }
 
-/// Where a record goes in its library: Artist/Record (Year), a number added where that is taken.
-fn place_in(lib: &Path, r: &Record) -> PathBuf {
-    folders_for(lib, r).next().expect("the numbers go on")
-}
-
-/// The folders a record may go in, in turn, none that is there already: Artist/Record (Year), then numbered (`place_in`).
+/// Where a record may go in its library, in turn, none that is there already: Artist/Record (Year), then with a number added.
 fn folders_for(lib: &Path, r: &Record) -> impl Iterator<Item = PathBuf> {
     let name = match r.year {
         Some(y) => format!("{} ({y})", safe(&r.album)),
@@ -1441,10 +1436,10 @@ mod tests {
         let d = std::env::temp_dir().join(format!("cratarr-soulseek-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let r = record("AC/DC", "Back in Black: Live?", Some(1980));
-        let first = place_in(&d, &r);
+        let first = folders_for(&d, &r).next().unwrap();
         assert_eq!(first, d.join("AC_DC").join("Back in Black_ Live_ (1980)"));
         std::fs::create_dir_all(&first).unwrap();
-        assert_eq!(place_in(&d, &r), d.join("AC_DC").join("Back in Black_ Live_ (1980) 2"));
+        assert_eq!(folders_for(&d, &r).next().unwrap(), d.join("AC_DC").join("Back in Black_ Live_ (1980) 2"));
         std::fs::remove_dir_all(&d).ok();
     }
 
