@@ -640,6 +640,9 @@ pub struct Label {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catno: Option<String>,
+    /// Discogs' own id for it (C46: what a label's reference is). Facts kept before it was read have none until read again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
 }
 
 /// Who did what on a release (`role`: "Producer", "Mastered By"…), on which tracks where not all ("A1 to A3").
@@ -729,7 +732,7 @@ fn labels_of(v: &Value) -> Vec<Label> {
     for l in v["labels"].as_array().into_iter().flatten() {
         let Some(name) = l["name"].as_str() else { continue };
         let catno = l["catno"].as_str().map(str::trim).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("none")).map(str::to_string);
-        let label = Label { name: clean_name(name), catno };
+        let label = Label { name: clean_name(name), catno, id: l["id"].as_u64() };
         if !out.contains(&label) {
             out.push(label);
         }
@@ -845,6 +848,16 @@ mod facts_tests {
         );
     }
 
+    /// C46: a label is kept with Discogs' id for it, what its reference will be; facts kept before have none, and read as before.
+    #[test]
+    fn labels_of_keeps_the_id() {
+        let v = serde_json::json!({ "labels": [{ "name": "Low Tide Records", "catno": "LTR-012", "id": 23528 }, { "name": "Bleep (2)", "catno": "none", "id": 9 }] });
+        assert_eq!(labels_of(&v), [Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528) }, Label { name: "Bleep".into(), catno: None, id: Some(9) }]);
+        let kept: Label = serde_json::from_str(r#"{"name":"Low Tide Records","catno":"LTR-012"}"#).unwrap();
+        assert_eq!(kept.id, None);
+        assert_eq!(id_in(&["https://www.discogs.com/label/23528-Low-Tide-Records".to_string()], "label"), Some(23528), "a label's page names its id");
+    }
+
     #[test]
     fn a_release_gives_its_labels_and_credits() {
         let v = serde_json::json!({
@@ -852,7 +865,7 @@ mod facts_tests {
             "extraartists": [{ "name": "Axel Boman", "anv": "", "role": "Producer", "tracks": "" }, { "name": "Mandy Parnell (2)", "role": "Mastered By" }],
             "tracklist": [{ "position": "A2", "extraartists": [{ "name": "Kornél Kovács", "anv": "Kornél", "role": "Vocals" }] }]
         });
-        assert_eq!(labels_of(&v), [Label { name: "Studio Barnhus".into(), catno: Some("BARN 042".into()) }, Label { name: "Self Released".into(), catno: None }]);
+        assert_eq!(labels_of(&v), [Label { name: "Studio Barnhus".into(), catno: Some("BARN 042".into()), id: None }, Label { name: "Self Released".into(), catno: None, id: None }]);
         let c = credits_of(&v);
         assert_eq!(c[0], Credit { name: "Axel Boman".into(), role: "Producer".into(), tracks: None });
         assert_eq!(c[1].name, "Mandy Parnell");

@@ -36,6 +36,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS references_one ON \"references\" (source, kind
 CREATE TABLE IF NOT EXISTS reference_tracks (
   record INTEGER NOT NULL, source TEXT NOT NULL, tracks TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (record, source)) WITHOUT ROWID;
+-- 0100: a label's id for life, served as `la-<id>`, kept when nothing names it any more, as an artist's (`catalogue::labels`).
+-- `key`: one name, one row, by `ids::artist_key`.
+CREATE TABLE IF NOT EXISTS labels (id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, name TEXT NOT NULL, key TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS labels_by_key ON labels (key);
+-- A record's artists in the order its files credit them, the first its album's artist; and its labels, each with its
+-- catalogue number ('' none). What an artist's and a label's pages list, had or not.
+CREATE TABLE IF NOT EXISTS record_artists (
+  record INTEGER NOT NULL, artist INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (record, artist)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS record_artists_by_artist ON record_artists (artist, record);
+CREATE TABLE IF NOT EXISTS record_labels (
+  record INTEGER NOT NULL, label INTEGER NOT NULL, catno TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (record, label, catno)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, record);
 ";
 
 /// The kinds a source gives to one subject alone (G1): what `references_one` holds unique.
@@ -166,6 +180,80 @@ pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], rec
         }
     }
     Ok(())
+}
+
+/// Who each album's files credit and what labels they name, kept for its record in the record pass's transaction (C46): the
+/// album artists in order (`record_artists`), each artist's MusicBrainz id as a `files` reference where the files give one
+/// id for each, and the labels with their catalogue numbers (`record_labels`). A record of several copies goes by its first
+/// album here. What a record holds already is left alone, so a pass over a library as it was writes nothing; what its files
+/// say now takes the place of what they said before.
+pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], records: &[Option<i64>], at: i64) -> Result<()> {
+    let mut first: std::collections::BTreeMap<i64, &super::AlbumCopy> = std::collections::BTreeMap::new();
+    for (a, record) in albums.iter().zip(records) {
+        if let Some(record) = record {
+            first.entry(*record).or_insert(a);
+        }
+    }
+    let names: std::collections::BTreeSet<String> = first.values().flat_map(|a| a.artists.iter().cloned()).collect();
+    let artists = super::artists::artists_in(tx, &names, at)?;
+    let label_names: std::collections::BTreeSet<String> = first.values().flat_map(|a| a.labels.iter().map(|(l, _)| l.clone())).collect();
+    let labels = super::labels::labels_in(tx, &label_names, at)?;
+    let held_artists = grouped(tx, "SELECT record, artist FROM record_artists ORDER BY record, position")?;
+    let held_labels: std::collections::HashMap<i64, Vec<(i64, String)>> = {
+        let mut st = tx.prepare("SELECT record, label, catno FROM record_labels ORDER BY record, label, catno")?;
+        let mut out: std::collections::HashMap<i64, Vec<(i64, String)>> = std::collections::HashMap::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
+            let (record, label, catno) = row?;
+            out.entry(record).or_default().push((label, catno));
+        }
+        out
+    };
+    for (record, a) in first {
+        let mut ids: Vec<i64> = Vec::new();
+        for name in &a.artists {
+            if let Some(id) = artists.get(&ids::artist_key(name))
+                && !ids.contains(id)
+            {
+                ids.push(*id);
+            }
+        }
+        if held_artists.get(&record).map_or(&[][..], Vec::as_slice) != ids.as_slice() {
+            tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1")?.execute([record])?;
+            for (position, artist) in ids.iter().enumerate() {
+                tx.prepare_cached("INSERT INTO record_artists (record, artist, position) VALUES (?1, ?2, ?3)")?.execute(params![record, artist, position as i64])?;
+            }
+        }
+        if a.artist_ids.len() == a.artists.len() {
+            for (name, mbid) in a.artists.iter().zip(&a.artist_ids) {
+                if let Some(id) = artists.get(&ids::artist_key(name))
+                    && is_mbid(mbid)
+                {
+                    put_reference(tx, &ids::artist(*id), &Ref::new("musicbrainz", "artist", mbid), "files", at, false)?;
+                }
+            }
+        }
+        let mut named: Vec<(i64, String)> = a.labels.iter().filter_map(|(name, catno)| Some((*labels.get(&ids::artist_key(name))?, catno.clone()))).collect();
+        named.sort();
+        named.dedup();
+        if held_labels.get(&record).map_or(&[][..], Vec::as_slice) != named.as_slice() {
+            tx.prepare_cached("DELETE FROM record_labels WHERE record = ?1")?.execute([record])?;
+            for (label, catno) in &named {
+                tx.prepare_cached("INSERT INTO record_labels (record, label, catno) VALUES (?1, ?2, ?3)")?.execute(params![record, label, catno])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A two-column query's second column by its first, in the query's order.
+fn grouped(tx: &Connection, sql: &str) -> Result<std::collections::HashMap<i64, Vec<i64>>> {
+    let mut st = tx.prepare(sql)?;
+    let mut out: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+    for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
+        let (a, b) = row?;
+        out.entry(a).or_default().push(b);
+    }
+    Ok(out)
 }
 
 /// `set_reference` in the caller's transaction, found at `at`. `takes`: one another subject holds alone comes here, as by hand.

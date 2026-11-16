@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn discogs_labels_are_named_once_and_not_on_label_is_no_label() {
-        let l = |name: &str| Label { name: name.into(), catno: None };
+        let l = |name: &str| Label { name: name.into(), catno: None, id: None };
         let names = label_names(&[l("Warp Records"), l("warp records"), l("Not On Label (Air Self-released)"), l(" "), l("Bleep")]);
         assert_eq!(names, ["Warp Records", "Bleep"]);
     }

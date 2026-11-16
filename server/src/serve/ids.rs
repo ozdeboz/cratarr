@@ -58,6 +58,16 @@ pub fn artist(id: i64) -> String {
     format!("{ARTIST}{id}")
 }
 
+/// What a label's id starts with (0100): a number for life, as an artist's. Only the server knows labels yet, so the prefix
+/// is its own, not the rules crate's.
+pub const LABEL: &str = "la-";
+
+/// A label's id as it is served: its number in the catalogue, for life.
+#[cfg_attr(not(test), allow(dead_code))] // a label's page (C56)
+pub fn label(id: i64) -> String {
+    format!("{LABEL}{id}")
+}
+
 /// What makes two names one artist: the same name, ignoring case and typographic quotes.
 pub fn artist_key(name: &str) -> String {
     clear(&name.to_lowercase())
@@ -109,14 +119,14 @@ pub fn record_number(id: &str) -> Option<i64> {
     id.strip_prefix(ALBUM).filter(|_| for_life(id)).and_then(|n| n.parse().ok())
 }
 
-/// The highest number named in `text` as a record's or an artist's id for life, `al-<digits>` or `ar-<digits>`, 0 for
+/// The highest number named in `text` as a record's, an artist's or a label's id for life, `al-`, `ar-` or `la-<digits>`, 0 for
 /// none: in a column, a key (`like:al-12`, `album:cratarr/al-12`) or a whole JSON store. A hash is no number: it runs on
 /// in letters, and 22 digits of one, if it ever came to that, are no id anyone was given.
 pub fn highest_named(text: &str) -> i64 {
     let word = |c: u8| c.is_ascii_alphanumeric();
     let bytes = text.as_bytes();
     let mut top = 0;
-    for prefix in [ALBUM, ARTIST] {
+    for prefix in [ALBUM, ARTIST, LABEL] {
         for (at, _) in text.match_indices(prefix) {
             if at > 0 && word(bytes[at - 1]) {
                 continue;

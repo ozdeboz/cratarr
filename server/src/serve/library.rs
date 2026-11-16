@@ -1629,6 +1629,20 @@ fn artist_number_in_tests(name: &str) -> i64 {
     (u64::from_le_bytes(hash[..8].try_into().unwrap_or_default()) >> 2) as i64
 }
 
+/// An album's labels as its first file that names any names them (Vorbis LABEL, MP4's, ID3v2 TPUB read as "label"), several
+/// in one value split as the crates split them, the catalogue number going with the first.
+fn labels_of_album(list: &[&Song]) -> Vec<(String, String)> {
+    let Some(s) = list.iter().find(|s| s.row.first("label").is_some()) else { return Vec::new() };
+    let mut names: Vec<String> = Vec::new();
+    for l in s.row.all("label").flat_map(crate::crates::labels_of) {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(&l)) {
+            names.push(l);
+        }
+    }
+    let catno = s.row.first("catalognumber").unwrap_or_default().to_string();
+    names.into_iter().enumerate().map(|(i, name)| (name, if i == 0 { catno.clone() } else { String::new() })).collect()
+}
+
 /// Stands in for `assign_records` in tests with no catalogue: each group a record of its own, from a stable hash of it,
 /// unless the test named one. So hand-made rows mean what they meant, and production has no fallback.
 #[cfg(test)]
@@ -1679,6 +1693,9 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                     tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
                 group: list.iter().find_map(|s| s.row.first("musicbrainz_releasegroupid")).map(str::to_lowercase),
+                artists: first.album_artists.clone(),
+                artist_ids: first.row.all("musicbrainz_albumartistid").flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect(),
+                labels: labels_of_album(&list),
                 title: first.album.clone(),
                 artist: first.album_artist.clone(),
                 year: list.iter().filter_map(|s| s.row.first("date").and_then(year_of)).max(),

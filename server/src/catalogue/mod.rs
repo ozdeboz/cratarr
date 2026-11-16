@@ -13,6 +13,7 @@ mod first;
 mod id3;
 pub mod identity;
 mod index_log;
+mod labels;
 pub mod normalise;
 pub mod records;
 pub mod tags;
@@ -121,9 +122,8 @@ CREATE TABLE IF NOT EXISTS beat_this (
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 ";
 
-/// The tables whose ids are for life and held in user data: what a fresh start of lost ids lifts. Labels join when they have
-/// ids of their own.
-const IDS_FOR_LIFE: [&str; 3] = ["tracks", "records", "artists"];
+/// The tables whose ids are for life and held in user data: what a fresh start of lost ids lifts.
+const IDS_FOR_LIFE: [&str; 4] = ["tracks", "records", "artists", "labels"];
 
 /// A file's beats and downbeats by Beat this! (decision 0049, amended), as heard: milliseconds from the start.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -194,6 +194,13 @@ pub struct AlbumCopy {
     pub facts: identity::RecordFacts,
     /// The MusicBrainz release group its files name, as tagged: with `facts.release`, a `files` reference of its record.
     pub group: Option<String>,
+    /// Its album artists in the order its files credit them, split as the library splits them (the first is the album's
+    /// artist), and the MusicBrainz artist ids the files give them, in the same order: its record's `record_artists`, and
+    /// each artist's `files` reference where there is one id for each.
+    pub artists: Vec<String>,
+    pub artist_ids: Vec<String>,
+    /// Its labels as its files name them, each with its catalogue number ('' none): its record's `record_labels`.
+    pub labels: Vec<(String, String)>,
     /// As shown, for the record's own facts.
     pub title: String,
     pub artist: String,
@@ -820,7 +827,7 @@ pub struct RowAnalysis {
 }
 
 impl ServedRow {
-    pub const TAGS: [&'static str; 27] = [
+    pub const TAGS: [&'static str; 29] = [
         "title",
         "artist",
         "artists",
@@ -843,6 +850,9 @@ impl ServedRow {
         "musicbrainz_artistid",
         "musicbrainz_albumartistid",
         "musicbrainz_releasegroupid",
+        // Its record's labels and catalogue number (0100, `record_labels`).
+        "label",
+        "catalognumber",
         "replaygain_track_gain",
         "replaygain_track_peak",
         "replaygain_album_gain",
@@ -2542,7 +2552,8 @@ impl Catalogue {
     /// retires for good, with what it became in `track_moved`, for what names it to follow (`Serve::built_now`). Copies of
     /// one record always hold the same tracks (Q8, the owner): one that no longer can leaves the record to the first by kind,
     /// then the largest (CR18), and takes tracks of its own, as what points at them stays with the record. What each album's
-    /// files name at MusicBrainz becomes its record's `files` references (`records::files_references`). The tracks given a
+    /// files name at MusicBrainz becomes its record's `files` references (`records::files_references`), and whom and which labels
+    /// they credit its `record_artists` and `record_labels` (`records::record_credits`). The tracks given a
     /// record, taken or let go of. Blocking.
     pub fn assign_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
         let mut db = self.db();
@@ -2550,6 +2561,7 @@ impl Catalogue {
         let read_half_way = self.read_half_way.swap(false, Ordering::SeqCst);
         let (given, records) = Self::assign(&tx, albums, now(), read_half_way || self.copies_are_moving())?;
         records::files_references(&tx, albums, &records, now())?;
+        records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
         Ok(given)
     }
