@@ -41,13 +41,14 @@ CREATE TABLE IF NOT EXISTS reference_tracks (
 CREATE TABLE IF NOT EXISTS labels (id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, name TEXT NOT NULL, key TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS labels_by_key ON labels (key);
 -- A record's artists in the order its files credit them, the first its album's artist; and its labels, each with its
--- catalogue number ('' none). What an artist's and a label's pages list, had or not.
+-- catalogue number ('' none). What an artist's and a label's pages list, had or not. `how`: `files` (the record pass's, which
+-- each build replaces) or `listing` (a discography's or a label's list, which no build touches).
 CREATE TABLE IF NOT EXISTS record_artists (
-  record INTEGER NOT NULL, artist INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+  record INTEGER NOT NULL, artist INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, how TEXT NOT NULL DEFAULT 'files',
   PRIMARY KEY (record, artist)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS record_artists_by_artist ON record_artists (artist, record);
 CREATE TABLE IF NOT EXISTS record_labels (
-  record INTEGER NOT NULL, label INTEGER NOT NULL, catno TEXT NOT NULL DEFAULT '',
+  record INTEGER NOT NULL, label INTEGER NOT NULL, catno TEXT NOT NULL DEFAULT '', how TEXT NOT NULL DEFAULT 'files',
   PRIMARY KEY (record, label, catno)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, record);
 -- 0.17's step: a record whose certain match from 0.16 names a release whose list is still to be read (`references::read_lists`).
@@ -108,7 +109,7 @@ pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[List
                     .execute(params![at, l.title, l.artist, l.year, l.kind, l.released, genres, l.cover])?;
                 let record = tx.last_insert_rowid();
                 if let Some(artist) = artist {
-                    tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position) VALUES (?1, ?2, 0)")?.execute(params![record, artist])?;
+                    tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')")?.execute(params![record, artist])?;
                 }
                 record
             }
@@ -170,12 +171,16 @@ fn found_by_listing(tx: &Connection, l: &Listing) -> Result<Option<i64>> {
 /// kept the surer way, and confirmed where either was; its lists where `into` has none from that source; its count where `into`
 /// has none, and its checks; its artists (after `into`'s) and labels; the facts `into` lacks. `from` answers through
 /// `merged_into` from then on, and so does every record merged into it before. A record with copies keeps its id, and two with
-/// copies are one only by their files: the record pass's, refused here.
+/// copies are one only by their files: the record pass's, refused here. Each is followed to where it was merged first (R9), a
+/// retired record takes no merge (it holds no release or page), and a reference `into` cannot take stops the merge: nothing of
+/// `from` is lost on the way.
 pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<()> {
+    let (from, into) = (merged_end(tx, from)?.context("no such record")?, merged_end(tx, into)?.context("no such record")?);
     if from == into {
         return Ok(());
     }
     anyhow::ensure!(!had(tx, from)?, "a record with copies keeps its id: merge the other into it, and two with copies are one only by their files");
+    anyhow::ensure!(!retired(tx, &ids::record(into))?, "a retired record takes no merge: it holds no release or page");
     let (subject, target) = (ids::record(from), ids::record(into));
     let refs: Vec<(Ref, String, i64, bool)> = {
         let mut st = tx.prepare("SELECT source, kind, value, how, at, confirmed FROM \"references\" WHERE subject = ?1")?;
@@ -183,7 +188,10 @@ pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<
     };
     tx.execute("DELETE FROM \"references\" WHERE subject = ?1", [&subject])?;
     for (r, how, at, confirmed) in &refs {
-        put_reference(tx, &target, r, how, *at, false)?;
+        match put_reference(tx, &target, r, how, *at, false)? {
+            Put::Kept(_) => {}
+            refused => anyhow::bail!("{} cannot take {} from {subject} ({refused:?})", target, named(&subject, r)),
+        }
         if *confirmed {
             tx.execute("UPDATE \"references\" SET confirmed = 1 WHERE subject = ?1 AND source = ?2 AND kind = ?3 AND value = ?4", params![target, r.source, r.kind, r.value])?;
         }
@@ -203,9 +211,9 @@ pub(super) fn merge_records_in(tx: &Connection, from: i64, into: i64) -> Result<
         params![from, into],
     )?;
     let after: i64 = tx.query_row("SELECT COALESCE(max(position) + 1, 0) FROM record_artists WHERE record = ?1", [into], |r| r.get(0))?;
-    tx.execute("INSERT OR IGNORE INTO record_artists (record, artist, position) SELECT ?2, artist, position + ?3 FROM record_artists WHERE record = ?1", params![from, into, after])?;
+    tx.execute("INSERT OR IGNORE INTO record_artists (record, artist, position, how) SELECT ?2, artist, position + ?3, how FROM record_artists WHERE record = ?1", params![from, into, after])?;
     tx.execute("DELETE FROM record_artists WHERE record = ?1", [from])?;
-    tx.execute("INSERT OR IGNORE INTO record_labels (record, label, catno) SELECT ?2, label, catno FROM record_labels WHERE record = ?1", params![from, into])?;
+    tx.execute("INSERT OR IGNORE INTO record_labels (record, label, catno, how) SELECT ?2, label, catno, how FROM record_labels WHERE record = ?1", params![from, into])?;
     tx.execute("DELETE FROM record_labels WHERE record = ?1", [from])?;
     tx.execute("UPDATE records SET merged_into = ?2 WHERE id = ?1 OR merged_into = ?1", params![from, into])?;
     Ok(())
@@ -433,9 +441,10 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
     let artists = super::artists::artists_in(tx, &names, at)?;
     let label_names: std::collections::BTreeSet<String> = first.values().flat_map(|a| a.labels.iter().map(|(l, _)| l.clone())).collect();
     let labels = super::labels::labels_in(tx, &label_names, at)?;
-    let held_artists = grouped(tx, "SELECT record, artist FROM record_artists ORDER BY record, position")?;
+    // The build's own rows (`files`) alone: a list's (`listing`, a merge's) are no build's to replace (R9).
+    let held_artists = grouped(tx, "SELECT record, artist FROM record_artists WHERE how = 'files' ORDER BY record, position")?;
     let held_labels: std::collections::HashMap<i64, Vec<(i64, String)>> = {
-        let mut st = tx.prepare("SELECT record, label, catno FROM record_labels ORDER BY record, label, catno")?;
+        let mut st = tx.prepare("SELECT record, label, catno FROM record_labels WHERE how = 'files' ORDER BY record, label, catno")?;
         let mut out: std::collections::HashMap<i64, Vec<(i64, String)>> = std::collections::HashMap::new();
         for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
             let (record, label, catno) = row?;
@@ -453,9 +462,13 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
             }
         }
         if held_artists.get(&record).map_or(&[][..], Vec::as_slice) != ids.as_slice() {
-            tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1")?.execute([record])?;
+            tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND how = 'files'")?.execute([record])?;
             for (position, artist) in ids.iter().enumerate() {
-                tx.prepare_cached("INSERT INTO record_artists (record, artist, position) VALUES (?1, ?2, ?3)")?.execute(params![record, artist, position as i64])?;
+                tx.prepare_cached(
+                    "INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'files')
+                     ON CONFLICT (record, artist) DO UPDATE SET position = excluded.position, how = 'files'",
+                )?
+                .execute(params![record, artist, position as i64])?;
             }
         }
         if a.artist_ids.len() == a.artists.len() {
@@ -471,9 +484,10 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         named.sort();
         named.dedup();
         if held_labels.get(&record).map_or(&[][..], Vec::as_slice) != named.as_slice() {
-            tx.prepare_cached("DELETE FROM record_labels WHERE record = ?1")?.execute([record])?;
+            tx.prepare_cached("DELETE FROM record_labels WHERE record = ?1 AND how = 'files'")?.execute([record])?;
             for (label, catno) in &named {
-                tx.prepare_cached("INSERT INTO record_labels (record, label, catno) VALUES (?1, ?2, ?3)")?.execute(params![record, label, catno])?;
+                tx.prepare_cached("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, ?3, 'files') ON CONFLICT (record, label, catno) DO UPDATE SET how = 'files'")?
+                    .execute(params![record, label, catno])?;
             }
         }
     }
@@ -1599,6 +1613,47 @@ mod tests {
         assert_eq!(cat.references_of(&ids::artist(rone)).unwrap().into_iter().map(|(r, _)| r.value).collect::<Vec<_>>(), [mbid(301)]);
         let shared = report["unmatched"].as_array().unwrap().iter().find(|u| u["what"] == SHARED_NAME).cloned().unwrap();
         assert_eq!(shared["sample"], serde_json::json!([format!("{} Rone", mbid(302))]), "{report}");
+    }
+
+    /// R9 (N10): a merge into a record merged before goes to where that one went, every reference with it; a retired record
+    /// takes none, and nothing of the record is lost for it.
+    #[test]
+    fn merging_into_a_merged_record_keeps_every_reference() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let [from, between, end] = ["Ferry Lights", "Ferry Lights (2)", "Ferry Lights (3)"].map(|t| cat.record_for_tests(t, 0));
+        cat.merge_records(between, end).unwrap();
+        let (release, page) = (Ref::new("musicbrainz", "release", "r1"), Ref::new("bandcamp", "album", "https://kitetheory.bandcamp.com/album/ferry-lights"));
+        for r in [&release, &page] {
+            assert!(cat.set_reference(&ids::record(from), r, "search").unwrap());
+        }
+        cat.merge_records(from, between).unwrap();
+        assert_eq!((cat.subject_of(&release).unwrap(), cat.subject_of(&page).unwrap()), (vec![ids::record(end)], vec![ids::record(end)]));
+        assert_eq!(cat.record(from).unwrap().unwrap().id, end);
+
+        let (kept, gone) = (cat.record_for_tests("Signal", 0), cat.record_for_tests("Signal (old)", 0));
+        assert!(cat.set_reference(&ids::record(kept), &Ref::new("musicbrainz", "release", "r7"), "search").unwrap());
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [gone]).unwrap();
+        assert!(cat.merge_records(kept, gone).is_err(), "a retired record takes no merge");
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "release", "r7")).unwrap(), [ids::record(kept)], "nothing lost");
+    }
+
+    /// R9 (N8): a label a merged record brought (from a list, not the files) survives the next build: the build replaces only
+    /// its own rows.
+    #[test]
+    fn a_merged_records_label_survives_the_next_build() {
+        let cat = crate::catalogue::tests::tracks(2);
+        let copy = super::super::AlbumCopy { labels: vec![("Low Tide Records".into(), "LT-1".into())], artists: vec!["Glass Harbour".into()], ..crate::catalogue::tests::copy(None, "Glass Harbour", "Tide Tables", &[(1, "One", 200_000), (2, "Two", 200_000)]) };
+        cat.assign_records(std::slice::from_ref(&copy)).unwrap();
+        let had = crate::catalogue::tests::record_of(&cat, 1).unwrap();
+        let listed = cat.record_for_tests("Tide Tables", 0);
+        let lantern = cat.label_for("Paper Lantern").unwrap();
+        cat.db().execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, 'PL-3', 'listing')", params![listed, lantern]).unwrap();
+        cat.merge_records(listed, had).unwrap();
+        cat.keep_files_names(std::slice::from_ref(&copy)).unwrap();
+        let labels: Vec<(String, String)> = cat.label_records(lantern).unwrap().into_iter().map(|(r, catno)| (crate::serve::ids::record(r), catno)).collect();
+        assert_eq!(labels, [(ids::record(had), "PL-3".to_string())], "the list's label kept");
+        let low_tide = cat.label_for("Low Tide Records").unwrap();
+        assert_eq!(cat.label_records(low_tide).unwrap().len(), 1, "the files' own, as before");
     }
 
     /// A refused write deletes nothing: every holder is weighed before any lets go, so a guess held beside a hand (made here
