@@ -54,6 +54,11 @@ CREATE INDEX IF NOT EXISTS record_labels_by_label ON record_labels (label, recor
 -- 0.17's step: a record whose certain match from 0.16 names a release whose list is still to be read (`references::read_lists`).
 -- It counts nothing and waits off Health's references item until the list is read and held against its files.
 -- `tries`: questions that failed for it; let go after a few (R7).
+-- C50: a folder a fetcher placed for a record not had (`expect_record`): the album that arrives there is that record, its tracks
+-- given to it. By the folder's id, which is for life, and the album's folder in it; forgotten after a week unclaimed.
+CREATE TABLE IF NOT EXISTS expected (
+  folder INTEGER NOT NULL, dir TEXT NOT NULL, record INTEGER NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (folder, dir)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TEXT NOT NULL, at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0);
 ";
 
@@ -951,6 +956,74 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
     Ok((record, made))
 }
 
+/// How long a folder expected for a record waits for its album (`expect_record`).
+const EXPECTED_SECS: i64 = 7 * 86_400;
+
+/// The folders expected for records (C50), by (folder, the album's folder in it), those older than `EXPECTED_SECS` let go of
+/// first, in the record pass's transaction.
+pub(super) fn expected_in(tx: &Connection, now: i64) -> Result<std::collections::HashMap<(i64, String), i64>> {
+    tx.execute("DELETE FROM expected WHERE at < ?1", [now - EXPECTED_SECS])?;
+    let mut st = tx.prepare_cached("SELECT folder, dir, record FROM expected")?;
+    let rows = st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), r.get(2)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The record not had a new album is (C50), where it is one, held in turn: the record expected in its folder (a fetcher placed
+/// it there for it, `expect_record`), else a record not had its files' release or release group names, else one of its names
+/// whose kept tracklist agrees with its files (`identity::agrees`: names alone never join two records). Merges are followed, and
+/// the oldest is taken where several are. Never a retired record: under OQ16 a retired record stays its group's record not
+/// had, but an album that arrives is new tracks, and makes a record of its own, as before 0.17.
+pub(super) fn wanted_record(tx: &Connection, a: &super::AlbumCopy, expected: Option<i64>) -> Result<Option<i64>> {
+    use super::identity::{agrees, fold};
+    // A record that can take an album's tracks: live, not retired, with none of its own.
+    let open = |record: i64| -> Result<Option<i64>> {
+        let Some(id) = merged_end(tx, record)? else { return Ok(None) };
+        let free: bool = tx.query_row(
+            "SELECT r.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL) FROM records r WHERE r.id = ?1",
+            [id],
+            |r| r.get(0),
+        )?;
+        Ok(free.then_some(id))
+    };
+    if let Some(record) = expected
+        && let Some(id) = open(record)?
+    {
+        return Ok(Some(id));
+    }
+    for (kind, value) in [("release", a.facts.release.as_deref()), ("release-group", a.group.as_deref())] {
+        let Some(value) = value.filter(|v| is_mbid(v)) else { continue };
+        let mut found: Vec<i64> = Vec::new();
+        for subject in subjects_in(tx, &Ref::new("musicbrainz", kind, value))? {
+            if let Some(record) = ids::record_number(&subject)
+                && let Some(id) = open(record)?
+            {
+                found.push(id);
+            }
+        }
+        if let Some(id) = found.into_iter().min() {
+            return Ok(Some(id));
+        }
+    }
+    let named: Vec<i64> = {
+        let mut st = tx.prepare_cached(
+            "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
+             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id) ORDER BY r.id",
+        )?;
+        let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        rows.into_iter().filter(|(_, artist, title)| !a.facts.title.is_empty() && fold(artist) == a.facts.artist && fold(title) == a.facts.title).map(|(id, ..)| id).collect()
+    };
+    for id in named {
+        let lists: Vec<String> = {
+            let mut st = tx.prepare_cached("SELECT tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
+            st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        };
+        if lists.iter().filter_map(|l| serde_json::from_str::<Vec<RefTrack>>(l).ok()).any(|l| agrees(&l, &a.facts.tracks)) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
 /// Where 0.17's step keeps the record it gave each request (`requests`), in the part's transaction: the user data's own
 /// (`request.record`) is written from it at every start where it is still empty, so a step cut off between the two gives it
 /// at the next.
@@ -1438,6 +1511,15 @@ fn carry_part(tx: &Connection, c: &Carry, part: &str, now: i64) -> Result<serde_
 }
 
 impl Catalogue {
+    /// The album a fetcher placed in `dir` of catalogue folder `folder` is `record` (C50, `wanted_record`): when the record pass
+    /// meets it as a new album, its tracks are given to that record, a record not had, and the expectation is used up. Forgotten
+    /// after a week unclaimed. Blocking.
+    #[cfg_attr(not(test), allow(dead_code))] // Soulseek's `place` (C51b)
+    pub fn expect_record(&self, folder: i64, dir: &str, record: i64) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO expected (folder, dir, record, at) VALUES (?1, ?2, ?3, ?4)", params![folder, dir.trim_matches('/'), record, now()])?;
+        Ok(())
+    }
+
     /// The records 0.17's step gave the requests (C49a), by request id, for the user data's `request.record`. Blocking.
     pub fn request_records_017(&self) -> Result<Vec<(i64, i64)>> {
         let Some(text) = self.meta(REQUEST_RECORDS) else { return Ok(Vec::new()) };

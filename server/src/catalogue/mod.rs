@@ -2712,6 +2712,8 @@ impl Catalogue {
             let Some(record) = record else { continue };
             home.extend(list.iter().map(|t| take.now(*t)).filter(|t| held.record.get(t) == Some(record)).map(|t| (t, *record)));
         }
+        // Folders a fetcher placed for a record not had (C50): their albums are those records.
+        let expected = records::expected_in(tx, now)?;
         let mut given = 0;
         // The records a track moved out of.
         let mut left = std::collections::HashSet::new();
@@ -2787,9 +2789,22 @@ impl Catalogue {
                                 take.by_name(&held, r, (&tracks[i], &a.facts.tracks), (&tracks[j], &albums[j].facts.tracks));
                                 r
                             }
+                            // A record not had that this album is (C50: expected here, else by its references, else by its
+                            // list), else a new record.
                             None => {
-                                born.execute(params![now, a.title, a.artist, a.year])?;
-                                tx.last_insert_rowid()
+                                let dir = a.files.first().map(|(folder, rel)| (*folder, dir_of(rel).to_string()));
+                                match records::wanted_record(tx, a, dir.as_ref().and_then(|d| expected.get(d)).copied())? {
+                                    Some(r) => {
+                                        if let Some((folder, dir)) = &dir {
+                                            tx.execute("DELETE FROM expected WHERE folder = ?1 AND dir = ?2", params![folder, dir])?;
+                                        }
+                                        r
+                                    }
+                                    None => {
+                                        born.execute(params![now, a.title, a.artist, a.year])?;
+                                        tx.last_insert_rowid()
+                                    }
+                                }
                             }
                         };
                         // Those it lists are given it below, with their places.
@@ -5375,6 +5390,78 @@ mod tests {
             let releases: Vec<String> = cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().filter(|(r, _)| r.kind == "release").map(|(r, _)| r.value).collect();
             assert_eq!(releases, [mbid(1)], "{label}");
         }
+    }
+
+    /// A copy of `title` lying in `dir` of folder 0, its tracks `ids` named "Track <id>".
+    fn arriving(title: &str, ids: &[i64], dir: &str) -> AlbumCopy {
+        AlbumCopy { files: ids.iter().map(|t| (0, format!("{dir}/{t:02}.flac"))).collect(), ..album(title, ids) }
+    }
+
+    /// A record not had, of `title` by "A" (as `album` names its albums), holding `refs`.
+    fn not_had(cat: &Catalogue, title: &str, refs: &[(&str, &str)]) -> i64 {
+        cat.db().execute("INSERT INTO records (born, title, artist) VALUES (1, ?1, 'A')", [title]).unwrap();
+        let record = cat.db().last_insert_rowid();
+        for (kind, value) in refs {
+            assert!(cat.set_reference(&crate::serve::ids::record(record), &records::Ref::new("musicbrainz", kind, value), "link").unwrap());
+        }
+        record
+    }
+
+    /// C50: an album that arrives in a folder a fetcher placed for a record not had is that record, whatever it is named: its
+    /// tracks given to it; the expectation used up.
+    #[test]
+    fn a_wanted_record_gets_its_tracks_by_expectation() {
+        let cat = tracks(2);
+        let wanted = not_had(&cat, "Quiet Lanes", &[]);
+        cat.expect_record(0, "Orbit Lane/Quiet Lanes", wanted).unwrap();
+        cat.assign_records(&[arriving("Silent Roads", &[1, 2], "Orbit Lane/Quiet Lanes")]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 2)), (Some(wanted), Some(wanted)));
+        assert!(cat.record(wanted).unwrap().unwrap().had);
+        assert_eq!(cat.db().query_row("SELECT count(*) FROM expected", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "used up");
+    }
+
+    /// C50: an album whose files name a release a record not had holds is that record; one naming its release group too.
+    #[test]
+    fn a_wanted_record_gets_its_tracks_by_reference() {
+        let cat = tracks(4);
+        let (release, group) = ("00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000105");
+        let (by_release, by_group) = (not_had(&cat, "Late Train OST", &[("release", release)]), not_had(&cat, "Lost Tapes", &[("release-group", group)]));
+        let first = AlbumCopy { facts: identity::RecordFacts { release: Some(release.into()), ..album("Late Train", &[1, 2]).facts }, ..arriving("Late Train", &[1, 2], "Late Train") };
+        let second = AlbumCopy { group: Some(group.into()), ..arriving("Lost Tapes (Remaster)", &[3, 4], "Lost Tapes") };
+        cat.assign_records(&[first, second]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 3)), (Some(by_release), Some(by_group)));
+    }
+
+    /// C50: an album named as a record not had, whose kept tracklist agrees with its files, is that record; of the same names
+    /// with a list that does not agree, a record of its own.
+    #[test]
+    fn a_wanted_record_gets_its_tracks_by_tracklist() {
+        let cat = tracks(4);
+        let list = |titles: &[&str]| -> Vec<identity::RefTrack> { titles.iter().zip(1..).map(|(t, position)| identity::RefTrack { disc: 1, position, title: t.to_string(), length_ms: Some(200_000), recording: None }).collect() };
+        let agreeing = not_had(&cat, "Tide Tables", &[]);
+        cat.set_reference_tracks(agreeing, "discogs", &list(&["Track 1", "Track 2"])).unwrap();
+        let other = not_had(&cat, "Ferry Lights", &[]);
+        cat.set_reference_tracks(other, "musicbrainz", &list(&["Track 3", "Track 4 (Remastered)"])).unwrap();
+        cat.assign_records(&[arriving("Tide Tables", &[1, 2], "Tide Tables"), arriving("Ferry Lights", &[3, 4], "Ferry Lights")]).unwrap();
+        assert_eq!(record_of(&cat, 1), Some(agreeing));
+        assert_ne!(record_of(&cat, 3), Some(other), "its list does not agree: a name alone joins nothing");
+        assert!(record_of(&cat, 3).is_some());
+    }
+
+    /// C50: a retired record is never joined: expected in a folder and holding the release the album names, still the album
+    /// that arrives makes a record of its own (under OQ16 the retired record stays its group's record not had).
+    #[test]
+    fn a_retired_record_is_not_joined() {
+        let cat = tracks(2);
+        let release = "00000000-0000-4000-8000-000000000006";
+        let gone = not_had(&cat, "Partial Shore", &[("release-group", "00000000-0000-4000-8000-000000000106")]);
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [gone]).unwrap();
+        cat.expect_record(0, "Partial Shore", gone).unwrap();
+        let back = AlbumCopy { group: Some("00000000-0000-4000-8000-000000000106".into()), facts: identity::RecordFacts { release: Some(release.into()), ..album("Partial Shore", &[1, 2]).facts }, ..arriving("Partial Shore", &[1, 2], "Partial Shore") };
+        cat.assign_records(&[back]).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        assert_ne!(record, gone);
+        assert!(cat.record(gone).unwrap().unwrap().retired_at.is_some(), "still retired");
     }
 
     /// Only a record tracks left retires for having none: one that never had any is one not had, whatever else a pass moves.
