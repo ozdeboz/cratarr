@@ -2434,7 +2434,9 @@ async fn the_card_hears_the_incoming_copy_end_to_end() {
 }
 
 /// A request of bob's waits in Incoming, and Music holds the same record, so the record's id is on his list of what he may delete.
-/// The right is his copy's: naming Music's is refused and leaves it there, and his own goes.
+/// The right is his copy's: naming Music's is refused and leaves it there, and his own goes. His request names a record not had,
+/// made when he asked, before the album came; the album came as a record of its own (C50 did not join it), which holds his
+/// record's files by its artist and title (R13), so he is its requester.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
@@ -2454,13 +2456,17 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     let copies = |a: &Value| a["copies"].as_array().cloned().unwrap_or_default();
     let holds = |a: &Value, p: &Path| copies(a).iter().any(|c| c["library"].as_str() == Some(&*path(p)));
     s.until("both copies read", Duration::from_secs(120), || async { bob.albums().await.iter().any(|a| a["title"] == "Both Shores" && holds(a, &music) && holds(a, &incoming)) }).await;
-    // His request names the record (C49a, C49b): the album's id says which.
-    let id = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap()["id"].as_str().unwrap().to_string();
-    let record: i64 = id.trim_start_matches("al-").parse().unwrap();
+    let catalogue = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    catalogue.busy_timeout(Duration::from_secs(10)).unwrap();
+    catalogue.execute("INSERT INTO records (born, title, artist) VALUES (1, 'Both Shores', 'Salt Meridian')", []).unwrap();
+    let record = catalogue.last_insert_rowid();
+    drop(catalogue);
     let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
     user.busy_timeout(Duration::from_secs(10)).unwrap();
     user.execute("INSERT INTO request (user, album_key, artist_key, album, artist, at, status, record) VALUES ('bob', 'k', 'k', 'Both Shores', 'Salt Meridian', 1, 'approved', ?1)", [record]).unwrap();
     drop(user);
+    let id = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap()["id"].as_str().unwrap().to_string();
+    assert_ne!(id, format!("al-{record}"), "the album a record of its own");
     let album = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap();
     let of = |p: &Path| copies(&album).into_iter().find(|c| c["library"].as_str() == Some(&*path(p))).unwrap();
     assert_eq!((of(&incoming)["deletable"].as_bool(), of(&music)["deletable"].as_bool()), (Some(true), Some(false)), "{album}");

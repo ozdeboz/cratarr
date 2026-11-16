@@ -1330,7 +1330,7 @@ mod tests {
 
     /// A request's record as `records_of` reads it: record `n`, named after its request.
     fn of(n: i64) -> Option<super::super::requests::RecordOf> {
-        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, had: false })
+        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, holder: None })
     }
 
     #[test]

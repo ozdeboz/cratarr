@@ -584,7 +584,119 @@ fn subjects_in(db: &Connection, r: &Ref) -> Result<Vec<String>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+// ---- Had (R13): one rule for whether a record is had, a request's record's and the artist pages' (C53a)
+
+/// The references that say two records are two where both hold one source's same kind with no value in common, whatever their
+/// names say.
+const IDENTIFYING: [(&str, &str); 5] = [("musicbrainz", "release-group"), ("musicbrainz", "release"), ("discogs", "master"), ("discogs", "release"), ("bandcamp", "album")];
+
+/// The live, had records by their folded artist and title: read once for all the records a caller asks after (`holder_in`).
+type HadNames = Option<std::collections::HashMap<(String, String), Vec<i64>>>;
+
+/// Whether a record is live (neither merged nor retired) and holds live tracks.
+fn live_had(db: &Connection, record: i64) -> Result<bool> {
+    let mut st = db.prepare_cached(
+        "SELECT r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL) FROM records r WHERE r.id = ?1",
+    )?;
+    Ok(st.query_row([record], |r| r.get(0)).optional()?.unwrap_or(false))
+}
+
+/// A subject's references: (source, kind, value).
+fn refs_in(db: &Connection, subject: &str) -> Result<Vec<(String, String, String)>> {
+    let mut st = db.prepare_cached("SELECT source, kind, value FROM \"references\" WHERE subject = ?1")?;
+    let rows = st.query_map([subject], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Which record holds a record's files (R13, the one rule for "had", C53a's too), `record` a merge's end: the record itself
+/// where it holds live tracks; else the oldest live, had record that holds its MusicBrainz release or release group (an album
+/// that arrived as a record of its own, its group known since by its tags, a match or Lidarr); else the oldest live, had record
+/// of its artist with its title, both folded, where no reference contradicts (`IDENTIFYING`). None: not had.
+fn holder_in(db: &Connection, record: i64, names: &mut HadNames) -> Result<Option<i64>> {
+    use super::identity::fold;
+    if live_had(db, record)? {
+        return Ok(Some(record));
+    }
+    let own = refs_in(db, &ids::record(record))?;
+    let mut by_ref = Vec::new();
+    for (source, kind, value) in own.iter().filter(|(s, k, _)| s == "musicbrainz" && (k == "release" || k == "release-group")) {
+        for subject in subjects_in(db, &Ref::new(source, kind, value))? {
+            if let Some(id) = ids::record_number(&subject)
+                && let Some(id) = merged_end(db, id)?
+                && id != record
+                && live_had(db, id)?
+            {
+                by_ref.push(id);
+            }
+        }
+    }
+    if let Some(id) = by_ref.into_iter().min() {
+        return Ok(Some(id));
+    }
+    let named = db.prepare_cached("SELECT COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id = ?1")?.query_row([record], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional()?;
+    let Some(key) = named.map(|(artist, title)| (fold(&artist), fold(&title))).filter(|(_, title)| !title.is_empty()) else { return Ok(None) };
+    if names.is_none() {
+        let mut st = db.prepare_cached(
+            "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
+             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL) ORDER BY r.id",
+        )?;
+        let mut by_name: std::collections::HashMap<(String, String), Vec<i64>> = std::collections::HashMap::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+            let (id, artist, title) = row?;
+            by_name.entry((fold(&artist), fold(&title))).or_default().push(id);
+        }
+        *names = Some(by_name);
+    }
+    let values = |refs: &[(String, String, String)], source: &str, kind: &str| refs.iter().filter(|(s, k, _)| s == source && k == kind).map(|(.., v)| v.clone()).collect::<Vec<_>>();
+    let contradicts = |other: &[(String, String, String)]| {
+        IDENTIFYING.iter().any(|(source, kind)| {
+            let (mine, theirs) = (values(&own, source, kind), values(other, source, kind));
+            !mine.is_empty() && !theirs.is_empty() && !mine.iter().any(|v| theirs.contains(v))
+        })
+    };
+    for &id in names.as_ref().and_then(|n| n.get(&key)).map(Vec::as_slice).unwrap_or_default() {
+        if id != record && !contradicts(&refs_in(db, &ids::record(id))?) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+/// The record a release group names where a request asks for it (R13, F2): its oldest live, had holder; else its oldest live
+/// one; a retired one only where no live record holds it (OQ16: a retired record stays its group's record not had).
+fn group_record_in(tx: &Connection, group: &Ref) -> Result<Option<i64>> {
+    let mut holders: Vec<(bool, bool, i64)> = Vec::new();
+    for subject in subjects_in(tx, group)? {
+        if let Some(id) = ids::record_number(&subject)
+            && let Some(id) = merged_end(tx, id)?
+        {
+            let retired: bool = tx.prepare_cached("SELECT retired_at IS NOT NULL FROM records WHERE id = ?1")?.query_row([id], |r| r.get(0))?;
+            holders.push((retired, !live_had(tx, id)?, id));
+        }
+    }
+    Ok(holders.into_iter().min().map(|(.., id)| id))
+}
+
 impl Catalogue {
+    /// Which record holds each of these records' files (R13, `holder_in`: the one rule for "had"), each a merge's end: those had
+    /// only, on one connection, the live records' names read once. Blocking.
+    pub fn holders(&self, records: &[i64]) -> Result<std::collections::HashMap<i64, i64>> {
+        let read = |db: &Connection| -> Result<std::collections::HashMap<i64, i64>> {
+            let mut names = None;
+            let mut out = std::collections::HashMap::new();
+            for &record in records {
+                if let Some(holder) = holder_in(db, record, &mut names)? {
+                    out.insert(record, holder);
+                }
+            }
+            Ok(out)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// A record by its id for life: had or not, retired or not, and where it was merged into another (G3), that one, so an id
     /// any page or list keeps answers for good. None: no such id. Blocking.
     pub fn record(&self, id: i64) -> Result<Option<RecordRow>> {
@@ -908,8 +1020,8 @@ pub struct Wanted {
     pub page: Option<String>,
 }
 
-/// The record an album asked for is, in the caller's transaction (C49a): the record its release group names (the oldest, each
-/// followed through its merges; under OQ16 a retired record is its group's), else the oldest live record had of its names,
+/// The record an album asked for is, in the caller's transaction (C49a): the record its release group names (`group_record_in`:
+/// the oldest live one, had first; a retired one only where no live record holds it, OQ16), else the oldest live record had of its names,
 /// else a new record not had, credited to its artist (`listing`). Its label, where a label named it, credited too (`listing`);
 /// its Bandcamp album page, where it has no release group, a reference (`search`), so Soulseek can judge by Bandcamp's list
 /// (C51b). Its id, and whether it was made now.
@@ -917,7 +1029,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
     use super::identity::fold;
     let group = w.group.as_deref().map(str::to_ascii_lowercase).filter(|g| is_mbid(g)).map(|g| Ref::new("musicbrainz", "release-group", &g));
     let by_group = match &group {
-        Some(g) => found_by_reference(tx, &Listing { refs: vec![g.clone()], ..Listing::default() })?,
+        Some(g) => group_record_in(tx, g)?,
         None => None,
     };
     let by_names = || -> Result<Option<i64>> {
@@ -1636,6 +1748,26 @@ mod tests {
         assert_eq!(most_named([a, b, b]).as_deref(), Some("abcdef00-0000-4000-8000-000000000002"));
         assert_eq!(most_named([b, a]).as_deref(), Some(a), "as often: the lower");
         assert_eq!(most_named(["", " "]), None);
+    }
+
+    /// R13 (F2): a Want by a release group a retired record holds (the owner rejected its copy) names the live record that holds
+    /// it, had before not had; the retired one only where no live record holds the group (OQ16).
+    #[test]
+    fn a_request_names_the_live_record_of_its_group_over_a_retired_one() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let group = "00000000-0000-4000-8000-000000000141";
+        let want = || crate::app::requests::record_of_album(&cat, Some(group), "Glass Harbour", "Undertow", None, None).unwrap();
+        let holding = |record: i64, how: &str| assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release-group", group), how).unwrap());
+        let gone = cat.record_for_tests("Undertow", 2);
+        holding(gone, "files");
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [gone]).unwrap();
+        assert_eq!(want(), gone, "no live record holds it: the retired one");
+        let wanted = cat.record_for_tests("Undertow (asked for)", 0);
+        holding(wanted, "link");
+        assert_eq!(want(), wanted, "a live one over the retired");
+        let back = cat.record_for_tests("Undertow", 2);
+        holding(back, "files");
+        assert_eq!(want(), back, "had before not had");
     }
 
     /// A record of this title, not had.

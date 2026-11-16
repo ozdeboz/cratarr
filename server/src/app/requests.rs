@@ -451,15 +451,16 @@ pub fn requested(artist: &str, album: &str) -> String {
     format!("{}|{}", super::import::key(artist), super::import::key(album))
 }
 
-/// Who asked for each approved request, by its record (C49b, merges followed): an Incoming record goes into its requester's
-/// own music by default, and is theirs to add or delete (0101 point 2). The newest asker of a record.
+/// Who asked for each approved request, by its record (C49b, merges followed) and by the record that holds its files where that
+/// is another (R13: an album that came as a record of its own): an Incoming record goes into its requester's own music by
+/// default, and is theirs to add or delete (0101 point 2). The newest asker of a record.
 pub fn requesters(serve: &Serve) -> HashMap<i64, String> {
     let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
     let of = records_of(serve.catalogue(), &approved).unwrap_or_else(|e| {
         tracing::debug!("the requests' records not read: {e:#}");
         vec![None; approved.len()]
     });
-    approved.into_iter().zip(of).rev().filter_map(|(r, o)| Some((o?.record, r.user))).collect()
+    approved.into_iter().zip(of).rev().filter_map(|(r, o)| Some((o?, r.user))).flat_map(|(o, user)| o.holder.into_iter().chain([o.record]).map(move |id| (id, user.clone()))).collect()
 }
 
 /// An album's mark where a list has no record id for it: by its release group, else by its artist's and its name's key (a
@@ -469,7 +470,8 @@ pub fn mark_of(marks: &Marks, release_group: Option<&str>, artist: &str, album: 
 }
 
 /// What a request's record says now (C49b): the id it answers by (a merge followed), its release groups, its names, year and
-/// cover, and whether it is had.
+/// cover, and the record that holds its files where it is had (R13: the one rule for "had", `Catalogue::holders`): itself, or an
+/// album that came as a record of its own.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RecordOf {
     pub record: i64,
@@ -478,17 +480,26 @@ pub struct RecordOf {
     pub artist: String,
     pub year: Option<i32>,
     pub cover: Option<String>,
-    pub had: bool,
+    pub holder: Option<i64>,
+}
+
+impl RecordOf {
+    /// Whether its album is in the library.
+    pub fn had(&self) -> bool {
+        self.holder.is_some()
+    }
 }
 
 /// Each request's record as the catalogue holds it now, in the requests' order: none where it names no record yet (before
 /// 0.17's step) or one that is gone. Blocking.
 pub fn records_of(cat: &crate::catalogue::Catalogue, rs: &[Request]) -> Result<Vec<Option<RecordOf>>> {
-    rs.iter()
-        .map(|r| {
-            let Some(row) = r.record.map(|id| cat.record(id)).transpose()?.flatten() else { return Ok(None) };
+    let rows: Vec<Option<crate::catalogue::records::RecordRow>> = rs.iter().map(|r| Ok(r.record.map(|id| cat.record(id)).transpose()?.flatten())).collect::<Result<_>>()?;
+    let holders = cat.holders(&rows.iter().flatten().map(|row| row.id).collect::<Vec<_>>())?;
+    rows.into_iter()
+        .map(|row| {
+            let Some(row) = row else { return Ok(None) };
             let groups = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().filter(|(x, _)| x.source == "musicbrainz" && x.kind == "release-group").map(|(x, _)| x.value).collect();
-            Ok(Some(RecordOf { record: row.id, groups, title: row.title, artist: row.artist, year: row.year, cover: row.cover, had: row.had }))
+            Ok(Some(RecordOf { record: row.id, groups, title: row.title, artist: row.artist, year: row.year, cover: row.cover, holder: holders.get(&row.id).copied() }))
         })
         .collect()
 }
@@ -543,7 +554,7 @@ async fn views(serve: &Serve, f: Option<&dyn Fetcher>, rs: Vec<Request>) -> Vec<
 
 /// `views`, each request's record read (`of`, in the requests' order).
 async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<RecordOf>]) -> Vec<View> {
-    let rs: Vec<(Request, bool)> = rs.into_iter().zip(of).map(|(r, o)| (shown(r, o.as_ref()), o.as_ref().is_some_and(|o| o.had))).collect();
+    let rs: Vec<(Request, bool)> = rs.into_iter().zip(of).map(|(r, o)| (shown(r, o.as_ref()), o.as_ref().is_some_and(RecordOf::had))).collect();
     let asked: Vec<String> = rs.iter().filter(|(r, there)| !*there && r.status == APPROVED).filter_map(|(r, _)| r.release_group.clone()).collect();
     let progress = match f {
         Some(f) if !asked.is_empty() => f.statuses(&asked).await.ok(),
@@ -557,7 +568,7 @@ async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<Record
 /// pages show it (`shown`, C49b).
 pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
     let of = named(serve, &rs).await;
-    rs.into_iter().zip(of).filter(|(_, o)| !o.as_ref().is_some_and(|o| o.had)).map(|(r, o)| shown(r, o.as_ref())).collect()
+    rs.into_iter().zip(of).filter(|(_, o)| !o.as_ref().is_some_and(RecordOf::had)).map(|(r, o)| shown(r, o.as_ref())).collect()
 }
 
 /// The library's albums by name (the import's matcher), where Cratarr's data folder holds it: its albums alone, one
@@ -647,6 +658,81 @@ mod tests {
         let mbid = "00000000-0000-4000-8000-000000000130";
         let by_group = record_of_album(&cat, Some(mbid), "Orbit Lane", "Undertow", None, None).unwrap();
         assert_eq!(record_of_album(&cat, Some(mbid), "Orbit Lane", "Undertow (Deluxe)", None, None).unwrap(), by_group, "its group finds it");
+    }
+
+    /// A request of bob's, approved, for `record`.
+    fn asked_for(record: i64) -> Request {
+        Request {
+            id: 0,
+            user: "bob".into(),
+            album_key: "k".into(),
+            artist_key: "a".into(),
+            release_group: None,
+            album: "Asked".into(),
+            artist: "Asker".into(),
+            year: None,
+            cover: None,
+            at: 1,
+            status: APPROVED.into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+            record: Some(record),
+        }
+    }
+
+    /// R13 (F1): an album that arrived untagged is a record of its own, and its request's record stays not had, until its group
+    /// is known on the arrival (its tags since, a match, Lidarr): from then on the request's record is had, by the arrival, and
+    /// its album is in the library.
+    #[tokio::test]
+    async fn an_untagged_arrival_completes_its_request_once_its_group_is_known() {
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let group = "00000000-0000-4000-8000-000000000140";
+        let asked = record_of_album(&cat, Some(group), "Orbit Lane", "Undertow", Some(2018), None).unwrap();
+        let arrived = cat.record_for_tests("Untitled", 2);
+        let rs = vec![asked_for(asked)];
+        let holder = |cat: &crate::catalogue::Catalogue| records_of(cat, &rs).unwrap()[0].as_ref().map(|o| (o.record, o.holder));
+        assert_eq!(holder(&cat), Some((asked, None)), "not had");
+        assert!(cat.set_reference(&crate::serve::ids::record(arrived), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", group), "likely").unwrap());
+        assert_eq!(holder(&cat), Some((asked, Some(arrived))), "had, by the arrival");
+        let of = records_of(&cat, &rs).unwrap();
+        assert_eq!(views_of(None, rs.clone(), &of).await[0].album_state, Album::InLibrary);
+    }
+
+    /// R13 (F1): a requested album that came as a record of its own, by its artist and title (an untagged copy kept from Incoming
+    /// into Music), is in the library and leaves the requested lists; where the two hold one source's same kind with no value in
+    /// common they are two records, and it stays requested.
+    #[tokio::test]
+    async fn a_requested_album_kept_into_music_leaves_the_requested_lists() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let asked = record_of_album(cat, None, "Glass Harbour", "Tide Tables", Some(2012), None).unwrap();
+        let rs = vec![asked_for(asked)];
+        assert_eq!(not_in_library(&serve, rs.clone()).await.len(), 1, "nothing of it had yet");
+        let kept = cat.record_for_tests("Tide Tables", 2);
+        assert!(not_in_library(&serve, rs.clone()).await.is_empty(), "in the library");
+        let of = records_of(cat, &rs).unwrap();
+        let views = views_of(None, rs.clone(), &of).await;
+        assert_eq!((of[0].as_ref().and_then(|o| o.holder), &views[0].album_state), (Some(kept), &Album::InLibrary));
+        assert_eq!(marks_of(&views, &of).of_record(asked), None, "no mark");
+        let page = |record: i64, url: &str| assert!(cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new("bandcamp", "album", url), "link").unwrap());
+        page(asked, "https://glassharbour.bandcamp.com/album/tide-tables");
+        page(kept, "https://glassharbour.bandcamp.com/album/tide-tables-live");
+        assert_eq!(not_in_library(&serve, rs).await.len(), 1, "two records");
+    }
+
+    /// R13 (F1): the requester of an album that came as a record of its own (C50 did not join it to the request's record) is still
+    /// its requester, by the record that holds the request's record's files: its Incoming copy goes into the requester's own music.
+    #[test]
+    fn the_requester_of_an_arrival_not_joined_is_still_its_requester() {
+        let serve = served();
+        let asked = record_of_album(serve.catalogue(), None, "Glass Harbour", "Two Rooms", Some(2019), None).unwrap();
+        let arrived = serve.catalogue().record_for_tests("Two Rooms", 2);
+        let mut r = asked_for(asked);
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let who = requesters(&serve);
+        assert_eq!((who.get(&asked).map(String::as_str), who.get(&arrived).map(String::as_str)), (Some("bob"), Some("bob")));
     }
 
     /// A server of the tests' own, in memory, its catalogue attached.
