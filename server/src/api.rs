@@ -5013,6 +5013,9 @@ async fn discover_refresh(ctx: Ctx) -> Result<(StatusCode, Json<serde_json::Valu
 
 /// Each card's mark (0.9.5): any account's open request for its album, wanted or coming.
 async fn mark_cards(app: &App, serve: &crate::serve::Serve, cards: &mut [serde_json::Value]) {
+    // Their artists opened by id from "Go to artist" by anyone, as Beyond's (G7).
+    let carded: Vec<(String, String)> = cards.iter().filter_map(|c| Some((c["artist_mbid"].as_str()?.to_string(), c["artist"].as_str()?.to_string()))).collect();
+    crate::app::beyond::keep_carded(&carded, crate::app::moment::now_secs());
     // No Bandcamp preview offered while Bandcamp is switched off (G1).
     for c in cards.iter_mut().filter_map(|c| c.as_object_mut()) {
         if crate::bandcamp::shown(c.get("bandcamp").and_then(|b| b.as_str()).map(str::to_string)).is_none() {

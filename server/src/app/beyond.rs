@@ -281,6 +281,19 @@ pub fn keep_listed(found: &[FoundArtist], now: i64) {
     }
 }
 
+/// Artists Discover's cards name by their MusicBrainz id (G7), as Beyond lists its own: each may be opened by anyone for
+/// `LISTED_FOR`, by the name the card gives. Never MusicBrainz's sure match for a name: a card's artist is its album's, which says
+/// nothing of the library's artists of that name, so opening one gives no id-less artist of the name theirs (U6).
+pub fn keep_carded(cards: &[(String, String)], now: i64) {
+    let mut all = listed_ids().lock().unwrap_or_else(|p| p.into_inner());
+    for (id, name) in cards {
+        let id = mbid(id);
+        if super::discogs::is_mbid(&id) && !name.trim().is_empty() {
+            all.entry(id).and_modify(|l| l.at = l.at.max(now)).or_insert(Listed { name: name.trim().to_string(), sure: false, at: now });
+        }
+    }
+}
+
 /// Whether an artist may be opened, and by which name (Z8, the review's finding 8: random ids used up a name's numbers for good;
 /// U6): by anyone where Beyond listed them within `LISTED_FOR`, by the name it listed them by (another name is refused: one
 /// account could give a library artist an unrelated id); by an administrator (`administering`), any, by the name given. The name,
@@ -570,6 +583,17 @@ mod tests {
         assert_eq!(may_open(LISTED, "Grouch", false, now), None, "another name: refused");
         assert_eq!(may_open(LISTED, " rone ", false, now), Some(("Rone".to_string(), true)), "the listed name, MusicBrainz's sure match");
         assert_eq!(may_open(LISTED, "Grouch", true, now), Some(("Grouch".to_string(), false)), "an administrator's, as given");
+    }
+
+    /// G7: an artist a Discover card names by id is opened by anyone by the card's name, never as MusicBrainz's sure match for it.
+    #[test]
+    fn a_cards_artist_is_opened_by_anyone() {
+        const CARDED: &str = "00000000-0000-4000-8000-000000000597";
+        let now = crate::app::moment::now_secs();
+        assert_eq!(may_open(CARDED, "Zero 7", false, now), None);
+        keep_carded(&[(CARDED.to_uppercase(), "Zero 7".into()), ("not an id".into(), "Air".into())], now);
+        assert_eq!(may_open(CARDED, "Zero 7", false, now), Some(("Zero 7".to_string(), false)));
+        assert_eq!(may_open(CARDED, "Air", false, now), None, "by the card's name alone");
     }
 
     /// U6: a library artist of the name with no MusicBrainz id is given the id only where it is MusicBrainz's first sure match for

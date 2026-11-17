@@ -24,7 +24,8 @@
   import MenuGroup from './lib/MenuGroup.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
-  import { goToArtist, sayWantFailed } from './lib/albums.svelte';
+  import { goToArtist, openArtistPage, sayWantFailed } from './lib/albums.svelte';
+  import { artistOpen } from './lib/artistIds';
   import { NearBlocks } from './lib/nearBlocks.svelte';
   import { inModeOrder, isSpotifyView, modeOf, type ReasonMode } from './lib/discoverModes';
   import { prefs } from './lib/prefs.svelte';
@@ -389,8 +390,12 @@
         {#if a.bandcamp}
           <MenuEntry icon="play" label="Play on Bandcamp" busy={previewing === a.key} onclick={act(() => preview(a))} />
         {/if}
-        <!-- Their page, by name: the server says who that is (W10). -->
-        <MenuEntry icon="user" label="Go to {a.artist}" onclick={act(() => goToArtist('cratarr', a.artist))} />
+        <!-- Their page, by their MusicBrainz id where the card has it (G7), else by name: the server says who that is (W10). -->
+        <MenuEntry
+          icon="user"
+          label="Go to {a.artist}"
+          onclick={act(() => (a.artist_mbid ? openArtistPage(artistOpen({ mbid: a.artist_mbid, name: a.artist })) : goToArtist('cratarr', a.artist)))}
+        />
       </MenuGroup>
       <MenuGroup label="Discover">
         {#if r && open(r)}

@@ -2267,6 +2267,8 @@ export type DiscoverAlbum = {
   key: string;
   album: string;
   artist: string;
+  /** Its artist's MusicBrainz id, where its source says: "Go to artist" opens them by it. */
+  artist_mbid?: string | null;
   artist_key: string;
   year: number | null;
   release_group: string | null;

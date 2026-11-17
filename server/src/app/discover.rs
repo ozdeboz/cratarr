@@ -95,6 +95,10 @@ pub struct Suggestion {
     /// Its album page on Bandcamp, where one was found: it plays there as a preview (decision 0071).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
+    /// Its artist's MusicBrainz id, where its source says (G7: MusicBrainz's discographies, the related artists): "Go to artist"
+    /// opens their page by it, never by a name another artist may share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_mbid: Option<String>,
     /// Its artist new to the library has a picture (and so may be featured, the owner 2026-10-25): read with the look,
     /// as the artist store reads the library's (TheAudioDB, picture and description, by name).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -272,6 +276,8 @@ pub struct Candidate {
     pub alike: Vec<Alike>,
     /// Its album page on Bandcamp, where its source found one (the related artists).
     pub bandcamp: Option<String>,
+    /// Its artist's MusicBrainz id, where its source says (G7).
+    pub artist_mbid: Option<String>,
     /// Which source, for the extra rank of more than one.
     pub source: &'static str,
     pub why: String,
@@ -877,6 +883,7 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
                 source: "discography",
                 why: format!("Missing from {}'s albums", a.name),
                 score,
+                artist_mbid: a.mbid.clone(),
                 ..Candidate::default()
             });
         }
@@ -908,6 +915,7 @@ pub(super) async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwes
             let value = (r.score / most).clamp(0.0, 1.0);
             let base = Candidate {
                 artist: r.name.clone(),
+                artist_mbid: r.mbid.clone(),
                 source: "related",
                 why: format!("Like {seed}"),
                 alike: vec![Alike { seed: seed.clone(), value: value as f32 }],
@@ -1073,6 +1081,7 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     why: Vec::new(),
                     sources: Vec::new(),
                     bandcamp: c.bandcamp.clone(),
+                    artist_mbid: c.artist_mbid.clone(),
                     artist_photo: false,
                     artist_albums: None,
                     artist_bandcamp: None,
@@ -1120,6 +1129,9 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
         }
         if s.bandcamp.is_none() {
             s.bandcamp = c.bandcamp.clone();
+        }
+        if s.artist_mbid.is_none() {
+            s.artist_mbid = c.artist_mbid.clone();
         }
         if s.released.is_none() {
             s.released = c.released.clone();
@@ -2929,6 +2941,19 @@ mod tests {
     }
 
     /// One list of `candidates`, nothing had or answered.
+    /// G7: a card carries its artist's MusicBrainz id where its source gave one, as one of two sources' did; none where neither.
+    #[test]
+    fn a_card_carries_its_artists_musicbrainz_id() {
+        let m = "00000000-0000-4000-8000-000000000394";
+        let cards = listed(vec![
+            c("Moon", "Zero 7", Some("rg-m"), "lastfm", "Like Air", 0.8),
+            Candidate { artist_mbid: Some(m.into()), ..c("Moon", "Zero 7", Some("rg-m"), "related", "Like Bonobo", 0.5) },
+            c("Lamplight", "Kite Theory", Some("rg-l"), "listenbrainz", "Recommended by ListenBrainz", 0.4),
+        ]);
+        let ids: Vec<(&str, Option<&str>)> = cards.iter().map(|s| (s.album.as_str(), s.artist_mbid.as_deref())).collect();
+        assert_eq!(ids, [("Moon", Some(m)), ("Lamplight", None)]);
+    }
+
     fn listed(candidates: Vec<Candidate>) -> Vec<Suggestion> {
         one_list(candidates, &|_: &Candidate| false, &HashSet::new(), &HashSet::new(), &HashSet::new())
     }
