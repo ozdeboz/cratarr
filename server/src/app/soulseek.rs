@@ -99,6 +99,9 @@ const ROOM_SPARE: u64 = 1 << 30;
 const COVER_PX: u32 = 1200;
 /// The most of a placed album's cover read (Y3): an original at the Cover Art Archive may be large.
 const COVER_MOST: usize = 10 * 1024 * 1024;
+/// The longest side of a cover decoded for `cover.jpg` (V7): a larger one is refused from its header, never decoded (an 8000-px
+/// original is some 190 MB of pixels, beside the server's own memory).
+const COVER_READ_PX: u32 = 6000;
 
 // ---- What is kept
 
@@ -1742,9 +1745,10 @@ where
 {
     for url in addresses {
         match get(url.clone()).await {
-            Ok(Some(b)) => match cover_jpg(b) {
+            // Read on a blocking thread (V7): a large original's decode is seconds of work.
+            Ok(Some(b)) => match tokio::task::spawn_blocking(move || cover_jpg(b)).await.ok().flatten() {
                 Some(jpg) => return Some(jpg),
-                None => tracing::warn!(target: "soulseek", url = %url, "a cover that is no picture Cratarr can read"),
+                None => tracing::warn!(target: "soulseek", url = %url, "a cover that is no picture Cratarr can read, or too large to read"),
             },
             Ok(None) => {}
             Err(e) => tracing::warn!(target: "soulseek", url = %url, reason = %format!("{e:#}"), "a cover not read"),
@@ -1753,13 +1757,17 @@ where
     None
 }
 
-/// A picture as `cover.jpg` takes it (Y3): a JPEG within `COVER_PX` as it came; any other made JPEG, scaled to fit. None where it
-/// is no picture Cratarr can read.
+/// A picture as `cover.jpg` takes it (Y3): a JPEG within `COVER_PX` as it came; any other made JPEG, scaled to fit. Its size is read
+/// first, from its header (V7): one over `COVER_READ_PX` on its longer side is never decoded, and the decode itself is held to that
+/// (`art::jpeg_within_at_most`). None where it is no picture Cratarr can read, or too large. Blocking.
 fn cover_jpg(b: Vec<u8>) -> Option<Vec<u8>> {
     let r = image::ImageReader::new(std::io::Cursor::new(&b)).with_guessed_format().ok()?;
     let jpeg = r.format() == Some(image::ImageFormat::Jpeg);
     let (w, h) = r.into_dimensions().ok()?;
-    if jpeg && w.max(h) <= COVER_PX { Some(b) } else { crate::serve::art::jpeg_within(&b, COVER_PX).ok() }
+    if w.max(h) > COVER_READ_PX {
+        return None;
+    }
+    if jpeg && w.max(h) <= COVER_PX { Some(b) } else { crate::serve::art::jpeg_within_at_most(&b, COVER_PX, COVER_READ_PX).ok() }
 }
 
 /// Where a record's cover comes from (X4): its cover's own address (the Cover Art Archive's for a release group, Bandcamp's for an
@@ -2509,6 +2517,39 @@ mod tests {
         assert_eq!((read.width(), read.height()), (1200, 675));
         assert_eq!(asked.lock().unwrap().len(), 2, "its 1200-px picture asked first");
         assert_eq!(large_cover(&of, |_| std::future::ready(Ok(Some(b"not a picture".to_vec())))).await, None);
+    }
+
+    /// A JPEG of a few pixels whose header says it is `w` by `h` (its frame's size written over): what a decoder would make room for.
+    fn said_to_be(w: u16, h: u16) -> Vec<u8> {
+        let mut b = picture(16, 16, image::ImageFormat::Jpeg);
+        let frame = b.windows(2).position(|m| m[0] == 0xFF && matches!(m[1], 0xC0..=0xC2)).expect("its frame");
+        b[frame + 5..frame + 7].copy_from_slice(&h.to_be_bytes());
+        b[frame + 7..frame + 9].copy_from_slice(&w.to_be_bytes());
+        b
+    }
+
+    /// V7: a cover's size is read from its header before it is decoded: one over 6000 px on its longer side is no cover, and the decode
+    /// itself is held to that size, so it is refused from the header, its pixels never read. Up to 6000 px it is made JPEG within
+    /// 1200 px as before. The placing's reader reads it on a blocking thread, and asks the next address.
+    #[tokio::test]
+    async fn an_oversized_original_is_not_decoded() {
+        let huge = said_to_be(7000, 8);
+        let r = image::ImageReader::new(std::io::Cursor::new(&huge)).with_guessed_format().unwrap();
+        assert_eq!(r.into_dimensions().unwrap(), (7000, 8), "its header says so");
+        assert_eq!(cover_jpg(huge.clone()), None, "no cover");
+        let refused = crate::serve::art::jpeg_within_at_most(&huge, COVER_PX, COVER_READ_PX).unwrap_err();
+        assert!(matches!(refused.downcast_ref::<image::ImageError>(), Some(image::ImageError::Limits(_))), "refused from its header: {refused:#}");
+        assert_eq!(cover_jpg(picture(6001, 2, image::ImageFormat::Png)), None, "its longer side over 6000 px");
+        let within = cover_jpg(picture(6000, 5, image::ImageFormat::Png)).expect("6000 px is read");
+        assert_eq!(image::load_from_memory_with_format(&within, image::ImageFormat::Jpeg).unwrap().width(), COVER_PX);
+        let asked = Mutex::new(0);
+        let get = |_: String| {
+            *asked.lock().unwrap() += 1;
+            std::future::ready(Ok(Some(huge.clone())))
+        };
+        let addresses = ["front-1200", "front"].map(|size| format!("https://coverartarchive.org/release-group/x/{size}"));
+        assert_eq!(first_picture(&addresses, &get).await, None);
+        assert_eq!(*asked.lock().unwrap(), 2, "the next address asked");
     }
 
     /// X4: a folder set aside is kept 14 days, then deleted and taken off its item.

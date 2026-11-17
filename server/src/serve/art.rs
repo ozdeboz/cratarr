@@ -109,6 +109,21 @@ pub fn jpeg_within(data: &[u8], size: u32) -> Result<Vec<u8>> {
 /// `jpeg_within` at this JPEG quality.
 pub fn jpeg_at(data: &[u8], size: u32, quality: u8) -> Result<Vec<u8>> {
     let img = image::load_from_memory(data).context("not a picture Cratarr can read")?;
+    jpeg_of(img, size, quality)
+}
+
+/// `jpeg_within` for a picture no larger than `most` on either side (V7): its decoder is held to that (`image::Limits`), so a larger
+/// one is refused from its header, before its pixels are read.
+pub fn jpeg_within_at_most(data: &[u8], size: u32, most: u32) -> Result<Vec<u8>> {
+    let mut r = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    (limits.max_image_width, limits.max_image_height) = (Some(most), Some(most));
+    r.limits(limits);
+    jpeg_of(r.decode().context("not a picture Cratarr can read at that size")?, size, 85)
+}
+
+/// A decoded picture as JPEG at this quality, scaled to fit `size` where it is larger.
+fn jpeg_of(img: image::DynamicImage, size: u32, quality: u8) -> Result<Vec<u8>> {
     let small = if img.width().max(img.height()) > size { img.resize(size, size, image::imageops::FilterType::Triangle) } else { img };
     let mut out = std::io::Cursor::new(Vec::new());
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode_image(&small.to_rgb8())?;
