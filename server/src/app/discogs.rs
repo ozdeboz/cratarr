@@ -96,6 +96,25 @@ async fn pace(keyed: bool) {
     *next = Instant::now() + gap(limit);
 }
 
+/// Discogs said "too many" (429): every caller held `TOO_MANY_WAIT` (O6).
+fn too_many() {
+    HOLD_UNTIL.fetch_max(now_ms() + TOO_MANY_WAIT.as_millis() as u64, Ordering::Relaxed);
+}
+
+/// Whether a release group's kept cover answer is a fresh "none" (O6): no cover anywhere, so the Cover Art Archive is not asked for
+/// it either while it is kept. Pure.
+pub fn none_kept(kept: Option<(i64, Option<String>)>, now: i64) -> bool {
+    matches!(kept, Some((at, None)) if now - at <= COVER_NONE_SECS)
+}
+
+/// `none_kept` for a release group, as the user data keeps its answer.
+pub async fn kept_without_cover(rg: &str) -> bool {
+    let Some(served) = crate::serve::instance() else { return false };
+    let (ud, key) = (served.userdata.clone(), rg.to_string());
+    let kept = tokio::task::spawn_blocking(move || ud.rg_cover(&key)).await.ok().and_then(Result::ok).flatten();
+    none_kept(kept, super::moment::now_secs())
+}
+
 /// What a reply says of the limits: the limit a minute, and a hold of a minute when few calls are left.
 fn note_limits(h: &reqwest::header::HeaderMap) {
     let num = |name: &str| h.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u32>().ok());
@@ -175,7 +194,8 @@ async fn get(path: &str) -> Result<Option<Value>> {
         note_limits(r.headers());
         match r.status() {
             reqwest::StatusCode::TOO_MANY_REQUESTS if std::mem::take(&mut again) => {
-                tokio::time::sleep(TOO_MANY_WAIT).await;
+                // Everyone held, not only this caller (O6): `pace` waits it out.
+                too_many();
                 continue;
             }
             reqwest::StatusCode::NOT_FOUND => return Ok(None),
@@ -718,6 +738,20 @@ mod listing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// O6: Discogs' "too many" holds every caller, not only the one it answered; a release group kept as having no cover anywhere
+    /// is not asked of the Cover Art Archive again while that is kept.
+    #[test]
+    fn a_discogs_429_holds_everyone_and_a_kept_none_asks_nothing() {
+        too_many();
+        let held = HOLD_UNTIL.load(Ordering::Relaxed);
+        HOLD_UNTIL.store(0, Ordering::Relaxed);
+        assert!(held >= now_ms() + 59_000, "held a minute for every caller");
+        let now = 1_800_000_000;
+        assert!(none_kept(Some((now - 60, None)), now));
+        assert!(!none_kept(Some((now - COVER_NONE_SECS - 1, None)), now), "an old none is asked again");
+        assert!(!none_kept(Some((now, Some("https://coverartarchive.org/release-group/x/front-250".into()))), now) && !none_kept(None, now));
+    }
 
     #[test]
     fn discogs_ids_are_read_from_musicbrainz_links() {

@@ -108,15 +108,20 @@ struct Problem {
     message: String,
 }
 
-/// What AcoustID knows of this fingerprint.
+/// AcoustID's one pacer (O6): its limit is three questions a second, whoever asks (the gate, every account's hearing).
+static TURN: crate::app::reach::Pacer = crate::app::reach::Pacer::new(Duration::from_millis(350));
+
+/// What AcoustID knows of this fingerprint: asked in its turn, with Cratarr's User-Agent, its answer noted for Health (O6).
 pub async fn lookup(key: &str, print: &Print) -> Result<Vec<Found>> {
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+    use crate::app::reach::Sent as _;
+    let http = crate::app::reach::client(crate::app::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?;
+    TURN.turn().await;
     let duration = (print.duration_secs.round() as u64).to_string();
     let form = [("client", key), ("meta", "recordingids"), ("duration", duration.as_str()), ("fingerprint", print.fingerprint.as_str())];
     let answer: Answer = http
         .post("https://api.acoustid.org/v2/lookup")
         .form(&form)
-        .send()
+        .sent()
         .await
         .context("AcoustID could not be reached")?
         .json()

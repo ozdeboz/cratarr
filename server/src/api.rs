@@ -5348,7 +5348,8 @@ async fn kept_cover(of: crate::app::cover_cache::Of) -> Response {
         Ok(Some((bytes, mime))) => {
             ([(header::CONTENT_TYPE, HeaderValue::from_static(mime)), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=604800"))], bytes).into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+        // A short while (O6): a page showing many records with no cover does not ask again at each view.
+        Ok(None) => (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=900"))], Json(json!({ "error": "no cover" }))).into_response(),
         Err(e) => {
             tracing::debug!("cover of {of:?}: {e:#}");
             (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response()

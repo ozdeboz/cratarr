@@ -153,6 +153,7 @@ pub async fn lastfm_session(api_key: &str, api_secret: &str, token: &str) -> Res
     let sig = signature(&p, api_secret);
     p.insert("api_sig", sig);
     p.insert("format", "json".into());
+    super::lastfm::FM.turn().await;
     let a: Answer = http()?.get(FM_API).query(&p).sent().await.context("Last.fm did not answer")?.json().await?;
     match a.session {
         Some(s) => Ok((s.key, s.name)),
@@ -254,6 +255,7 @@ async fn send_lastfm(secret: &Secret, plays: &[Play]) -> Result<(), Failed> {
     let sig = signature(&by, sec);
     p.insert("api_sig".into(), sig);
     p.insert("format".into(), "json".into());
+    super::lastfm::FM.turn().await;
     let res = http().map_err(|e| Failed::Later(format!("{e:#}")))?.post(FM_API).form(&p).sent().await.map_err(|e| Failed::Later(format!("{e:#}")))?;
     let body: serde_json::Value = res.json().await.map_err(|e| Failed::Later(format!("{e:#}")))?;
     match body.get("error").and_then(|e| e.as_i64()) {
@@ -443,6 +445,7 @@ async fn send_now_playing(user: &str, secrets: Vec<(String, String)>, s: &Play) 
             let sig = signature(&p, sec);
             p.insert("api_sig", sig);
             p.insert("format", "json".into());
+            super::lastfm::FM.turn().await;
             http()?.post(FM_API).form(&p).sent().await.map(|_| ())
         };
         if let Err(e) = sent {

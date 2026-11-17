@@ -111,6 +111,10 @@ async fn fetch(of: &Of) -> Result<Option<Vec<u8>>> {
     let http = super::reach::client(super::reach::Purpose::Covers).timeout(Duration::from_secs(30)).build()?;
     match of {
         Of::ReleaseGroup(rg) => {
+            // Kept as having none anywhere (O6): the Cover Art Archive is not asked again on every view.
+            if super::discogs::kept_without_cover(rg).await {
+                return Ok(None);
+            }
             let caa = format!("https://coverartarchive.org/release-group/{rg}/front-250");
             if let Some(b) = image(&http, &caa).await? {
                 return Ok(Some(b));

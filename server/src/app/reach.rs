@@ -44,6 +44,8 @@ pub fn name_of(url: &reqwest::Url) -> Option<&'static str> {
         "theaudiodb"
     } else if is("wikidata.org") || is("wikimedia.org") || is("wikipedia.org") {
         "wikimedia"
+    } else if is("acoustid.org") {
+        "acoustid"
     } else if is("spotify.com") || is("scdn.co") || is("spotifycdn.com") {
         "spotify"
     } else {
@@ -63,6 +65,7 @@ pub fn label(name: &str) -> &'static str {
         "theaudiodb" => "TheAudioDB",
         "wikimedia" => "Wikimedia",
         "spotify" => "Spotify",
+        "acoustid" => "AcoustID",
         _ => "A connection",
     }
 }
@@ -272,6 +275,36 @@ pub async fn read_capped(mut resp: reqwest::Response, cap: usize) -> anyhow::Res
     Ok(out)
 }
 
+/// One turn for a service's questions, whoever asks (O6: Last.fm, AcoustID): `apart` between two, none while it is held.
+pub struct Pacer {
+    apart: std::time::Duration,
+    next: tokio::sync::Mutex<Option<tokio::time::Instant>>,
+}
+
+impl Pacer {
+    pub const fn new(apart: std::time::Duration) -> Self {
+        Self { apart, next: tokio::sync::Mutex::const_new(None) }
+    }
+
+    /// Waits for a question's turn, and takes it.
+    pub async fn turn(&self) {
+        let mut next = self.next.lock().await;
+        if let Some(at) = *next {
+            tokio::time::sleep_until(at).await;
+        }
+        *next = Some(tokio::time::Instant::now() + self.apart);
+    }
+
+    /// No question for `wait`, whoever asks.
+    pub async fn hold(&self, wait: std::time::Duration) {
+        let at = tokio::time::Instant::now() + wait;
+        let mut next = self.next.lock().await;
+        if next.is_none_or(|n| n < at) {
+            *next = Some(at);
+        }
+    }
+}
+
 /// A request sent, its answer noted for its connection (by its host).
 pub trait Sent {
     fn sent(self) -> impl std::future::Future<Output = reqwest::Result<reqwest::Response>> + Send;
@@ -380,6 +413,32 @@ mod tests {
         assert!(slskd.transfers("b1").await.is_err(), "the redirect not followed, its answer not read");
         let r = lan_client().build().unwrap().get(format!("http://127.0.0.1:{at}/api/v0/transfers/downloads/batches/b1")).send().await.unwrap();
         assert!(r.status().is_redirection());
+    }
+
+    /// O6: one pacer a service: every asker's questions `apart` apart, and none while it is held, whoever asks.
+    #[tokio::test(start_paused = true)]
+    async fn a_pacer_spaces_every_askers_questions_and_holds_them_all() {
+        let gap = std::time::Duration::from_millis(250);
+        let p = std::sync::Arc::new(Pacer::new(gap));
+        let askers: Vec<_> = (0..5)
+            .map(|_| {
+                let p = p.clone();
+                tokio::spawn(async move {
+                    p.turn().await;
+                    tokio::time::Instant::now()
+                })
+            })
+            .collect();
+        let mut at = Vec::new();
+        for a in askers {
+            at.push(a.await.unwrap());
+        }
+        at.sort();
+        assert!(at.windows(2).all(|w| w[1] - w[0] >= gap), "{at:?}");
+        p.hold(std::time::Duration::from_secs(60)).await;
+        let before = tokio::time::Instant::now();
+        p.turn().await;
+        assert!(tokio::time::Instant::now() - before >= std::time::Duration::from_secs(59), "held for everyone");
     }
 
     #[tokio::test]

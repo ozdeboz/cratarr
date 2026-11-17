@@ -43,8 +43,6 @@ const MOST: usize = 500;
 const EXPLORATIONS: usize = 2;
 const LB_API: &str = "https://api.listenbrainz.org/1";
 const FM_API: &str = "https://ws.audioscrobbler.com/2.0/";
-/// Last.fm asks for no more than about five calls a second.
-const FM_PAUSE: Duration = Duration::from_millis(250);
 /// Of the user's most played artists, how many are looked from; of the artists like them, how many get an album.
 const TOP_ARTISTS: &str = "25";
 const SIMILAR_PER: &str = "10";
@@ -480,8 +478,12 @@ pub(super) async fn fm(http: &reqwest::Client, auth: &Auth, method: &str, params
         q.insert("api_sig", sig);
     }
     q.insert("format", "json".into());
-    tokio::time::sleep(FM_PAUSE).await;
+    // Last.fm's one pacer, whoever asks (O6); its rate limit holds everyone a minute.
+    super::lastfm::FM.turn().await;
     let body: serde_json::Value = http.get(FM_API).query(&q).sent().await.context("Last.fm did not answer")?.json().await?;
+    if super::lastfm::said_limit(&body) {
+        super::lastfm::limited().await;
+    }
     if let Some(why) = body["message"].as_str().filter(|_| body.get("error").is_some()) {
         anyhow::bail!("Last.fm: {why}");
     }
@@ -1857,6 +1859,11 @@ struct DiscogsList;
 impl ArtistList for DiscogsList {
     fn source(&self) -> &'static str {
         "discogs"
+    }
+
+    /// Off with Discogs (O6): its MusicBrainz link is not asked for either.
+    fn on(&self) -> bool {
+        super::switches::is_on(super::switches::DISCOGS)
     }
 
     fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
