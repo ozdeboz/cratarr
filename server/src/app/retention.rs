@@ -8,11 +8,11 @@
 //!
 //! - **Never while something points at it.** The catalogue keeps what it holds itself (`Catalogue::forget_quiet`: a choice or
 //!   a reference by hand, a confirmation, a merge, an expected folder, a retired record, a link from before 0.16, a request's
-//!   shared name); this gathers the rest: every request's record, whatever its status, and every record on Soulseek's list
-//!   (`protected`). An artist is kept by a record's credit, a reference by hand or confirmed, an id from before 0.16
-//!   (`Catalogue::forget_quiet_artists`), and by a track's credit, anything the user data names them in (a favourite, plays, a
-//!   rating, words) and the stores in the data folder (every account's crates, their seeds and conditions; the queues):
-//!   `protected_artists`.
+//!   shared name); this gathers the rest: every request's record, whatever its status, every record on Soulseek's list, and
+//!   what the user data and the stores in the data folder name, as for an artist (`protected`, Z5). An artist is kept by a
+//!   record's credit, a reference by hand or confirmed, an id from before 0.16 (`Catalogue::forget_quiet_artists`), and by a
+//!   track's credit, anything the user data names them in (a favourite, plays, a rating, words) and the stores in the data
+//!   folder (every account's crates, their seeds and conditions; the queues): `protected_artists`.
 //! - **Seen** is a list read: each sees what it lists (`Catalogue::keep_listing`), Bandcamp's too (Z4, the owner's rule: an
 //!   artist page's reads refresh what they show), and MusicBrainz's or Discogs' the artist's records only Bandcamp knows
 //!   (`Catalogue::bandcamp_only_seen`), as Bandcamp's lists only its search box's first answers (O4). A page showing a record sees
@@ -48,28 +48,39 @@ fn due(cat: &Catalogue, now: i64) -> bool {
 }
 
 /// What keeps a record not had from outside the catalogue, however long nobody saw it: every request's record, whatever its
-/// status (`UserData::request_records`), and every record on Soulseek's list. Blocking.
-fn protected(ud: &UserData) -> Result<BTreeSet<i64>> {
+/// status (`UserData::request_records`), every record on Soulseek's list, and, as an artist is kept (`protected_artists`, Z5),
+/// anything the user data names it in (`UserData::records_named`: a heart, plays, a rating, words, tags) and the stores in the
+/// data folder `data` (`stores_name`). Blocking.
+fn protected(ud: &UserData, data: Option<&std::path::Path>) -> Result<BTreeSet<i64>> {
     let mut kept: BTreeSet<i64> = ud.request_records()?.into_iter().filter_map(|(_, record)| record).collect();
     kept.extend(super::soulseek::item_records());
+    kept.extend(ud.records_named()?);
+    kept.extend(stores_name(data, |text| crate::serve::ids::records_named(text).collect())?);
     Ok(kept)
 }
 
 /// What keeps an artist with no record from outside the catalogue (RT01b): a track's credit (Cratarr's own library holds it),
-/// anything the user data names them in (`UserData::artists_named`), and the stores in the data folder (`library::id_stores`:
-/// every account's crates, their seeds and conditions; the queues). A store not made yet names nobody; one that cannot be
-/// read may name anyone, so nobody is forgotten this time. Blocking.
+/// anything the user data names them in (`UserData::artists_named`), and the stores in the data folder (`stores_name`). Blocking.
 fn protected_artists(served: &Serve) -> Result<BTreeSet<i64>> {
     let mut kept = served.userdata.artists_named()?;
     kept.extend(served.library.artists_credited()?);
-    for store in served.data_dir.as_deref().map(super::library::id_stores).unwrap_or_default() {
+    kept.extend(stores_name(served.data_dir.as_deref(), |text| crate::serve::ids::artists_named(text).collect())?);
+    Ok(kept)
+}
+
+/// What the stores in the data folder `data` name (`library::id_stores`: every account's crates, their seeds and conditions; the
+/// queues), each read by `read`. A store not made yet names nothing; one that cannot be read may name anything, so nothing is
+/// forgotten this time. Blocking.
+fn stores_name(data: Option<&std::path::Path>, read: fn(&str) -> Vec<i64>) -> Result<BTreeSet<i64>> {
+    let mut named = BTreeSet::new();
+    for store in data.map(super::library::id_stores).unwrap_or_default() {
         match std::fs::read_to_string(&store) {
-            Ok(text) => kept.extend(crate::serve::ids::artists_named(&text)),
+            Ok(text) => named.extend(read(&text)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(anyhow::Error::from(e).context(format!("{} cannot be read", store.display()))),
         }
     }
-    Ok(kept)
+    Ok(named)
 }
 
 /// What the day's re-read came to (RT01c), by (artist, source): the lists read, and those it could not read (failed, switched
@@ -168,7 +179,7 @@ async fn pass_reading(served: Arc<Serve>, now: i64, sources: &[Arc<dyn ArtistLis
     let reread = reread(&cat, sources, paused, now).await?;
     let done = tokio::task::spawn_blocking(move || -> Result<Passed> {
         let cat = served.catalogue();
-        let (kept, artists_kept) = (protected(&served.userdata)?, protected_artists(&served)?);
+        let (kept, artists_kept) = (protected(&served.userdata, served.data_dir.as_deref())?, protected_artists(&served)?);
         let records = cat.forget_quiet(now, &kept)?;
         let lists = cat.forget_quiet_lists(now, &kept)?;
         let artists = cat.forget_quiet_artists(now, &artists_kept)?;
@@ -345,7 +356,7 @@ mod tests {
         cat.number_above(83_000).unwrap();
         let (asked, other) = (unseen(&cat, "Undertow"), unseen(&cat, "Open Water"));
         ud.add_request(&asked_for(asked)).unwrap();
-        assert_eq!(cat.forget_quiet(NOW, &protected(&ud).unwrap()).unwrap(), [other]);
+        assert_eq!(cat.forget_quiet(NOW, &protected(&ud, None).unwrap()).unwrap(), [other]);
     }
 
     /// RT01: a record on Soulseek's list keeps it, as the pass gathers what keeps a record.
@@ -355,7 +366,22 @@ mod tests {
         cat.number_above(81_000).unwrap();
         let (listed, other) = (unseen(&cat, "Undertow"), unseen(&cat, "Open Water"));
         crate::app::soulseek::list_for_tests("ss-rt01a", listed);
-        assert_eq!(cat.forget_quiet(NOW, &protected(&ud).unwrap()).unwrap(), [other]);
+        assert_eq!(cat.forget_quiet(NOW, &protected(&ud, None).unwrap()).unwrap(), [other]);
+    }
+
+    /// Z5: a record not had that the user data names (a heart, a rating) or a store in the data folder names (a queue) is never
+    /// forgotten, as an artist so named is not; one nothing names goes.
+    #[test]
+    fn a_hearted_record_not_had_is_never_forgotten() {
+        let dir = data_dir("records-named");
+        let (cat, ud) = (Catalogue::open(None, Vec::new()).unwrap(), UserData::open(None).unwrap());
+        cat.number_above(92_000).unwrap();
+        let [hearted, rated, queued, other] = ["Undertow", "Open Water", "Two Rooms", "Tide Tables"].map(|t| unseen(&cat, t));
+        ud.set_starred("ann", crate::userdata::Kind::Album, &[ids::record(hearted)], true).unwrap();
+        ud.set_rating("ann", crate::userdata::Kind::Album, &ids::record(rated), 4).unwrap();
+        std::fs::write(dir.join("queues.json"), format!("{{\"ann\":[\"{}/1.1\"]}}", ids::record(queued))).unwrap();
+        assert_eq!(cat.forget_quiet(NOW, &protected(&ud, Some(dir.as_path())).unwrap()).unwrap(), [other]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// RT01: Cratarr's album forgotten answers "no longer known" (410), by its tombstone; one never known, as before.
@@ -404,7 +430,7 @@ mod tests {
             db.execute("UPDATE records SET opened_at = ?2 WHERE id = ?1", rusqlite::params![opened, NOW - 10 * DAY]).unwrap();
         }
         ud.add_request(&asked_for(asked)).unwrap();
-        assert_eq!(cat.forget_quiet_lists(NOW, &protected(&ud).unwrap()).unwrap(), 1);
+        assert_eq!(cat.forget_quiet_lists(NOW, &protected(&ud, None).unwrap()).unwrap(), 1);
         assert!(cat.reference_tracks(quiet).unwrap().is_empty(), "unopened thirty days: let go of");
         assert!(cat.record(quiet).unwrap().is_some(), "the record stays");
         for kept in [opened, fresh, asked] {

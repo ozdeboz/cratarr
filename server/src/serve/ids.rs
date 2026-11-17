@@ -141,6 +141,12 @@ pub fn artists_named(text: &str) -> impl Iterator<Item = i64> + '_ {
     numbers_named(text, ARTIST)
 }
 
+/// The records `text` names by their ids for life (`al-<digits>`), read as `highest_named` reads an id (Z5: what names a record
+/// not had keeps it).
+pub fn records_named(text: &str) -> impl Iterator<Item = i64> + '_ {
+    numbers_named(text, ALBUM)
+}
+
 /// The numbers `text` names as ids for life of `prefix`, wherever they are written: not a word that only ends in it, nor one
 /// that runs on, nor a hash.
 fn numbers_named<'t>(text: &'t str, prefix: &'static str) -> impl Iterator<Item = i64> + 't {

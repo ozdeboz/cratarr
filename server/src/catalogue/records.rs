@@ -2439,11 +2439,15 @@ impl Catalogue {
         }
     }
 
-    /// The record an album asked for is, found or made (`request_record_in`, C49a). Blocking.
+    /// The record an album asked for is, found or made (`request_record_in`, C49a), opened now in the same transaction (Z5): the
+    /// forgetting gathers what keeps a record, the requests among them, before its own transaction, so a record a Want names
+    /// meanwhile is kept by its opening. Blocking.
     pub fn record_for_request(&self, w: &Wanted) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let record = request_record_in(&tx, w, now())?.record;
+        let at = now();
+        let record = request_record_in(&tx, w, at)?.record;
+        tx.execute(OPENED, params![record, at])?;
         tx.commit()?;
         Ok(record)
     }
@@ -2529,6 +2533,8 @@ const KEPT_UNSEEN: i64 = 183 * 86_400;
 const RETENTION_FROM: &str = "retention_from";
 /// A record seen at `?2`, never earlier than it was seen before (RT01).
 const SEEN: &str = "UPDATE records SET seen_at = max(COALESCE(seen_at, 0), ?2) WHERE id = ?1";
+/// A record opened at `?2`, never earlier than it was opened before (RT01): its page (C54), a Want (Z5).
+const OPENED: &str = "UPDATE records SET opened_at = max(COALESCE(opened_at, 0), ?2) WHERE id = ?1";
 /// A record not had that nothing keeps (RT01), as `n`: no track, ever, and nothing pointing at it: no merge either way, not
 /// retired ("Was in Music until…"), no count or check chosen by hand, no reference pasted by hand nor confirmed, no folder
 /// expected for it, no link from before 0.16, no request's shared name (X9). A request's and a Soulseek item's are left out by
@@ -2622,7 +2628,7 @@ impl Catalogue {
     /// A record's page opened at `at` (RT01, C54): kept six months from then, and its kept lists thirty days. Never earlier than it
     /// was opened before. Blocking.
     pub fn opened(&self, record: i64, at: i64) -> Result<()> {
-        self.db().execute("UPDATE records SET opened_at = max(COALESCE(opened_at, 0), ?2) WHERE id = ?1", params![record, at])?;
+        self.db().execute(OPENED, params![record, at])?;
         Ok(())
     }
 
@@ -3559,6 +3565,23 @@ mod tests {
         let later = cat.forget_quiet(NOW + 7 * MONTH, &std::collections::BTreeSet::new()).unwrap();
         assert!(later.contains(&before) && !later.contains(&had), "from before 0.17: six months after the first pass");
         assert!(!later.contains(&since), "made since: six months after it was made");
+    }
+
+    /// Z5: a Want opens the record it names, in the transaction that names it, so the forgetting, which gathers the requests that
+    /// keep a record before its own transaction, keeps it six months from the Want; a record no one wanted goes.
+    #[test]
+    fn a_want_opens_its_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let group = "00000000-0000-4000-8000-000000000315";
+        let (wanted, other) = (cat.record_for_tests("Undertow", 0), cat.record_for_tests("Open Water", 0));
+        assert!(cat.set_reference(&ids::record(wanted), &Ref::new("musicbrainz", "release-group", group), "link").unwrap());
+        let before = now();
+        cat.db().execute("UPDATE records SET seen_at = ?1 WHERE id IN (?2, ?3)", params![before - 7 * MONTH, wanted, other]).unwrap();
+        let w = Wanted { group: Some(group.into()), artist: "Glass Harbour".into(), title: "Undertow".into(), ..Wanted::default() };
+        assert_eq!(cat.record_for_request(&w).unwrap(), wanted);
+        let opened: Option<i64> = cat.db().query_row("SELECT opened_at FROM records WHERE id = ?1", [wanted], |r| r.get(0)).unwrap();
+        assert!(opened.is_some_and(|at| at >= before), "opened by the Want");
+        assert_eq!(cat.forget_quiet(before + 5 * MONTH, &std::collections::BTreeSet::new()).unwrap(), [other], "kept six months from the Want");
     }
 
     /// RT01: a reference pasted or chosen by hand keeps its record not had, however long nobody saw it; one a link found does not.

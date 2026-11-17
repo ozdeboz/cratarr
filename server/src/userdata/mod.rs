@@ -595,8 +595,8 @@ fn snapshot_of(r: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
 
 const SNAPSHOT_COLUMNS: &str = "id, name, settings, created, picture";
 
-/// Where the user data names records and artists by their ids for life, (table, column): what `top_named` and `artists_named`
-/// read.
+/// Where the user data names records and artists by their ids for life, (table, column): what `top_named`, `artists_named` and
+/// `records_named` read.
 const NAMING: [(&str, &str); 19] = [
     ("annotation", "item"),
     ("added", "album"),
@@ -953,12 +953,25 @@ impl UserData {
     /// or a rating, what an import brought, their words, a preference, a related artist (RT01b: never forgotten while it does).
     /// Blocking.
     pub fn artists_named(&self) -> Result<std::collections::BTreeSet<i64>> {
+        self.named_by("ar-", |text| crate::serve::ids::artists_named(text).collect())
+    }
+
+    /// Every record the user data names by its id for life (`ids::records_named`), wherever `NAMING` looks: a heart, plays or a
+    /// rating, its words and tags, a review, what an import brought (Z5: a record not had is never forgotten while it does, as an
+    /// artist is not). Blocking.
+    pub fn records_named(&self) -> Result<std::collections::BTreeSet<i64>> {
+        self.named_by("al-", |text| crate::serve::ids::records_named(text).collect())
+    }
+
+    /// The ids for life of one kind the user data names wherever `NAMING` looks, `prefix` theirs (`al-`, `ar-`), each value read
+    /// by `read`.
+    fn named_by(&self, prefix: &str, read: fn(&str) -> Vec<i64>) -> Result<std::collections::BTreeSet<i64>> {
         let db = self.db();
         let mut named = std::collections::BTreeSet::new();
         for (table, column) in NAMING {
-            let mut st = db.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE '%ar-%'"))?;
+            let mut st = db.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE '%{prefix}%'"))?;
             for text in st.query_map([], |r| r.get::<_, String>(0))? {
-                named.extend(crate::serve::ids::artists_named(&text?));
+                named.extend(read(&text?));
             }
         }
         Ok(named)
