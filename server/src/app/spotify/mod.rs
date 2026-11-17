@@ -393,7 +393,7 @@ fn with_marks<T>(account: &str, f: impl FnOnce(&Marks, &Lists) -> T) -> Result<O
     let all = serve.userdata.requests(Some(account), None, 10_000)?;
     let of = crate::app::requests::records_of(serve.catalogue(), &all)?;
     let requests = marks::requests_by_key(all, &of);
-    let m = Marks { library: &library, answers: &answers, requests };
+    let m = Marks { library: &library, answers: &answers, requests, catalogue: Some(serve.catalogue().as_ref()) };
     Ok(Some(f(&m, &lists)))
 }
 
@@ -562,7 +562,7 @@ pub fn take_export(account: &str, file: &str, lists: Lists, preview: bool) -> Re
     let s = store()?;
     let library = library()?;
     let answers = Answers(s.all_mb()?);
-    let m = Marks { library: &library, answers: &answers, requests: Default::default() };
+    let m = Marks { library: &library, answers: &answers, requests: Default::default(), catalogue: None };
     let mut b = Brought { albums: lists.albums.len(), tracks: lists.tracks.len(), playlists: lists.playlists.len(), artists: lists.artists.len(), ..Default::default() };
     let statuses = lists
         .albums

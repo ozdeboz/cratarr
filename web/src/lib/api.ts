@@ -3119,6 +3119,8 @@ export type SpotifyAlbum = {
   /** The library's album, where it has it (or some of it). */
   album: { source: string; id: string } | null;
   release_group: string | null;
+  /** Its record (`al-<n>`): its request's, else its release group's. */
+  record?: string | null;
   request: AlbumRequest | null;
   preview: { source: 'bandcamp'; id: string } | null;
 };

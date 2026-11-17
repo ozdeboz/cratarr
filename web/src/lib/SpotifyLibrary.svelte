@@ -122,9 +122,11 @@
     return () => watch.disconnect();
   }
 
-  // Not here: its record's page, made one by its release group as it opens (W9); its Bandcamp preview on its cover.
+  // Not here: its record's page, by the record the server names (G2), else made one by its release group as it opens (W9); its
+  // Bandcamp preview on its cover.
   let finding = $state<string | null>(null);
-  const missingOf = (a: { title: string; artist: string; year?: number | null; release_group: string | null; preview?: SpotifyAlbum['preview'] }): Openable => ({
+  const missingOf = (a: { title: string; artist: string; year?: number | null; release_group: string | null; record?: string | null; preview?: SpotifyAlbum['preview'] }): Openable => ({
+    record: a.record ?? null,
     release_group: a.release_group,
     title: a.title,
     artist: a.artist,

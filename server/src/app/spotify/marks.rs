@@ -108,6 +108,9 @@ pub struct AlbumView {
     pub have: u32,
     pub of: u32,
     pub release_group: Option<String>,
+    /// Its record (`al-<n>`, G2): its request's, else the one its release group names; none where neither says. A page opens it
+    /// by this where it has no group.
+    pub record: Option<String>,
     pub album: Option<Ref>,
     pub request: Option<Request>,
     /// The page looks for Bandcamp's itself, as for every missing album (lib/ElsewhereAlbum).
@@ -163,6 +166,8 @@ pub struct Marks<'a> {
     pub answers: &'a Answers,
     /// The account's requests by their key (a release group, else `artist|album` keys), the latest first, each with its state (W5).
     pub requests: HashMap<String, (Request, crate::app::requests::RequestState)>,
+    /// The catalogue, for the record a release group names (G2); none where it is not asked.
+    pub catalogue: Option<&'a crate::catalogue::Catalogue>,
 }
 
 /// The requests by every key an album of a list may name them by (C49b): the key each was asked by, and what names its
@@ -232,6 +237,12 @@ impl Marks<'_> {
         let release_group = release.release_group.or_else(|| self.answers.named(&a.artist, &a.title));
         let request = self.request(release_group.as_deref(), &a.artist, &a.title);
         let status = self.status(have, of, found.is_some(), request.as_ref());
+        // Its record (G2): its request's, else its release group's.
+        let record = request
+            .as_ref()
+            .and_then(|(r, _)| r.record)
+            .or_else(|| self.catalogue.and_then(|c| c.record_named_by(release_group.as_deref(), None).ok().flatten()))
+            .map(crate::serve::ids::record);
         AlbumView {
             id: a.id.clone(),
             title: a.title.clone(),
@@ -243,6 +254,7 @@ impl Marks<'_> {
             have,
             of,
             release_group,
+            record,
             album: found.map(|id| Ref { source: self.library.source.clone(), id }),
             // In the library, it is the library's (the owner, 2026-10-30): requested only on the Requests page.
             request: request.map(|(r, _)| r).filter(|_| status != IN),
@@ -353,7 +365,7 @@ mod tests {
             (upc_key("0731452280826"), r#"{"releases":["rel-nnta"],"release_group":"rg-nnta"}"#.to_string()),
             (name_key("Björk", "Homogenic"), r#""rg-homogenic""#.to_string()),
         ]));
-        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "pending")], &[]) };
+        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "pending")], &[]), catalogue: None };
         // By ISRC, though the title differs.
         let t = Track { id: "t1".into(), title: "Zombie (Remastered)".into(), artist: "The Cranberries".into(), album: "No Need To Argue".into(), isrc: Some("IEACJ9400015".into()), ..Default::default() };
         let v = marks.track(&t);
@@ -369,8 +381,25 @@ mod tests {
         let v = marks.album(&a, None);
         assert_eq!((v.status, v.release_group.as_deref()), (REQUESTED, Some("rg-homogenic")));
         // Declined: missing again.
-        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "declined")], &[]) };
+        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "declined")], &[]), catalogue: None };
         assert_eq!(marks.album(&a, None).status, MISSING);
         assert_eq!(marks.artist(&Artist { id: "x".into(), name: "the cranberries".into(), photo: None }, None).have, 3);
+    }
+
+    /// G2: an album row names its record: its request's, else the one its release group names, so the page opens its record's page
+    /// where it has no group of its own to make one by; none where neither says.
+    #[test]
+    fn an_album_row_names_its_record() {
+        let (lib, cat) = (library(), crate::catalogue::Catalogue::open(None, Vec::new()).unwrap());
+        let group = "00000000-0000-4000-8000-000000000391";
+        let listed = cat.record_for_tests("Homogenic", 0);
+        assert!(cat.set_reference(&crate::serve::ids::record(listed), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", group), "link").unwrap());
+        let answers = Answers(HashMap::from([(name_key("Björk", "Homogenic"), format!("\"{group}\"")), (name_key("Björk", "Vespertine"), r#""rg-vespertine""#.to_string())]));
+        let asked = Request { record: Some(77), ..request(&format!("{}|{}", key("Björk"), key("Post")), "pending") };
+        let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![asked], &[]), catalogue: Some(&cat) };
+        let row = |title: &str| marks.album(&Album { id: format!("x.{title}"), title: title.into(), artist: "Björk".into(), ..Default::default() }, None).record;
+        assert_eq!(row("Homogenic"), Some(crate::serve::ids::record(listed)), "its group's record");
+        assert_eq!(row("Post"), Some(crate::serve::ids::record(77)), "its request's");
+        assert_eq!(row("Vespertine"), None, "no record names its group");
     }
 }
