@@ -650,9 +650,10 @@ fn retired(tx: &Connection, subject: &str) -> Result<bool> {
 /// `set_reference` in the caller's transaction, found at `at`. One a subject holds alone (a release, an album page, an artist, a
 /// label): a retired record is given none, and one it held goes to whoever names it now; held by another, it is taken by hand,
 /// or where `takes` (a certain match), and never from a hand by anything else: a link pasted names what it names. An artist's id
-/// held by `search` alone, by an artist credited on no had record (one opened from Beyond, Z2), gives way to the files', and the
-/// records that artist's lists made (credited `listing`) go with it to the taker (U4): an artist with nothing of their own is
-/// merged into them, left with nothing, and forgotten a day later (Z10).
+/// held by `search` alone, by an artist credited on no had record (one opened from Beyond, Z2, or from a card, G7), gives way to
+/// the files', and to the monthly read's (`search`, T7) for an artist credited on a had record; the records that artist's lists
+/// made (credited `listing`) go with it to the taker (U4): an artist with nothing of their own is merged into them, left with
+/// nothing, and forgotten a day later (Z10).
 pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, at: i64, takes: bool) -> Result<Put> {
     let mut taken = Vec::new();
     if ONE_SUBJECT.contains(&r.kind.as_str()) {
@@ -667,7 +668,8 @@ pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, 
         // schema holds one holder, `references_one`; the rule stands without counting on it.)
         let mut giving = Vec::new();
         for (holder, held_how) in &holders {
-            let gives_way = how == "files" && held_how == "search" && r.kind == "artist" && credited_on_none_had(tx, holder)?;
+            // The monthly read takes only for an artist with a had record (T7): two of a name with none never pass it back and forth.
+            let gives_way = r.kind == "artist" && held_how == "search" && (how == "files" || (how == "search" && !credited_on_none_had(tx, subject)?)) && credited_on_none_had(tx, holder)?;
             if !retired(tx, holder)? && ((held_how == "hand" && how != "hand") || (!takes && how != "hand" && !gives_way)) {
                 return Ok(Put::Held);
             }
@@ -4164,5 +4166,92 @@ mod tests {
         assert_eq!(cat.forgotten_at(&ids::artist(lonely)).unwrap(), Some(NOW), "their tombstone");
         assert_eq!(cat.artist_of("Paper Lantern").unwrap(), None, "their row gone");
         assert!(cat.artist_for("Paper Lantern").unwrap() > lonely, "named again: a new id, never theirs");
+    }
+
+    /// Air's MusicBrainz id in T7's tests.
+    const AIR_ID: &str = "00000000-0000-4000-8000-000000000701";
+
+    /// T7's shape (the review of run 10, finding 7): the library's "Air", credited on a had record where `air_had`; "Air (2)", made as
+    /// a card's open makes them (G7: not sure, so a new artist of the name), holding Air's id found `how`, credited on two records
+    /// their list made and, where `theirs_had`, on a had record. Air and Air (2).
+    fn air_and_air_2(cat: &Catalogue, reference: &Ref, air_had: bool, how: &str, theirs_had: bool) -> (i64, i64) {
+        let credit = |record: i64, artist: i64| {
+            cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", params![record, artist]).unwrap();
+        };
+        let air = cat.artist_for("Air").unwrap();
+        if air_had {
+            credit(cat.record_for_tests("Moon Safari", 2), air);
+        }
+        let second = cat.artist_by_reference(reference, "Air", how, false).unwrap();
+        assert_ne!(second, air, "not sure: Air (2)");
+        let listing = |title: &str| Listing { title: title.into(), artist: "Air".into(), kind: Some("album".into()), ..Listing::default() };
+        assert_eq!(cat.keep_listing(Some(second), &[listing("Talkie Walkie"), listing("Pocket Symphony")], "link").unwrap().len(), 2);
+        if theirs_had {
+            credit(cat.record_for_tests("Le Voyage Dans La Lune", 2), second);
+        }
+        (air, second)
+    }
+
+    /// The monthly read's put of the id it found by the artist's name (`discover::read_one`'s `set_reference`, `search`), as it ends.
+    fn monthly_read(cat: &Catalogue, artist: i64, reference: &Ref) -> Put {
+        let mut db = cat.db();
+        let tx = db.transaction().unwrap();
+        let put = put_reference(&tx, &ids::artist(artist), reference, "search", NOW, false).unwrap();
+        tx.commit().unwrap();
+        put
+    }
+
+    /// The records an artist is credited on, and how.
+    fn credits_of(cat: &Catalogue, artist: i64) -> Vec<(i64, String)> {
+        let db = cat.db();
+        let mut st = db.prepare("SELECT record, how FROM record_artists WHERE artist = ?1 ORDER BY record").unwrap();
+        st.query_map([artist], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// Who holds a reference, and how each found it.
+    fn holders_of(cat: &Catalogue, r: &Ref) -> Vec<(String, String)> {
+        let db = cat.db();
+        let mut st = db.prepare("SELECT subject, how FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject").unwrap();
+        st.query_map(params![r.source, r.kind, r.value], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// T7.1 (the review of run 10, finding 7): the monthly read finds the library's "Air" by their name and puts Air's id on them,
+    /// which "Air (2)" (a card's open, G7) holds by `search` and no had record: taken (`Put::Kept`), with the records Air (2)'s list
+    /// made, credited `listing` (U4). One artist holds the id.
+    #[test]
+    fn a_cards_artist_is_the_library_artist_where_the_name_is_sure() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let reference = Ref::new("musicbrainz", "artist", AIR_ID);
+        let (air, second) = air_and_air_2(&cat, &reference, true, "search", false);
+        let listed: Vec<(i64, String)> = credits_of(&cat, second);
+        assert!(listed.len() == 2 && listed.iter().all(|(_, how)| how == "listing"), "two listing credits: {listed:?}");
+        let mut both = [credits_of(&cat, air), listed].concat();
+        both.sort();
+        assert_eq!(monthly_read(&cat, air, &reference), Put::Kept(vec![ids::artist(second)]));
+        assert_eq!(holders_of(&cat, &reference), [(ids::artist(air), "search".to_string())], "Air holds it, alone");
+        assert!(cat.references_of(&ids::artist(second)).unwrap().is_empty(), "Air (2) holds none");
+        assert!(credits_of(&cat, second).is_empty(), "Air (2)'s listing credits moved");
+        assert_eq!(credits_of(&cat, air), both, "to Air");
+    }
+
+    /// T7.2: the monthly read takes nothing where "Air (2)" is credited on a had record, or holds the id by hand or by their files;
+    /// nor (T7's default) for a library "Air" with no had record of their own. `Put::Held` each time, and nothing moves.
+    #[test]
+    fn an_id_held_by_an_artist_with_a_had_record_stays() {
+        let cases = [
+            ("Air (2) credited on a had record", true, "search", true),
+            ("held by hand", true, "hand", false),
+            ("held by their files", true, "files", false),
+            ("Air with no had record", false, "search", false),
+        ];
+        for (case, air_had, how, theirs_had) in cases {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let reference = Ref::new("musicbrainz", "artist", AIR_ID);
+            let (air, second) = air_and_air_2(&cat, &reference, air_had, how, theirs_had);
+            let before = (credits_of(&cat, air), credits_of(&cat, second));
+            assert_eq!(monthly_read(&cat, air, &reference), Put::Held, "{case}");
+            assert_eq!(holders_of(&cat, &reference), [(ids::artist(second), how.to_string())], "{case}: still Air (2)'s");
+            assert_eq!((credits_of(&cat, air), credits_of(&cat, second)), before, "{case}: nothing moves");
+        }
     }
 }
