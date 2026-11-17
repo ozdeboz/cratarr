@@ -901,6 +901,9 @@ impl IncomingService {
         if let Err(e) = tokio::task::spawn_blocking(move || c.unmark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
             tracing::warn!("catalogue: could not bring {title} back from the trash: {e:#}");
         }
+        // The requests the Delete closed open again (Y4), their arrival back, before Lidarr fetches again: an open request's arrival
+        // is what stops it (X1). Before `mark_undone`, after which a handler still telling Lidarr puts it back too.
+        self.reopen_requests(id).await;
         self.journal.mark_undone(id, epoch_now())?;
         self.resume_fetching(id, title).await;
         self.unhide(source, album_id, *folder).await;
@@ -1565,6 +1568,20 @@ impl IncomingService {
         }
     }
 
+    /// The requests a Delete closed (Y4, kept on its entry by `requests::reject`), opened again as they were, in the user data the
+    /// requests are in (the library's, the server's).
+    async fn reopen_requests(&self, id: EventId) {
+        let closed: Vec<super::requests::Closed> =
+            self.journal.result(id, super::requests::CLOSED_BY_DELETE).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        if closed.is_empty() {
+            return;
+        }
+        let ud = self.lib.playlists_db().clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || super::requests::reopen(&ud, &closed)).await {
+            tracing::warn!("the requests a Delete closed were not opened again: {e}");
+        }
+    }
+
     /// Lidarr fetches again what it fetched before, if it was told (or was about to be told) to stop. Safe to repeat.
     async fn resume_fetching(&self, id: EventId, title: &str) {
         let read = |h: &str| -> Option<Vec<i64>> { self.journal.result(id, h).ok().flatten().and_then(|v| serde_json::from_value(v).ok()) };
@@ -1946,6 +1963,88 @@ mod tests {
             assert!(standing(None), "back where it was: {n}");
         }
         for d in roots {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// An album waiting in Incoming (catalogue folder 1), record 1, and an approved request of it by each of `users`, asked before
+    /// it came and answered by root: what a Delete of the copy closes (Y4).
+    fn waiting_with_requests(svc: &IncomingService, inc: &std::path::Path, users: &[&str]) -> Vec<crate::userdata::Request> {
+        std::fs::create_dir_all(inc.join("A/Album")).unwrap();
+        std::fs::write(inc.join("A/Album/1.flac"), b"waiting").unwrap();
+        let c = svc.lib.catalogue();
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        let ud = svc.lib.playlists_db();
+        let asked = |user: &&str| crate::userdata::Request {
+            id: 0,
+            user: user.to_string(),
+            album_key: format!("k-{user}"),
+            artist_key: "a".into(),
+            release_group: None,
+            album: "Album".into(),
+            artist: "A".into(),
+            year: None,
+            cover: None,
+            at: 100,
+            status: crate::app::requests::APPROVED.into(),
+            reason: None,
+            decided_by: Some("root".into()),
+            decided_at: Some(150),
+            fetched: None,
+            record: Some(1),
+        };
+        users.iter().map(asked).map(|r| crate::userdata::Request { id: ud.add_request(&r).unwrap(), ..r }).collect()
+    }
+
+    /// A request's answer as it stands: status, why, by whom, when.
+    fn answer(ud: &crate::userdata::UserData, id: i64) -> (String, Option<String>, Option<String>, Option<i64>) {
+        let r = ud.request(id).unwrap().unwrap();
+        (r.status, r.reason, r.decided_by, r.decided_at)
+    }
+
+    /// Y4 (the review's finding 4): the Undo of a requester's Delete opens again the request the Delete closed, as it was
+    /// (approved, by whom and when), before Lidarr fetches again; and only that: the other asker's, never closed, and one a Delete
+    /// closed before, are as they were.
+    #[tokio::test]
+    async fn undoing_a_delete_reopens_the_requests_it_closed() {
+        use crate::app::requests::{APPROVED, REJECTED, closed_by, reject};
+        let (music, inc) = (folder("reopen-music"), folder("reopen-inc"));
+        let svc = on_disk(&music, &inc).await;
+        let rs = waiting_with_requests(&svc, &inc, &["ann", "bob", "carol"]);
+        let ud = svc.lib.playlists_db().clone();
+        assert!(ud.set_request_status(rs[2].id, APPROVED, REJECTED, Some("Rejected"), None).unwrap(), "Carol's closed by an earlier Delete");
+        let before: Vec<_> = rs.iter().map(|r| answer(&ud, r.id)).collect();
+        let deleted = svc.delete_listed("cratarr", copy_at("al-1", 1, &inc.to_string_lossy(), "A/Album")).await.unwrap();
+        let undo = Some((svc.journal.as_ref(), deleted.undo.parse().unwrap()));
+        let closed = reject(None, &ud, &closed_by(rs.clone(), false, Some("ann")), undo).await;
+        assert_eq!(closed.iter().map(|c| c.id).collect::<Vec<_>>(), [rs[0].id], "Ann's alone");
+        assert_eq!(answer(&ud, rs[0].id).0, REJECTED);
+        svc.undo(&deleted.undo).await.unwrap();
+        assert!(inc.join("A/Album/1.flac").exists(), "the album back");
+        assert_eq!(rs.iter().map(|r| answer(&ud, r.id)).collect::<Vec<_>>(), before, "Ann's open again as it was; Bob's and Carol's as they were");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Y4: an administrator's Delete closes every asker's request, and its Undo opens them all again, each as it was.
+    #[tokio::test]
+    async fn an_administrators_delete_closes_every_request_and_its_undo_reopens_them() {
+        use crate::app::requests::{REJECTED, closed_by, reject};
+        let (music, inc) = (folder("reopen-all-music"), folder("reopen-all-inc"));
+        let svc = on_disk(&music, &inc).await;
+        let rs = waiting_with_requests(&svc, &inc, &["ann", "bob"]);
+        let ud = svc.lib.playlists_db().clone();
+        let before: Vec<_> = rs.iter().map(|r| answer(&ud, r.id)).collect();
+        let deleted = svc.delete_listed("cratarr", copy_at("al-1", 1, &inc.to_string_lossy(), "A/Album")).await.unwrap();
+        let undo = Some((svc.journal.as_ref(), deleted.undo.parse().unwrap()));
+        assert_eq!(reject(None, &ud, &closed_by(rs.clone(), true, Some("root")), undo).await.len(), 2, "every asker's");
+        assert!(rs.iter().all(|r| answer(&ud, r.id).0 == REJECTED));
+        svc.undo(&deleted.undo).await.unwrap();
+        assert_eq!(rs.iter().map(|r| answer(&ud, r.id)).collect::<Vec<_>>(), before, "all open again, each as it was");
+        for d in [music, inc] {
             std::fs::remove_dir_all(d).ok();
         }
     }

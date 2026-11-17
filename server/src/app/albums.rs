@@ -464,7 +464,11 @@ impl App {
         };
         let done = self.incoming.delete_listed(source, a).await?;
         if let Some(served) = self.served.as_ref() {
-            super::requests::reject(super::requests::fetcher(self).as_deref(), served, &arrived).await;
+            // An administrator's Delete closes every asker's request, a requester's their own alone (Y4); what it closed is kept on
+            // its journal entry, for its Undo.
+            let closing = super::requests::closed_by(arrived, crate::serve::access::administering(), served.current_user().as_deref());
+            let undo = done.undo.parse::<crate::journal::EventId>().ok().map(|id| (self.journal.as_ref(), id));
+            super::requests::reject(super::requests::fetcher(self).as_deref(), &served.userdata, &closing, undo).await;
         }
         Ok(done)
     }

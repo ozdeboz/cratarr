@@ -1707,6 +1707,15 @@ impl UserData {
         )? > 0)
     }
 
+    /// A request a Delete closed, put back by its Undo as it was (Y4): its status, why, by whom and when, where it still has the
+    /// status the Delete gave it (`from`): an answer since wins. Whether it was written.
+    pub fn restore_request_status(&self, id: i64, from: &str, status: &str, reason: Option<&str>, by: Option<&str>, at: Option<i64>) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1 AND status = ?6",
+            params![id, status, reason, by, at, from],
+        )? > 0)
+    }
+
     /// The account's open request (pending or approved) of a record, else of an album's key (W6): looked for by these among all its
     /// requests, not its newest.
     pub fn open_request(&self, user: &str, record: Option<i64>, key: &str) -> Result<Option<Request>> {
