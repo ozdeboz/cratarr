@@ -1430,7 +1430,8 @@ pub struct Wanted {
 /// its Bandcamp album page, where one was found for it (by its names, or by its release group, R19), a reference (`search`), so
 /// Soulseek can judge by Bandcamp's list (C51b). A request with a release group takes a record by its names only where nothing
 /// the record holds contradicts that group (R21, N1): "Album (Remixes)" asked by its group is not the owned "Album", nor another
-/// self-titled album. What it came to (`RequestRecord`).
+/// self-titled album. A name several live records of the artist share, had or not had (X8: Orbital's two self-titled albums, Peter
+/// Gabriel's four), finds none by its names: the request takes its own record. What it came to (`RequestRecord`).
 pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<RequestRecord> {
     use super::identity::fold;
     let group = w.group.as_deref().map(str::to_ascii_lowercase).filter(|g| is_mbid(g)).map(|g| Ref::new("musicbrainz", "release-group", &g));
@@ -1490,9 +1491,21 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         }
         Ok(None)
     };
+    // Its names several live records of the artist share, had or not had (X8): exact folded names cannot say which.
+    let shared_names = || -> Result<bool> {
+        let (artist, title) = (fold(&w.artist), fold(&w.title));
+        if title.is_empty() {
+            return Ok(false);
+        }
+        let mut st = tx.prepare_cached("SELECT COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL")?;
+        let rows: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows.iter().filter(|(a, t)| fold(a) == artist && fold(t) == title).count() > 1)
+    };
+    let shared = by_group.or(by_page).is_none() && shared_names()?;
     // Which, and whether it is an owned record found by its names, onto which nothing it was asked by is written (W2, B2).
     let (found, by_names, owned) = match by_group.or(by_page) {
         Some(record) => (Some(record), false, false),
+        None if shared => (None, false, false),
         None => match by_names()? {
             Some(record) => (Some(record), true, true),
             None if group.is_none() => {
@@ -1532,17 +1545,18 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         }
         None => None,
     };
-    Ok(RequestRecord { record, made, by_names, paged })
+    Ok(RequestRecord { record, made, by_names, paged, shared })
 }
 
 /// What `request_record_in` came to: the record, whether it was made now, whether it was found by its names (R21: each listed in
 /// the step's report), and what became of the page: put on it now (true), held by another record (false), or none (no page, or
-/// the record held it already).
+/// the record held it already); and whether its names were shared by several records, so none was taken by them (X8: listed too).
 pub(super) struct RequestRecord {
     pub record: i64,
     pub made: bool,
     pub by_names: bool,
     pub paged: Option<bool>,
+    pub shared: bool,
 }
 
 /// How long a folder expected for a record waits for its album (`expect_record`).
@@ -2029,7 +2043,7 @@ impl Carrying<'_> {
         let pages: std::collections::HashMap<String, &str> = c.pages.iter().map(|p| (lower(&p.key), p.page.as_str())).collect();
         let mut given: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         let (mut made, mut paged) = (0, 0);
-        let (mut made_for, mut found_by_names, mut look_alikes) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut made_for, mut found_by_names, mut look_alikes, mut shared_names) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         // The owned albums the import matcher finds loosely (W2, B1): no request takes one any more, exact folded names alone do;
         // each request one would have been, listed whole for the rehearsal to check.
         let owned: Vec<(i64, String, String)> = self
@@ -2051,7 +2065,10 @@ impl Carrying<'_> {
             // here, the pages part found none to give it to. Counted where it is put now; one another record holds is reported so.
             let page = pages.get(&lower(&r.key)).or_else(|| r.group.as_deref().and_then(|g| pages.get(&lower(g)))).map(|p| p.to_string());
             let w = Wanted { group: r.group.clone(), artist: named.artist, artists: Vec::new(), title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
-            let RequestRecord { record, made: new, by_names, paged: mut page } = request_record_in(self.tx, &w, r.at)?;
+            let RequestRecord { record, made: new, by_names, paged: mut page, shared } = request_record_in(self.tx, &w, r.at)?;
+            if shared {
+                shared_names.push(format!("{} {} - {}", r.id, r.artist, r.album));
+            }
             // Else by a release group its record holds (R22, the owner's GROUCH request: 0.16 found its page by the group its card
             // knew, and it was asked for by Bandcamp's names).
             let mut put = w.page.clone();
@@ -2088,7 +2105,12 @@ impl Carrying<'_> {
         self.tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![REQUEST_RECORDS, serde_json::to_string(&given)?])?;
         self.counts = vec![("records_made_for_requests", made), ("pages_for_requests", paged)];
         // Each, whole, for a rehearsal to check (R14, F6): a request given a record not had where 0.16 judged it by names.
-        self.lists = vec![("records_made_for", made_for), ("requests_found_by_names", found_by_names), ("requests_beside_owned_look_alikes", look_alikes)];
+        self.lists = vec![
+            ("records_made_for", made_for),
+            ("requests_found_by_names", found_by_names),
+            ("requests_beside_owned_look_alikes", look_alikes),
+            ("names_shared_by_several_records", shared_names),
+        ];
         Ok(())
     }
 
@@ -2488,6 +2510,43 @@ mod tests {
         assert!(cat.set_reference(&ids::record(owned), &Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/two-rooms"), "link").unwrap());
         let wanted = Wanted { artist: "Glass Harbour".into(), title: "Two Rooms".into(), page: Some("https://glassharbour.bandcamp.com/album/two-rooms-live".into()), ..Wanted::default() };
         assert_ne!(cat.record_for_request(&wanted).unwrap(), owned);
+    }
+
+    /// X8 (the rehearsal's request 89, "Orbital"): a name two live records of the artist share, had or not had, finds neither by
+    /// its names: the request takes its own record, its release group's where it has one, and says its names are shared.
+    #[test]
+    fn a_request_for_a_self_titled_album_with_two_of_that_name_is_not_found_by_names() {
+        let asked = |cat: &Catalogue, w: &Wanted| {
+            let mut db = cat.db();
+            let tx = db.transaction().unwrap();
+            let r = request_record_in(&tx, w, 1).unwrap();
+            tx.commit().unwrap();
+            (r.record, r.made, r.by_names, r.shared)
+        };
+        let named = Wanted { artist: "Glass Harbour".into(), title: "Glass Harbour".into(), ..Wanted::default() };
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let had = [cat.record_for_tests("Glass Harbour", 2), cat.record_for_tests("Glass Harbour", 3)];
+        let (record, made, by_names, shared) = asked(&cat, &named);
+        assert!(!had.contains(&record) && made && !by_names && shared, "its own record, its names said to be shared");
+        let group = "00000000-0000-4000-8000-000000000204";
+        let (record, ..) = asked(&cat, &Wanted { group: Some(group.into()), ..named.clone() });
+        assert!(!had.contains(&record));
+        assert!(refs_in(&cat.db(), &ids::record(record)).unwrap().iter().any(|(s, k, v)| (s.as_str(), k.as_str(), v.as_str()) == ("musicbrainz", "release-group", group)), "by its group");
+        // One had, one not had: two still.
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let both = [cat.record_for_tests("Glass Harbour", 2), cat.record_for_tests("Glass Harbour", 0)];
+        let (record, _, by_names, shared) = asked(&cat, &named);
+        assert!(!both.contains(&record) && !by_names && shared);
+    }
+
+    /// X8: a name one live record of the artist alone has is still found by it, had or not had.
+    #[test]
+    fn a_request_whose_name_is_unique_is_still_found_by_names() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (had, not_had) = (cat.record_for_tests("Tide Tables", 2), cat.record_for_tests("Open Water", 0));
+        let w = |title: &str| Wanted { artist: "Glass Harbour".into(), title: title.into(), ..Wanted::default() };
+        assert_eq!(cat.record_for_request(&w("Tide Tables")).unwrap(), had);
+        assert_eq!(cat.record_for_request(&w("Open Water")).unwrap(), not_had);
     }
 
     /// R21 (N1): a self-titled Want by its release group is not another self-titled album of the artist the library holds.
