@@ -171,6 +171,12 @@ const PRESENT: &str = "folder >= 0 AND gone_at IS NULL AND trashed IS NULL";
 /// The same, with the files table named `f` (in a join with `source_ids`, which has a folder too).
 const PRESENT_F: &str = "f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL";
 
+/// Whether copy `f` (`files.shared`) still shares its blocks with an original in catalogue folder `?1` (T2): a row of the same
+/// track there, its trash counting as there (Q16), whose size and time are still the copy's, as the copy was made of it (C38
+/// keeps both). A copy whose original was replaced or rewritten since is its own. The one rule wherever `shared` is read: the
+/// backup's list, and room (AL01).
+pub const SHARED_WITH: &str = "f.shared = 1 AND f.track IS NOT NULL AND EXISTS (SELECT 1 FROM files o WHERE o.track = f.track AND o.folder = ?1 AND o.gone_at IS NULL AND o.size = f.size AND o.mtime = f.mtime)";
+
 /// How many of a folder's files `set_folders` looks for at a path, to tell whether those rows are that folder's.
 const SAMPLE: i64 = 20;
 
@@ -3040,16 +3046,12 @@ impl Catalogue {
         Ok(done)
     }
 
-    /// The copies sharing their blocks with an original in catalogue folder `main` (C41, the backup's list): present, shared
-    /// (`files.shared`), on a track whose file lies in `main`, its trash counting as there still (Q16). A copy whose original left
-    /// is its own, and is not listed. In folder and path order. Blocking.
+    /// The copies sharing their blocks with an original in catalogue folder `main` (C41, the backup's list): present, and
+    /// `SHARED_WITH` an original there, its trash counting as there still (Q16). A copy whose original left, or was replaced or
+    /// rewritten since (T2), is its own, and is not listed. In folder and path order. Blocking.
     pub fn shared_copies(&self, main: i64) -> Result<Vec<(i64, String)>> {
         let db = self.db();
-        let mut st = db.prepare_cached(&format!(
-            "SELECT f.folder, f.rel FROM files f WHERE {PRESENT_F} AND f.shared = 1 AND f.folder <> ?1 AND f.track IS NOT NULL
-               AND EXISTS (SELECT 1 FROM files o WHERE o.track = f.track AND o.folder = ?1 AND o.gone_at IS NULL)
-             ORDER BY f.folder, f.rel"
-        ))?;
+        let mut st = db.prepare_cached(&format!("SELECT f.folder, f.rel FROM files f WHERE {PRESENT_F} AND f.folder <> ?1 AND {SHARED_WITH} ORDER BY f.folder, f.rel"))?;
         let rows = st.query_map([main], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -4611,6 +4613,16 @@ mod tests {
         assert_eq!(cat.other_edition_in(waiting, &[1]).unwrap(), None, "only itself there");
         assert_eq!(cat.other_edition_in(other, &[0]).unwrap(), None, "another name");
         assert_eq!(cat.other_edition_in(waiting, &[]).unwrap(), None);
+    }
+
+    /// T2.4: one rule says whether a copy shares its blocks: it asks the original's size and time, and the backup's list reads it.
+    #[test]
+    fn the_shared_rule_is_one() {
+        assert!(SHARED_WITH.contains("o.size = f.size") && SHARED_WITH.contains("o.mtime = f.mtime"), "{SHARED_WITH}");
+        let source = include_str!("mod.rs");
+        let at = source.find("pub fn shared_copies").unwrap();
+        let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
+        assert!(body.contains("{SHARED_WITH}") && !body.contains("f.shared ="), "shared_copies reads the one rule: {body}");
     }
 
     /// M1: the pass's question of which files have no waveform in three bands reads `analysis_band_wave`'s index of forms

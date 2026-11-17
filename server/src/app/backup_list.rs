@@ -78,6 +78,38 @@ mod tests {
         std::fs::remove_dir_all(&data).ok();
     }
 
+    /// Music's record of one track (`copy-<record>/1.flac`, size 1, time 1) and its copy in own music sharing its blocks: listed.
+    fn one_shared_copy() -> (Catalogue, i64) {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/own")]).unwrap();
+        let record = cat.record_for_tests("Tide Tables", 1);
+        cat.copy_for_tests(record, 0);
+        cat.copy_rows(&[((0, format!("copy-{record}/1.flac")), (1, "Own/1.flac".into()), true)]).unwrap();
+        assert_eq!(paths(&cat, 0).unwrap(), [PathBuf::from("/own/Own/1.flac")], "listed");
+        (cat, record)
+    }
+
+    /// T2.1: Replace gives Music's track to a new file of another size and time and lets the old one go: the copy in own music no
+    /// longer shares its blocks with anything in Music, and is its own.
+    #[test]
+    fn a_copy_whose_original_was_replaced_is_its_own() {
+        let (cat, record) = one_shared_copy();
+        cat.copy_rows(&[((0, format!("copy-{record}/1.flac")), (0, "New/1.flac".into()), false)]).unwrap();
+        cat.execute_for_tests("UPDATE files SET size = 200, mtime = 20 WHERE folder = 0 AND rel = 'New/1.flac'");
+        cat.set_tracks(&[((0, format!("copy-{record}/1.flac")), None), ((0, "New/1.flac".into()), Some(1))]).unwrap();
+        assert!(paths(&cat, 0).unwrap().is_empty(), "its own: backed up");
+    }
+
+    /// T2.2: Music's original rewritten in place (a tag write: another size and time on its row): the copy is its own, its own
+    /// flag as it was, as the copy itself did not change.
+    #[test]
+    fn a_copy_whose_original_was_rewritten_is_its_own() {
+        let (cat, record) = one_shared_copy();
+        cat.execute_for_tests(&format!("UPDATE files SET size = 104, mtime = 30 WHERE folder = 0 AND rel = 'copy-{record}/1.flac'"));
+        assert!(paths(&cat, 0).unwrap().is_empty(), "its own: backed up");
+        cat.execute_for_tests(&format!("UPDATE files SET size = 1, mtime = 1 WHERE folder = 0 AND rel = 'copy-{record}/1.flac'"));
+        assert_eq!(paths(&cat, 0).unwrap().len(), 1, "the copy's own flag untouched: as before, listed again");
+    }
+
     /// C41: the list is written anew after a copy's Undo: the copy, its rows into its library's trash, leaves the list; written
     /// through a part, renamed, none left behind.
     #[test]

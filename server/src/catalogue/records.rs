@@ -1500,6 +1500,12 @@ impl Catalogue {
         }
     }
 
+    /// Tests elsewhere: one statement on the catalogue, as a test sets a shape no action makes (a file rewritten in place).
+    #[cfg(test)]
+    pub fn execute_for_tests(&self, sql: &str) {
+        self.db().execute_batch(sql).unwrap();
+    }
+
     /// Tests elsewhere: a copy of the record in catalogue folder `folder`, a file there behind each of its tracks (`copy-<record>/…`).
     #[cfg(test)]
     pub fn copy_for_tests(&self, record: i64, folder: i64) {
