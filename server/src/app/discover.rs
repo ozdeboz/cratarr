@@ -1347,18 +1347,18 @@ fn same(a: &str, b: &str) -> bool {
     key(a) == key(b) || loose(a) == loose(b)
 }
 
-/// An album's page on Bandcamp (decision 0071): its own on MusicBrainz, else Bandcamp's search box where artist and title both
-/// match (O4: an artist's `/music` page is not read); none otherwise. An error where Bandcamp could not be asked (switched off, left
-/// alone after its bot check, out of reach): no answer, never kept as none (O5). Bandcamp is asked at most once a second, in its own
-/// turn (`Bandcamp::send`), as MusicBrainz is in its.
-async fn bandcamp_page(urls: &[String], artist: &str, album: &str) -> Result<Option<String>> {
-    if let Some(p) = urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
+/// An album's page on Bandcamp (decision 0071): its own on MusicBrainz (`mb`, what it answered for the release group; none asked
+/// where no group is known), else Bandcamp's search box (`search`, `Bandcamp::search`) where artist and title both match (O4: an
+/// artist's `/music` page is not read); none otherwise. An error where either could not be asked: MusicBrainz not read (Y6: its links
+/// unknown, the search box is not asked in their place), Bandcamp switched off, left alone after its bot check, out of reach: no
+/// answer, never kept as none (O5). Bandcamp is asked at most once a second, in its own turn (`Bandcamp::send`, which also refuses
+/// while it is switched off), as MusicBrainz is in its.
+async fn bandcamp_page(mb: &Result<MbAlbum>, artist: &str, album: &str, search: impl std::future::Future<Output = Result<Vec<(String, String, String)>>>) -> Result<Option<String>> {
+    let mb = mb.as_ref().map_err(|e| anyhow::anyhow!("MusicBrainz was not read: {e:#}"))?;
+    if let Some(p) = mb.urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
         return Ok(Some(p));
     }
-    if !super::switches::is_on(super::switches::BANDCAMP) {
-        anyhow::bail!("Bandcamp is switched off");
-    }
-    let found = crate::bandcamp::Bandcamp::get().search(artist, album).await?;
+    let found = search.await?;
     Ok(found.into_iter().find(|(t, a, _)| same(t, album) && same(a, artist)).map(|(_, _, url)| url))
 }
 
@@ -1614,23 +1614,26 @@ pub async fn look(
         }
         let s = &mut albums[i];
         progress(LISTEN_STEP, i as u64, Some(total));
-        let mut mb = match &s.release_group {
-            Some(g) => mb_urls(&http, g).await.unwrap_or_default(),
-            None => MbAlbum::default(),
+        let answer = match &s.release_group {
+            Some(g) => mb_urls(&http, g).await,
+            None => Ok(MbAlbum::default()),
         };
-        (s.track_count, s.length_secs) = (mb.tracks, mb.length_secs);
         // Its own page on MusicBrainz, else, for the first `BANDCAMP_CARDS` cards only, Bandcamp's search box through
-        // `find_on_bandcamp`'s memory (O5): a miss is kept 30 days for every account, so the daily look does not ask again.
+        // `find_on_bandcamp`'s memory (O5): a miss is kept 30 days for every account, so the daily look does not ask again. MusicBrainz
+        // not read: no answer, Bandcamp not asked, no miss kept; the next look asks again (Y6).
         if s.bandcamp.is_none() {
-            s.bandcamp = match mb.urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
+            s.bandcamp = match answer.as_ref().ok().and_then(|mb| mb.urls.iter().find_map(|u| crate::bandcamp::album_page(u))) {
                 Some(p) => Some(p),
                 None if i < BANDCAMP_CARDS => {
-                    let (artist, album, urls) = (s.artist.clone(), s.album.clone(), mb.urls.clone());
-                    remembered(serve, &artist, &album, s.release_group.as_deref(), bandcamp_page(&urls, &artist, &album)).await.unwrap_or(None)
+                    let (artist, album) = (s.artist.clone(), s.album.clone());
+                    let search = crate::bandcamp::Bandcamp::get().search(&artist, &album);
+                    remembered(serve, &artist, &album, s.release_group.as_deref(), bandcamp_page(&answer, &artist, &album, search)).await.unwrap_or(None)
                 }
                 None => None,
             };
         }
+        let mut mb = answer.unwrap_or_default();
+        (s.track_count, s.length_secs) = (mb.tracks, mb.length_secs);
         if let Some(p) = &s.bandcamp {
             mb.urls.insert(0, p.clone());
         }
@@ -2094,7 +2097,7 @@ pub async fn find_on_bandcamp(serve: &Arc<crate::serve::Serve>, artist: &str, al
 }
 
 /// `find_on_bandcamp`'s memory around a look (`look`): what was found, a miss too, kept `BANDCAMP_FOUND_SECS` for every account;
-/// a look that could not ask (O5) keeps nothing.
+/// a look that could not ask (O5), MusicBrainz or Bandcamp (Y6), keeps nothing.
 async fn remembered(serve: &Arc<crate::serve::Serve>, artist: &str, album: &str, release_group: Option<&str>, look: impl std::future::Future<Output = Result<Option<String>>>) -> Result<Option<String>> {
     let album_key = release_group.filter(|g| !g.is_empty()).map_or_else(|| format!("{}|{}", key(artist), key(album)), str::to_string);
     let now = super::moment::now_secs();
@@ -2110,14 +2113,14 @@ async fn remembered(serve: &Arc<crate::serve::Serve>, artist: &str, album: &str,
     Ok(page)
 }
 
-/// The look itself, `find_on_bandcamp`'s.
+/// The look itself, `find_on_bandcamp`'s: MusicBrainz not read where the release group is known, no answer (Y6).
 async fn look_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>) -> Result<Option<String>> {
     let http = http()?;
-    let urls = match release_group.filter(|g| !g.is_empty()) {
-        Some(g) => mb_urls(&http, g).await.unwrap_or_default().urls,
-        None => Vec::new(),
+    let answer = match release_group.filter(|g| !g.is_empty()) {
+        Some(g) => mb_urls(&http, g).await,
+        None => Ok(MbAlbum::default()),
     };
-    bandcamp_page(&urls, artist, album).await
+    bandcamp_page(&answer, artist, album, crate::bandcamp::Bandcamp::get().search(artist, album)).await
 }
 
 /// Every record not had of the library's artists (Insights › Discovery › Missing albums, 0.9.3; C53b: one query,
@@ -2671,6 +2674,35 @@ mod missing_tests {
         assert_eq!(ask("Kite Theory", Ok(None)).await.unwrap(), None);
         assert_eq!(ask("Kite Theory", page()).await.unwrap(), None, "a miss kept too");
         assert_eq!(BANDCAMP_CARDS, 100);
+    }
+
+    /// Y6: MusicBrainz not read while an album's Bandcamp page is worked out (a 503, out of reach, switched off): no answer, never
+    /// none; Bandcamp's search box is not asked in its place and no miss is kept, so the next look asks again. Only MusicBrainz read
+    /// and Bandcamp searched keep a miss.
+    #[tokio::test]
+    async fn a_musicbrainz_failure_keeps_no_bandcamp_miss() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        static SEARCHED: AtomicUsize = AtomicUsize::new(0);
+        // Bandcamp's search box, a stand-in: another of the artist's records.
+        async fn search() -> Result<Vec<(String, String, String)>> {
+            SEARCHED.fetch_add(1, SeqCst);
+            Ok(vec![("Another Record".into(), "Glass Harbour".into(), "https://glassharbour.bandcamp.com/album/another-record".into())])
+        }
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let (artist, page) = ("Glass Harbour", "https://glassharbour.bandcamp.com/album/two-rooms");
+        let kept = |group: &str| serve.userdata.bandcamp_found(group).unwrap().map(|(_, p)| p);
+        let failed: Result<MbAlbum> = Err(anyhow::anyhow!("MusicBrainz answered 503"));
+        let missed = remembered(&serve, artist, "Two Rooms", Some(GROUP_1), bandcamp_page(&failed, artist, "Two Rooms", search())).await;
+        assert!(missed.is_err(), "no answer, never none: {missed:?}");
+        assert_eq!(SEARCHED.load(SeqCst), 0, "Bandcamp's search box not asked in MusicBrainz's place");
+        assert_eq!(kept(GROUP_1), None, "no miss kept");
+        let read: Result<MbAlbum> = Ok(MbAlbum { urls: vec![page.into()], ..MbAlbum::default() });
+        let found = remembered(&serve, artist, "Two Rooms", Some(GROUP_1), bandcamp_page(&read, artist, "Two Rooms", search())).await.unwrap();
+        assert_eq!(found.as_deref(), Some(page), "asked again by the next look, MusicBrainz read: its page");
+        let no_links: Result<MbAlbum> = Ok(MbAlbum::default());
+        let miss = remembered(&serve, artist, "Tide Tables", Some(GROUP_2), bandcamp_page(&no_links, artist, "Tide Tables", search())).await.unwrap();
+        assert_eq!((miss, SEARCHED.load(SeqCst)), (None, 1), "MusicBrainz read and Bandcamp searched: nothing there");
+        assert_eq!(kept(GROUP_2), Some(None), "that miss is kept");
     }
 
     /// C53a: an artist no source knows has no list, and nothing is looked for long; an id no artist has, the same.
