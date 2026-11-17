@@ -106,13 +106,15 @@ mod tests {
     /// the disk said) Music holds no original of its size and time on its track, and it leaves the list; after the Undo it is back.
     /// Bob's rows keep `shared = 0` and are never listed (OQ-E); Music's are never listed (they are Music's). Case 2, as T2b has it
     /// (an original in anyone's own music covers its copy, and a copy never holds another): Ann's FLAC, a Want's copy of Bob's, is
-    /// covered by Bob's original before, after and after the Undo, Music's new rows being copies that hold nothing.
+    /// covered by Bob's original before, after and after the Undo, Music's new rows being copies that hold nothing. Case 3 (the
+    /// coordinator, T2b's own rule): as case 2, then Bob's original trashed after the Replace: Ann's copy and Music's new rows both
+    /// count in full and leave the list.
     #[test]
     fn the_backup_list_follows_a_replace_from_a_copy() {
         use crate::journal::{Event, TrackMove};
         let roots = ["/music", "/inc", "/ann", "/bob"].map(PathBuf::from);
         let kept = [0, 2, 3];
-        for case in [1, 2] {
+        for case in [1, 2, 3] {
             let cat = Catalogue::open(None, roots.to_vec()).unwrap();
             let record = cat.record_for_tests("Drift", 2);
             cat.copy_for_tests(record, 0);
@@ -154,6 +156,13 @@ mod tests {
             match case {
                 1 => assert_eq!(ann_listed(), 0, "Ann's MP3 is its own now: backed up"),
                 _ => assert_eq!(ann_listed(), 2, "Ann's FLAC covered by Bob's original, as before (T2b)"),
+            }
+            if case == 3 {
+                cat.mark_trashed(3, "Bob", "300/Bob").unwrap();
+                let free = cat.shared_copies(-1, &kept).unwrap();
+                assert!(free.iter().all(|(folder, _)| *folder != 2 && *folder != 0), "Bob's original in his trash: Ann's and Music's count in full: {free:?}");
+                assert_eq!(ann_listed(), 0, "Ann's copy leaves the list: backed up");
+                continue;
             }
             let taken: Vec<(String, String)> = (0..tracks.len()).map(|n| (format!("Drift/{n}.flac"), format!("200/Drift/{n}.flac"))).collect();
             crate::app::incoming::rows_back_of_copy(&cat, &event, &taken).unwrap();
