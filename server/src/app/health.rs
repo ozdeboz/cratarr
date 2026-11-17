@@ -1233,11 +1233,14 @@ mod tests {
     /// O5: the background reading paused by an administrator is said on Health.
     #[test]
     fn background_reading_paused_shows_on_health() {
+        let _one = super::super::switches::TEST_STATE.blocking_lock();
         let shown = || check_connections(super::super::moment::now_secs()).into_iter().any(|f| f.key == "connections:background-paused");
-        super::super::switches::set_for_tests(super::super::switches::BACKGROUND, false);
+        let was = super::super::switches::set_for_tests(super::super::switches::BACKGROUND, false);
         let paused = shown();
         super::super::switches::set_for_tests(super::super::switches::BACKGROUND, true);
-        assert!(paused && !shown());
+        let on = shown();
+        super::super::switches::set_for_tests(super::super::switches::BACKGROUND, was);
+        assert!(paused && !on);
     }
 
     /// W4 (E1): records arrived in Incoming and waiting to be added are one Health item, each opening its intake card ("Before

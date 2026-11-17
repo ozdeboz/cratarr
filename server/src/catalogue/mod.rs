@@ -488,7 +488,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 39] = [
+const ADDED_COLUMNS: [(&str, &str); 40] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -558,6 +558,9 @@ const ADDED_COLUMNS: [(&str, &str); 39] = [
     // (RT01b). NULL: not since 0.17, or never.
     ("records", "seen_at INTEGER"),
     ("records", "opened_at INTEGER"),
+    // Y12: its names as the clash of names compares them (`records::names_of`: artist|title, each folded), kept so a Want finds the
+    // records of its names by an index. NULL until folded (`records::live_named_in`), and again once either is renamed (a trigger).
+    ("records", "names TEXT"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.

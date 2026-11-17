@@ -766,13 +766,11 @@ mod listing_tests {
 mod tests {
     use super::*;
 
-    /// The tests that set or read the hold every caller honours: one at a time.
-    static HOLDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Y8: every 429 holds every caller, a second in a row too (which is not asked again); any other answer holds no one.
     #[test]
     fn every_discogs_429_holds_everyone() {
-        let _one = HOLDING.lock().unwrap_or_else(|p| p.into_inner());
+        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let was = HOLD_UNTIL.load(Ordering::Relaxed);
         let busy = reqwest::StatusCode::TOO_MANY_REQUESTS;
         let mut again = true;
         HOLD_UNTIL.store(0, Ordering::Relaxed);
@@ -782,6 +780,7 @@ mod tests {
         let held = HOLD_UNTIL.swap(0, Ordering::Relaxed);
         let other = again_after(reqwest::StatusCode::OK, &mut true);
         let after_other = HOLD_UNTIL.load(Ordering::Relaxed);
+        HOLD_UNTIL.store(was, Ordering::Relaxed);
         assert!(first && !second, "the first asked once more, the second not");
         assert!(held >= now_ms() + 59_000, "the second holds every caller all the same");
         assert!(!other && after_other == 0, "any other answer holds no one");
@@ -791,10 +790,11 @@ mod tests {
     /// is not asked of the Cover Art Archive again while that is kept.
     #[test]
     fn a_discogs_429_holds_everyone_and_a_kept_none_asks_nothing() {
-        let _one = HOLDING.lock().unwrap_or_else(|p| p.into_inner());
+        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let was = HOLD_UNTIL.load(Ordering::Relaxed);
         too_many();
         let held = HOLD_UNTIL.load(Ordering::Relaxed);
-        HOLD_UNTIL.store(0, Ordering::Relaxed);
+        HOLD_UNTIL.store(was, Ordering::Relaxed);
         assert!(held >= now_ms() + 59_000, "held a minute for every caller");
         let now = 1_800_000_000;
         assert!(none_kept(Some((now - 60, None)), now));

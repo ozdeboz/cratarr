@@ -1573,17 +1573,27 @@ mod tests {
         assert_eq!((groups(paged), groups(bare)), (0, 1));
     }
 
-    /// X1: a fetcher out of reach for over an hour shows on Health.
+    /// X1: a fetcher out of reach for over an hour shows on Health. Y12: by a fetcher's name of the test's own, which the tests handing
+    /// requests to their stand-in Lidarr never touch, under the one test lock, put back as it was.
     #[test]
     fn a_dead_fetcher_shows_on_health() {
-        fetcher_said_at("lidarr", false, 1_000);
-        fetcher_said_at("lidarr", false, 2_000);
-        assert!(fetchers_down(1_000 + DOWN_FOR).is_empty(), "not an hour yet");
-        assert_eq!(fetchers_down(1_001 + DOWN_FOR), [("lidarr", 1_000)], "since the first time");
-        let f = crate::app::health::fetchers_down(&fetchers_down(1_001 + DOWN_FOR), 1_001 + DOWN_FOR).unwrap();
+        const FETCHER: &str = "the test's fetcher";
+        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let was = DOWN.lock().unwrap_or_else(|p| p.into_inner()).get(FETCHER).copied();
+        fetcher_said_at(FETCHER, false, 1_000);
+        fetcher_said_at(FETCHER, false, 2_000);
+        let not_yet = fetchers_down(1_000 + DOWN_FOR);
+        let down = fetchers_down(1_001 + DOWN_FOR);
+        let f = crate::app::health::fetchers_down(&down, 1_001 + DOWN_FOR).unwrap();
+        fetcher_said_at(FETCHER, true, 9_000);
+        let reached = fetchers_down(99_999);
+        if let Some(at) = was {
+            fetcher_said_at(FETCHER, false, at);
+        }
+        assert!(not_yet.is_empty(), "not an hour yet");
+        assert_eq!(down, [(FETCHER, 1_000)], "since the first time");
         assert_eq!((f.key.as_str(), f.count), ("requests:fetcher-down", 1));
-        fetcher_said_at("lidarr", true, 9_000);
-        assert!(fetchers_down(99_999).is_empty(), "reached again");
+        assert!(reached.is_empty(), "reached again");
     }
 
     /// W6 (H): an account has one open request of a record: found by its record wherever it is among the account's requests (past

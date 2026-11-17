@@ -1403,16 +1403,21 @@ fn armed(settings: &serde_json::Value) -> Option<(super::radio::AutoMode, bool)>
 }
 
 /// The id a name means among playlists, each (id, name, the asker's own) (X6): an id as it is; else the one of that very name, the
-/// asker's own first; else the one alone of it regardless of capitals. None where none is, or several are alike but for their
-/// capitals: then the exact name is needed. Pure.
+/// asker's own first, another's where it is the one alone of that name (Y12: two others' of one name are alike); else the one alone
+/// of it regardless of capitals. None where none is, or several are alike: then no playlist is meant. Pure.
 fn named_in(list: &[(String, String, bool)], asked: &str) -> Option<String> {
     if list.iter().any(|(id, ..)| id == asked) {
         return Some(asked.to_string());
     }
-    let mut exact: Vec<&(String, String, bool)> = list.iter().filter(|(_, name, _)| name == asked).collect();
-    exact.sort_by_key(|(.., mine)| !mine);
-    if let Some((id, ..)) = exact.first() {
+    let exact = |mine: bool| list.iter().filter(move |(_, name, own)| name == asked && *own == mine);
+    if let Some((id, ..)) = exact(true).next() {
         return Some(id.clone());
+    }
+    let mut theirs = exact(false);
+    match (theirs.next(), theirs.next()) {
+        (Some((id, ..)), None) => return Some(id.clone()),
+        (Some(_), Some(_)) => return None,
+        _ => {}
     }
     let want = asked.to_lowercase();
     let mut like = list.iter().filter(|(_, name, _)| name.to_lowercase() == want);
@@ -3856,6 +3861,19 @@ mod tests {
         assert_eq!(named_in(&list, "road").as_deref(), Some("pl-3"), "one alone: whatever its capitals");
         assert_eq!(named_in(&list, "pl-3").as_deref(), Some("pl-3"), "an id as it is");
         assert_eq!(named_in(&[pl("pl-4", "Road", false), pl("pl-5", "Road", true)], "Road").as_deref(), Some("pl-5"), "of one name, the asker's own");
+    }
+
+    /// Y12 (X6): two shared playlists of one exact name, neither the asker's own, are no such playlist, not the first in the list; one
+    /// of the asker's own of that name is still meant first, and another's alone of it is meant.
+    #[test]
+    fn two_shared_playlists_of_one_name_are_no_such_playlist() {
+        let pl = |id: &str, name: &str, mine: bool| (id.to_string(), name.to_string(), mine);
+        let theirs = [pl("pl-1", "Chill", false), pl("pl-2", "Chill", false)];
+        assert_eq!(named_in(&theirs, "Chill"), None, "two alike: neither is meant");
+        assert_eq!(named_in(&theirs, "chill"), None);
+        let with_mine = [pl("pl-1", "Chill", false), pl("pl-2", "Chill", false), pl("pl-3", "Chill", true)];
+        assert_eq!(named_in(&with_mine, "Chill").as_deref(), Some("pl-3"), "the asker's own first");
+        assert_eq!(named_in(&[pl("pl-1", "Chill", false), pl("pl-2", "CHILL", false)], "Chill").as_deref(), Some("pl-1"), "one alone of that very name");
     }
 
     #[tokio::test]

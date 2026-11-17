@@ -241,7 +241,9 @@ where
     let mut why: Vec<String> = Vec::new();
     let mut off = None;
     for (n, source) in sources.into_iter().enumerate() {
-        if n > 0 && row.counting.is_some() && judging.untimed.is_none() {
+        // Its own list alone, the others only where it has no lengths (R33); where its own source is switched off, the next judges
+        // and its count stays (Y12).
+        if n > 0 && row.counting.is_some() && judging.untimed.is_none() && off.is_none() {
             break;
         }
         let list = match kept_of(source) {
@@ -380,6 +382,10 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
     // Discogs switched off is passed over as MusicBrainz is (X3): out of reach until it is on, nothing said against the record.
     if r.source == "discogs" && !super::switches::is_on(super::switches::DISCOGS) {
         return Err(SwitchedOff("Discogs").into());
+    }
+    // Bandcamp too (Y12): its plain "switched off" ended the read, so no other list was tried.
+    if r.source == "bandcamp" && !super::switches::is_on(super::switches::BANDCAMP) {
+        return Err(SwitchedOff("Bandcamp").into());
     }
     match (r.source.as_str(), r.kind.as_str()) {
         ("musicbrainz", "release") => Ok(release(r.value).await?.map(|list| (list, None))),
@@ -1205,10 +1211,27 @@ mod tests {
     /// X3: with Discogs switched off, a Discogs reference is passed over as MusicBrainz's is: nothing is asked of Discogs.
     #[tokio::test]
     async fn with_discogs_off_a_record_is_judged_by_its_next_list() {
-        super::super::switches::set_for_tests(super::super::switches::DISCOGS, false);
+        let _one = super::super::switches::TEST_STATE.lock().await;
+        let was = super::super::switches::set_for_tests(super::super::switches::DISCOGS, false);
         let read = read_reference(Ref::new("discogs", "release", "2000009")).await;
-        super::super::switches::set_for_tests(super::super::switches::DISCOGS, true);
+        super::super::switches::set_for_tests(super::super::switches::DISCOGS, was);
         assert!(read.unwrap_err().is::<SwitchedOff>());
+    }
+
+    /// Y12: with Bandcamp switched off, a record counted by Bandcamp's list (the GROUCH kind) is judged by its next list, its count
+    /// kept: Bandcamp's reference says it is switched off, and nothing is asked of Bandcamp.
+    #[tokio::test]
+    async fn with_bandcamp_off_a_record_is_judged_by_its_next_list() {
+        let _one = super::super::switches::TEST_STATE.lock().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Further", &[("bandcamp", "album", "https://grouch.bandcamp.com/album/further"), ("discogs", "release", "2000011")]);
+        cat.set_counting(record, Some("bandcamp"), false).unwrap();
+        let read = |r: Ref| async move { if r.source == "bandcamp" { read_reference(r).await } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None))) } };
+        let was = super::super::switches::set_for_tests(super::super::switches::BANDCAMP, false);
+        let judged = tracklist(&cat, record, read).await;
+        super::super::switches::set_for_tests(super::super::switches::BANDCAMP, was);
+        assert_eq!(judged.unwrap().unwrap().timed.map(|(s, _)| s).as_deref(), Some("discogs"));
+        assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("bandcamp"), "its count kept");
     }
 
     /// R15 (F4): a release MusicBrainz says it will not give (a 404) has no list, at once; its rate limit (a 429) is no such answer.

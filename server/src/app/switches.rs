@@ -42,11 +42,19 @@ pub fn is_on(name: &'static str) -> bool {
     on
 }
 
-/// Tests: a connection taken as switched on or off, nothing written.
+/// Tests: a connection taken as switched on or off, nothing written; what it was, for the test to put back (Y12). Under
+/// `TEST_STATE`.
 #[cfg(test)]
-pub fn set_for_tests(name: &'static str, on: bool) {
+pub fn set_for_tests(name: &'static str, on: bool) -> bool {
+    let was = is_on(name);
     KNOWN.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(name, on);
+    was
 }
+
+/// Tests: the one lock for the state the whole process shares that some tests change (Y12): the switches, Bandcamp's and Discogs'
+/// holds, a fetcher said down. A test that changes one, or reads one another test changes, takes it, and puts back what was there.
+#[cfg(test)]
+pub static TEST_STATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A connection switched on or off. Blocking.
 pub fn set_on(name: &'static str, on: bool) -> Result<()> {

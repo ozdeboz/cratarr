@@ -71,6 +71,11 @@ CREATE TABLE IF NOT EXISTS forgotten (subject TEXT PRIMARY KEY, at INTEGER NOT N
 -- RT01c: when the paced re-read last came to a library artist's list at a source, read or not (`Catalogue::reread_tried`): it
 -- comes again a month later, so each comes once a month whatever came of it.
 CREATE TABLE IF NOT EXISTS list_reread (artist INTEGER NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (artist, source)) WITHOUT ROWID;
+-- Y12: the records of a name, by the names each row keeps folded (`names_of`); a rename makes them to be folded again.
+CREATE INDEX IF NOT EXISTS records_by_names ON records (names);
+DROP TRIGGER IF EXISTS records_names_unfolded;
+CREATE TRIGGER records_names_unfolded AFTER UPDATE OF artist, title ON records WHEN OLD.artist IS NOT NEW.artist OR OLD.title IS NOT NEW.title
+BEGIN UPDATE records SET names = NULL WHERE id = NEW.id; END;
 ";
 
 /// A chain of merges longer than this is a loop: the record it began at answers none.
@@ -1593,13 +1598,11 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
     // one MusicBrainz release group or release are one album, its copies or editions (X9, `albums_of`, as the had rule counts them,
     // Y1); a record holding neither, one of its own.
     let shared_names = || -> Result<bool> {
-        let (artist, title) = (fold(&w.artist), fold(&w.title));
-        if title.is_empty() {
+        if fold(&w.title).is_empty() {
             return Ok(false);
         }
-        let mut st = tx.prepare_cached("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL")?;
-        let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-        let named: Vec<i64> = rows.into_iter().filter(|(_, a, t)| fold(a) == artist && fold(t) == title).map(|(id, ..)| id).collect();
+        // By the names each record keeps (Y12), not a fold of every live record.
+        let named = live_named_in(tx, &names_of(&w.artist, &w.title))?;
         if named.len() < 2 {
             return Ok(false);
         }
@@ -1610,7 +1613,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
     // A request by its names alone whose names clash takes the record made for the first such request, while it is live (X9): two
     // accounts asking for "Orbital" share one record, not one each. One asked by its group or page takes its own, as X8 has it.
     let alone = group.is_none() && w.page.is_none();
-    let names_key = format!("{}|{}", fold(&w.artist), fold(&w.title));
+    let names_key = names_of(&w.artist, &w.title);
     // Which, and whether it is an owned record found by its names, onto which nothing it was asked by is written (W2, B2).
     let (found, by_names, owned) = match by_group.or(by_page) {
         Some(record) => (Some(record), false, false),
@@ -1659,6 +1662,28 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         None => None,
     };
     Ok(RequestRecord { record, made, by_names, paged, shared })
+}
+
+/// A record's names as the clash of names compares them (X8, X9), and as its row keeps them (`records.names`, Y12): its artist and
+/// title, each folded (`identity::fold`), as `artist|title`.
+fn names_of(artist: &str, title: &str) -> String {
+    use super::identity::fold;
+    format!("{}|{}", fold(artist), fold(title))
+}
+
+/// The live records of `names` (`names_of`), oldest first, by the names each row keeps (Y12: an index, where X8's clash folded every
+/// live record at each Want); a row not folded since it was made or renamed (`names` NULL) folded first. In the caller's transaction.
+fn live_named_in(tx: &Connection, names: &str) -> Result<Vec<i64>> {
+    let unfolded: Vec<(i64, String, String)> = tx
+        .prepare_cached("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE names IS NULL")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut keep = tx.prepare_cached("UPDATE records SET names = ?2 WHERE id = ?1")?;
+    for (id, artist, title) in unfolded {
+        keep.execute(params![id, names_of(&artist, &title)])?;
+    }
+    let mut st = tx.prepare_cached("SELECT id FROM records WHERE names = ?1 AND merged_into IS NULL AND retired_at IS NULL ORDER BY id")?;
+    Ok(st.query_map([names], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
 /// The record made for the first request by `names` alone that met a clash of names (X9), as merged now; none where it is retired
@@ -3539,6 +3564,25 @@ mod tests {
         let (retired, other) = (unseen_for(&cat, "Undertow", Some(7)), unseen_for(&cat, "Open Water", Some(7)));
         cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [retired]).unwrap();
         assert_eq!(forget(&cat), [other]);
+    }
+
+    /// Y12: the records of a Want's names are found by the names each row keeps, as X8 found them by folding every live record:
+    /// their artist and title folded; a row renamed found by its new names and no longer by its old; a retired one left out.
+    #[test]
+    fn a_wants_names_find_their_records_by_the_kept_names() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let db = cat.db();
+        let made = |artist: &str, title: &str| {
+            db.execute("INSERT INTO records (born, title, artist) VALUES (1, ?1, ?2)", params![title, artist]).unwrap();
+            db.last_insert_rowid()
+        };
+        let (a, b, other, gone) = (made("Glass Harbour", "Two Rooms"), made("GLASS-HARBOUR", "Two Rooms!"), made("Glass Harbour", "Open Water"), made("Glass Harbour", "Two Rooms"));
+        db.execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [gone]).unwrap();
+        let names = names_of("glass harbour", "two rooms");
+        assert_eq!(live_named_in(&db, &names).unwrap(), [a, b], "folded, as the clash folds them; the retired one left out");
+        db.execute("UPDATE records SET title = 'Two Rooms' WHERE id = ?1", [other]).unwrap();
+        db.execute("UPDATE records SET title = 'Open Water' WHERE id = ?1", [a]).unwrap();
+        assert_eq!(live_named_in(&db, &names).unwrap(), [b, other], "renamed: by its new names, no longer by its old");
     }
 
     /// The shared names (X9) as kept: (names, record).

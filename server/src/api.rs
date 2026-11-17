@@ -7786,6 +7786,8 @@ mod tests {
     #[tokio::test]
     async fn a_preview_streams_through_cratarr_as_it_is_with_its_ranges() {
         use axum::http::StatusCode;
+        // A stream reads Bandcamp's switch (Y12).
+        let _one = crate::app::switches::TEST_STATE.lock().await;
         let page = "https://relay.bandcamp.com/album/fake";
         let (id, mp3) = fake_bandcamp(page, 60).await;
         // From its start: its MP3, its length from its page, Bandcamp's own length and ranges.

@@ -322,6 +322,10 @@ impl Bandcamp {
     /// A track's stream, asked for as it is played: the response, its status and headers as Bandcamp sends them
     /// (`range` passed on, so a player can seek), and the track's length as its page gives it.
     pub async fn stream(&self, url: &str, n: u32, range: Option<&str>) -> Result<(reqwest::Response, Option<f64>)> {
+        // Switched off, its streams stop too, as the switch says (Y12): an album kept in memory's as well.
+        if !crate::app::switches::is_on(crate::app::switches::BANDCAMP) {
+            bail!("Bandcamp is switched off");
+        }
         let a = self.album(url).await?;
         let t = a.tracks.iter().find(|t| t.n == n).context("No such track on that album")?;
         // A track the album's page gives no stream for: its own page read now, as it is played (O4).
@@ -881,18 +885,31 @@ mod tests {
 
     /// S12: Bandcamp's bot check in place of a page (a stand-in written here, not a captured one) is not read: told apart from
     /// a page, and said as such; a page that merely mentions a challenge further down is a page.
-    /// O4: Bandcamp switched off is asked nothing: a search, an album not kept, a stream.
-    /// The tests that change Bandcamp's switch or its hold, which every read of Bandcamp's checks: one at a time.
-    static SWITCHED: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
+    /// O4: Bandcamp switched off is asked nothing: a search, an album not kept, a stream. Its switch and its hold, which every read of
+    /// Bandcamp's checks, are changed under the one test lock (`switches::TEST_STATE`, Y12).
     #[tokio::test]
     async fn bandcamp_switched_off_is_asked_nothing() {
-        let _one = SWITCHED.lock().await;
-        crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, false);
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, false);
         let bc = Bandcamp::new().unwrap();
         let said = bc.search("Glass Harbour", "Two Rooms").await.unwrap_err().to_string();
-        crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, true);
+        crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, was);
         assert_eq!(said, "Bandcamp is switched off");
+    }
+
+    /// Y12: Bandcamp switched off, its streams stop too, as the switch says: an album kept in memory plays nothing.
+    #[tokio::test]
+    async fn with_bandcamp_off_its_streams_stop() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let (page, stream) = ("https://glassharbour.bandcamp.com/album/low-tide", "http://127.0.0.1:9/low-tide/1");
+        fake_media_at(stream);
+        let bc = Bandcamp::new().unwrap();
+        let track = Track { n: 1, title: "Ebb".into(), artist: None, duration_secs: None, stream: Some(stream.into()), page: None };
+        bc.keep(Album { url: page.into(), title: "Low Tide".into(), artist: "Glass Harbour".into(), cover: None, tracks: vec![track], released: None, label: None, account: None, about: None, credits: None, tags: Vec::new() });
+        let was = crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, false);
+        let played = bc.stream(page, 1, None).await.map(|_| ());
+        crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, was);
+        assert_eq!(played.unwrap_err().to_string(), "Bandcamp is switched off");
     }
 
     /// O4: after its bot check Bandcamp is left alone for a day, said on Health as a connection failing; a search is not read then,
@@ -900,7 +917,8 @@ mod tests {
     /// played.
     #[tokio::test]
     async fn a_bot_check_holds_bandcamp_for_a_day() {
-        let _one = SWITCHED.lock().await;
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
         let now = crate::app::moment::now_secs();
         hold();
         let until = held_until(now);
@@ -912,7 +930,7 @@ mod tests {
         let listed = bc.album(page).await.unwrap().queue_tracks().len();
         let played = bc.stream(page, 2, None).await;
         let said: Vec<String> = crate::app::health::check_connections(now).into_iter().filter(|f| f.key == "connections:bandcamp-check").map(|f| f.title).collect();
-        HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
         assert!(said.len() == 1 && said[0].starts_with("Bandcamp asked for a browser check; Cratarr stopped asking until "), "{said:?}");
         assert!(until.is_some_and(|u| u >= now + CHECK_HOLD_SECS), "{until:?}");
         assert!(searched.is_err_and(|e| not_read(&e)), "not read, not nothing found");
@@ -924,21 +942,23 @@ mod tests {
     /// Y8: the day's hold after the check survives a restart: kept in the user data as it is set, taken up again at start.
     #[tokio::test]
     async fn the_bandcamp_hold_survives_a_restart() {
-        let _one = SWITCHED.lock().await;
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
         let ud = crate::userdata::UserData::open(None).unwrap();
         let now = crate::app::moment::now_secs();
         hold_in(Some(&ud));
         HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
         hold_kept(&ud);
         let until = held_until(now);
-        HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
         assert!(until.is_some_and(|u| u >= now + CHECK_HOLD_SECS), "taken up again at start: {until:?}");
     }
 
     /// Y8: a read waiting in line when the check comes is not sent: it looks at the hold again in its turn.
     #[tokio::test]
     async fn a_read_waiting_when_the_check_comes_is_not_sent() {
-        let _one = SWITCHED.lock().await;
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
         let bc = Bandcamp::new().unwrap();
         *bc.next.lock().await = Instant::now() + Duration::from_millis(400);
         let waiting = bc.send(reqwest::Client::new().get("http://127.0.0.1:9/"));
@@ -947,7 +967,7 @@ mod tests {
             hold_in(None);
         };
         let (sent, ()) = tokio::join!(waiting, check);
-        HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
         assert!(sent.is_err_and(|e| not_read(&e)), "not sent after the check");
     }
 
@@ -955,6 +975,8 @@ mod tests {
     /// another site.
     #[tokio::test]
     async fn a_stream_address_outside_bcbits_is_refused() {
+        // A stream reads Bandcamp's switch (Y12).
+        let _one = crate::app::switches::TEST_STATE.lock().await;
         let bc = Bandcamp::new().unwrap();
         let page = "https://glassharbour.bandcamp.com/album/tide-tables";
         let track = |n: u32, stream: &str| Track { n, title: format!("Tide {n}"), artist: None, duration_secs: None, stream: Some(stream.into()), page: None };
