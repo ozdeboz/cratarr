@@ -307,6 +307,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/musicbrainz", get(musicbrainz_status).put(musicbrainz_switch))
             // Bandcamp's switch, and until when it is left alone after its bot check (O4).
             .route("/api/settings/bandcamp", get(bandcamp_status).put(bandcamp_switch))
+            // "Pause background reading" (O5).
+            .route("/api/settings/background", get(background_status).put(background_switch))
             .route("/api/server/restart", post(restart_server))
             .route("/api/settings/connections/state", get(connections_state))
             .route(
@@ -7158,6 +7160,20 @@ async fn musicbrainz_switch(Json(b): Json<Switched>) -> Result<Json<crate::app::
 /// Bandcamp's switch (O4: off, Cratarr asks it nothing), and until when it is left alone after its bot check (epoch s), where it is.
 async fn bandcamp_status() -> Json<serde_json::Value> {
     Json(json!({ "enabled": crate::app::switches::is_on(crate::app::switches::BANDCAMP), "held_until": crate::bandcamp::held_until(crate::app::moment::now_secs()) }))
+}
+
+/// Whether Cratarr reads outside services in the background (O5): off is "Pause background reading".
+async fn background_status() -> Json<serde_json::Value> {
+    Json(json!({ "enabled": !crate::app::switches::background_paused() }))
+}
+
+/// The background reading paused or let go on (O5).
+async fn background_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
+    tokio::task::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::BACKGROUND, b.enabled))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(background_status().await)
 }
 
 /// Bandcamp switched on or off (O4).

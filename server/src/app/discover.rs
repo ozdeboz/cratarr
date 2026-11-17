@@ -1348,18 +1348,22 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 /// An album's page on Bandcamp (decision 0071): its own on MusicBrainz, else Bandcamp's search box where artist and title both
-/// match (O4: an artist's `/music` page is not read); none otherwise, or with Bandcamp switched off. Bandcamp is asked at most once
-/// a second, in its own turn (`Bandcamp::send`), as MusicBrainz is in its.
-async fn bandcamp_page(urls: &[String], artist: &str, album: &str) -> Option<String> {
+/// match (O4: an artist's `/music` page is not read); none otherwise. An error where Bandcamp could not be asked (switched off, left
+/// alone after its bot check, out of reach): no answer, never kept as none (O5). Bandcamp is asked at most once a second, in its own
+/// turn (`Bandcamp::send`), as MusicBrainz is in its.
+async fn bandcamp_page(urls: &[String], artist: &str, album: &str) -> Result<Option<String>> {
     if let Some(p) = urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
-        return Some(p);
+        return Ok(Some(p));
     }
     if !super::switches::is_on(super::switches::BANDCAMP) {
-        return None;
+        anyhow::bail!("Bandcamp is switched off");
     }
-    let found = crate::bandcamp::Bandcamp::get().search(artist, album).await.unwrap_or_default();
-    found.into_iter().find(|(t, a, _)| same(t, album) && same(a, artist)).map(|(_, _, url)| url)
+    let found = crate::bandcamp::Bandcamp::get().search(artist, album).await?;
+    Ok(found.into_iter().find(|(t, a, _)| same(t, album) && same(a, artist)).map(|(_, _, url)| url))
 }
+
+/// Discover's look asks Bandcamp for its first cards only (O5): a look of 500 cards asked up to a thousand times a day.
+const BANDCAMP_CARDS: usize = 100;
 
 /// An artist's own page on Bandcamp among the addresses MusicBrainz keeps for them (not Bandcamp's own site).
 fn own_bandcamp(urls: &[String]) -> Option<String> {
@@ -1615,8 +1619,17 @@ pub async fn look(
             None => MbAlbum::default(),
         };
         (s.track_count, s.length_secs) = (mb.tracks, mb.length_secs);
+        // Its own page on MusicBrainz, else, for the first `BANDCAMP_CARDS` cards only, Bandcamp's search box through
+        // `find_on_bandcamp`'s memory (O5): a miss is kept 30 days for every account, so the daily look does not ask again.
         if s.bandcamp.is_none() {
-            s.bandcamp = bandcamp_page(&mb.urls, &s.artist, &s.album).await;
+            s.bandcamp = match mb.urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
+                Some(p) => Some(p),
+                None if i < BANDCAMP_CARDS => {
+                    let (artist, album, urls) = (s.artist.clone(), s.album.clone(), mb.urls.clone());
+                    remembered(serve, &artist, &album, s.release_group.as_deref(), bandcamp_page(&urls, &artist, &album)).await.unwrap_or(None)
+                }
+                None => None,
+            };
         }
         if let Some(p) = &s.bandcamp {
             mb.urls.insert(0, p.clone());
@@ -1946,6 +1959,12 @@ const LIST_RETRY_SECS: i64 = 15 * 60;
 /// The longest a list's read may take: past it, it counts as not read, and `looking` ends.
 const LIST_READ_AT_MOST: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 300 });
 
+/// One reader a source (O5): its artists' lists read one at a time, first come first served (a fair semaphore).
+fn turn_of(source: &'static str) -> Arc<tokio::sync::Semaphore> {
+    static TURNS: std::sync::OnceLock<std::sync::Mutex<HashMap<&'static str, Arc<tokio::sync::Semaphore>>>> = std::sync::OnceLock::new();
+    TURNS.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner()).entry(source).or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(1))).clone()
+}
+
 /// Ends a list's read, whatever becomes of its task: what it came to, else failed (a panic, a task dropped).
 struct Settles(Option<(usize, i64, &'static str)>, Option<Reading>);
 
@@ -1984,6 +2003,8 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
         let (cat, artist, source) = (cat.clone(), artist.clone(), source.clone());
         tokio::spawn(async move {
             let mut settles = Settles(Some(key), None);
+            // Its source's one reader, in turn (O5): the cut counts from when it asks, not from its place in the line.
+            let Ok(_turn) = turn_of(source.source()).acquire_owned().await else { return };
             let at = |done: bool| if done { Reading::Done(super::moment::now_secs()) } else { Reading::Failed(super::moment::now_secs()) };
             settles.1 = Some(match tokio::time::timeout(LIST_READ_AT_MOST, read_one(&cat, &artist, source.as_ref())).await {
                 Ok(Ok(())) => at(true),
@@ -2042,6 +2063,12 @@ const BANDCAMP_FOUND_SECS: i64 = 30 * 86_400;
 /// as a look finds them (`bandcamp_page`), from its release group's MusicBrainz pages where it is known. Kept a month
 /// for every account, a miss too (the owner: "Yes, please"), so a second open is at once and Bandcamp asked less.
 pub async fn find_on_bandcamp(serve: &Arc<crate::serve::Serve>, artist: &str, album: &str, release_group: Option<&str>) -> Result<Option<String>> {
+    remembered(serve, artist, album, release_group, look_on_bandcamp(artist, album, release_group)).await
+}
+
+/// `find_on_bandcamp`'s memory around a look (`look`): what was found, a miss too, kept `BANDCAMP_FOUND_SECS` for every account;
+/// a look that could not ask (O5) keeps nothing.
+async fn remembered(serve: &Arc<crate::serve::Serve>, artist: &str, album: &str, release_group: Option<&str>, look: impl std::future::Future<Output = Result<Option<String>>>) -> Result<Option<String>> {
     let album_key = release_group.filter(|g| !g.is_empty()).map_or_else(|| format!("{}|{}", key(artist), key(album)), str::to_string);
     let now = super::moment::now_secs();
     let (ud, k) = (serve.userdata.clone(), album_key.clone());
@@ -2050,7 +2077,7 @@ pub async fn find_on_bandcamp(serve: &Arc<crate::serve::Serve>, artist: &str, al
     {
         return Ok(page);
     }
-    let page = look_on_bandcamp(artist, album, release_group).await?;
+    let page = look.await?;
     let (ud, p) = (serve.userdata.clone(), page.clone());
     tokio::task::spawn_blocking(move || ud.set_bandcamp_found(&album_key, now, p.as_deref())).await??;
     Ok(page)
@@ -2063,7 +2090,7 @@ async fn look_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>
         Some(g) => mb_urls(&http, g).await.unwrap_or_default().urls,
         None => Vec::new(),
     };
-    Ok(bandcamp_page(&urls, artist, album).await)
+    bandcamp_page(&urls, artist, album).await
 }
 
 /// Every record not had of the library's artists (Insights › Discovery › Missing albums, 0.9.3; C53b: one query,
@@ -2497,6 +2524,59 @@ mod missing_tests {
         assert_eq!(titles, ["Night Walks", "Paper Kites", "Undertow"]);
         let known = cat.artist_known(artist).unwrap().unwrap().1;
         assert_eq!(known.iter().filter(|(_, row)| row.read_at.is_some()).count(), 3, "each list read, its time kept: {known:?}");
+    }
+
+    /// O5: one reader a source, first come first served: two artists' lists at one source are read one after the other, and the cut
+    /// counts from when a read asks, not from its place in the line (each read here takes most of the cut).
+    #[tokio::test]
+    async fn one_reader_a_source_cut_only_while_asking() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        static AT_ONCE: AtomicUsize = AtomicUsize::new(0);
+        static MOST: AtomicUsize = AtomicUsize::new(0);
+        struct Slow;
+        impl ArtistList for Slow {
+            fn source(&self) -> &'static str {
+                "slow"
+            }
+
+            fn read<'a>(&'a self, _: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+                Box::pin(async move {
+                    MOST.fetch_max(AT_ONCE.fetch_add(1, SeqCst) + 1, SeqCst);
+                    tokio::time::sleep(Duration::from_millis(700)).await;
+                    AT_ONCE.fetch_sub(1, SeqCst);
+                    Ok(None)
+                })
+            }
+        }
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artists = [cat.artist_for("Glass Harbour").unwrap(), cat.artist_for("Kite Theory").unwrap()];
+        let sources: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Slow)];
+        for a in artists {
+            assert!(missing_albums(cat.clone(), a, &sources).await.unwrap().1, "asked");
+        }
+        for a in artists {
+            settled(&cat, a, &sources).await;
+        }
+        assert_eq!(MOST.load(SeqCst), 1, "one at a time");
+        let read = |a: i64| matches!(readings().lock().unwrap().get(&(Arc::as_ptr(&cat) as usize, a, "slow")), Some(Reading::Done(_)));
+        assert!(artists.iter().all(|a| read(*a)), "both read: the second's wait in line is not its read's time");
+    }
+
+    /// O5: a look at Bandcamp kept, a miss too, for every account; one that could not ask (switched off, its bot check) keeps nothing.
+    #[tokio::test]
+    async fn bandcamp_misses_are_kept_and_failed_asks_are_not() {
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let page = || Ok(Some("https://glassharbour.bandcamp.com/album/two-rooms".to_string()));
+        let ask = |artist: &'static str, answer: Result<Option<String>>| {
+            let serve = serve.clone();
+            async move { remembered(&serve, artist, "Two Rooms", None, std::future::ready(answer)).await }
+        };
+        assert!(ask("Glass Harbour", Err(anyhow::anyhow!("Bandcamp is switched off"))).await.is_err());
+        assert_eq!(ask("Glass Harbour", page()).await.unwrap(), page().unwrap(), "asked again: no answer was kept");
+        assert_eq!(ask("Glass Harbour", Ok(None)).await.unwrap(), page().unwrap(), "what was found, kept");
+        assert_eq!(ask("Kite Theory", Ok(None)).await.unwrap(), None);
+        assert_eq!(ask("Kite Theory", page()).await.unwrap(), None, "a miss kept too");
+        assert_eq!(BANDCAMP_CARDS, 100);
     }
 
     /// C53a: an artist no source knows has no list, and nothing is looked for long; an id no artist has, the same.

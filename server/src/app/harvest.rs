@@ -61,7 +61,10 @@ pub fn start() {
         tokio::time::sleep(START_AFTER).await;
         loop {
             // Its questions to MusicBrainz behind any page's, as the background asker's (R7): no one waits for a round.
-            if let Err(e) = super::musicbrainz::behind(round()).await {
+            // None while the background reading is paused (O5).
+            if !super::switches::background_paused()
+                && let Err(e) = super::musicbrainz::behind(round()).await
+            {
                 tracing::info!("harvest: a round stopped: {e:#}");
             }
             tokio::time::sleep(ROUND).await;

@@ -15,6 +15,10 @@ pub static PASS_NEXT: AtomicI64 = AtomicI64::new(0);
 pub const PACE_SECS: u64 = 2;
 /// MusicBrainz's rule is one question a second from one address: a little more apart, so two never fall in one second.
 const APART: Duration = Duration::from_millis(1100);
+/// After a 503 the turn's next question waits this long, doubling on each in a row up to `BACK_OFF_MOST` (O5); as long as
+/// Retry-After says where MusicBrainz says.
+const BACK_OFF_FIRST: Duration = Duration::from_secs(5);
+const BACK_OFF_MOST: Duration = Duration::from_secs(60);
 
 /// The questions to MusicBrainz in turn, each `APART` after the one before, whoever asked it (S10, 0100's map 1.11). A page, a
 /// pass and a Soulseek fetch asking at once share the one second between them, which a sleep of each caller's own after its
@@ -28,6 +32,8 @@ struct Turn {
     waiting: AtomicUsize,
     /// Told when none waits any more.
     quiet: tokio::sync::Notify,
+    /// The 503s' wait in a row (O5), none after any other answer.
+    backing: std::sync::Mutex<Option<Duration>>,
 }
 
 /// A question waiting that is not the background's, counted while it waits, a question dropped meanwhile too.
@@ -43,7 +49,29 @@ impl Drop for Waiting<'_> {
 
 impl Turn {
     const fn new() -> Self {
-        Self { next: tokio::sync::Mutex::const_new(None), waiting: AtomicUsize::new(0), quiet: tokio::sync::Notify::const_new() }
+        Self { next: tokio::sync::Mutex::const_new(None), waiting: AtomicUsize::new(0), quiet: tokio::sync::Notify::const_new(), backing: std::sync::Mutex::new(None) }
+    }
+
+    /// An answer heard (O5): a 503 pushes the turn's next question out, `BACK_OFF_FIRST` doubling in a row to `BACK_OFF_MOST`, or as
+    /// long as its Retry-After says (at most a quarter of an hour); any other answer ends the run. The wait, after a 503.
+    async fn answered(&self, status: reqwest::StatusCode, retry_after: Option<u64>) -> Option<Duration> {
+        let wait = {
+            let mut backing = self.backing.lock().unwrap_or_else(|p| p.into_inner());
+            if status != reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                *backing = None;
+                return None;
+            }
+            let base = backing.map_or(BACK_OFF_FIRST, |d| (d * 2).min(BACK_OFF_MOST));
+            *backing = Some(base);
+            retry_after.map_or(base, |secs| Duration::from_secs(secs.min(15 * 60)))
+        };
+        let at = tokio::time::Instant::now() + wait;
+        let mut next = self.next.lock().await;
+        if next.is_none_or(|n| n < at) {
+            *next = Some(at);
+        }
+        tracing::warn!(target: "musicbrainz", secs = wait.as_secs(), "MusicBrainz answered 503: its next question waits");
+        Some(wait)
     }
 
     /// Waits for a question's turn, and takes it. One `behind` waits while another waits, and holds no place in the line while
@@ -107,7 +135,10 @@ impl Asked for reqwest::RequestBuilder {
                 anyhow::bail!("MusicBrainz is switched off");
             }
             TURN.take(BEHIND.try_with(|b| *b).unwrap_or(false)).await;
-            Ok(super::reach::Sent::sent(self).await?)
+            let r = super::reach::Sent::sent(self).await?;
+            let retry_after = r.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok());
+            TURN.answered(r.status(), retry_after).await;
+            Ok(r)
         }
     }
 }
@@ -177,6 +208,27 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
+
+    /// O5: a 503 pushes the turn's next question out, 5 s doubling to a minute in a row, as long as Retry-After says where it says;
+    /// any other answer ends the run.
+    #[tokio::test]
+    async fn a_503_pushes_musicbrainz_back() {
+        let t = Turn::new();
+        let busy = reqwest::StatusCode::SERVICE_UNAVAILABLE;
+        let secs = |d: Option<Duration>| d.map(|d| d.as_secs());
+        assert_eq!(secs(t.answered(busy, None).await), Some(5));
+        assert_eq!(secs(t.answered(busy, None).await), Some(10));
+        assert_eq!(secs(t.answered(busy, None).await), Some(20));
+        assert_eq!(secs(t.answered(busy, Some(7)).await), Some(7), "Retry-After honoured");
+        for _ in 0..4 {
+            t.answered(busy, None).await;
+        }
+        assert_eq!(secs(t.answered(busy, None).await), Some(60), "at most a minute");
+        let next = t.next.lock().await.unwrap();
+        assert!(next > Instant::now() + Duration::from_secs(50), "the next question waits");
+        assert_eq!(t.answered(reqwest::StatusCode::OK, None).await, None);
+        assert_eq!(secs(t.answered(busy, None).await), Some(5), "a run ends at any other answer");
+    }
 
     /// When a question asked at `start` went.
     async fn went(turn: &Turn, start: Instant) -> Duration {

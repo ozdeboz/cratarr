@@ -13,6 +13,15 @@ pub const MUSICBRAINZ: &str = "musicbrainz";
 pub const SLSKD: &str = "slskd";
 /// Bandcamp (O4): its pages, its search box, its streams.
 pub const BANDCAMP: &str = "bandcamp";
+/// Cratarr's reading of outside services on its own, in the background (O5, "Pause background reading"): MusicBrainz's lists, years
+/// and works, harvest, Discogs' passes, artist info, Spotify's looks. Off, none asks anything until it is on again; what a page asks
+/// for still goes.
+pub const BACKGROUND: &str = "background";
+
+/// Whether an administrator paused the background reading (`BACKGROUND` off).
+pub fn background_paused() -> bool {
+    !is_on(BACKGROUND)
+}
 
 static KNOWN: Mutex<Option<HashMap<&'static str, bool>>> = Mutex::new(None);
 

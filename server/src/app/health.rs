@@ -558,6 +558,13 @@ pub(crate) fn check_connections(at: i64) -> Vec<Finding> {
         f
     });
     let bandcamp_held = held.is_some();
+    // The background reading paused by an administrator (O5).
+    let paused = super::switches::background_paused().then(|| {
+        let mut f = finding("connections", "connections:background-paused", Level::Info, 1, "Background reading is paused: Cratarr asks no service anything on its own".to_string());
+        f.name = "Background reading".to_string();
+        (f.thing, f.state) = (Some(f.name.clone()), Some("paused".into()));
+        f
+    });
     super::reach::failing(at)
         .into_iter()
         .filter(|(name, _)| !switched_off(name) && !(*name == "bandcamp" && bandcamp_held))
@@ -570,6 +577,7 @@ pub(crate) fn check_connections(at: i64) -> Vec<Finding> {
             f
         })
         .chain(held)
+        .chain(paused)
         .collect()
 }
 
@@ -1206,6 +1214,16 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// O5: the background reading paused by an administrator is said on Health.
+    #[test]
+    fn background_reading_paused_shows_on_health() {
+        let shown = || check_connections(super::super::moment::now_secs()).into_iter().any(|f| f.key == "connections:background-paused");
+        super::super::switches::set_for_tests(super::super::switches::BACKGROUND, false);
+        let paused = shown();
+        super::super::switches::set_for_tests(super::super::switches::BACKGROUND, true);
+        assert!(paused && !shown());
+    }
 
     /// W4 (E1): records arrived in Incoming and waiting to be added are one Health item, each opening its intake card ("Before
     /// adding" in it); those an upgrade's or a duplicate's verdict names stay on those items.

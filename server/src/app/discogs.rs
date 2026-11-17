@@ -424,6 +424,11 @@ pub fn start() {
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_secs(600)).await;
         loop {
+            // The background reading paused (O5): looked at again in a while.
+            if super::switches::background_paused() {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                continue;
+            }
             if let Err(e) = genres_pass().await {
                 tracing::info!("discogs: genres not asked now: {e:#}");
             }

@@ -139,7 +139,10 @@ pub fn start(data_dir: Option<&str>) {
         // After the catalogue has caught up.
         tokio::time::sleep(Duration::from_secs(120)).await;
         loop {
-            look().await;
+            // None while the background reading is paused (O5).
+            if !crate::app::switches::background_paused() {
+                look().await;
+            }
             tokio::time::sleep(LOOK).await;
         }
     });

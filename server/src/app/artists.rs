@@ -297,6 +297,10 @@ impl ArtistInfo {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(EVERY).await;
+                // The background reading paused (O5).
+                if super::switches::background_paused() {
+                    continue;
+                }
                 let Some(served) = crate::serve::instance() else { continue };
                 let lib = served.library.clone();
                 let Ok(Ok(artists)) = tokio::task::spawn_blocking(move || lib.artist_names()).await else { continue };

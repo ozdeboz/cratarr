@@ -28,7 +28,8 @@ pub fn start() {
         tokio::time::sleep(Duration::from_secs(300)).await;
         loop {
             // Switched off (0.9.6): looked at again later.
-            if !super::switches::is_on(super::switches::MUSICBRAINZ) {
+            // Or the background reading paused (O5).
+            if !super::switches::is_on(super::switches::MUSICBRAINZ) || super::switches::background_paused() {
                 super::musicbrainz::PASS_NEXT.store(0, std::sync::atomic::Ordering::Relaxed);
                 tokio::time::sleep(IDLE).await;
                 continue;
