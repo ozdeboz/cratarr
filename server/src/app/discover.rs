@@ -1786,7 +1786,7 @@ impl Missing {
             year: q.row.year,
             kind: q.row.kind,
             release_group: group,
-            bandcamp: q.bandcamp,
+            bandcamp: crate::bandcamp::shown(q.bandcamp),
             request: None,
             was_until: q.row.retired_at,
         }

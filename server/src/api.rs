@@ -5001,6 +5001,12 @@ async fn discover_refresh(ctx: Ctx) -> Result<(StatusCode, Json<serde_json::Valu
 
 /// Each card's mark (0.9.5): any account's open request for its album, wanted or coming.
 async fn mark_cards(app: &App, serve: &crate::serve::Serve, cards: &mut [serde_json::Value]) {
+    // No Bandcamp preview offered while Bandcamp is switched off (G1).
+    for c in cards.iter_mut().filter_map(|c| c.as_object_mut()) {
+        if crate::bandcamp::shown(c.get("bandcamp").and_then(|b| b.as_str()).map(str::to_string)).is_none() {
+            c.remove("bandcamp");
+        }
+    }
     let Some(marks) = request_marks(app, serve).await else { return };
     for c in cards {
         let mark = crate::app::requests::mark_of(
@@ -6436,7 +6442,11 @@ async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<se
     if due {
         crate::app::related::start(serve, asked.name, mbid.clone());
     }
-    let artists = kept.map(|f| f.artists).unwrap_or_default();
+    let mut artists = kept.map(|f| f.artists).unwrap_or_default();
+    // No Bandcamp preview offered while Bandcamp is switched off (G1).
+    for a in &mut artists {
+        a.bandcamp = crate::bandcamp::shown(a.bandcamp.take());
+    }
     Ok(Json(json!({ "artists": artists, "looking": crate::app::related::is_looking(&mbid) })))
 }
 

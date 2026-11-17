@@ -293,7 +293,7 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
             labels,
             cover,
             was_until: row.retired_at,
-            bandcamp: q.bandcamp,
+            bandcamp: crate::bandcamp::shown(q.bandcamp),
             ..AlbumMore::default()
         },
     }))))
@@ -1187,6 +1187,8 @@ mod tests {
     /// the preview (Q34).
     #[test]
     fn a_record_not_had_is_a_page_not_playable() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let was = crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, true);
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let record = cat.record_for_tests("Night Walks", 0);
         let group = "00000000-0000-4000-8000-000000000194";
@@ -1214,7 +1216,11 @@ mod tests {
         let v = page(&cat, bare);
         assert!(v.rows.is_empty() && v.more.looking);
         assert_eq!(v.more.cover, Some(format!("/api/cover/bandcamp/{}", crate::bandcamp::track_id(at, 0))));
+        crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, false);
+        let hidden = page(&cat, bare).more.bandcamp;
+        crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, was);
         assert_eq!((v.more.bandcamp.as_deref(), v.more.labels.len()), (Some(at), 0));
+        assert_eq!(hidden, None, "G1: Bandcamp switched off, no preview offered");
     }
 
     /// C54 (G3): a record merged into another answers as that one: its page moves to the record it is now; merged into a record

@@ -37,6 +37,18 @@ static HELD_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::
 /// Where that is kept across a restart (Y8): the user data's server choices, epoch seconds.
 const HELD_CHOICE: &str = "bandcamp:held_until";
 
+/// A Bandcamp album page as a view offers it for its preview (G1): none while Bandcamp is switched off, as its preview would only
+/// fail. Every view that carries one goes through here: a record not had's page, the missing lists and search's rows from them,
+/// Discover's cards and related artists.
+pub fn shown(page: Option<String>) -> Option<String> {
+    shown_if(page, crate::app::switches::is_on(crate::app::switches::BANDCAMP))
+}
+
+/// `shown`, Bandcamp switched `on` or not. Pure.
+fn shown_if(page: Option<String>, on: bool) -> Option<String> {
+    page.filter(|_| on)
+}
+
 /// Until when Cratarr leaves Bandcamp alone after its bot check (O4), where it does at `now`. Never longer than the check's own day
 /// from now (U11, as V8 has it for the kept one): a hold set while the clock ran ahead is cut to that, and held so.
 pub fn held_until(now: i64) -> Option<i64> {
@@ -1013,6 +1025,15 @@ mod tests {
         HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(until, Some(now + CHECK_HOLD_SECS), "a day from now");
         assert_eq!(after, None, "a day on: over");
+    }
+
+    /// G1: a view offers Bandcamp's preview only while Bandcamp is switched on.
+    #[test]
+    fn a_view_offers_no_preview_while_bandcamp_is_off() {
+        let page = Some("https://glassharbour.bandcamp.com/album/two-rooms".to_string());
+        assert_eq!(shown_if(page.clone(), true), page);
+        assert_eq!(shown_if(page, false), None);
+        assert_eq!(shown_if(None, true), None);
     }
 
     /// V8: an administrator switching Bandcamp on again lifts its hold, in memory and in the user data: it is asked again at once,
