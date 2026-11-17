@@ -17,6 +17,11 @@ test('a user only of the conversions their page queued, each with its own Undo',
   assert.deepEqual(toldOf([job('al-1')], false, []), [], 'nothing queued here: nothing told');
 });
 
+test('a user is told of every job of theirs that says who queued it, from whichever page they queued it', () => {
+  const theirs = { ...job('al-4'), by: 'ann' };
+  assert.deepEqual(toldOf([theirs, job('al-5')], false, []).map((j) => j.album_id), ['al-4'], 'theirs, though this page queued none');
+});
+
 test('a job is known by its record, and by its copy where both name one', () => {
   assert.ok(queuedHere([{ source: 'cratarr', album_id: 'al-2' }], job('al-2', 'incoming')));
   assert.ok(queuedHere([{ source: 'cratarr', album_id: 'al-2', from: 'incoming' }], job('al-2', null)));

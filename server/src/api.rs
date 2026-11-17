@@ -145,6 +145,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums", get(albums))
         // Asked of everyone: who may is the record's own (0101 point 2).
         .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
+        // The conversion queue (G8): an administrator's every job, a user's their own.
+        .route("/api/incoming/jobs", get(incoming_jobs))
         .route("/api/albums/{source}/{album}/delete", post(delete_album))
         // A record's facts set by hand (0.13): one record or a selection. The administrators', and a record only in one person's
         // own music theirs (`may_change`).
@@ -283,7 +285,6 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
             .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
             .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
-            .route("/api/incoming/jobs", get(incoming_jobs))
             .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
             .route("/api/settings", get(get_settings).put(save_settings))
             // Types, years and Classical into the files (0.13, decision 0092): the switch and Health's Write; a run's
@@ -4112,7 +4113,8 @@ async fn replace_incoming(
 
 /// Albums waiting for their hi-res files to be converted before Keep or Replace, and those just finished.
 async fn incoming_jobs(State(app): State<Arc<App>>) -> Json<Vec<crate::app::JobView>> {
-    Json(app.incoming.jobs())
+    let account = app.served.as_ref().and_then(|s| s.current_user());
+    Json(crate::app::incoming_jobs_shown(app.incoming.jobs(), account.as_deref(), crate::serve::access::administering()))
 }
 
 async fn cancel_job(State(app): State<Arc<App>>, Path(id): Path<u64>) -> Result<Json<()>, ApiError> {

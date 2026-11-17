@@ -107,6 +107,15 @@ pub struct KeepResult {
     pub queued: bool,
 }
 
+/// The jobs a page is sent (G8): an administrator every one; a user those they queued (the conversions their own Add to waited
+/// for), never another's, nor whose they are; nobody signed in none. Pure.
+pub fn shown_jobs(jobs: Vec<JobView>, account: Option<&str>, admin: bool) -> Vec<JobView> {
+    if admin {
+        return jobs;
+    }
+    jobs.into_iter().filter(|j| account.is_some() && j.by.as_deref() == account).collect()
+}
+
 /// An Incoming album located on disk: the server's album, its catalogue folder, and that folder's path.
 struct Located {
     /// The server it is on.
@@ -2024,6 +2033,17 @@ mod tests {
         for d in roots {
             std::fs::remove_dir_all(d).ok();
         }
+    }
+
+    /// G8: an administrator is sent every job; a user only those they queued; nobody signed in none.
+    #[test]
+    fn a_user_is_sent_their_own_jobs_alone() {
+        let job = |id: u64, by: Option<&str>| JobView { by: by.map(str::to_string), ..JobView::converting(id, "cratarr", "al-1", "/in", 1, "A/Album") };
+        let jobs = vec![job(1, Some("ann")), job(2, Some("bob")), job(3, None)];
+        let ids = |v: Vec<JobView>| v.into_iter().map(|j| j.id).collect::<Vec<_>>();
+        assert_eq!(ids(shown_jobs(jobs.clone(), Some("root"), true)), [1, 2, 3], "an administrator: every one");
+        assert_eq!(ids(shown_jobs(jobs.clone(), Some("ann"), false)), [1], "ann: her own");
+        assert_eq!(ids(shown_jobs(jobs, None, false)), Vec::<u64>::new(), "nobody: none");
     }
 
     /// U3 (the review of 8c/8d, finding 3): a Delete through Incoming's own endpoint (an administrator's, before the next Soulseek

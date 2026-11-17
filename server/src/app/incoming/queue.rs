@@ -109,6 +109,9 @@ pub struct JobView {
     pub undo: Option<String>,
     /// Once failed: why.
     pub why: Option<String>,
+    /// Who queued it (G8): the account; none for one the server queued. A user is sent their own alone (`incoming::shown_jobs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
 }
 
 impl JobView {
@@ -136,6 +139,7 @@ impl JobView {
             place: (folder, dir.into()),
             undo: None,
             why: None,
+            by: None,
         }
     }
 
@@ -327,6 +331,7 @@ fn views(jobs: &Jobs, now: i64) -> Vec<JobView> {
             place: (j.folder, j.dir.clone()),
             undo: j.undo.clone(),
             why: j.why.clone(),
+            by: j.by.clone(),
         })
         .collect()
 }

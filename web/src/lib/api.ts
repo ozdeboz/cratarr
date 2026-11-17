@@ -2780,6 +2780,8 @@ export type Job = {
   id: number;
   source: string;
   album_id: string;
+  /** Who queued it: a user is sent their own jobs alone. */
+  by?: string | null;
   title: string;
   action: 'keep' | 'replace';
   state: 'waiting' | 'converting' | 'done' | 'failed';
