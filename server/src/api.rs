@@ -7221,12 +7221,12 @@ async fn intake_card(State(app): State<Arc<App>>, Path((source, album)): Path<(S
     own_album(&source)?;
     let view = app.incoming.list(Some(&source)).await;
     let waiting = |a: &&crate::source::Album| a.id == album && q.from.as_ref().is_none_or(|f| a.library.as_ref() == Some(f));
-    let (at, library, verdict) = view
+    let (at, library) = view
         .sources
         .iter()
-        .find_map(|s| s.albums.iter().find(waiting).map(|a| (a.copies.first().map(|c| (c.folder, c.dir.clone())), a.library.clone(), s.verdicts.get(&album).cloned())))
-        .unwrap_or((None, None, None));
-    Ok(Json(crate::app::intake_card::card(&app, &album, at, library, verdict.as_ref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+        .find_map(|s| s.albums.iter().find(waiting).map(|a| (a.copies.first().map(|c| (c.folder, c.dir.clone())), a.library.clone())))
+        .unwrap_or((None, None));
+    Ok(Json(crate::app::intake_card::card(&app, &album, at, library).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// The findings Health has of one record, each with only its items, and its tracks' file problems (0.14).

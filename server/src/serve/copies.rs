@@ -96,6 +96,44 @@ pub fn copy_for<'a>(copies: &'a [Copy], viewer: Option<&Viewer>, off: &[i64]) ->
     best(on().filter(|c| c.kind != Kind::Incoming)).or_else(|| best(on()).filter(|_| held.iter().all(|c| c.kind == Kind::Incoming)))
 }
 
+/// An Incoming copy of a record kept elsewhere, against the copy that plays the record for most among its kept ones (C37a; the
+/// owner's OQ1: a record is one by its tracks, so a copy no better is the same record twice): whether it ranks above that copy in
+/// the one order copies are chosen in (a whole copy before one short of tracks, then quality), and that copy. None: not an
+/// Incoming copy, or the record is kept nowhere else.
+pub fn against<'a>(copies: &'a [Copy], incoming: &Copy) -> Option<(bool, &'a Copy)> {
+    if incoming.kind != Kind::Incoming {
+        return None;
+    }
+    let kept: Vec<Copy> = copies.iter().filter(|c| c.kind != Kind::Incoming).cloned().collect();
+    let row = copy_for(&kept, None, &[])?;
+    let row = copies.iter().find(|c| *c == row)?;
+    let better = incoming.short.cmp(&row.short).then(rank(row).cmp(&rank(incoming))) == std::cmp::Ordering::Less;
+    Some((better, row))
+}
+
+/// Whether a better copy (`against`) is one Replace takes: Replace puts it in a main library's copy's place, so the copy it is
+/// better than must lie in one (Health's better copies; the rest are records in two libraries at once).
+pub fn replaces(better: bool, kept: Kind) -> bool {
+    better && kept == Kind::Main
+}
+
+/// Why an Incoming copy stands as it does against the kept one (`against`), as the intake card, Health and the Library say it:
+/// its quality and that copy's, and which of them lacks tracks.
+pub fn why(new: &Copy, kept: &Copy) -> String {
+    let quality = |c: &Copy| match (lossless(c), c.min_kbps) {
+        (true, _) => "lossless".to_string(),
+        (false, Some(kbps)) => format!("{kbps} kbps"),
+        (false, None) => "unknown quality".to_string(),
+    };
+    let (n, o) = (quality(new), quality(kept));
+    let said = if n == o { format!("{n}, same as yours") } else { format!("{n}, yours is {o}") };
+    match (new.short, kept.short) {
+        (false, true) => format!("{said}, yours lacks tracks"),
+        (true, false) => format!("{said}, lacking tracks"),
+        _ => said,
+    }
+}
+
 /// The library whose owner a record's facts are theirs to change, a catalogue folder: where it lies only in people's own music,
 /// that of the copy that speaks for it. Anywhere else the record is the administrators', and none (the owner, 2026-11-07: "If it's
 /// owned by administrator, then only administrator can edit").
@@ -134,6 +172,31 @@ mod tests {
     }
 
     const ANYONE: &Viewer = &Viewer { from: None };
+
+    /// C37a: an Incoming copy of a kept record stands against the copy that plays it for most, by the order copies are chosen in:
+    /// better where it ranks above it, the same record twice where not; a record kept nowhere else has nothing to stand against.
+    #[test]
+    fn an_incoming_copy_stands_against_the_copy_that_plays_for_most() {
+        let waiting = flac(2, Kind::Incoming);
+        let copies = [mp3(0, Kind::Main, 320), flac(1, Kind::Own), waiting.clone()];
+        let (better, kept) = against(&copies, &waiting).unwrap();
+        assert!(better, "lossless over 320 kb/s");
+        assert_eq!(kept.folder, 0, "Music's copy plays for most, not someone's own");
+        assert_eq!(why(&waiting, kept), "lossless, yours is 320 kbps");
+        let same = mp3(2, Kind::Incoming, 320);
+        let twice = [mp3(0, Kind::Main, 320), same.clone()];
+        assert_eq!(against(&twice, &same).map(|(b, k)| (b, k.folder)), Some((false, 0)), "the same quality: not better");
+        assert_eq!(why(&same, &twice[0]), "320 kbps, same as yours");
+        let short = Copy { short: true, ..flac(2, Kind::Incoming) };
+        let whole = mp3(0, Kind::Main, 128);
+        assert_eq!(against(&[whole.clone(), short.clone()], &short).map(|(b, _)| b), Some(false), "short of tracks: never better than a whole copy");
+        assert_eq!(why(&short, &whole), "lossless, yours is 128 kbps, lacking tracks");
+        let own = [flac(1, Kind::Own), mp3(2, Kind::Incoming, 320)];
+        assert_eq!(against(&own, &own[1]).map(|(b, k)| (b, k.folder)), Some((false, 1)), "kept in own music alone: against that");
+        assert!(against(&[waiting.clone()], &waiting).is_none(), "kept nowhere else");
+        assert!(against(&copies, &copies[0]).is_none(), "a kept copy stands against nothing");
+        assert!(replaces(true, Kind::Main) && !replaces(true, Kind::Own) && !replaces(false, Kind::Main), "Replace takes a main library's place");
+    }
 
     fn naming(from: i64) -> Viewer {
         Viewer { from: Some(from) }

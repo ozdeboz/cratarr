@@ -1176,7 +1176,7 @@ impl IncomingService {
 
     /// What a server calls its used library in catalogue folder `folder`, for what Keep, Move and Replace say; else
     /// "that library".
-    fn library_name(&self, source_id: &str, folder: i64) -> String {
+    pub(crate) fn library_name(&self, source_id: &str, folder: i64) -> String {
         let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
         let named = live.iter().find(|a| a.cfg.id == source_id).and_then(|a| {
             let id = library_in(a, folders.get(folder)?)?;

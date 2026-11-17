@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::incoming::VerdictView;
 use super::{App, JobView, KeepPreview, KeepResult, ToggleError};
 use super::library::{Active, epoch_now};
-use crate::serve::copies::{Copy, Viewer, copy_for, in_order};
+use crate::serve::copies::{Copy, Viewer, against, copy_for, in_order, replaces, why};
 use crate::settings::{LibraryKind, Quality, YOUR_MUSIC};
 use crate::source;
 
@@ -355,6 +355,19 @@ struct PlayOrder {
     places: Vec<(i64, String)>,
     /// The copy that plays them: as their libraries are switched, else as if the one it would be were on.
     plays: Option<(i64, String)>,
+    /// Each Incoming copy of a record kept elsewhere, as it stands against the copy that plays the record for most (C37a).
+    against: Vec<Stand>,
+}
+
+/// An Incoming copy's stand against the copy that plays its record for most (C37a, `copies::against`): its place, whether it is
+/// better and Replace's to take, that copy's place, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Stand {
+    at: (i64, String),
+    better: bool,
+    replaces: bool,
+    kept: (i64, String),
+    why: String,
 }
 
 impl PlayOrder {
@@ -365,6 +378,13 @@ impl PlayOrder {
         Self {
             places: in_order(copies, viewer).iter().map(place).collect(),
             plays: copy_for(copies, viewer, off).or_else(|| copy_for(copies, viewer, &[])).map(place),
+            against: copies
+                .iter()
+                .filter_map(|c| {
+                    let (better, kept) = against(copies, c)?;
+                    Some(Stand { at: place(c), better, replaces: replaces(better, kept.kind), kept: place(kept), why: why(c, kept) })
+                })
+                .collect(),
         }
     }
 }
@@ -395,11 +415,18 @@ fn fold(listed: Vec<source::Album>, orders: &HashMap<String, PlayOrder>) -> Vec<
             let rank = |a: &source::Album| place(a).and_then(|p| order.places.iter().position(|o| *o == p)).unwrap_or(usize::MAX);
             entries.sort_by_key(rank);
             let lead = entries.iter().position(|a| place(a).is_some() && place(a) == order.plays).unwrap_or(0);
-            let copies: Vec<source::AlbumCopy> = entries
+            let mut copies: Vec<source::AlbumCopy> = entries
                 .iter()
                 .enumerate()
                 .flat_map(|(i, a)| a.copies.iter().cloned().map(move |c| source::AlbumCopy { plays: i == lead, ..c }))
                 .collect();
+            // An Incoming copy's stand, its kept copy named by its library as listed.
+            let libraries: Vec<((i64, String), String)> = copies.iter().map(|c| ((c.folder, c.dir.clone()), c.library.clone())).collect();
+            for c in &mut copies {
+                let Some(s) = order.against.iter().find(|s| s.at == (c.folder, c.dir.clone())) else { continue };
+                let library = libraries.iter().find(|(at, _)| *at == s.kept).map(|(_, l)| l.clone());
+                c.against = library.map(|library| source::Against { better: s.better, replaces: s.replaces, library, dir: s.kept.1.clone(), why: s.why.clone() });
+            }
             let mut record = entries.swap_remove(lead);
             record.copies = copies;
             Some(record)
@@ -715,7 +742,25 @@ mod tests {
 
     fn order(places: &[i64], plays: i64) -> HashMap<String, PlayOrder> {
         let at = |f: i64| (f, "A/Album".to_string());
-        [("al-1".to_string(), PlayOrder { places: places.iter().copied().map(at).collect(), plays: Some(at(plays)) })].into()
+        [("al-1".to_string(), PlayOrder { places: places.iter().copied().map(at).collect(), plays: Some(at(plays)), ..Default::default() })].into()
+    }
+
+    /// C37a: an Incoming copy of a record kept elsewhere says how it stands against the copy that plays the record for most, that
+    /// copy named by its library; the kept copy says nothing.
+    #[test]
+    fn an_incoming_copy_says_how_it_stands_against_the_kept_one() {
+        let at = |f: i64| (f, "A/Album".to_string());
+        let stand = Stand { at: at(2), better: true, replaces: true, kept: at(0), why: "lossless, yours is 320 kbps".into() };
+        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![at(0), at(2)], plays: Some(at(0)), against: vec![stand] })]);
+        let folded = fold(vec![listed("al-1", 0, "music", "MP3"), listed("al-1", 2, "incoming", "FLAC")], &order);
+        let against: Vec<Option<source::Against>> = folded[0].copies.iter().map(|c| c.against.clone()).collect();
+        let said = source::Against { better: true, replaces: true, library: "music".into(), dir: "A/Album".into(), why: "lossless, yours is 320 kbps".into() };
+        assert_eq!(against, [None, Some(said)]);
+        let copies = [
+            Copy { folder: 0, dir: "A/Album".into(), kind: LibraryKind::Main, order: 0, format: Some("MP3".into()), min_kbps: Some(320), bits: None, rate: None, short: false, added: None },
+            Copy { folder: 2, dir: "A/Album".into(), kind: LibraryKind::Incoming, order: 1, format: Some("FLAC".into()), min_kbps: Some(900), bits: Some(16), rate: Some(44_100), short: false, added: None },
+        ];
+        assert_eq!(PlayOrder::of(&copies, None, &[]).against, order["al-1"].against, "worked out of the record's copies");
     }
 
     /// Two entries with one id, and a keyed list on the page throws: so a record is one entry whichever libraries hold it,
@@ -748,7 +793,7 @@ mod tests {
     fn two_folders_of_one_library_are_two_copies_of_one_entry() {
         let mut other = listed("al-1", 0, "music", "FLAC");
         other.copies[0].dir = "B/Album".into();
-        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![(0, "B/Album".to_string()), (0, "A/Album".to_string())], plays: Some((0, "B/Album".to_string())) })]);
+        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![(0, "B/Album".to_string()), (0, "A/Album".to_string())], plays: Some((0, "B/Album".to_string())), ..Default::default() })]);
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), other], &order);
         assert_eq!(folded.len(), 1);
         assert_eq!(folded[0].copies.iter().map(|c| (c.dir.as_str(), c.plays)).collect::<Vec<_>>(), [("B/Album", true), ("A/Album", false)]);
@@ -834,7 +879,7 @@ mod tests {
     fn of_two_folders_of_one_library_the_first_is_named() {
         let mut other = listed("al-1", 0, "music", "FLAC");
         other.copies[0].dir = "B/Album".into();
-        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![(0, "B/Album".to_string()), (0, "A/Album".to_string())], plays: Some((0, "B/Album".to_string())) })]);
+        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![(0, "B/Album".to_string()), (0, "A/Album".to_string())], plays: Some((0, "B/Album".to_string())), ..Default::default() })]);
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), other], &order);
         assert_eq!(named_copy(&folded[0], Some("music")).unwrap().copies[0].dir, "B/Album");
     }

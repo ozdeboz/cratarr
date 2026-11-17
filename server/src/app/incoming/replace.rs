@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::{IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayData, files_under, queue, verdicts, whole_copy};
+use super::{IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayData, files_under, queue, whole_copy};
 use crate::app::ToggleError;
 use crate::app::library::epoch_now;
 use crate::incoming::{AlbumFile, ReplacePlan, ReplaceRefusal};
@@ -257,6 +257,7 @@ fn album_files(c: &crate::catalogue::Catalogue, folder: i64, dir: &str) -> Resul
     Ok(c.album_tags(folder, dir)?
         .into_iter()
         .map(|(rel, tags)| AlbumFile {
+            track: c.track_of(folder, &rel),
             duration_ms: lengths.get(&rel).copied(),
             rel: rel.strip_prefix(&prefix).unwrap_or(&rel).to_string(),
             tags: crate::naming::Tags(tags),
@@ -322,20 +323,25 @@ impl IncomingService {
         Ok(Some(folder))
     }
 
-    /// The album Replace takes the place of: its main library's catalogue folder and its folder there. Named (`into`, the
-    /// library the page chose or the job was planned for), the record's copy there, else what is matched there; else the
-    /// first match. Only an album matched in a main library is replaced (one matched in another library is only told).
+    /// The copy Replace takes the place of: the record's own, in a main library (C37a: two copies of one record, never a match by
+    /// name), as its catalogue folder and its folder there. Named (`into`, the library the page chose or the job was planned for),
+    /// the record's copy there; else its copy in the first main library in the libraries' order.
     async fn replaced_copy(&self, at: &Located, into: Option<i64>) -> Result<(i64, String), ToggleError> {
         if let Some(folder) = into
             && let Some(dir) = super::copy_dir_in(&at.album.id, folder).await
         {
             return Ok((folder, dir));
         }
-        let (libraries, main, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        verdicts(std::slice::from_ref(&at.album), &libraries, &main, &incoming, |_| None)
-            .remove(&at.album.id)
-            .and_then(|v| Some((v.main_folder?, v.library)))
-            .filter(|(folder, _)| into.is_none_or(|i| i == *folder))
+        let (mains, id) = (self.lib.main_folders(), at.album.id.clone());
+        let copies = match crate::serve::instance() {
+            Some(served) => tokio::task::spawn_blocking(move || served.library.copies_of(&id)).await.ok().and_then(Result::ok).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        copies
+            .into_iter()
+            .filter(|c| mains.contains(&c.folder) && into.is_none_or(|i| i == c.folder))
+            .min_by(|a, b| (a.order, a.folder, &a.dir).cmp(&(b.order, b.folder, &b.dir)))
+            .map(|c| (c.folder, c.dir))
             .ok_or_else(|| ToggleError::Refused(format!("{} is not in a main library", at.album.title)))
     }
 

@@ -3678,6 +3678,34 @@ impl Catalogue {
         Ok(out)
     }
 
+    /// Another live record of a record's names (folded as the had rule folds them, `identity::fold`) with a present file in one of
+    /// `folders`: another edition of it there (OQ1, the owner: two records by their tracks, said by name, with no action). Its
+    /// folder, the lowest. Blocking.
+    pub fn other_edition_in(&self, record: i64, folders: &[i64]) -> Result<Option<i64>> {
+        if folders.is_empty() {
+            return Ok(None);
+        }
+        let db = self.db();
+        let named: Option<(String, String)> =
+            db.query_row("SELECT COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id = ?1", [record], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let Some((artist, title)) = named.map(|(a, t)| (identity::fold(&a), identity::fold(&t))).filter(|(a, t)| !a.is_empty() && !t.is_empty()) else {
+            return Ok(None);
+        };
+        let within = folders.iter().map(i64::to_string).collect::<Vec<_>>().join(", ");
+        let mut st = db.prepare(&format!(
+            "SELECT COALESCE(r.artist, ''), COALESCE(r.title, ''), min(f.folder) FROM records r JOIN tracks t ON t.record = r.id JOIN files f ON f.track = t.id
+             WHERE r.id != ?1 AND r.merged_into IS NULL AND {PRESENT_F} AND f.folder IN ({within}) GROUP BY r.id ORDER BY 3"
+        ))?;
+        let rows = st.query_map([record], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?;
+        for row in rows {
+            let (a, t, folder) = row?;
+            if identity::fold(&a) == artist && identity::fold(&t) == title {
+                return Ok(Some(folder));
+            }
+        }
+        Ok(None)
+    }
+
     /// 0.17's step's part `band_wave` (M1): the waveforms in three bands 0.16 kept in `analysis_shape`, copied into
     /// `analysis_band_wave` once, `batch` of the shape's rows at a time in key order, each batch a transaction of its own and
     /// the last one's last write the part's mark (`BAND_WAVE_MARK`). A start cut off goes on at the next from the last one
@@ -4566,6 +4594,23 @@ mod tests {
         let waiting = cat.unanalysed(10).unwrap();
         assert!(!waiting.iter().any(|(f, rel, ..)| (*f, rel.as_str()) == (1, "A/1.flac")), "not analysed again: {waiting:?}");
         assert_eq!(cat.without_band_wave(10).unwrap(), Vec::new(), "nor its waveform in three bands worked out again");
+    }
+
+    /// OQ1: a record waiting whose names another record in a main library has is another edition there, by its names alone; one
+    /// only elsewhere, itself, or another name is none.
+    #[test]
+    fn another_edition_is_found_by_its_names_in_the_main_libraries() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/incoming")]).unwrap();
+        let kept = cat.record_for_tests("Night Ferry", 10);
+        let waiting = cat.record_for_tests("Night Ferry", 12);
+        let other = cat.record_for_tests("Day Ferry", 10);
+        cat.copy_for_tests(kept, 0);
+        cat.copy_for_tests(other, 0);
+        cat.copy_for_tests(waiting, 1);
+        assert_eq!(cat.other_edition_in(waiting, &[0]).unwrap(), Some(0), "Music has another edition");
+        assert_eq!(cat.other_edition_in(waiting, &[1]).unwrap(), None, "only itself there");
+        assert_eq!(cat.other_edition_in(other, &[0]).unwrap(), None, "another name");
+        assert_eq!(cat.other_edition_in(waiting, &[]).unwrap(), None);
     }
 
     /// M1: the pass's question of which files have no waveform in three bands reads `analysis_band_wave`'s index of forms

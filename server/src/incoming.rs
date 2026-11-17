@@ -149,6 +149,8 @@ fn describe_same(new: &AlbumFacts, old: &AlbumFacts) -> String {
 /// One track as Replace pairs them: the library album's tracks against the incoming album's files (decision 0011 §4).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrackFacts {
+    /// The catalogue's track the file is (`files.track`, C37a): two copies of one record pair by it, before anything their tags say.
+    pub track: Option<i64>,
     /// MusicBrainz recording id (Picard's `musicbrainz_trackid`).
     pub recording: Option<String>,
     /// `None` counts as disc 1.
@@ -175,7 +177,8 @@ const SAME_TITLE_MS: u64 = 3_000;
 /// Same place, different title (a typo, garbled characters): the lengths must agree this closely.
 const SAME_PLACE_MS: u64 = 2_000;
 
-/// Pair an album's old tracks with its new files, surest evidence first: the MusicBrainz recording; then the same disc
+/// Pair an album's old tracks with its new files, surest evidence first: the same track of the catalogue (two copies of one
+/// record, C37a); the MusicBrainz recording; then the same disc
 /// and number with the same title; then the same title with the same length (another numbering); then, only when both
 /// albums have the same number of tracks, the same disc and number with the same length. A pass pairs two tracks only
 /// when each is the other's single candidate, so nothing is guessed: what is left stays unpaired.
@@ -188,7 +191,8 @@ pub fn pair(old: &[TrackFacts], new: &[TrackFacts]) -> Pairing {
     let same_title = |o: usize, n: usize| !folded_old[o].is_empty() && folded_old[o] == folded_new[n];
     let same_count = old.len() == new.len();
 
-    let passes: [&dyn Fn(usize, usize) -> bool; 4] = [
+    let passes: [&dyn Fn(usize, usize) -> bool; 5] = [
+        &|o, n| matches!((old[o].track, new[n].track), (Some(a), Some(b)) if a == b),
         &|o, n| matches!((&old[o].recording, &new[n].recording), (Some(a), Some(b)) if !a.is_empty() && a == b),
         &|o, n| same_place(&old[o], &new[n]) && same_title(o, n),
         &|o, n| same_title(o, n) && close(old[o].duration_ms, new[n].duration_ms, SAME_TITLE_MS),
@@ -224,6 +228,7 @@ impl TrackFacts {
     pub fn of(tags: &crate::naming::Tags, duration_ms: Option<u64>) -> Self {
         let number = |name: &str| tags.first(name).and_then(|v| v.split('/').next()?.trim().parse().ok());
         TrackFacts {
+            track: None,
             recording: tags.first("musicbrainz_trackid").map(str::to_string),
             disc: number("discnumber"),
             number: number("tracknumber"),
@@ -237,6 +242,8 @@ impl TrackFacts {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AlbumFile {
     pub rel: String,
+    /// The catalogue's track it is (`files.track`): what pairs two copies of one record (C37a).
+    pub track: Option<i64>,
     pub tags: crate::naming::Tags,
     pub duration_ms: Option<u64>,
 }
@@ -283,7 +290,7 @@ pub fn plan_replace(
     if new.is_empty() {
         return Err(ReplaceRefusal::Empty);
     }
-    let facts = |files: &[AlbumFile]| files.iter().map(|f| TrackFacts::of(&f.tags, f.duration_ms)).collect::<Vec<_>>();
+    let facts = |files: &[AlbumFile]| files.iter().map(|f| TrackFacts { track: f.track, ..TrackFacts::of(&f.tags, f.duration_ms) }).collect::<Vec<_>>();
     let (old_facts, new_facts) = (facts(old), facts(new));
     let pairing = pair(&old_facts, &new_facts);
     if !pairing.retired.is_empty() {
@@ -512,7 +519,7 @@ mod tests {
     }
 
     fn track(number: u32, title: &str, secs: u64) -> TrackFacts {
-        TrackFacts { recording: None, disc: None, number: Some(number), title: title.into(), duration_ms: Some(secs * 1000) }
+        TrackFacts { track: None, recording: None, disc: None, number: Some(number), title: title.into(), duration_ms: Some(secs * 1000) }
     }
 
     #[test]
@@ -637,7 +644,23 @@ mod tests {
     fn file(rel: &str, n: &str, title: &str, ms: u64, extra: &[(&str, &str)]) -> AlbumFile {
         let mut v = vec![("albumartist", "Air"), ("artist", "Air"), ("album", "Moon Safari"), ("tracknumber", n), ("title", title)];
         v.extend_from_slice(extra);
-        AlbumFile { rel: rel.into(), tags: tags(&v), duration_ms: Some(ms) }
+        AlbumFile { rel: rel.into(), tags: tags(&v), duration_ms: Some(ms), track: None }
+    }
+
+    /// C37a: two copies of one record pair by the track each file is (`files.track`), whatever their tags say: here the new copy's
+    /// titles are in another language, and a bonus track first puts its numbers off by one.
+    #[test]
+    fn replace_swaps_two_copies_of_one_record() {
+        let at = |f: AlbumFile, track: i64| AlbumFile { track: Some(track), ..f };
+        let old = vec![at(file("01.mp3", "1", "Sexy Boy", 298_000, &[("date", "1998")]), 7), at(file("02.mp3", "2", "Talisman", 256_000, &[]), 8)];
+        let new = vec![
+            at(file("01.flac", "1", "Intro", 60_000, &[]), 9),
+            at(file("02.flac", "2", "Garçon sexy", 290_000, &[]), 7),
+            at(file("03.flac", "3", "Le talisman", 250_000, &[]), 8),
+        ];
+        let plan = plan_replace(&Default::default(), &old, &new, &[], None).unwrap();
+        assert_eq!(plan.takes_over, [("01.mp3".to_string(), "02.flac".to_string()), ("02.mp3".to_string(), "03.flac".to_string())]);
+        assert_eq!(plan.added, 1, "the bonus track");
     }
 
     #[test]

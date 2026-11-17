@@ -334,10 +334,40 @@ async fn soulseek_user(files: &[String]) -> Option<String> {
     best.map(|(_, u)| u)
 }
 
+/// How a record's copy waiting stands in the library (C37a, OQ1): against the copy that plays the record for most, whether it is
+/// better, that copy's catalogue folder and why; else the folder of a main library holding another edition of it by its names.
+/// Blocking.
+fn stands_of(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>, mains: &[i64]) -> Result<(Option<(bool, i64, String)>, Option<i64>)> {
+    use crate::serve::copies::{against, why};
+    let copies = served.library.copies_of(album)?;
+    let waiting = at.and_then(|(f, d)| copies.iter().find(|c| c.folder == *f && &c.dir == d));
+    let kept = waiting.and_then(|c| against(&copies, c).map(|(better, kept)| (better, kept.folder, why(c, kept))));
+    if kept.is_some() {
+        return Ok((kept, None));
+    }
+    let edition = match crate::serve::ids::record_number(album) {
+        Some(record) => served.catalogue().other_edition_in(record, mains)?,
+        None => None,
+    };
+    Ok((None, edition))
+}
+
+/// The card's line on the library (C37a; OQ1, the owner: two records, say so): kept elsewhere, better than the copy that plays it
+/// for most or not, that copy named by its library; else another edition a main library has by name, with no action; else not in
+/// the library yet. Pure.
+fn in_library(kept: Option<(bool, String, &str)>, edition: Option<String>) -> Check {
+    let (state, said) = match (kept, edition) {
+        (Some((true, library, why)), _) => ("amber", format!("Better than the copy in {library}: {why}")),
+        (Some((false, library, why)), _) => ("red", format!("Already in {library}: {why}")),
+        (None, Some(library)) => ("amber", format!("{library} has another edition")),
+        (None, None) => ("green", "Not in your library yet".to_string()),
+    };
+    Check { key: "in_library", state, said }
+}
+
 /// A record's card. `album`: Cratarr's own album id; `at`: its copy waiting, as (catalogue folder, folder in it), which is what
-/// the card reads and hears, whichever copy plays; `library`, `verdict`: Incoming's for it. The hearing is started where it
-/// was never done.
-pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>, library: Option<String>, verdict: Option<&super::incoming::VerdictView>) -> Result<Card> {
+/// the card reads and hears, whichever copy plays; `library`: Incoming's for it. The hearing is started where it was never done.
+pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>, library: Option<String>) -> Result<Card> {
     let served = app.served.clone().context("Cratarr's own library is not open")?;
     let a = album.to_string();
     let (s, a2, at2) = (served.clone(), a.clone(), at.clone());
@@ -356,7 +386,7 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
     let matched = super::matching::kept_or_find(&served, vec![a.clone()]).await?.into_iter().next().map(|(_, m)| m);
     let looking = matched.is_none() && super::tasks::tasks().of(&served.current_user().unwrap_or_default()).iter().any(|t| t.kind == super::matching::KIND && t.finished.is_none());
     if heard.is_none() {
-        hear(app, &a, at);
+        hear(app, &a, at.clone());
     }
     let files: Vec<String> = tracks.iter().map(|t| t.file.clone()).collect();
     let folder = tracks.first().and_then(|t| t.path.parent()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -369,11 +399,12 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
     if from.kind == "soulseek" {
         checks.push(Check { key: "one_user", state: "green", said: format!("From one Soulseek user's folder: {}", from.user.clone().unwrap_or_default()) });
     }
-    checks.push(match verdict {
-        None => Check { key: "in_library", state: "green", said: "Not in your library yet".into() },
-        Some(v) if v.kind == "upgrade" => Check { key: "in_library", state: "amber", said: format!("Better than the copy in {}: {}", v.library, v.why) },
-        Some(v) => Check { key: "in_library", state: "red", said: format!("Already in {}: {}", v.library, v.why) },
-    });
+    let (kept, edition) = {
+        let (s, a, at, mains) = (served.clone(), album.to_string(), at.clone(), app.library.main_folders());
+        tokio::task::spawn_blocking(move || stands_of(&s, &a, at.as_ref(), &mains)).await??
+    };
+    let name = |folder: i64| app.incoming.library_name(crate::source::cratarr::KIND.id, folder);
+    checks.push(in_library(kept.as_ref().map(|(better, folder, why)| (*better, name(*folder), why.as_str())), edition.map(name)));
     let all_green = checks.iter().all(|c| c.state == "green");
     let year = tags.iter().find_map(|t| t.items.iter().find(|(_, n, _)| *n == Some("date")).and_then(|(_, _, v)| v.get(..4)?.parse().ok()));
     let card_tracks = tracks
@@ -425,18 +456,35 @@ pub struct Waiting {
 pub async fn waiting(app: &super::App) -> Vec<Waiting> {
     let view = app.incoming.list(None).await;
     let mut out = Vec::new();
+    let mut places = Vec::new();
     for s in view.sources.iter().filter(|s| s.id == crate::source::cratarr::KIND.id) {
         if let Some(e) = &s.error {
             tracing::warn!(target: "library", reason = %e, "records waiting not listed");
         }
-        out.extend(s.albums.iter().map(|a| Waiting {
-            source: s.id.clone(),
-            album: a.id.clone(),
-            title: a.title.clone(),
-            artist: a.artist.clone().unwrap_or_default(),
-            library: a.library.clone(),
-            verdict: s.verdicts.get(&a.id).map(|v| v.kind),
-        }));
+        for a in &s.albums {
+            places.push((a.id.clone(), a.copies.first().map(|c| (c.folder, c.dir.clone()))));
+            out.push(Waiting { source: s.id.clone(), album: a.id.clone(), title: a.title.clone(), artist: a.artist.clone().unwrap_or_default(), library: a.library.clone(), verdict: None });
+        }
+    }
+    // Each one's stand against a copy kept elsewhere (C37a): an upgrade where Replace would take it, else in two libraries.
+    if let Some(served) = app.served.clone() {
+        use crate::serve::copies::{against, replaces};
+        let stands = tokio::task::spawn_blocking(move || {
+            places
+                .iter()
+                .map(|(id, at)| {
+                    let copies = served.library.copies_of(id).ok()?;
+                    let c = copies.iter().find(|c| at.as_ref().is_some_and(|(f, d)| c.folder == *f && &c.dir == d))?;
+                    let (better, kept) = against(&copies, c)?;
+                    Some(if replaces(better, kept.kind) { "upgrade" } else { "duplicate" })
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        for (w, v) in out.iter_mut().zip(stands) {
+            w.verdict = v;
+        }
     }
     out
 }
@@ -490,6 +538,19 @@ pub fn hear(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// C37a, OQ1: the card's line on the library: a copy kept elsewhere it is better than (named by its library) or not; else another
+    /// edition a main library has by name, no action; else nothing yet.
+    #[test]
+    fn the_card_says_how_the_record_stands_in_the_library() {
+        let line = |c: Check| (c.state, c.said);
+        let better = in_library(Some((true, "Music".into(), "lossless, yours is 320 kbps")), None);
+        assert_eq!(line(better), ("amber", "Better than the copy in Music: lossless, yours is 320 kbps".to_string()));
+        let twice = in_library(Some((false, "Music".into(), "320 kbps, same as yours")), Some("Music".into()));
+        assert_eq!(line(twice), ("red", "Already in Music: 320 kbps, same as yours".to_string()));
+        assert_eq!(line(in_library(None, Some("Music".into()))), ("amber", "Music has another edition".to_string()));
+        assert_eq!(line(in_library(None, None)), ("green", "Not in your library yet".to_string()));
+    }
 
     /// A copy that does not play has no rows in `songs`: all there is of it is its files, and a card about it must list those,
     /// in the order their own tags give.

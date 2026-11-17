@@ -522,15 +522,33 @@ fn agreed_total(totals: &[u32]) -> u32 {
     by.iter().rev().find(|(_, n)| **n >= 2).map_or(0, |(t, _)| *t)
 }
 
-/// A better copy Replace can take: an upgrade of a main library's album (`incoming`'s upgrades; any other verdict is an
-/// album in two libraries at once).
-fn replaces(v: &super::incoming::VerdictView) -> bool {
-    v.kind == "upgrade" && v.main_folder.is_some()
+/// Where an Incoming copy's kept copy is, for an item's line: its library as named.
+fn paired_in<'a>(v: &crate::source::Against, libraries: &'a [super::albums::LibraryView]) -> &'a str {
+    libraries.iter().find(|l| l.id == v.library).map_or("another library", |l| l.name.as_str())
 }
 
-/// Where a verdict's other copy is, for an item's line: Music, else its library as named.
-fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums::LibraryView]) -> &'a str {
-    v.library_id.as_ref().and_then(|id| libraries.iter().find(|l| &l.id == id)).map_or("another library", |l| l.name.as_str())
+/// Incoming's copies of records kept elsewhere, as Health's two items list them (C37a): the better copies Replace can take, and
+/// the records in two libraries at once, by their stand against the copy that plays the record for most (`AlbumCopy.against`).
+/// Each item opens the record, its line naming the kept copy's library and folder, and why; by title. Pure.
+fn standing<'a>(sources: impl Iterator<Item = (&'a str, &'a [super::albums::LibraryView], &'a [crate::source::Album])>) -> (Vec<Item>, Vec<Item>) {
+    let (mut better, mut twice) = (Vec::new(), Vec::new());
+    for (source, libraries, albums) in sources {
+        for a in albums {
+            for v in a.copies.iter().filter_map(|c| c.against.as_ref()) {
+                let line = [a.artist.clone(), Some(format!("in {} as {}", paired_in(v, libraries), v.dir)), Some(v.why.clone()).filter(|w| !w.is_empty())]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let item = Item { title: a.title.clone(), line: Some(line), album: Some((source.to_string(), a.id.clone())), ..Item::default() };
+                if v.replaces { better.push(item) } else { twice.push(item) }
+            }
+        }
+    }
+    for items in [&mut better, &mut twice] {
+        items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    }
+    (better, twice)
 }
 
 /// The connections failing (0.9.6, the owner: each one's signal): a service Cratarr calls out to that failed a few
@@ -1013,46 +1031,22 @@ impl App {
 
     async fn check_incoming(&self) -> anyhow::Result<Vec<Finding>> {
         let view = self.albums(None).await;
-        let verdicts = view.sources.iter().flat_map(|s| s.verdicts.values());
-        let (mut upgrades, mut duplicates) = (0, 0);
-        for v in verdicts {
-            if replaces(v) {
-                upgrades += 1;
-            } else {
-                duplicates += 1;
-            }
-        }
+        let (mut better, mut twice) = standing(view.sources.iter().map(|s| (s.id.as_str(), s.library_info.as_slice(), s.albums.as_slice())));
         let jobs: Vec<_> = self.incoming.jobs().into_iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).collect();
-        let mut out = incoming(upgrades, duplicates, jobs.len() as u64);
-        // Each album waiting, with the album it upgrades or duplicates; each conversion failed, with why.
+        let mut out = incoming(better.len() as u64, twice.len() as u64, jobs.len() as u64);
+        // Each copy waiting, with the copy it stands against; each conversion failed, with why.
         for f in &mut out {
-            let better = match f.key.as_str() {
-                "incoming:upgrades" => true,
-                "incoming:duplicates" => false,
+            match f.key.as_str() {
+                "incoming:upgrades" => f.items = std::mem::take(&mut better),
+                "incoming:duplicates" => f.items = std::mem::take(&mut twice),
                 "incoming:failed" => {
                     f.items = jobs
                         .iter()
                         .map(|j| Item { title: j.title.clone(), line: j.why.clone(), album: Some((j.source.clone(), j.album_id.clone())), ..Item::default() })
                         .collect();
-                    continue;
                 }
-                _ => continue,
-            };
-            for s in &view.sources {
-                for (id, v) in s.verdicts.iter().filter(|(_, v)| replaces(v) == better) {
-                    let a = s.albums.iter().find(|a| &a.id == id);
-                    let title = a.map_or_else(|| id.clone(), |a| a.title.clone());
-                    let by = a.and_then(|a| a.artist.clone());
-                    // Both places: the other copy, in its library as the verdict names it (this one opens Incoming's).
-                    let line = [by, Some(format!("in {} as {}", paired_in(v, &s.library_info), v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                    f.items.push(Item { title, line: Some(line), album: Some((s.id.clone(), id.clone())), ..Item::default() });
-                }
+                _ => {}
             }
-            f.items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
         }
         out.extend(arrived(&super::intake_card::waiting(self).await));
         Ok(out)
@@ -1456,16 +1450,16 @@ mod tests {
         assert!(gaps_in(&[(None, None), (None, None)], &[6, 6]).is_empty(), "numbered nowhere");
     }
 
+    /// C37a: an Incoming copy of a kept record is a better copy Replace can take, or the record in two libraries at once, by its
+    /// stand against the copy that plays the record for most; each item names that copy's library and folder, and why.
     #[test]
     fn an_incoming_album_says_which_library_its_other_copy_is_in() {
-        use crate::app::incoming::VerdictView;
-        let v = |kind: &'static str, library_id: Option<&str>, replaceable: bool| VerdictView {
-            kind,
-            library: "Arp/Zebra".into(),
-            why: String::new(),
-            library_id: library_id.map(Into::into),
-            main_folder: replaceable.then_some(0),
-            replaceable_into: if replaceable { library_id.map(Into::into).into_iter().collect() } else { Vec::new() },
+        let v = |library: &str, better: bool, replaces: bool| crate::source::Against {
+            better,
+            replaces,
+            library: library.into(),
+            dir: "Arp/Zebra".into(),
+            why: "lossless, yours is 320 kbps".into(),
         };
         let library = |id: &str, name: &str, kind: &'static str| crate::app::albums::LibraryView {
             id: id.into(),
@@ -1481,12 +1475,29 @@ mod tests {
             naming: None,
         };
         // Libraries are equal (0101 point 1): a main library is named by its own name, as any other.
-        let libraries = [library("music", "Music", "main"), library("new", "New music", "incoming")];
-        assert!(replaces(&v("upgrade", Some("music"), true)));
-        assert!(!replaces(&v("upgrade", Some("new"), false)), "a better copy of another Incoming library's: in two libraries at once");
-        assert!(!replaces(&v("duplicate", Some("music"), true)));
-        assert_eq!(paired_in(&v("duplicate", Some("music"), true), &libraries), "Music");
-        assert_eq!(paired_in(&v("upgrade", Some("new"), false), &libraries), "New music");
-        assert_eq!(paired_in(&v("upgrade", None, false), &libraries), "another library");
+        let libraries = [library("music", "Music", "main"), library("new", "New music", "incoming"), library("own", "Your music", "own")];
+        let album = |id: &str, title: &str, against: Option<crate::source::Against>| crate::source::Album {
+            id: id.into(),
+            title: title.into(),
+            artist: Some("Glass Harbour".into()),
+            copies: vec![
+                crate::source::AlbumCopy { library: "music".into(), ..Default::default() },
+                crate::source::AlbumCopy { library: "new".into(), against, ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let albums = [
+            album("al-1", "Zebra", Some(v("music", true, true))),
+            album("al-2", "Arp", Some(v("own", true, false))),
+            album("al-3", "Mist", Some(v("music", false, false))),
+            album("al-4", "Kept once", None),
+        ];
+        let (better, twice) = standing([("cratarr", libraries.as_slice(), albums.as_slice())].into_iter());
+        let ids = |items: &[Item]| items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
+        assert_eq!(ids(&better), ["al-1"], "better than Music's copy: Replace's");
+        assert_eq!(ids(&twice), ["al-2", "al-3"], "better than someone's own, or no better: in two libraries at once");
+        assert_eq!(better[0].line.as_deref(), Some("Glass Harbour · in Music as Arp/Zebra · lossless, yours is 320 kbps"));
+        assert_eq!(twice[0].line.as_deref(), Some("Glass Harbour · in Your music as Arp/Zebra · lossless, yours is 320 kbps"));
+        assert_eq!(paired_in(&v("gone", false, false), &libraries), "another library");
     }
 }
