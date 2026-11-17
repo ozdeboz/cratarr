@@ -28,7 +28,9 @@
 //!   and the next folder tried. Only a whole, checked record goes on. AcoustID that could not be asked is no failed file:
 //!   the record is held at its check with its folder, its tick and its user, and asked about again (`hold`).
 //! - **Into its own Incoming library** (the owner, 2026-11-03): the Incoming library whose fetcher is "soulseek"
-//!   (decision 0096), as Artist/Record (Year), for the intake card. Never straight into Music.
+//!   (decision 0096), as Artist/Record (Year), for the intake card. Never straight into Music. Placed whole through a hidden
+//!   folder, the record's cover beside it (`cover.jpg`); a placing that fails keeps its checked files and is tried again (X4).
+//!   Trouble on Cratarr's own side (a disk full, slskd's folder gone) blames no user; free space is looked at before a fetch.
 //! - **Kept on disk** (`soulseek.json` in the data folder), so a restart forgets nothing: a fetch under way is followed
 //!   again.
 
@@ -68,6 +70,14 @@ const ROUND_AT_LEAST: i64 = 15 * 60;
 const LENGTH_SLACK_MS: i64 = crate::slskd::LENGTH_SLACK_MS;
 /// A record held at its check is checked again after this long: each time decodes a file to ask AcoustID about it.
 const CHECK_AGAIN: i64 = 15 * 60;
+/// A record whose placing failed is placed again from its checked files after this long (X4).
+const PLACE_AGAIN: i64 = 15 * 60;
+/// The data folder's folder for folders set aside.
+const SET_ASIDE: &str = "soulseek-set-aside";
+/// A folder set aside is kept this long, then deleted (X4).
+const SET_ASIDE_KEPT: i64 = 14 * 86_400;
+/// Room kept free beyond a fetch's files, on slskd's disk and the library's (X4).
+const ROOM_SPARE: u64 = 1 << 30;
 
 // ---- What is kept
 
@@ -169,6 +179,10 @@ pub struct Item {
     /// The folders set aside for it, with why per file.
     #[serde(default)]
     pub set_aside: Vec<SetAside>,
+    /// The batch whose folder holds its checked files, its transfers let go, after a placing that failed (X4): placed again from
+    /// them, nothing fetched again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked: Option<String>,
 }
 
 /// A folder set aside: whose, where it is kept, and why each of its files failed.
@@ -673,7 +687,8 @@ fn dropped(id: &str, now: i64) -> Option<String> {
         } else {
             k.dropped.push(i.record.request);
         }
-        i.batch
+        // Its checked files too (X4): their folder is a batch's.
+        i.batch.or(i.checked)
     })
 }
 
@@ -764,14 +779,35 @@ pub fn start(app: &Arc<super::App>) {
 /// (C51b, `requests::records_of`): one whose record is not on the list yet is added, waiting to be searched; one no longer
 /// approved (cancelled, declined) goes, unless it is fetched or placed.
 async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>) -> Result<()> {
+    // Folders set aside past their 14 days, looked for hourly (X4).
+    static SWEPT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    if let Some(data) = served.data_dir.clone()
+        && now() - SWEPT.load(std::sync::atomic::Ordering::Relaxed) >= 3600
+    {
+        SWEPT.store(now(), std::sync::atomic::Ordering::Relaxed);
+        tokio::task::spawn_blocking(move || sweep_set_asides(&data, now())).await.ok();
+    }
     let (ud, cat, kinds) = (served.userdata.clone(), served.catalogue().clone(), served.library.kinds());
-    let (approved, of) = tokio::task::spawn_blocking(move || -> Result<_> {
+    // Placed for a record retired meanwhile (X4, D17): its request follows the record its album joined or made.
+    let placed: Vec<(i64, i64, String)> =
+        kept(|k| k.items.iter().filter(|i| i.state == State::Placed && i.record.record != 0).filter_map(|i| Some((i.record.request, i.record.record, i.placed.clone()?))).collect());
+    let (approved, of, moved) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let moved = repoint(&ud, &cat, &placed)?;
         // Every approved request (X2), not the newest thousand: those whose record is complete give no item (`take_requests`).
         let approved = ud.requests(None, Some(super::requests::APPROVED), usize::MAX)?;
         let of = super::requests::records_held(&cat, &approved, &kinds)?;
-        Ok((approved, of))
+        Ok((approved, of, moved))
     })
     .await??;
+    if !moved.is_empty() {
+        kept(|k| {
+            for (request, _, to) in &moved {
+                for i in k.items.iter_mut().filter(|i| i.record.request == *request) {
+                    i.record.record = *to;
+                }
+            }
+        });
+    }
     // The owner's 6 November order (X1): Lidarr first, Soulseek five minutes after, or at once where Lidarr is not connected or did
     // not take it; an album not out yet waits for its release.
     let lidarr = super::requests::fetcher(app);
@@ -799,6 +835,25 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
         }
     }
     Ok(())
+}
+
+/// Requests whose record is retired re-pointed to the record their placed album joined or made (X4, D17): one on a retired record
+/// (the reject workflow) is otherwise never done, and its album is fetched again after Clear placed. `placed` is (request, record,
+/// the folder its album was placed in); what moved, as (request, from, to). Blocking.
+fn repoint(ud: &crate::userdata::UserData, cat: &crate::catalogue::Catalogue, placed: &[(i64, i64, String)]) -> Result<Vec<(i64, i64, i64)>> {
+    let read = cat.requested(&placed.iter().map(|(_, record, _)| *record).collect::<Vec<_>>())?;
+    let mut moved = Vec::new();
+    for (request, record, at) in placed {
+        if !read.get(record).is_some_and(|q| q.row.retired_at.is_some()) {
+            continue;
+        }
+        if let Some(to) = cat.record_placed_in(Path::new(at))?.filter(|to| to != record) {
+            ud.set_request_record(*request, to)?;
+            tracing::info!(target: "soulseek", request, from = record, to, "a request on a retired record follows its placed album");
+            moved.push((*request, *record, to));
+        }
+    }
+    Ok(moved)
 }
 
 /// How long Soulseek leaves a request to Lidarr, which goes first (X1, the owner's 6 November order).
@@ -903,6 +958,7 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             percent: 0.0,
             placed: None,
             set_aside: Vec::new(),
+            checked: None,
         });
         // Its first search as the order has it (X1, `first_search`).
         if let Some(i) = k.items.last_mut() {
@@ -935,7 +991,7 @@ fn next_fetch() -> Option<String> {
 fn next_of(items: &[Item], now: i64) -> Option<String> {
     let due = || items.iter().filter(|i| i.due <= now);
     due()
-        .find(|i| matches!(i.state, State::Fetching | State::Checking) && i.batch.is_some())
+        .find(|i| matches!(i.state, State::Fetching | State::Checking) && (i.batch.is_some() || i.checked.is_some()))
         .or_else(|| due().find(|i| i.state == State::Approved))
         .map(|i| i.id.clone())
 }
@@ -1086,9 +1142,26 @@ where
     Fut: std::future::Future<Output = Result<f32>>,
 {
     let Some(it) = item(id) else { return };
+    // Checked files whose placing failed (X4): placed again from where they were kept, nothing fetched or checked again.
+    if let Some(checked) = &it.checked {
+        let dir = folder.join(crate::slskd::FOLDER).join(checked);
+        let files = files_under(&dir);
+        if files.is_empty() {
+            return with_item(id, |i| (i.state, i.checked, i.due, i.why) = (State::Approved, None, 0, Some("Its checked files were gone: fetched again".into())));
+        }
+        return place_from(id, &it, &dir, &files).await;
+    }
     let Some(f) = it.chosen.and_then(|c| it.folders.get(c)).cloned() else {
         return with_item(id, |i| (i.state, i.chosen, i.due) = (State::Waiting, None, 0));
     };
+    // Room for its files on slskd's disk and the library's before a fetch begins (X4): a disk full is no user's failure.
+    if it.batch.is_none() {
+        let need: u64 = f.files.iter().map(|o| o.size.max(0) as u64).sum();
+        let dirs: Vec<PathBuf> = std::iter::once(folder.to_path_buf()).chain(library().ok()).collect();
+        if let Some(why) = short_of_room(need, &dirs) {
+            return with_item(id, |i| hold(i, why, SLSKD_AGAIN));
+        }
+    }
     let batch = match &it.batch {
         Some(b) => b.clone(),
         None => match slskd.fetch_many(&f.user, &f.files).await {
@@ -1122,6 +1195,16 @@ where
                 for t in slskd.transfers(&batch).await.unwrap_or_default() {
                     slskd.drop_transfer(&f.user, &t.id).await;
                 }
+                // What came of it goes with it (X4): nothing else looks in a batch's folder.
+                std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(&batch)).ok();
+                // Cratarr's own side (X4: slskd's disk full, its folder gone): no user failed; the same folder fetched again later.
+                if e.is::<Local>() {
+                    tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "a fetch failed on Cratarr's side; held");
+                    return with_item(id, |i| {
+                        (i.state, i.batch, i.percent) = (State::Approved, None, 0.0);
+                        hold(i, format!("{e:#}"), SLSKD_AGAIN);
+                    });
+                }
                 tracing::info!(target: "soulseek", user = %f.user, reason = %format!("{e:#}"), "a user failed; the next folder");
                 return with_item(id, |i| {
                     on_failed(i, &f.user, format!("{e:#}"));
@@ -1144,16 +1227,11 @@ where
         slskd.drop_transfer(&f.user, &t.id).await;
     }
     match checked {
-        Ok(files) => match place(&kept(|k| record_now(k, id, &it.record)), &files) {
-            Ok(to) => {
-                std::fs::remove_dir_all(&dir).ok();
-                tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), to = %to.display(), "placed in Incoming");
-                with_item(id, |i| (i.state, i.placed, i.batch, i.why) = (State::Placed, Some(to.display().to_string()), None, None));
-            }
-            Err(e) => with_item(id, |i| (i.state, i.why) = (State::Stuck, Some(format!("{e:#}")))),
-        },
+        Ok(files) => place_from(id, &it, &dir, &files).await,
         Err(why) => {
             let aside = set_aside(&dir, id, &f.user, &why);
+            // Gone either way (X4): set aside, or where it could not be, removed.
+            std::fs::remove_dir_all(&dir).ok();
             with_item(id, |i| {
                 if let Some(path) = aside {
                     i.set_aside.push(SetAside { user: f.user.clone(), path, why: why.clone() });
@@ -1186,6 +1264,11 @@ async fn follow(slskd: &Slskd, id: &str, batch: &str) -> Result<Vec<crate::slskd
             }
         };
         if let Some(bad) = ts.iter().find(|t| t.done() && !t.succeeded()) {
+            let said = bad.exception.as_deref().unwrap_or_default();
+            // Cratarr's own side, not the user's (X4): slskd could not store it.
+            if local_failure(said) {
+                return Err(Local(format!("slskd could not store {}: {said}", crate::slskd::base_name(&bad.filename))).into());
+            }
             bail!("{} was not sent{}", crate::slskd::base_name(&bad.filename), bad.exception.as_ref().map(|e| format!(": {e}")).unwrap_or_default());
         }
         if ts.iter().all(|t| t.done()) {
@@ -1203,6 +1286,37 @@ async fn follow(slskd: &Slskd, id: &str, batch: &str) -> Result<Vec<crate::slskd
     }
 }
 
+/// A fetch that failed on Cratarr's own side (X4): slskd could not store a file (its disk full, its folder gone). No user's failure.
+#[derive(Debug)]
+struct Local(String);
+
+impl std::fmt::Display for Local {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Local {}
+
+/// Whether slskd's word on a failed transfer is its own disk's trouble (X4), not the user's: .NET's words for a disk full, or a
+/// folder gone or not writable.
+fn local_failure(said: &str) -> bool {
+    let s = said.to_lowercase();
+    ["no space left", "disk full", "not enough space", "could not find a part of the path", "directorynotfound", "access to the path", "read-only file system", "unauthorizedaccess"]
+        .iter()
+        .any(|w| s.contains(w))
+}
+
+/// Why a fetch of `need` bytes would not fit (X4): one of `dirs` (slskd's folder, the library) with less free than it and
+/// `ROOM_SPARE`. Where its free space cannot be read, nothing is said.
+fn short_of_room(need: u64, dirs: &[PathBuf]) -> Option<String> {
+    dirs.iter().find_map(|d| {
+        let free = crate::folders::free(d)?;
+        let want = need.saturating_add(ROOM_SPARE);
+        (free < want).then(|| format!("Too little free space for its files: {} MB needed, {} MB free", want / 1_000_000, free / 1_000_000))
+    })
+}
+
 /// What the check of a fetched folder found: its files in the release's order, or why each that failed did (by its name).
 type Verdict = std::result::Result<Vec<PathBuf>, BTreeMap<String, String>>;
 
@@ -1214,6 +1328,10 @@ where
     Fut: std::future::Future<Output = Result<f32>>,
 {
     let on_disk = files_under(dir);
+    // None of its files there at all (X4): slskd's folder is set wrong, or gone. No user's failure: held, as with AcoustID away.
+    if on_disk.is_empty() && !f.files.is_empty() {
+        return Err("Its files are not in slskd's folder: check slskd's folder in Settings › Server".into());
+    }
     let mut out = Vec::new();
     let mut why = BTreeMap::new();
     for (offered, track) in f.files.iter().zip(release) {
@@ -1268,13 +1386,56 @@ fn folders_for(lib: &Path, r: &Record) -> impl Iterator<Item = PathBuf> {
     (1..).map(move |n| if n == 1 { base.clone() } else { base.with_file_name(format!("{name} {n}")) }).filter(|to| !to.exists())
 }
 
-/// The checked files into the Soulseek library, each copied in under a hidden name and then renamed (no walk sees a
-/// half-written track); the record's folder. The catalogue is told first that the album arriving there is the record
-/// (`Catalogue::expect_record`, C50), so its tracks join that record rather than make another, and again once the last file
-/// has landed, from when the expectation waits its week (F9).
-fn place(r: &Record, files: &[PathBuf]) -> Result<PathBuf> {
+/// The checked files placed (X4), the record's cover beside them, and the batch's folder they came from removed. A placing that
+/// fails keeps them there: the batch is let go (`checked`), no user is failed, and the record is placed again from them later.
+async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
+    let r = kept(|k| record_now(k, id, &it.record));
+    let placed = match library() {
+        // Its cover only once there is somewhere to put it: it may have to be fetched.
+        Ok(lib) => {
+            let cover = cover_for(r.record).await;
+            place(&lib, &r, files, cover.as_deref())
+        }
+        Err(e) => Err(e),
+    };
+    match placed {
+        Ok(to) => {
+            std::fs::remove_dir_all(dir).ok();
+            tracing::info!(target: "soulseek", record = %format!("{} - {}", r.artist, r.album), to = %to.display(), "placed in Incoming");
+            with_item(id, |i| (i.state, i.placed, i.batch, i.checked, i.why) = (State::Placed, Some(to.display().to_string()), None, None, None));
+        }
+        Err(e) => {
+            tracing::warn!(target: "soulseek", record = %format!("{} - {}", r.artist, r.album), reason = %format!("{e:#}"), "not placed; its checked files kept");
+            let checked = dir.file_name().map(|n| n.to_string_lossy().into_owned());
+            with_item(id, |i| {
+                (i.state, i.batch, i.checked) = (State::Checking, None, checked);
+                hold(i, format!("It could not be placed: {e:#}"), PLACE_AGAIN);
+            });
+        }
+    }
+}
+
+/// The record's cover as JPEG, for `cover.jpg` beside its placed files (X4), from where it comes (`cover_source`); none where it
+/// has none, or it cannot be had now.
+async fn cover_for(record: i64) -> Option<Vec<u8>> {
+    let cat = crate::serve::instance()?.catalogue().clone();
+    let q = tokio::task::spawn_blocking(move || cat.requested(&[record])).await.ok()?.ok()?.remove(&record)?;
+    let (bytes, mime) = super::cover_cache::cover(&cover_source(q.row.cover.as_deref(), &q.groups)?).await.ok()??;
+    if mime == "image/jpeg" { Some(bytes) } else { crate::serve::art::jpeg_within(&bytes, 1200).ok() }
+}
+
+/// Where a record's cover comes from (X4): its cover's own address (the Cover Art Archive's for a release group, Bandcamp's for an
+/// album page), else its first release group's. Pure.
+fn cover_source(cover: Option<&str>, groups: &[String]) -> Option<super::cover_cache::Of> {
+    cover.and_then(super::cover_cache::Of::of_address).or_else(|| groups.first().map(|g| super::cover_cache::Of::ReleaseGroup(g.clone())))
+}
+
+/// The checked files into the Soulseek library `lib` (`place_with`); the record's folder. The catalogue is told first that the
+/// album arriving there is the record (`Catalogue::expect_record`, C50), so its tracks join that record rather than make another,
+/// and again once it is in place, from when the expectation waits its week (F9).
+fn place(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>) -> Result<PathBuf> {
     let served = crate::serve::instance();
-    place_with(&library()?, r, files, |to| match served.as_ref().filter(|_| r.record != 0).and_then(|s| Some((s, s.catalogue().place_of_path(to)?))) {
+    place_with(lib, r, files, cover, |to| match served.as_ref().filter(|_| r.record != 0).and_then(|s| Some((s, s.catalogue().place_of_path(to)?))) {
         Some((s, (folder, dir))) => s.catalogue().expect_record(folder, &dir, r.record),
         None => Ok(true),
     })
@@ -1285,9 +1446,11 @@ const FOLDERS_AT_MOST: usize = 50;
 
 /// `place`, `expect` telling the catalogue that the album arriving in a folder is the record, and whether it took that. A
 /// folder another record is still expected in is passed over for the next free one, numbered as a folder that is there already
-/// (R27, N10): an album placed there would join that other record. Said again once the last file has landed; a failure then is
-/// said in the log and the files stay placed: they are in Incoming, and fetching them again would not help.
-fn place_with(lib: &Path, r: &Record, files: &[PathBuf], expect: impl Fn(&Path) -> Result<bool>) -> Result<PathBuf> {
+/// (R27, N10): an album placed there would join that other record. The files are copied into a hidden folder of the library, the
+/// cover beside them, and the folder renamed into place whole (X4): no catalogue pass sees half an album, and the checked files
+/// stay where they are until it is in place, so a placing that fails, or is cut short, loses none. Said again once in place; a
+/// failure then is said in the log and the files stay placed: they are in Incoming, and fetching them again would not help.
+fn place_with(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, expect: impl Fn(&Path) -> Result<bool>) -> Result<PathBuf> {
     let mut to = None;
     for folder in folders_for(lib, r).take(FOLDERS_AT_MOST) {
         if expect(&folder)? {
@@ -1296,22 +1459,17 @@ fn place_with(lib: &Path, r: &Record, files: &[PathBuf], expect: impl Fn(&Path) 
         }
     }
     let to = to.context("Another record is expected in every folder it could go in")?;
-    std::fs::create_dir_all(&to).with_context(|| format!("{} cannot be made", to.display()))?;
-    for f in files {
-        let name = f.file_name().context("no file name")?;
-        // One disc's file goes into its disc folder (X3), as the catalogue reads a release of several.
-        let to = match f.parent().and_then(Path::file_name).map(|d| d.to_string_lossy().into_owned()).filter(|d| is_disc_folder(d)) {
-            Some(disc) => {
-                std::fs::create_dir_all(to.join(&disc)).with_context(|| format!("{} cannot be made", to.join(&disc).display()))?;
-                to.join(disc)
-            }
-            None => to.clone(),
-        };
-        let hidden = to.join(format!(".{}.part", name.to_string_lossy()));
-        if std::fs::rename(f, &hidden).is_err() {
-            std::fs::copy(f, &hidden).with_context(|| format!("copying {}", f.display()))?;
-        }
-        std::fs::rename(&hidden, to.join(name))?;
+    // The record's own: a placing cut short is begun again in it, not left beside it.
+    let hidden = lib.join(format!(".cratarr-{}-{}.part", r.record, r.request));
+    std::fs::remove_dir_all(&hidden).ok();
+    let made = fill(&hidden, files, cover).and_then(|()| {
+        let parent = to.parent().context("no folder")?;
+        std::fs::create_dir_all(parent).with_context(|| format!("{} cannot be made", parent.display()))?;
+        std::fs::rename(&hidden, &to).with_context(|| format!("{} cannot be made", to.display()))
+    });
+    if let Err(e) = made {
+        std::fs::remove_dir_all(&hidden).ok();
+        return Err(e);
     }
     if let Err(e) = expect(&to) {
         tracing::warn!(target: "soulseek", folder = %to.display(), reason = %format!("{e:#}"), "placed, but its record could not be told of its folder again");
@@ -1319,11 +1477,54 @@ fn place_with(lib: &Path, r: &Record, files: &[PathBuf], expect: impl Fn(&Path) 
     Ok(to)
 }
 
+/// The files copied into `into`, a new folder (`place_with`): each disc's into its disc folder (X3), as the catalogue reads a
+/// release of several, and the cover beside them.
+fn fill(into: &Path, files: &[PathBuf], cover: Option<&[u8]>) -> Result<()> {
+    std::fs::create_dir_all(into).with_context(|| format!("{} cannot be made", into.display()))?;
+    for f in files {
+        let name = f.file_name().context("no file name")?;
+        let at = match f.parent().and_then(Path::file_name).map(|d| d.to_string_lossy().into_owned()).filter(|d| is_disc_folder(d)) {
+            Some(disc) => {
+                std::fs::create_dir_all(into.join(&disc)).with_context(|| format!("{} cannot be made", into.join(&disc).display()))?;
+                into.join(disc)
+            }
+            None => into.to_path_buf(),
+        };
+        std::fs::copy(f, at.join(name)).with_context(|| format!("copying {}", f.display()))?;
+    }
+    if let Some(c) = cover {
+        std::fs::write(into.join("cover.jpg"), c).context("its cover could not be written")?;
+    }
+    Ok(())
+}
+
+/// Folders set aside more than `SET_ASIDE_KEPT` ago deleted (X4), by when each was set aside (its `why.json`), and taken off their
+/// items. Blocking.
+fn sweep_set_asides(data: &Path, now: i64) {
+    let mut gone = Vec::new();
+    for e in std::fs::read_dir(data.join(SET_ASIDE)).into_iter().flatten().flatten() {
+        let p = e.path();
+        let at = std::fs::metadata(p.join("why.json"))
+            .or_else(|_| e.metadata())
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(now, |d| d.as_secs() as i64);
+        if p.is_dir() && now - at > SET_ASIDE_KEPT && std::fs::remove_dir_all(&p).is_ok() {
+            gone.push(p.display().to_string());
+        }
+    }
+    if !gone.is_empty() {
+        tracing::info!(target: "soulseek", count = gone.len(), "folders set aside 14 days ago deleted");
+        kept(|k| k.items.iter_mut().for_each(|i| i.set_aside.retain(|s| !gone.contains(&s.path))));
+    }
+}
+
 /// A fetched folder set aside, with why each file failed beside it (`why.json`), in the data folder's
-/// `soulseek-set-aside`; where it went.
+/// `soulseek-set-aside`, for 14 days (X4); where it went.
 fn set_aside(dir: &Path, id: &str, user: &str, why: &BTreeMap<String, String>) -> Option<String> {
     let data = crate::serve::instance()?.data_dir.clone()?;
-    let to = data.join("soulseek-set-aside").join(format!("{id} {}", safe(user)));
+    let to = data.join(SET_ASIDE).join(format!("{id} {}", safe(user)));
     std::fs::create_dir_all(to.parent()?).ok()?;
     if std::fs::rename(dir, &to).is_err() {
         std::fs::create_dir_all(&to).ok()?;
@@ -1432,6 +1633,7 @@ mod tests {
             percent: 40.0,
             placed: None,
             set_aside: Vec::new(),
+            checked: None,
         };
         assert!(on_failed(&mut i, "a", "a is offline".into()));
         assert_eq!((i.state, i.chosen, i.folders.len(), i.batch.clone(), i.failed.clone()), (State::Approved, Some(0), 1, None, vec!["a".to_string()]));
@@ -1471,6 +1673,7 @@ mod tests {
             percent: 0.0,
             placed: None,
             set_aside: Vec::new(),
+            checked: None,
         };
         kept(|k| k.items.push(i));
     }
@@ -1530,7 +1733,7 @@ mod tests {
         fetch_from(id, &forgot, &d, |_, _| std::future::ready(Ok(0.97))).await;
         let i = item(id).unwrap();
         assert!(i.failed.is_empty() && i.set_aside.is_empty());
-        assert_eq!(i.state, State::Stuck, "passed: only the library a test has not set up stops it");
+        assert_eq!((i.state, i.batch.as_deref(), i.checked.as_deref()), (State::Checking, None, Some(batch)), "passed: only the library a test has not set up stops it, its files kept (X4)");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -1744,6 +1947,7 @@ mod tests {
             percent: 0.0,
             placed: None,
             set_aside: Vec::new(),
+            checked: None,
         };
         kept(|k| k.items.push(i));
         r
@@ -1845,10 +2049,178 @@ mod tests {
                 _ => Ok(to != taken.as_path()),
             }
         };
-        let to = place_with(&lib, &r, &[from.join("01 Pier.flac")], expect).unwrap();
+        let to = place_with(&lib, &r, &[from.join("01 Pier.flac")], None, expect).unwrap();
         assert_eq!(to, lib.join("Glass Harbour").join("Harbour Lights (2014) 2"));
         assert!(to.join("01 Pier.flac").exists() && !taken.exists());
         assert_eq!(*asked.lock().unwrap(), 3, "told again once placed");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X4: the files go into a hidden folder of the library and the folder into place whole, so no pass sees half an album; a
+    /// placing that fails leaves nothing in the library, and the checked files where they were.
+    #[test]
+    fn a_placing_goes_through_a_hidden_folder_and_one_that_fails_keeps_its_files() {
+        let d = data_folder("hidden");
+        let (lib, from) = (d.join("soulseek"), d.join("fetched"));
+        std::fs::create_dir_all(from.join("CD2")).unwrap();
+        std::fs::write(from.join("01 Pier.flac"), b"flac").unwrap();
+        std::fs::write(from.join("CD2").join("01 Quay.flac"), b"flac").unwrap();
+        let r = record("Glass Harbour", "Harbour Lights", Some(2014));
+        let to = lib.join("Glass Harbour").join("Harbour Lights (2014)");
+        let files = [from.join("01 Pier.flac"), from.join("CD2").join("01 Quay.flac")];
+        // A file gone on the way: nothing placed, nothing left half made, the checked files where they were.
+        let err = place_with(&lib, &r, &[files[0].clone(), from.join("02 Gone.flac")], None, |_| Ok(true)).unwrap_err();
+        assert!(format!("{err:#}").contains("02 Gone.flac"), "{err:#}");
+        assert!(!to.exists(), "no half album");
+        assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 0, "no hidden folder left behind");
+        assert!(files.iter().all(|f| f.exists()), "the checked files kept");
+        let placed = place_with(&lib, &r, &files, None, |_| Ok(true)).unwrap();
+        assert_eq!(placed, to);
+        assert!(to.join("01 Pier.flac").exists() && to.join("CD2").join("01 Quay.flac").exists(), "whole, each disc in its folder");
+        assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 1, "the artist's folder alone");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X4: the record's cover goes beside its placed files as `cover.jpg`; none where it has none. It comes from the record's cover
+    /// address, else its release group.
+    #[test]
+    fn the_placed_album_has_its_records_cover_beside_it() {
+        let d = data_folder("cover");
+        let (lib, from) = (d.join("soulseek"), d.join("fetched"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::write(from.join("01 Pier.flac"), b"flac").unwrap();
+        let to = place_with(&lib, &record("Glass Harbour", "Harbour Lights", Some(2014)), &[from.join("01 Pier.flac")], Some(&b"jpeg"[..]), |_| Ok(true)).unwrap();
+        assert_eq!(std::fs::read(to.join("cover.jpg")).unwrap(), b"jpeg");
+        let bare = place_with(&lib, &record("Glass Harbour", "Low Tide", None), &[from.join("01 Pier.flac")], None, |_| Ok(true)).unwrap();
+        assert!(bare.join("01 Pier.flac").exists() && !bare.join("cover.jpg").exists(), "none where it has none");
+        use super::super::cover_cache::Of;
+        let rg = "00000000-0000-4000-8000-000000000140";
+        let address = format!("/api/covers/release-group/{rg}");
+        assert_eq!(cover_source(Some(address.as_str()), &[]), Some(Of::ReleaseGroup(rg.into())));
+        assert_eq!(cover_source(None, &[rg.to_string()]), Some(Of::ReleaseGroup(rg.into())), "its group's");
+        assert_eq!(cover_source(Some("https://example.org/a.jpg"), &[]), None);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X4: a folder set aside is kept 14 days, then deleted and taken off its item.
+    #[test]
+    fn a_set_aside_is_kept_fourteen_days_then_deleted() {
+        let d = data_folder("aside");
+        let (old, new) = (d.join(SET_ASIDE).join("ss-aside a"), d.join(SET_ASIDE).join("ss-aside b"));
+        for p in [&old, &new] {
+            std::fs::create_dir_all(p).unwrap();
+            std::fs::write(p.join("why.json"), b"{}").unwrap();
+        }
+        let fifteen_days_ago = std::time::SystemTime::now() - Duration::from_secs(15 * 86_400);
+        std::fs::File::options().write(true).open(old.join("why.json")).unwrap().set_modified(fifteen_days_ago).unwrap();
+        listed("ss-aside", State::Waiting, None);
+        with_item("ss-aside", |i| i.set_aside = [&old, &new].iter().map(|p| SetAside { user: "a".into(), path: p.display().to_string(), why: BTreeMap::new() }).collect());
+        sweep_set_asides(&d, now());
+        assert!(!old.exists() && new.exists(), "only the one past its 14 days");
+        assert_eq!(item("ss-aside").unwrap().set_aside.iter().map(|s| s.path.clone()).collect::<Vec<_>>(), [new.display().to_string()]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X4 (D17): a request whose record was retired follows the record its placed album joined or made; one on a live record stays.
+    #[test]
+    fn a_request_on_a_retired_record_follows_its_placed_album() {
+        let cat = crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/incoming")]).unwrap();
+        let folder = cat.folders().iter().next().map(|(id, _)| id).unwrap();
+        let gone = cat.record_for_tests("Two Rooms", 2);
+        cat.db_for_tests().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [gone]).unwrap();
+        let new = cat.record_for_tests("Two Rooms", 2);
+        cat.copy_for_tests(new, folder);
+        let live = cat.record_for_tests("Open Water", 2);
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        let on_gone = ud.add_request(&crate::userdata::Request { record: Some(gone), ..asked(1, None) }).unwrap();
+        let on_live = ud.add_request(&crate::userdata::Request { record: Some(live), ..asked(2, None) }).unwrap();
+        let at = format!("/incoming/copy-{new}");
+        assert_eq!(cat.record_placed_in(Path::new(&at)).unwrap(), Some(new));
+        let moved = repoint(&ud, &cat, &[(on_gone, gone, at.clone()), (on_live, live, at)]).unwrap();
+        assert_eq!(moved, [(on_gone, gone, new)]);
+        assert_eq!(ud.request(on_gone).unwrap().unwrap().record, Some(new));
+        assert_eq!(ud.request(on_live).unwrap().unwrap().record, Some(live), "a live record's request stays");
+    }
+
+    /// X4: too little free space for a folder's files holds the record before anything is fetched, and blames no user.
+    #[tokio::test]
+    async fn too_little_free_space_holds_the_record_and_blames_no_user() {
+        let id = "ss-room";
+        listed(id, State::Approved, None);
+        with_item(id, |i| i.folders.iter_mut().flat_map(|f| f.files.iter_mut()).for_each(|o| o.size = i64::MAX / 4));
+        let d = data_folder("room");
+        fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("Too little free space")), "{:?}", i.why);
+        assert_eq!((i.state, i.chosen, i.batch.clone(), i.failed.len()), (State::Approved, Some(0), None, 0));
+        assert!(i.due > now(), "held");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X4: slskd unable to store a file (its disk full, its folder gone) is Cratarr's side: no user failed, what came of the batch
+    /// removed, and the same folder fetched again later.
+    #[tokio::test]
+    async fn slskd_unable_to_store_a_file_blames_no_user() {
+        let (id, batch) = ("ss-full", "b-full");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("full", batch);
+        let full = serde_json::json!({ "transfers": [{ "id": "t1", "filename": r"d\01 One.flac", "state": "Completed, Errored", "percentComplete": 40.0, "exception": "System.IO.IOException: No space left on device" }] });
+        let app = axum::Router::new().route("/api/v0/transfers/downloads/batches/{id}", axum::routing::get(move || std::future::ready(axum::Json(full.clone()))));
+        fetch_from(id, &slskd_at(app).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert!(i.failed.is_empty(), "no user failed");
+        assert_eq!((i.state, i.chosen, i.batch.clone(), i.folders.len()), (State::Approved, Some(0), None, 2), "the same folder, later");
+        assert!(i.why.as_deref().is_some_and(|w| w.contains("No space left on device")), "{:?}", i.why);
+        assert!(i.due > now());
+        assert!(!d.join(crate::slskd::FOLDER).join(batch).exists(), "what came of it removed");
+        assert!(local_failure("Could not find a part of the path '/downloads/x'") && !local_failure("Transfer rejected: Queue full"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X4: a user who fails partway leaves nothing behind in slskd's folder.
+    #[tokio::test]
+    async fn a_failed_user_leaves_no_batch_folder_behind() {
+        let (id, batch) = ("ss-partway", "b-partway");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("partway", batch);
+        let refused = serde_json::json!({ "transfers": [{ "id": "t1", "filename": r"d\01 One.flac", "state": "Completed, Rejected", "percentComplete": 0.0, "exception": "Transfer rejected: Queue full" }] });
+        let app = axum::Router::new().route("/api/v0/transfers/downloads/batches/{id}", axum::routing::get(move || std::future::ready(axum::Json(refused.clone()))));
+        fetch_from(id, &slskd_at(app).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.failed.clone()), (State::Approved, vec!["a".to_string()]), "the next folder");
+        assert!(!d.join(crate::slskd::FOLDER).join(batch).exists(), "what the user sent is gone with them");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X4: none of a folder's files in slskd's folder at all (the folder set wrong) is no user's failure: the record is held.
+    #[tokio::test]
+    async fn files_missing_from_slskds_folder_altogether_blame_no_user() {
+        let d = data_folder("nowhere");
+        let f = Folder { user: "a".into(), dir: "d".into(), format: "flac".into(), lossless: true, free_slot: true, queue: 0, speed: 1, extra: 0, files: vec![file(r"d\01 One.flac", 100)], unchecked: None };
+        let release = vec![super::super::track_fetch::track_for(1, 1, "One", "Air", None, "r")];
+        let held = check(&d.join("no-such-batch"), &f, &release, &never_gated).await.unwrap_err();
+        assert!(held.starts_with("Its files are not in slskd's folder"), "{held}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X4: a placing that fails keeps the checked files where they are and lets the batch go (no user failed, nothing fetched
+    /// again); the record is placed again from them later.
+    #[tokio::test]
+    async fn a_failed_placing_keeps_its_checked_files_and_lets_its_batch_go() {
+        let (id, batch) = ("ss-unplaced", "b-unplaced");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("unplaced", batch);
+        // No library is set up in a test: its placing fails.
+        fetch_from(id, &slskd_at(all_in()).await, &d, |_, _| std::future::ready(Ok(0.97))).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.batch.as_deref(), i.checked.as_deref(), i.failed.len()), (State::Checking, None, Some(batch), 0));
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("It could not be placed")), "{:?}", i.why);
+        assert!(d.join(crate::slskd::FOLDER).join(batch).join("01 One.flac").exists(), "its checked files kept");
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due), Some(id.to_string()), "taken up again when due");
+        // Again, slskd gone meanwhile: placed again from its files, nothing fetched nor gated again.
+        fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.checked.as_deref(), i.failed.len()), (State::Checking, Some(batch), 0), "kept still: still no library");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -2114,6 +2486,7 @@ mod tests {
             percent: 0.0,
             placed: None,
             set_aside: Vec::new(),
+            checked: None,
         };
         let mut found = item(State::Found);
         search_again(&mut found);

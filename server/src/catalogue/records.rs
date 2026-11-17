@@ -2201,6 +2201,26 @@ impl Catalogue {
         Ok(kept)
     }
 
+    /// The record the album a fetcher placed in `dir` (as Cratarr sees it) went to, once a record pass has read it (X4): the one
+    /// most of its present tracks are on, followed through merges. None before then. Blocking.
+    pub fn record_placed_in(&self, dir: &std::path::Path) -> Result<Option<i64>> {
+        let Some((folder, rel)) = self.place_of_path(dir) else { return Ok(None) };
+        let db = self.db();
+        let found: Option<i64> = db
+            .prepare_cached(&format!(
+                "SELECT t.record FROM files f JOIN tracks t ON t.id = f.track
+                 WHERE f.folder = ?1 AND substr(f.rel, 1, length(?2) + 1) = ?2 || '/' AND {} AND t.retired_at IS NULL AND t.record IS NOT NULL
+                 GROUP BY t.record ORDER BY count(*) DESC, t.record LIMIT 1",
+                super::PRESENT_F
+            ))?
+            .query_row(params![folder, rel], |r| r.get(0))
+            .optional()?;
+        match found {
+            Some(record) => merged_end(&db, record),
+            None => Ok(None),
+        }
+    }
+
     /// The records 0.17's step gave the requests (C49a), by request id, for the user data's `request.record`. Blocking.
     pub fn request_records_017(&self) -> Result<Vec<(i64, i64)>> {
         let Some(text) = self.meta(REQUEST_RECORDS) else { return Ok(Vec::new()) };
