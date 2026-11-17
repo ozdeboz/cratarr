@@ -3396,6 +3396,42 @@ async fn a_copy_is_one_album_two_copies_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// T1.5: a Copy to's Undo, as Health's list of changes gives it, takes the copied files into Bob's library's trash and leaves a
+/// picture set in the copy's folder since; the record is listed with Music's copy alone after.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copys_undo_leaves_what_came_after_end_to_end() {
+    let root = temp("copy-undo-after");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let album = s.read_in("Both Shores", &music).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    let original = as_it_lies(&music.join(SHORES));
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password", "admin": true })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let mine = own.join("bob");
+    let copied = bob.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/move"), json!({ "from": id_of(&music), "to": id_of(&mine) })).await;
+    let folder = copied["folder"].as_str().unwrap().to_string();
+    let copies = || async { bob.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).count() };
+    s.until("its copy read in own music", Duration::from_secs(120), || async { copies().await == 2 }).await;
+    std::fs::write(mine.join(&folder).join("folder.jpg"), b"a picture set since").unwrap();
+    let run = s.album_run("copy").await;
+    let (status, answer) = s.undo_a_moment_later(run["id"].as_str().unwrap()).await;
+    assert_eq!(status, 200, "{answer}");
+    let left = as_it_lies(&mine.join(&folder));
+    assert_eq!(left.keys().cloned().collect::<Vec<_>>(), ["folder.jpg"], "what came after stays");
+    assert_eq!(in_the_trash(&mine), audio_under(&music.join(SHORES)).len(), "the copied files in Bob's library's trash");
+    assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
+    s.until("the record listed with Music's copy alone", Duration::from_secs(120), || async { copies().await == 1 }).await;
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// C52, OQ3: Want of a record the library has makes the asker's own copy of it in their own music, as Copy to makes one: Music's
 /// album as it was, the copy on the record's tracks, and the request says so.
 #[tokio::test(flavor = "multi_thread")]
