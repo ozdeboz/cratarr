@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::{App, JobView, KeepPreview, KeepResult, ToggleError};
 use super::library::{Active, epoch_now};
-use crate::serve::copies::{Copy, Viewer, against, copy_for, in_order, replaces, why};
+use crate::serve::copies::{Copy, Viewer, against, copy_for, in_order, judged, replace_offers, replaces, replacing_copy, why};
 use crate::settings::{LibraryKind, Quality, YOUR_MUSIC};
 use crate::source;
 
@@ -349,6 +349,37 @@ pub(crate) fn want_copy(copies: &[(Copy, crate::catalogue::identity::Lacks)], as
     copy_for(&whole, None, &[]).map_or(Chosen::NoneWhole, |c| Chosen::From(c.folder, c.dir.clone()))
 }
 
+/// The catalogue folder a used library of a server lies in (its first folder), where it is in use.
+fn folder_in(on: &Active, folders: &crate::catalogue::InUse, library: &str) -> Option<i64> {
+    on.placement.libraries.iter().find(|l| l.id == library).and_then(|l| l.folders.first()).and_then(|p| folders.id_of(std::path::Path::new(p)))
+}
+
+/// The catalogue folders of own music switched off for its account (it owns none, `Active::libraries`): no Want copies from them
+/// (T5), and no Replace takes a main library's place from them (RY01).
+fn own_off(on: &Active, folders: &crate::catalogue::InUse) -> Vec<i64> {
+    on.libraries().into_iter().filter(|u| u.kind == LibraryKind::Own && u.owner.is_none()).filter_map(|u| folder_in(on, folders, &u.id)).collect()
+}
+
+/// Replace from someone's own music (RY01) as `App::own_offer` finds it: the record's title, the own copy listed alone, the main
+/// library's copy it would take the place of, and why not, where it is not offered.
+struct OwnOffer {
+    title: String,
+    copy: source::Album,
+    main: (i64, String),
+    refused: Option<String>,
+}
+
+/// A Replace's tap (`App::replace_album`): the copies, the year where the tags lack it, the cover (`keep`, `new`), carry over, and
+/// (RY01) what its sheet showed.
+pub struct ReplaceAsk<'a> {
+    pub from: Option<&'a str>,
+    pub to: Option<&'a str>,
+    pub year: Option<&'a str>,
+    pub cover: Option<&'a str>,
+    pub carry: bool,
+    pub sheet: Option<super::ReplaceSheet>,
+}
+
 /// The one record's listing of the copy a Want copies (T5): its card with that copy alone, by its folder and place, in the library
 /// `root` names. Never the whole Albums view. Pure.
 fn copy_listed(card: source::Album, root: &str, (folder, dir): (i64, String)) -> source::Album {
@@ -440,6 +471,9 @@ struct PlayOrder {
     plays: Option<(i64, String)>,
     /// Each Incoming copy of a record kept elsewhere, as it stands against the copy that plays the record for most (C37a).
     against: Vec<Stand>,
+    /// Each Replace in a main library from someone's own copy (RY01, `copies::replace_offers`): the own copy's place, and the main
+    /// library's copy it beats. One per main library (OQ-N).
+    replace_into: Vec<Stand>,
 }
 
 /// An Incoming copy's stand against the copy that plays its record for most (C37a, `copies::against`): its place, whether it is
@@ -468,7 +502,17 @@ impl PlayOrder {
                     Some(Stand { at: place(c), better, replaces: replaces(better, kept.kind), kept: place(kept), why: why(c, kept) })
                 })
                 .collect(),
+            replace_into: Vec::new(),
         }
+    }
+
+    /// The Replaces from someone's own music a record's copies, as copying judges them (`copies::judged`), offer (RY01), own music
+    /// switched off (`off`) left out.
+    fn offering(mut self, judged: &[Copy], off: &[i64]) -> Self {
+        let place = |c: &Copy| (c.folder, c.dir.clone());
+        self.replace_into =
+            replace_offers(judged, off).into_iter().map(|(own, main)| Stand { at: place(own), better: true, replaces: true, kept: place(main), why: why(own, main) }).collect();
+        self
     }
 }
 
@@ -510,6 +554,14 @@ fn fold(listed: Vec<source::Album>, orders: &HashMap<String, PlayOrder>) -> Vec<
                 let library = libraries.iter().find(|(at, _)| *at == s.kept).map(|(_, l)| l.clone());
                 c.against = library.map(|library| source::Against { better: s.better, replaces: s.replaces, library, dir: s.kept.1.clone(), why: s.why.clone() });
             }
+            // Someone's own copy says which main libraries' copies Replace from it would take the place of (RY01), each named by its
+            // library as listed.
+            for s in &order.replace_into {
+                let Some(library) = libraries.iter().find(|(at, _)| *at == s.kept).map(|(_, l)| l.clone()) else { continue };
+                if let Some(c) = copies.iter_mut().find(|c| (c.folder, c.dir.clone()) == s.at) {
+                    c.replace_into.push(source::Against { better: s.better, replaces: s.replaces, library, dir: s.kept.1.clone(), why: s.why.clone() });
+                }
+            }
             let mut record = entries.swap_remove(lead);
             record.copies = copies;
             Some(record)
@@ -530,12 +582,26 @@ impl App {
             return HashMap::new();
         }
         let who = served.listener(viewer);
+        let off = self.own_music_off();
         let read = tokio::task::spawn_blocking(move || -> anyhow::Result<HashMap<String, PlayOrder>> {
             let mut out = HashMap::new();
             for (id, places) in listed {
                 // Only what is listed can stand for the record: a copy read since the list was has no entry here yet.
-                let copies: Vec<Copy> = served.library.copies_of(&id)?.into_iter().filter(|c| places.iter().any(|(f, d)| *f == c.folder && *d == c.dir)).collect();
-                let order = PlayOrder::of(&copies, who.viewer().as_ref(), &who.off);
+                let here = |c: &Copy| places.iter().any(|(f, d)| *f == c.folder && *d == c.dir);
+                let copies: Vec<Copy> = served.library.copies_of(&id)?.into_iter().filter(here).collect();
+                let mut order = PlayOrder::of(&copies, who.viewer().as_ref(), &who.off);
+                // Replace from someone's own music (RY01), where the record has a copy there and one in a main library: its copies
+                // as copying judges them (S.1).
+                let kinds = |k: LibraryKind| copies.iter().any(|c| c.kind == k);
+                if let (true, true, Some(record)) = (kinds(LibraryKind::Own), kinds(LibraryKind::Main), crate::serve::ids::record_number(&id)) {
+                    match judged_copies(&served, &id, record) {
+                        Ok(all) => {
+                            let listed: Vec<Copy> = judged(&all).into_iter().filter(here).collect();
+                            order = order.offering(&listed, &off);
+                        }
+                        Err(e) => tracing::warn!(target: "library", album = %id, reason = %format!("{e:#}"), "its copies not judged: no Replace from own music offered"),
+                    }
+                }
                 out.insert(id, order);
             }
             Ok(out)
@@ -613,10 +679,8 @@ impl App {
             let Some(on) = live.iter().find(|x| x.cfg.id == source) else { return WantCopy::Failed("Cratarr's own source is not connected".into()) };
             let Some(own) = on.own_of(account) else { return WantCopy::Nothing };
             let folders = self.library.catalogue().folders();
-            let folder = |library: &str| on.placement.libraries.iter().find(|l| l.id == library).and_then(|l| l.folders.first()).and_then(|p| folders.id_of(std::path::Path::new(p)));
             // Own music switched off for its account (it owns none, `Active::libraries`) is copied from by no one.
-            let off: Vec<i64> = on.libraries().into_iter().filter(|u| u.kind == LibraryKind::Own && u.owner.is_none()).filter_map(|u| folder(&u.id)).collect();
-            (own.clone(), on.used(&own), folder(&own), off)
+            (own.clone(), on.used(&own), folder_in(on, &folders, &own), own_off(on, &folders))
         };
         let id = crate::serve::ids::record(record);
         let s = served.clone();
@@ -648,6 +712,100 @@ impl App {
             Ok(_) => WantCopy::Made,
             Err(e) => WantCopy::Failed(e.to_string()),
         }
+    }
+
+    /// The catalogue folders of own music switched off for its account, Cratarr's own (`own_off`).
+    fn own_music_off(&self) -> Vec<i64> {
+        let live = self.library.live();
+        live.iter().find(|x| x.cfg.id == crate::source::cratarr::KIND.id).map(|on| own_off(on, &self.library.catalogue().folders())).unwrap_or_default()
+    }
+
+    /// The own library a Replace's `from` names (RY01): someone's own music of Cratarr's own; none for anything else, which is
+    /// Replace from Incoming.
+    fn own_source(&self, source: &str, from: Option<&str>) -> Option<String> {
+        let from = from?;
+        let live = self.library.live();
+        let own = source == crate::source::cratarr::KIND.id && live.iter().find(|x| x.cfg.id == source)?.kind_of(from) == Some(LibraryKind::Own);
+        own.then(|| from.to_string())
+    }
+
+    /// Replace in a main library from someone's own music (RY01) as the record stands now: the own copy `from` names, listed alone
+    /// by its folder and place (`copy_listed`, as T5's Want reads it: never the whole Albums view), and the main library's copy it
+    /// would take the place of, in `to`, else the first main library it beats. Offered only where that own copy is the one
+    /// `copies::replacing_copy` takes, of the record's copies as copying judges them (S.1), own music switched off left out; else
+    /// `refused` says why.
+    async fn own_offer(&self, source: &str, album: &str, from: &str, to: Option<&str>) -> Result<OwnOffer, ToggleError> {
+        let served = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open".into()))?;
+        let record = crate::serve::ids::record_number(album).ok_or_else(|| ToggleError::Refused("that album is no longer listed".into()))?;
+        let (own, target, off) = {
+            let live = self.library.live();
+            let on = live.iter().find(|x| x.cfg.id == source).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
+            let folders = self.library.catalogue().folders();
+            let unseen = || ToggleError::Refused("that library's folder is not in use yet".into());
+            let own = folder_in(on, &folders, from).ok_or_else(unseen)?;
+            let target = match to {
+                Some(to) if on.kind_of(to) == Some(LibraryKind::Main) => Some(folder_in(on, &folders, to).ok_or_else(unseen)?),
+                Some(_) => return Err(ToggleError::Refused("Replace takes the place of a copy in a main library".into())),
+                None => None,
+            };
+            (own, target, own_off(on, &folders))
+        };
+        let (id, s) = (album.to_string(), served.clone());
+        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<OwnOffer, String>> {
+            let copies = judged(&judged_copies(&s, &id, record)?);
+            let Some(mine) = copies.iter().find(|c| c.folder == own) else { return Ok(Err("It has no copy in that library".into())) };
+            let mains: Vec<&Copy> = copies.iter().filter(|c| c.kind == LibraryKind::Main && target.is_none_or(|t| t == c.folder)).collect();
+            let offered = mains.iter().copied().find(|m| replacing_copy(&copies, m, &off).is_some_and(|o| (o.folder, &o.dir) == (mine.folder, &mine.dir)));
+            let Some(main) = offered.or_else(|| mains.first().copied()) else { return Ok(Err("It has no copy in a main library to replace".into())) };
+            let refused = match offered {
+                Some(_) => None,
+                None if off.contains(&mine.folder) => Some("That music is switched off".to_string()),
+                None if mine.short && !main.short => Some("That copy lacks tracks".to_string()),
+                None => Some("That copy is not the best one better than the main library's".to_string()),
+            };
+            let card = s.library.albums_by_id(std::slice::from_ref(&id))?.pop().ok_or_else(|| anyhow::anyhow!("its record is not listed"))?;
+            let root = s.library.roots().into_iter().find(|(f, _)| *f == own).map(|(_, r)| r).ok_or_else(|| anyhow::anyhow!("its copy's library is not listed"))?;
+            let card = crate::source::cratarr::card(card);
+            Ok(Ok(OwnOffer { title: card.title.clone(), copy: copy_listed(card, &root, (mine.folder, mine.dir.clone())), main: (main.folder, main.dir.clone()), refused }))
+        })
+        .await;
+        match read {
+            Ok(Ok(Ok(offer))) => Ok(offer),
+            Ok(Ok(Err(why))) => Err(ToggleError::Refused(why)),
+            Ok(Err(e)) => Err(ToggleError::Refused(format!("its copies could not be read: {e:#}"))),
+            Err(e) => Err(ToggleError::Refused(format!("its copies could not be read: {e}"))),
+        }
+    }
+
+    /// What Replace would do (decision 0013), for the page to show before asking: of an Incoming copy, or (RY01) of someone's own
+    /// copy, whose sheet offers no cover to choose and carries nothing over (OQ-A), and is refused, saying why, where that copy is not
+    /// the one offered. Changes nothing.
+    pub async fn replace_preview(&self, source: &str, album: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>) -> Result<super::ReplacePreview, ToggleError> {
+        let Some(own) = self.own_source(source, from) else { return self.incoming.replace_preview(source, album, from, to, year).await };
+        let offer = self.own_offer(source, album, &own, to).await?;
+        match offer.refused {
+            Some(why) => Ok(super::ReplacePreview::refused_from_copy(offer.title, offer.main.1, own, why)),
+            None => self.incoming.replace_from_copy_preview(source, offer.copy, offer.main, year).await,
+        }
+    }
+
+    /// Replace (decision 0013) of an Incoming copy, or (RY01) from someone's own copy, the administrators' as its route is. From own
+    /// music no cover is chosen and nothing is carried over (OQ-A: `cover: keep` and `carry` are refused), and the tap carries what
+    /// its sheet showed (OQ-G): refused where the copy stopped being the one offered, or the plan changed, since.
+    pub async fn replace_album(&self, source: &str, album: &str, ask: ReplaceAsk<'_>) -> Result<KeepResult, ToggleError> {
+        let Some(own) = self.own_source(source, ask.from) else {
+            let keep = ask.cover != Some("new");
+            return self.incoming.replace(source, album, ask.from, ask.to, ask.year, keep, ask.carry).await;
+        };
+        if ask.cover == Some("keep") || ask.carry {
+            return Err(ToggleError::Refused("From someone's own music the copy goes in as it is: no cover is kept and nothing is carried over".into()));
+        }
+        let sheet = ask.sheet.ok_or_else(|| ToggleError::Refused("Say what Replace's sheet showed: its folder, tracks, added and files".into()))?;
+        let offer = self.own_offer(source, album, &own, ask.to).await?;
+        if let Some(why) = offer.refused {
+            return Err(ToggleError::Refused(format!("Changed since you looked. {why}.")));
+        }
+        self.incoming.replace_from_copy(source, offer.copy, offer.main, ask.year, &sheet).await
     }
 
     /// Delete an album of someone's own music from the Users panel: an administrator's, only there (the owner, 2026-11-04:
@@ -967,11 +1125,40 @@ mod tests {
 
     /// C37a: an Incoming copy of a record kept elsewhere says how it stands against the copy that plays the record for most, that
     /// copy named by its library; the kept copy says nothing.
+    /// RY01, the Library's list: of a record in Music and in Bob's and Ann's own music, Bob's FLAC, the best copy better than
+    /// Music's MP3, says Replace in Music may take its place, naming Music's copy and why; Ann's MP3, as good as Music's, says
+    /// nothing, and neither does Music's own copy. Bob's switched off: no copy says it.
+    #[test]
+    fn the_best_own_copy_says_which_main_copy_it_would_replace() {
+        let at = |f: i64| (f, "A/Album".to_string());
+        let copy = |folder: i64, kind: LibraryKind, format: &str, kbps: i64, bits: Option<i64>| Copy {
+            folder,
+            dir: "A/Album".into(),
+            kind,
+            order: folder as usize,
+            format: Some(format.into()),
+            min_kbps: Some(kbps),
+            bits,
+            rate: bits.map(|_| 44_100),
+            short: false,
+            added: None,
+        };
+        let copies = [copy(0, LibraryKind::Main, "MP3", 320, None), copy(2, LibraryKind::Own, "MP3", 320, None), copy(3, LibraryKind::Own, "FLAC", 900, Some(16))];
+        let order = PlayOrder::of(&copies, None, &[]).offering(&copies, &[]);
+        assert_eq!(order.replace_into.iter().map(|s| (s.at.clone(), s.kept.clone())).collect::<Vec<_>>(), [(at(3), at(0))]);
+        let folded = fold(vec![listed("al-1", 0, "music", "MP3"), listed("al-1", 2, "ann", "MP3"), listed("al-1", 3, "bob", "FLAC")], &HashMap::from([("al-1".to_string(), order)]));
+        let said: Vec<Vec<(String, String)>> = folded[0].copies.iter().map(|c| c.replace_into.iter().map(|a| (a.library.clone(), a.why.clone())).collect()).collect();
+        let bobs = said[folded[0].copies.iter().position(|c| c.library == "bob").unwrap()].clone();
+        assert_eq!(bobs, [("music".to_string(), "lossless, yours is 320 kbps".to_string())], "{said:?}");
+        assert_eq!(said.iter().filter(|s| !s.is_empty()).count(), 1, "one copy says it, once: {said:?}");
+        assert!(PlayOrder::of(&copies, None, &[]).offering(&copies, &[3]).replace_into.is_empty(), "Bob's music switched off");
+    }
+
     #[test]
     fn an_incoming_copy_says_how_it_stands_against_the_kept_one() {
         let at = |f: i64| (f, "A/Album".to_string());
         let stand = Stand { at: at(2), better: true, replaces: true, kept: at(0), why: "lossless, yours is 320 kbps".into() };
-        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![at(0), at(2)], plays: Some(at(0)), against: vec![stand] })]);
+        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![at(0), at(2)], plays: Some(at(0)), against: vec![stand], replace_into: Vec::new() })]);
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), listed("al-1", 2, "incoming", "FLAC")], &order);
         let against: Vec<Option<source::Against>> = folded[0].copies.iter().map(|c| c.against.clone()).collect();
         let said = source::Against { better: true, replaces: true, library: "music".into(), dir: "A/Album".into(), why: "lossless, yours is 320 kbps".into() };

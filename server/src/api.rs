@@ -4077,7 +4077,7 @@ async fn replace_preview(
     Path((source, album)): Path<(String, String)>,
     Query(q): Query<ReplaceWhat>,
 ) -> Result<Json<crate::app::ReplacePreview>, ApiError> {
-    Ok(Json(app.incoming.replace_preview(&source, &album, q.from.as_deref(), q.to.as_deref(), q.year.as_deref()).await?))
+    Ok(Json(app.replace_preview(&source, &album, q.from.as_deref(), q.to.as_deref(), q.year.as_deref()).await?))
 }
 
 /// Replace's ask (0.9.5): the copies as `ReplaceWhat` names them, the year where the tags lack it, and the cover: `keep`
@@ -4095,6 +4095,15 @@ struct ReplaceBody {
     /// Replace and carry over (0.9.7): the album's MusicBrainz ids and numbers written into the new copy first.
     #[serde(default)]
     carry: bool,
+    /// From someone's own music (RY01, OQ-G): what its sheet showed, its folder and counts, met again or refused.
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    tracks: Option<usize>,
+    #[serde(default)]
+    added: Option<usize>,
+    #[serde(default)]
+    files: Option<usize>,
 }
 
 async fn replace_incoming(
@@ -4103,12 +4112,15 @@ async fn replace_incoming(
     body: Option<Json<ReplaceBody>>,
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    let keep = match b.cover.as_deref() {
-        None | Some("keep") => true,
-        Some("new") => false,
-        Some(_) => return Err(ToggleError::Refused("cover is keep or new".into()).into()),
+    if !matches!(b.cover.as_deref(), None | Some("keep" | "new")) {
+        return Err(ToggleError::Refused("cover is keep or new".into()).into());
+    }
+    let sheet = match (b.folder, b.tracks, b.added, b.files) {
+        (Some(folder), Some(tracks), Some(added), Some(files)) => Some(crate::app::ReplaceSheet { folder, tracks, added, files }),
+        _ => None,
     };
-    Ok(Json(app.incoming.replace(&source, &album, b.from.as_deref(), b.to.as_deref(), b.year.as_deref(), keep, b.carry).await?))
+    let ask = crate::app::ReplaceAsk { from: b.from.as_deref(), to: b.to.as_deref(), year: b.year.as_deref(), cover: b.cover.as_deref(), carry: b.carry, sheet };
+    Ok(Json(app.replace_album(&source, &album, ask).await?))
 }
 
 /// Albums waiting for their hi-res files to be converted before Keep or Replace, and those just finished.

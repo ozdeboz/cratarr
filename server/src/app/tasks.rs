@@ -142,13 +142,14 @@ impl Handle {
         self.tasks.change(self.id, |t| t.result = value, false);
     }
 
-    /// Where it is now. A new step is told at once; the same step's count at most four times a second.
+    /// Where it is now. A new step is told at once, and so is a step done to its last (RY01.13: a page sees "3 of 3" before the
+    /// task ends, which takes its step away); the same step's count otherwise at most four times a second.
     pub fn step(&self, name: &str, done: u64, total: Option<u64>) {
-        let mut new = false;
+        let mut new = total == Some(done);
         self.tasks.change(
             self.id,
             |t| {
-                new = t.step.as_ref().is_none_or(|s| s.name != name);
+                new |= t.step.as_ref().is_none_or(|s| s.name != name);
                 t.step = Some(Step { name: name.into(), done, total });
             },
             false,

@@ -107,8 +107,51 @@ pub fn against<'a>(copies: &'a [Copy], incoming: &Copy) -> Option<(bool, &'a Cop
     let kept: Vec<Copy> = copies.iter().filter(|c| c.kind != Kind::Incoming).cloned().collect();
     let row = copy_for(&kept, None, &[])?;
     let row = copies.iter().find(|c| *c == row)?;
-    let better = incoming.short.cmp(&row.short).then(rank(row).cmp(&rank(incoming))) == std::cmp::Ordering::Less;
-    Some((better, row))
+    Some((above(incoming, row), row))
+}
+
+/// Whether copy `a` ranks above copy `b` in the one order copies are chosen in: a whole copy before one short of tracks, then
+/// quality. As good is not above.
+fn above(a: &Copy, b: &Copy) -> bool {
+    a.short.cmp(&b.short).then(rank(b).cmp(&rank(a))) == std::cmp::Ordering::Less
+}
+
+/// A record's copies as copying judges them (S.1, `identity::lacks`): `short` where it says Short, whatever `copies.short` said; a
+/// copy it cannot tell of (Unknown) counts as whole (OQ-Q). What RY01's offer reads, never what plays.
+pub fn judged(copies: &[(Copy, crate::catalogue::identity::Lacks)]) -> Vec<Copy> {
+    copies.iter().map(|(c, l)| Copy { short: *l == crate::catalogue::identity::Lacks::Short, ..c.clone() }).collect()
+}
+
+/// The own copy Replace in a main library takes the place of that library's copy `main` from (RY01; OQ2, the owner: "Copy in,
+/// admins"), of a record's `copies` as copying judges them (`judged`): the best of the copies in someone's own music, not switched
+/// off or out of use (`off`, catalogue folders), where it ranks above `main` (a whole copy before one short of tracks, then
+/// quality; a tie is no better). Never a lossy copy over one lossless by its format, whatever is not read of it (OQ-C); never an
+/// Incoming copy (that is Replace from Incoming) nor another main library's (that is Move). None where `main` is no main
+/// library's. Pure.
+pub fn replacing_copy<'a>(copies: &'a [Copy], main: &Copy, off: &[i64]) -> Option<&'a Copy> {
+    if main.kind != Kind::Main {
+        return None;
+    }
+    let own = best(copies.iter().filter(|c| c.kind == Kind::Own && !off.contains(&c.folder)))?;
+    (above(own, main) && !(lossless(main) && !lossless(own))).then_some(own)
+}
+
+/// Every Replace from someone's own music a record's `copies` offer (RY01, OQ-N): one per main library whose copy the own copy
+/// beats (`replacing_copy`), that library's first copy as listed (`copies_of` lists them by place); none for one it does not
+/// beat. Each as (the own copy, the main library's). Pure.
+pub fn replace_offers<'a>(copies: &'a [Copy], off: &[i64]) -> Vec<(&'a Copy, &'a Copy)> {
+    let mut seen: Vec<i64> = Vec::new();
+    let mut out = Vec::new();
+    for main in copies.iter().filter(|c| c.kind == Kind::Main) {
+        if seen.contains(&main.folder) {
+            continue;
+        }
+        seen.push(main.folder);
+        if let Some(own) = replacing_copy(copies, main, off) {
+            out.push((own, main));
+        }
+    }
+    out
 }
 
 /// Whether a better copy (`against`) is one Replace takes: Replace puts it in a main library's copy's place, so the copy it is
@@ -196,6 +239,49 @@ mod tests {
         assert!(against(&[waiting.clone()], &waiting).is_none(), "kept nowhere else");
         assert!(against(&copies, &copies[0]).is_none(), "a kept copy stands against nothing");
         assert!(replaces(true, Kind::Main) && !replaces(true, Kind::Own) && !replaces(false, Kind::Main), "Replace takes a main library's place");
+    }
+
+    /// RY01.2: the own copy offered against Music's is the best one above it, as copying judges copies (S.1): never a short one
+    /// beside Music's whole one, a tie, one switched off or parked, an Incoming copy or another main library's, nor a lossy one over
+    /// Music's lossless (OQ-C); of two better, the best. One line per main library it beats (OQ-N). S.2 cases 3 and 4, through
+    /// `lacks`: both short alike by their clean tags, Bob's is offered by its quality; Bob's short beside Music's whole, never.
+    #[test]
+    fn the_own_copy_offered_is_the_best_whole_one_above_musics() {
+        use crate::catalogue::identity::{FileNumbers, Judged, lacks};
+        let music = mp3(0, Kind::Main, 320);
+        let bob = flac(3, Kind::Own);
+        assert_eq!(folder(replacing_copy(&[music.clone(), bob.clone()], &music, &[])), Some(3));
+        assert_eq!(replacing_copy(&[music.clone(), Copy { short: true, ..bob.clone() }], &music, &[]), None, "short: never");
+        assert_eq!(replacing_copy(&[music.clone(), mp3(2, Kind::Own, 320)], &music, &[]), None, "a tie is no better");
+        assert_eq!(folder(replacing_copy(&[music.clone(), mp3(2, Kind::Own, 320), bob.clone()], &music, &[])), Some(3), "Bob's, beside Ann's tie");
+        let hires = copy(2, Kind::Own, "FLAC", 3000, Some(24), Some(96_000));
+        assert_eq!(folder(replacing_copy(&[music.clone(), bob.clone(), hires], &music, &[])), Some(2), "the best of two better");
+        assert_eq!(replacing_copy(&[music.clone(), bob.clone()], &music, &[3]), None, "switched off or parked");
+        assert_eq!(replacing_copy(&[music.clone(), flac(1, Kind::Incoming)], &music, &[]), None, "Incoming is today's Replace");
+        assert_eq!(replacing_copy(&[music.clone(), flac(4, Kind::Main)], &music, &[]), None, "another main library's is Move's");
+        let short_music = Copy { short: true, ..mp3(0, Kind::Main, 320) };
+        assert_eq!(folder(replacing_copy(&[short_music.clone(), mp3(3, Kind::Own, 320)], &short_music, &[])), Some(3), "whole before short");
+        assert_eq!(replacing_copy(std::slice::from_ref(&music), &music, &[]), None, "another record's FLAC is no copy of this one (OQ1)");
+        let unread = copy(0, Kind::Main, "FLAC", 900, None, None);
+        assert_eq!(replacing_copy(&[unread.clone(), mp3(3, Kind::Own, 320)], &unread, &[]), None, "OQ-C: lossy never over lossless");
+        let waiting = flac(1, Kind::Incoming);
+        assert_eq!(replacing_copy(&[waiting.clone(), bob.clone()], &waiting, &[]), None, "never against what is not a main library's");
+        // OQ-N: one line per main library the own copy beats, none for one it does not; never two for one library.
+        let second = Copy { order: 4, ..flac(4, Kind::Main) };
+        let record = [music.clone(), Copy { dir: "A/C".into(), ..mp3(0, Kind::Main, 128) }, second, bob.clone()];
+        let offers = replace_offers(&record, &[]);
+        assert_eq!(offers.iter().map(|(o, m)| (o.folder, m.folder, m.dir.as_str())).collect::<Vec<_>>(), [(3, 0, "A/B")]);
+        // Shortness as S.1 judges it, not `copies.short` alone.
+        let tagged = |n: u32, total: u32| (1..=n).map(|t| FileNumbers { disc: Some(1), number: Some(t), total: Some(total) }).collect::<Vec<_>>();
+        let said = |fewer: bool, files: Vec<FileNumbers>| lacks(&Judged { fewer_than_its_copies: fewer, files, ..Judged::default() });
+        let lone = judged(&[(music.clone(), said(false, tagged(10, 10))), (bob.clone(), said(false, tagged(8, 10)))]);
+        assert_eq!(replacing_copy(&lone, &lone[0], &[]), None, "Bob's short by his clean tags beside Music's whole, though copies.short says whole");
+        let both = judged(&[(music.clone(), said(false, tagged(8, 10))), (bob.clone(), said(false, tagged(8, 10)))]);
+        assert_eq!(folder(replacing_copy(&both, &both[0], &[])), Some(3), "S.2 case 3: both short alike, Bob's offered by quality");
+        let fewer = judged(&[(music.clone(), said(false, tagged(10, 10))), (bob.clone(), said(true, tagged(8, 10)))]);
+        assert_eq!(replacing_copy(&fewer, &fewer[0], &[]), None, "S.2 case 4: Bob's 8 of Music's 10, never");
+        let untidy = judged(&[(music.clone(), said(false, tagged(10, 10))), (bob.clone(), said(false, vec![FileNumbers { total: None, ..tagged(1, 8)[0] }]))]);
+        assert_eq!(folder(replacing_copy(&untidy, &untidy[0], &[])), Some(3), "tags that cannot say count as whole (OQ-Q)");
     }
 
     fn naming(from: i64) -> Viewer {

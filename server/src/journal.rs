@@ -82,6 +82,25 @@ pub enum Event {
         /// Every file, audio and others, from the original to the copy.
         copies: Vec<TrackMove>,
     },
+    /// Replace in a main library from someone's own music (RY01; OQ2, the owner: "Copy in, admins"): the own copy copied into the
+    /// place of the main library's, as Copy to copies (shared blocks, byte for byte, OQ-B), the own copy staying as it was; the
+    /// main library's old files into its own trash. One album, its copy there made anew on the same tracks. An album action like
+    /// Keep (the owner, 2026-11-17: "Like Keep"): the copies are all it writes, nothing into or beside either copy, Lidarr not
+    /// told. Its Undo takes the copies, file by file, into that library's trash and its old files back.
+    AlbumReplacedFromCopy {
+        source: String,
+        album_id: String,
+        title: String,
+        /// The own copy's folder and the main library's new one: (catalogue folder, relative path).
+        from_dir: (i64, String),
+        to_dir: (i64, String),
+        /// Every file of the own copy, audio and others, copied into the main library; `track` the one it is on, its old file's.
+        copies: Vec<TrackMove>,
+        /// The main library's old files, into its trash; `track` the one each let go of.
+        replaced: Vec<TrackMove>,
+        /// Where the old files lie in that trash.
+        token: String,
+    },
 }
 
 impl Event {
@@ -91,7 +110,7 @@ impl Event {
             Event::AlbumRejected { title, release_group, .. }
             | Event::AlbumAdopted { title, release_group, .. }
             | Event::AlbumReplaced { title, release_group, .. } => (title, release_group.as_deref()),
-            Event::AlbumCopied { title, .. } => (title, None),
+            Event::AlbumCopied { title, .. } | Event::AlbumReplacedFromCopy { title, .. } => (title, None),
         }
     }
 }
@@ -458,7 +477,7 @@ impl Journal {
         let db = self.db();
         let event: Option<String> = db
             .query_row(
-                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL AND json_extract(event, '$.kind') <> 'album_copied'
+                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL AND json_extract(event, '$.kind') NOT IN ('album_copied', 'album_replaced_from_copy')
                  AND json_extract(event, '$.source') = ?1 AND json_extract(event, '$.album_id') = ?2 ORDER BY id DESC LIMIT 1",
                 params![source, album_id],
                 |r| r.get(0),

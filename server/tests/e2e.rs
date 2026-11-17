@@ -4427,3 +4427,570 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     s.stop();
     std::fs::remove_dir_all(&shelves.root).ok();
 }
+
+// ---- RY01: Replace in Music from someone's own music (SCENARIOS-RUN-12.md, RY01.1-RY01.14) ----
+
+/// RY01's places: Music, Ann's and Bob's own music, and the data folder.
+struct Places {
+    music: PathBuf,
+    ann: PathBuf,
+    bob: PathBuf,
+    data: PathBuf,
+}
+
+/// RY01's shape from the layout, its audio as `make_layout` makes it: Music's copy MP3 (the layout's Incoming one moved there),
+/// Bob's FLAC (Music's moved into his own music), Ann's MP3 as the layout has it. One record, three copies. A cover beside Music's
+/// copy and Bob's, each its own, as staging's copies have one. `before` changes the files before the server first reads them.
+/// The accounts root and carl (administrators), ann and bob (users), each with "<name> pw".
+async fn ry01_shape(name: &str, before: impl FnOnce(&Places)) -> (Server, PathBuf, Places, String) {
+    let root = temp(name);
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let p = Places { music: library.join("music"), ann: library.join("own/ann"), bob: library.join("own/bob"), data: data.clone() };
+    std::fs::create_dir_all(p.bob.join("Salt Meridian")).unwrap();
+    std::fs::rename(p.music.join(SHORES), p.bob.join(SHORES)).unwrap();
+    std::fs::rename(library.join("incoming").join(SHORES), p.music.join(SHORES)).unwrap();
+    std::fs::write(p.music.join(SHORES).join("cover.jpg"), b"Music's cover").unwrap();
+    std::fs::write(p.bob.join(SHORES).join("cover.jpg"), b"Bob's cover").unwrap();
+    before(&p);
+    settings(&data, &[(&p.music, "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    // Read as nobody while there are no accounts: nobody is the administrator until one is made.
+    let album = s.read_in("Both Shores", &p.bob).await;
+    s.read_in("Both Shores", &p.music).await;
+    s.read_in("Both Shores", &p.ann).await;
+    for (name, admin) in [("root", true), ("carl", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+    }
+    (s, root, p, album["id"].as_str().unwrap().to_string())
+}
+
+async fn bobs_flac_beside_musics_mp3(name: &str) -> (Server, PathBuf, Places, String) {
+    ry01_shape(name, |_| {}).await
+}
+
+/// A library's path as a query names it.
+fn enc(library: &Path) -> String {
+    id_of(library).replace('/', "%2F")
+}
+
+/// Replace's address for a record, and its sheet's for Bob's copy into Music.
+fn ry01_paths(id: &str, p: &Places) -> (String, String) {
+    let path = format!("/api/incoming/replace/cratarr/{id}");
+    let preview = format!("{path}?from={}&to={}", enc(&p.bob), enc(&p.music));
+    (path, preview)
+}
+
+/// The tap as the page sends it: the copies, and what its sheet showed (OQ-G).
+fn tap_of(preview: &Value, p: &Places) -> Value {
+    json!({ "from": id_of(&p.bob), "to": id_of(&p.music), "folder": preview["folder"], "tracks": preview["tracks"], "added": preview["added"], "files": preview["files"] })
+}
+
+/// Every file's time under `dir`, hidden ones too, by its place.
+fn times_under(dir: &Path) -> std::collections::BTreeMap<String, std::time::SystemTime> {
+    fn walk(root: &Path, at: &Path, out: &mut std::collections::BTreeMap<String, std::time::SystemTime>) {
+        for e in std::fs::read_dir(at).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else {
+                out.insert(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), std::fs::metadata(&p).unwrap().modified().unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// A folder's files as (bytes, time), whatever they are called: what a copy keeps of its original.
+fn kept_as(dir: &Path) -> Vec<(Vec<u8>, std::time::SystemTime)> {
+    let mut all: Vec<(Vec<u8>, std::time::SystemTime)> = as_it_lies(dir).into_iter().map(|(name, bytes)| (bytes, std::fs::metadata(dir.join(name)).unwrap().modified().unwrap())).collect();
+    all.sort();
+    all
+}
+
+/// An account's view of a record's copy in `library`, if the Library lists one.
+async fn copy_in(who: &Caller<'_>, id: &str, library: &Path) -> Option<Value> {
+    let at = id_of(library);
+    let record = who.albums().await.into_iter().find(|a| a["id"] == id)?;
+    record["copies"].as_array()?.iter().find(|c| c["library"].as_str() == Some(at.as_str())).cloned()
+}
+
+/// A record's songs as an account reads them, their ids its tracks'.
+async fn songs_for(who: &Caller<'_>, id: &str) -> Vec<String> {
+    let album = who.get(&format!("/api/albums/cratarr/{id}")).await;
+    album["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect()
+}
+
+/// A song's file as it is served to an account.
+async fn served_to(who: &Caller<'_>, song: &str) -> Vec<u8> {
+    let (status, bytes) = who.bytes(&format!("/api/file/cratarr/{song}")).await;
+    assert_eq!(status, 200, "{song}");
+    bytes
+}
+
+/// The album actions in the journal, intended or applied: (kind, applied).
+fn album_events(data: &Path) -> Vec<(String, bool)> {
+    let db = rusqlite::Connection::open(data.join("journal.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT json_extract(event, '$.kind'), applied FROM events ORDER BY id").unwrap();
+    st.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1))).unwrap().map(Result::unwrap).collect()
+}
+
+/// What a handler kept on the newest album action, if it did.
+fn handled(data: &Path, handler: &str) -> Option<Value> {
+    use rusqlite::OptionalExtension;
+    let db = rusqlite::Connection::open(data.join("journal.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let text: Option<String> = db
+        .query_row("SELECT h.result FROM handled h WHERE h.handler = ?1 AND h.event = (SELECT max(id) FROM events)", [handler], |r| r.get(0))
+        .optional()
+        .unwrap();
+    text.map(|t| serde_json::from_str(&t).unwrap())
+}
+
+/// A library's rows in the catalogue: (path, size, time, shared, gone, trashed), by path.
+fn own_rows(data: &Path, library: &Path) -> Vec<(String, i64, i64, i64, Option<i64>, Option<String>)> {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db
+        .prepare("SELECT f.rel, f.size, f.mtime, f.shared, f.gone_at, f.trashed FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 ORDER BY f.rel")
+        .unwrap();
+    let rows = st.query_map([library.to_string_lossy().to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// The rows a library keeps in its trash: (track, trash token), each.
+fn trashed_rows(data: &Path, library: &Path) -> Vec<(Option<i64>, Option<String>)> {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT f.track, f.trashed FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE '.cratarr-trash/%'").unwrap();
+    let rows = st.query_map([library.to_string_lossy().to_string()], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// The `shared` flags of a copy's rows, as the catalogue keeps them.
+fn shared_at(data: &Path, library: &Path, dir: &str) -> Vec<i64> {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT f.shared FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE ?2 AND f.trashed IS NULL ORDER BY f.rel").unwrap();
+    let rows = st.query_map([library.to_string_lossy().to_string(), format!("{dir}/%")], |r| r.get(0)).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// An album action on the list of runs as an administrator reads it, by the journal's id (`m…`).
+async fn album_run_as(who: &Caller<'_>, what: &str) -> Value {
+    let runs = who.get("/api/file-changes/runs").await;
+    let found = runs.as_array().unwrap().iter().find(|r| r["what"] == what && r["id"].as_str().unwrap().starts_with('m'));
+    found.unwrap_or_else(|| panic!("no {what} on the list: {runs}")).clone()
+}
+
+/// A run's Undo as an administrator gives it, a moment after the action (`Server::undo_a_moment_later`), waited for.
+async fn undo_as(who: &Caller<'_>, id: &str) -> (u16, Value) {
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (status, first) = who.send(reqwest::Method::POST, &format!("/api/file-changes/runs/{id}/undo"), json!({})).await;
+    if status != 200 {
+        return (status, first);
+    }
+    let start = Instant::now();
+    loop {
+        let runs = who.get("/api/file-changes/runs").await;
+        let mine: Vec<&Value> = runs.as_array().unwrap().iter().filter(|r| r["id"] == id).collect();
+        if !mine.iter().any(|r| r["state"] != "done")
+            && let Some(run) = mine.first()
+        {
+            return (status, (*run).clone());
+        }
+        assert!(start.elapsed() < Duration::from_secs(120), "waited for {id}'s Undo: {runs}");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// The requests the user data holds, each (id, status): what RY01 must leave as it was.
+fn requests_kept(data: &Path) -> Vec<(i64, String)> {
+    let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT id, status FROM requests ORDER BY id").unwrap();
+    st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+}
+
+/// RY01.1 (and RY01.6 case 1): root replaces Music's MP3 copy of Both Shores from Bob's FLAC. The sheet names Music's old folder and
+/// its new one, 3 tracks taken over, none added, the 4 files it writes (Bob's 3 tracks and his cover) and whose copy it is; the tap
+/// writes there exactly Bob's files, bytes and times, a cover included; Music's old files, its cover too, lie in Music's trash, their
+/// rows trashed holding no track; the new rows are on the record's tracks, shared as the copy said (ext4 here: not); one journal
+/// entry, applied, holding each copy's size and time; a run on Health's list naming the record, Music and Bob's music; the record
+/// listed once with its three copies, its songs streaming FLAC. Never: a byte, time or file of Bob's music changed, added or taken
+/// away (no cover, part, conversion or trash there); anything of Ann's changed; a file of Music outside the two folders written; a
+/// cover set aside in the data folder; Lidarr asked anything; a request changed.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn replace_in_music_from_bobs_music_copies_his_and_keeps_it_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-main").await;
+    let admin = s.sign_in("root", "root pw").await;
+    let (bobs, anns, musics) = (as_it_lies(&p.bob.join(SHORES)), as_it_lies(&p.ann.join(SHORES)), as_it_lies(&p.music.join(SHORES)));
+    let (bob_times, ann_times, bobs_kept) = (times_under(&p.bob), times_under(&p.ann), kept_as(&p.bob.join(SHORES)));
+    let elsewhere = |at: &Path| as_it_lies(at).into_iter().filter(|(rel, _)| !rel.starts_with("Salt Meridian/Both Shores")).collect::<Files>();
+    let (music_else, asked) = (elsewhere(&p.music), requests_kept(&p.data));
+    let songs = songs_for(&admin, &id).await;
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    assert_eq!((&preview["refused"], preview["tracks"].as_u64(), preview["added"].as_u64(), preview["files"].as_u64()), (&Value::Null, Some(3), Some(0), Some(4)), "{preview}");
+    assert_eq!((preview["old"].as_str(), preview["from"].as_str()), (Some(SHORES), Some(id_of(&p.bob).as_str())), "Music's old folder, and whose copy: {preview}");
+    assert!(preview["folder"].is_string() && preview["carry"].as_array().is_some_and(Vec::is_empty) && preview["covers"]["current"].is_null(), "no cover to choose, nothing carried: {preview}");
+    let done = admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    assert_eq!(done["folder"], preview["folder"], "written where the sheet said");
+    let folder = done["folder"].as_str().unwrap().to_string();
+    let new = p.music.join(&folder);
+    assert_eq!(as_it_lies(&new).len() as u64, preview["files"].as_u64().unwrap(), "as many files as the sheet said");
+    assert!(contents(&as_it_lies(&new)) == contents(&bobs), "Bob's files alone, a cover included, whatever Music's template calls them");
+    assert_eq!(kept_as(&new), bobs_kept, "with their times");
+    assert!(as_it_lies(&p.bob.join(SHORES)) == bobs && times_under(&p.bob) == bob_times, "Bob's copy untouched, nothing beside it");
+    assert!(!p.bob.join(".cratarr-trash").exists() && !p.bob.join(".cratarr-convert").exists(), "no trash, no conversion in his music");
+    assert!(as_it_lies(&p.ann.join(SHORES)) == anns && times_under(&p.ann) == ann_times, "Ann's as it was");
+    assert!(contents(&as_it_lies(&p.music.join(".cratarr-trash"))) == contents(&musics), "Music's old files, the cover too, in Music's trash");
+    assert!(elsewhere(&p.music) == music_else, "nothing of Music's outside the two folders written");
+    assert!(!p.data.join("cover-undo").exists(), "nothing set aside in the data folder");
+    assert_eq!(tracks_at(&p.data, &p.music, &folder), songs, "the new files on the record's tracks");
+    assert_eq!(tracks_at(&p.data, &p.bob, SHORES), songs, "Bob's still on the record's tracks");
+    assert!(shared_at(&p.data, &p.music, &folder).iter().all(|s| *s == 0), "shared as the copy said: on ext4, not");
+    let trashed = trashed_rows(&p.data, &p.music);
+    assert!(trashed.len() == 3 && trashed.iter().all(|(track, token)| track.is_none() && token.is_some()), "the old rows trashed, holding no track: {trashed:?}");
+    assert_eq!(album_events(&p.data), [("album_replaced_from_copy".to_string(), true)], "one journal entry, applied");
+    let copied = handled(&p.data, "copied").expect("the copies' sizes and times on the entry");
+    assert!(copied.as_array().is_some_and(|c| c.len() == 4 && c.iter().all(|x| !x.is_null())), "{copied}");
+    let run = album_run_as(&admin, "replace").await;
+    let title = run["title"].as_str().unwrap_or_default().to_string();
+    assert!(title.contains("Both Shores") && title.contains("music") && title.contains("bob's music"), "the run names the record, Music and Bob's music: {run}");
+    s.until("Lidarr's handler done, asking nothing", Duration::from_secs(60), || async { handled(&p.data, "acquisition").is_some() }).await;
+    assert_eq!(handled(&p.data, "acquisition"), Some(json!([])), "no Lidarr asked: an empty plan");
+    assert_eq!(requests_kept(&p.data), asked, "no request changed");
+    s.until("FLAC served on the old ids", Duration::from_secs(120), || async { !is_mp3(&served_to(&admin, &songs[0]).await) }).await;
+    let listed: Vec<Value> = admin.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect();
+    assert_eq!(listed.len(), 1, "one record");
+    assert_eq!(listed[0]["copies"].as_array().map(Vec::len), Some(3), "Music's, Bob's and Ann's: {}", listed[0]);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.3: Bob's copy short (a track's file deleted by hand, read so): the Library's list says nothing on it replaces Music's; the
+/// preview is refused; a tap asked anyway answers 409. Never a file written in Music, one of Music's in the trash, a journal entry
+/// left, or a task begun.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_short_own_copy_is_never_offered_and_refused_if_asked_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-short").await;
+    let admin = s.sign_in("root", "root pw").await;
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let offered = |c: &Value| c["replace_into"].as_array().is_some_and(|r| r.iter().any(|a| a["replaces"] == true));
+    s.until("Bob's copy offered while whole", Duration::from_secs(120), || async { copy_in(&admin, &id, &p.bob).await.is_some_and(|c| offered(&c)) }).await;
+    let last = audio_under(&p.bob.join(SHORES)).last().cloned().unwrap();
+    std::fs::remove_file(p.bob.join(SHORES).join(last)).unwrap();
+    s.until("Bob's copy read short", Duration::from_secs(120), || async { copy_in(&admin, &id, &p.bob).await.is_some_and(|c| c["tracks"] == 2) }).await;
+    assert!(!offered(&copy_in(&admin, &id, &p.bob).await.unwrap()), "no line offers it");
+    let before = (as_it_lies(&p.music), times_under(&p.music));
+    let preview = admin.get(&preview_path).await;
+    assert!(!preview["refused"].is_null(), "{preview}");
+    let tap = json!({ "from": id_of(&p.bob), "to": id_of(&p.music), "folder": SHORES, "tracks": 3, "added": 0, "files": 4 });
+    let (status, answer) = admin.send(reqwest::Method::POST, &path, tap).await;
+    assert_eq!(status, 409, "{answer}");
+    assert!(as_it_lies(&p.music) == before.0 && times_under(&p.music) == before.1 && in_the_trash(&p.music) == 0, "nothing written or trashed in Music");
+    assert!(album_events(&p.data).is_empty(), "no entry, intended or applied");
+    let tasks = admin.get("/api/tasks").await;
+    assert!(!tasks.to_string().contains("\"replace\""), "no task begun: {tasks}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.4: with the sheet open, Bob's copy changes before the tap: (1) Bob deletes it; (2) a FLAC of his is swapped by hand for an
+/// MP3, read so (no longer better); (3) it is renamed on disk, not read yet; (4) a fourth file is put in it by hand. Each tap carries
+/// what its sheet showed and is refused (409), Music as it was, Bob's trash and folder untouched by the refusal; a fresh preview
+/// says what is true now. Each on a fresh shape.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_replace_from_a_copy_that_changed_since_the_sheet_is_refused_end_to_end() {
+    for case in 1..=4 {
+        let (s, root, p, id) = bobs_flac_beside_musics_mp3(&format!("ry01-changed{case}")).await;
+        let (admin, bob) = (s.sign_in("root", "root pw").await, s.sign_in("bob", "bob pw").await);
+        let (path, preview_path) = ry01_paths(&id, &p);
+        let preview = admin.get(&preview_path).await;
+        assert!(preview["refused"].is_null(), "case {case}: {preview}");
+        let mine = p.bob.join(SHORES);
+        match case {
+            1 => {
+                bob.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/delete"), json!({ "from": id_of(&p.bob) })).await;
+            }
+            2 => {
+                let first = audio_under(&mine)[0].clone();
+                let mp3 = p.ann.join(SHORES).join(&audio_under(&p.ann.join(SHORES))[0]);
+                std::fs::remove_file(mine.join(&first)).unwrap();
+                std::fs::copy(&mp3, mine.join(first.replace(".flac", ".mp3"))).unwrap();
+                let better = |c: &Value| c["replace_into"].as_array().is_some_and(|r| !r.is_empty());
+                s.until("the swap read: no longer better", Duration::from_secs(120), || async { copy_in(&admin, &id, &p.bob).await.is_some_and(|c| !better(&c) && c["format"] != "FLAC") }).await;
+            }
+            3 => std::fs::rename(&mine, p.bob.join("Salt Meridian/Both Shores (moved)")).unwrap(),
+            _ => {
+                let other = p.ann.join("Salt Meridian").join(std::fs::read_dir(p.ann.join("Salt Meridian")).unwrap().flatten().map(|e| e.file_name()).find(|n| n.to_string_lossy().starts_with("Own Room")).unwrap());
+                std::fs::copy(other.join(&audio_under(&other)[0]), mine.join("04 Own Room.mp3")).unwrap();
+            }
+        }
+        let (music, bobs) = (as_it_lies(&p.music), times_under(&p.bob));
+        let (status, answer) = admin.send(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+        assert_eq!(status, 409, "case {case}: {answer}");
+        assert!(as_it_lies(&p.music) == music && in_the_trash(&p.music) == 0, "case {case}: Music as it was");
+        assert!(times_under(&p.bob) == bobs, "case {case}: Bob's trash and folder untouched by the refusal");
+        assert!(album_events(&p.data).iter().all(|(kind, _)| kind != "album_replaced_from_copy"), "case {case}: no entry");
+        let (status, fresh) = admin.send(reqwest::Method::GET, &preview_path, Value::Null).await;
+        assert!(status == 409 || !fresh["refused"].is_null() || fresh["files"] != preview["files"], "case {case}: a fresh preview says what is true now: {status} {fresh}");
+        s.stop();
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+/// RY01.8, cases 1 and 2: after RY01, a booklet dropped into Music's new folder; RY01's Undo from Health's list of changes puts
+/// Music's MP3 copy back as it was, the booklet staying beside it, the copies in Music's trash, never deleted; Bob's copy untouched;
+/// the record's songs stream MP3 again on their ids.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn undo_puts_musics_copy_back_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-undo").await;
+    let admin = s.sign_in("root", "root pw").await;
+    let (bobs, musics) = (as_it_lies(&p.bob.join(SHORES)), as_it_lies(&p.music.join(SHORES)));
+    let songs = songs_for(&admin, &id).await;
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    let done = admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    let new = p.music.join(done["folder"].as_str().unwrap());
+    std::fs::write(new.join("booklet.pdf"), b"pdf").unwrap();
+    let run = album_run_as(&admin, "replace").await;
+    let (status, undone) = undo_as(&admin, run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert_eq!(std::fs::read(new.join("booklet.pdf")).unwrap(), b"pdf", "what came after stays");
+    let mut back = as_it_lies(&p.music.join(SHORES));
+    back.remove("booklet.pdf");
+    assert!(back == musics, "Music's old copy back as it was");
+    assert!(as_it_lies(&p.bob.join(SHORES)) == bobs, "Bob's untouched by the Undo too");
+    assert_eq!(in_the_trash(&p.music), 3, "the copies now in Music's trash, never deleted");
+    s.until("MP3 served again", Duration::from_secs(120), || async { is_mp3(&served_to(&admin, &songs[0]).await) }).await;
+    assert_eq!(tracks_at(&p.data, &p.music, SHORES), songs);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.9: after RY01 Bob deletes his own copy (into his trash). RY01's Undo still puts Music's MP3 back and takes the copies into
+/// Music's trash, never reaching into Bob's trash; then Bob's own Undo brings his FLACs back on the record's tracks, byte for byte.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn undo_after_bob_deleted_his_copy_leaves_his_trash_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-bob-deleted").await;
+    let (admin, bob) = (s.sign_in("root", "root pw").await, s.sign_in("bob", "bob pw").await);
+    let (bobs, musics) = (as_it_lies(&p.bob.join(SHORES)), as_it_lies(&p.music.join(SHORES)));
+    let songs = songs_for(&admin, &id).await;
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    let gone = bob.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/delete"), json!({ "from": id_of(&p.bob) })).await;
+    assert!(!p.bob.join(SHORES).exists(), "his copy in his trash");
+    let his_trash = as_it_lies(&p.bob.join(".cratarr-trash"));
+    let run = album_run_as(&admin, "replace").await;
+    let (status, undone) = undo_as(&admin, run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert!(as_it_lies(&p.music.join(SHORES)) == musics, "Music's MP3 back");
+    assert_eq!(in_the_trash(&p.music), 3, "Music's FLAC copies in Music's trash");
+    assert!(as_it_lies(&p.bob.join(".cratarr-trash")) == his_trash && !p.bob.join(SHORES).exists(), "Bob's trash untouched, his copy not restored by it");
+    bob.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
+    assert!(as_it_lies(&p.bob.join(SHORES)) == bobs, "his FLACs back, byte for byte");
+    s.until("his copy on the record's tracks again", Duration::from_secs(120), || async { tracks_at(&p.data, &p.bob, SHORES) == songs }).await;
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.10: Bob's FLAC spells a title otherwise than Music's MP3 ("Return (Original Mix)"), so tags alone would not pair them. Before
+/// RY01 Ann played track 1 four times and starred it, and rated track 2; root starred the album; root's shared playlist "Evening" holds
+/// tracks 2 and 3 and Bob's own holds track 3. Replace paired the tracks by `files.track` (3 taken over, none added) and its sheet shows
+/// the title's difference. After RY01 and after its Undo: the same song ids; the annotations and plays as they were; each list the same
+/// ids, each streaming (FLAC after RY01, MP3 after the Undo); the album's star kept.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn plays_hearts_ratings_and_playlists_stay_on_their_tracks_through_a_replace_from_a_copy_end_to_end() {
+    let (s, root, p, id) = ry01_shape("ry01-plays", |p| {
+        let mine = p.bob.join(SHORES);
+        set_vorbis(&mine.join(&audio_under(&mine)[2]), "TITLE", "Return (Original Mix)");
+    })
+    .await;
+    let (admin, ann, bob) = (s.sign_in("root", "root pw").await, s.sign_in("ann", "ann pw").await, s.sign_in("bob", "bob pw").await);
+    let songs = songs_for(&admin, &id).await;
+    assert_eq!(songs.len(), 3, "the retitled track still the record's");
+    for _ in 0..4 {
+        ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{}/played", songs[0]), json!({})).await;
+    }
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{}/favorite?on=true", songs[0]), json!({})).await;
+    let rated = s.anyone().get(&format!("/rest/setRating?u=ann&p=ann%20pw&v=1.16.1&c=e2e&id={}&rating=4", songs[1])).await;
+    assert_eq!(rated["subsonic-response"]["status"], "ok", "{rated}");
+    admin.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/favorite?on=true"), json!({})).await;
+    let evening = admin.ok(reqwest::Method::POST, "/api/playlists", json!({ "name": "Evening" })).await["playlist"].as_str().unwrap().to_string();
+    admin.ok(reqwest::Method::POST, &format!("/api/playlists/{evening}/append"), json!({ "source": "cratarr", "ids": [songs[1], songs[2]] })).await;
+    admin.send(reqwest::Method::PUT, &format!("/api/playlists/{evening}/shared"), json!({ "shared": true })).await;
+    let his = bob.ok(reqwest::Method::POST, "/api/playlists", json!({ "name": "Bob's" })).await["playlist"].as_str().unwrap().to_string();
+    bob.ok(reqwest::Method::POST, &format!("/api/playlists/{his}/append"), json!({ "source": "cratarr", "ids": [songs[2]] })).await;
+    let ids = |rows: Value| -> Vec<(String, bool)> { rows["rows"].as_array().unwrap().iter().map(|r| (r["id"].as_str().unwrap_or_default().to_string(), r["missing"].as_bool().unwrap_or(false))).collect() };
+    let lists = || async { (ids(admin.get(&format!("/api/playlists/{evening}/rows")).await), ids(bob.get(&format!("/api/playlists/{his}/rows")).await)) };
+    let kept = || (held(&p.data), plays(&p.data));
+    let (lists_before, kept_before) = (lists().await, kept());
+    assert_eq!(lists_before.0.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), [songs[1].clone(), songs[2].clone()]);
+    assert!(starred(&admin, &id).await, "root starred the album");
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    assert_eq!((preview["tracks"].as_u64(), preview["added"].as_u64(), &preview["refused"]), (Some(3), Some(0), &Value::Null), "paired by track despite the title: {preview}");
+    assert!(preview["diff"].as_array().unwrap().iter().any(|d| d["field"] == "title" && d["new"] == "Return (Original Mix)"), "the sheet shows the title's difference: {preview}");
+    admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    assert_eq!(songs_for(&admin, &id).await, songs, "no new id for a song of the record");
+    s.until("FLAC served", Duration::from_secs(120), || async { !is_mp3(&served_to(&admin, &songs[1]).await) }).await;
+    assert_eq!((lists().await, kept()), (lists_before.clone(), kept_before.clone()), "after RY01: lists, plays, stars and ratings as they were");
+    for song in &songs {
+        served_to(&admin, song).await;
+    }
+    assert!(starred(&admin, &id).await, "the album's star stays");
+    let run = album_run_as(&admin, "replace").await;
+    let (status, _) = undo_as(&admin, run["id"].as_str().unwrap()).await;
+    assert_eq!(status, 200);
+    s.until("MP3 served again", Duration::from_secs(120), || async { is_mp3(&served_to(&admin, &songs[1]).await) }).await;
+    assert_eq!(songs_for(&admin, &id).await, songs);
+    assert_eq!((lists().await, kept()), (lists_before, kept_before), "after its Undo: as they were");
+    assert!(starred(&admin, &id).await);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Whether an account has starred an album.
+async fn starred(who: &Caller<'_>, id: &str) -> bool {
+    who.get("/api/favorites/cratarr/albums").await.to_string().contains(id)
+}
+
+/// RY01.12: own music's rows (present files, sizes, times, `shared`, gone and trashed marks) under Bob's and Ann's music are as they
+/// were after RY01 and after its Undo, and no file is added under own music. (AL01's room, run 13, reads these same rows.)
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_replace_from_a_copy_changes_no_row_of_own_music_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-room").await;
+    let admin = s.sign_in("root", "root pw").await;
+    let rows = || (own_rows(&p.data, &p.bob), own_rows(&p.data, &p.ann));
+    let files = || (times_under(&p.bob), times_under(&p.ann));
+    let (rows_before, files_before) = (rows(), files());
+    assert!(!rows_before.0.is_empty() && !rows_before.1.is_empty());
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    assert_eq!(rows(), rows_before, "after RY01");
+    assert_eq!(files(), files_before, "no file added under own music");
+    let run = album_run_as(&admin, "replace").await;
+    assert_eq!(undo_as(&admin, run["id"].as_str().unwrap()).await.0, 200);
+    assert_eq!(rows(), rows_before, "after its Undo");
+    assert_eq!(files(), files_before);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.13, cases 1 and 2 (4, a conversion job on Music's copy, is `a_replace_from_a_copy_being_converted_or_replaced_is_refused`:
+/// the layout holds no copy a job could work on): Bob, a user and the copy's owner, and Ann are refused its preview and its tap,
+/// nothing written; root and carl tap the same Replace at once: one goes, the other is refused, Music holds one copy, its trash the
+/// old files once, the journal one entry. No task for bob or ann.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn only_an_administrator_replaces_from_a_copy_and_one_at_a_time_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-who").await;
+    let (admin, carl, ann, bob) = (s.sign_in("root", "root pw").await, s.sign_in("carl", "carl pw").await, s.sign_in("ann", "ann pw").await, s.sign_in("bob", "bob pw").await);
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    let tap = tap_of(&preview, &p);
+    let music = as_it_lies(&p.music);
+    for (who, name) in [(&bob, "bob"), (&ann, "ann")] {
+        let (seen, _) = who.send(reqwest::Method::GET, &preview_path, Value::Null).await;
+        let (tapped, answer) = who.send(reqwest::Method::POST, &path, tap.clone()).await;
+        assert!([403, 409].contains(&seen) && [403, 409].contains(&tapped), "{name}: {seen} {tapped} {answer}");
+        assert!(!who.get("/api/tasks").await.to_string().contains("\"replace\""), "no task for {name}");
+    }
+    assert!(as_it_lies(&p.music) == music && album_events(&p.data).is_empty(), "nothing written");
+    let (a, b) = tokio::join!(admin.send(reqwest::Method::POST, &path, tap.clone()), carl.send(reqwest::Method::POST, &path, tap.clone()));
+    assert_eq!([a.0, b.0].iter().filter(|s| **s == 200).count(), 1, "one of the two: {a:?} {b:?}");
+    assert!([a.0, b.0].contains(&409), "the other refused: {a:?} {b:?}");
+    let folder = if a.0 == 200 { a.1["folder"].clone() } else { b.1["folder"].clone() };
+    assert!(contents(&as_it_lies(&p.music.join(folder.as_str().unwrap()))) == contents(&as_it_lies(&p.bob.join(SHORES))), "Music holds one copy");
+    assert_eq!(in_the_trash(&p.music), 3, "the old files once");
+    assert_eq!(album_events(&p.data), [("album_replaced_from_copy".to_string(), true)], "one journal entry");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// MusicBrainz's ids gone from an MP3's tags, as a person's tagger leaves an untagged album.
+fn strip_musicbrainz(path: &Path) {
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+    let mut file = lofty::read_from_path(path).unwrap();
+    if let Some(tag) = file.primary_tag_mut() {
+        for key in [ItemKey::MusicBrainzReleaseId, ItemKey::MusicBrainzReleaseGroupId, ItemKey::MusicBrainzTrackId, ItemKey::MusicBrainzRecordingId, ItemKey::MusicBrainzReleaseArtistId, ItemKey::MusicBrainzArtistId] {
+            tag.remove_key(key);
+        }
+    }
+    file.save_to_path(path, lofty::config::WriteOptions::default()).unwrap();
+}
+
+/// What a file's tags say of MusicBrainz, any of its ids.
+fn musicbrainz_of(path: &Path) -> Vec<String> {
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+    let file = lofty::read_from_path(path).unwrap();
+    let keys = [ItemKey::MusicBrainzReleaseId, ItemKey::MusicBrainzReleaseGroupId, ItemKey::MusicBrainzRecordingId];
+    file.tags().iter().flat_map(|t| keys.iter().filter_map(|k| t.get_string(*k).map(str::to_string)).collect::<Vec<_>>()).collect()
+}
+
+/// RY01.14: Music's MP3 stripped of every MusicBrainz id (as 522 of Music's copies are), Bob's FLAC carrying a release and a release
+/// group. Replace pairs by `files.track` (3 taken over, nothing unmatched); its sheet's `diff` lists the ids Music's copy gains and
+/// `lost` is empty. After it the record keeps its id and song ids, is listed once, and is merged into no other; after its Undo it is
+/// as before, untagged in Music. (The not-had record of the release group from a discography needs MusicBrainz, off here.)
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_replace_from_a_tagged_copy_over_an_untagged_one_keeps_the_record_end_to_end() {
+    let (s, root, p, id) = ry01_shape("ry01-untagged", |p| {
+        let musics = p.music.join(SHORES);
+        for f in audio_under(&musics) {
+            strip_musicbrainz(&musics.join(f));
+        }
+        let mine = p.bob.join(SHORES);
+        for f in audio_under(&mine) {
+            set_vorbis(&mine.join(f), "MUSICBRAINZ_RELEASEGROUPID", "00000000-0000-4000-8000-000000000214");
+        }
+    })
+    .await;
+    let admin = s.sign_in("root", "root pw").await;
+    let songs = songs_for(&admin, &id).await;
+    let musics = p.music.join(SHORES);
+    assert!(audio_under(&musics).iter().all(|f| musicbrainz_of(&musics.join(f)).is_empty()), "Music's copy untagged");
+    let merged = || -> Vec<Option<i64>> {
+        let db = rusqlite::Connection::open(p.data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        let n: i64 = id.trim_start_matches("al-").parse().unwrap();
+        db.prepare("SELECT merged_into FROM records WHERE id = ?1").unwrap().query_map([n], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    };
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    assert_eq!((preview["tracks"].as_u64(), preview["added"].as_u64(), &preview["refused"]), (Some(3), Some(0), &Value::Null), "{preview}");
+    let diff = preview["diff"].as_array().unwrap();
+    assert!(diff.iter().any(|d| d["field"].as_str().is_some_and(|f| f.starts_with("musicbrainz_")) && d["old"].is_null() && !d["new"].is_null()), "the ids Music's copy gains: {preview}");
+    assert_eq!(preview["lost"], json!([]), "nothing lost: {preview}");
+    admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    s.until("the record read again", Duration::from_secs(120), || async { !is_mp3(&served_to(&admin, &songs[0]).await) }).await;
+    assert_eq!(songs_for(&admin, &id).await, songs, "the record's id and its song ids");
+    assert_eq!(admin.albums().await.iter().filter(|a| a["title"] == "Both Shores").count(), 1, "listed once");
+    assert_eq!(merged(), [None], "merged into no other");
+    let run = album_run_as(&admin, "replace").await;
+    assert_eq!(undo_as(&admin, run["id"].as_str().unwrap()).await.0, 200);
+    s.until("MP3 again", Duration::from_secs(120), || async { is_mp3(&served_to(&admin, &songs[0]).await) }).await;
+    assert_eq!(songs_for(&admin, &id).await, songs);
+    assert!(audio_under(&musics).iter().all(|f| musicbrainz_of(&musics.join(f)).is_empty()), "untagged in Music again");
+    assert_eq!(merged(), [None]);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}

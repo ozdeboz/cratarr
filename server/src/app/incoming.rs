@@ -20,7 +20,9 @@ mod carry_on;
 mod queue;
 mod replace;
 pub use queue::JobView;
-pub use replace::ReplacePreview;
+pub use replace::{ReplacePreview, ReplaceSheet};
+#[cfg(test)]
+pub(crate) use replace::{rows_back_of_copy, rows_of_copy};
 
 /// The handler name in the journal for telling Lidarr (decision 0011 §6). Its result is what it stopped fetching.
 const ACQUISITION: &str = "acquisition";
@@ -324,6 +326,9 @@ pub(super) fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
 /// Album actions going on in this process, by their journal ids.
 type Running = Arc<std::sync::Mutex<std::collections::HashSet<EventId>>>;
 
+/// Replaces from someone's own copy going on in this process, by record and main library (RY01.13, `IncomingService::alone`).
+type Replacing = Arc<std::sync::Mutex<std::collections::HashSet<(String, i64)>>>;
+
 /// An album action going on: its intent in the journal is no crash, and `reconcile` leaves it alone while this lives. A
 /// clone goes with the blocking move: a request dropped half way ends the action's future, not its move.
 #[derive(Clone)]
@@ -362,6 +367,8 @@ pub struct IncomingService {
     journal: Arc<Journal>,
     /// See `Underway`.
     running: Running,
+    /// See `IncomingService::alone`.
+    replacing: Replacing,
     /// Whether Cratarr could write in a folder, and when that was tested (epoch seconds).
     writable: Mutex<std::collections::HashMap<PathBuf, (i64, bool)>>,
     /// Saved with the sources.
@@ -393,6 +400,7 @@ impl IncomingService {
             hidden: Mutex::new(std::collections::HashSet::new()),
             journal,
             running: Default::default(),
+            replacing: Default::default(),
             writable: Mutex::new(std::collections::HashMap::new()),
             trash_days: std::sync::atomic::AtomicU32::new(trash_days),
             queue: queue::Queue::open(data_dir.map(|d| std::path::PathBuf::from(d).join("convert-queue.json"))),
@@ -775,6 +783,12 @@ impl IncomingService {
                     let folders = self.lib.catalogue().folders();
                     copies.iter().any(|m| folders.get(m.to.0).is_some_and(|f| f.join(&m.to.1).is_file()))
                 }
+                // Replace from someone's own copy (RY01): it happened when the old files' trash entry exists (they move first); then
+                // it is finished forward, or put back whole where its copy cannot be made.
+                Event::AlbumReplacedFromCopy { to_dir, token, .. } => {
+                    let root = self.lib.catalogue().folders().get(to_dir.0).cloned();
+                    root.is_some_and(|r| crate::trash::holds(&r, token))
+                }
             };
             let (title, _) = entry.event.album();
             if happened
@@ -783,6 +797,22 @@ impl IncomingService {
             {
                 tracing::warn!("could not finish copying {title}: {e:#}");
                 continue;
+            }
+            if happened && matches!(entry.event, Event::AlbumReplacedFromCopy { .. }) {
+                match self.finish_from_copy(entry.id, &entry.event, false, None).await {
+                    Ok(()) => {}
+                    Err((true, e)) => {
+                        tracing::warn!("could not finish replacing {title}: {e:#}");
+                        continue;
+                    }
+                    Err((false, e)) => {
+                        tracing::warn!("put {title} back as it was: its copy could not be made whole: {e:#}");
+                        if let Err(e) = self.journal.forget(entry.id) {
+                            tracing::warn!("journal: {e:#}");
+                        }
+                        continue;
+                    }
+                }
             }
             if happened && matches!(entry.event, Event::AlbumAdopted { .. } | Event::AlbumReplaced { .. }) {
                 let moving = self.lib.catalogue().copies_moving();
@@ -842,6 +872,7 @@ impl IncomingService {
             Event::AlbumAdopted { .. } => self.undo_keep(&entry).await,
             Event::AlbumReplaced { .. } => self.undo_replace(&entry).await,
             Event::AlbumCopied { .. } => self.undo_copy(&entry).await,
+            Event::AlbumReplacedFromCopy { .. } => self.undo_from_copy(&entry).await,
         }
     }
 
@@ -1175,6 +1206,15 @@ impl IncomingService {
 
     /// A Copy to's task, as `app::tasks` lists it (C40).
     const COPY_TASK: &'static str = "copy";
+
+    /// A Replace from someone's own copy's task (RY01).
+    const REPLACE_TASK: &'static str = "replace";
+
+    /// What a Replace from someone's own copy is called on Health's list of changes to files, and its title (RY01): the record, the
+    /// main library it went into, and whose music it came from.
+    pub(super) fn replaced_from_named(&self, source_id: &str, from: i64, to: i64, title: &str) -> (&'static str, String) {
+        ("replace", format!("Replaced in {} from {}: {title}", self.library_name(source_id, to), self.library_name(source_id, from)))
+    }
 
     /// What a Copy to is called on Health's list of changes to files, and its title (C40).
     pub(super) fn copied_named(&self, source_id: &str, to: i64, title: &str) -> (&'static str, String) {
@@ -1613,6 +1653,7 @@ impl IncomingService {
             Event::AlbumAdopted { moves, .. } => moves.iter().collect(),
             Event::AlbumReplaced { moves, replaced, .. } => replaced.iter().chain(moves).collect(),
             Event::AlbumCopied { copies, .. } => copies.iter().collect(),
+            Event::AlbumReplacedFromCopy { copies, replaced, .. } => replaced.iter().chain(copies).collect(),
             _ => return Some(Vec::new()),
         };
         moves
@@ -1960,7 +2001,7 @@ mod tests {
         IncomingService::new(lib, crate::ports::disk(), Arc::new(Journal::open(None).unwrap()), None, crate::trash::DEFAULT_KEEP_DAYS, None, shelves)
     }
 
-    fn folder(tag: &str) -> PathBuf {
+    pub(super) fn folder(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("cratarr-incoming-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -2153,7 +2194,7 @@ mod tests {
     }
 
     /// A library's list entry for its copy of `id`, lying at `dir` in catalogue folder `folder`.
-    fn copy_at(id: &str, folder: i64, library: &str, dir: &str) -> source::Album {
+    pub(super) fn copy_at(id: &str, folder: i64, library: &str, dir: &str) -> source::Album {
         let copy = source::AlbumCopy { library: library.into(), folder, dir: dir.into(), ..Default::default() };
         source::Album { library: Some(library.into()), copies: vec![copy], ..album(id, &format!("{library}/{dir}"), "FLAC") }
     }
@@ -2235,7 +2276,7 @@ mod tests {
     }
 
     /// Each file under `dir` (hidden ones too), by its path there, with its bytes and its time.
-    fn lying(dir: &std::path::Path) -> std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> {
+    pub(super) fn lying(dir: &std::path::Path) -> std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> {
         let mut out = std::collections::BTreeMap::new();
         let mut todo = vec![dir.to_path_buf()];
         while let Some(d) = todo.pop() {
@@ -2314,6 +2355,279 @@ mod tests {
         assert!(svc.undo(&undo).await.is_err(), "undone once");
         for d in [music, inc, own] {
             std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// RY01's titles, a track's in its number's place.
+    const TITLES: [&str; 10] = ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+
+    /// RY01's folder, as Music's template names the record's: where its copies go.
+    pub(super) const RY01_DIR: &str = "A - Album (2019)";
+
+    /// A file of RY01's shape in `dir`, as the default template names it: `01 A - One.flac`.
+    pub(super) fn ry01_file(dir: &str, n: u32, ext: &str) -> String {
+        let name = format!("{n:02} A - {}.{ext}", TITLES[n as usize - 1]);
+        if dir.is_empty() { name } else { format!("{dir}/{name}") }
+    }
+
+    /// RY01's shape (SCENARIOS-RUN-12's `with_three_own`): Music (catalogue folder 0, the main library), Incoming (1), Ann's own music
+    /// (2) and Bob's (3). Music's copy at `music_dir`, `tracks` MP3 and a cover.jpg; Bob's at `bob_dir`, as many FLAC and a cover.jpg
+    /// of his own; each file tagged as Music's template names it (the year where one is given, `of` the total each says), Bob's on
+    /// Music's tracks, as copies of one record are. The service, and the four folders.
+    pub(super) async fn with_three_own(tag: &str, music_dir: &str, bob_dir: &str, year: Option<&str>, tracks: u32, of: u32) -> (IncomingService, PathBuf, PathBuf, PathBuf, PathBuf) {
+        let roots: Vec<PathBuf> = ["music", "inc", "ann", "bob"].iter().map(|n| folder(&format!("{tag}-{n}"))).collect();
+        let svc = on_disk(&roots[0], &roots[1]).await;
+        let c = svc.lib.catalogue();
+        c.set_folders(roots.clone()).unwrap();
+        for (root, dir, ext) in [(&roots[0], music_dir, "mp3"), (&roots[3], bob_dir, "flac")] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            for n in 1..=tracks {
+                std::fs::write(root.join(ry01_file(dir, n, ext)), format!("{ext} number {n}")).unwrap();
+            }
+            std::fs::write(root.join(dir).join("cover.jpg"), format!("{ext} cover")).unwrap();
+        }
+        c.walk_all();
+        c.pretend_read_for_tests();
+        for (f, dir, ext) in [(0, music_dir, "mp3"), (3, bob_dir, "flac")] {
+            for n in 1..=tracks {
+                let (number, total) = (n.to_string(), of.to_string());
+                let mut tags = vec![("albumartist", "A"), ("artist", "A"), ("album", "Album"), ("title", TITLES[n as usize - 1]), ("tracknumber", number.as_str()), ("totaltracks", total.as_str())];
+                if let Some(y) = year {
+                    tags.push(("date", y));
+                }
+                c.tag_for_tests(f, &ry01_file(dir, n, ext), &tags);
+            }
+        }
+        c.identify().unwrap();
+        for n in 1..=tracks {
+            let track = c.track_of(0, &ry01_file(music_dir, n, "mp3")).unwrap();
+            c.give_track_for_tests(3, &ry01_file(bob_dir, n, "flac"), track);
+        }
+        let mut roots = roots.into_iter();
+        let mut next = || roots.next().unwrap();
+        (svc, next(), next(), next(), next())
+    }
+
+    /// Bob's copy at `dir` as RY01 finds it listed (catalogue folder 3).
+    pub(super) async fn bobs_copy(svc: &IncomingService, bob: &std::path::Path, dir: &str) -> Located {
+        svc.locate_listed("cratarr", copy_at("al-1", 3, &bob.to_string_lossy(), dir)).await.unwrap()
+    }
+
+    /// A row's track and trash mark, present or not: (track, trashed); none where there is no row.
+    pub(super) fn row_at(c: &crate::catalogue::Catalogue, folder: i64, rel: &str) -> Option<(Option<i64>, Option<String>)> {
+        use rusqlite::OptionalExtension;
+        let db = c.writer_for_tests();
+        db.query_row("SELECT track, trashed FROM files WHERE folder = ?1 AND rel = ?2", rusqlite::params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?))).optional().unwrap()
+    }
+
+    /// What the log said, for a test that reads it.
+    #[derive(Clone, Default)]
+    struct Logged(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Logged {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Logged {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    /// RY01.7: a Replace from Bob's copy stopped at any point (its intent in the journal, nothing holding it) is finished or put back
+    /// by the pass. (1) Nothing moved, a part of the first copy beside Music's files: forgotten, the part gone, Music as it was. (2)
+    /// Music's old files in its trash and the first copy made: finished forward, every copy byte for byte with Bob's time, on the old
+    /// files' tracks, the old rows trashed holding none, applied and undoable. (2') The same, Bob's second file gone since: put back,
+    /// not half-finished: the copy made taken away, Music's old files back on their tracks, the entry forgotten, a warning logged.
+    /// (3) Every file in place, the rows not followed: they follow, applied. Never an entry applied while Music holds part of a copy;
+    /// Music's album never left in the trash with no copy in its place; Bob's files never moved.
+    #[tokio::test]
+    async fn a_replace_from_a_copy_stopped_at_any_point_is_finished_or_put_back() {
+        for case in ["1", "2", "2'", "3"] {
+            let (svc, music, inc, ann, bob) = with_three_own(&format!("ry01-stop{}", case.replace('\'', "b")), RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
+            let (before, mut theirs) = (lying(&music), lying(&bob));
+            let at = bobs_copy(&svc, &bob, RY01_DIR).await;
+            let (event, ..) = svc.event_from_copy(&at, (0, RY01_DIR.into()), None, epoch_now()).await.unwrap();
+            let id = svc.journal.intend(100, &event).unwrap();
+            let Event::AlbumReplacedFromCopy { replaced, .. } = &event else { unreachable!() };
+            let mut out = svc.steps(&event).unwrap();
+            let ins = out.split_off(replaced.len());
+            let c = svc.lib.catalogue();
+            let olds: Vec<Option<i64>> = (1..=2).map(|n| c.track_of(0, &ry01_file(RY01_DIR, n, "mp3"))).collect();
+            assert!(olds.iter().all(Option::is_some));
+            match case {
+                "1" => std::fs::write(crate::moves::part_of(&ins[0].to.0.join(&ins[0].to.1)), b"part").unwrap(),
+                "3" => {
+                    crate::moves::apply(&out).unwrap();
+                    crate::moves::copy(&ins).unwrap();
+                }
+                _ => {
+                    crate::moves::apply(&out).unwrap();
+                    crate::moves::clone_file(&ins[0].from.0.join(&ins[0].from.1), &ins[0].to.0.join(&ins[0].to.1)).unwrap();
+                    if case == "2'" {
+                        let gone = ry01_file(RY01_DIR, 2, "flac");
+                        std::fs::remove_file(bob.join(&gone)).unwrap();
+                        theirs.remove(&gone);
+                    }
+                }
+            }
+            let log = Logged::default();
+            let writer = log.clone();
+            let subscriber = tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).with_max_level(tracing::Level::INFO).finish();
+            let logging = tracing::subscriber::set_default(subscriber);
+            svc.reconcile().await;
+            drop(logging);
+            let entry = svc.journal.get(id).unwrap();
+            if matches!(case, "1" | "2'") {
+                assert!(entry.is_none(), "{case}: forgotten");
+                assert_eq!(lying(&music), before, "{case}: Music's album as it was, nothing of the copy, no part");
+                for (n, t) in (1..=2).zip(&olds) {
+                    assert_eq!(c.track_of(0, &ry01_file(RY01_DIR, n, "mp3")), *t, "{case}: its rows on their tracks");
+                }
+                assert!(!c.has_row(0, &ry01_file(RY01_DIR, 1, "flac")), "{case}: no row of a copy");
+            } else {
+                assert!(entry.is_some_and(|e| e.applied), "{case}: applied");
+                for n in 1..=2 {
+                    let (copy, original) = (music.join(ry01_file(RY01_DIR, n, "flac")), bob.join(ry01_file(RY01_DIR, n, "flac")));
+                    assert_eq!(std::fs::read(&copy).unwrap(), std::fs::read(&original).unwrap(), "{case}: byte for byte");
+                    assert_eq!(std::fs::metadata(&copy).unwrap().modified().unwrap(), std::fs::metadata(&original).unwrap().modified().unwrap(), "{case}: with Bob's time");
+                    assert_eq!(c.track_of(0, &ry01_file(RY01_DIR, n, "flac")), olds[n as usize - 1], "{case}: on the old file's track");
+                    let trashed = replaced.iter().find(|r| r.from.1 == ry01_file(RY01_DIR, n, "mp3")).unwrap();
+                    let row = row_at(&c, 0, &trashed.to.1).expect("the old row in the trash");
+                    assert!(row.0.is_none() && row.1.is_some(), "{case}: the old row trashed, holding no track: {row:?}");
+                }
+                svc.undo(&id.to_string()).await.unwrap();
+                let back: std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> = before.iter().map(|(k, v)| (k.strip_prefix(&format!("{RY01_DIR}/")).unwrap().to_string(), v.clone())).collect();
+                assert_eq!(lying(&music.join(RY01_DIR)), back, "{case}: its Undo puts Music's copy back");
+            }
+            if case == "2'" {
+                let text = log.text();
+                assert!(text.lines().any(|l| l.contains("WARN") && l.contains("put Zebra back as it was")), "{text}");
+            }
+            assert_eq!(lying(&bob), theirs, "{case}: Bob's files never moved");
+            for d in [music, inc, ann, bob] {
+                std::fs::remove_dir_all(d).ok();
+            }
+        }
+    }
+
+    /// RY01.8: the Undo of a Replace from Bob's copy. (1) Each copied file still as copied goes into Music's trash, file by file;
+    /// Music's old files come back under their names, bytes and times, on their tracks, not trashed; the copies' rows trashed and
+    /// holding no track; the trash tokens kept on the entry. (2) A booklet dropped in since stays beside the old files. (3) A copied
+    /// file rewritten since refuses it whole, naming it, nothing moved (OQ-D). (4) A second tap is refused, and nothing moves. (5) A
+    /// later Replace from Incoming took the copies' place: refused, the later album and its own Undo untouched. Never a copy moved
+    /// into Bob's folder, a file of Bob's touched, a file deleted outright, an old file put back over a file at its name.
+    #[tokio::test]
+    async fn undo_of_a_replace_from_a_copy_puts_musics_copy_back_and_leaves_bobs() {
+        for case in 1..=5 {
+            let (svc, music, inc, ann, bob) = with_three_own(&format!("ry01-undo{case}"), RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
+            let (before, theirs) = (lying(&music.join(RY01_DIR)), lying(&bob));
+            let c = svc.lib.catalogue();
+            let olds: Vec<Option<i64>> = (1..=2).map(|n| c.track_of(0, &ry01_file(RY01_DIR, n, "mp3"))).collect();
+            let at = bobs_copy(&svc, &bob, RY01_DIR).await;
+            let done = svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None).await.unwrap();
+            let key = done.undo.clone().unwrap();
+            let id: EventId = key.parse().unwrap();
+            let new = music.join(&done.folder);
+            let copied: Vec<String> = lying(&new).into_keys().collect();
+            let mut later = None;
+            match case {
+                2 => std::fs::write(new.join("booklet.pdf"), b"pdf").unwrap(),
+                3 => std::fs::write(new.join(ry01_file("", 2, "flac")), b"two, retagged").unwrap(),
+                5 => {
+                    // A later Replace from Incoming: a 24/96 copy takes the copies' place, and they go into Music's trash.
+                    std::fs::create_dir_all(inc.join(RY01_DIR)).unwrap();
+                    for n in 1..=2 {
+                        std::fs::write(inc.join(ry01_file(RY01_DIR, n, "flac")), format!("hi-res {n}")).unwrap();
+                    }
+                    c.walk_all();
+                    c.pretend_read_for_tests();
+                    c.identify().unwrap();
+                    let token = format!("1700000000/{RY01_DIR}");
+                    let event = Event::AlbumReplaced {
+                        source: "cratarr".into(),
+                        album_id: "al-1".into(),
+                        title: "Zebra".into(),
+                        from_dir: (1, RY01_DIR.into()),
+                        to_dir: (0, RY01_DIR.into()),
+                        moves: (1..=2)
+                            .map(|n| {
+                                let rel = ry01_file(RY01_DIR, n, "flac");
+                                TrackMove { track: c.track_of(0, &rel), from: (1, rel.clone()), to: (0, rel.clone()), was: c.track_of(1, &rel) }
+                            })
+                            .collect(),
+                        replaced: files_under(&new)
+                            .into_iter()
+                            .map(|f| {
+                                let rel = format!("{RY01_DIR}/{f}");
+                                TrackMove { track: c.track_of(0, &rel), from: (0, rel), to: (0, format!("{}/{token}/{f}", crate::trash::TRASH_DIR)), was: None }
+                            })
+                            .collect(),
+                        token,
+                        release_group: None,
+                        converted: Vec::new(),
+                    };
+                    let later_id = svc.journal.intend(epoch_now(), &event).unwrap();
+                    crate::moves::apply(&svc.steps(&event).unwrap()).unwrap();
+                    svc.finish_replace(&event, false, false).await;
+                    svc.journal.applied(later_id).unwrap();
+                    later = Some(later_id);
+                }
+                _ => {}
+            }
+            let lies = lying(&music);
+            let undone = svc.undo(&key).await;
+            match case {
+                3 => {
+                    let e = undone.unwrap_err().to_string();
+                    assert!(e.contains(&ry01_file("", 2, "flac")) && e.contains("changed since"), "it names the file: {e}");
+                    assert_eq!(lying(&music), lies, "refused whole: nothing moved");
+                    assert!(svc.journal.get(id).unwrap().is_some_and(|e| !e.undone));
+                }
+                5 => {
+                    let e = undone.unwrap_err().to_string();
+                    assert!(e.contains("None of the files copied"), "{e}");
+                    assert_eq!(lying(&music), lies, "the later Replace's files untouched");
+                    svc.undo(&later.unwrap().to_string()).await.unwrap();
+                    assert_eq!(std::fs::read(inc.join(ry01_file(RY01_DIR, 1, "flac"))).unwrap(), b"hi-res 1", "its own Undo works after");
+                    assert_eq!(std::fs::read(new.join(ry01_file("", 1, "flac"))).unwrap(), std::fs::read(bob.join(ry01_file(RY01_DIR, 1, "flac"))).unwrap());
+                }
+                _ => {
+                    undone.unwrap();
+                    let mut back = lying(&music.join(RY01_DIR));
+                    if case == 2 {
+                        assert_eq!(back.remove("booklet.pdf").map(|(b, _)| b), Some(b"pdf".to_vec()), "what came after stays");
+                    }
+                    assert_eq!(back, before, "Music's old copy back as it was, bytes and times");
+                    let trash: std::collections::BTreeSet<Vec<u8>> = lying(&music.join(crate::trash::TRASH_DIR)).into_values().map(|(b, _)| b).collect();
+                    assert_eq!(trash, theirs.values().map(|(b, _)| b.clone()).collect(), "the copies in Music's trash, never deleted");
+                    for (n, t) in (1..=2).zip(&olds) {
+                        let rel = ry01_file(RY01_DIR, n, "mp3");
+                        assert_eq!(row_at(&c, 0, &rel), Some((*t, None)), "{rel}: back on its track, not trashed");
+                    }
+                    let tokens = uncopied(&svc, id);
+                    assert_eq!(tokens.len(), copied.len(), "every copy's token kept on the entry: {tokens:?}");
+                    for t in tokens.iter().filter(|t| t.ends_with(".flac")) {
+                        let row = row_at(&c, 0, &format!("{}/{t}", crate::trash::TRASH_DIR)).expect("the copy's row in the trash");
+                        assert!(row.0.is_none() && row.1.is_some(), "{t}: trashed, holding no track");
+                    }
+                    if case == 4 {
+                        let after = lying(&music);
+                        assert!(svc.undo(&key).await.unwrap_err().to_string().contains("already"), "undone once");
+                        assert_eq!(lying(&music), after, "nothing moves");
+                    }
+                }
+            }
+            assert_eq!(lying(&bob), theirs, "Bob's untouched by the Undo");
+            for d in [music, inc, ann, bob] {
+                std::fs::remove_dir_all(d).ok();
+            }
         }
     }
 
@@ -2823,7 +3137,7 @@ async fn fate_of(lib: &Library, journal: &Journal, source_id: &str, album_id: &s
     let (moves, title) = match &event {
         Event::AlbumAdopted { moves, title, .. } | Event::AlbumReplaced { moves, title, .. } => (moves, title),
         Event::AlbumRejected { title, .. } => return Some(AlbumFate::Deleted(title.clone())),
-        Event::AlbumCopied { .. } => return None,
+        Event::AlbumCopied { .. } | Event::AlbumReplacedFromCopy { .. } => return None,
     };
     if source_id == crate::source::cratarr::KIND.id {
         return Some(AlbumFate::NotYet(title.clone()));

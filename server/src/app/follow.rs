@@ -75,6 +75,17 @@ fn renames(event: &Event, folders: &InUse, back: bool) -> HashMap<String, String
                 }
             }
         }
+        // From someone's own music (RY01): the old files' lines go to the copy on their track; the own copy's lines stay its own.
+        Event::AlbumReplacedFromCopy { copies, replaced, .. } => {
+            for c in copies {
+                let Some(old) = replaced.iter().find(|r| r.track.is_some() && r.track == c.track) else { continue };
+                if back {
+                    add(line(&c.to), line(&old.from));
+                } else {
+                    add(line(&old.from), line(&c.to));
+                }
+            }
+        }
     }
     out
 }

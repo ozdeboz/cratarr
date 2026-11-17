@@ -298,6 +298,11 @@ pub struct AlbumCopy {
     /// An Incoming copy of a record kept elsewhere: how it stands against the copy that plays the record for most (C37a).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub against: Option<Against>,
+    /// Someone's own copy Replace in a main library may take the place of that library's copy from (RY01, `copies::replace_offers`):
+    /// one stand per main library whose copy it beats (OQ-N), that copy's library and folder, and why. Whose copy it is is this
+    /// copy's own library. Empty on any other copy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replace_into: Vec<Against>,
     /// Its catalogue folder and its folder in it: what tells it from the record's other copies here, not the page's.
     #[serde(skip)]
     pub folder: i64,
