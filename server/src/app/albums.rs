@@ -488,6 +488,26 @@ impl App {
         Ok(done)
     }
 
+    /// `account`'s copy of a record the library has, in their own music (C52, OQ3: "Add to Your music" through Want), made as Copy to
+    /// makes one (C40): from the copy that plays, into their own music, made now where it is not in use yet. None where they have
+    /// no own music, or a copy of it is in theirs already, or the record is no album listed here.
+    pub(super) async fn copy_for(&self, account: &str, record: i64) -> Option<Result<KeepResult, ToggleError>> {
+        let source = crate::source::cratarr::KIND.id;
+        let (_, a) = self.listed_album(source, &crate::serve::ids::record(record), None).await.ok()?;
+        let own = {
+            let live = self.library.live();
+            live.iter().find(|x| x.cfg.id == source)?.own_of(account)?
+        };
+        if a.copies.iter().any(|c| c.library == own) {
+            return None;
+        }
+        let to = match self.library.live().iter().find(|x| x.cfg.id == source).is_some_and(|x| x.used(&own)) {
+            true => own,
+            false => self.library.own_library(account).await.ok()??,
+        };
+        Some(self.incoming.copy_album(source, a, &to, None).await)
+    }
+
     /// Delete an album of someone's own music from the Users panel: an administrator's, only there (the owner, 2026-11-04:
     /// "not anywhere else than in a control panel").
     pub async fn delete_own_album(&self, source: &str, album: &str, from: Option<&str>) -> Result<super::DeleteResult, ToggleError> {

@@ -3393,6 +3393,36 @@ async fn a_copy_is_one_album_two_copies_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// C52, OQ3: Want of a record the library has makes the asker's own copy of it in their own music, as Copy to makes one: Music's
+/// album as it was, the copy on the record's tracks, and the request says so.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_request_for_a_stored_album_makes_a_copy_end_to_end() {
+    let root = temp("want-stored");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let album = s.read_in("Both Shores", &music).await;
+    let (id, songs) = (album["id"].as_str().unwrap().to_string(), s.songs_of(&album).await);
+    let original = as_it_lies(&music.join(SHORES));
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Both Shores" })).await;
+    let mine = own.join("ann");
+    s.until("her copy made", Duration::from_secs(60), || async { std::fs::read_dir(mine.join("Salt Meridian")).is_ok_and(|mut d| d.next().is_some()) }).await;
+    assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
+    let copied = std::fs::read_dir(mine.join("Salt Meridian")).unwrap().flatten().map(|e| e.path()).next().expect("a copy in her music");
+    assert!(contents(&as_it_lies(&copied)) == contents(&original), "the original's files");
+    let folder = copied.strip_prefix(&mine).unwrap().to_string_lossy().replace('\\', "/");
+    s.until("her copy read", Duration::from_secs(120), || async { tracks_at(&data, &mine, &folder) == songs }).await;
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A track's own word goes into its file in every copy, by the track and not the file's name, and into no other track's. One
 /// Undo takes it out of them all.
 #[tokio::test(flavor = "multi_thread")]

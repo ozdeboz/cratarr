@@ -630,9 +630,36 @@ pub const ALREADY_HAD: &str = "Already in the library";
 /// release group Lidarr found by the record's names is kept on the record, as found by names (`search`): its state can be
 /// read from then on.
 async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
+    // A record the library has already (C52, OQ3): the asker's own copy of it, in their own music, as Copy to makes one.
+    if let Some(said) = copied_for(app, serve, r).await {
+        if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {
+            tracing::warn!("request {}: what was done was not kept: {e:#}", r.id);
+        }
+        return said;
+    }
     let lidarr = fetcher(app);
     let soulseek = super::soulseek::connected().await;
     hand_to(lidarr.as_deref(), soulseek, serve, r).await
+}
+
+/// What a request of a record the library has says once its asker's copy is made in their own music (C52).
+pub const COPIED_INTO_OWN: &str = "Copied into your music";
+
+/// A request whose record the library holds whole (C52, OQ3: "Add to Your music" any stored record, through Want): its asker's
+/// copy of it in their own music (`App::copy_for`), and what the request says of it. None where it is not held whole, the asker has
+/// no own music or a copy there already, or the copy failed (said in the log): the request goes on as before.
+async fn copied_for(app: &super::App, serve: &Serve, r: &Request) -> Option<String> {
+    let of = named(serve, std::slice::from_ref(r)).await.pop().flatten()?;
+    if of.holding != Holding::Done {
+        return None;
+    }
+    match app.copy_for(&r.user, of.holder?).await? {
+        Ok(_) => Some(COPIED_INTO_OWN.to_string()),
+        Err(e) => {
+            tracing::warn!("request {}: its asker's copy was not made: {e}", r.id);
+            None
+        }
+    }
 }
 
 /// [`hand`] to Lidarr where it is connected (the tests' stands in for it), and to Soulseek where it is.
