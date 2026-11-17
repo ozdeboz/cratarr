@@ -678,7 +678,7 @@ impl Library {
         if let Some(serve) = crate::serve::instance() {
             let others: Vec<String> = serve.users.names().into_iter().filter(|n| n != account).collect();
             let db = self.playlists_db.clone();
-            tokio::task::spawn_blocking(move || db.switch_library_off(&others, &key)).await??;
+            tokio::task::spawn_blocking(move || db.switch_library_off(&others, std::slice::from_ref(&key))).await??;
         }
         Ok(Some(id))
     }

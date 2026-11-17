@@ -274,18 +274,20 @@ impl Serve {
         saved.sources.iter().find_map(|s| s.own_music())
     }
 
-    /// Everyone else's own music switched off for `account`, new here (0101 point 6: others' start off).
+    /// Everyone else's own music switched off for `account`, new here (0101 point 6: others' start off), all of it as one change
+    /// (`UserData::switch_library_off`).
     pub fn others_own_off(&self, account: &str) {
         let Some(own) = self.own_music() else { return };
+        let mut others = Vec::new();
         for folder in std::fs::read_dir(own).map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>()).unwrap_or_default() {
             let Some(name) = folder.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
             if !folder.is_dir() || name.starts_with('.') || name == account {
                 continue;
             }
-            let key = format!("{}/{}", crate::source::cratarr::KIND.id, folder.display());
-            if let Err(e) = self.userdata.switch_library_off(&[account.to_string()], &key) {
-                tracing::warn!("{name}'s music not switched off for {account}: {e:#}");
-            }
+            others.push(format!("{}/{}", crate::source::cratarr::KIND.id, folder.display()));
+        }
+        if let Err(e) = self.userdata.switch_library_off(&[account.to_string()], &others) {
+            tracing::warn!("others' own music not switched off for {account}: {e:#}");
         }
     }
 
@@ -1077,6 +1079,28 @@ mod tests {
         checked_again(&serve);
         assert_eq!((plays_of(&serve, &away), plays_of(&serve, &here)), (1, 0), "on its own track, and nothing on the other");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// Run 12's close (0101 point 6): an account new here has every other account's own music off, however many there are; never
+    /// its own, nor a hidden folder.
+    #[test]
+    fn a_new_account_has_every_other_accounts_own_music_off() {
+        let d = std::env::temp_dir().join(format!("cratarr-serve-others-own-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let own = d.join("own");
+        for name in ["ann", "bob", "carl", "dee", "root", ".cratarr-trash"] {
+            std::fs::create_dir_all(own.join(name)).unwrap();
+        }
+        let source = serde_json::json!({ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": [], "values": { "folders": [], "own_music": own.to_string_lossy() } });
+        std::fs::write(d.join("settings.json"), serde_json::to_vec(&serde_json::json!({ "version": 4, "sources": [source] })).unwrap()).unwrap();
+        let serve = Serve::open(Some(&d), Rules::default(), &|_| None).unwrap();
+        serve.others_own_off("root");
+        let mut off = serve.userdata.hidden_libraries("root").unwrap();
+        off.sort();
+        let others: Vec<String> = ["ann", "bob", "carl", "dee"].iter().map(|n| format!("cratarr/{}", own.join(n).display())).collect();
+        assert_eq!(off, others);
+        drop(serve);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

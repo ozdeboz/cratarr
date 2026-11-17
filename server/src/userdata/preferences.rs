@@ -150,14 +150,21 @@ impl UserData {
         }
     }
 
-    /// `library` (`source/library`) switched off for each of `accounts`, beside what they have off: a library that starts
-    /// off for them (0101 point 6: someone's own music, at its making). Only then: one switched on again stays on.
-    /// Blocking.
-    pub fn switch_library_off(&self, accounts: &[String], library: &str) -> Result<()> {
+    /// `libraries` (each `source/library`) switched off for each of `accounts`, beside what they have off: libraries that start
+    /// off for them (0101 point 6: someone's own music, at its making; everyone else's, for an account new here). Only then: one
+    /// switched on again stays on. Each account's list written once, as one change: a change is dated in milliseconds and a tie
+    /// keeps what is kept, so libraries written one by one lost every one but the first (run 12's close: root kept Bob's music
+    /// on). Blocking.
+    pub fn switch_library_off(&self, accounts: &[String], libraries: &[String]) -> Result<()> {
         for account in accounts {
             let mut off = self.hidden_libraries(account)?;
-            if !off.iter().any(|k| k == library) {
-                off.push(library.to_string());
+            let had = off.len();
+            for library in libraries {
+                if !off.iter().any(|k| k == library) {
+                    off.push(library.clone());
+                }
+            }
+            if off.len() > had {
                 self.set_preference(account, HIDDEN_LIBRARIES, &serde_json::json!(off), super::now_ms())?;
             }
         }
@@ -250,12 +257,26 @@ mod tests {
     fn a_library_switched_off_for_others_joins_what_they_have_off() {
         let u = UserData::open(None).unwrap();
         u.set_preference("ann", HIDDEN_LIBRARIES, &json!(["cratarr/x"]), 1).unwrap();
-        u.switch_library_off(&["ann".to_string(), "bo".to_string()], "cratarr//own/cy").unwrap();
+        u.switch_library_off(&["ann".to_string(), "bo".to_string()], &["cratarr//own/cy".to_string()]).unwrap();
         assert_eq!(u.hidden_libraries("ann").unwrap(), ["cratarr/x", "cratarr//own/cy"]);
         assert_eq!(u.hidden_libraries("bo").unwrap(), ["cratarr//own/cy"]);
         let changed = u.preferences("bo").unwrap()[HIDDEN_LIBRARIES].changed;
-        u.switch_library_off(&["bo".to_string()], "cratarr//own/cy").unwrap();
+        u.switch_library_off(&["bo".to_string()], &["cratarr//own/cy".to_string()]).unwrap();
         assert_eq!(u.preferences("bo").unwrap()[HIDDEN_LIBRARIES].changed, changed, "already off: nothing changes");
+    }
+
+    /// Run 12's close (0101 point 6): libraries switched off together are every one of them off, for each account, as a stream
+    /// reads them. One by one, each write after the first fell in the millisecond of the one before, and a tie keeps what is kept:
+    /// root, new beside Ann's and Bob's own music, had Bob's on and heard his FLAC over Music's MP3.
+    #[test]
+    fn libraries_switched_off_together_are_all_off() {
+        let u = UserData::open(None).unwrap();
+        let own: Vec<String> = ["ann", "bob", "carl", "dee"].iter().map(|n| format!("cratarr//own/{n}")).collect();
+        u.switch_library_off(&["root".to_string(), "eve".to_string()], &own).unwrap();
+        for account in ["root", "eve"] {
+            assert_eq!(u.hidden_libraries(account).unwrap(), own, "{account}");
+            assert_eq!(*u.hidden_libraries_kept(account), own, "{account}, as a stream reads them");
+        }
     }
 
     /// A library's switch says its path, so a library renamed or on a moved mount would come back on for whoever has it off.
