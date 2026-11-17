@@ -158,26 +158,27 @@ async fn fetch(of: &Of) -> Result<Option<Vec<u8>>> {
                 return Ok(None);
             }
             let caa = format!("https://coverartarchive.org/release-group/{rg}/front-250");
-            if let Some(b) = image(&http, &caa).await? {
+            if let Some(b) = image(&http, &caa, MOST_BYTES).await? {
                 return Ok(Some(b));
             }
             match super::discogs::release_group_cover(rg).await? {
-                Some(url) if url != caa => image(&http, &url).await,
+                Some(url) if url != caa => image(&http, &url, MOST_BYTES).await,
                 _ => Ok(None),
             }
         }
         Of::Bandcamp(page) => match crate::bandcamp::Bandcamp::get().cover(page).await? {
             // Bandcamp's own pictures only (its image servers).
             Some(url) if reqwest::Url::parse(&url).ok().and_then(|u| u.host_str().map(|h| h.ends_with(".bcbits.com"))).unwrap_or(false) => {
-                image(&http, &url).await
+                image(&http, &url, MOST_BYTES).await
             }
             _ => Ok(None),
         },
     }
 }
 
-/// An image's bytes; `None` where there is none (404), or where the address is none of the covers' hosts (O1: Discogs names it).
-async fn image(http: &reqwest::Client, url: &str) -> Result<Option<Vec<u8>>> {
+/// An image's bytes, `most` of them at most (`MOST_BYTES` for the covers kept; Soulseek's placed cover reads larger ones, Y3);
+/// `None` where there is none (404), or where the address is none of the covers' hosts (O1: Discogs names it).
+pub(super) async fn image(http: &reqwest::Client, url: &str, most: usize) -> Result<Option<Vec<u8>>> {
     if !reqwest::Url::parse(url).is_ok_and(|u| super::reach::Purpose::Covers.allows(&u)) {
         return Ok(None);
     }
@@ -190,7 +191,7 @@ async fn image(http: &reqwest::Client, url: &str) -> Result<Option<Vec<u8>>> {
         bail!("{url} is not an image");
     }
     // Read in pieces, cut at its cap (O1).
-    let b = super::reach::read_capped(r, MOST_BYTES).await?;
+    let b = super::reach::read_capped(r, most).await?;
     if b.is_empty() {
         bail!("{url} could not be read");
     }

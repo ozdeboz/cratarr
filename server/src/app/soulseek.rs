@@ -31,7 +31,8 @@
 //!   the record is held at its check with its folder, its tick and its user, and asked about again (`hold`).
 //! - **Into its own Incoming library** (the owner, 2026-11-03): the Incoming library whose fetcher is "soulseek"
 //!   (decision 0096), as Artist/Record (Year), for the intake card. Never straight into Music. Placed whole through a hidden
-//!   folder, the record's cover beside it (`cover.jpg`); a placing that fails keeps its checked files and is tried again (X4).
+//!   folder, the record's cover beside it (`cover.jpg`, its large picture: Y3); a placing that fails keeps its checked files and
+//!   is tried again (X4).
 //!   Trouble on Cratarr's own side (a disk full, slskd's folder gone) blames no user; free space is looked at before a fetch.
 //! - **Kept on disk** (`soulseek.json` in the data folder), so a restart forgets nothing: a fetch under way is followed
 //!   again.
@@ -80,6 +81,10 @@ const SET_ASIDE: &str = "soulseek-set-aside";
 const SET_ASIDE_KEPT: i64 = 14 * 86_400;
 /// Room kept free beyond a fetch's files, on slskd's disk and the library's (X4).
 const ROOM_SPARE: u64 = 1 << 30;
+/// A placed album's `cover.jpg` is no larger than this on its longer side (Y3).
+const COVER_PX: u32 = 1200;
+/// The most of a placed album's cover read (Y3): an original at the Cover Art Archive may be large.
+const COVER_MOST: usize = 10 * 1024 * 1024;
 
 // ---- What is kept
 
@@ -1473,13 +1478,71 @@ async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
     }
 }
 
-/// The record's cover as JPEG, for `cover.jpg` beside its placed files (X4), from where it comes (`cover_source`); none where it
-/// has none, or it cannot be had now.
+/// The record's cover as JPEG, for `cover.jpg` beside its placed files (X4), from where it comes (`cover_source`), as its large
+/// picture (Y3, `large_cover`), never the cover cache's thumbnail; none where it has none, or it cannot be had now.
 async fn cover_for(record: i64) -> Option<Vec<u8>> {
     let cat = crate::serve::instance()?.catalogue().clone();
     let q = tokio::task::spawn_blocking(move || cat.requested(&[record])).await.ok()?.ok()?.remove(&record)?;
-    let (bytes, mime) = super::cover_cache::cover(&cover_source(q.row.cover.as_deref(), &q.groups)?).await.ok()??;
-    if mime == "image/jpeg" { Some(bytes) } else { crate::serve::art::jpeg_within(&bytes, 1200).ok() }
+    let of = cover_source(q.row.cover.as_deref(), &q.groups)?;
+    // The covers' hosts only, each answer read in pieces to its cap (O1).
+    let http = super::reach::client(super::reach::Purpose::Covers).timeout(Duration::from_secs(30)).build().ok()?;
+    let http = &http;
+    large_cover(&of, |url: String| async move { super::cover_cache::image(http, &url, COVER_MOST).await }).await
+}
+
+/// An album's large picture, as `cover.jpg` takes it (Y3), each address read through `get` (the covers' client; the tests' stands
+/// in): a release group's from the Cover Art Archive at 1200 px, else its original, else its Discogs master's picture as the cover
+/// cache falls back to, never the archive's 250-px thumbnail; a Bandcamp album's at Bandcamp's large size (`_10`), as its page
+/// names it. None where none of them gives one.
+async fn large_cover<G, F>(of: &super::cover_cache::Of, get: G) -> Option<Vec<u8>>
+where
+    G: Fn(String) -> F,
+    F: std::future::Future<Output = Result<Option<Vec<u8>>>>,
+{
+    use super::cover_cache::Of;
+    match of {
+        Of::ReleaseGroup(rg) => {
+            let archive = ["front-1200", "front"].map(|size| format!("https://coverartarchive.org/release-group/{rg}/{size}"));
+            if let Some(b) = first_picture(&archive, &get).await {
+                return Some(b);
+            }
+            let other = super::discogs::release_group_cover(rg).await.ok().flatten().filter(|u| !u.contains("coverartarchive.org"))?;
+            first_picture(&[other], &get).await
+        }
+        Of::Bandcamp(page) => {
+            let large = crate::bandcamp::Bandcamp::get().album(page).await.ok()?.cover?;
+            first_picture(&[large], &get).await
+        }
+    }
+}
+
+/// The first of `addresses` that gives a picture through `get`, as `cover.jpg` takes it (`cover_jpg`); one that cannot be read is
+/// said in the log, and the next tried.
+async fn first_picture<G, F>(addresses: &[String], get: &G) -> Option<Vec<u8>>
+where
+    G: Fn(String) -> F,
+    F: std::future::Future<Output = Result<Option<Vec<u8>>>>,
+{
+    for url in addresses {
+        match get(url.clone()).await {
+            Ok(Some(b)) => match cover_jpg(b) {
+                Some(jpg) => return Some(jpg),
+                None => tracing::warn!(target: "soulseek", url = %url, "a cover that is no picture Cratarr can read"),
+            },
+            Ok(None) => {}
+            Err(e) => tracing::warn!(target: "soulseek", url = %url, reason = %format!("{e:#}"), "a cover not read"),
+        }
+    }
+    None
+}
+
+/// A picture as `cover.jpg` takes it (Y3): a JPEG within `COVER_PX` as it came; any other made JPEG, scaled to fit. None where it
+/// is no picture Cratarr can read.
+fn cover_jpg(b: Vec<u8>) -> Option<Vec<u8>> {
+    let r = image::ImageReader::new(std::io::Cursor::new(&b)).with_guessed_format().ok()?;
+    let jpeg = r.format() == Some(image::ImageFormat::Jpeg);
+    let (w, h) = r.into_dimensions().ok()?;
+    if jpeg && w.max(h) <= COVER_PX { Some(b) } else { crate::serve::art::jpeg_within(&b, COVER_PX).ok() }
 }
 
 /// Where a record's cover comes from (X4): its cover's own address (the Cover Art Archive's for a release group, Bandcamp's for an
@@ -2158,6 +2221,48 @@ mod tests {
         assert_eq!(cover_source(None, &[rg.to_string()]), Some(Of::ReleaseGroup(rg.into())), "its group's");
         assert_eq!(cover_source(Some("https://example.org/a.jpg"), &[]), None);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A picture `w` by `h` pixels, as `format` writes it.
+    fn picture(w: u32, h: u32, format: image::ImageFormat) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(w, h)).write_to(&mut out, format).unwrap();
+        out.into_inner()
+    }
+
+    /// Y3: the cover placed beside an album is the large picture, for a release group the Cover Art Archive's 1200-px one, kept as it
+    /// came where it is a JPEG within 1200 px: never the 250-px thumbnail the pages' cover cache keeps.
+    #[tokio::test]
+    async fn the_placed_cover_is_the_large_one_not_the_thumbnail() {
+        let rg = "00000000-0000-4000-8000-000000000141";
+        let jpeg = picture(120, 120, image::ImageFormat::Jpeg);
+        let asked = Mutex::new(Vec::new());
+        let get = |url: String| {
+            asked.lock().unwrap().push(url.clone());
+            std::future::ready(Ok(url.ends_with("/front-1200").then(|| jpeg.clone())))
+        };
+        let cover = large_cover(&super::super::cover_cache::Of::ReleaseGroup(rg.into()), get).await;
+        assert_eq!(cover.as_deref(), Some(jpeg.as_slice()), "as it came");
+        assert_eq!(*asked.lock().unwrap(), [format!("https://coverartarchive.org/release-group/{rg}/front-1200")]);
+    }
+
+    /// Y3: where the Cover Art Archive has no 1200-px picture, its original is read, made JPEG and scaled to fit 1200 px. A picture
+    /// none of its addresses gives is no cover, and the album is placed without one.
+    #[tokio::test]
+    async fn a_large_original_cover_is_made_jpeg_within_1200_px() {
+        let rg = "00000000-0000-4000-8000-000000000142";
+        let png = picture(1600, 900, image::ImageFormat::Png);
+        let asked = Mutex::new(Vec::new());
+        let get = |url: String| {
+            asked.lock().unwrap().push(url.clone());
+            std::future::ready(Ok(url.ends_with("/front").then(|| png.clone())))
+        };
+        let of = super::super::cover_cache::Of::ReleaseGroup(rg.into());
+        let cover = large_cover(&of, get).await.expect("its original");
+        let read = image::load_from_memory_with_format(&cover, image::ImageFormat::Jpeg).expect("made JPEG");
+        assert_eq!((read.width(), read.height()), (1200, 675));
+        assert_eq!(asked.lock().unwrap().len(), 2, "its 1200-px picture asked first");
+        assert_eq!(large_cover(&of, |_| std::future::ready(Ok(Some(b"not a picture".to_vec())))).await, None);
     }
 
     /// X4: a folder set aside is kept 14 days, then deleted and taken off its item.
