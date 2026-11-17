@@ -76,9 +76,9 @@ export const adds = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind ==
  *  it is, and a copy of it goes ("Copy to Your music"). Out of Incoming it is added, between main libraries moved. */
 export const copies = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind !== 'incoming' && (from?.kind === 'own' || to.kind === 'own');
 
-type Offered = Pick<AlbumsSource, 'library_info' | 'verdicts' | 'deletable' | 'keepable' | 'keep_to'>;
+type Offered = Pick<AlbumsSource, 'library_info' | 'deletable' | 'keepable' | 'keep_to'>;
 type Listed = Pick<ListedAlbum, 'id' | 'library' | 'copies'>;
-type Rights = Pick<AlbumCopy, 'deletable' | 'keepable' | 'keep_to'> & { library?: string };
+type Rights = Pick<AlbumCopy, 'deletable' | 'keepable' | 'keep_to' | 'against'> & { library?: string };
 
 /** Each library's copy of a record, once: of two folders of one library `from` names the first. Another server's album
  *  says what may be done with it in its list, by id, and lies in its one library. */
@@ -89,16 +89,14 @@ function copiesIn(s: Offered, a: Listed): Rights[] {
 
 /** One offer per copy, in the list's order. A library already holding a copy is no target: that is Replace, not Move.
  *  An Incoming copy's Add to goes first where it goes by default (`keep_to`: the requester's own music, else the first
- *  main library), the others after it in the list's order. An upgrade's Replace takes the place of its other copy, so
- *  of any copy in a main library. `jobOf`: the conversion at work on a library's copy. */
+ *  main library), the others after it in the list's order. A better copy's Replace (C37a: its `against` says it replaces,
+ *  better than the record's copy in a main library) takes the place of the record's copy in any main library holding one.
+ *  `jobOf`: the conversion at work on a library's copy. */
 export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?: string) => number | null): AlbumOffer[] {
   const info = (id?: string) => s.library_info.find((l) => l.id === id) ?? null;
-  const verdict = s.verdicts[a.id];
-  const into = verdict?.replaceable_into ?? [];
   const held = librariesOf(a);
-  const mains = held.filter((id) => info(id)?.kind === 'main');
-  const replacing = verdict?.kind === 'upgrade' ? [...new Set([...into, ...mains])].flatMap((id) => info(id) ?? []) : [];
-  const others = s.library_info.filter((l) => !held.includes(l.id) && !into.includes(l.id));
+  const mains = held.flatMap((id) => (info(id)?.kind === 'main' ? [info(id)!] : []));
+  const others = s.library_info.filter((l) => !held.includes(l.id));
   return copiesIn(s, a).map((c) => {
     const from = info(c.library);
     const keepTo = c.keep_to;
@@ -118,7 +116,7 @@ export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?
       from,
       name: from?.name ?? c.library ?? 'Incoming',
       targets: [...targets.filter((l) => l.id === keepTo), ...targets.filter((l) => l.id !== keepTo)],
-      replaceInto: c.deletable && !kept ? replacing : [],
+      replaceInto: c.deletable && !kept && c.against?.replaces ? mains : [],
       deletable: c.deletable,
       job: jobOf(c.library),
     };

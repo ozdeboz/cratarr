@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { AlbumCopy, AlbumsSource, LibraryInfo, Verdict } from '../src/lib/api.ts';
+import type { AlbumCopy, AlbumsSource, Against, LibraryInfo } from '../src/lib/api.ts';
 
 const { adds, copies, deleteEntries, deleteGroups, heardAs, moveEntries, moveGroups, offersOf, playFromEntries, replaceEntries, withCopyMoved, withoutCopy } = await import('../src/lib/copiesRule.ts');
 
@@ -12,8 +12,9 @@ const library = (id: string, kind: LibraryInfo['kind'], more: Partial<LibraryInf
 const INFO = [library('music', 'main'), library('more', 'main'), library('in', 'incoming'), library('in2', 'incoming'), library('own', 'own', { mine: true }), library('theirs', 'own')];
 
 const copy = (id: string, more: Partial<AlbumCopy> = {}) => ({ library: id, deletable: true, keepable: false, keep_to: null, ...more }) as AlbumCopy;
-const list = (more: Partial<AlbumsSource> = {}) => ({ library_info: INFO, verdicts: {}, deletable: [], keepable: [], keep_to: {}, ...more }) as AlbumsSource;
-const upgrade = (into: string[]): Record<string, Verdict> => ({ 'al-1': { kind: 'upgrade', library: 'A/B', why: '', library_id: into[0] ?? null, replaceable_into: into } });
+const list = (more: Partial<AlbumsSource> = {}) => ({ library_info: INFO, deletable: [], keepable: [], keep_to: {}, ...more }) as AlbumsSource;
+/** An Incoming copy's stand against the record's copy in `library` (C37a). */
+const against = (library: string, better = true, replaces = better): { against: Against } => ({ against: { better, replaces, library, dir: 'A/B', why: '' } });
 const none = () => null;
 const offers = (copies: AlbumCopy[], s = list(), admin = true) => offersOf(s, { id: 'al-1', copies }, admin, none);
 const ids = (l: { id: string }[]) => l.map((x) => x.id);
@@ -69,21 +70,17 @@ test("an Incoming copy not the viewer's to add has no targets", () => {
   assert.deepEqual(offers([copy('in', { keep_to: 'music' })])[0].targets, []);
 });
 
-test("an upgrade replaces any main library's copy, its verdict's first; a duplicate replaces none", () => {
-  const [incoming, music, more] = offers([copy('in'), copy('music'), copy('more')], list({ verdicts: upgrade(['more']) }));
-  assert.deepEqual(ids(incoming.replaceInto), ['more', 'music']);
+test("a better copy replaces the record's copy in any main library; one no better, or better than own music's alone, none", () => {
+  const [incoming, music, more] = offers([copy('in', against('more')), copy('music'), copy('more')]);
+  assert.deepEqual(ids(incoming.replaceInto), ['music', 'more']);
   assert.deepEqual([music.replaceInto, more.replaceInto], [[], []], 'a kept copy replaces nothing');
-  const duplicate = list({ verdicts: { 'al-1': { ...upgrade(['music'])['al-1'], kind: 'duplicate' } } });
-  assert.deepEqual(offers([copy('in'), copy('music')], duplicate)[0].replaceInto, []);
+  assert.deepEqual(offers([copy('in', against('music', false)), copy('music')])[0].replaceInto, [], 'no better');
+  assert.deepEqual(offers([copy('in', against('own', true, false)), copy('own'), copy('music')])[0].replaceInto, [], "better than someone's own copy alone");
+  assert.deepEqual(offers([copy('in'), copy('music')])[0].replaceInto, [], 'no stand');
 });
 
 test('an Incoming copy may not replace what it may not delete', () => {
-  assert.deepEqual(offers([copy('in', { deletable: false }), copy('music')], list({ verdicts: upgrade(['music']) }))[0].replaceInto, []);
-});
-
-test('the library a verdict replaces in is no target, though no copy there is listed with it', () => {
-  const [o] = offers([copy('in', { keepable: true })], list({ verdicts: upgrade(['music']) }));
-  assert.deepEqual(ids(o.targets), ['more', 'own']);
+  assert.deepEqual(offers([copy('in', { deletable: false, ...against('music') }), copy('music')])[0].replaceInto, []);
 });
 
 test("another server's album goes by what its list says of its id, in its one library", () => {
@@ -111,7 +108,7 @@ test("each offer knows its own copy's job", () => {
 });
 
 test('a copy with a job has no Move, Replace or Delete, and the copy beside it keeps them', () => {
-  const o = offersOf(list({ verdicts: upgrade(['music']) }), { id: 'al-1', copies: [copy('in', { keepable: true }), copy('music')] }, true, (l) => (l === 'in' ? 7 : null));
+  const o = offersOf(list(), { id: 'al-1', copies: [copy('in', { keepable: true, ...against('music') }), copy('music')] }, true, (l) => (l === 'in' ? 7 : null));
   assert.deepEqual([...new Set(moveEntries(o).map((e) => e.offer.library))], ['music']);
   assert.deepEqual(replaceEntries(o), []);
   assert.deepEqual(deleteEntries(o, 'album').map((e) => e.label), ['Delete from MUSIC']);
@@ -148,7 +145,7 @@ test('Add to, Move to or Copy to as the copy goes, each entry knowing its copy a
 test('a record of several copies names the copy each Move and Replace acts on; one copy names none', () => {
   const s = list({ library_info: [...INFO, library('lidarr', 'main', { name: 'lidarr-music' })] });
   assert.deepEqual(moveEntries(offers([copy('music'), copy('own')], s)).filter((x) => x.to.id === 'lidarr').map((x) => x.label), ['Move to lidarr-music from MUSIC', 'Copy to lidarr-music from OWN'], "own music's copy goes as a copy (C40)");
-  assert.deepEqual(replaceEntries(offers([copy('in'), copy('more')], list({ verdicts: upgrade(['music']) }))).map((x) => x.label), ['Replace in MUSIC from IN', 'Replace in MORE from IN']);
+  assert.deepEqual(replaceEntries(offers([copy('in', against('music')), copy('music'), copy('more')])).map((x) => x.label), ['Replace in MUSIC from IN', 'Replace in MORE from IN']);
   assert.deepEqual(moveEntries(offers([copy('music')], s)).filter((x) => x.to.id === 'lidarr').map((x) => x.label), ['Move to lidarr-music']);
 });
 
@@ -159,7 +156,7 @@ test('two copies that would say the same each name themselves, and their keys di
 });
 
 test('Replace has an entry per main library, named by it', () => {
-  const o = offers([copy('in'), copy('music'), copy('more')], list({ verdicts: upgrade(['music']) }));
+  const o = offers([copy('in', against('music')), copy('music'), copy('more')]);
   assert.deepEqual(replaceEntries(o).map((e) => [e.label, e.offer.library, e.to.id]), [
     ['Replace in MUSIC from IN', 'in', 'music'],
     ['Replace in MORE from IN', 'in', 'more'],

@@ -1799,7 +1799,13 @@ export type AlbumCopy = {
   size: number | null;
   tracks: number;
   job: number | null;
+  /** An Incoming copy of a record kept elsewhere: how it stands against the copy that plays the record for most (C37a). */
+  against?: Against;
 };
+
+/** An Incoming copy against the copy that plays its record for most (C37a): `better` where it ranks above it, `replaces` where
+ *  that copy lies in a main library (Replace's), that copy's `library` and folder there (`dir`), and `why` in words. */
+export type Against = { better: boolean; replaces: boolean; library: string; dir: string; why: string };
 
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {
@@ -1883,20 +1889,11 @@ export type LibraryInfo = {
   naming?: string;
 };
 
-/** An album as it stands to the other used libraries (decision 0034): an upgrade of an album there, or a duplicate.
- *  `library` is that album's folder, `library_id` the library it is in; `replaceable_into` the main libraries it can
- *  replace the other copy in (decision 0101 point 2). */
-export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable_into: string[] };
-
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
   library_info: LibraryInfo[];
-  verdicts: Record<string, Verdict>;
   /** Per album id of an Incoming library: what it lacks of what the library requires (cover, year, genre, …). */
   lacks?: Record<string, string[]>;
-  /** Per album a verdict pairs with (Music's or another library's): an album of another library that upgrades or
-   *  duplicates it. */
-  waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
   deletable: string[];
   /** The Incoming albums the viewer may Keep, and where each goes by default (decision 0101 point 2). */
   keepable: string[];
