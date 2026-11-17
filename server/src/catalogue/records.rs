@@ -787,6 +787,13 @@ fn contradicts(mine: &[(String, String, String)], theirs: &[(String, String, Str
     })
 }
 
+/// Whether a record of a name is an album of it as `albums_of` counts them (V3): had, or holding a MusicBrainz release or release
+/// group. One not had holding neither (a Bandcamp or Discogs list's, a request's, a clash's) is none of its own: nothing tells it
+/// apart from the others of its name, so it is never what makes a name several albums. Pure.
+fn an_album(refs: &[(String, String, String)], had: bool) -> bool {
+    had || refs.iter().any(|(s, k, _)| s == "musicbrainz" && (k == "release-group" || k == "release"))
+}
+
 /// Records of one name as albums (X8, X9): records holding one MusicBrainz release group or release are one album, its copies
 /// or editions; a record holding neither, one of its own. Each album's records, from each record's references.
 fn albums_of<'r>(records: impl IntoIterator<Item = (i64, &'r [(String, String, String)])>) -> Vec<Vec<i64>> {
@@ -810,7 +817,8 @@ fn albums_of<'r>(records: impl IntoIterator<Item = (i64, &'r [(String, String, S
 /// oldest live, had record that holds its MusicBrainz release or release group (an album that arrived as a record of its own,
 /// its group known since by its tags, a match or Lidarr); else the oldest live, had record of its artist with its title, both
 /// folded, where no reference contradicts (`contradicts`). Never by a name that is several albums' besides the record's own,
-/// records had and not had counted as X9 counts them (`albums_of`), nor for a record made for a clash of names
+/// records counted as X9 counts them (`albums_of`), those not had only where they hold a MusicBrainz reference (`an_album`, V3),
+/// nor for a record made for a clash of names
 /// (`shared_name_records`): which album the name means, nothing says, so a request of it stays Wanted (Y1). A retired record is
 /// had the same way: by a live record of its group or of its names. For a whole list at once, in a few queries whatever its
 /// length (C53a: an artist's page of hundreds of records asks once, not once a record); `names`, the live records by their
@@ -897,8 +905,9 @@ fn holders_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Resu
     let had_ones = live_had_of(db, &others)?;
     for (r, key) in keyed {
         let same = index.get(&key).map(Vec::as_slice).unwrap_or_default();
-        // Its name's albums, its own among them (X9): two besides its own, and its names cannot say which it is.
-        let albums = albums_of(std::iter::once((r, own_of(r).as_slice())).chain(same.iter().filter(|h| **h != r).map(|h| (*h, theirs_of(*h)))));
+        // Its name's albums, its own among them (X9): two besides its own, and its names cannot say which it is. One not had that
+        // nothing tells apart is none (V3).
+        let albums = albums_of(std::iter::once((r, own_of(r).as_slice())).chain(same.iter().filter(|h| **h != r && an_album(theirs_of(**h), had_ones.contains(*h))).map(|h| (*h, theirs_of(*h)))));
         if albums.iter().filter(|a| !a.contains(&r)).count() > 1 {
             continue;
         }
@@ -946,7 +955,7 @@ fn held_by_names_in(db: &Connection, rows: &[(Ref, &str, &str)], names: &mut Fol
             }
             let same = index.get(key).map(Vec::as_slice).unwrap_or_default();
             let own = [(r.source.clone(), r.kind.clone(), r.value.clone())];
-            let albums = albums_of(std::iter::once((ROW, &own[..])).chain(same.iter().map(|h| (*h, theirs_of(*h)))));
+            let albums = albums_of(std::iter::once((ROW, &own[..])).chain(same.iter().filter(|h| an_album(theirs_of(**h), had.contains(*h))).map(|h| (*h, theirs_of(*h)))));
             if albums.iter().filter(|a| !a.contains(&ROW)).count() > 1 {
                 return None;
             }
@@ -1692,7 +1701,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
     };
     // Its names several live albums of the artist share, had or not had (X8): exact folded names cannot say which. Records holding
     // one MusicBrainz release group or release are one album, its copies or editions (X9, `albums_of`, as the had rule counts them,
-    // Y1); a record holding neither, one of its own.
+    // Y1); a had record holding neither, one of its own; one not had holding neither (a list's, a request's), none (V3).
     let shared_names = || -> Result<bool> {
         if fold(&w.title).is_empty() {
             return Ok(false);
@@ -1702,8 +1711,8 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         if named.len() < 2 {
             return Ok(false);
         }
-        let (refs, none) = (refs_of(tx, &named)?, Vec::new());
-        Ok(albums_of(named.iter().map(|id| (*id, refs.get(id).unwrap_or(&none).as_slice()))).len() > 1)
+        let (refs, had, none) = (refs_of(tx, &named)?, live_had_of(tx, &named)?, Vec::new());
+        Ok(albums_of(named.iter().map(|id| (*id, refs.get(id).unwrap_or(&none).as_slice())).filter(|(id, theirs)| an_album(theirs, had.contains(id)))).len() > 1)
     };
     let shared = by_group.or(by_page).is_none() && shared_names()?;
     // A request by its names alone whose names clash takes the record made for the first such request, while it is live (X9): two
@@ -3087,9 +3096,13 @@ mod tests {
         let (record, ..) = asked(&cat, &Wanted { group: Some(group.into()), ..named.clone() });
         assert!(!had.contains(&record));
         assert!(refs_in(&cat.db(), &ids::record(record)).unwrap().iter().any(|(s, k, v)| (s.as_str(), k.as_str(), v.as_str()) == ("musicbrainz", "release-group", group)), "by its group");
-        // One had, one not had: two still.
+        // One had, one not had of another release group (a discography's): two still. The one not had holding no MusicBrainz
+        // reference (a list's, a request's) is no album of its own (V3): the had one is found by its names.
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let both = [cat.record_for_tests("Glass Harbour", 2), cat.record_for_tests("Glass Harbour", 0)];
+        let (record, _, by_names, shared) = asked(&cat, &named);
+        assert!(record == both[0] && by_names && !shared, "V3: the had one, by its names");
+        assert!(cat.set_reference(&ids::record(both[1]), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000205"), "link").unwrap());
         let (record, _, by_names, shared) = asked(&cat, &named);
         assert!(!both.contains(&record) && !by_names && shared);
     }
@@ -3204,6 +3217,52 @@ mod tests {
             assert!(cat.set_reference(&ids::record(listed), &Ref::new("discogs", "master", "3020"), "link").unwrap());
             assert_eq!(cat.requested(&[listed]).unwrap()[&listed].holder, grouped.then_some(copies[0]), "grouped {grouped}");
         }
+    }
+
+    /// V3 (the review of run 8b, finding 3): a record not had holding no MusicBrainz release or release group, a Bandcamp list's or a
+    /// Discogs list's, is no album of its own: beside an owned album of the name, untagged or of a release group a discography's
+    /// record holds too, both list records are held by it, a Beyond row of the name is had, and a request by the names alone takes
+    /// the owned album.
+    #[test]
+    fn a_bandcamp_and_a_discogs_list_record_of_an_owned_album_read_had() {
+        for tagged in [false, true] {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let owned = cat.record_for_tests("Two Rooms", 2);
+            if tagged {
+                let listed = cat.record_for_tests("Two Rooms", 0);
+                for r in [owned, listed] {
+                    cat.db().execute("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, 'musicbrainz', 'release-group', '00000000-0000-4000-8000-000000000330', 1, 'files')", [ids::record(r)]).unwrap();
+                }
+            }
+            let bandcamp = cat.record_for_tests("Two Rooms", 0);
+            assert!(cat.set_reference(&ids::record(bandcamp), &Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/two-rooms"), "link").unwrap());
+            let discogs = cat.record_for_tests("Two Rooms", 0);
+            assert!(cat.set_reference(&ids::record(discogs), &Ref::new("discogs", "master", "3030"), "link").unwrap());
+            let read = cat.requested(&[bandcamp, discogs]).unwrap();
+            assert_eq!((read[&bandcamp].holder, read[&discogs].holder), (Some(owned), Some(owned)), "tagged {tagged}: both lists' records had");
+            let row = (Ref::new("discogs", "master", "3031"), "Glass Harbour", "Two Rooms");
+            assert_eq!(cat.by_reference(&[row], &[]).unwrap().named, [Some(owned)], "tagged {tagged}: Beyond's row had");
+            let asked = cat.record_for_request(&Wanted { artist: "Glass Harbour".into(), title: "Two Rooms".into(), ..Wanted::default() }).unwrap();
+            assert_eq!(asked, owned, "tagged {tagged}: no clash of names, the owned album by its names");
+        }
+    }
+
+    /// V3: two albums of one name, each of its own release group (Orbital's 1991 album owned, its 1993 one a discography's), are two
+    /// still: a Bandcamp list's record of the name is held by neither, and a request by the names alone takes a record of its own
+    /// (X8, X9), held by neither (Y1).
+    #[test]
+    fn two_albums_of_one_name_by_their_groups_are_still_a_clash() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let owned = cat.record_for_tests("Glass Harbour", 2);
+        assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000331"), "files").unwrap());
+        let listed = cat.record_for_tests("Glass Harbour", 0);
+        assert!(cat.set_reference(&ids::record(listed), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000332"), "link").unwrap());
+        let bandcamp = cat.record_for_tests("Glass Harbour", 0);
+        assert!(cat.set_reference(&ids::record(bandcamp), &Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/glass-harbour"), "link").unwrap());
+        let alone = cat.record_for_request(&Wanted { artist: "Glass Harbour".into(), title: "Glass Harbour".into(), ..Wanted::default() }).unwrap();
+        assert!(![owned, listed, bandcamp].contains(&alone), "a clash of names: its own record");
+        let read = cat.requested(&[bandcamp, alone]).unwrap();
+        assert_eq!((read[&bandcamp].holder, read[&alone].holder), (None, None), "neither held by the owned album");
     }
 
     /// R21 (N1): a self-titled Want by its release group is not another self-titled album of the artist the library holds.
