@@ -1640,6 +1640,22 @@ async fn album_view(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> 
         Ok(v) => Ok(v),
         Err(e) => Err(e),
     };
+    // A record not had (C54): its own page from the catalogue, with the asking account's request of it; one merged into a record
+    // the library holds answers that one's view.
+    if source == crate::source::cratarr::KIND.id
+        && failed.is_err()
+        && let Some(mut v) = app.playing.record_view(&album).await?
+    {
+        if v.more.not_had
+            && let (Some(serve), Some(account), Some(record)) = (ctx.served.clone(), ctx.account(), crate::serve::ids::record_number(&v.id))
+        {
+            v.more.request = crate::app::requests::request_of_record(&app, &serve, &account, record).await.unwrap_or_else(|e| {
+                tracing::debug!("the request of {album}: {e:#}");
+                None
+            });
+        }
+        return Ok(Json(v));
+    }
     // A link from before 0.16 opens its record, which the answer's id says. A record nothing plays of now is no answer: that
     // album's fate is what its old id finds.
     if source == crate::source::cratarr::KIND.id
@@ -1711,6 +1727,7 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
         words: None,
         record,
         release_group,
+        ..crate::app::AlbumMore::default()
     };
     let rows = a
         .tracks
@@ -4104,6 +4121,11 @@ async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Qu
         }),
         (None, Some(size), Some(served)) if own => crate::app::device_covers::for_list(served, &album, size).await,
         _ => ctx.app.playing.album_cover(&source, &album).await,
+    };
+    // A record not had (C54): from the cover cache, by the address its page shows.
+    let found = match found {
+        None if own => crate::app::cover_cache::of_record(ctx.app.library.catalogue(), &album).await.map(|(bytes, mime)| (mime.to_string(), bytes)),
+        found => found,
     };
     match found {
         Some((content_type, bytes)) => {

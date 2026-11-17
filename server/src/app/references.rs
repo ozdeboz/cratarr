@@ -297,6 +297,58 @@ where
 /// a release group's (R25: kept as a reference).
 pub type Read = (Vec<RefTrack>, Option<Ref>);
 
+/// How long a record's list its page asked for and could not have is left before a page asks for it again (C54).
+const PAGE_READ_AGAIN_SECS: i64 = 15 * 60;
+
+/// The records whose list a page asked for (C54), by the catalogue and the record: being read (none), or when it could not be.
+type PageReads = std::sync::Mutex<HashMap<(usize, i64), Option<i64>>>;
+
+fn page_reads() -> &'static PageReads {
+    static READS: std::sync::OnceLock<PageReads> = std::sync::OnceLock::new();
+    READS.get_or_init(Default::default)
+}
+
+/// Ends a page's read, whatever becomes of its task: read, else not (a panic, a task dropped), and when.
+struct PageRead((usize, i64), bool);
+
+impl Drop for PageRead {
+    fn drop(&mut self) {
+        let mut reads = page_reads().lock().unwrap_or_else(|p| p.into_inner());
+        if self.1 {
+            reads.remove(&self.0);
+        } else {
+            reads.insert(self.0, Some(super::moment::now_secs()));
+        }
+    }
+}
+
+/// A record not had's list asked for by its page where none is kept (C54): its counting list read in the background through
+/// `tracklist` and its sources (`read_reference`), and kept, so the page lists its rows when asked again. One read a record at a
+/// time; one that came to no list is asked for again after `PAGE_READ_AGAIN_SECS`. Whether it is being read (the page's
+/// `looking`).
+pub fn read_soon(cat: &Arc<Catalogue>, record: i64, now: i64) -> bool {
+    let key = (Arc::as_ptr(cat) as usize, record);
+    {
+        let mut reads = page_reads().lock().unwrap_or_else(|p| p.into_inner());
+        match reads.get(&key) {
+            Some(None) => return true,
+            Some(Some(failed)) if now - failed < PAGE_READ_AGAIN_SECS => return false,
+            _ => {}
+        }
+        reads.insert(key, None);
+    }
+    let cat = cat.clone();
+    tokio::spawn(async move {
+        let mut settles = PageRead(key, false);
+        match tracklist(&cat, record, read_reference).await {
+            Ok(Ok(_)) => settles.1 = true,
+            Ok(Err(why)) => tracing::debug!(target: "library", record, "a page's list not read: {why}"),
+            Err(e) => tracing::debug!(target: "library", record, "a page's list not read: {e:#}"),
+        }
+    });
+    true
+}
+
 /// A source switched off: no answer about any record, and none against it (R23).
 #[derive(Debug)]
 pub struct SwitchedOff(pub &'static str);
@@ -587,15 +639,19 @@ struct Kept {
     files: Vec<Listed>,
 }
 
-/// Blocking.
+/// A record not had (D18, C54) is no album of the library: its names are the catalogue's. Blocking.
 fn kept(served: &crate::serve::Serve, album: &str, record: i64) -> Result<Kept> {
-    let rec = served.library.album(album)?.context("No such album in Cratarr's own library")?;
     let cat = served.catalogue();
     let row = cat.record(record)?.context("No such album in Cratarr's own library")?;
+    let (title, artist) = match served.library.album(album)? {
+        Some(rec) => (rec.name, rec.artist),
+        None if !row.had => (row.title.clone(), row.artist.clone()),
+        None => bail!("No such album in Cratarr's own library"),
+    };
     let matched = served.userdata.album_matches(&[album.to_string()])?.remove(album).and_then(|(_, j)| serde_json::from_str(&j?).ok());
     Ok(Kept {
-        title: rec.name,
-        artist: rec.artist,
+        title,
+        artist,
         refs: cat.references_of(album)?,
         lists: cat.reference_tracks(record)?,
         row,
@@ -612,6 +668,8 @@ fn source_of(source: &'static str, k: &Kept, found: &str, missing: &str) -> Sour
     let main = main_ref(&k.refs, source);
     let list = k.lists.iter().find(|(s, _)| s == source).map(|(_, l)| l.as_slice()).filter(|l| !l.is_empty());
     let (state, said) = match (list, main) {
+        // A record not had (D18): no files to hold its list against.
+        (Some(l), _) if !k.row.had => ("found", format!("{} tracks", l.len())),
         (Some(l), _) => held(l, &k.files),
         (None, Some((_, row))) if row.how == "hand" => ("agrees", "Pasted by hand".to_string()),
         (None, Some(_)) => ("found", found.to_string()),
@@ -764,6 +822,8 @@ fn chose(cat: &Catalogue, record: i64, album: &str, c: &Choose, files: &[Listed]
         let r = ref_of_link(link).context("Paste a release's page on MusicBrainz or Discogs, or an album's on Bandcamp")?;
         cat.set_reference(album, &r, "hand")?;
         cat.set_counting(record, Some(&r.source), true)?;
+        // The list its source kept was another reference's (D18): read by the link from now on, so Search now judges by it.
+        cat.forget_reference_tracks(record, &r.source)?;
     }
     if let Some(src) = &c.confirm {
         if !SOURCES.contains(&src.as_str()) {
@@ -782,30 +842,36 @@ pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<Ref
     let served = app.served.clone().context("Cratarr's own library is not open")?;
     let record = ids::record_number(album).context("No such album in Cratarr's own library")?;
     let (s, a) = (served.clone(), album.to_string());
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let rec = s.library.album(&a)?.context("No such album in Cratarr's own library")?;
-        let checked = chose(s.catalogue(), record, &a, &c, &files_of(&s, &a)?)?;
-        // Checked by hand: the record is its own reference for its type and year from now on, as it shows them (set as
-        // by hand, so no source's guess changes them after).
-        if checked {
-            let mut facts: Vec<(String, Option<serde_json::Value>)> = Vec::new();
-            if let Some(kind) = rec.release.kind.clone() {
-                facts.push(("type".into(), Some(serde_json::Value::String(kind))));
-            }
-            if let Some(y) = rec.year.filter(|y| *y >= 1000) {
-                facts.push(("year".into(), Some(serde_json::json!(y))));
-            }
-            if !facts.is_empty() {
-                s.userdata.set_overrides(std::slice::from_ref(&a), &facts, super::moment::now_secs())?;
-                s.refresh()?;
-            }
-        }
-        Ok(())
-    })
-    .await??;
+    tokio::task::spawn_blocking(move || choose_in(&s, &a, record, &c)).await??;
     app.collection.refresh().await;
     app.collection.tell_changed();
     of(app, album).await
+}
+
+/// `choose` in the catalogue and the user data. A record not had (D18, C54) is no album of the library: its choice is the
+/// catalogue's alone, with no files to write its facts to. Blocking.
+fn choose_in(s: &crate::serve::Serve, a: &str, record: i64, c: &Choose) -> Result<()> {
+    let rec = s.library.album(a)?;
+    if rec.is_none() && !s.catalogue().record(record)?.is_some_and(|r| !r.had) {
+        bail!("No such album in Cratarr's own library");
+    }
+    let checked = chose(s.catalogue(), record, a, c, &files_of(s, a)?)?;
+    // Checked by hand: the record is its own reference for its type and year from now on, as it shows them (set as
+    // by hand, so no source's guess changes them after).
+    if checked && let Some(rec) = rec {
+        let mut facts: Vec<(String, Option<serde_json::Value>)> = Vec::new();
+        if let Some(kind) = rec.release.kind.clone() {
+            facts.push(("type".into(), Some(serde_json::Value::String(kind))));
+        }
+        if let Some(y) = rec.year.filter(|y| *y >= 1000) {
+            facts.push(("year".into(), Some(serde_json::json!(y))));
+        }
+        if !facts.is_empty() {
+            s.userdata.set_overrides(&[a.to_string()], &facts, super::moment::now_secs())?;
+            s.refresh()?;
+        }
+    }
+    Ok(())
 }
 
 /// The records no reference speaks for (Health's References item): the catalogue's one query (`Catalogue::unreferenced`),
@@ -1223,6 +1289,41 @@ mod tests {
         let (source, list) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
         assert_eq!((source.as_str(), list.len()), ("discogs", 2));
         assert_eq!(*asked.lock().unwrap(), ["discogs:release"]);
+    }
+
+    /// D18 (C54): the References panel works on a record not had. It is read with its names from the catalogue, its list as found
+    /// (no files to hold it against). A link pasted on it is its hand reference and counts, the list kept from another reference
+    /// let go of, so Search now (`tracklist`) reads what was pasted; "Use this" the same.
+    #[tokio::test]
+    async fn the_references_panel_works_on_a_record_not_had() {
+        let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.attach_catalogue(Arc::new(Catalogue::open(None, Vec::new()).unwrap()));
+        let cat = served.catalogue().clone();
+        let record = wanted(&cat, "Night Walks", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000192"), ("discogs", "release", "2000010")]);
+        let album = ids::record(record);
+        cat.set_reference_tracks(record, "musicbrainz", &list(&[("Lamplight", Some(200_000)), ("Bonus", Some(90_000))])).unwrap();
+        cat.set_counting(record, Some("musicbrainz"), false).unwrap();
+        let k = kept(&served, &album, record).unwrap();
+        assert_eq!((k.title.as_str(), k.artist.as_str()), ("Night Walks", "Glass Harbour"));
+        let mb = &sources(&k, None)[0];
+        assert_eq!((mb.state, mb.said.as_str(), mb.tracks), ("found", "2 tracks", Some(2)), "no files to hold it against");
+        let release = "00000000-0000-4000-8000-000000000193";
+        choose_in(&served, &album, record, &Choose { link: Some(format!("https://musicbrainz.org/release/{release}")), ..Choose::default() }).unwrap();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let read = {
+            let asked = asked.clone();
+            move |r: Ref| {
+                asked.lock().unwrap().push(format!("{}:{}", r.kind, r.value));
+                std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000))]), None))))
+            }
+        };
+        let (source, pasted) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
+        assert_eq!((source.as_str(), pasted.len()), ("musicbrainz", 1), "the pasted release's list, not the one kept before");
+        assert_eq!(*asked.lock().unwrap(), [format!("release:{release}")]);
+        asked.lock().unwrap().clear();
+        choose_in(&served, &album, record, &Choose { counting: Some(Some("discogs".into())), ..Choose::default() }).unwrap();
+        assert_eq!(tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap().0, "discogs", "Use this");
+        assert_eq!(*asked.lock().unwrap(), ["release:2000010"]);
     }
 
     /// C51a: a record not had counts its first reference in the design's order whose list answers: MusicBrainz before Discogs

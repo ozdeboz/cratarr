@@ -75,6 +75,20 @@ impl Catalogue {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// A record's labels (C54: its page), each with its catalogue number there ('' none), in the order they were given ids. On a
+    /// reader. Blocking.
+    pub fn record_labels(&self, record: i64) -> Result<Vec<(LabelRow, String)>> {
+        let read = |db: &Connection| -> Result<Vec<(LabelRow, String)>> {
+            let mut st = db.prepare_cached("SELECT l.id, l.name, r.catno FROM record_labels r JOIN labels l ON l.id = r.label WHERE r.record = ?1 ORDER BY l.id, r.catno")?;
+            let rows = st.query_map([record], |r| Ok((LabelRow { id: r.get(0)?, name: r.get(1)? }, r.get(2)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// A record's artists, in order. Blocking.
     #[cfg_attr(not(test), allow(dead_code))] // an artist's page and a record's (C54, C55)
     pub fn record_artists(&self, record: i64) -> Result<Vec<i64>> {

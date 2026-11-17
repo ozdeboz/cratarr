@@ -149,11 +149,124 @@ pub struct AlbumMore {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listeners: Option<u64>,
     /// What a Want of a Bandcamp album sends (W1): Cratarr's record that holds its page (`al-<n>`), else the release group its page
-    /// was found by.
+    /// was found by. A record not had's page (C54): the record itself, and its first release group.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release_group: Option<String>,
+    /// A record not had (C54): its page from the catalogue, its rows its list's, none of them playable.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub not_had: bool,
+    /// Its list is being read (C54): none kept yet, so its rows come when the page asks again.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub looking: bool,
+    /// The record that has the album by the one had rule (C54, R13), where it is another (`al-<n>`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub have: Option<String>,
+    /// The account's newest request of it, whatever its status, as the Requests page shows it (C54).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<super::requests::View>,
+    /// Its labels (C54), each by its id for life.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<LabelOf>,
+    /// Its cover's address (C54): its own, else its release group's, else its Bandcamp page's (`cover_cache::addresses_of`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    /// A retired record's (OQ16): when it went from Music, "Was in Music until <date>".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub was_until: Option<i64>,
+    /// Its Bandcamp album page (Q34): its preview plays through the Bandcamp source, as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandcamp: Option<String>,
+}
+
+/// A record's label as its page names it (C54): its id for life (`la-<n>`), its name, and its catalogue number there.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LabelOf {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catno: Option<String>,
+}
+
+/// What Cratarr's album answers where the served library cannot read it (C54, `record_page`).
+enum RecordPage {
+    /// A record not had: its own page (`AlbumMore::not_had`).
+    NotHad(Box<AlbumView>),
+    /// Merged into a record that is had (G3): that record's id, whose usual view answers.
+    Held(String),
+}
+
+/// The page of Cratarr's record `record` from the catalogue alone (C54), merges followed. A record not had is opened at `at` (RT01:
+/// kept six months from then), and shows:
+/// - its names, year, genres and release date;
+/// - its rows from its counting list as kept, else from the first kept in the design's order, none of them playable; with none
+///   kept and a reference to read one by, `looking`;
+/// - who has it (the one had rule's holder), its labels, its cover's address, its Bandcamp page (Q34), and when it went from Music
+///   where it was retired (OQ16).
+///
+/// One merged into a record had is `Held`; a record had itself, or no such record, none: answered as before. Blocking.
+fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Result<Option<RecordPage>> {
+    use crate::catalogue::identity::COUNTING_ORDER;
+    use crate::serve::ids;
+    let Some(q) = cat.requested(&[record])?.remove(&record) else { return Ok(None) };
+    let album = ids::record(q.row.id);
+    if q.row.had {
+        return Ok((q.row.id != record).then_some(RecordPage::Held(album)));
+    }
+    cat.opened(q.row.id, at)?;
+    let kept = cat.reference_tracks(q.row.id)?;
+    let listed = |source: &str| kept.iter().find(|(s, l)| s == source && !l.is_empty()).map(|(_, l)| l);
+    let list = q.row.counting.as_deref().and_then(listed).or_else(|| COUNTING_ORDER.iter().find_map(|&s| listed(s)));
+    let rows: Vec<super::playlists::PlaylistRow> = list
+        .into_iter()
+        .flatten()
+        .map(|t| super::playlists::PlaylistRow {
+            entry: format!("{album}/{}.{}", t.disc, t.position),
+            file: t.title.clone(),
+            id: None,
+            name: Some(t.title.clone()),
+            album: Some(q.row.title.clone()),
+            duration_secs: t.length_ms.map(|ms| ms as f64 / 1000.0),
+            disc: Some(t.disc),
+            track: Some(t.position),
+            album_id: Some(album.clone()),
+            missing: true,
+            ..Default::default()
+        })
+        .collect();
+    let looking = list.is_none() && q.refs.iter().any(|(s, ..)| COUNTING_ORDER.contains(&s.as_str()));
+    let labels = cat.record_labels(q.row.id)?.into_iter().map(|(l, catno)| LabelOf { id: ids::label(l.id), name: l.name, catno: Some(catno).filter(|c| !c.is_empty()) }).collect();
+    let cover = super::cover_cache::addresses_of(q.row.cover.as_deref(), q.groups.first().map(String::as_str), q.bandcamp.as_deref()).into_iter().next();
+    let id = q.row.id;
+    let row = q.row;
+    Ok(Some(RecordPage::NotHad(Box::new(AlbumView {
+        source: crate::source::cratarr::KIND.id.to_string(),
+        id: album.clone(),
+        title: row.title,
+        artist: Some(row.artist).filter(|a| !a.is_empty()),
+        year: row.year.and_then(|y| u32::try_from(y).ok()).filter(|y| *y > 0),
+        genres: row.genres.into_iter().take(GENRES_SHOWN).collect(),
+        format: None,
+        bitrate_kbps: None,
+        rows,
+        added: None,
+        played: None,
+        plays: None,
+        more: AlbumMore {
+            released: row.released,
+            record: Some(album),
+            release_group: q.groups.into_iter().next(),
+            not_had: true,
+            looking,
+            have: q.holder.filter(|h| *h != id).map(ids::record),
+            labels,
+            cover,
+            was_until: row.retired_at,
+            bandcamp: q.bandcamp,
+            ..AlbumMore::default()
+        },
+    }))))
 }
 
 /// A track the page plays itself (decision 0022) as the player shows it: its playlists, and whether it can be added
@@ -684,6 +797,11 @@ impl PlayingService {
                     if let Ok(Some(gone)) = tokio::task::spawn_blocking(move || super::retention::unknown_album(&c, &id)).await {
                         return Err(gone);
                     }
+                    // A record not had is no album of the library: its page answers from the catalogue (C54, `record_view`).
+                    if crate::serve::ids::record_number(album_id).is_some() {
+                        tracing::debug!("{source_id}: album {album_id}: {e:#}");
+                        return Err(ToggleError::Refused("The server could not read this album.".into()));
+                    }
                 }
                 tracing::warn!("{source_id}: album {album_id}: {e:#}");
                 return Err(ToggleError::Refused("The server could not read this album.".into()));
@@ -754,6 +872,38 @@ impl PlayingService {
             plays: listening.plays,
             more: AlbumMore { words, ..AlbumMore::default() },
         })
+    }
+
+    /// What Cratarr's album `album` answers where the served library cannot read it (C54): a record not had, its own page from the
+    /// catalogue (`record_page`), its list asked for where none is kept (`references::read_soon`); one merged into a record had,
+    /// that one's view. The page's path alone: opening it marks the record opened. None: no record of the catalogue's, or one had
+    /// that the library does not serve now (answered as before).
+    pub async fn record_view(&self, album: &str) -> Result<Option<AlbumView>, ToggleError> {
+        let Some(record) = crate::serve::ids::record_number(album) else { return Ok(None) };
+        let cat = self.lib.catalogue();
+        let c = cat.clone();
+        let page = match tokio::task::spawn_blocking(move || record_page(&c, record, super::moment::now_secs())).await {
+            Ok(Ok(page)) => page,
+            Ok(Err(e)) => {
+                tracing::warn!("record {album}: {e:#}");
+                None
+            }
+            Err(e) => {
+                tracing::warn!("record {album}: {e}");
+                None
+            }
+        };
+        match page {
+            Some(RecordPage::NotHad(mut view)) => {
+                if view.more.looking {
+                    let end = crate::serve::ids::record_number(&view.id).unwrap_or(record);
+                    view.more.looking = super::references::read_soon(&cat, end, super::moment::now_secs());
+                }
+                Ok(Some(*view))
+            }
+            Some(RecordPage::Held(end)) => self.album_view(crate::source::cratarr::KIND.id, &end).await.map(Some),
+            None => Ok(None),
+        }
     }
 
     /// An artist of a connected server, for their view in the panel (by name, as the albums credit them).
@@ -932,5 +1082,119 @@ mod tests {
         assert!(playing.hear(&play("gone", "3d5336410f0c2dbfca17dd0dbc334d23")).await.is_ok(), "a server removed");
         assert!(playing.hear(&play("away", "3d5336410f0c2dbfca17dd0dbc334d23")).await.is_err(), "a server on but away");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    // ---- C54: the page of a record not had
+
+    use crate::catalogue::Catalogue;
+    use crate::catalogue::identity::RefTrack;
+    use crate::catalogue::records::Ref;
+    use crate::serve::ids;
+
+    /// The pages' clock in the tests, and a month.
+    const NOW: i64 = 1_800_000_000;
+    const MONTH: i64 = 30 * 86_400;
+
+    /// A record not had's page, as `record_page` answers it now.
+    fn page(cat: &Catalogue, record: i64) -> AlbumView {
+        match record_page(cat, record, NOW).unwrap() {
+            Some(RecordPage::NotHad(v)) => *v,
+            _ => panic!("al-{record} is no page of a record not had"),
+        }
+    }
+
+    fn track(position: u32, title: &str) -> RefTrack {
+        RefTrack { disc: 1, position, title: title.into(), length_ms: Some(200_000), recording: None }
+    }
+
+    /// C54: a record not had is a page from the catalogue: its names, year and date; its rows its counting list's (Bandcamp's here,
+    /// though Discogs' comes first in the order), none of them playable; its labels; its cover's address. With no list kept it has
+    /// no rows yet, and asks for one where a reference may give it; its cover is then its Bandcamp page's, and its page is kept for
+    /// the preview (Q34).
+    #[test]
+    fn a_record_not_had_is_a_page_not_playable() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let record = cat.record_for_tests("Night Walks", 0);
+        let group = "00000000-0000-4000-8000-000000000194";
+        assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release-group", group), "link").unwrap());
+        cat.db_for_tests().execute("UPDATE records SET year = 2019, released = '2019-05-17', genres = 'Ambient' WHERE id = ?1", [record]).unwrap();
+        let label = cat.label_for("Low Tide Records").unwrap();
+        cat.db_for_tests().execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, 'LTR-012', 'listing')", [record, label]).unwrap();
+        cat.set_reference_tracks(record, "discogs", &[track(1, "Other")]).unwrap();
+        cat.set_reference_tracks(record, "bandcamp", &[track(1, "Lamplight"), track(2, "Morning")]).unwrap();
+        cat.set_counting(record, Some("bandcamp"), false).unwrap();
+        let v = page(&cat, record);
+        assert_eq!((v.id.clone(), v.title.as_str(), v.artist.as_deref(), v.year), (ids::record(record), "Night Walks", Some("Glass Harbour"), Some(2019)));
+        assert_eq!((v.genres.clone(), v.more.released.as_deref()), (vec!["Ambient".to_string()], Some("2019-05-17")));
+        let rows: Vec<(Option<&str>, Option<u32>, Option<f64>)> = v.rows.iter().map(|r| (r.name.as_deref(), r.track, r.duration_secs)).collect();
+        assert_eq!(rows, [(Some("Lamplight"), Some(1), Some(200.0)), (Some("Morning"), Some(2), Some(200.0))], "its counting list's");
+        assert!(v.rows.iter().all(|r| r.id.is_none() && r.missing), "none of them plays");
+        assert!(v.more.not_had && !v.more.looking);
+        assert_eq!(v.more.cover, Some(format!("/api/covers/release-group/{group}")));
+        assert_eq!(serde_json::to_value(&v.more.labels).unwrap(), serde_json::json!([{ "id": ids::label(label), "name": "Low Tide Records", "catno": "LTR-012" }]));
+        assert_eq!((v.more.record.clone(), v.more.release_group.as_deref()), (Some(ids::record(record)), Some(group)), "what a Want sends");
+        // No list kept, a Bandcamp page alone: no rows yet, its list asked for; the page's cover, and its preview.
+        let at = "https://kitetheory.bandcamp.com/album/quiet-lanes";
+        let bare = cat.record_for_tests("Quiet Lanes", 0);
+        assert!(cat.set_reference(&ids::record(bare), &Ref::new("bandcamp", "album", at), "link").unwrap());
+        let v = page(&cat, bare);
+        assert!(v.rows.is_empty() && v.more.looking);
+        assert_eq!(v.more.cover, Some(format!("/api/cover/bandcamp/{}", crate::bandcamp::track_id(at, 0))));
+        assert_eq!((v.more.bandcamp.as_deref(), v.more.labels.len()), (Some(at), 0));
+    }
+
+    /// C54 (G3): a record merged into another answers as that one: its page moves to the record it is now; merged into a record
+    /// had, that record's usual view answers. A record had is the library's, no page.
+    #[test]
+    fn a_merged_record_moves() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (from, into) = (cat.record_for_tests("Two Rooms", 0), cat.record_for_tests("Two Rooms (Deluxe)", 0));
+        cat.merge_records(from, into).unwrap();
+        let v = page(&cat, from);
+        assert_eq!((v.id, v.title), (ids::record(into), "Two Rooms (Deluxe)".to_string()));
+        let (gone, had) = (cat.record_for_tests("Signal", 0), cat.record_for_tests("Signal", 2));
+        cat.merge_records(gone, had).unwrap();
+        assert!(matches!(record_page(&cat, gone, NOW).unwrap(), Some(RecordPage::Held(id)) if id == ids::record(had)), "its usual view");
+        assert!(record_page(&cat, had, NOW).unwrap().is_none(), "a record had is the library's");
+    }
+
+    /// C54, RT01: opening a record's page marks it opened, never earlier than it was, and only it: it is kept six months from
+    /// then, though no list showed it for longer.
+    #[test]
+    fn opening_a_record_marks_it_opened() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (opened, other) = (cat.record_for_tests("Undertow", 0), cat.record_for_tests("Open Water", 0));
+        cat.db_for_tests().execute("UPDATE records SET seen_at = ?1", [NOW - 7 * MONTH]).unwrap();
+        let at = |id: i64| cat.db_for_tests().query_row("SELECT opened_at FROM records WHERE id = ?1", [id], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        record_page(&cat, opened, NOW - MONTH).unwrap();
+        assert_eq!(at(opened), Some(NOW - MONTH));
+        record_page(&cat, opened, NOW - 2 * MONTH).unwrap();
+        assert_eq!(at(opened), Some(NOW - MONTH), "never earlier than it was");
+        assert_eq!(at(other), None, "only the record opened");
+        assert_eq!(cat.forget_quiet(NOW, &Default::default()).unwrap(), [other], "the record opened stays");
+    }
+
+    /// OQ16 (a): a retired record's page is a record not had's, what a Want sends with it, and says when it went from Music; one
+    /// never had says nothing of the kind.
+    #[test]
+    fn a_retired_record_says_until_when() {
+        const WENT: i64 = 1_790_000_000;
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let record = cat.record_for_tests("Harbour Lights", 2);
+        cat.db_for_tests().execute("UPDATE tracks SET retired_at = ?2 WHERE record = ?1", [record, WENT]).unwrap();
+        cat.db_for_tests().execute("UPDATE records SET retired_at = ?2 WHERE id = ?1", [record, WENT]).unwrap();
+        let v = page(&cat, record);
+        assert_eq!((v.more.not_had, v.more.was_until, v.more.record), (true, Some(WENT), Some(ids::record(record))));
+        assert_eq!(page(&cat, cat.record_for_tests("Quiet Lanes", 0)).more.was_until, None, "one never had");
+    }
+
+    /// C54 (R13): a record not had that another record has by the one had rule (here by its artist and title, nothing
+    /// contradicting) says which; one nobody has says none.
+    #[test]
+    fn a_record_not_had_shows_who_has_it() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (had, wanted) = (cat.record_for_tests("Tide Tables", 2), cat.record_for_tests("Tide Tables", 0));
+        assert_eq!(page(&cat, wanted).more.have, Some(ids::record(had)));
+        assert_eq!(page(&cat, cat.record_for_tests("Quiet Lanes", 0)).more.have, None, "nobody has it");
     }
 }

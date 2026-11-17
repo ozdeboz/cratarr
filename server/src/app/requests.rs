@@ -826,6 +826,26 @@ pub async fn of_suggestions(app: &super::App, serve: &Serve, account: &str, keys
     Ok(shown_to(views(serve, f.as_deref(), newest).await, crate::serve::access::administering()).into_iter().map(|v| (v.request.album_key.clone(), v)).collect())
 }
 
+/// The account's newest request of a record (C54: the page of a record not had), whatever its status, as the Requests page shows
+/// it. None: it asked for none.
+pub async fn request_of_record(app: &super::App, serve: &Serve, account: &str, record: i64) -> Result<Option<View>> {
+    let f = fetcher(app);
+    let newest = newest_of_record(serve, f.as_deref(), account, record).await?;
+    Ok(shown_to(newest.into_iter().collect(), crate::serve::access::administering()).pop())
+}
+
+/// `request_of_record`, Lidarr asked as `f`: the account's requests by the record each asked for, as merged now (`named`).
+async fn newest_of_record(serve: &Serve, f: Option<&dyn Fetcher>, account: &str, record: i64) -> Result<Option<View>> {
+    let asked: Vec<Request> = serve.userdata.requests(Some(account), None, LIST)?.into_iter().filter(|r| r.record.is_some()).collect();
+    // None of a record: the catalogue is not read.
+    if asked.is_empty() {
+        return Ok(None);
+    }
+    let of = named(serve, &asked).await;
+    let Some((r, o)) = asked.into_iter().zip(of).find(|(_, o)| o.as_ref().is_some_and(|o| o.record == record)) else { return Ok(None) };
+    Ok(views_of(f, vec![r], &[o]).await.pop())
+}
+
 /// What Lidarr is looking for and fetching now (the page's "Lidarr is looking for these"); asked while the page is
 /// open, not watched.
 pub async fn watching(app: &super::App) -> Result<Option<crate::lidarr::Watching>> {
@@ -1613,6 +1633,26 @@ mod tests {
         assert_eq!(not_in_library(&serve, rs.clone()).await.iter().map(|r| r.id).collect::<Vec<_>>(), [asking.id, asked.id], "the requested lists");
         let marks = marks_of(&shown, &named(&serve, &rs).await);
         assert!(!marks.by_record.contains_key(&owned) && marks.by_record.contains_key(&wanted) && marks.by_record.contains_key(&other), "the marks");
+    }
+
+    /// C54: a record not had's page shows the account's newest request of it, whatever its status, as the Requests page shows it, by
+    /// the record each asked for as merged now (G3); another account's, and its own of another record, are not its.
+    #[tokio::test]
+    async fn a_record_not_had_shows_its_request() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let (record, merged, other) = (cat.record_for_tests("Quiet Lanes", 0), cat.record_for_tests("Quiet Lanes (Deluxe)", 0), cat.record_for_tests("Two Rooms", 0));
+        let add = |r: Request| Request { id: serve.userdata.add_request(&r).unwrap(), ..r };
+        add(Request { status: CANCELLED.into(), at: 1, album_key: "k1".into(), ..asked_for(record) });
+        let newest = add(Request { at: 2, album_key: "k2".into(), ..asked_for(merged) });
+        add(Request { user: "ann".into(), at: 3, album_key: "k3".into(), ..asked_for(record) });
+        let elsewhere = add(Request { at: 4, album_key: "k4".into(), ..asked_for(other) });
+        cat.merge_records(merged, record).unwrap();
+        let v = newest_of_record(&serve, None, "bob", record).await.unwrap().expect("bob asked for it");
+        assert_eq!((v.request.id, v.request.record), (newest.id, Some(record)), "the newest, by its record as merged now");
+        assert!(matches!(v.state, RequestState::Wanted { .. }) && v.hand_over_again, "as the Requests page shows it");
+        assert_eq!(newest_of_record(&serve, None, "bob", other).await.unwrap().map(|v| v.request.id), Some(elsewhere.id));
+        assert!(newest_of_record(&serve, None, "carol", record).await.unwrap().is_none(), "carol asked for nothing");
     }
 
     /// W4 (D3): Health's "Ask for the full album" fetches it again: its group finds the owned record, short of the list its files

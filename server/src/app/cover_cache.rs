@@ -51,6 +51,48 @@ impl Of {
     }
 }
 
+/// A record not had's cover addresses (C54), in the order its page takes them: its own (`records.cover`), else its release
+/// group's, as the missing lists choose (`discover::Missing::of`), else its Bandcamp page's.
+pub fn addresses_of(own: Option<&str>, group: Option<&str>, bandcamp: Option<&str>) -> Vec<String> {
+    own.map(str::to_string)
+        .into_iter()
+        .chain(group.map(|g| format!("/api/covers/release-group/{g}")))
+        .chain(bandcamp.map(|page| format!("/api/cover/{}/{}", crate::bandcamp::SOURCE, crate::bandcamp::track_id(page, 0))))
+        .collect()
+}
+
+/// The cover of Cratarr's record `album` where it is not had (C54: `/api/albums/cratarr/al-<n>/cover`), merges followed: kept,
+/// else fetched, by the first of its addresses that is Cratarr's own (`addresses_of`). None: no such record, one had (its files
+/// hold its cover), or no cover.
+pub async fn of_record(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str) -> Option<(Vec<u8>, &'static str)> {
+    let record = crate::serve::ids::record_number(album)?;
+    let addresses = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        let Some(row) = cat.record(record)?.filter(|r| !r.had) else { return Ok(Vec::new()) };
+        let refs = cat.references_of(&crate::serve::ids::record(row.id))?;
+        let of = |source: &str, kind: &str| refs.iter().find(|(r, _)| r.source == source && r.kind == kind).map(|(r, _)| r.value.clone());
+        Ok(addresses_of(row.cover.as_deref(), of("musicbrainz", "release-group").as_deref(), of("bandcamp", "album").as_deref()))
+    });
+    let addresses = match addresses.await {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => {
+            tracing::debug!("covers: {album} not read: {e:#}");
+            return None;
+        }
+        Err(e) => {
+            tracing::debug!("covers: {album} not read: {e}");
+            return None;
+        }
+    };
+    let of = addresses.iter().find_map(|a| Of::of_address(a))?;
+    match cover(&of).await {
+        Ok(found) => found,
+        Err(e) => {
+            tracing::debug!("covers: {of:?} of {album}: {e:#}");
+            None
+        }
+    }
+}
+
 fn file_of(of: &Of) -> Option<PathBuf> {
     use sha2::Digest as _;
     let data = crate::serve::instance()?.data_dir.clone()?;

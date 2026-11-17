@@ -1296,6 +1296,13 @@ impl Catalogue {
         Ok(())
     }
 
+    /// A source's tracklist of a record let go of (D18): a link pasted by hand names another list than the one kept, read by the
+    /// link when it is asked for (`references::tracklist`). Blocking.
+    pub fn forget_reference_tracks(&self, record: i64, source: &str) -> Result<()> {
+        self.db().execute("DELETE FROM reference_tracks WHERE record = ?1 AND source = ?2", params![record, source])?;
+        Ok(())
+    }
+
     /// Which source's tracklist counts for a record (none: none does). By hand, it is chosen, and taken back with none, so it is
     /// worked out again. Worked out, it never takes the place of one chosen by hand: the hand comes first (0.14). Whether it was
     /// written. Blocking.
@@ -2476,6 +2483,13 @@ impl Catalogue {
                AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || records.id AND f.source <> 'bandcamp')",
             params![artist, now()],
         )?;
+        Ok(())
+    }
+
+    /// A record's page opened at `at` (RT01, C54): kept six months from then, and its kept lists thirty days. Never earlier than it
+    /// was opened before. Blocking.
+    pub fn opened(&self, record: i64, at: i64) -> Result<()> {
+        self.db().execute("UPDATE records SET opened_at = max(COALESCE(opened_at, 0), ?2) WHERE id = ?1", params![record, at])?;
         Ok(())
     }
 
