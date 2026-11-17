@@ -114,9 +114,10 @@ pub struct Listing {
     pub says: Vec<Ref>,
 }
 
-/// `Catalogue::keep_listing` in the caller's transaction, found at `at`. Each record it finds or makes is seen at `seen` (RT01),
-/// never earlier than it was, but by a listing only Bandcamp's references are on; none for a list read before 0.17 (0.17's
-/// step), whose clock starts at the first forgetting.
+/// `Catalogue::keep_listing` in the caller's transaction, found at `at`. A record it makes, and one it finds that no artist is
+/// credited on (Z3), is credited to `artist`. Each record it finds or makes is seen at `seen` (RT01), never earlier than it was,
+/// but by a listing only Bandcamp's references are on; none for a list read before 0.17 (0.17's step), whose clock starts at the
+/// first forgetting.
 pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64, seen: Option<i64>) -> Result<Vec<i64>> {
     let mut out = Vec::with_capacity(list.len());
     for l in list {
@@ -133,13 +134,17 @@ pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[List
                 let genres = (!l.genres.is_empty()).then(|| l.genres.join(&GENRES_APART.to_string()));
                 tx.prepare_cached("INSERT INTO records (born, title, artist, year, kind, released, genres, cover) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?
                     .execute(params![at, l.title, l.artist, l.year, l.kind, l.released, genres, l.cover])?;
-                let record = tx.last_insert_rowid();
-                if let Some(artist) = artist {
-                    tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')")?.execute(params![record, artist])?;
-                }
-                record
+                tx.last_insert_rowid()
             }
         };
+        // Credited to the artist whose list it is: a record made now, and one found that no artist is credited on yet (Z3: opened
+        // from a label's page or Beyond, `keep_listing(None, …)`). A credit by reference, never by a name; one credited stays so.
+        if let Some(artist) = artist {
+            tx.prepare_cached(
+                "INSERT INTO record_artists (record, artist, position, how) SELECT ?1, ?2, 0, 'listing' WHERE NOT EXISTS (SELECT 1 FROM record_artists WHERE record = ?1)",
+            )?
+            .execute(params![record, artist])?;
+        }
         for r in &l.refs {
             put_reference(tx, &ids::record(record), r, how, at, false)?;
         }
@@ -1178,8 +1183,8 @@ impl Catalogue {
     }
 
     /// Records a list names, kept (C47): each found by its references first, else by `identity::same_listing` among the
-    /// records of its name, else a record not had of its own, credited to `artist` where the list is one artist's. Its
-    /// references are kept, found `how`. Their ids, in the list's order. Blocking.
+    /// records of its name, else a record not had of its own, credited to `artist` where the list is one artist's, as is one
+    /// found that no artist is credited on (Z3). Its references are kept, found `how`. Their ids, in the list's order. Blocking.
     pub fn keep_listing(&self, artist: Option<i64>, list: &[Listing], how: &str) -> Result<Vec<i64>> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -2822,6 +2827,23 @@ mod tests {
         let had = cat.record_for_tests("Tide Tables", 2);
         assert!(cat.set_reference(&ids::record(had), &Ref::new("musicbrainz", "release-group", held), "files").unwrap());
         assert_eq!(missing_titles(&cat, artist), ["Undertow"]);
+    }
+
+    /// Z3: a record made at open and credited to nobody (a label's page, Beyond: `keep_listing(None, …)`) joins the artist whose
+    /// list later names it by its reference: credited to them, and on their list. One credited already takes no other list's.
+    #[test]
+    fn a_record_opened_from_a_label_joins_its_artist_when_their_list_names_it() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let [theirs, other] = ["Kite Theory", "Noor Field"].map(|n| cat.artist_for(n).unwrap());
+        let group = [("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000165")];
+        let label_row = Listing { title: "Night Walks".into(), kind: Some("album".into()), refs: vec![Ref::new(group[0].0, group[0].1, group[0].2)], ..Listing::default() };
+        let opened = cat.keep_listing(None, &[label_row], "link").unwrap()[0];
+        assert!(cat.record_artists(opened).unwrap().is_empty(), "opened from a label's page: credited to nobody");
+        assert_eq!(credited(&cat, theirs, "Night Walks", &group), opened, "their list finds it by its reference");
+        assert_eq!(cat.record_artists(opened).unwrap(), [theirs], "and credits them");
+        assert_eq!(missing_titles(&cat, theirs), ["Night Walks"], "on their list");
+        assert_eq!(credited(&cat, other, "Night Walks", &group), opened);
+        assert_eq!(cat.record_artists(opened).unwrap(), [theirs], "credited already: no other list's");
     }
 
     /// C53a: a record not had of its artist's title, folded, that a live, had record has too is had by it where no reference
