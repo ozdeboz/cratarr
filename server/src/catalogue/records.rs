@@ -36,6 +36,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS references_one ON \"references\" (source, kind
 CREATE TABLE IF NOT EXISTS reference_tracks (
   record INTEGER NOT NULL, source TEXT NOT NULL, tracks TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (record, source)) WITHOUT ROWID;
+-- X9: the record made for the first request by its names alone whose names several live albums of the artist share (X8), by
+-- those names folded (`artist|title`): a later such request takes it, so two accounts asking for one name share one record.
+CREATE TABLE IF NOT EXISTS shared_name_records (names TEXT PRIMARY KEY, record INTEGER NOT NULL) WITHOUT ROWID;
 -- 0100: a label's id for life, served as `la-<id>`, kept when nothing names it any more, as an artist's (`catalogue::labels`).
 -- `key`: one name, one row, by `ids::artist_key`.
 CREATE TABLE IF NOT EXISTS labels (id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, name TEXT NOT NULL, key TEXT NOT NULL);
@@ -1430,8 +1433,10 @@ pub struct Wanted {
 /// its Bandcamp album page, where one was found for it (by its names, or by its release group, R19), a reference (`search`), so
 /// Soulseek can judge by Bandcamp's list (C51b). A request with a release group takes a record by its names only where nothing
 /// the record holds contradicts that group (R21, N1): "Album (Remixes)" asked by its group is not the owned "Album", nor another
-/// self-titled album. A name several live records of the artist share, had or not had (X8: Orbital's two self-titled albums, Peter
-/// Gabriel's four), finds none by its names: the request takes its own record. What it came to (`RequestRecord`).
+/// self-titled album. A name several live albums of the artist share, had or not had (X8: Orbital's two self-titled albums, Peter
+/// Gabriel's four), finds none by its names: the request takes its own record. Records holding one MusicBrainz release group or
+/// release are one album's copies or editions, no clash (X9); a later request by those names alone takes the record made for the
+/// first, so two askers share one. What it came to (`RequestRecord`).
 pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<RequestRecord> {
     use super::identity::fold;
     let group = w.group.as_deref().map(str::to_ascii_lowercase).filter(|g| is_mbid(g)).map(|g| Ref::new("musicbrainz", "release-group", &g));
@@ -1491,21 +1496,44 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         }
         Ok(None)
     };
-    // Its names several live records of the artist share, had or not had (X8): exact folded names cannot say which.
+    // Its names several live albums of the artist share, had or not had (X8): exact folded names cannot say which. Records holding
+    // one MusicBrainz release group or release are one album, its copies or editions (X9); a record holding neither, one of its own.
     let shared_names = || -> Result<bool> {
         let (artist, title) = (fold(&w.artist), fold(&w.title));
         if title.is_empty() {
             return Ok(false);
         }
-        let mut st = tx.prepare_cached("SELECT COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL")?;
-        let rows: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        Ok(rows.iter().filter(|(a, t)| fold(a) == artist && fold(t) == title).count() > 1)
+        let mut st = tx.prepare_cached("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL")?;
+        let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let named: Vec<i64> = rows.into_iter().filter(|(_, a, t)| fold(a) == artist && fold(t) == title).map(|(id, ..)| id).collect();
+        if named.len() < 2 {
+            return Ok(false);
+        }
+        let mut albums: Vec<std::collections::BTreeSet<(String, String)>> = Vec::new();
+        for id in named {
+            let mine: std::collections::BTreeSet<(String, String)> = refs_in(tx, &ids::record(id))?
+                .into_iter()
+                .filter(|(s, k, _)| s == "musicbrainz" && (k == "release-group" || k == "release"))
+                .map(|(_, k, v)| (k, v.to_ascii_lowercase()))
+                .collect();
+            let (same, apart): (Vec<_>, Vec<_>) = albums.into_iter().partition(|a| !mine.is_disjoint(a));
+            albums = apart;
+            albums.push(same.into_iter().fold(mine, |mut one, a| {
+                one.extend(a);
+                one
+            }));
+        }
+        Ok(albums.len() > 1)
     };
     let shared = by_group.or(by_page).is_none() && shared_names()?;
+    // A request by its names alone whose names clash takes the record made for the first such request, while it is live (X9): two
+    // accounts asking for "Orbital" share one record, not one each. One asked by its group or page takes its own, as X8 has it.
+    let alone = group.is_none() && w.page.is_none();
+    let names_key = format!("{}|{}", fold(&w.artist), fold(&w.title));
     // Which, and whether it is an owned record found by its names, onto which nothing it was asked by is written (W2, B2).
     let (found, by_names, owned) = match by_group.or(by_page) {
         Some(record) => (Some(record), false, false),
-        None if shared => (None, false, false),
+        None if shared => (if alone { made_for_names_in(tx, &names_key)? } else { None }, false, false),
         None => match by_names()? {
             Some(record) => (Some(record), true, true),
             None if group.is_none() => {
@@ -1529,6 +1557,10 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
             for (position, name) in names.iter().enumerate().skip(1) {
                 tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, credited[&ids::artist_key(name)], position as i64])?;
             }
+            // The first request by these names alone to meet their clash: the next takes this record (X9).
+            if shared && alone {
+                tx.prepare_cached("INSERT OR REPLACE INTO shared_name_records (names, record) VALUES (?1, ?2)")?.execute(params![names_key, record])?;
+            }
             (record, true)
         }
     };
@@ -1546,6 +1578,17 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         None => None,
     };
     Ok(RequestRecord { record, made, by_names, paged, shared })
+}
+
+/// The record made for the first request by `names` alone that met a clash of names (X9), as merged now; none where it is retired
+/// or gone.
+fn made_for_names_in(tx: &Connection, names: &str) -> Result<Option<i64>> {
+    let Some(record) = tx.prepare_cached("SELECT record FROM shared_name_records WHERE names = ?1")?.query_row([names], |r| r.get::<_, i64>(0)).optional()? else {
+        return Ok(None);
+    };
+    let Some(end) = merged_end(tx, record)? else { return Ok(None) };
+    let retired: Option<i64> = tx.prepare_cached("SELECT retired_at FROM records WHERE id = ?1")?.query_row([end], |r| r.get(0))?;
+    Ok(retired.is_none().then_some(end))
 }
 
 /// What `request_record_in` came to: the record, whether it was made now, whether it was found by its names (R21: each listed in
@@ -2547,6 +2590,58 @@ mod tests {
         let w = |title: &str| Wanted { artist: "Glass Harbour".into(), title: title.into(), ..Wanted::default() };
         assert_eq!(cat.record_for_request(&w("Tide Tables")).unwrap(), had);
         assert_eq!(cat.record_for_request(&w("Open Water")).unwrap(), not_had);
+    }
+
+    /// X9: records holding one MusicBrainz release group are one album's copies or editions, no clash of names (X8): a request by its
+    /// names takes the oldest of them; a record of the name with another group makes it a clash again.
+    #[test]
+    fn records_sharing_a_group_are_one_album_for_names() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let grouped = |record: i64, group: &str| {
+            cat.db().execute("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, 'musicbrainz', 'release-group', ?2, 1, 'files')", params![ids::record(record), group]).unwrap();
+        };
+        let copies = [cat.record_for_tests("Glass Harbour", 2), cat.record_for_tests("Glass Harbour", 2)];
+        for c in copies {
+            grouped(c, "00000000-0000-4000-8000-000000000301");
+        }
+        let named = Wanted { artist: "Glass Harbour".into(), title: "Glass Harbour".into(), ..Wanted::default() };
+        assert_eq!(cat.record_for_request(&named).unwrap(), copies[0], "two copies of one album: the oldest, by its names");
+        let other = cat.record_for_tests("Glass Harbour", 3);
+        grouped(other, "00000000-0000-4000-8000-000000000302");
+        let record = cat.record_for_request(&named).unwrap();
+        assert!(!copies.contains(&record) && record != other, "another album of the name: a clash again, its own record");
+    }
+
+    /// X9: requests by their names alone that meet one clash of names share the record made for the first: two accounts asking for
+    /// "Orbital" are one record's, not one each. One asked by its own release group takes that group's.
+    #[test]
+    fn two_requests_for_a_shared_name_share_one_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let had = [cat.record_for_tests("Glass Harbour", 2), cat.record_for_tests("Glass Harbour", 3)];
+        let named = Wanted { artist: "Glass Harbour".into(), title: "Glass Harbour".into(), ..Wanted::default() };
+        let first = cat.record_for_request(&named).unwrap();
+        assert!(!had.contains(&first));
+        assert_eq!(cat.record_for_request(&Wanted { artist: "GLASS HARBOUR".into(), ..named.clone() }).unwrap(), first, "the second asker, its names folded alike");
+        assert_eq!(cat.record_for_request(&named).unwrap(), first, "and a third");
+        let by_group = cat.record_for_request(&Wanted { group: Some("00000000-0000-4000-8000-000000000303".into()), ..named.clone() }).unwrap();
+        assert!(![had[0], had[1], first].contains(&by_group), "one asked by its group: that group's own record");
+    }
+
+    /// X9: an album held as two had records of one name reads had through the had rule (`holders_in`), whichever record its request
+    /// takes, so no fetcher takes it: two copies of one album (a release group in common), and two records nothing tells apart.
+    #[test]
+    fn a_request_for_an_album_owned_twice_reads_had() {
+        for grouped in [true, false] {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let twice = [cat.record_for_tests("Two Rooms", 2), cat.record_for_tests("Two Rooms", 2)];
+            if grouped {
+                for r in twice {
+                    cat.db().execute("INSERT INTO \"references\" (subject, source, kind, value, at, how) VALUES (?1, 'musicbrainz', 'release-group', '00000000-0000-4000-8000-000000000304', 1, 'files')", [ids::record(r)]).unwrap();
+                }
+            }
+            let record = cat.record_for_request(&Wanted { artist: "Glass Harbour".into(), title: "Two Rooms".into(), ..Wanted::default() }).unwrap();
+            assert_eq!(cat.requested(&[record]).unwrap()[&record].holder, Some(twice[0]), "grouped {grouped}: held, by the older copy");
+        }
     }
 
     /// R21 (N1): a self-titled Want by its release group is not another self-titled album of the artist the library holds.

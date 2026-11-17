@@ -563,8 +563,8 @@ mod tests {
     }
 
     /// C49a: each request is given its record: by its release group (a record had, or a discography's record not had), else
-    /// the one record of its names (X8: none where several share them, as FX01's two copies of Two Rooms do: its own record);
-    /// written into the user data, and found as it was when the step runs again.
+    /// the oldest record had of its names, where they name one album (X8; X9: FX01's two copies of Two Rooms hold one release group,
+    /// one album); written into the user data, and found as it was when the step runs again.
     #[test]
     fn a_request_finds_its_record() {
         let data = Data::new("request-record");
@@ -573,8 +573,7 @@ mod tests {
         let record = |id: i64| ud.request(id).unwrap().unwrap().record;
         let of_group = |n: u32| -> Vec<i64> { cat.subject_of(&Ref::new("musicbrainz", "release-group", &mb(n))).unwrap().iter().filter_map(|s| crate::serve::ids::record_number(s)).collect() };
         assert_eq!(record(6), Some(1), "Tide Tables, by its group");
-        let rooms = record(7).unwrap();
-        assert!(![2, 9].contains(&rooms) && !cat.record(rooms).unwrap().unwrap().had, "Two Rooms, no group, its names on two records (2 and 9): its own record not had (X8)");
+        assert_eq!(record(7), Some(2), "Two Rooms, no group: the oldest record had of its names, its two copies (2 and 9) one album (X9)");
         assert_eq!(of_group(111).len(), 1);
         assert_eq!(record(2), of_group(111).first().copied(), "Harbour Lights: the discography's record not had");
         assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM request WHERE record IS NULL"), 0, "every request its record");
@@ -767,12 +766,12 @@ mod tests {
         assert!(cat.label_records(cat.label_for("Paper Lantern").unwrap()).unwrap().contains(&(hours.id, String::new())), "the account its label (and Long Player's, FX01's 12)");
         assert!(refs(&cat, hours.id).contains(&by("bandcamp", "album", "https://paperlantern.bandcamp.com/album/after-hours", "search", false)), "{:?}", refs(&cat, hours.id));
         let report = &ud.migration_report().unwrap()[PART].1;
-        assert_eq!((report["records_made_for_requests"].as_u64(), report["pages_for_requests"].as_u64()), (Some(4), Some(1)), "Two Rooms (X8), Quiet Lanes, Nowhere Fast, After Hours: {report}");
-        assert_eq!(report["records_made_for"], serde_json::json!(["7 Noor Field - Two Rooms", "8 Orbit Lane - Quiet Lanes", "9 Tape Club - Nowhere Fast", "11 Tape Club - After Hours"]), "each, whole");
-        assert_eq!(report["names_shared_by_several_records"], serde_json::json!(["7 Noor Field - Two Rooms"]), "X8: FX01's two copies of Two Rooms");
+        assert_eq!((report["records_made_for_requests"].as_u64(), report["pages_for_requests"].as_u64()), (Some(3), Some(1)), "Quiet Lanes, Nowhere Fast, After Hours: {report}");
+        assert_eq!(report["records_made_for"], serde_json::json!(["8 Orbit Lane - Quiet Lanes", "9 Tape Club - Nowhere Fast", "11 Tape Club - After Hours"]), "each, whole");
+        assert_eq!(report["names_shared_by_several_records"], serde_json::json!([]), "X9: FX01's two copies of Two Rooms are one album, no clash");
         let by_names: Vec<&str> = report["requests_found_by_names"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect();
-        assert!(by_names.iter().any(|r| r.starts_with("12 Paper Lantern - Tape Club - Long Player (Paper Lantern) -> ")), "R21: each found by names, listed: {by_names:?}");
-        assert!(!by_names.iter().any(|r| r.starts_with("7 ")), "X8: Two Rooms not by its names: {by_names:?}");
+        assert!(by_names.iter().any(|r| r.starts_with("7 Noor Field - Two Rooms -> ")), "R21: each found by names, listed: {by_names:?}");
+        assert!(by_names.iter().any(|r| r.starts_with("12 Paper Lantern - Tape Club - Long Player (Paper Lantern) -> ")), "{by_names:?}");
     }
 
     /// R5: an id in capitals is the same id: Ferry Lights' two matches name one release, one in capitals, and the older copy
