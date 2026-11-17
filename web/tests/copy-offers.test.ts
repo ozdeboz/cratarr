@@ -8,6 +8,8 @@ import { readFileSync } from 'node:fs';
 import type { AlbumCopy, AlbumsSource, Against, LibraryInfo } from '../src/lib/api.ts';
 
 const { moveSentences, moveWords, withCopyAdded } = await import('../src/lib/copiesRule.ts');
+const { afterReplace, replacedWords, replaceSheet } = await import('../src/lib/copiesRule.ts');
+const { MENUS, offeredAway } = await import('../src/lib/menuTable.ts');
 const { adds, copies, deleteEntries, deleteGroups, heardAs, moveEntries, moveGroups, offersOf, playFromEntries, replaceEntries, withCopyMoved, withoutCopy } = await import('../src/lib/copiesRule.ts');
 
 const library = (id: string, kind: LibraryInfo['kind'], more: Partial<LibraryInfo> = {}) => ({ id, name: id.toUpperCase(), kind, ...more }) as LibraryInfo;
@@ -119,6 +121,115 @@ test("a better copy replaces the record's copy in any main library; one no bette
 
 test('an Incoming copy may not replace what it may not delete', () => {
   assert.deepEqual(offers([copy('in', { deletable: false, ...against('music') }), copy('music')])[0].replaceInto, []);
+});
+
+// RY02 (SCENARIOS-RUN-12): Replace in a main library from someone's own copy (RY01), offered to administrators, the line naming
+// whose copy it is (the owner, 2026-11-17): "Replace in Music from Your music", "Replace in Music from <name>'s music".
+const INFO2 = [
+  library('music', 'main', { name: 'Music' }),
+  library('own', 'own', { mine: true, name: 'Your music', owner: 'root' }),
+  library('bob', 'own', { name: "Bob's music", owner: 'bob' }),
+  library('ann', 'own', { name: "Ann's music", owner: 'ann' }),
+  library('more', 'main', { name: 'More' }),
+];
+/** Someone's own copy's stands as RY01 lists them (`replace_into`): it beats the copy in each of `libraries`. */
+const replacing = (...libraries: string[]): { replace_into: Against[] } => ({ replace_into: libraries.map((library) => ({ better: true, replaces: true, library, dir: 'A/B', why: '' })) });
+const s2 = list({ library_info: INFO2 });
+
+test("an administrator replaces Music's copy from the better own copy, named by whose music it is", () => {
+  const a = replaceEntries(offersOf(s2, { id: 'al-1', copies: [copy('music'), copy('bob', { deletable: false, ...replacing('music') })] }, true, none));
+  assert.deepEqual(a.map((e) => [e.label, e.offer.library, e.to.id]), [["Replace in Music from Bob's music", 'bob', 'music']]);
+  const b = replaceEntries(offersOf(s2, { id: 'al-2', copies: [copy('music'), copy('own', replacing('music'))] }, true, none));
+  assert.deepEqual(b.map((e) => e.label), ['Replace in Music from Your music']);
+  // Never "from Your music" for Bob's copy, nor an entry on Music's own copy.
+  assert.ok(!a.some((e) => e.label.includes('Your music')), "Bob's copy is Bob's");
+  assert.ok(![...a, ...b].some((e) => e.offer.library === 'music'), "Music's copy replaces nothing");
+  // OQ-M: an own library whose account is gone goes by its name as the server gives it, as every other menu does.
+  const gone = list({ library_info: [...INFO2, library('gone', 'own', { owner: null, name: "gone's music" })] });
+  assert.deepEqual(replaceEntries(offersOf(gone, { id: 'al-3', copies: [copy('music'), copy('gone', replacing('music'))] }, true, none)).map((e) => e.label), ["Replace in Music from gone's music"]);
+});
+
+test('no Replace from own music for a user, for a copy no better, nor one with a job; of two better, the best alone', () => {
+  const lines = (copies: AlbumCopy[], admin = true, jobOf: (library?: string) => number | null = none, s = s2) => replaceEntries(offersOf(s, { id: 'al-1', copies }, admin, jobOf)).map((e) => e.label);
+  // 1. A user, Bob himself included.
+  assert.deepEqual(lines([copy('music'), copy('bob', replacing('music'))], false), [], 'a user');
+  const bobs = list({ library_info: INFO2.map((l) => (l.id === 'bob' ? { ...l, mine: true, name: 'Your music' } : l.id === 'own' ? { ...l, mine: false, name: "root's music" } : l)) });
+  assert.deepEqual(lines([copy('music'), copy('bob', replacing('music'))], false, none, bobs), [], 'Bob himself');
+  // 2. No stand, or one that does not replace.
+  assert.deepEqual(lines([copy('music'), copy('bob')]), [], 'no stand');
+  const stand = (better: boolean, replaces: boolean) => ({ replace_into: [{ better, replaces, library: 'music', dir: 'A/B', why: '' }] });
+  assert.deepEqual(lines([copy('music'), copy('bob', stand(false, false))]), [], 'no better');
+  assert.deepEqual(lines([copy('music'), copy('bob', stand(true, false))]), [], 'the server did not say it replaces');
+  // 3. A conversion at work on Bob's copy.
+  assert.deepEqual(lines([copy('music'), copy('bob', replacing('music'))], true, (l) => (l === 'bob' ? 4 : null)), [], 'a job');
+  // 4. Two own copies better than Music's, the server's stand on the best one only (Ann's 24/96).
+  assert.deepEqual(lines([copy('music'), copy('bob'), copy('ann', replacing('music'))]), ["Replace in Music from Ann's music"]);
+  // OQ-N: one line per main library the own copy beats, none for one it does not beat; never two for one library.
+  assert.deepEqual(lines([copy('music'), copy('more'), copy('bob', replacing('music', 'more'))]), ["Replace in Music from Bob's music", "Replace in More from Bob's music"]);
+  assert.deepEqual(lines([copy('music'), copy('more'), copy('bob', replacing('music'))]), ["Replace in Music from Bob's music"], 'not More, which it does not beat');
+  assert.deepEqual(lines([copy('music'), copy('music'), copy('bob', replacing('music'))]), ["Replace in Music from Bob's music"], 'two folders of Music, one line');
+});
+
+test("Replace from someone's own music is offered though the copy is not the administrator's to delete", () => {
+  const o = offersOf(s2, { id: 'al-1', copies: [copy('music'), copy('bob', { deletable: false, keepable: false, ...replacing('music') })] }, true, none);
+  const bob = o.find((x) => x.library === 'bob')!;
+  assert.deepEqual(ids(bob.replaceInto), ['music'], 'from its stand');
+  assert.deepEqual(bob.targets, [], 'no Move');
+  assert.deepEqual(moveEntries(o).filter((e) => e.offer.library === 'bob'), [], 'no Move');
+  assert.deepEqual(deleteEntries(o, 'album').filter((d) => d.offer.library === 'bob'), [], 'no Delete');
+});
+
+test("a replace from own music leaves the own copy on the record, and its undo names Music's copy", () => {
+  const a = { id: 'al-1', library: 'music', format: 'MP3', bitrate_kbps: 320, copies: [copy('music', { plays: true }), copy('bob')] };
+  const after = afterReplace(a, 'bob', 'own');
+  assert.deepEqual(after!.copies!.map((c) => c.library), ['music', 'bob'], 'Bob keeps his');
+  assert.deepEqual([after!.library, after!.format, after!.bitrate_kbps], ['music', 'MP3', 320], "Music's copy still listed, its format with the next read");
+  const said = replacedWords('Both Shores', 'Music', "Bob's music", 'own');
+  assert.equal(said.done, 'Replaced Both Shores in Music.');
+  assert.equal(said.undone, "Music's copy of Both Shores is back.");
+  for (const s of [said.done, said.undone]) assert.ok(!s.includes("Bob's music") && !/\bmoved?\b/i.test(s), s);
+  // From Incoming, as ever: its copy took Music's place and leaves the record, and the Undo puts it back in Incoming.
+  const waiting = { ...a, copies: [copy('music', { plays: true }), copy('in')] };
+  assert.deepEqual(afterReplace(waiting, 'in', 'incoming')!.copies!.map((c) => c.library), ['music']);
+  assert.equal(replacedWords('Both Shores', 'Music', 'IN', 'incoming').undone, 'Both Shores is back in IN.');
+});
+
+test('no Replace from own music offline or on a list that names no copies', () => {
+  // The device's own list: no copies, no libraries.
+  assert.deepEqual(replaceEntries(offersOf(list({ library_info: [] }), { id: 'al-1' }, true, none)), [], "the device's list");
+  // Another server's list in its mode: its one library, no copies.
+  assert.deepEqual(replaceEntries(offersOf(s2, { id: 'al-1', library: 'bob' }, true, none)), [], "another server's list");
+  // Cratarr out of reach: the list as kept still says Bob's copy beats Music's, and the record's menu leaves Replace out, as its
+  // tap needs Cratarr.
+  assert.equal(replaceEntries(offersOf(s2, { id: 'al-1', copies: [copy('music'), copy('bob', replacing('music'))] }, true, none)).length, 1, 'the list as kept');
+  const entries = MENUS.album.cards.flatMap((c) => c.entries);
+  assert.ok(entries.includes('replaceIn') && !entries.filter((e) => offeredAway(e, true)).includes('replaceIn'), 'out of reach: no Replace');
+});
+
+test('the record menu takes its Replace words from copiesRule', () => {
+  const read = (f: string) => readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8');
+  const [menu, albums] = [read('AlbumMenu.svelte'), read('albums.svelte.ts')];
+  assert.match(menu, /replaceEntries\(copyOffers\)/, 'its entries');
+  assert.match(
+    menu,
+    /const said = replacedWords\(r\.title, into\.name, fromName, kind\);\s*moved\(r, said\.done, \(\) => copiesReplaced\(\[\{ source, id: a\.id, from, kind \}\]\), from, said\.undone\);/,
+    'its left step and its Undo words',
+  );
+  assert.match(albums, /changeListed\(replaced, \(a, i\) => afterReplace\(a, replaced\[i\]\.from, replaced\[i\]\.kind\)\)/, "the left step is the rule's");
+  assert.doesNotMatch(menu, /`Replaced \$\{|copiesGone\(\[\{ source, id: a\.id, from \}\]\)/, 'no words or left step of its own');
+  // Its sheet: from someone's own music no cover choice, no carrying over, nothing of Lidarr or Incoming (OQ-A), and the tap says
+  // what the sheet showed (OQ-G).
+  assert.deepEqual(replaceSheet('own'), { cover: false, carry: false, lidarr: false, shown: true });
+  assert.deepEqual(replaceSheet('incoming'), { cover: true, carry: true, lidarr: true, shown: false });
+  assert.match(menu, /const swapAsks = \$derived\(replaceSheet\(copy\?\.from\?\.kind\)\);/);
+  const sheet = menu.slice(menu.indexOf("{:else if ask === 'replace'}"), menu.indexOf("{:else if ask === 'cover-url'}"));
+  assert.match(sheet, /\{#if swapAsks\.cover && swap\.covers && /, 'the cover choice');
+  assert.equal(sheet.split('swap.carry?.length').length, sheet.split('swapAsks.carry && swap.carry?.length').length, 'carrying over, every time');
+  assert.equal(sheet.split('NO_LIDARR').length, 2, 'one Lidarr line');
+  assert.match(sheet, /\{#if !swap\.acquisition && swapAsks\.lidarr\}\s*\{` \$\{NO_LIDARR\}`\}\{\/if\}/, 'said only as a copy leaves Incoming');
+  assert.doesNotMatch(sheet, /Incoming/);
+  assert.match(menu, /const shown = asks\.shown && swap\?\.folder \? \{ folder: swap\.folder, tracks: swap\.tracks, added: swap\.added, files: swap\.files \} : undefined;/);
+  assert.match(menu, /replaceIncoming\(source, a\.id, from, into\.id, year\.trim\(\) \|\| undefined, asks\.cover && swap\?\.covers \? coverWay : undefined, asks\.carry && carry, shown\)/);
 });
 
 test("another server's album comes with its one copy, and goes by what that copy allows", () => {

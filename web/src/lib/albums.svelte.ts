@@ -13,6 +13,7 @@ import {
   setAlbumRating,
   type AlbumsView,
   type AlbumUse,
+  type LibraryInfo,
   type ListedAlbum,
   albumsTracks,
   ApiError,
@@ -31,7 +32,7 @@ import { howToOpen, type Openable } from './openRecord';
 import { wantFailed } from './wantPath';
 import { artistSource, type ArtistOpen } from './artistIds';
 import { prefs } from './prefs.svelte';
-import { dotsOf, withCopyAdded, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
+import { afterReplace, dotsOf, withCopyAdded, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
 import { shownIn } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { can } from './capabilities.svelte';
@@ -121,6 +122,12 @@ function changeListed(changes: { source: string; id: string }[], change: (a: Lis
 export function copiesGone<G extends { source: string; id: string; from?: string }>(gone: G[]): G[] {
   changeListed(gone, (a, i) => withoutCopy(a, gone[i].from));
   return gone.filter((g) => !listedAlbum(g.source, g.id));
+}
+
+/** Copies that took a main library's copy's place (Replace): from Incoming each left it, from someone's own music each stays
+ *  (RY02.4, `afterReplace`). */
+export function copiesReplaced(replaced: { source: string; id: string; from?: string; kind?: LibraryInfo['kind'] }[]) {
+  changeListed(replaced, (a, i) => afterReplace(a, replaced[i].from, replaced[i].kind));
 }
 
 /** Copies made (Copy to, T3): their records stay as they were, each with its new copy. */

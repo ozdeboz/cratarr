@@ -1802,10 +1802,14 @@ export type AlbumCopy = {
   job: number | null;
   /** An Incoming copy of a record kept elsewhere: how it stands against the copy that plays the record for most (C37a). */
   against?: Against;
+  /** Someone's own copy Replace in a main library takes from (RY01): one stand per main library whose copy it beats (OQ-N).
+   *  Whose copy it is is its own `library`. None on any other copy. */
+  replace_into?: Against[];
 };
 
-/** An Incoming copy against the copy that plays its record for most (C37a): `better` where it ranks above it, `replaces` where
- *  that copy lies in a main library (Replace's), that copy's `library` and folder there (`dir`), and `why` in words. */
+/** A copy against another of its record (C37a): `better` where it ranks above it, `replaces` where that copy lies in a main
+ *  library (Replace's), that copy's `library` and folder there (`dir`), and `why` in words. An Incoming copy's is against the
+ *  copy that plays its record for most; someone's own copy's against each main library's copy it beats (RY01). */
 export type Against = { better: boolean; replaces: boolean; library: string; dir: string; why: string };
 
 /** An album in a server's library list (Incoming, Collection). */
@@ -2759,15 +2763,23 @@ export type ReplacePreview = {
   lost?: string[];
   /** What Replace and carry over brings into the new copy ("MusicBrainz ids", "Track numbers", "Cover"…). */
   carry?: string[];
+  /** How many files it writes: every file of the new copy. */
+  files: number;
+  /** The new copy's library: someone's own music for a Replace from it (RY01), else its Incoming library. */
+  from: string | null;
 };
+/** What Replace's sheet showed of a Replace from someone's own music (RY01, OQ-G): sent with the tap, which is refused where the
+ *  copy or what it would do changed since. */
+export type ReplaceSheet = { folder: string; tracks: number; added: number; files: number };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 /** `to`: the main library whose copy it takes the place of. */
 export const replacePreview = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
   request<ReplacePreview>(`${replacePath(source, album)}?${copyQuery({ from, to, year })}`);
-/** Replace a main library's copy with an upgrade: the old files go to the trash (Undo brings them back). */
-export const replaceIncoming = (source: string, album: string, from: string | undefined, to: string, year?: string, cover?: 'keep' | 'new', carry = false) =>
-  request<AlbumMoved>(replacePath(source, album), asJson({ from, to, year, cover, carry }));
+/** Replace a main library's copy with an upgrade: the old files go to the trash (Undo brings them back). From someone's own
+ *  music (RY01) the copy is copied in and stays, and `sheet` says what its sheet showed. */
+export const replaceIncoming = (source: string, album: string, from: string | undefined, to: string, year?: string, cover?: 'keep' | 'new', carry = false, sheet?: ReplaceSheet) =>
+  request<AlbumMoved>(replacePath(source, album), asJson({ from, to, year, cover, carry, ...sheet }));
 
 /** An album in the conversion queue: waiting, converting (`done` of `total` files), or just finished. */
 export type Job = {

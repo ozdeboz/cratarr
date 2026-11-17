@@ -50,8 +50,8 @@
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumOfDownload, albumPlay, albumRatings, copiesAdded, copiesGone, copiesMoved, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
-  import { adds, deleteEntries, moveEntries, moveSentences, moveWords, playFromEntries, replaceEntries } from './copiesRule';
+  import { albumOfDownload, albumPlay, albumRatings, copiesAdded, copiesGone, copiesMoved, copiesReplaced, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
+  import { adds, deleteEntries, moveEntries, moveSentences, moveWords, playFromEntries, replacedWords, replaceEntries, replaceSheet } from './copiesRule';
   import { shownIn } from './sources.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -404,6 +404,9 @@
   /** The move's sentences, as its preview says it (T3). */
   const sentences = (k: KeepPreview) => moveSentences({ title: a.title, from: fromName, to: to?.name ?? '', folder: k.folder ?? '', files: k.files, copy: !!k.copy, adding });
   let swap = $state<ReplacePreview | null>(null);
+  /** What Replace's sheet offers for the copy asked of (OQ-A): from someone's own music no cover to choose, nothing carried over,
+   *  nothing said of Lidarr, and the tap says what the sheet showed. */
+  const swapAsks = $derived(replaceSheet(copy?.from?.kind));
   /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
   let coverWay = $state<'keep' | 'new'>('keep');
   /** Change cover: the album's own and those to choose from (null while asked). */
@@ -567,11 +570,13 @@
   const replaceIt = (carry = false) =>
     act(async () => {
       if (!to) return;
-      const name = to.name;
-      const from = copy?.library;
-      const r = await replaceIncoming(source, a.id, from, to.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
-      // The copy that took the other's place is now that one: what is listed of it comes with the next read.
-      moved(r, `Replaced ${r.title} in ${name}.`, () => void copiesGone([{ source, id: a.id, from }]), from);
+      const [into, from, kind, asks] = [to, copy?.library, copy?.from?.kind, swapAsks];
+      const shown = asks.shown && swap?.folder ? { folder: swap.folder, tracks: swap.tracks, added: swap.added, files: swap.files } : undefined;
+      const r = await replaceIncoming(source, a.id, from, into.id, year.trim() || undefined, asks.cover && swap?.covers ? coverWay : undefined, asks.carry && carry, shown);
+      // The copy that took the other's place is now that one: what is listed of it comes with the next read. From Incoming the copy
+      // leaves; from someone's own music it was copied and stays (RY02.4).
+      const said = replacedWords(r.title, into.name, fromName, kind);
+      moved(r, said.done, () => copiesReplaced([{ source, id: a.id, from, kind }]), from, said.undone);
     }, `Could not replace the ${word}`);
   /** The tag differences shown at first (the rest behind "And N more"). */
   const DIFF_SHOWN = 12;
@@ -768,11 +773,11 @@
             ? `, ${swap.added} new`
             : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
           {trashDays === 1 ? 'day' : 'days'}.{#if swap.convert}
-            {` ${converted(swap.convert, to?.name ?? '')}`}{/if}{#if !swap.acquisition}
+            {` ${converted(swap.convert, to?.name ?? '')}`}{/if}{#if !swap.acquisition && swapAsks.lidarr}
             {` ${NO_LIDARR}`}{/if}
         </p>
         <!-- Its cover (the owner, 2026-10-25): the one it has, or the new copy's; both shown. -->
-        {#if swap.covers && (swap.covers.current || swap.covers.new)}
+        {#if swapAsks.cover && swap.covers && (swap.covers.current || swap.covers.new)}
           {@const c = swap.covers}
           <div class="covers">
             <figure class:on={coverWay === 'keep'}><span class="thumb"><Cover src={c.current} /></span><figcaption>Current</figcaption></figure>
@@ -794,11 +799,11 @@
           </ul>
           {#if !diffAll && swap.diff.length > DIFF_SHOWN}<button class="more" onclick={() => (diffAll = true)}>And {swap.diff.length - DIFF_SHOWN} more</button>{/if}
         {/if}
-        {#if swap.carry?.length}<p class="ask carried">Carried over: {swap.carry.join(', ')}.</p>{/if}
+        {#if swapAsks.carry && swap.carry?.length}<p class="ask carried">Carried over: {swap.carry.join(', ')}.</p>{/if}
       {/if}
       <div class="actions">
         {#if swap && (!swap.refused || swap.refused.kind === 'needs_year')}
-          {#if swap.carry?.length}
+          {#if swapAsks.carry && swap.carry?.length}
             <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={() => replaceIt(true)}>Replace and carry over</button>
             <button disabled={working || !!swap.refused} onclick={() => replaceIt()}>Replace only</button>
           {:else}
