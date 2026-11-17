@@ -139,7 +139,8 @@ struct Failure {
 
 impl Slskd {
     pub fn new(url: &str, key: &str) -> Result<Self> {
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+        // Never a redirect (O1): its key stays on the host given.
+        let http = crate::app::reach::lan_client().timeout(Duration::from_secs(20)).build()?;
         Ok(Self { url: url.trim_end_matches('/').to_string(), key: key.to_string(), http })
     }
 

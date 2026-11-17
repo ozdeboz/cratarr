@@ -28,7 +28,7 @@ const BACK_OFF: Duration = Duration::from_secs(5);
 const LONGEST_WAIT: Duration = Duration::from_secs(120);
 
 pub fn http() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION"))).build()?)
+    Ok(crate::app::reach::client(crate::app::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?)
 }
 
 /// A sign-in on its way: for whom, its PKCE verifier, the address Spotify comes back to, and whether it began in the

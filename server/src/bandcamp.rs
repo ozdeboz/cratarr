@@ -22,6 +22,9 @@ use crate::app::reach::Sent as _;
 const KEEP: Duration = Duration::from_secs(5 * 60);
 /// The most album pages kept at once.
 const KEEP_MOST: usize = 64;
+/// The most of a page of Bandcamp's read (O1), and of a search box's answer.
+const PAGE_MOST: usize = 8 << 20;
+const SEARCH_MOST: usize = 1 << 20;
 /// At most one page of Bandcamp's read in this long, server-wide (Discover's look, previews, a track's details): the
 /// owner asked, 2026-10-25, whether Cratarr is polite to it. A stream played is not paced: it is a listener's.
 const PACE: Duration = Duration::from_secs(1);
@@ -174,9 +177,21 @@ pub fn album_page(url: &str) -> Option<String> {
     (path.starts_with("/album/") || path.starts_with("/track/")).then_some(p)
 }
 
+/// Tests: the stream addresses of fake media servers at home (`fake_media_at`), reached plainly.
+#[cfg(test)]
+static FAKE_MEDIA: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Tests: a fake media server's stream address, reached plainly as if it were on Bandcamp's media hosts.
+#[cfg(test)]
+pub fn fake_media_at(stream: &str) {
+    FAKE_MEDIA.lock().unwrap_or_else(|p| p.into_inner()).push(stream.to_string());
+}
+
 /// Reads Bandcamp: one client, the album pages kept a few minutes.
 pub struct Bandcamp {
     http: reqwest::Client,
+    /// Its streams' client: Bandcamp's media hosts only (O1).
+    media: reqwest::Client,
     kept: Mutex<HashMap<String, (Instant, Album)>>,
     /// When the next page may be read (PACE apart; later after a back-off).
     next: tokio::sync::Mutex<Instant>,
@@ -184,11 +199,11 @@ pub struct Bandcamp {
 
 impl Bandcamp {
     pub fn new() -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION")))
-            .build()?;
-        Ok(Self { http, kept: Mutex::new(HashMap::new()), next: tokio::sync::Mutex::new(Instant::now()) })
+        use crate::app::reach::{Purpose, client};
+        // Its pages on Bandcamp's own hosts, its streams on its media hosts (O1): a redirect off them is not followed.
+        let http = client(Purpose::BandcampPages).timeout(Duration::from_secs(20)).build()?;
+        let media = client(Purpose::BandcampMedia).build()?;
+        Ok(Self { http, media, kept: Mutex::new(HashMap::new()), next: tokio::sync::Mutex::new(Instant::now()) })
     }
 
     /// The one reader, for the server's life.
@@ -228,7 +243,7 @@ impl Bandcamp {
     async fn text(&self, url: &str) -> Result<String> {
         let resp = self.send(self.http.get(url)).await?;
         let status = resp.status();
-        let body = resp.text().await?;
+        let body = String::from_utf8_lossy(&crate::app::reach::read_capped(resp, PAGE_MOST).await?).into_owned();
         // Its bot check in place of the page, whatever the status: not read, nothing is done to get past it, and Bandcamp is left
         // alone for a day (O4).
         if is_check(&body) {
@@ -285,7 +300,8 @@ impl Bandcamp {
             (None, Some(p)) => self.track_stream(&a.url, n, p).await?.context("That track does not stream on Bandcamp")?,
             (None, None) => bail!("That track does not stream on Bandcamp"),
         };
-        let mut req = self.http.get(&s).timeout(Duration::from_secs(60 * 60));
+        let media = self.media_for(&s).context("That track's stream is not on Bandcamp's own servers")?;
+        let mut req = media.get(&s).timeout(Duration::from_secs(60 * 60));
         if let Some(r) = range {
             req = req.header(reqwest::header::RANGE, r);
         }
@@ -296,6 +312,16 @@ impl Bandcamp {
             bail!("Bandcamp answered {}", resp.status());
         }
         Ok((resp, t.duration_secs))
+    }
+
+    /// The client a stream is fetched with: Bandcamp's own media hosts only (O1), as a page's data could name any address and a stream
+    /// goes back to the listener whole; none for any other address. Tests: a fake media server at home (`fake_media_at`), plainly.
+    fn media_for(&self, stream: &str) -> Option<reqwest::Client> {
+        #[cfg(test)]
+        if FAKE_MEDIA.lock().unwrap_or_else(|p| p.into_inner()).iter().any(|f| f == stream) {
+            return Some(reqwest::Client::new());
+        }
+        reqwest::Url::parse(stream).is_ok_and(|u| crate::app::reach::Purpose::BandcampMedia.allows(&u)).then(|| self.media.clone())
     }
 
     /// A track's stream from its own page (O4: read as it is played), kept on its album while the album is kept.
@@ -336,7 +362,7 @@ impl Bandcamp {
         if !resp.status().is_success() {
             bail!("Bandcamp answered {}", resp.status());
         }
-        let body = resp.text().await?;
+        let body = String::from_utf8_lossy(&crate::app::reach::read_capped(resp, SEARCH_MOST).await?).into_owned();
         if is_check(&body) || serde_json::from_str::<serde_json::Value>(&body).is_err() {
             hold();
             return Err(NotRead.into());
@@ -854,6 +880,21 @@ mod tests {
         assert!(crate::app::reach::state("bandcamp").failures > 0, "a failure for Health's connections");
         assert_eq!(listed, 2, "the track with its own page plays too");
         assert!(played.is_err_and(|e| not_read(&e)), "its own page asked for only now, as it is played");
+    }
+
+    /// O1: a track whose stream the page names anywhere but Bandcamp's media hosts is not fetched: an address at home, plain http,
+    /// another site.
+    #[tokio::test]
+    async fn a_stream_address_outside_bcbits_is_refused() {
+        let bc = Bandcamp::new().unwrap();
+        let page = "https://glassharbour.bandcamp.com/album/tide-tables";
+        let track = |n: u32, stream: &str| Track { n, title: format!("Tide {n}"), artist: None, duration_secs: None, stream: Some(stream.into()), page: None };
+        let tracks = vec![track(1, "http://192.168.1.20/admin"), track(2, "https://lidarr.example.org/initialize.json"), track(3, "http://t4.bcbits.com/stream/3")];
+        bc.keep(Album { url: page.into(), title: "Tide Tables".into(), artist: "Glass Harbour".into(), cover: None, tracks, released: None, label: None, account: None, about: None, credits: None, tags: Vec::new() });
+        for n in 1..=3 {
+            let said = bc.stream(page, n, None).await.unwrap_err().to_string();
+            assert_eq!(said, "That track's stream is not on Bandcamp's own servers", "track {n}");
+        }
     }
 
     #[test]

@@ -107,7 +107,8 @@ fn sniffed(b: Vec<u8>) -> (Vec<u8>, &'static str) {
 /// The cover's bytes from where it is: a release group's from the Cover Art Archive (else as
 /// `discogs::release_group_cover` finds it, which remembers none for a while), a Bandcamp album's from its page's.
 async fn fetch(of: &Of) -> Result<Option<Vec<u8>>> {
-    let http = super::discover::http()?;
+    // The covers' hosts only, a redirect followed while it stays on them (O1).
+    let http = super::reach::client(super::reach::Purpose::Covers).timeout(Duration::from_secs(30)).build()?;
     match of {
         Of::ReleaseGroup(rg) => {
             let caa = format!("https://coverartarchive.org/release-group/{rg}/front-250");
@@ -129,8 +130,11 @@ async fn fetch(of: &Of) -> Result<Option<Vec<u8>>> {
     }
 }
 
-/// An image's bytes; `None` where there is none (404).
+/// An image's bytes; `None` where there is none (404), or where the address is none of the covers' hosts (O1: Discogs names it).
 async fn image(http: &reqwest::Client, url: &str) -> Result<Option<Vec<u8>>> {
+    if !reqwest::Url::parse(url).is_ok_and(|u| super::reach::Purpose::Covers.allows(&u)) {
+        return Ok(None);
+    }
     let r = http.get(url).timeout(Duration::from_secs(30)).sent().await?;
     if r.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
@@ -139,14 +143,12 @@ async fn image(http: &reqwest::Client, url: &str) -> Result<Option<Vec<u8>>> {
     if !r.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("image/")) {
         bail!("{url} is not an image");
     }
-    if r.content_length().is_some_and(|n| n as usize > MOST_BYTES) {
-        bail!("{url} is too large");
-    }
-    let b = r.bytes().await?;
-    if b.is_empty() || b.len() > MOST_BYTES {
+    // Read in pieces, cut at its cap (O1).
+    let b = super::reach::read_capped(r, MOST_BYTES).await?;
+    if b.is_empty() {
         bail!("{url} could not be read");
     }
-    Ok(Some(b.to_vec()))
+    Ok(Some(b))
 }
 
 /// A look's covers fetched ahead, one at a time, in the background (one such task at a time; the next look's does the

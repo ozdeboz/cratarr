@@ -3380,7 +3380,8 @@ impl PlayOn {
         let me = Arc::downgrade(&self);
         drop(self);
         tokio::spawn(async move {
-            let http = reqwest::Client::builder().timeout(WEBHOOK_TIMEOUT).build().expect("a plain client builds");
+            // Never a redirect (O1).
+            let http = super::reach::lan_client().timeout(WEBHOOK_TIMEOUT).build().expect("a plain client builds");
             // Each webhook's failures in a row, so the log shows when a bad spell began, why, and when it ended.
             let mut failing: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
             loop {

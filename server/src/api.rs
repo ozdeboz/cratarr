@@ -5188,10 +5188,22 @@ struct BandcampOf {
     url: String,
 }
 
+/// What a Bandcamp read that failed says to the asker (O1): an administrator its cause; anyone else a plain word, never an address or a
+/// connection's details (they told which addresses at home answer).
+fn bandcamp_failed(e: &anyhow::Error) -> String {
+    if crate::serve::access::administering() {
+        format!("{e:#}")
+    } else if crate::bandcamp::not_read(e) {
+        e.to_string()
+    } else {
+        "Bandcamp could not be read".into()
+    }
+}
+
 /// A Bandcamp album to play as a preview (decision 0071): its tracks as players hold them (`QueueTrack`), each
 /// streamed and its cover shown through Cratarr's own addresses.
 async fn preview_bandcamp(Query(q): Query<BandcampOf>) -> Result<Json<serde_json::Value>, ApiError> {
-    let a = crate::bandcamp::Bandcamp::get().album(&q.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let a = crate::bandcamp::Bandcamp::get().album(&q.url).await.map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
     let tracks = a.queue_tracks();
     if tracks.is_empty() {
         return Err(ToggleError::Refused("None of its tracks can be heard on Bandcamp.".into()).into());
@@ -5230,7 +5242,7 @@ async fn preview_bandcamp_artist(Query(q): Query<BandcampArtistOf>) -> Result<Js
     }
     let (page, releases) = crate::app::discover::bandcamp_artist(q.name.trim(), q.mbid.as_deref(), q.page.as_deref())
         .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        .map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
     let bc = crate::bandcamp::Bandcamp::get();
     let mut albums = Vec::new();
     for (_, url) in releases.into_iter().take(BANDCAMP_ARTIST_RELEASES) {
@@ -5264,7 +5276,7 @@ async fn bandcamp_relay(id: &str, range: Option<&str>, from_ms: u64) -> Response
     let at = (from_ms > 0).then(|| format!("bytes={}-", from_ms * crate::bandcamp::BYTES_PER_SEC / 1000));
     let (mut resp, duration) = match crate::bandcamp::Bandcamp::get().stream(&url, n, at.as_deref().or(range)).await {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": bandcamp_failed(&e) }))).into_response(),
     };
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
@@ -7617,6 +7629,7 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let stream = format!("http://{}/s", listener.local_addr().unwrap());
+        crate::bandcamp::fake_media_at(&stream);
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         crate::bandcamp::Bandcamp::get().keep(crate::bandcamp::Album {
             url: page.into(),

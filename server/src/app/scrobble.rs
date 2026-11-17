@@ -55,7 +55,7 @@ pub struct Secret {
 }
 
 fn http() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION"))).build()?)
+    Ok(super::reach::client(super::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?)
 }
 
 /// The ListenBrainz user a token belongs to; refused when it is no token.

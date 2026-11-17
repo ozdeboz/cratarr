@@ -212,7 +212,8 @@ impl Lidarr {
         let mut v = reqwest::header::HeaderValue::from_str(api_key).context("the API key has characters a header cannot hold")?;
         v.set_sensitive(true);
         headers.insert("X-Api-Key", v);
-        let http = reqwest::Client::builder().default_headers(headers).timeout(std::time::Duration::from_secs(20)).build()?;
+        // Never a redirect (O1): its key stays on the host given.
+        let http = crate::app::reach::lan_client().default_headers(headers).timeout(std::time::Duration::from_secs(20)).build()?;
         Ok(Self { http, base: url.trim_end_matches('/').to_string() })
     }
 

@@ -19,7 +19,6 @@ use super::reach::Sent as _;
 pub const KEY: &str = "discogs:key";
 pub const SECRET: &str = "discogs:secret";
 const API: &str = "https://api.discogs.com";
-const UA: &str = concat!("Cratarr/", env!("CARGO_PKG_VERSION"), " +https://github.com/ozdeboz/cratarr");
 /// Discogs' limits a minute, until a reply says.
 const ANONYMOUS_PER_MINUTE: u32 = 25;
 const KEYED_PER_MINUTE: u32 = 60;
@@ -68,7 +67,7 @@ fn client() -> Result<&'static reqwest::Client> {
     if let Some(c) = C.get() {
         return Ok(c);
     }
-    let c = reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent(UA).build()?;
+    let c = super::reach::client(super::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?;
     Ok(C.get_or_init(|| c))
 }
 

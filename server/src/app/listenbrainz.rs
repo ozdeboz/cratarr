@@ -80,7 +80,7 @@ struct Info {
 /// Every listen of a ListenBrainz user, newest first, a page at a time, each page kept in `spool` as it comes; one that
 /// holds a read stopped before goes on from its oldest (0.9.7). `progress` says how many so far.
 async fn fetch(user: &str, progress: &super::lastfm::Progress, spool: &mut super::resume::Spool<Listen>) -> Result<Vec<Listen>> {
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let http = super::reach::client(super::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?;
     let mut out = Vec::new();
     let mut before: Option<i64> = spool.items.iter().map(|l| l.at).min();
     loop {
