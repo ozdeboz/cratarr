@@ -287,6 +287,12 @@ mod tests {
         d
     }
 
+    /// Every artist made so far born a month before `NOW`, whatever the real clock says (Z7: `artist_for` gives them its now, and
+    /// from mid-January 2027 that is within a day of `NOW`).
+    fn born_a_month_before(cat: &Catalogue) {
+        cat.db_for_tests().execute("UPDATE artists SET born = ?1", [NOW - MONTH]).unwrap();
+    }
+
     /// A pass that reads no list (no source given, nothing paused): what is due to be read again keeps its records seen.
     async fn quiet_pass(served: &Arc<Serve>, now: i64) -> Option<Passed> {
         pass_reading(served.clone(), now, &[], || false).await.unwrap()
@@ -445,6 +451,7 @@ mod tests {
         let served = served(None, 85_000);
         let cat = served.catalogue().clone();
         let [lonely, featured, listed] = ["Orbit Lane", "Tape Club", "Glass Harbour"].map(|n| cat.artist_for(n).unwrap());
+        born_a_month_before(&cat);
         let listing = |title: &str| crate::catalogue::records::Listing { title: title.into(), kind: Some("album".into()), ..Default::default() };
         let gone = cat.keep_listing(Some(lonely), &[listing("Undertow")], "link").unwrap()[0];
         let kept = cat.keep_listing(Some(listed), &[listing("Two Rooms")], "link").unwrap()[0];
@@ -467,6 +474,7 @@ mod tests {
         let served = served(None, 86_000);
         let cat = served.catalogue().clone();
         let [hearted, other] = ["Kite Theory", "Noor Field"].map(|n| cat.artist_for(n).unwrap());
+        born_a_month_before(&cat);
         served.userdata.set_starred("ann", crate::userdata::Kind::Artist, &[ids::artist(hearted)], true).unwrap();
         assert_eq!(cat.forget_quiet_artists(NOW, &protected_artists(&served).unwrap()).unwrap(), [other]);
     }
@@ -478,6 +486,7 @@ mod tests {
         let served = served(Some(&dir), 87_000);
         let cat = served.catalogue().clone();
         let [seeded, other] = ["Kite Theory", "Noor Field"].map(|n| cat.artist_for(n).unwrap());
+        born_a_month_before(&cat);
         let like: crate::crates::Condition =
             serde_json::from_value(serde_json::json!({ "axis": "like", "value": { "kind": "like", "of": [ids::artist(seeded)], "count": 20 } })).unwrap();
         crate::crates::CrateStore::of_account(dir.to_str(), "ann").save(None, "Like Kite Theory", vec![like]).await.unwrap();

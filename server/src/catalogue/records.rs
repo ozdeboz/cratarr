@@ -3773,11 +3773,13 @@ mod tests {
         cat.db().execute("UPDATE records SET seen_at = 5 WHERE id = ?1", [listed]).unwrap();
         assert_eq!(credited(&cat, artist, "Undertow", &group), listed, "read again: the same record");
         assert!(seen_at().is_some_and(|at| at >= read_at), "and seen again");
-        // Seen later than this read (the tests' clock is ahead of the real one): read again, it stays.
-        cat.db().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", params![listed, NOW]).unwrap();
+        // Seen later than this read, a month ahead of the real clock (Z7: not the tests' fixed one, which the real clock passes in
+        // January 2027): read again, it stays.
+        let later = now() + MONTH;
+        cat.db().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", params![listed, later]).unwrap();
         assert_eq!(credited(&cat, artist, "Undertow", &group), listed);
-        assert_eq!(seen_at(), Some(NOW), "never seen earlier than it was");
-        assert!(cat.forget_quiet(NOW + 5 * MONTH, &std::collections::BTreeSet::new()).unwrap().is_empty(), "seen five months before: kept");
+        assert_eq!(seen_at(), Some(later), "never seen earlier than it was");
+        assert!(cat.forget_quiet(later + 5 * MONTH, &std::collections::BTreeSet::new()).unwrap().is_empty(), "seen five months before: kept");
     }
 
     /// RT01b: an artist a record credits, a reference pasted by hand or confirmed names, or an id from before 0.16 went to is
@@ -3788,6 +3790,8 @@ mod tests {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let [credited, pasted, confirmed, moved, new, lonely] =
             ["Glass Harbour", "Orbit Lane", "Tape Club", "Kite Theory", "Noor Field", "Paper Lantern"].map(|n| cat.artist_for(n).unwrap());
+        // Born a month before the tests' clock, whatever the real one says (Z7); `new` within the day, below.
+        cat.db().execute("UPDATE artists SET born = ?1", [NOW - MONTH]).unwrap();
         let record = cat.record_for_tests("Tide Tables", 0);
         cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", params![record, credited]).unwrap();
         assert!(cat.set_reference(&ids::artist(pasted), &Ref::new("musicbrainz", "artist", "00000000-0000-4000-8000-000000000401"), "hand").unwrap());
