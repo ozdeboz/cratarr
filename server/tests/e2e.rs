@@ -929,8 +929,9 @@ async fn a_labels_page_from_kept_rows_end_to_end() {
     let by_name = json!({ "title": "Tide Tables", "artist": "Glass Harbour" });
     assert_eq!(s.send(reqwest::Method::POST, "/api/records/open", by_name).await.0, 409, "never by its names alone");
     let page = s.get(&format!("/api/labels/la-{label}")).await;
+    // U10: a row the label never listed, opened with it, is made (above) but tied to no label: not one of its page's rows.
     let row = page["rows"].as_array().unwrap().iter().find(|r| r["title"] == "Harbour Lights").cloned().unwrap_or(Value::Null);
-    assert_eq!((row["record"].as_str(), row["had"].as_bool(), row["discogs_master"].as_u64()), (Some(&*first), Some(false), Some(4401)), "opened from its page, one of its rows: {page}");
+    assert_eq!(row, Value::Null, "a made-up row ties nothing: {page}");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
@@ -3374,18 +3375,18 @@ async fn a_copy_is_one_album_two_copies_end_to_end() {
     let album = s.read_in("Both Shores", &music).await;
     let (id, songs) = (album["id"].as_str().unwrap().to_string(), s.songs_of(&album).await);
     let original = as_it_lies(&music.join(SHORES));
-    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
-    let ann = s.sign_in("ann", "ann's password").await;
-    let mine = own.join("ann");
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password", "admin": true })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let mine = own.join("bob");
     let at = |p: &Path| id_of(p).replace('/', "%2F");
     let path = format!("/api/albums/cratarr/{id}/move");
-    let preview = ann.get(&format!("{path}?from={}&to={}", at(&music), at(&mine))).await;
+    let preview = bob.get(&format!("{path}?from={}&to={}", at(&music), at(&mine))).await;
     assert_eq!((&preview["copy"], &preview["refused"]), (&json!(true), &Value::Null), "{preview}");
-    let copied = ann.ok(reqwest::Method::POST, &path, json!({ "from": id_of(&music), "to": id_of(&mine) })).await;
+    let copied = bob.ok(reqwest::Method::POST, &path, json!({ "from": id_of(&music), "to": id_of(&mine) })).await;
     let folder = copied["folder"].as_str().unwrap().to_string();
     assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
     assert!(contents(&as_it_lies(&mine.join(&folder))) == contents(&original), "the copy is the original's files alone");
-    let copies = || async { ann.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect::<Vec<_>>() };
+    let copies = || async { bob.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect::<Vec<_>>() };
     s.until("its copy read in own music", Duration::from_secs(120), || async { copies().await.iter().flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).count() == 2 }).await;
     assert_eq!(copies().await.len(), 1, "one album, listed once");
     assert_eq!(tracks_at(&data, &mine, &folder), songs, "the copy on the record's tracks");
@@ -3409,16 +3410,16 @@ async fn a_request_for_a_stored_album_makes_a_copy_end_to_end() {
     let album = s.read_in("Both Shores", &music).await;
     let (id, songs) = (album["id"].as_str().unwrap().to_string(), s.songs_of(&album).await);
     let original = as_it_lies(&music.join(SHORES));
-    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
-    let ann = s.sign_in("ann", "ann's password").await;
-    ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Both Shores" })).await;
-    let mine = own.join("ann");
-    s.until("her copy made", Duration::from_secs(60), || async { std::fs::read_dir(mine.join("Salt Meridian")).is_ok_and(|mut d| d.next().is_some()) }).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password", "admin": true })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    bob.ok(reqwest::Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Both Shores" })).await;
+    // His own music holds other records of the artist (the layout's No Papers, Other Room): his copy is Both Shores', named as own
+    // music names a folder (as it is), whole once every file of it is there under its own name.
+    let mine = own.join("bob");
+    let copied = mine.join(SHORES);
+    s.until("his copy made, every file of it", Duration::from_secs(60), || async { copied.is_dir() && contents(&as_it_lies(&copied)) == contents(&original) }).await;
     assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
-    let copied = std::fs::read_dir(mine.join("Salt Meridian")).unwrap().flatten().map(|e| e.path()).next().expect("a copy in her music");
-    assert!(contents(&as_it_lies(&copied)) == contents(&original), "the original's files");
-    let folder = copied.strip_prefix(&mine).unwrap().to_string_lossy().replace('\\', "/");
-    s.until("her copy read", Duration::from_secs(120), || async { tracks_at(&data, &mine, &folder) == songs }).await;
+    s.until("his copy read", Duration::from_secs(120), || async { tracks_at(&data, &mine, SHORES) == songs }).await;
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

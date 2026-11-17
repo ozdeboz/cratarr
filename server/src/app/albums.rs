@@ -489,16 +489,24 @@ impl App {
     }
 
     /// `account`'s copy of a record the library has, in their own music (C52, OQ3: "Add to Your music" through Want), made as Copy to
-    /// makes one (C40): from the copy that plays, into their own music, made now where it is not in use yet. None where they have
-    /// no own music, or a copy of it is in theirs already, or the record is no album listed here.
+    /// makes one (C40): from the copy that plays the record for most (`copies::copy_for` for no one: never someone else's own music
+    /// where a library holds it), named, as a record of several copies must be (C52b); into their own music, made now where it is
+    /// not in use yet. None where they have no own music, or a copy of it is in theirs already, or the record is no album listed here.
     pub(super) async fn copy_for(&self, account: &str, record: i64) -> Option<Result<KeepResult, ToggleError>> {
-        let source = crate::source::cratarr::KIND.id;
-        let (_, a) = self.listed_album(source, &crate::serve::ids::record(record), None).await.ok()?;
+        let (source, id) = (crate::source::cratarr::KIND.id, crate::serve::ids::record(record));
+        let served = self.served.clone()?;
+        let id2 = id.clone();
+        let copies = tokio::task::spawn_blocking(move || served.library.copies_of(&id2)).await.ok()?.ok()?;
+        let row = copy_for(&copies, None, &[]).map(|c| (c.folder, c.dir.clone()))?;
+        let view = self.albums(Some(source)).await;
+        let listed = view.sources.into_iter().find(|s| s.id == source)?.albums.into_iter().find(|a| a.id == id)?;
+        let from = listed.copies.iter().find(|c| (c.folder, c.dir.clone()) == row).map(|c| c.library.clone())?;
+        let a = named_copy(&listed, Some(&from)).ok()?;
         let own = {
             let live = self.library.live();
             live.iter().find(|x| x.cfg.id == source)?.own_of(account)?
         };
-        if a.copies.iter().any(|c| c.library == own) {
+        if listed.copies.iter().any(|c| c.library == own) {
             return None;
         }
         let to = match self.library.live().iter().find(|x| x.cfg.id == source).is_some_and(|x| x.used(&own)) {
