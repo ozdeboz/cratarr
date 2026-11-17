@@ -674,11 +674,21 @@ impl PlayingService {
             return Err(ToggleError::Refused("That is not an album.".into()));
         }
         let (_, s) = self.source(source_id)?;
-        // The server's own words (a request and its status) go to the log, not the page.
-        let tracks = s.tracks_of_album(album_id).await.map_err(|e| {
-            tracing::warn!("{source_id}: album {album_id}: {e:#}");
-            ToggleError::Refused("The server could not read this album.".into())
-        })?;
+        // The server's own words (a request and its status) go to the log, not the page. A record not had that was forgotten
+        // (RT01) says so, by its tombstone.
+        let tracks = match s.tracks_of_album(album_id).await {
+            Ok(tracks) => tracks,
+            Err(e) => {
+                if source_id == crate::source::cratarr::KIND.id {
+                    let (c, id) = (self.lib.catalogue(), album_id.to_string());
+                    if let Ok(Some(gone)) = tokio::task::spawn_blocking(move || super::retention::unknown_album(&c, &id)).await {
+                        return Err(gone);
+                    }
+                }
+                tracing::warn!("{source_id}: album {album_id}: {e:#}");
+                return Err(ToggleError::Refused("The server could not read this album.".into()));
+            }
+        };
         let first = tracks.first();
         let (title, artist, year) =
             (first.and_then(|t| t.album.clone()).unwrap_or_default(), first.and_then(|t| t.album_artist.clone()), first.and_then(|t| t.year));

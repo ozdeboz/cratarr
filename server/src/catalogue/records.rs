@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS expected (
   folder INTEGER NOT NULL, dir TEXT NOT NULL, record INTEGER NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (folder, dir)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TEXT NOT NULL, at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0);
+-- RT01: what was forgotten and when, by its subject: `al-<record>` (a record not had nobody saw or opened for six months,
+-- `Catalogue::forget_quiet`), `ar-<artist>` from RT01b. Its id is never given again (AUTOINCREMENT), and a link to it
+-- answers \"no longer known\".
+CREATE TABLE IF NOT EXISTS forgotten (subject TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID;
 ";
 
 /// A chain of merges longer than this is a loop: the record it began at answers none.
@@ -102,8 +106,10 @@ pub struct Listing {
     pub says: Vec<Ref>,
 }
 
-/// `Catalogue::keep_listing` in the caller's transaction, found at `at`.
-pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64) -> Result<Vec<i64>> {
+/// `Catalogue::keep_listing` in the caller's transaction, found at `at`. Each record it finds or makes is seen at `seen` (RT01),
+/// never earlier than it was, but by a listing only Bandcamp's references are on; none for a list read before 0.17 (0.17's
+/// step), whose clock starts at the first forgetting.
+pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64, seen: Option<i64>) -> Result<Vec<i64>> {
     let mut out = Vec::with_capacity(list.len());
     for l in list {
         // A listing with no link to another source (`says`) and, as every listing, no tracks is found by its references or
@@ -128,6 +134,12 @@ pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[List
         };
         for r in &l.refs {
             put_reference(tx, &ids::record(record), r, how, at, false)?;
+        }
+        // Bandcamp's list is no longer read whole (O4: its search box's first answers), so a record only it knows is seen by the
+        // artist's other lists (`Catalogue::bandcamp_only_seen`). A listing with no reference (a Want's) sees its record.
+        let sees = l.refs.is_empty() || l.refs.iter().any(|r| r.source != "bandcamp");
+        if let Some(seen) = seen.filter(|_| sees) {
+            tx.prepare_cached(SEEN)?.execute(params![record, seen])?;
         }
         out.push(record);
     }
@@ -1104,7 +1116,8 @@ impl Catalogue {
     pub fn keep_listing(&self, artist: Option<i64>, list: &[Listing], how: &str) -> Result<Vec<i64>> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let kept = keep_listing_in(&tx, artist, list, how, now())?;
+        let at = now();
+        let kept = keep_listing_in(&tx, artist, list, how, at, Some(at))?;
         tx.commit()?;
         Ok(kept)
     }
@@ -1553,7 +1566,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
             let credited = super::artists::artists_in(tx, &names.iter().cloned().collect(), at)?;
             let artist = names.first().map(|n| credited[&ids::artist_key(n)]);
             let listing = Listing { title: w.title.clone(), artist: w.artist.clone(), year: w.year, cover: w.cover.clone(), refs: group.clone().into_iter().collect(), ..Listing::default() };
-            let record = keep_listing_in(tx, artist, &[listing], "link", at)?[0];
+            let record = keep_listing_in(tx, artist, &[listing], "link", at, Some(at))?[0];
             for (position, name) in names.iter().enumerate().skip(1) {
                 tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, credited[&ids::artist_key(name)], position as i64])?;
             }
@@ -2024,7 +2037,8 @@ impl Carrying<'_> {
             let name: String = self.tx.query_row("SELECT name FROM artists WHERE id = ?1", [artist], |r| r.get(0))?;
             let listings: Vec<Listing> = d.listings.iter().map(|l| Listing { artist: name.clone(), ..l.clone() }).collect();
             let made = records(self.tx)?;
-            let kept = keep_listing_in(self.tx, Some(artist), &listings, "link", d.at)?;
+            // Seen by nobody since 0.17 (RT01): its clock starts at the first forgetting, not at 0.16's read.
+            let kept = keep_listing_in(self.tx, Some(artist), &listings, "link", d.at, None)?;
             found += kept.len() as u64 - (records(self.tx)? - made);
             listed += kept.len() as u64;
             self.tx.execute(
@@ -2388,6 +2402,93 @@ impl Catalogue {
             ran.push(part);
         }
         Ok(ran)
+    }
+}
+
+// ---- RT01: a record not had that nobody sees, forgotten
+
+/// How long a record not had is kept that no list showed and nobody opened (RT01, the owner's six months).
+const KEPT_UNSEEN: i64 = 183 * 86_400;
+/// When the forgetting first ran (`meta`): the clock of a record not seen since 0.17, so nothing from before goes until six
+/// months after the first pass.
+const RETENTION_FROM: &str = "retention_from";
+/// A record seen at `?2`, never earlier than it was seen before (RT01).
+const SEEN: &str = "UPDATE records SET seen_at = max(COALESCE(seen_at, 0), ?2) WHERE id = ?1";
+/// The records the forgetting takes (RT01), `?1` the first pass (`RETENTION_FROM`), `?2` six months ago: not had (no track,
+/// ever), not seen nor opened since `?2`, and nothing pointing at it: no merge either way, not retired ("Was in Music until…"),
+/// no count or check chosen by hand, no reference pasted by hand nor confirmed, no folder expected for it, no link from before
+/// 0.16, no request's shared name (X9). One never seen (from before 0.17, or made by Bandcamp's list alone) counts from when it
+/// was made or from the first pass, the later. A request's and a Soulseek item's are left out by the caller (`forget_quiet`'s
+/// `protected`).
+const FORGETTABLE: &str = "SELECT n.id FROM records n
+     WHERE n.merged_into IS NULL
+       AND n.id NOT IN (SELECT merged_into FROM records WHERE merged_into IS NOT NULL)
+       AND n.retired_at IS NULL
+       AND n.counted_by_hand = 0 AND n.checked_by_hand = 0
+       AND COALESCE(n.seen_at, max(n.born, ?1)) < ?2
+       AND COALESCE(n.opened_at, 0) < ?2
+       AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = n.id)
+       AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || n.id AND f.how = 'hand')
+       AND NOT EXISTS (SELECT 1 FROM \"references\" c WHERE c.subject = 'al-' || n.id AND c.confirmed = 1)
+       AND n.id NOT IN (SELECT record FROM expected)
+       AND n.id NOT IN (SELECT record FROM album_moved)
+       AND n.id NOT IN (SELECT record FROM shared_name_records)
+     ORDER BY n.id";
+
+impl Catalogue {
+    /// An artist's list read now at a source other than Bandcamp (RT01): their records only Bandcamp knows, or no source, seen
+    /// now too, as Bandcamp's own list, no longer read whole (O4), sees nothing (`keep_listing_in`). Blocking.
+    pub fn bandcamp_only_seen(&self, artist: i64) -> Result<()> {
+        self.db().execute(
+            "UPDATE records SET seen_at = max(COALESCE(seen_at, 0), ?2)
+             WHERE id IN (SELECT record FROM record_artists WHERE artist = ?1)
+               AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || records.id AND f.source <> 'bandcamp')",
+            params![artist, now()],
+        )?;
+        Ok(())
+    }
+
+    /// When a subject was forgotten (RT01): its tombstone, by which a link to it answers "no longer known". None: never
+    /// forgotten. On a reader. Blocking.
+    pub fn forgotten_at(&self, subject: &str) -> Result<Option<i64>> {
+        let read = |db: &Connection| -> Result<Option<i64>> {
+            Ok(db.prepare_cached("SELECT at FROM forgotten WHERE subject = ?1")?.query_row([subject], |r| r.get(0)).optional()?)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// The records not had that nothing keeps, forgotten at `now` (RT01), in one transaction: those `FORGETTABLE` names, but
+    /// for `protected` (every request's record, whatever its status, and Soulseek's items', gathered outside the catalogue).
+    /// Each goes with its references, credits and lists, and leaves a tombstone (`forgotten`); its id is never given again. A
+    /// shared name (X9) whose record is gone, however it went, goes too. The first pass starts the clock of what was not seen
+    /// since 0.17 (`RETENTION_FROM`). The ids forgotten. Blocking.
+    pub fn forget_quiet(&self, now: i64, protected: &std::collections::BTreeSet<i64>) -> Result<Vec<i64>> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?1, ?2)", params![RETENTION_FROM, now.to_string()])?;
+        // One that cannot be read counts as now: nothing goes by it.
+        let from: String = tx.query_row("SELECT value FROM meta WHERE key = ?1", [RETENTION_FROM], |r| r.get(0))?;
+        let from: i64 = from.parse().unwrap_or(now);
+        let gone: Vec<i64> = {
+            let mut st = tx.prepare_cached(FORGETTABLE)?;
+            let all: Vec<i64> = st.query_map(params![from, now - KEPT_UNSEEN], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            all.into_iter().filter(|record| !protected.contains(record)).collect()
+        };
+        for &record in &gone {
+            let subject = ids::record(record);
+            tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1")?.execute([&subject])?;
+            for table in ["record_artists", "record_labels", "reference_tracks", "lists_to_read"] {
+                tx.prepare_cached(&format!("DELETE FROM {table} WHERE record = ?1"))?.execute([record])?;
+            }
+            tx.prepare_cached("DELETE FROM records WHERE id = ?1")?.execute([record])?;
+            tx.prepare_cached("INSERT OR REPLACE INTO forgotten (subject, at) VALUES (?1, ?2)")?.execute(params![subject, now])?;
+        }
+        tx.execute("DELETE FROM shared_name_records WHERE record NOT IN (SELECT id FROM records)", [])?;
+        tx.commit()?;
+        Ok(gone)
     }
 }
 
@@ -3059,5 +3160,176 @@ mod tests {
         assert_eq!(counts(), (None, false), "taken back by hand: to be worked out again");
         assert!(cat.set_counting(id, Some("bandcamp"), false).unwrap());
         assert_eq!(counts(), (Some("bandcamp".to_string()), false));
+    }
+
+    /// RT01's clock in the tests: now, and a month.
+    const NOW: i64 = 1_800_000_000;
+    const MONTH: i64 = 30 * 86_400;
+
+    /// A record not had of `title`, last seen `months` before `NOW`; none: never since 0.17.
+    fn unseen_for(cat: &Catalogue, title: &str, months: Option<i64>) -> i64 {
+        let record = cat.record_for_tests(title, 0);
+        cat.db().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", params![record, months.map(|m| NOW - m * MONTH)]).unwrap();
+        record
+    }
+
+    /// What the forgetting takes at `NOW`, nothing kept from outside the catalogue.
+    fn forget(cat: &Catalogue) -> Vec<i64> {
+        cat.forget_quiet(NOW, &std::collections::BTreeSet::new()).unwrap()
+    }
+
+    /// RT01: a record not had that no list showed and nobody opened for six months is forgotten, with its references, lists and
+    /// credits, and leaves a tombstone; one seen or opened since stays, a had one always, and one from before 0.17 (not seen
+    /// since) until six months after the first pass; one never seen made since, six months after it was made. Its id is never
+    /// given again.
+    #[test]
+    fn a_record_nobody_touched_for_six_months_is_forgotten() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Glass Harbour").unwrap();
+        let had = cat.record_for_tests("Tide Tables", 2);
+        cat.db().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", params![had, NOW - 7 * MONTH]).unwrap();
+        let (recent, opened, before) = (unseen_for(&cat, "Two Rooms", Some(5)), unseen_for(&cat, "Partial Shore", Some(7)), unseen_for(&cat, "Ferry Lights", None));
+        cat.db().execute("UPDATE records SET opened_at = ?2 WHERE id = ?1", params![opened, NOW - MONTH]).unwrap();
+        // The last made, so an id given again would be its own.
+        let stale = credited(&cat, artist, "Undertow", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000310")]);
+        let label = cat.label_for("Low Tide Records").unwrap();
+        cat.db().execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, 'LT-2', 'listing')", params![stale, label]).unwrap();
+        cat.set_reference_tracks(stale, "musicbrainz", &[RefTrack { disc: 1, position: 1, title: "Neap".into(), length_ms: None, recording: None }]).unwrap();
+        cat.db().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", params![stale, NOW - 7 * MONTH]).unwrap();
+
+        assert_eq!(forget(&cat), [stale]);
+        assert_eq!(cat.forgotten_at(&ids::record(stale)).unwrap(), Some(NOW), "its tombstone");
+        assert!(cat.record(stale).unwrap().is_none());
+        assert!(cat.references_of(&ids::record(stale)).unwrap().is_empty() && cat.reference_tracks(stale).unwrap().is_empty(), "its references and lists gone");
+        assert!(cat.record_artists(stale).unwrap().is_empty() && cat.label_records(label).unwrap().is_empty(), "its credits gone");
+        for kept in [had, recent, opened, before] {
+            assert!(cat.record(kept).unwrap().is_some() && cat.forgotten_at(&ids::record(kept)).unwrap().is_none(), "{kept} kept");
+        }
+        // Made a month after the first pass, never seen (as by Bandcamp's list alone).
+        let since = unseen_for(&cat, "Open Water", None);
+        cat.db().execute("UPDATE records SET born = ?2 WHERE id = ?1", params![since, NOW + MONTH]).unwrap();
+        assert!(since > stale, "its id never given again");
+        let later = cat.forget_quiet(NOW + 7 * MONTH, &std::collections::BTreeSet::new()).unwrap();
+        assert!(later.contains(&before) && !later.contains(&had), "from before 0.17: six months after the first pass");
+        assert!(!later.contains(&since), "made since: six months after it was made");
+    }
+
+    /// RT01: a reference pasted or chosen by hand keeps its record not had, however long nobody saw it; one a link found does not.
+    #[test]
+    fn a_hand_reference_keeps_its_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (pasted, linked) = (unseen_for(&cat, "Undertow", Some(7)), unseen_for(&cat, "Open Water", Some(7)));
+        assert!(cat.set_reference(&ids::record(pasted), &Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/undertow"), "hand").unwrap());
+        assert!(cat.set_reference(&ids::record(linked), &Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/open-water"), "link").unwrap());
+        assert_eq!(forget(&cat), [linked]);
+    }
+
+    /// RT01: a count or a check chosen by hand (0.14's "Use this", "Checked by hand") keeps its record not had.
+    #[test]
+    fn a_choice_keeps_its_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let [counted, checked, other] = ["Undertow", "Open Water", "Two Rooms"].map(|t| unseen_for(&cat, t, Some(7)));
+        assert!(cat.set_counting(counted, Some("musicbrainz"), true).unwrap());
+        cat.set_checked_by_hand(checked, true).unwrap();
+        assert_eq!(forget(&cat), [other]);
+    }
+
+    /// RT01: a guess confirmed once (0.14's "That's it") keeps its record not had; one never confirmed does not.
+    #[test]
+    fn a_confirmation_keeps_its_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (confirmed, guessed) = (unseen_for(&cat, "Undertow", Some(7)), unseen_for(&cat, "Open Water", Some(7)));
+        for (record, group) in [(confirmed, "00000000-0000-4000-8000-000000000311"), (guessed, "00000000-0000-4000-8000-000000000312")] {
+            assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release-group", group), "search").unwrap());
+        }
+        assert_eq!(cat.confirm_reference(&ids::record(confirmed), "musicbrainz").unwrap(), 1);
+        assert_eq!(forget(&cat), [guessed]);
+    }
+
+    /// RT01, G3: a merge keeps both its records: the one merged, whose id answers through the other, and the one it went into.
+    #[test]
+    fn a_merge_keeps_both_its_records() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let [from, into, other] = ["Undertow (2)", "Undertow", "Open Water"].map(|t| unseen_for(&cat, t, Some(7)));
+        cat.merge_records(from, into).unwrap();
+        assert_eq!(forget(&cat), [other]);
+        assert_eq!(cat.record(from).unwrap().map(|r| r.id), Some(into), "the merged one answers through the other");
+    }
+
+    /// RT01, C50: a folder a fetcher placed for a record not had keeps it while the folder is expected.
+    #[test]
+    fn an_expected_folder_keeps_its_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (expected, other) = (unseen_for(&cat, "Undertow", Some(7)), unseen_for(&cat, "Open Water", Some(7)));
+        assert!(cat.expect_record(1, "soulseek/Glass Harbour - Undertow", expected).unwrap());
+        assert_eq!(forget(&cat), [other]);
+    }
+
+    /// RT01: an id from before 0.16 that went to a record (`album_moved`) keeps it: an old link opens it.
+    #[test]
+    fn a_link_from_before_0_16_keeps_its_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (moved, other) = (unseen_for(&cat, "Undertow", Some(7)), unseen_for(&cat, "Open Water", Some(7)));
+        cat.db().execute("INSERT INTO album_moved (old, form, record, folder, rank) VALUES ('5f2b9c', 'id', ?1, 0, 0)", [moved]).unwrap();
+        assert_eq!(forget(&cat), [other]);
+    }
+
+    /// RT01, OQ16: a retired record ("Was in Music until…") is never forgotten.
+    #[test]
+    fn a_retired_record_is_never_forgotten() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (retired, other) = (unseen_for(&cat, "Undertow", Some(7)), unseen_for(&cat, "Open Water", Some(7)));
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [retired]).unwrap();
+        assert_eq!(forget(&cat), [other]);
+    }
+
+    /// The shared names (X9) as kept: (names, record).
+    fn shared_names(cat: &Catalogue) -> Vec<(String, i64)> {
+        let db = cat.db();
+        let mut st = db.prepare("SELECT names, record FROM shared_name_records ORDER BY names").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// RT01, X9: the record a request's shared name names is kept: the next request by that name takes it.
+    #[test]
+    fn a_shared_name_row_keeps_its_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (named, other) = (unseen_for(&cat, "Glass Harbour", Some(7)), unseen_for(&cat, "Open Water", Some(7)));
+        cat.db().execute("INSERT INTO shared_name_records (names, record) VALUES ('glass harbour|glass harbour', ?1)", [named]).unwrap();
+        assert_eq!(forget(&cat), [other]);
+        assert_eq!(shared_names(&cat), [("glass harbour|glass harbour".to_string(), named)]);
+    }
+
+    /// RT01, X9: a shared name whose record is gone, however it went, is let go of by the forgetting; a live record's stays.
+    #[test]
+    fn shared_name_rows_of_gone_records_are_pruned() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let live = unseen_for(&cat, "Open Water", Some(1));
+        for (names, record) in [("glass harbour|open water", live), ("glass harbour|lost tapes", live + 100)] {
+            cat.db().execute("INSERT INTO shared_name_records (names, record) VALUES (?1, ?2)", params![names, record]).unwrap();
+        }
+        assert!(forget(&cat).is_empty());
+        assert_eq!(shared_names(&cat), [("glass harbour|open water".to_string(), live)]);
+    }
+
+    /// RT01: a list read sees what it lists (`keep_listing`), read again too, and never makes a record seen earlier than it was;
+    /// what was seen is kept from the forgetting.
+    #[test]
+    fn a_list_read_refreshes_what_it_shows() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Glass Harbour").unwrap();
+        let group = [("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000313")];
+        let read_at = now();
+        let listed = credited(&cat, artist, "Undertow", &group);
+        let seen_at = || cat.db().query_row("SELECT seen_at FROM records WHERE id = ?1", [listed], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        assert!(seen_at().is_some_and(|at| at >= read_at), "a list read: seen now");
+        cat.db().execute("UPDATE records SET seen_at = 5 WHERE id = ?1", [listed]).unwrap();
+        assert_eq!(credited(&cat, artist, "Undertow", &group), listed, "read again: the same record");
+        assert!(seen_at().is_some_and(|at| at >= read_at), "and seen again");
+        // Seen later than this read (the tests' clock is ahead of the real one): read again, it stays.
+        cat.db().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", params![listed, NOW]).unwrap();
+        assert_eq!(credited(&cat, artist, "Undertow", &group), listed);
+        assert_eq!(seen_at(), Some(NOW), "never seen earlier than it was");
+        assert!(cat.forget_quiet(NOW + 5 * MONTH, &std::collections::BTreeSet::new()).unwrap().is_empty(), "seen five months before: kept");
     }
 }

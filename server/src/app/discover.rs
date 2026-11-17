@@ -2031,16 +2031,21 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
 
 /// One source's list of the artist read and kept (C53a): what it knows them by (where found now), its rows as records not had
 /// credited to them (`keep_listing`: each found by its references first), and when it was read. A source that does not know them
-/// keeps nothing.
+/// keeps nothing. A list but Bandcamp's sees what it lists, and the artist's records only Bandcamp knows too (RT01): Bandcamp's
+/// own is no longer read whole (O4), so it sees nothing.
 async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<()> {
     let Some((known, how, listings)) = source.read(artist).await? else { return Ok(()) };
     let (cat, id, name) = (cat.clone(), artist.id, artist.name.clone());
+    let sees_bandcamp_only = source.source() != "bandcamp";
     tokio::task::spawn_blocking(move || -> Result<()> {
         if let Some(how) = how {
             cat.set_reference(&crate::serve::ids::artist(id), &known, how)?;
         }
         let listings: Vec<crate::catalogue::records::Listing> = listings.into_iter().map(|l| crate::catalogue::records::Listing { artist: name.clone(), ..l }).collect();
         cat.keep_listing(Some(id), &listings, "link")?;
+        if sees_bandcamp_only {
+            cat.bandcamp_only_seen(id)?;
+        }
         cat.artist_list_read(id, &known.source)
     })
     .await?
@@ -2531,6 +2536,32 @@ mod missing_tests {
         assert_eq!(titles, ["Night Walks", "Paper Kites", "Undertow"]);
         let known = cat.artist_known(artist).unwrap().unwrap().1;
         assert_eq!(known.iter().filter(|(_, row)| row.read_at.is_some()).count(), 3, "each list read, its time kept: {known:?}");
+    }
+
+    /// RT01: Bandcamp's list (O4: its search box's first answers, never read whole) sees nothing: a record only Bandcamp knows is
+    /// not seen when Bandcamp's list makes it nor when it finds it again, but when the artist's MusicBrainz list is read.
+    #[tokio::test]
+    async fn a_bandcamp_list_never_keeps_a_record_seen() {
+        const PAGE: &str = "https://kitetheory.bandcamp.com/album/night-walks";
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let bandcamp: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Stub("bandcamp", |_| {
+            Ok(Some((Ref::new("bandcamp", "artist", "https://kitetheory.bandcamp.com"), Some("search"), vec![listing("Night Walks", &[("bandcamp", "album", PAGE)])])))
+        }))];
+        let listed = settled(&cat, artist, &bandcamp).await;
+        let record = crate::serve::ids::record_number(&listed[0].record).unwrap();
+        let seen_at = || cat.db_for_tests().query_row("SELECT seen_at FROM records WHERE id = ?1", [record], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        assert_eq!(seen_at(), None, "made by Bandcamp's list: not seen");
+        cat.db_for_tests().execute("UPDATE records SET seen_at = 5 WHERE id = ?1", [record]).unwrap();
+        let again = Listing { artist: "Kite Theory".into(), ..listing("Night Walks", &[("bandcamp", "album", PAGE)]) };
+        assert_eq!(cat.keep_listing(Some(artist), &[again], "link").unwrap(), [record], "found again");
+        assert_eq!(seen_at(), Some(5), "nor found again by it");
+        let read_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let musicbrainz: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Stub("musicbrainz", |_| {
+            Ok(Some((Ref::new("musicbrainz", "artist", "00000000-0000-4000-8000-000000000271"), Some("search"), vec![listing("Paper Kites", &[("musicbrainz", "release-group", GROUP_2)])])))
+        }))];
+        settled(&cat, artist, &musicbrainz).await;
+        assert!(seen_at().is_some_and(|at| at >= read_at), "the artist's MusicBrainz list sees their record only Bandcamp knows");
     }
 
     /// O5: one reader a source, first come first served: two artists' lists at one source are read one after the other, and the cut

@@ -665,6 +665,37 @@ pub fn item_words(requests: &[i64]) -> std::collections::HashMap<i64, Word> {
     })
 }
 
+/// The records on the list (RT01: a record not had is never forgotten while an item of it is there); an item 0.16 kept with
+/// no record yet (0) is left out: its request keeps its record. Read once the list is (`start`), as every reader of it.
+pub fn item_records() -> std::collections::BTreeSet<i64> {
+    kept(|k| k.items.iter().map(|i| i.record.record).filter(|record| *record != 0).collect())
+}
+
+/// Tests elsewhere: an item of `record` on the list as `id`, its folders found and waiting for a tick, so no worker takes it up.
+#[cfg(test)]
+pub fn list_for_tests(id: &str, record: i64) {
+    let r = Record { record, artist: "Glass Harbour".into(), album: "Undertow".into(), year: None, request: 0 };
+    let i = Item {
+        id: id.into(),
+        record: r,
+        state: State::Found,
+        tracks: Vec::new(),
+        untimed: Vec::new(),
+        folders: Vec::new(),
+        chosen: None,
+        failed: Vec::new(),
+        misses: 0,
+        due: 0,
+        why: None,
+        batch: None,
+        percent: 0.0,
+        placed: None,
+        set_aside: Vec::new(),
+        checked: None,
+    };
+    kept(|k| k.items.push(i));
+}
+
 /// A record taken off the list (not while it is fetched): its Request is not taken in again. What it fetched goes with
 /// it: nothing else looks in a batch's folder.
 pub async fn drop_item(app: &Arc<super::App>, id: &str) -> View {

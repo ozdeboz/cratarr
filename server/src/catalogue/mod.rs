@@ -488,7 +488,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 37] = [
+const ADDED_COLUMNS: [(&str, &str); 39] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -553,6 +553,10 @@ const ADDED_COLUMNS: [(&str, &str); 37] = [
     ("records", "merged_into INTEGER"),
     // The rank of the copy that named a record last (R28): a copy ranked lower does not name it again.
     ("records", "named_rank INTEGER"),
+    // RT01: when a list read last showed a record not had (but Bandcamp's), and when it was last opened. One neither for six
+    // months, that nothing points at, is forgotten (`Catalogue::forget_unseen`). NULL: not since 0.17, or never.
+    ("records", "seen_at INTEGER"),
+    ("records", "opened_at INTEGER"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.

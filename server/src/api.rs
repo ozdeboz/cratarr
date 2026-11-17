@@ -7434,6 +7434,7 @@ impl IntoResponse for ApiError {
                 StatusCode::CONFLICT
             }
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
+            ToggleError::Gone(_) => StatusCode::GONE,
             ToggleError::Forbidden(_) | ToggleError::Fenced => StatusCode::FORBIDDEN,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };
