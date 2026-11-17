@@ -22,14 +22,30 @@ pub fn paths(cat: &Catalogue, main: i64) -> Result<Vec<PathBuf>> {
     Ok(cat.shared_copies(main)?.into_iter().filter_map(|(folder, rel)| Some(folders.get(folder)?.join(rel))).collect())
 }
 
-/// The list written anew in `data` (through a part, renamed). How many copies. Blocking.
+/// The list written anew in `data`: through a part of this writer's own (`part_in`), made sure of on disk, then renamed, so two
+/// writes at once (a copy's refresh and a build's) each leave a whole list, and a crash leaves the old one or the new (T12). On
+/// any error the part goes and the old list stays. How many copies. Blocking.
 pub fn write(cat: &Catalogue, main: i64, data: &Path) -> Result<usize> {
+    use std::io::Write;
     let paths = paths(cat, main)?;
     let text: String = paths.iter().map(|p| format!("{}\n", p.display())).collect();
-    let (to, part) = (data.join(LIST), data.join(format!("{LIST}.part")));
-    std::fs::write(&part, text)?;
-    std::fs::rename(&part, &to)?;
-    Ok(paths.len())
+    let (to, part) = (data.join(LIST), part_in(data));
+    let written = (|| -> Result<()> {
+        let mut file = std::fs::File::create(&part)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(std::fs::rename(&part, &to)?)
+    })();
+    if written.is_err() && part.is_file() {
+        std::fs::remove_file(&part).ok();
+    }
+    written.map(|()| paths.len())
+}
+
+/// A write's part in `data`: the process's and the writing thread's, so two writes at once never share one (T12).
+fn part_in(data: &Path) -> PathBuf {
+    let thread: String = format!("{:?}", std::thread::current().id()).chars().filter(char::is_ascii_digit).collect();
+    data.join(format!("{LIST}.{}-{thread}.part", std::process::id()))
 }
 
 /// The list written anew for the server (`served`): Music the first main library. Nothing where there is no data folder or no
@@ -108,6 +124,61 @@ mod tests {
         assert!(paths(&cat, 0).unwrap().is_empty(), "its own: backed up");
         cat.execute_for_tests(&format!("UPDATE files SET size = 1, mtime = 1 WHERE folder = 0 AND rel = 'copy-{record}/1.flac'"));
         assert_eq!(paths(&cat, 0).unwrap().len(), 1, "the copy's own flag untouched: as before, listed again");
+    }
+
+    /// A catalogue whose Music record of `n` tracks has a copy in own music sharing its blocks, each track's: `n` lines listed.
+    fn shared(n: usize) -> Catalogue {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/own")]).unwrap();
+        let record = cat.record_for_tests("Tide Tables", n);
+        cat.copy_for_tests(record, 0);
+        let rows: Vec<((i64, String), (i64, String), bool)> = (1..=n).map(|t| ((0, format!("copy-{record}/{t}.flac")), (1, format!("Own/{t}.flac")), true)).collect();
+        cat.copy_rows(&rows).unwrap();
+        cat
+    }
+
+    /// The parts left in a data folder.
+    fn parts(data: &Path) -> Vec<String> {
+        std::fs::read_dir(data).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".part")).collect()
+    }
+
+    /// T12.1: twenty writers at once, of a list of 50 copies and one of 2, into one data folder: the list is one of the two whole,
+    /// each line a full path ending in a newline, and no part is left.
+    #[test]
+    fn two_writes_at_once_leave_a_whole_list() {
+        let (fifty, two) = (shared(50), shared(2));
+        let data = std::env::temp_dir().join(format!("cratarr-backup-at-once-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        // Each list whole, as it alone would be written: its copies' paths in the catalogue's order.
+        let text = |cat: &Catalogue| paths(cat, 0).unwrap().iter().map(|p| format!("{}\n", p.display())).collect::<String>();
+        std::thread::scope(|s| {
+            for i in 0..20 {
+                let (cat, data) = (if i % 2 == 0 { &fifty } else { &two }, &data);
+                s.spawn(move || {
+                    for _ in 0..20 {
+                        write(cat, 0, data).unwrap();
+                    }
+                });
+            }
+        });
+        let list = std::fs::read_to_string(data.join(LIST)).unwrap();
+        assert!(list == text(&fifty) || list == text(&two), "one whole list: {} lines", list.lines().count());
+        assert!(parts(&data).is_empty(), "no part left: {:?}", parts(&data));
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// T12.2: a write that fails (its part cannot be made) leaves the old list as it was, and no part.
+    #[test]
+    fn a_failed_write_keeps_the_old_list() {
+        let data = std::env::temp_dir().join(format!("cratarr-backup-fails-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        assert_eq!(write(&shared(2), 0, &data).unwrap(), 2);
+        let old = std::fs::read_to_string(data.join(LIST)).unwrap();
+        std::fs::create_dir_all(part_in(&data)).unwrap();
+        assert!(write(&shared(3), 0, &data).is_err(), "the part could not be made");
+        assert_eq!(std::fs::read_to_string(data.join(LIST)).unwrap(), old, "the old list as it was");
+        std::fs::remove_dir(part_in(&data)).unwrap();
+        assert!(parts(&data).is_empty(), "no part left");
+        std::fs::remove_dir_all(&data).ok();
     }
 
     /// C41: the list is written anew after a copy's Undo: the copy, its rows into its library's trash, leaves the list; written
