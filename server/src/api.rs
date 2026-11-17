@@ -6061,6 +6061,8 @@ async fn undo_listenbrainz(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError
 #[derive(Deserialize)]
 struct PicksQuery {
     name: String,
+    /// Their id (`ar-<n>`, G6) where the page knows it: their own tracks, not a namesake's.
+    id: Option<String>,
     without: Option<String>,
 }
 
@@ -6070,7 +6072,12 @@ const PICKS: usize = 5;
 /// An artist's Top recommendations: their tracks that fit the asking account's taste best (song ids, best first).
 async fn artist_picks(State(app): State<Arc<App>>, Query(q): Query<PicksQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(json!({ "ids": app.playlists.artist_picks(&q.name, &without, PICKS).await? })))
+    // By their id (G6): their own tracks, as their page lists them.
+    let only = match q.id.as_deref().filter(|i| crate::serve::ids::artist_number(i).is_some()) {
+        Some(id) => Some(app.playing.artist_view(crate::source::cratarr::KIND.id, &q.name, Some(id), &without).await?.rows.into_iter().filter_map(|r| r.id).collect()),
+        None => None,
+    };
+    Ok(Json(json!({ "ids": app.playlists.artist_picks(&q.name, &without, PICKS, only).await? })))
 }
 
 /// The weather as Home Assistant tells it (the cratarr-ha integration, on each change): Home's moment.

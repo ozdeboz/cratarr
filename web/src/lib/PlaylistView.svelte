@@ -1580,6 +1580,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
   }
 
+  // The artist the page shows, by their id where the server said it (G6): their play, radio and picks are theirs, never a
+  // namesake's.
+  const byId = (): { id?: string } => (artistHead?.id ? { id: artistHead.id } : {});
+
   function artistRadio() {
     navigator.vibrate?.(8);
     const a = artist;
@@ -1587,9 +1591,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     openRadio({
       name: title,
       kind: 'artist',
-      within: a ? { kind: 'artist', source: a.source, name: artistName, ...(hiddenLibraries() ? { without: hiddenLibraries() } : {}) } : null,
+      within: a ? { kind: 'artist', source: a.source, name: artistName, ...byId(), ...(hiddenLibraries() ? { without: hiddenLibraries() } : {}) } : null,
       // The seed: 300 of all their tracks, the server's fair draw (decision 0059), not the rows shown.
-      seed: async () => (a ? (await pickOf({ kind: 'artist', source: a.source, name: artistName }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id) : shown),
+      seed: async () => (a ? (await pickOf({ kind: 'artist', source: a.source, name: artistName, ...byId() }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id) : shown),
     });
   }
 
@@ -1614,7 +1618,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const name = artistName;
     picks = null;
     if (!a || a.tracks || a.source !== 'cratarr' || !name) return;
-    artistPicks(name, hiddenLibraries()).then(
+    artistPicks(name, hiddenLibraries(), artistHead?.id).then(
       (r) => {
         if (artistName === name) picks = { name, ids: r.ids };
       },
@@ -1648,8 +1652,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     // The server's library (decision 0059): an album or an artist whole, in its order; a sorted view what shows.
     if (!offServer) {
       if (album && !reshaped) return playCollection({ kind: 'album', source: album.source, id: album.id }, mode, title);
-      // Played by the server by name: an artist who shares theirs plays their own rows (W10).
-      if (artist && !reshaped && !artistHead?.namesakes) return playCollection({ kind: 'artist', source: artist.source, name: artistName }, mode, title);
+      // Played by the server, by their id (G6); one it has not said yet who shares their name plays their own rows (W10).
+      if (artist && !reshaped && (artistHead?.id || !artistHead?.namesakes)) return playCollection({ kind: 'artist', source: artist.source, name: artistName, ...byId() }, mode, title);
       return playCollection({ kind: 'tracks', source, ids: shownPlayable.map((r) => r.id!) }, mode, title);
     }
     const tracks = tracksOf(shownPlayable);
@@ -1714,7 +1718,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       const c = crate;
       if (c && !crateEditing) return await playCollection({ kind: 'crate', id: c }, 'play', name, r.id, crateLook);
       if (album && !reshaped) return await playCollection({ kind: 'album', source: album.source, id: album.id }, 'play', name, r.id);
-      if (artist && !reshaped && !artistHead?.namesakes) return await playCollection({ kind: 'artist', source: artist.source, name: artistName }, 'play', name, r.id);
+      if (artist && !reshaped && (artistHead?.id || !artistHead?.namesakes)) return await playCollection({ kind: 'artist', source: artist.source, name: artistName, ...byId() }, 'play', name, r.id);
       if (p && !multi && !reshaped) return await playCollection({ kind: 'playlist', id: p.id }, 'play', name, r.id);
       await playCollection({ kind: 'tracks', source: src, ids: ok.map((x) => x.id!) }, 'play', name, r.id);
     } catch (e) {

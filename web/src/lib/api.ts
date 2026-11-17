@@ -423,7 +423,7 @@ export type Collection =
   | { kind: 'crate'; id: string; without?: string[] } // genres are crates: id 'genre:<name>'
   | { kind: 'playlist'; id: string }
   | { kind: 'album'; source: string; id: string }
-  | { kind: 'artist'; source: string; name: string; without?: string[] }
+  | { kind: 'artist'; source: string; name: string; id?: string; without?: string[] }
   | { kind: 'tracks'; source: string; ids: string[] };
 /** play: in its order (from a track, or its first 500) · shuffle: 500 from all of it, mixed · next: after the playing
  *  track · last: at the end of the queue. */
@@ -2173,8 +2173,8 @@ export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** An artist's Top recommendations (the owner, 2026-10-23: "a list of tracks which follows taste"): their tracks
  *  that fit the account's taste best, best first (Cratarr's song ids). */
-export const artistPicks = (name: string, without?: string[]) =>
-  quietly<{ ids: string[] }>(`/api/artists/picks?${new URLSearchParams({ name, ...(without?.length ? { without: without.join(',') } : {}) })}`);
+export const artistPicks = (name: string, without?: string[], id?: string | null) =>
+  quietly<{ ids: string[] }>(`/api/artists/picks?${new URLSearchParams({ name, ...(id ? { id } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** Home's moment (the owner, 2026-10-23): named after the weather Home Assistant tells and the time of day ("Music for a Rainy
  *  Evening"), a few albums near it (Cratarr's ids); its radio plays inside the crate `like:now`. */
 /** `sky`: the canvas Home paints (sunny, clear, fewclouds, cloudy, foggy, rainy, stormy, snowy, windy, hot, plain); `dark`
