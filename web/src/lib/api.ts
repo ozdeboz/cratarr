@@ -2447,7 +2447,7 @@ export const musicBrainzSearch = (q: string, limit = 20) =>
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 /** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
  *  Bandcamp. */
-export type RelatedArtist = { name: string; mbid?: string; why: string[]; id?: string; bandcamp?: string };
+export type RelatedArtist = { name: string; mbid?: string; why: string[]; id?: string; number?: number | null; bandcamp?: string };
 /** An artist's related artists to explore (0.9.2) as last looked up; `looking`: a look runs now. */
 export const getRelatedArtists = (nameOrId: string) =>
   quietly<{ artists: RelatedArtist[]; looking: boolean }>(`/api/artists/related?${new URLSearchParams(artistAsk(nameOrId))}`);
@@ -2637,7 +2637,7 @@ export type BeyondAlbum = {
 /** Beyond's albums for the words (decision 0076): the server's own merged search where it has it (0.9.13), else
  *  MusicBrainz's alone, as Find more music asks it. */
 /** An artist Beyond lists (C57): by their MusicBrainz id; `artist`, Cratarr's who holds it (`ar-<n>`), none until opened. */
-export type BeyondArtist = { mbid: string; name: string; disambiguation?: string | null; artist?: string | null; have: boolean };
+export type BeyondArtist = { mbid: string; name: string; disambiguation?: string | null; artist?: string | null; number?: number | null; have: boolean };
 export type BeyondFound = { albums: BeyondAlbum[]; artists: BeyondArtist[] };
 export async function searchBeyond(q: string, limit = 20, offset = 0): Promise<BeyondFound> {
   try {

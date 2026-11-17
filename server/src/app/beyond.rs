@@ -58,6 +58,9 @@ pub struct BeyondArtist {
     /// The artist who holds that MusicBrainz id (`ar-<n>`); none until they are opened.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artist: Option<String>,
+    /// That artist's number for their name (C55, G5): "Name (n)" where the list holds two of a name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<i64>,
     /// Whether the library has albums by that artist.
     pub have: bool,
 }
@@ -72,6 +75,8 @@ pub struct Known {
     pub groups_named: Vec<Option<i64>>,
     pub masters_named: Vec<Option<i64>>,
     pub here: ByReference,
+    /// The artists found's numbers for their names (G5), by artist.
+    pub numbers: HashMap<i64, i64>,
 }
 
 /// A MusicBrainz id as MusicBrainz writes it.
@@ -93,7 +98,8 @@ pub fn known(cat: &Catalogue, albums: &[FoundAlbum], masters: &[FoundMaster], ar
     let groups = std::mem::take(&mut here.records);
     let masters_named = here.named.split_off(albums.len().min(here.named.len()));
     let groups_named = std::mem::take(&mut here.named);
-    Ok(Known { groups, masters, groups_named, masters_named, here })
+    let numbers = cat.artist_numbers(&here.artists.iter().flatten().map(|(id, _)| *id).collect::<Vec<_>>())?;
+    Ok(Known { groups, masters, groups_named, masters_named, here, numbers })
 }
 
 impl Known {
@@ -213,7 +219,14 @@ pub fn artists(found: &[FoundArtist], known: &Known) -> Vec<BeyondArtist> {
         .enumerate()
         .map(|(i, a)| {
             let here = known.here.artists.get(i).copied().flatten();
-            BeyondArtist { mbid: a.mbid.clone(), name: a.name.clone(), disambiguation: a.disambiguation.clone(), artist: here.map(|(id, _)| ids::artist(id)), have: here.is_some_and(|(_, had)| had) }
+            BeyondArtist {
+                mbid: a.mbid.clone(),
+                name: a.name.clone(),
+                disambiguation: a.disambiguation.clone(),
+                artist: here.map(|(id, _)| ids::artist(id)),
+                number: here.and_then(|(id, _)| known.numbers.get(&id).copied()),
+                have: here.is_some_and(|(_, had)| had),
+            }
         })
         .collect()
 }
@@ -582,6 +595,19 @@ mod tests {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let grouch = cat.artist_for("Grouch").unwrap();
         assert_eq!(open(&cat, FIRST, "Grouch"), grouch, "the first sure match: the library's Grouch, given the id");
+    }
+
+    /// G5: an artist row names the artist who holds its id with their number for the name, and the catalogue gives each of a name
+    /// theirs, in the order they were made; one no artist holds has none.
+    #[test]
+    fn an_artist_row_carries_its_number() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let first = open_artist(&cat, ARTIST_1, "Rone", true).unwrap().expect("made");
+        let second = open_artist(&cat, ARTIST_2, "Rone", true).unwrap().expect("made");
+        assert_eq!(cat.artist_numbers(&[first, second, 999_999]).unwrap(), HashMap::from([(first, 1), (second, 2)]));
+        let people = [person(ARTIST_2, "Rone"), person(ARTIST_3, "Rone")];
+        let rows = artists(&people, &known(&cat, &[], &[], &people).unwrap());
+        assert_eq!(rows.iter().map(|r| (r.artist.clone(), r.number)).collect::<Vec<_>>(), [(Some(ids::artist(second)), Some(2)), (None, None)]);
     }
 
     /// C57: Beyond's answer makes nothing: no record, artist or reference, whatever it finds.

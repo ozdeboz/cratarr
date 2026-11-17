@@ -15,7 +15,7 @@
   import SectionHead from './lib/SectionHead.svelte';
   import { pageView } from './lib/pageView.svelte';
   import { openArtistPage, openNotHad } from './lib/albums.svelte';
-  import { artistOpen } from './lib/artistIds';
+  import { artistLabel, artistOpen } from './lib/artistIds';
   import { beyondKey } from './lib/beyondRows';
   import { toast } from './lib/toast.svelte';
 
@@ -113,7 +113,7 @@
           <li>
             <Row
               size="large"
-              title={x.name}
+              title={artistLabel(x.name, x.number, found.r.artists.map((a) => a.name))}
               label={`Open ${x.name}`}
               onclick={() => openArtist(x)}
             >

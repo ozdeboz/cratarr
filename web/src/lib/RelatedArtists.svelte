@@ -7,7 +7,7 @@
   // MusicBrainz's page. The server's first look runs in the background: the row asks again while it does.
   import { artistPhotoUrl, discoverArtistPhotoUrl, getRelatedArtists, type RelatedArtist } from './api';
   import { openArtistPage } from './albums.svelte';
-  import { artistOpen } from './artistIds';
+  import { artistLabel, artistOpen } from './artistIds';
   import SectionHead from './SectionHead.svelte';
   import { toast } from './toast.svelte';
 
@@ -52,7 +52,7 @@
     <SectionHead title="Related artists to explore" />
     <div class="chips">
       {#each artists as a (a.mbid ?? a.name)}
-        <button class="chip" onclick={() => open(a)}><img src={photo(a)} alt="" onerror={none} />{a.name}</button>
+        <button class="chip" onclick={() => open(a)}><img src={photo(a)} alt="" onerror={none} />{artistLabel(a.name, a.number, artists.map((x) => x.name))}</button>
       {/each}
     </div>
   </section>

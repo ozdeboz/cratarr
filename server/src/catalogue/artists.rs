@@ -153,6 +153,24 @@ impl Catalogue {
         Ok(artist)
     }
 
+    /// Each of these artists' number for their name (C55, G5), where they have one, in one query: what a list shows as "Name (n)"
+    /// where it holds two of a name. On a reader. Blocking.
+    pub fn artist_numbers(&self, artists: &[i64]) -> Result<HashMap<i64, i64>> {
+        if artists.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let read = |db: &Connection| -> Result<HashMap<i64, i64>> {
+            let ids = artists.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+            let mut st = db.prepare(&format!("SELECT artist, number FROM artist_numbers WHERE artist IN ({ids})"))?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// An artist as their page names them (C55): their name, number, and whether another artist has the name. None: no such
     /// artist, or one forgotten. On a reader. Blocking.
     pub fn artist_named(&self, artist: i64) -> Result<Option<Named>> {

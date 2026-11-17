@@ -6459,6 +6459,16 @@ async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<se
     for a in &mut artists {
         a.bandcamp = crate::bandcamp::shown(a.bandcamp.take());
     }
+    // Their numbers for their names (G5), read once for those the library has.
+    let ids: Vec<i64> = artists.iter().filter_map(|a| a.id.as_deref().and_then(crate::serve::ids::artist_number)).collect();
+    let cat = ctx.app.library.catalogue();
+    if !ids.is_empty()
+        && let Ok(Ok(numbers)) = tokio::task::spawn_blocking(move || cat.artist_numbers(&ids)).await
+    {
+        for a in &mut artists {
+            a.number = a.id.as_deref().and_then(crate::serve::ids::artist_number).and_then(|n| numbers.get(&n).copied());
+        }
+    }
     Ok(Json(json!({ "artists": artists, "looking": crate::app::related::is_looking(&mbid) })))
 }
 

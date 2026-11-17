@@ -124,6 +124,9 @@ pub struct Item {
     /// An artist's library id (`ar-…`; 0.11, quick crates: what a Sounds like is seeded with from a search hit).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// An artist's number for their name (C55, G5): the page shows "Name (n)" where a list holds two of a name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<i64>,
     pub score: f32,
     pub matched: Vec<Matched>,
 }
@@ -275,6 +278,7 @@ fn missing_items(list: &[crate::app::discover::Missing], w: &[String], marks: Op
         .filter_map(|(i, m)| {
             let (close, matched) = album_match(&m.title, &m.artist, w)?;
             Some(Item {
+                number: None,
                 kind: "missing",
                 album: None,
                 album_id: None,
@@ -316,6 +320,7 @@ fn excluded_items(
         .filter_map(|(i, x)| {
             let (close, matched) = album_match(&x.album, &x.artist, w)?;
             Some(Item {
+                number: None,
                 kind: "excluded",
                 album: None,
                 album_id: None,
@@ -336,6 +341,7 @@ fn excluded_items(
             })
         })
         .chain(artists.iter().enumerate().filter(|(_, a)| crate::search::matches(&a.artist, w)).map(|(i, a)| Item {
+            number: None,
             kind: "excluded",
             album: None,
             album_id: None,
@@ -355,6 +361,7 @@ fn excluded_items(
             matched: matched_name(&a.artist),
         }))
         .chain(everywhere.iter().enumerate().filter(|(_, a)| crate::search::matches(&a.name, w)).map(|(i, a)| Item {
+            number: None,
             kind: "excluded",
             album: None,
             album_id: None,
@@ -382,6 +389,7 @@ fn excluded_items(
 fn known_item(kind: &'static str, id: String, title: &str, artist: &str, year: Option<i32>, cover: Option<String>, why: &str, w: &[String], at: usize, of: usize) -> Option<Item> {
     let (close, matched) = album_match(title, artist, w)?;
     Some(Item {
+        number: None,
         kind,
         album: None,
         album_id: None,
@@ -465,6 +473,7 @@ fn by_composer(c: &super::classical::Index, w: &[String], have: &std::collection
                 continue;
             }
             out.push(Item {
+                number: None,
                 kind: "album",
                 album: None,
                 album_id: None,
@@ -520,6 +529,7 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
                 r => format!("{r} recordings"),
             };
             Some(Item {
+                number: None,
                 kind: "work",
                 album: None,
                 album_id: None,
@@ -623,6 +633,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             .iter()
             .enumerate()
             .map(|(i, (a, h))| Item {
+                number: None,
                 kind: "album",
                 album: None,
                 album_id: None,
@@ -658,6 +669,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .iter()
                 .enumerate()
                 .map(|(i, (a, h))| Item {
+                    number: None,
                     kind: "artist",
                     album: None,
                     album_id: None,
@@ -686,6 +698,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .iter()
                 .enumerate()
                 .map(|(i, t)| Item {
+                    number: None,
                     kind: "track",
                     album: (!t.album.is_empty()).then(|| t.album.clone()),
                     album_id: Some(t.album_id.clone()),
@@ -714,6 +727,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .iter()
                 .enumerate()
                 .map(|(i, (g, count))| Item {
+                    number: None,
                     kind: "genre",
                     album: None,
                     album_id: None,
@@ -756,6 +770,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                         kind,
                         hits.into_iter()
                             .map(|((_, word, albums), score)| Item {
+                                number: None,
                                 kind,
                                 album: None,
                                 album_id: None,
@@ -799,6 +814,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 continue;
             };
             lists.push(Item {
+                number: None,
                 kind: "playlist",
                 album: None,
                 album_id: None,
@@ -840,7 +856,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             } else {
                 continue;
             };
-            found.push(Item { kind: "crate", album: None, album_id: None, duration_secs: None, subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
+            found.push(Item { number: None, kind: "crate", album: None, album_id: None, duration_secs: None, subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);
@@ -920,6 +936,18 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         }
     }
     once_known(&mut groups);
+    // An artist's number for their name (G5), read once for the artists found: the page shows "Name (n)" where it lists two.
+    if let Some(artists) = groups.get_mut("artist") {
+        let ids: Vec<i64> = artists.iter().filter_map(|i| i.id.as_deref().and_then(crate::serve::ids::artist_number)).collect();
+        let cat = app.library.catalogue();
+        if !ids.is_empty()
+            && let Ok(Ok(numbers)) = tokio::task::spawn_blocking(move || cat.artist_numbers(&ids)).await
+        {
+            for i in artists.iter_mut() {
+                i.number = i.id.as_deref().and_then(crate::serve::ids::artist_number).and_then(|a| numbers.get(&a).copied());
+            }
+        }
+    }
     // Each group as asked for; `top` the best of all, weighed by kind.
     let mut top: Vec<Item> = Vec::new();
     for (kind, weight) in KINDS {

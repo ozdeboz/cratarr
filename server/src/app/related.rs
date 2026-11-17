@@ -40,6 +40,9 @@ pub struct Related {
     /// Their id in the library, whose page they open; none: new to the library.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Their number for their name (C55, G5), as they are sent: "Name (n)" where the list holds two of a name. Never kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<i64>,
     /// An album of theirs that plays on Bandcamp (a new artist's way in), and its title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
@@ -247,7 +250,7 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
     let http = super::discover::http()?;
     let mut by: HashMap<String, Related> = HashMap::new();
     let mut add = |id: String, name: String, why: &str, score: f64| {
-        let r = by.entry(id.clone()).or_insert_with(|| Related { name, mbid: Some(id), why: Vec::new(), id: None, bandcamp: None, album: None, score: 0.0 });
+        let r = by.entry(id.clone()).or_insert_with(|| Related { name, mbid: Some(id), why: Vec::new(), id: None, number: None, bandcamp: None, album: None, score: 0.0 });
         if !r.why.iter().any(|w| w == why) {
             r.why.push(why.to_string());
         }
@@ -321,6 +324,7 @@ mod tests {
                 mbid: Some("m1".into()),
                 why: vec!["Listened alongside".into()],
                 id: None,
+                number: None,
                 bandcamp: Some("https://extrawelt.bandcamp.com/album/x".into()),
                 album: Some("Fernweh".into()),
                 score: 0.75,
