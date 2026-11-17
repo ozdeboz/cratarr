@@ -35,9 +35,10 @@
 //!   (decision 0096), as Artist/Record (Year), for the intake card. Never straight into Music. Placed whole through a hidden
 //!   folder, the record's cover beside it (`cover.jpg`, its large picture: Y3); a placing that fails keeps its checked files and
 //!   is tried again (X4).
-//!   Trouble on Cratarr's own side (a disk full, slskd's folder gone) blames no user; free space is looked at before a fetch.
-//!   Only slskd's own words that it could not store a file count as such; three in a row hold the record a day, and Health says
-//!   Soulseek can't store files (Y9).
+//!   Trouble on Cratarr's own side (a disk full or read-only, slskd's folder refused it) blames no user; free space is looked at
+//!   before a fetch. Only slskd's own words that it could not store a file count as such, and only for what is the whole disk's
+//!   (V5): a name too long for it, or a part of its path not found, is the folder's, and its user is failed. Three in a row hold
+//!   the record a day, and Health says Soulseek can't store files (Y9).
 //! - **Kept on disk** (`soulseek.json` in the data folder), so a restart forgets nothing: a fetch under way is followed
 //!   again.
 
@@ -1410,7 +1411,8 @@ where
                 }
                 // What came of it goes with it (X4): nothing else looks in a batch's folder.
                 std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(&batch)).ok();
-                // Cratarr's own side (X4: slskd's disk full, its folder gone): no user failed; the same folder fetched again later.
+                // Cratarr's own side (X4, V5: slskd's disk full or read-only, its folder refused it): no user failed; the same folder
+                // fetched again later.
                 if e.is::<Local>() {
                     tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "a fetch failed on Cratarr's side; held");
                     return with_item(id, |i| {
@@ -1503,7 +1505,8 @@ async fn follow(slskd: &Slskd, id: &str, batch: &str) -> Result<Vec<crate::slskd
     }
 }
 
-/// A fetch that failed on Cratarr's own side (X4): slskd could not store a file (its disk full, its folder gone). No user's failure.
+/// A fetch that failed on Cratarr's own side (X4, V5): slskd could not store a file (its disk full or read-only, its folder refused it).
+/// No user's failure.
 #[derive(Debug)]
 struct Local(String);
 
@@ -1516,23 +1519,16 @@ impl std::fmt::Display for Local {
 impl std::error::Error for Local {}
 
 /// .NET's exception types that are slskd's own disk's alone (Y9), as a transfer's exception may begin with one
-/// ("System.IO.DirectoryNotFoundException: …").
-const LOCAL_KINDS: [&str; 4] = ["System.UnauthorizedAccessException", "System.IO.DirectoryNotFoundException", "System.IO.FileNotFoundException", "System.IO.PathTooLongException"];
+/// ("System.UnauthorizedAccessException: …"): the whole disk's only (V5), access to slskd's own folder denied. A path too long
+/// (`System.IO.PathTooLongException`), or a part of one not found, is the folder's own names' trouble: its user is failed, and the
+/// next folder tried.
+const LOCAL_KINDS: [&str; 1] = ["System.UnauthorizedAccessException"];
 
-/// .NET's own words for slskd's disk's trouble (Y9), as a transfer's exception begins with them, alone or after its type
-/// ("System.IO.IOException: No space left on device"): "No space left on device : '/downloads/…'", "There is not enough space on
-/// the disk.", "Disk full", "Disk quota exceeded", "Read-only file system", "Access to the path '/downloads/…' is denied.", "Could
-/// not find a part of the path '/downloads/…'.", "Could not find file '/downloads/…'.".
-const LOCAL_SAYS: [&str; 8] = [
-    "No space left on device",
-    "There is not enough space on the disk",
-    "Disk full",
-    "Disk quota exceeded",
-    "Read-only file system",
-    "Access to the path '",
-    "Could not find a part of the path '",
-    "Could not find file '",
-];
+/// .NET's own words for slskd's disk's trouble (Y9), the whole disk's only (V5: no space, read-only, access denied), as a transfer's
+/// exception begins with them, alone or after its type ("System.IO.IOException: No space left on device"): "No space left on device
+/// : '/downloads/…'", "There is not enough space on the disk.", "Disk full", "Disk quota exceeded", "Read-only file system", "Access
+/// to the path '/downloads/…' is denied.".
+const LOCAL_SAYS: [&str; 6] = ["No space left on device", "There is not enough space on the disk", "Disk full", "Disk quota exceeded", "Read-only file system", "Access to the path '"];
 
 /// Whether a failed transfer is slskd's own disk's trouble (X4, Y9), not its user's: errored, never refused ("Completed, Rejected"),
 /// timed out or cancelled, and its exception one of .NET's local kinds (`LOCAL_KINDS`) or beginning with its words for them
@@ -2776,7 +2772,7 @@ mod tests {
         assert!(i.why.as_deref().is_some_and(|w| w.contains("No space left on device")), "{:?}", i.why);
         assert!(i.due > now());
         assert!(!d.join(crate::slskd::FOLDER).join(batch).exists(), "what came of it removed");
-        assert!(local_failure(&ended("Completed, Errored", "Could not find a part of the path '/downloads/x'")) && !local_failure(&ended("Completed, Rejected", "Transfer rejected: Queue full")));
+        assert!(local_failure(&ended("Completed, Errored", "Read-only file system : '/downloads/x'")) && !local_failure(&ended("Completed, Rejected", "Transfer rejected: Queue full")));
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -2797,7 +2793,7 @@ mod tests {
     async fn a_remote_refusal_with_disk_words_fails_the_user() {
         assert!(local_failure(&ended("Completed, Errored", "System.IO.IOException: No space left on device")));
         assert!(local_failure(&ended("Completed, Errored", "Access to the path '/downloads/cratarr/b1/01 One.flac' is denied.")));
-        assert!(local_failure(&ended("Completed, Errored", "System.IO.DirectoryNotFoundException: The folder is gone.")));
+        assert!(local_failure(&ended("Completed, Errored", "System.UnauthorizedAccessException: Access to the path '/downloads/cratarr' is denied.")));
         assert!(!local_failure(&ended("Completed, Rejected", r"Transfer rejected: Access to the path 'D:\Music' is denied.")));
         assert!(!local_failure(&ended("Completed, Errored", r"Transfer rejected: Access to the path 'D:\Music' is denied.")), "not slskd's own words");
         assert!(!local_failure(&ended("Completed, Errored", "Remote connection closed: no space left on device")));
@@ -2810,6 +2806,29 @@ mod tests {
         fetch_from(id, &slskd_at(app).await, &d, never_gated).await;
         let i = item(id).unwrap();
         assert_eq!((i.state, i.failed.clone(), i.folders[0].user.as_str(), i.local_failures), (State::Approved, vec!["a".to_string()], "b", 0), "the next folder");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// V5: a name too long for slskd's disk (a peer's folder of long names) is that folder's trouble, not the disk's: its user is failed
+    /// and the next folder tried, nothing held, and Health says nothing of storing. So is a part of a path not found. Only what is the
+    /// whole disk's is Cratarr's side: no space, a disk read-only, access denied.
+    #[tokio::test]
+    async fn a_name_too_long_fails_the_user_not_the_disk() {
+        let too_long = "System.IO.PathTooLongException: The path '/downloads/cratarr/b1/01 One.flac' is too long, or a component of the specified path is too long.";
+        assert!(!local_failure(&ended("Completed, Errored", too_long)));
+        assert!(!local_failure(&ended("Completed, Errored", "System.IO.DirectoryNotFoundException: Could not find a part of the path '/downloads/cratarr/b1/CD1'.")));
+        assert!(!local_failure(&ended("Completed, Errored", "Could not find file '/downloads/cratarr/b1/01 One.flac'.")));
+        assert!(local_failure(&ended("Completed, Errored", "System.IO.IOException: Read-only file system : '/downloads/cratarr/b1'")));
+        assert!(local_failure(&ended("Completed, Errored", "System.UnauthorizedAccessException: Access to the path '/downloads/cratarr/b1' is denied.")));
+        let (id, batch) = ("ss-v5-long", "b-v5-long");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("v5-long", batch);
+        let long = serde_json::json!({ "transfers": [{ "id": "t1", "filename": r"d\01 One.flac", "state": "Completed, Errored", "percentComplete": 0.0, "exception": too_long }] });
+        let app = axum::Router::new().route("/api/v0/transfers/downloads/batches/{id}", axum::routing::get(move || std::future::ready(axum::Json(long.clone()))));
+        fetch_from(id, &slskd_at(app).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.failed.clone(), i.folders[0].user.as_str(), i.local_failures), (State::Approved, vec!["a".to_string()], "b", 0), "the next folder");
+        assert!(i.due <= now() && cant_store_in(std::slice::from_ref(&i), now()).is_empty(), "nothing held: Soulseek can store files");
         std::fs::remove_dir_all(&d).ok();
     }
 
