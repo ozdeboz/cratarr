@@ -1607,6 +1607,16 @@ export const getMusicBrainz = () => quietly<MusicBrainzStatus>('/api/settings/mu
 export const setMusicBrainzEnabled = (enabled: boolean) =>
   request<MusicBrainzStatus>('/api/settings/musicbrainz', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
 
+/** Bandcamp switched on or off, and until when it is left alone after its browser check (O4; on again lifts that, V8): an
+ *  administrator's (lib/serverSwitches). */
+export const getBandcamp = () => quietly<import('./serverSwitches').BandcampSetting>('/api/settings/bandcamp');
+export const setBandcampEnabled = (enabled: boolean) =>
+  request<import('./serverSwitches').BandcampSetting>('/api/settings/bandcamp', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+/** Whether Cratarr reads outside services in the background (O5): off is "Pause background reading". An administrator's. */
+export const getBackground = () => quietly<import('./serverSwitches').BackgroundSetting>('/api/settings/background');
+export const setBackground = (s: import('./serverSwitches').BackgroundSetting) =>
+  request<import('./serverSwitches').BackgroundSetting>('/api/settings/background', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
+
 /** Check a Lidarr as filled in; nothing is saved. Null for a blank address. */
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
 

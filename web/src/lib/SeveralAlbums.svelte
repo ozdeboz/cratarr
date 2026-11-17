@@ -201,8 +201,11 @@
           async ({ x }) => {
             const r = await moveAlbum(x.s.id, x.a.id, x.from, x.to.id);
             // Queued (lossless files above the quality limit to convert first): its row shows the progress instead.
-            if (r.queued) queued = true;
-            else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id, from: x.from, to: x.to.id }));
+            // Its end is told to whoever asked, with its Undo (W13).
+            if (r.queued) {
+              queued = true;
+              jobs.queued({ source: x.s.id, album_id: x.a.id, from: x.from });
+            } else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id, from: x.from, to: x.to.id }));
           },
           1,
         );

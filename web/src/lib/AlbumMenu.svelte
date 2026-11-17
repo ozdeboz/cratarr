@@ -532,9 +532,10 @@
     }
   }
   // Done: the copy leaves its library, shown at once as `left` says. Queued (lossless files above the target's quality
-  // limit to convert first): its row shows the progress instead, and the queue says when it is done.
-  function moved(r: AlbumMoved, words: string, left: () => void) {
+  // limit to convert first): its row shows the progress instead, and the queue says when it is done, to whoever asked (W13).
+  function moved(r: AlbumMoved, words: string, left: () => void, from: string | undefined) {
     if (r.queued) {
+      jobs.queued({ source, album_id: a.id, from });
       jobs.poke();
       return;
     }
@@ -553,7 +554,7 @@
       if (!to) return;
       const [into, from] = [to, copy?.library];
       const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined);
-      moved(r, `${adding ? 'Added' : 'Moved'} ${a.title} to ${into.name}.`, () => copiesMoved([{ source, id: a.id, from, to: into.id }]));
+      moved(r, `${adding ? 'Added' : 'Moved'} ${a.title} to ${into.name}.`, () => copiesMoved([{ source, id: a.id, from, to: into.id }]), from);
     }, `Could not ${adding ? 'add' : 'move'} the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
@@ -563,7 +564,7 @@
       const from = copy?.library;
       const r = await replaceIncoming(source, a.id, from, to.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
       // The copy that took the other's place is now that one: what is listed of it comes with the next read.
-      moved(r, `Replaced ${r.title} in ${name}.`, () => void copiesGone([{ source, id: a.id, from }]));
+      moved(r, `Replaced ${r.title} in ${name}.`, () => void copiesGone([{ source, id: a.id, from }]), from);
     }, `Could not replace the ${word}`);
   /** The tag differences shown at first (the rest behind "And N more"). */
   const DIFF_SHOWN = 12;

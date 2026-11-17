@@ -11,6 +11,8 @@
   import type { Field } from '../api';
   import {
     getAcoustid,
+    getBackground,
+    getBandcamp,
     getDiscogs,
     getLastfmServerKey,
     getLidarrOptions,
@@ -18,6 +20,8 @@
     getSlskd,
     missingCall,
     setAcoustid,
+    setBackground,
+    setBandcampEnabled,
     setDiscogs,
     setDiscogsEnabled,
     setLastfmEnabled,
@@ -31,6 +35,7 @@
     type SlskdSetting,
   } from '../api';
   import { when } from './when';
+  import { backgroundPaused, bandcampHeld, bandcampRow, pausedBody, type BackgroundSetting, type BandcampSetting } from '../serverSwitches';
   import FormSheet from './FormSheet.svelte';
   import { toast } from '../toast.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
@@ -56,7 +61,8 @@
   const MUSICBRAINZ = 'musicbrainz';
   const SLSKD = 'slskd';
   const ACOUSTID = 'acoustid';
-  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === MCP || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ || t === SLSKD || t === ACOUSTID;
+  const BANDCAMP = 'bandcamp';
+  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === MCP || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ || t === SLSKD || t === ACOUSTID || t === BANDCAMP;
   const FETCHERS_MORE =
     "What fetches the records asked for, either or both: Lidarr (it also watches your artists for new releases) and Soulseek, which Cratarr searches through slskd itself, each file checked. An approved request goes to each. Each brings its records into an Incoming library of its own (Libraries).";
   const WANT_MORE =
@@ -143,10 +149,32 @@
             .filter(Boolean)
             .join(' · '),
   );
-  // Each connection switched on or off (the owner, 2026-10-25: all of them), the key kept; a switch says it at once.
-  async function turn(what: 'lastfm' | 'discogs' | 'musicbrainz' | 'slskd', on: boolean) {
+  // Bandcamp (run 7d, O4; W13): on or off, and until when it is left alone after its browser check; switching it on again lifts
+  // that (V8). "Pause background reading" (O5): on while Cratarr reads no outside service on its own. Both the administrators'.
+  let bandcamp = $state<BandcampSetting | null>(null);
+  let background = $state<BackgroundSetting | null>(null);
+  getBandcamp().then(
+    (b) => (bandcamp = b),
+    () => (bandcamp = null),
+  );
+  getBackground().then(
+    (b) => (background = b),
+    () => (background = null),
+  );
+  const now = () => Math.floor(Date.now() / 1000);
+  const bandcampShown = $derived(bandcamp ? bandcampRow(bandcamp, now(), when) : null);
+  async function pause(paused: boolean) {
     try {
-      if (what === 'lastfm') await setLastfmEnabled(on).then(loadFmKey);
+      background = await setBackground(pausedBody(paused));
+    } catch (e) {
+      toast.fail(e, paused ? "It wasn't paused" : "It wasn't let go on");
+    }
+  }
+  // Each connection switched on or off (the owner, 2026-10-25: all of them), the key kept; a switch says it at once.
+  async function turn(what: 'lastfm' | 'discogs' | 'musicbrainz' | 'slskd' | 'bandcamp', on: boolean) {
+    try {
+      if (what === 'bandcamp') bandcamp = await setBandcampEnabled(on);
+      else if (what === 'lastfm') await setLastfmEnabled(on).then(loadFmKey);
       else if (what === 'discogs') discogs = await setDiscogsEnabled(on);
       else if (what === 'slskd') slskd = await setSlskdEnabled(on);
       else mb = await setMusicBrainzEnabled(on);
@@ -226,7 +254,7 @@
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
   const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
   nameThing(() =>
-    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === MCP ? 'MCP' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'Soulseek' : thing === ACOUSTID ? 'AcoustID' : draft ? label(draft) : null,
+    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === MCP ? 'MCP' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'Soulseek' : thing === ACOUSTID ? 'AcoustID' : thing === BANDCAMP ? 'Bandcamp' : draft ? label(draft) : null,
   );
   // Last.fm's key and Discogs' app as rows say them.
   const fmOff = $derived(fmKey?.enabled === false);
@@ -249,6 +277,7 @@
       { id: LASTFM, shown: true, off: fmOff },
       { id: DISCOGS, shown: discogsKnown, off: discogsOff },
       { id: ACOUSTID, shown: acoustidKnown, off: false },
+      { id: BANDCAMP, shown: !!bandcamp, off: bandcamp?.enabled === false },
     ]
       .filter((r) => r.shown)
       .sort((a, b) => Number(a.off) - Number(b.off)),
@@ -482,6 +511,13 @@
       onclose={() => (removing = null)}
     />
   {/if}
+{:else if thing === BANDCAMP}
+  {#if bandcamp}
+    {@const b = bandcamp}
+    <Group>
+      <Item name="Use Bandcamp" line={bandcampHeld(b, now()) ? bandcampShown?.line : null} toggle={{ checked: b.enabled, onchange: (on) => turn('bandcamp', on) }} />
+    </Group>
+  {/if}
 {:else if thing === MUSICBRAINZ}
   {#if mb}
     <Group>
@@ -666,8 +702,14 @@
         {:else}
           <Item name="Add AcoustID" kind="add" onclick={() => openThing('connections', ACOUSTID)} />
         {/if}
+      {:else if r.id === BANDCAMP && bandcampShown}
+        <Item lead={bandcampShown.lead} name="Bandcamp" line={bandcampShown.line} onclick={() => openThing('connections', BANDCAMP)} />
       {/if}
     {/each}
+    {#if background}
+      {@const g = background}
+      <Item name="Pause background reading" toggle={{ checked: backgroundPaused(g), onchange: pause }} />
+    {/if}
   </Group>
   <HomeAssistantPart />
   <McpPart />
