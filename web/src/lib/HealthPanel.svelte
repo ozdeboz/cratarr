@@ -20,6 +20,8 @@
   import Icon from './Icon.svelte';
   import MoreInfo from './MoreInfo.svelte';
   import { albumCoverUrl, freshTrackIds, getRecordHealth, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
+  import { sayWantFailed } from './albums.svelte';
+  import { wantOf } from './wantPath';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { plural } from './insights.svelte';
   import MenuCards from './MenuCards.svelte';
@@ -325,17 +327,22 @@
   const handed = $derived(glass.one && !beside);
   const pill = () => (!beside ? { filter: false, view: false, search: 'health' } : null);
   handGlass(() => handed, { left: glassLeft, pill });
-  // An album missing tracks: the whole release asked for (Lidarr fetches it into Incoming; Replace carries over).
+  // An album missing tracks: the whole release asked for (Lidarr fetches it into Incoming; Replace carries over), by its record
+  // (W12: a copy short of tracks reads "partly there", so its request stays open), else its release group.
   let asking = $state(false);
   let askedFull = $state<string | null>(null);
+  /** What a missing-tracks item is asked for by: its record where it is Cratarr's own, else its release group. */
+  const fullOf = (x: HealthItem) => (x.album?.[0] === 'cratarr' ? x.album[1] : (x.release_group ?? null));
   async function askFull(x: HealthItem) {
-    if (!x.release_group || asking) return;
+    const key = fullOf(x);
+    if (!key || asking) return;
     asking = true;
     try {
-      await wantAlbum({ release_group: x.release_group, artist: (x.line ?? '').split(' · ')[0], album: x.title });
-      askedFull = x.release_group;
+      const record = x.album?.[0] === 'cratarr' ? x.album[1] : null;
+      await wantAlbum(wantOf({ record, release_group: x.release_group, artist: (x.line ?? '').split(' · ')[0], album: x.title }));
+      askedFull = key;
     } catch (e) {
-      toast.fail(e, "The album wasn't asked for");
+      sayWantFailed(e);
     } finally {
       asking = false;
     }
@@ -453,8 +460,8 @@
           <Item name={m}>{#if finds && x.album?.[0] === 'cratarr'}<button disabled aria-busy="true">Search</button>{/if}</Item>
         {/each}
       {/if}
-      {#if x.release_group}
-        {#if x.request || askedFull === x.release_group}
+      {#if fullOf(x)}
+        {#if x.request || askedFull === fullOf(x)}
           <Item name="Asked for the full album" />
         {:else}
           <Item name="Ask for the full album" busy={asking} disabled={asking} onclick={() => askFull(x)} />

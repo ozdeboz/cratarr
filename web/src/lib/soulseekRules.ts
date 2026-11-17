@@ -6,10 +6,9 @@ export type SoulseekState = 'waiting' | 'searching' | 'found' | 'approved' | 'fe
 export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number; unchecked?: string | null };
 export type SoulseekItem = {
   id: string;
-  /** The catalogue's record it fetches (`record`), named as the record is. */
-  record: { record: number; artist: string; album: string; year?: number | null };
-  /** The approved Request it fetches (every one is one: decision 0099's amendment). */
-  request: number;
+  /** The catalogue's record it fetches (`record`: its number, 0 for an item 0.16 kept), named as the record is, and the approved
+   *  Request it fetches (every one is one: decision 0099's amendment), as the server keeps them. */
+  record: { record: number; artist: string; album: string; year?: number | null; request: number };
   state: SoulseekState;
   folders: SoulseekFolder[];
   /** The folder to be fetched (its place in `folders`). */
@@ -79,6 +78,10 @@ export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): 
   const aside = i.set_aside.length ? `${i.set_aside.length} folder${i.set_aside.length === 1 ? '' : 's'} set aside` : null;
   return [...head, ...where, aside].filter(Boolean).join(' · ');
 }
+
+/** The record an item fetches, as lists serve it (`al-<n>`, W12): its row's cover and its page. None for an item 0.16 kept,
+ *  which named its release group instead. */
+export const recordOf = (i: Pick<SoulseekItem, 'record'>): string | null => (i.record.record > 0 ? `al-${i.record.record}` : null);
 
 /** Only a found record with a folder can be ticked; nothing is fetched without a tick. */
 export const tickable = (i: SoulseekItem) => i.state === 'found' && i.folders.length > 0;

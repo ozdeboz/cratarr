@@ -3,14 +3,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { approvePayload, folderLine, itemLine, itemTone, searchable, tickable, underWay } = await import('../src/lib/soulseekRules.ts');
+const { approvePayload, folderLine, itemLine, itemTone, recordOf, searchable, tickable, underWay } = await import('../src/lib/soulseekRules.ts');
 
 const folder = (user: string, lossless = true) => ({ user, dir: `Music\\${user}\\Late Set`, format: lossless ? 'flac' : 'mp3', lossless, free_slot: true, queue: 0, speed: 2_500_000, extra: 0 });
 const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
   ({
     id,
-    record: { record: 1, artist: 'M. Rivers', album: 'Late Set', year: 1998 },
-    request: 7,
+    record: { record: 1, artist: 'M. Rivers', album: 'Late Set', year: 1998, request: 7 },
     state,
     folders: state === 'found' ? [folder('ann'), folder('bo', false)] : [],
     chosen: state === 'found' ? 0 : null,
@@ -21,6 +20,11 @@ const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
     set_aside: [],
     ...extra,
   }) as Parameters<typeof itemLine>[0];
+
+test('a Soulseek row names its record as lists serve it; an item 0.16 kept names none', () => {
+  assert.equal(recordOf(item('a', 'found')), 'al-1');
+  assert.equal(recordOf(item('b', 'waiting', { record: { record: 0, artist: 'M. Rivers', album: 'Late Set', request: 7 } })), null);
+});
 
 test("a record's row says where it stands", () => {
   assert.equal(folderLine(folder('ann')), 'FLAC · free slot · 2.5 MB/s · ann');

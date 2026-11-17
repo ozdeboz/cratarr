@@ -15,7 +15,7 @@
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
-  import { cancelRequest, type AlbumRequest, type WatchedAlbum } from './api';
+  import { albumCoverUrl, cancelRequest, type AlbumRequest, type WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -25,12 +25,13 @@
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch, searchNone } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
-  import { backOne, REQUESTS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
+  import { albumSubject, backOne, REQUESTS, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, listsShown, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import { clearPlaced, dropSoulseek, fetchFound, loadSoulseek, searchSoulseekNow, soulseek } from './soulseek.svelte';
-  import { approvePayload, folderLine, GROUPS, itemLine, itemTone, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
+  import { approvePayload, folderLine, GROUPS, itemLine, itemTone, recordOf, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
+  import { fillOf, handOverAgain, standing, standingTone } from './requestState';
   import SelectBar from './SelectBar.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import Group from './settings/Group.svelte';
@@ -89,35 +90,16 @@
   }
   const answers = $derived(answersRequests());
 
-  const STATUS = { pending: 'Waiting', approved: 'Approved', declined: 'Declined', cancelled: 'Taken back' } as const;
-  /** What a row says: the artist, then where it stands (and who asked, among everyone's). */
+  /** What a row says: the artist, then where it stands, as the server's state says (W5, lib/requestState), and who asked, among
+   *  everyone's. */
   function line(r: AlbumRequest, who: boolean): string {
     const parts = [r.artist];
     if (who) parts.push(`asked by ${r.user}`);
-    parts.push(standing(r));
+    parts.push(standing(r, when));
     return parts.join(' · ');
   }
-  function standing(r: AlbumRequest): string {
-    const a = r.album_state;
-    if (a?.state === 'in_library') return 'In the library';
-    if (r.status === 'declined') return r.reason ? `Declined: ${r.reason}` : 'Declined';
-    if (r.status !== 'approved') return `${STATUS[r.status]} · ${when(r.at)}`;
-    if (r.fetched?.startsWith('Not handed over')) return r.fetched;
-    switch (a?.state) {
-      case 'fetching':
-        return `Being fetched · ${Math.round(a.done * 100)}%`;
-      case 'in_incoming':
-        return 'In Incoming';
-      case 'partly_there':
-        return `Partly there · ${a.tracks} of ${a.of}`;
-      case 'looking':
-        return 'Lidarr is looking for it';
-      default:
-        return r.fetched ?? 'Approved';
-    }
-  }
-  const tone = (r: AlbumRequest) => (r.status === 'declined' || r.fetched?.startsWith('Not handed over') ? 'bad' : null);
-  const fill = (r: AlbumRequest) => (r.album_state?.state === 'fetching' ? r.album_state.done : null);
+  const tone = (r: AlbumRequest) => standingTone(r);
+  const fill = (r: AlbumRequest) => fillOf(r.state);
   /** A release group's cover, as Discover's (the Cover Art Archive). */
   const coverOf = (w: WatchedAlbum) => (w.release_group ? `https://coverartarchive.org/release-group/${w.release_group}/front-250` : null);
   const watchLine = (w: WatchedAlbum) =>
@@ -266,7 +248,7 @@
             <Group title={g.title}>
               {#snippet tail()}{#if g.states.includes('placed')}<button class="tailact" onclick={() => void clearPlaced()}>Clear</button>{/if}{/snippet}
               {#each these as i (i.id)}
-                <ReleaseRow cover={null} title={i.record.album} line={itemLine(i)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
+                <ReleaseRow cover={recordOf(i) ? albumCoverUrl('cratarr', recordOf(i)!) : null} title={i.record.album} line={itemLine(i)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
                   {#if tickable(i)}
                     {@const on = slskTicks.has(i.id)}
                     <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.record.album}`} onclick={() => slskTick(i.id)}
@@ -333,7 +315,8 @@
     onclose={() => (opened = null)}
   >
     <div role="menu">
-      {#if answers && (r.status === 'pending' || (r.status === 'approved' && r.fetched?.startsWith('Not handed over')))}
+      <!-- Approve one waiting; Hand over again where the server says no fetcher has spoken of it (W5, G2). -->
+      {#if answers && (r.status === 'pending' || handOverAgain(r, answers))}
         <MenuEntry icon="check" label={r.status === 'pending' ? 'Approve' : 'Hand over again'} onclick={() => (answer([r.id], true), (opened = null))} />
       {/if}
       {#if answers && r.status === 'pending'}
@@ -372,6 +355,8 @@
       </Group>
     {/if}
     <div role="menu">
+      <!-- Its record's page (W12): the album it fetches, had or not. -->
+      {#if recordOf(i)}{@const rec = recordOf(i)!}<MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => ((slskOpen = null), viewOver(albumSubject('cratarr', rec)))} />{/if}
       {#if searchable(i)}<MenuEntry icon="search" label="Search now" onclick={() => (void searchSoulseekNow(i.id), (slskOpen = null))} />{/if}
       <MenuEntry icon="trash" label="Out of the list" danger onclick={() => (void dropSoulseek(i.id), (slskOpen = null))} />
     </div>

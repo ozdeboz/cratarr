@@ -16,13 +16,15 @@
   import CoverPlay from './lib/CoverPlay.svelte';
   import CoverStatus from './lib/CoverStatus.svelte';
   import { markOf } from './lib/requests.svelte';
+  import { cardStanding, requestOpen, standingTone } from './lib/requestState';
+  import { when } from './lib/settings/when';
   import { hoursMinutes } from './lib/duration';
   import MenuCards from './lib/MenuCards.svelte';
   import MenuEntry from './lib/MenuEntry.svelte';
   import MenuGroup from './lib/MenuGroup.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
-  import { goToArtist } from './lib/albums.svelte';
+  import { goToArtist, sayWantFailed } from './lib/albums.svelte';
   import { NearBlocks } from './lib/nearBlocks.svelte';
   import { inModeOrder, isSpotifyView, modeOf, type ReasonMode } from './lib/discoverModes';
   import { prefs } from './lib/prefs.svelte';
@@ -200,27 +202,16 @@
       if (view) view.requests = { ...view.requests, [a.key]: request };
       if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
     } catch (e) {
-      toast.fail(e, 'Could not ask for it');
+      sayWantFailed(e);
     } finally {
       asking = null;
     }
   }
-  /** Where an asked-for album stands, on its card. */
-  function asked(r: AlbumRequest): string {
-    const a = r.album_state;
-    if (a?.state === 'in_library') return 'In the library';
-    if (r.status === 'pending') return 'Requested';
-    if (r.status === 'declined') return r.reason ? `Declined: ${r.reason}` : 'Declined';
-    if (r.status === 'cancelled') return '';
-    // Not handed over: its mark a red "!", the message in its sheet (the owner, 2026-10-26: it broke the card's layout).
-    if (r.fetched?.startsWith('Not handed over')) return '';
-    if (a?.state === 'fetching') return `Being fetched · ${Math.round(a.done * 100)}%`;
-    if (a?.state === 'in_incoming') return 'In Incoming';
-    if (a?.state === 'partly_there') return `Partly there · ${a.tracks} of ${a.of}`;
-    return 'Approved';
-  }
-  /** Asked for and not taken back: Want is done for it. */
-  const open = (r: AlbumRequest | undefined) => !!r && (r.status === 'pending' || r.status === 'approved');
+  /** Where an asked-for album stands, on its card: the server's state in words (W5, lib/requestState). Not handed over: its
+   *  mark a red "!", the message in its sheet (the owner, 2026-10-26: it broke the card's layout). */
+  const asked = (r: AlbumRequest) => cardStanding(r, when);
+  /** Asked for and still open: Want is done for it. */
+  const open = (r: AlbumRequest | undefined) => requestOpen(r);
 
   // Play (decision 0071): lib/bandcampFound's, one place for every cover that plays an album on Bandcamp.
   const previewing = $derived(bandcampPlay.key);
@@ -327,7 +318,7 @@
           <span class="tags">{#each pages(a) as l (l.url)}<a class="tag link" href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}</span>
         {/if}
         {#if r && asked(r)}
-          <small class="asked" class:bad={r.status === 'declined' || r.fetched?.startsWith('Not handed over')}>{asked(r)}</small>
+          <small class="asked" class:bad={standingTone(r) === 'bad'}>{asked(r)}</small>
         {/if}
     </span>
   </li>

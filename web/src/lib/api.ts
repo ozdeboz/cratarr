@@ -2340,7 +2340,8 @@ export type AlbumRequest = {
   year: number | null;
   cover: string | null;
   at: number;
-  status: 'pending' | 'approved' | 'declined' | 'cancelled';
+  /** `rejected`: its arrival was deleted (W4). */
+  status: 'pending' | 'approved' | 'declined' | 'cancelled' | 'rejected';
   reason: string | null;
   decided_by: string | null;
   decided_at: number | null;
@@ -2350,6 +2351,10 @@ export type AlbumRequest = {
   album_state?: RequestedAlbum;
   /** Its state as the server works it out, the one every view reads (W5, lib/requestState); absent on a request just made. */
   state?: RequestState;
+  /** Hand over again is open for it: no fetcher has spoken of it (W5, G2). */
+  hand_over_again?: boolean;
+  /** The record it asks for, the catalogue's number (`al-<n>` as lists serve it, C49a). */
+  record?: number | null;
 };
 /** The Requests page: the account's own, everyone's waiting ones for those who answer them (else null). */
 /** `fetchers`: those connected, configured and answering (decision 0099's amendment: Lidarr and Soulseek siblings,
@@ -2419,7 +2424,7 @@ export const getLabel = (id: string, more?: import('./labelPage').LabelSource) =
  *  that already holds it (lib/openRecord). */
 export const openRecord = (b: import('./openRecord').RecordOpenBody) => post<{ record: string }>('/api/records/open', b);
 /** Want for any album (a missing one): the same request and rights as Discover's Want. */
-export const wantAlbum = (a: { record?: string; release_group?: string; artist: string; album: string; year?: number | null; cover?: string | null }) =>
+export const wantAlbum = (a: import('./wantPath').WantBody) =>
   post<{ request: AlbumRequest }>('/api/requests/want', a);
 /** The words looked up on MusicBrainz (Find more music, 0.9.3): its albums and artists, the surest first, `have` where
  *  the library has them. */

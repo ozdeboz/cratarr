@@ -18,6 +18,7 @@ import {
   ApiError,
   openRecord,
   openArtist,
+  notAnswered,
 } from './api';
 import type { DownloadedTrack } from './app.svelte';
 import { player } from './live.svelte';
@@ -27,6 +28,7 @@ import { choosePlayer, port } from './player/port.svelte';
 import { albumSubject, artistSubject, viewOver } from './panel.svelte';
 import { albumIdOf, BANDCAMP } from './bandcampPreview';
 import { howToOpen, type Openable } from './openRecord';
+import { wantFailed } from './wantPath';
 import { artistSource, type ArtistOpen } from './artistIds';
 import { prefs } from './prefs.svelte';
 import { dotsOf, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
@@ -219,6 +221,9 @@ export function goToArtist(source: string, nameOrId: string) {
   if (player.full) leavePlayer();
   viewOver(artistSubject(artistSource(source), nameOrId));
 }
+
+/** A Want that failed, said (lib/wantPath): out of reach it needs Cratarr, as a record not had does; else the server's words. */
+export const sayWantFailed = (e: unknown) => toast.show({ text: wantFailed(e instanceof ApiError && !e.generic ? e.message : null, notAnswered(e)), tone: 'error' });
 
 /** A related or Beyond artist opened (W10): their page by id; one Cratarr has no artist for yet opened by their MusicBrainz id
  *  first (`POST /api/artists/open`); refused that (Z8, 403: not one Beyond listed, for one who is no administrator), by name. */

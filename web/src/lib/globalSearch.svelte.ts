@@ -13,6 +13,7 @@ import { prefs } from './prefs.svelte';
 import { byRelevance, provided, relevance, words, type SearchResult } from './search';
 import { leaveOnArrival, onArrival } from './navStep.svelte';
 import { keep } from './searchKept';
+import { beyondFound, beyondSubject, knownOf } from './beyondRows';
 import { untrack } from 'svelte';
 import { TERM_KINDS, answerOfTerms, conditionsOf, crateOfLine, modesFrom, readLine, type Chip, type Found as Finds, type Modes } from './quickCrate';
 
@@ -294,16 +295,14 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
       })
       .sort((a, b) => byRelevance(a.best, b.best))
       .map((x) => x.g);
-  // Beyond (decision 0076): last, each album once, none the library or what Cratarr knows already has.
-  const known = new Set(
-    [...server(LIBRARY), ...server(ELSEWHERE)].flatMap((g) => g.items.flatMap((it) => [it.subject.replace(/^(missing|excluded):/, ''), `${(it.artist ?? it.sub ?? '').toLowerCase()}|${it.title.toLowerCase()}`])),
-  );
+  // Beyond (decision 0076): last, each album once, none the library or what Cratarr knows already has, by record or release
+  // group, never by name (C57, lib/beyondRows).
+  const known = knownOf([...server(LIBRARY), ...server(ELSEWHERE)].flatMap((g) => g.items.map((it) => it.subject)));
   const b = globalSearch.beyond?.q === q ? globalSearch.beyond.albums : [];
-  const beyond: Found[] = b
-    .filter((a) => !a.have && !(a.release_group && known.has(a.release_group)) && !known.has(`${a.artist.toLowerCase()}|${a.title.toLowerCase()}`))
+  const beyond: Found[] = beyondFound(b, known)
     .map((a) => ({
       kind: 'beyond',
-      subject: `beyond:${a.release_group ?? a.discogs ?? `${a.artist}|${a.title}`}`,
+      subject: beyondSubject(a),
       title: a.title,
       artist: a.artist,
       sub: [a.artist, a.year, a.sources.map((x) => (x === 'discogs' ? 'Discogs' : 'MusicBrainz')).join(' · ')].filter(Boolean).join(' · '),
@@ -316,9 +315,8 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
   const beyondGroup: FoundGroup[] = beyond.length && !except.includes('beyond') ? [{ kind: 'beyond', label: 'Beyond', items: beyond.slice(0, EACH), total: beyond.length }] : [];
   return [...ranked([...server(LIBRARY), ...here]), ...ranked(server(ELSEWHERE)), ...beyondGroup];
 }
-/** Beyond's albums as asked (to open one: its release group, its year). */
-export const beyondAlbum = (subject: string) =>
-  globalSearch.beyond?.albums.find((a) => `beyond:${a.release_group ?? a.discogs ?? `${a.artist}|${a.title}`}` === subject) ?? null;
+/** Beyond's albums as asked (to open one: its record, else its references). */
+export const beyondAlbum = (subject: string) => globalSearch.beyond?.albums.find((a) => beyondSubject(a) === subject) ?? null;
 
 /** Whether the server has answered these words (else everywhere's count and its "nothing" wait). */
 export const globalAsked = () => {

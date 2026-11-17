@@ -16,6 +16,7 @@
   import { pageView } from './lib/pageView.svelte';
   import { openArtistPage, openNotHad } from './lib/albums.svelte';
   import { artistOpen } from './lib/artistIds';
+  import { beyondKey } from './lib/beyondRows';
   import { toast } from './lib/toast.svelte';
 
   /** The words: the pill's while it searches, else the address's. */
@@ -49,8 +50,8 @@
     };
   });
   type Album = BeyondFound['albums'][number];
-  /** A row's key: its record, else what its source knows it by (two of one name are two rows, C57). */
-  const keyOf = (a: Album) => a.record ?? a.release_group ?? `d${a.discogs}`;
+  /** A row's key: its record, else what its source knows it by (two of one name are two rows, C57; lib/beyondRows). */
+  const keyOf = (a: Album) => beyondKey(a);
   const SOURCE = { musicbrainz: 'MusicBrainz', discogs: 'Discogs' } as const;
   /** The next page, as the end of the list comes into sight (a server before 0.9.13 has one). */
   let more = false;

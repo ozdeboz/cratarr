@@ -469,7 +469,8 @@
   {:else if e === 'otherVersions'}
     {#if versions}<MenuEntry icon="music" label="Other versions" onclick={() => (step = 'versions')} />{/if}
   {:else if e === 'discover'}
-    {#if !onServer}<DiscoverEntries page={bandcampPage} artist={t.artist} album={t.album} {onclose} />{/if}
+    <!-- A preview's Want is its album's, by the album's own artist as its page says it (W12): never the track's. -->
+    {#if !onServer}<DiscoverEntries page={bandcampPage} {onclose} />{/if}
   {:else if e === 'favourite'}
     {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
   {:else if e === 'excludeEverywhere'}

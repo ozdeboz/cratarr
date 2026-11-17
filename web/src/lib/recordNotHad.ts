@@ -3,7 +3,8 @@
 // open; its Bandcamp preview plays from there where it has one (OQ14). One the library has through another record (`have`)
 // says so, and opens that one, with no Want. A retired one says until when it was in Music (OQ16). Pure.
 import type { EntryId } from './menuTable';
-import { isOpen, type RequestState } from './requestState';
+import { requestOpen, standing, type Asked } from './requestState';
+import { when } from './settings/when';
 
 /** What the page reads of a record not had's view. */
 export type NotHad = {
@@ -11,13 +12,14 @@ export type NotHad = {
   have?: string | null;
   bandcamp?: string | null;
   was_until?: number | null;
-  request?: { state?: RequestState } | null;
+  request?: Asked | null;
 };
 
 /** Its header's actions, in the bar's order: the preview's Play, Shuffle, Play next and Add to queue, then Want or Requested. */
 export type NotHadAction = 'play' | 'shuffle' | 'next' | 'last' | 'want' | 'requested';
-/** A line under its title: the record the library has it as, or until when it was in Music. */
-export type NotHadLine = { kind: 'have'; record: string; text: string } | { kind: 'was'; text: string };
+/** A line under its title: the record the library has it as, where its open request stands (W12: the server's state), or until
+ *  when it was in Music. */
+export type NotHadLine = { kind: 'have'; record: string; text: string } | { kind: 'request'; text: string } | { kind: 'was'; text: string };
 export type NotHadPage = { heart: boolean; resume: boolean; actions: NotHadAction[]; lines: NotHadLine[] };
 
 /** "Was in Music until 3 March 2026" (OQ16), in the browser's language. */
@@ -25,12 +27,14 @@ export const wasInMusic = (t: number) => `Was in Music until ${new Date(t * 1000
 
 /** What its page shows: nothing of a copy's (no heart, no Resume); the preview's actions where it has a Bandcamp page; Want, or
  *  Requested while its request is open, but none where the library has it through another record. */
-export function notHadPage(v: NotHad): NotHadPage {
+export function notHadPage(v: NotHad, said: (t: number) => string = when): NotHadPage {
   const play: NotHadAction[] = v.bandcamp ? ['play', 'shuffle', 'next', 'last'] : [];
   const lines: NotHadLine[] = [];
+  const open = requestOpen(v.request);
   if (v.have) lines.push({ kind: 'have', record: v.have, text: 'In your library' });
+  if (open && v.request) lines.push({ kind: 'request', text: standing(v.request, said) });
   if (v.was_until) lines.push({ kind: 'was', text: wasInMusic(v.was_until) });
-  const ask: NotHadAction[] = v.have ? [] : [isOpen(v.request?.state) ? 'requested' : 'want'];
+  const ask: NotHadAction[] = v.have ? [] : [open ? 'requested' : 'want'];
   return { heart: false, resume: false, actions: [...play, ...ask], lines };
 }
 

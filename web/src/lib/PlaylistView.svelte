@@ -110,6 +110,7 @@
   import Notice from './Notice.svelte';
   import { artistTitle, movedTo } from './artistIds';
   import { labelCovers, labelOf, type LabelPageOf } from './labelPage';
+  import { wantOf } from './wantPath';
   import LabelBody from './LabelBody.svelte';
   import RowHeart from './RowHeart.svelte';
   import type { ExcludeEntry } from './crates.svelte';
@@ -140,7 +141,7 @@
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
   import { away, rowsAway } from './away.svelte';
-  import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, playListedAlbum, readLibrary } from './albums.svelte';
+  import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, playListedAlbum, readLibrary, sayWantFailed } from './albums.svelte';
   import { copyLines, librariesOf, type CopyLine } from './copiesRule';
   import { shownIn } from './sources.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
@@ -1378,11 +1379,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (!a || !albumHead || wanting) return;
     wanting = true;
     try {
-      const { request } = await wantAlbum({ record: a.id, artist: albumHead.artist ?? '', album: albumHead.title });
+      const { request } = await wantAlbum(wantOf({ record: a.id, artist: albumHead.artist ?? '', album: albumHead.title }));
       if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
       saved++;
     } catch (e) {
-      toast.fail(e, 'Could not ask for it');
+      sayWantFailed(e);
     } finally {
       wanting = false;
     }
@@ -2562,10 +2563,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
               >{#if l.progress !== null}<span class="files-meter"><i style:width={`${l.progress * 100}%`}></i></span>{/if}</button
             >
           {/if}
-          <!-- A record not had (W9): the record the library has it as, which a tap opens; until when it was in Music (OQ16). -->
+          <!-- A record not had (W9): the record the library has it as, which a tap opens; where its request stands (the server's
+               state, W12), a tap to Requests; until when it was in Music (OQ16). -->
           {#if notHadShown}
             {#each notHadShown.lines as l (l.kind)}
               {#if l.kind === 'have'}{@const to = l.record}<button class="details left-out" onclick={() => viewOver(albumSubject('cratarr', to))}><Icon name="disc" size={14} /><span>{l.text}</span></button>
+              {:else if l.kind === 'request'}<button class="details left-out" onclick={() => (location.hash = hrefOf('requests'))}><Icon name="inbox" size={14} /><span>{l.text}</span></button>
               {:else}<span class="details left-out"><Icon name="clock" size={14} /><span>{l.text}</span></span>{/if}
             {/each}
           {/if}
