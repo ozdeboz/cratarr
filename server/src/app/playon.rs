@@ -1422,6 +1422,12 @@ fn named_in(list: &[(String, String, bool)], asked: &str) -> Option<String> {
     }
 }
 
+/// Whether the running request may announce (O2): an administrator, signed in or by a key that controls (Home Assistant's); Cratarr's
+/// own work as `access::administering` has it.
+fn may_announce() -> bool {
+    crate::serve::access::administering() || crate::serve::who::current().is_some_and(|w| w.admin && w.scope == crate::serve::who::Scope::Control)
+}
+
 /// Whether `e` is `user`'s (`first`: the first administrator's name).
 fn belongs_to(e: &Entry, user: &str, first: Option<&str>) -> bool {
     e.owner.as_deref().or(first) == Some(user)
@@ -2584,8 +2590,13 @@ impl PlayOn {
             }
             Command::Seek { position_ms: None, percent: None, by_ms: None, .. } => return Err(ToggleError::Refused("Seek where?".into())),
             Command::Announce { url, id } => {
-                if url.trim().is_empty() {
-                    return Err(ToggleError::Refused("Announce what? Give the clip's url.".into()));
+                // Administrators and Home Assistant's key only (O2): any other account at home could have a shared player say
+                // anything aloud, or open any address the player reaches.
+                if !may_announce() {
+                    return Err(ToggleError::Forbidden("Announcing is for administrators and Home Assistant.".into()));
+                }
+                if !reqwest::Url::parse(url.trim()).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
+                    return Err(ToggleError::Refused("Announce what? Give the clip's web address (http or https).".into()));
                 }
                 if self.entries().get(name).is_some_and(|e| matches!(e.kind, PlayerKind::Kodi)) {
                     return Err(ToggleError::Refused(format!("{name} cannot announce: a Kodi plays no clip over its music.")));
@@ -3897,6 +3908,31 @@ mod tests {
         assert_eq!(listed("bob", true).await, ["Phone", "Tablet"]);
         assert_eq!(listed("bob", false).await, ["Phone"], "away, another's shared device is left out");
         assert_eq!(listed("ann", false).await, ["Tablet"], "one's own from anywhere");
+    }
+
+    /// O2: announcing is for administrators and Home Assistant's key (an administrator's that controls), and of an http(s) clip
+    /// only: any other account may not, not even on its own player, and no one sends a file's address.
+    #[tokio::test]
+    async fn a_user_may_not_announce() {
+        use crate::serve::who::{Scope, Who, acting_as};
+        let p = play_on().await;
+        let mut tablet = p.connect("Tablet").unwrap();
+        let _phone = p.connect("Phone").unwrap();
+        p.entries().get_mut("Tablet").unwrap().owner = Some("me".into());
+        p.entries().get_mut("Phone").unwrap().owner = Some("bob".into());
+        said(&mut tablet);
+        let clip = |url: &str| Command::Announce { url: url.into(), id: "ha-1".into() };
+        let who = |user: &str, admin: bool, scope: Scope| Who { user: user.into(), admin, scope, home: true };
+        for scope in [Scope::Full, Scope::Control] {
+            let r = acting_as(who("bob", false, scope), p.command("Phone", clip("http://ha/tts.mp3"))).await;
+            assert!(matches!(r, Err(ToggleError::Forbidden(_))), "{scope:?}: {r:?}");
+        }
+        acting_as(who("me", true, Scope::Control), p.command("Tablet", clip("http://ha/tts.mp3"))).await.unwrap();
+        assert_eq!(said(&mut tablet), vec!["announce"], "Home Assistant's key");
+        let r = acting_as(who("me", true, Scope::Full), p.command("Tablet", clip("file:///sdcard/Music/a.mp3"))).await;
+        assert!(matches!(r, Err(ToggleError::Refused(_))), "{r:?}");
+        let r = acting_as(who("me", true, Scope::Read), p.command("Tablet", clip("http://ha/tts.mp3"))).await;
+        assert!(r.is_err(), "a key that only reads");
     }
 
     #[tokio::test]
