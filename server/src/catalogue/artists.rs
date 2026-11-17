@@ -116,12 +116,13 @@ impl Catalogue {
         give_artist(&self.db(), &ids::artist_key(name), name, now())
     }
 
-    /// The artist a source's id names (C57: an artist of Beyond's opened, OQ12 (a)): the one who holds it; else the one live artist
-    /// of the name who holds no id at that source (Z2), as the monthly read finds a library artist by their name
-    /// (`discover::mb_artist_by_name`); else one of their own made now, as `artist_apart` makes them (the name's next number where
-    /// another has it). Two or more of the name, or one holding another id, say nothing of which: a new artist. The one found or
-    /// made holds the id, found `how`. In one transaction, so two opens at once make one artist. Blocking.
-    pub fn artist_by_reference(&self, r: &super::records::Ref, name: &str, how: &str) -> Result<i64> {
+    /// The artist a source's id names (C57: an artist of Beyond's opened, OQ12 (a)): the one who holds it; else, where the id is the
+    /// source's first sure match for the name (`sure`, U6), the one live artist of the name who holds no id at that source (Z2), as
+    /// the monthly read finds a library artist by their name (`discover::mb_artist_by_name`); else one of their own made now, as
+    /// `artist_apart` makes them (the name's next number where another has it). Two or more of the name, one holding another id,
+    /// or an id not the name's sure match (a namesake opened on purpose) say nothing of which: a new artist. The one found or made
+    /// holds the id, found `how`. In one transaction, so two opens at once make one artist. Blocking.
+    pub fn artist_by_reference(&self, r: &super::records::Ref, name: &str, how: &str, sure: bool) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let held: Vec<String> = tx
@@ -143,7 +144,7 @@ impl Catalogue {
             .collect::<rusqlite::Result<_>>()?;
         let at = now();
         let artist = match named.as_slice() {
-            [(only, false)] => *only,
+            [(only, false)] if sure => *only,
             _ => give_artist(&tx, &key, name, at)?,
         };
         super::records::put_reference(&tx, &ids::artist(artist), r, how, at, false)?;

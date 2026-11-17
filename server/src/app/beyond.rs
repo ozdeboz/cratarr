@@ -218,11 +218,11 @@ pub fn artists(found: &[FoundArtist], known: &Known) -> Vec<BeyondArtist> {
         .collect()
 }
 
-/// An artist of Beyond's opened (C57, OQ12 (a): kept when opened): the artist who holds their MusicBrainz id; else the one live
-/// artist of the name who holds none (Z2); else one of their own made now, though another has the name (C55: the name's next
-/// number). The one opened holds it (`Catalogue::artist_by_reference`). Never by the name alone: without a MusicBrainz id, or a
-/// name, none. Blocking.
-pub fn open_artist(cat: &Catalogue, id: &str, name: &str) -> Result<Option<i64>> {
+/// An artist of Beyond's opened (C57, OQ12 (a): kept when opened): the artist who holds their MusicBrainz id; else, where the id
+/// is MusicBrainz's first sure match for the name (`sure`, U6, as `may_open` says), the one live artist of the name who holds none
+/// (Z2); else one of their own made now, though another has the name (C55: the name's next number). The one opened holds it
+/// (`Catalogue::artist_by_reference`). Never by the name alone: without a MusicBrainz id, or a name, none. Blocking.
+pub fn open_artist(cat: &Catalogue, id: &str, name: &str, sure: bool) -> Result<Option<i64>> {
     let (id, name) = (mbid(id), name.trim());
     if !super::discogs::is_mbid(&id) || name.is_empty() {
         return Ok(None);
@@ -230,32 +230,56 @@ pub fn open_artist(cat: &Catalogue, id: &str, name: &str) -> Result<Option<i64>>
     if name.chars().count() > super::labels::NAME_MOST {
         anyhow::bail!("A name that long is no artist's.");
     }
-    Ok(Some(cat.artist_by_reference(&Ref::new("musicbrainz", "artist", &id), name, "search")?))
+    Ok(Some(cat.artist_by_reference(&Ref::new("musicbrainz", "artist", &id), name, "search", sure)?))
 }
 
 /// How long an artist Beyond listed may be opened by anyone (Z8): a day from when it was listed, so a page left open still opens it.
 pub const LISTED_FOR: i64 = 86_400;
 
-/// The MusicBrainz artists Beyond listed, by id, and when (Z8).
-fn listed_ids() -> &'static std::sync::Mutex<HashMap<String, i64>> {
-    static LISTED: std::sync::OnceLock<std::sync::Mutex<HashMap<String, i64>>> = std::sync::OnceLock::new();
+/// MusicBrainz's score from which it is sure of an artist, as the monthly read takes them by name (`discover::mb_artist_by_name`).
+const SURE: u64 = 95;
+
+/// A MusicBrainz artist Beyond listed (Z8, U6): the name it listed them by, whether they were MusicBrainz's first sure match for
+/// that name in its answer, and when.
+#[derive(Debug, Clone)]
+struct Listed {
+    name: String,
+    sure: bool,
+    at: i64,
+}
+
+/// The MusicBrainz artists Beyond listed, by id (Z8).
+fn listed_ids() -> &'static std::sync::Mutex<HashMap<String, Listed>> {
+    static LISTED: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Listed>>> = std::sync::OnceLock::new();
     LISTED.get_or_init(Default::default)
 }
 
-/// Beyond's artists as it answers them at `now` (Z8): each may be opened by anyone for `LISTED_FOR` (`may_open`); those listed
-/// longer ago are let go of.
+/// Beyond's artists as it answers them at `now` (Z8, U6), its surest first: each may be opened by anyone for `LISTED_FOR`, by the
+/// name it was listed by (`may_open`); the first of a name MusicBrainz is sure of (a score of 95 or more, none of the name surer
+/// before it) is that name's sure match, as the monthly read would take it. Those listed longer ago are let go of.
 pub fn keep_listed(found: &[FoundArtist], now: i64) {
+    use super::import::loose;
     let mut all = listed_ids().lock().unwrap_or_else(|p| p.into_inner());
-    all.retain(|_, at| now - *at <= LISTED_FOR);
-    for a in found {
-        all.insert(mbid(&a.mbid), now);
+    all.retain(|_, l| now - l.at <= LISTED_FOR);
+    for (i, a) in found.iter().enumerate() {
+        let name = loose(&a.name);
+        let sure = a.score >= SURE && !found[..i].iter().any(|b| b.score >= SURE && loose(&b.name) == name);
+        all.insert(mbid(&a.mbid), Listed { name: a.name.clone(), sure, at: now });
     }
 }
 
-/// Whether an artist may be opened (Z8, the review's finding 8: random ids used up a name's numbers for good): by anyone where Beyond
-/// listed them within `LISTED_FOR`; by an administrator (`administering`), any.
-pub fn may_open(id: &str, administering: bool, now: i64) -> bool {
-    administering || listed_ids().lock().unwrap_or_else(|p| p.into_inner()).get(&mbid(id)).is_some_and(|at| now - at <= LISTED_FOR)
+/// Whether an artist may be opened, and by which name (Z8, the review's finding 8: random ids used up a name's numbers for good;
+/// U6): by anyone where Beyond listed them within `LISTED_FOR`, by the name it listed them by (another name is refused: one
+/// account could give a library artist an unrelated id); by an administrator (`administering`), any, by the name given. The name,
+/// and whether the id is MusicBrainz's sure match for it (`keep_listed`): the one id an id-less artist of the name is given. None:
+/// refused.
+pub fn may_open(id: &str, name: &str, administering: bool, now: i64) -> Option<(String, bool)> {
+    let listed = listed_ids().lock().unwrap_or_else(|p| p.into_inner()).get(&mbid(id)).filter(|l| now - l.at <= LISTED_FOR).cloned();
+    match listed {
+        Some(l) if ids::artist_key(name.trim()) == ids::artist_key(l.name.trim()) => Some((l.name, l.sure)),
+        _ if administering => Some((name.trim().to_string(), false)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -279,7 +303,7 @@ mod tests {
     }
 
     fn person(id: &str, name: &str) -> FoundArtist {
-        FoundArtist { mbid: id.into(), name: name.into(), disambiguation: None, have: false }
+        FoundArtist { mbid: id.into(), name: name.into(), disambiguation: None, have: false, score: 100 }
     }
 
     /// A record of this title by Kite Theory holding these references; had with `tracks`.
@@ -369,24 +393,24 @@ mod tests {
     #[test]
     fn opening_a_beyond_artist_never_merges_by_name() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
-        let first = open_artist(&cat, ARTIST_1, "Rone").unwrap().expect("made");
-        assert_eq!(open_artist(&cat, &ARTIST_1.to_uppercase(), "Rone").unwrap(), Some(first), "the same id: the same artist");
-        let second = open_artist(&cat, ARTIST_2, "Rone").unwrap().expect("made");
+        let first = open_artist(&cat, ARTIST_1, "Rone", true).unwrap().expect("made");
+        assert_eq!(open_artist(&cat, &ARTIST_1.to_uppercase(), "Rone", true).unwrap(), Some(first), "the same id: the same artist");
+        let second = open_artist(&cat, ARTIST_2, "Rone", true).unwrap().expect("made");
         assert_ne!(first, second, "another id of the same name: another artist");
         let number = |artist: i64| cat.artist_named(artist).unwrap().unwrap().number;
         assert_eq!((number(first), number(second)), (Some(1), Some(2)));
         // Two artists of a name with no MusicBrainz id: which one, nothing says, so neither (Z2).
         let (theirs, twin) = (cat.artist_for("Kite Theory").unwrap(), cat.artist_apart("Kite Theory").unwrap());
-        let opened = open_artist(&cat, ARTIST_3, "Kite Theory").unwrap().expect("made");
+        let opened = open_artist(&cat, ARTIST_3, "Kite Theory", true).unwrap().expect("made");
         assert!(opened != theirs && opened != twin);
         assert_eq!(number(opened), Some(3));
         // One who holds the id by their files is the one opened.
         let harbour = cat.artist_for("Glass Harbour").unwrap();
         cat.set_reference(&ids::artist(harbour), &Ref::new("musicbrainz", "artist", ARTIST_4), "files").unwrap();
-        assert_eq!(open_artist(&cat, ARTIST_4, "Glass Harbour").unwrap(), Some(harbour));
+        assert_eq!(open_artist(&cat, ARTIST_4, "Glass Harbour", false).unwrap(), Some(harbour));
         // Never by the name alone.
-        assert_eq!(open_artist(&cat, "", "Rone").unwrap(), None);
-        assert_eq!(open_artist(&cat, "not an id", "Rone").unwrap(), None);
+        assert_eq!(open_artist(&cat, "", "Rone", true).unwrap(), None);
+        assert_eq!(open_artist(&cat, "not an id", "Rone", true).unwrap(), None);
         let known_by = |artist: i64| cat.references_of(&ids::artist(artist)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect::<Vec<_>>();
         assert_eq!(known_by(second), [(ARTIST_2.to_string(), "search".to_string())], "their MusicBrainz id kept");
     }
@@ -398,17 +422,17 @@ mod tests {
     fn a_beyond_artist_is_the_library_artist_of_its_name_with_no_id() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let grouch = cat.artist_for("Grouch").unwrap();
-        assert_eq!(open_artist(&cat, ARTIST_1, "grouch").unwrap(), Some(grouch), "the library's Grouch, not Grouch (2)");
+        assert_eq!(open_artist(&cat, ARTIST_1, "grouch", true).unwrap(), Some(grouch), "the library's Grouch, not Grouch (2)");
         let holds = |artist: i64| cat.references_of(&ids::artist(artist)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect::<Vec<_>>();
         assert_eq!(holds(grouch), [(ARTIST_1.to_string(), "search".to_string())], "given the id, as the monthly read would");
         let number = |artist: i64| cat.artist_named(artist).unwrap().unwrap().number;
         assert_eq!(number(grouch), Some(1));
-        assert_eq!(open_artist(&cat, ARTIST_1, "Grouch").unwrap(), Some(grouch), "held: the same artist");
-        let other = open_artist(&cat, ARTIST_2, "Grouch").unwrap().expect("made");
+        assert_eq!(open_artist(&cat, ARTIST_1, "Grouch", true).unwrap(), Some(grouch), "held: the same artist");
+        let other = open_artist(&cat, ARTIST_2, "Grouch", true).unwrap().expect("made");
         assert_ne!(other, grouch, "the one of the name holds another id: another artist");
         assert_eq!(number(other), Some(2));
         let (club, twin) = (cat.artist_for("Tape Club").unwrap(), cat.artist_apart("Tape Club").unwrap());
-        let made = open_artist(&cat, ARTIST_3, "Tape Club").unwrap().expect("made");
+        let made = open_artist(&cat, ARTIST_3, "Tape Club", true).unwrap().expect("made");
         assert!(made != club && made != twin, "two of the name with no id: neither");
         assert_eq!(number(made), Some(3));
     }
@@ -420,7 +444,7 @@ mod tests {
     fn a_files_artist_id_takes_it_from_a_beyond_artist() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let (grouch, twin) = (cat.artist_for("Grouch").unwrap(), cat.artist_apart("Grouch").unwrap());
-        let beyond = open_artist(&cat, ARTIST_1, "Grouch").unwrap().expect("made");
+        let beyond = open_artist(&cat, ARTIST_1, "Grouch", true).unwrap().expect("made");
         assert!(beyond != grouch && beyond != twin);
         let files = |artist: i64, id: &str| cat.set_reference(&ids::artist(artist), &Ref::new("musicbrainz", "artist", id), "files").unwrap();
         let holds = |artist: i64| cat.references_of(&ids::artist(artist)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect::<Vec<_>>();
@@ -428,7 +452,7 @@ mod tests {
         assert_eq!(holds(grouch), [(ARTIST_1.to_string(), "files".to_string())]);
         assert!(holds(beyond).is_empty(), "let go of");
         // Credited on a had record: kept.
-        let credited = open_artist(&cat, ARTIST_2, "Grouch").unwrap().expect("made");
+        let credited = open_artist(&cat, ARTIST_2, "Grouch", true).unwrap().expect("made");
         let album = record(&cat, "Night Walks", 2, &[]);
         cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", rusqlite::params![album, credited]).unwrap();
         assert!(!files(twin, ARTIST_2), "credited on a had record: kept");
@@ -446,7 +470,7 @@ mod tests {
     fn a_files_takeover_brings_the_beyond_artists_records() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let (grouch, twin) = (cat.artist_for("Grouch").unwrap(), cat.artist_apart("Grouch").unwrap());
-        let beyond = open_artist(&cat, ARTIST_1, "Grouch").unwrap().expect("made");
+        let beyond = open_artist(&cat, ARTIST_1, "Grouch", true).unwrap().expect("made");
         assert!(beyond != grouch && beyond != twin);
         let credit = |record: i64, artist: i64| {
             cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", rusqlite::params![record, artist]).unwrap();
@@ -512,15 +536,52 @@ mod tests {
         const LISTED: &str = "00000000-0000-4000-8000-000000000591";
         const NEVER: &str = "00000000-0000-4000-8000-000000000592";
         let now = crate::app::moment::now_secs();
-        assert!(!may_open(LISTED, false, now), "not listed yet");
+        assert!(may_open(LISTED, "Rone", false, now).is_none(), "not listed yet");
         keep_listed(&[person(LISTED, "Rone")], now);
-        assert!(may_open(&LISTED.to_uppercase(), false, now + 3600), "listed: by anyone");
-        assert!(!may_open(LISTED, false, now + LISTED_FOR + 1), "a day on: no more");
-        assert!(!may_open(NEVER, false, now), "never listed");
-        assert!(may_open(NEVER, true, now), "an administrator: any");
+        assert!(may_open(&LISTED.to_uppercase(), "Rone", false, now + 3600).is_some(), "listed: by anyone");
+        assert!(may_open(LISTED, "Rone", false, now + LISTED_FOR + 1).is_none(), "a day on: no more");
+        assert!(may_open(NEVER, "Rone", false, now).is_none(), "never listed");
+        assert!(may_open(NEVER, "Rone", true, now).is_some(), "an administrator: any");
         let cat = Catalogue::open(None, Vec::new()).unwrap();
-        assert!(open_artist(&cat, LISTED, &"x".repeat(super::super::labels::NAME_MOST + 1)).is_err(), "a name that long is no artist's");
-        assert!(open_artist(&cat, LISTED, "Rone").unwrap().is_some());
+        assert!(open_artist(&cat, LISTED, &"x".repeat(super::super::labels::NAME_MOST + 1), true).is_err(), "a name that long is no artist's");
+        assert!(open_artist(&cat, LISTED, "Rone", true).unwrap().is_some());
+    }
+
+    /// U6 (the review of 8c/8d, finding 6): an artist Beyond listed is opened by the name it listed them by. Another name is refused
+    /// to anyone but an administrator, whose name is taken as given; one the page sends in other letters is the listed name.
+    #[test]
+    fn an_open_with_another_name_than_beyond_listed_is_refused() {
+        const LISTED: &str = "00000000-0000-4000-8000-000000000593";
+        let now = crate::app::moment::now_secs();
+        keep_listed(&[person(LISTED, "Rone")], now);
+        assert_eq!(may_open(LISTED, "Grouch", false, now), None, "another name: refused");
+        assert_eq!(may_open(LISTED, " rone ", false, now), Some(("Rone".to_string(), true)), "the listed name, MusicBrainz's sure match");
+        assert_eq!(may_open(LISTED, "Grouch", true, now), Some(("Grouch".to_string(), false)), "an administrator's, as given");
+    }
+
+    /// U6: a library artist of the name with no MusicBrainz id is given the id only where it is MusicBrainz's first sure match for
+    /// the name in Beyond's answer, as the monthly read would decide. Opening a second namesake on purpose (the rapper, beside the
+    /// library's local band) makes a new artist, and so does a match MusicBrainz is not sure of; the first sure one is the library's.
+    #[test]
+    fn a_beyond_open_of_a_second_namesake_makes_a_new_artist() {
+        const FIRST: &str = "00000000-0000-4000-8000-000000000594";
+        const SECOND: &str = "00000000-0000-4000-8000-000000000595";
+        const UNSURE: &str = "00000000-0000-4000-8000-000000000596";
+        let now = crate::app::moment::now_secs();
+        let unsure = FoundArtist { score: 80, ..person(UNSURE, "Paper Lantern") };
+        keep_listed(&[person(FIRST, "Grouch"), person(SECOND, "GROUCH"), unsure], now);
+        let open = |cat: &Catalogue, id: &str, name: &str| {
+            let (name, sure) = may_open(id, name, false, now).expect("listed");
+            open_artist(cat, id, &name, sure).unwrap().expect("opened")
+        };
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (grouch, lantern) = (cat.artist_for("Grouch").unwrap(), cat.artist_for("Paper Lantern").unwrap());
+        assert_ne!(open(&cat, SECOND, "GROUCH"), grouch, "the second of the name: a new artist");
+        assert!(cat.references_of(&ids::artist(grouch)).unwrap().is_empty(), "the library's keeps no id");
+        assert_ne!(open(&cat, UNSURE, "Paper Lantern"), lantern, "MusicBrainz not sure: a new artist");
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let grouch = cat.artist_for("Grouch").unwrap();
+        assert_eq!(open(&cat, FIRST, "Grouch"), grouch, "the first sure match: the library's Grouch, given the id");
     }
 
     /// C57: Beyond's answer makes nothing: no record, artist or reference, whatever it finds.

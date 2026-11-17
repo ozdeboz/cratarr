@@ -2250,6 +2250,9 @@ pub struct FoundArtist {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disambiguation: Option<String>,
     pub have: bool,
+    /// MusicBrainz's score for the words (U6: whether they are its sure match for their name), not shown.
+    #[serde(skip)]
+    pub score: u64,
 }
 
 /// How long a query's answer from MusicBrainz is kept (in memory): the page asks again as it is typed and opened.
@@ -2319,6 +2322,7 @@ pub async fn musicbrainz_found(q: &str, limit: usize) -> Result<(Vec<FoundAlbum>
                     name: a["name"].as_str()?.to_string(),
                     disambiguation: a["disambiguation"].as_str().filter(|d| !d.is_empty()).map(str::to_string),
                     have: false,
+                    score: a["score"].as_u64().unwrap_or(0),
                 },
             ))
         })
