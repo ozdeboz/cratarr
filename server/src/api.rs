@@ -7270,12 +7270,16 @@ async fn background_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::V
     Ok(background_status().await)
 }
 
-/// Bandcamp switched on or off (O4).
+/// Bandcamp switched on or off (O4); switched on again, its bot check's hold lifted (V8).
 async fn bandcamp_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
-    tokio::task::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::BANDCAMP, b.enabled))
-        .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        crate::app::switches::set_on(crate::app::switches::BANDCAMP, b.enabled)?;
+        crate::bandcamp::switched(crate::serve::instance().as_deref().map(|s| &*s.userdata), b.enabled);
+        Ok(())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(bandcamp_status().await)
 }
 

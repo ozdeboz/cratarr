@@ -66,9 +66,30 @@ fn hold_in(ud: Option<&crate::userdata::UserData>) {
 }
 
 /// The hold kept before a restart taken up again, at start (Y8): nothing is asked of Bandcamp until it is out, and Health says so.
+/// Never longer than the check's own day from now (V8): one kept while the clock ran ahead is cut to that, in the user data too, so
+/// the next start does not take it up again.
 pub fn hold_kept(ud: &crate::userdata::UserData) {
-    if let Some(until) = ud.import_choice(HELD_CHOICE).ok().flatten().and_then(|v| v.trim().parse::<i64>().ok()) {
-        HELD_UNTIL.fetch_max(until, std::sync::atomic::Ordering::Relaxed);
+    let Some(kept) = ud.import_choice(HELD_CHOICE).ok().flatten().and_then(|v| v.trim().parse::<i64>().ok()) else { return };
+    let until = kept.min(crate::app::moment::now_secs() + CHECK_HOLD_SECS);
+    if until < kept
+        && let Err(e) = ud.set_import_choice(HELD_CHOICE, &until.to_string())
+    {
+        tracing::warn!(target: "bandcamp", "Bandcamp's hold, cut to a day, is not kept for a restart: {e:#}");
+    }
+    HELD_UNTIL.fetch_max(until, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Bandcamp switched on or off by an administrator (O4): switched on, its bot check's hold is lifted (V8), in memory and in the user
+/// data `ud` where there is one, so it is asked again at once and a restart takes up nothing. Switched off, the hold stays.
+pub fn switched(ud: Option<&crate::userdata::UserData>, on: bool) {
+    if !on {
+        return;
+    }
+    HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+    if let Some(ud) = ud
+        && let Err(e) = ud.set_import_choice(HELD_CHOICE, "")
+    {
+        tracing::warn!(target: "bandcamp", "Bandcamp's hold, lifted, is still kept for a restart: {e:#}");
     }
 }
 
@@ -952,6 +973,45 @@ mod tests {
         let until = held_until(now);
         HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
         assert!(until.is_some_and(|u| u >= now + CHECK_HOLD_SECS), "taken up again at start: {until:?}");
+    }
+
+    /// V8 (the review of run 8b, finding 8): a kept hold is taken up for a day from now at most: one kept while the clock ran a month
+    /// ahead is cut to a day, in the user data too.
+    #[tokio::test]
+    async fn a_kept_hold_beyond_a_day_is_cut_to_a_day() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        let now = crate::app::moment::now_secs();
+        ud.set_import_choice(HELD_CHOICE, &(now + 30 * 86_400).to_string()).unwrap();
+        HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+        hold_kept(&ud);
+        let until = held_until(now);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        let kept = ud.import_choice(HELD_CHOICE).unwrap().and_then(|v| v.parse::<i64>().ok());
+        let a_day = now + CHECK_HOLD_SECS..=now + CHECK_HOLD_SECS + 60;
+        assert!(until.is_some_and(|u| a_day.contains(&u)), "a day from now: {until:?}");
+        assert!(kept.is_some_and(|k| a_day.contains(&k)), "kept cut too: {kept:?}");
+    }
+
+    /// V8: an administrator switching Bandcamp on again lifts its hold, in memory and in the user data: it is asked again at once,
+    /// and a restart takes up nothing. Switched off, the hold stays.
+    #[tokio::test]
+    async fn switching_bandcamp_on_again_lifts_its_hold() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        let now = crate::app::moment::now_secs();
+        hold_in(Some(&ud));
+        switched(Some(&ud), false);
+        let off = held_until(now);
+        switched(Some(&ud), true);
+        let on = held_until(now);
+        hold_kept(&ud);
+        let restarted = held_until(now);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        assert!(off.is_some(), "switched off: held still");
+        assert_eq!((on, restarted), (None, None), "switched on: asked again, and a restart takes up nothing");
     }
 
     /// Y8: a read waiting in line when the check comes is not sent: it looks at the hold again in its turn.
