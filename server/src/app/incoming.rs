@@ -1562,8 +1562,10 @@ impl IncomingService {
         if let Err(e) = self.journal.done(entry.id, ACQUISITION, epoch_now(), &serde_json::json!(stopped)) {
             tracing::warn!("journal: {e:#}");
         }
-        // Undone while Lidarr was being told: put it back at once.
-        if self.journal.get(entry.id).ok().flatten().is_some_and(|e| e.undone) {
+        // Undone while Lidarr was being told, or an open request of the album left by a Delete (V2, `keep_fetching`): put it back
+        // at once.
+        let kept = self.journal.result(entry.id, super::requests::KEPT_FOR_REQUESTS).ok().flatten().is_some();
+        if kept || self.journal.get(entry.id).ok().flatten().is_some_and(|e| e.undone) {
             self.resume_fetching(entry.id, title).await;
         }
     }
@@ -1580,6 +1582,15 @@ impl IncomingService {
         if let Err(e) = tokio::task::spawn_blocking(move || super::requests::reopen(&ud, &closed)).await {
             tracing::warn!("the requests a Delete closed were not opened again: {e}");
         }
+    }
+
+    /// Lidarr goes on with what a Delete stopped for its copy, where it left an open request of the album (V2, `requests::deleted`):
+    /// said on its entry first, so a handler still telling Lidarr puts it back too (`handle`), then put back. Safe to repeat.
+    pub(super) async fn keep_fetching(&self, id: EventId, title: &str) {
+        if let Err(e) = self.journal.done(id, super::requests::KEPT_FOR_REQUESTS, epoch_now(), &serde_json::json!(true)) {
+            tracing::warn!("journal: {e:#}");
+        }
+        self.resume_fetching(id, title).await;
     }
 
     /// Lidarr fetches again what it fetched before, if it was told (or was about to be told) to stop. Safe to repeat.
@@ -1776,6 +1787,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// V2 (the review of run 8b, finding 2): a Delete that left another asker's request of the album has Lidarr go on: Incoming's
+    /// handler puts back what it stopped, whether it was told so before it stopped Lidarr or after.
+    #[tokio::test]
+    async fn a_delete_that_left_a_request_has_lidarr_go_on() {
+        use axum::Json;
+        use axum::routing::{get, put};
+        let told: Arc<std::sync::Mutex<Vec<bool>>> = Arc::default();
+        let t = told.clone();
+        let app = axum::Router::new().route("/api/v1/album", get(|| async { Json(serde_json::json!([{ "id": 7, "monitored": true }])) })).route(
+            "/api/v1/album/monitor",
+            put(move |Json(b): Json<serde_json::Value>| {
+                t.lock().unwrap().push(b["monitored"] == true);
+                async { Json(serde_json::json!({})) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (music, inc) = (folder("kept-music"), folder("kept-inc"));
+        let svc = on_disk(&music, &inc).await;
+        svc.apply_settings(lidarr_pair(Some(settings::LidarrConfig { url, api_key: "key".into(), enabled: true, ..Default::default() })), crate::trash::DEFAULT_KEEP_DAYS);
+        for before in [true, false] {
+            let release_group = Some("00000000-0000-4000-8000-000000000340".to_string());
+            let event = Event::AlbumRejected { source: "cratarr".into(), album_id: "al-1".into(), title: "Album".into(), folder: 1, dir: "A/Album".into(), token: "t".into(), release_group };
+            let id = svc.journal.intend(epoch_now(), &event).unwrap();
+            svc.journal.applied(id).unwrap();
+            if before {
+                svc.keep_fetching(id, "Album").await;
+            }
+            svc.handle(&svc.journal.get(id).unwrap().unwrap()).await;
+            if !before {
+                svc.keep_fetching(id, "Album").await;
+            }
+            assert_eq!(told.lock().unwrap().last(), Some(&true), "told before it acts {before}: Lidarr fetches it again");
+        }
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     /// A Keep of `X/A`'s two tracks from Incoming (1) into `Y` in the library (0).

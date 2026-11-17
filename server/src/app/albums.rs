@@ -458,9 +458,10 @@ impl App {
         // it has.
         let live = self.library.live();
         let incoming = a.library.as_deref().and_then(|l| live.iter().find(|x| x.cfg.id == source)?.kind_of(l)) == Some(LibraryKind::Incoming);
-        let arrived = match (self.served.as_ref(), crate::serve::ids::record_number(&a.id)) {
-            (Some(served), Some(record)) if incoming => super::requests::arrived_for(served, record, a.added).await,
-            _ => Vec::new(),
+        // Every open request of its record too (V2): one the Delete leaves keeps a fetcher.
+        let (arrived, open) = match (self.served.as_ref(), crate::serve::ids::record_number(&a.id)) {
+            (Some(served), Some(record)) if incoming => (super::requests::arrived_for(served, record, a.added).await, super::requests::open_of(served, record).await),
+            _ => (Vec::new(), Vec::new()),
         };
         // Its record, read before the copy goes (V1): Soulseek's Placed items of it are forgotten once it has.
         let record = crate::serve::ids::record_number(&a.id).filter(|_| incoming);
@@ -470,10 +471,15 @@ impl App {
         }
         if let Some(served) = self.served.as_ref() {
             // An administrator's Delete closes every asker's request, a requester's their own alone (Y4); what it closed is kept on
-            // its journal entry, for its Undo.
+            // its journal entry, for its Undo. An open request of the record it leaves has Lidarr go on, and what Incoming's handler
+            // stopped for the copy put back (V2).
             let closing = super::requests::closed_by(arrived, crate::serve::access::administering(), served.current_user().as_deref());
-            let undo = done.undo.parse::<crate::journal::EventId>().ok().map(|id| (self.journal.as_ref(), id));
-            super::requests::reject(super::requests::fetcher(self).as_deref(), &served.userdata, &closing, undo).await;
+            let id = done.undo.parse::<crate::journal::EventId>().ok();
+            let soulseek = super::soulseek::connected().await;
+            let goes_on = super::requests::deleted(super::requests::fetcher(self).as_deref(), soulseek, served, &closing, open, id.map(|id| (self.journal.as_ref(), id))).await;
+            if goes_on && let Some(id) = id {
+                self.incoming.keep_fetching(id, &done.title).await;
+            }
         }
         Ok(done)
     }
