@@ -12,7 +12,7 @@ const library = (id: string, kind: LibraryInfo['kind'], more: Partial<LibraryInf
 const INFO = [library('music', 'main'), library('more', 'main'), library('in', 'incoming'), library('in2', 'incoming'), library('own', 'own', { mine: true }), library('theirs', 'own')];
 
 const copy = (id: string, more: Partial<AlbumCopy> = {}) => ({ library: id, deletable: true, keepable: false, keep_to: null, ...more }) as AlbumCopy;
-const list = (more: Partial<AlbumsSource> = {}) => ({ library_info: INFO, deletable: [], keepable: [], keep_to: {}, ...more }) as AlbumsSource;
+const list = (more: Partial<AlbumsSource> = {}) => ({ library_info: INFO, ...more }) as AlbumsSource;
 /** An Incoming copy's stand against the record's copy in `library` (C37a). */
 const against = (library: string, better = true, replaces = better): { against: Against } => ({ against: { better, replaces, library, dir: 'A/B', why: '' } });
 const none = () => null;
@@ -83,9 +83,8 @@ test('an Incoming copy may not replace what it may not delete', () => {
   assert.deepEqual(offers([copy('in', { deletable: false, ...against('music') }), copy('music')])[0].replaceInto, []);
 });
 
-test("another server's album goes by what its list says of its id, in its one library", () => {
-  const s = list({ deletable: ['al-1'], keepable: ['al-1'], keep_to: { 'al-1': 'more' } });
-  const [o, ...rest] = offersOf(s, { id: 'al-1', library: 'in' }, true, none);
+test("another server's album comes with its one copy, and goes by what that copy allows", () => {
+  const [o, ...rest] = offers([copy('in', { keepable: true, keep_to: 'more' })]);
   assert.equal(rest.length, 0);
   assert.deepEqual([o.library, o.deletable, ids(o.targets)[0]], ['in', true, 'more']);
 });
@@ -94,8 +93,9 @@ test('a copy its viewer may not delete goes nowhere', () => {
   assert.deepEqual(offers([copy('music', { deletable: false })])[0].targets, []);
 });
 
-test('a list with no libraries names no copy', () => {
-  assert.equal(offersOf(list({ deletable: ['al-1'] }), { id: 'al-1' }, true, none)[0].library, undefined);
+test('a list with no libraries names no copy and allows nothing', () => {
+  const [o] = offersOf(list(), { id: 'al-1' }, true, none);
+  assert.deepEqual([o.library, o.deletable, o.targets], [undefined, false, []]);
 });
 
 test('a record no one has has nothing to offer', () => {

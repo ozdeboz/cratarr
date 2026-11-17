@@ -76,14 +76,14 @@ export const adds = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind ==
  *  it is, and a copy of it goes ("Copy to Your music"). Out of Incoming it is added, between main libraries moved. */
 export const copies = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind !== 'incoming' && (from?.kind === 'own' || to.kind === 'own');
 
-type Offered = Pick<AlbumsSource, 'library_info' | 'deletable' | 'keepable' | 'keep_to'>;
+type Offered = Pick<AlbumsSource, 'library_info'>;
 type Listed = Pick<ListedAlbum, 'id' | 'library' | 'copies'>;
 type Rights = Pick<AlbumCopy, 'deletable' | 'keepable' | 'keep_to' | 'against'> & { library?: string };
 
-/** Each library's copy of a record, once: of two folders of one library `from` names the first. Another server's album
- *  says what may be done with it in its list, by id, and lies in its one library. */
-function copiesIn(s: Offered, a: Listed): Rights[] {
-  if (!a.copies) return [{ library: a.library, deletable: s.deletable.includes(a.id), keepable: s.keepable.includes(a.id), keep_to: s.keep_to[a.id] ?? null }];
+/** Each library's copy of a record, once: of two folders of one library `from` names the first. Another server's album comes
+ *  with its one copy (C36). A list with no libraries (the device's, Discover's) names no copy and allows nothing. */
+function copiesIn(a: Listed): Rights[] {
+  if (!a.copies) return [{ library: a.library, deletable: false, keepable: false, keep_to: null }];
   return a.copies.filter((c, i) => a.copies!.findIndex((x) => x.library === c.library) === i);
 }
 
@@ -97,7 +97,7 @@ export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?
   const held = librariesOf(a);
   const mains = held.flatMap((id) => (info(id)?.kind === 'main' ? [info(id)!] : []));
   const others = s.library_info.filter((l) => !held.includes(l.id));
-  return copiesIn(s, a).map((c) => {
+  return copiesIn(a).map((c) => {
     const from = info(c.library);
     const keepTo = c.keep_to;
     // An Incoming copy is added where it goes by default; by an administrator also to a main library or their own music

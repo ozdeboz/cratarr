@@ -126,7 +126,7 @@
   const standOf = (a: ListedAlbum) => a.copies?.find((c) => c.against)?.against;
   const nameOf = (shelf: ShelfSource, id: string) => sources?.find((x) => x.id === shelf.id)?.library_info.find((l) => l.id === id)?.name ?? id;
   /** What an Incoming album lacks of what the library requires, to see before Keep (the owner, 2026-10-24). */
-  const lacksOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.lacks?.[a.id] ?? [];
+  const lacksOf = (a: ListedAlbum) => a.copies?.find((c) => c.lacks.length)?.lacks ?? [];
 
   // The filter (decisions 0060 and 0061): its own switches (Favourites only, Unplayed only, 4 stars and up) and its
   // conditions (the kind beside back is its Type row), remembered as the Library's; one left on from before goes by
@@ -225,7 +225,7 @@
             {v.why}
           </span>
         {/if}
-        {#if me.admin && lacksOf(s, a).length}<span class="lacks">Missing {lacksOf(s, a).join(', ')}</span>{/if}
+        {#if me.admin && lacksOf(a).length}<span class="lacks">Missing {lacksOf(a).join(', ')}</span>{/if}
       {/snippet}
     </AlbumShelf>
   {/if}

@@ -112,10 +112,6 @@ export function listView(rows: ListRows, account: string | null, at: number): Al
     as_of: Math.floor(at / 1000),
     libraries: libraries.map((l) => l.key),
     library_info: libraries.map((l) => infoOf(l, account)),
-    lacks: {},
-    deletable: [],
-    keepable: [],
-    keep_to: {},
   };
   return { sources: [source], trash_days: 0, music: libraries.find((l) => l.kind === 'main')?.name ?? null };
 }

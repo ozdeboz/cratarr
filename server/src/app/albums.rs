@@ -90,16 +90,51 @@ pub struct AlbumsSourceView {
     /// Those libraries, with their names, uses, colours and formats.
     pub library_info: Vec<LibraryView>,
     /// Per album id of a library other than Music: what it lacks of what the library requires (the owner,
-    /// 2026-10-24: marked before Keep, as Health marks Music's).
+    /// 2026-10-24: marked before Keep, as Health marks Music's). This and the lists below are the server's own: the page is
+    /// sent each copy's (C36, `AlbumsView::as_sent`).
+    #[serde(skip)]
     pub lacks: BTreeMap<String, Vec<&'static str>>,
     /// The albums Cratarr can delete.
+    #[serde(skip)]
     pub deletable: Vec<String>,
     /// The Incoming albums the viewer may Keep (0101 point 2: an administrator every one; a user their own requests,
     /// once own music is in).
+    #[serde(skip)]
     pub keepable: Vec<String>,
     /// Per Incoming album, where Keep puts it by default (0101 point 2: the requester's own music, else the first main
     /// library).
+    #[serde(skip)]
     pub keep_to: BTreeMap<String, String>,
+}
+
+impl AlbumsView {
+    /// The view as the page is sent it (C36): what the viewer may do with each copy, and what it lacks, on the copy alone.
+    /// Another server's album gets its one copy, made of its source's lists by id; Cratarr's own records, their copies saying
+    /// their libraries, say no `library` of their own.
+    pub fn as_sent(mut self) -> Self {
+        for s in &mut self.sources {
+            for a in &mut s.albums {
+                if !a.copies.is_empty() {
+                    a.library = None;
+                    continue;
+                }
+                let Some(library) = a.library.clone() else { continue };
+                a.copies.push(source::AlbumCopy {
+                    library,
+                    format: a.format.clone(),
+                    kbps: a.bitrate_kbps,
+                    deletable: s.deletable.contains(&a.id),
+                    keepable: s.keepable.contains(&a.id),
+                    keep_to: s.keep_to.get(&a.id).cloned(),
+                    lacks: s.lacks.get(&a.id).map(|l| l.iter().map(|w| w.to_string()).collect()).unwrap_or_default(),
+                    plays: true,
+                    tracks: a.tracks,
+                    ..Default::default()
+                });
+            }
+        }
+        self
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -681,6 +716,36 @@ mod tests {
             copies: Vec::new(),
             artists: Vec::new(),
             release: Default::default(),
+        }
+    }
+
+    /// C36: the page reads what each copy allows on the copy alone: another server's album is sent its one copy, made of the
+    /// lists by id, which stay the server's; Cratarr's own records are sent no library of their own, their copies saying it.
+    #[test]
+    fn the_page_reads_each_copy_alone() {
+        let source = |id: &str, albums: Vec<source::Album>| AlbumsSourceView {
+            id: id.into(),
+            label: id.into(),
+            supported: true,
+            albums,
+            error: None,
+            as_of: 0,
+            libraries: Vec::new(),
+            library_info: Vec::new(),
+            lacks: [("j1".to_string(), vec!["cover"])].into(),
+            deletable: vec!["j1".into()],
+            keepable: vec!["j1".into()],
+            keep_to: [("j1".to_string(), "music".to_string())].into(),
+        };
+        let view = AlbumsView { sources: vec![source("cratarr", vec![listed("al-1", 2, "incoming", "FLAC")]), source("jf", vec![album("j1", "new", "/data/new/A/Album")])], trash_days: 30, music: None };
+        let view = view.as_sent();
+        assert_eq!(view.sources[0].albums[0].library, None, "Cratarr's own: its copies say where");
+        let c = &view.sources[1].albums[0].copies;
+        assert_eq!(c.len(), 1, "another server's album: its one copy");
+        assert_eq!((c[0].library.as_str(), c[0].deletable, c[0].keepable, c[0].keep_to.as_deref(), c[0].lacks.clone(), c[0].plays), ("new", true, true, Some("music"), vec!["cover".to_string()], true));
+        let sent = serde_json::to_value(&view).unwrap();
+        for field in ["deletable", "keepable", "keep_to", "lacks"] {
+            assert!(sent["sources"][1].get(field).is_none(), "{field} is each copy's to say");
         }
     }
 

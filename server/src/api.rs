@@ -1268,7 +1268,7 @@ async fn track_versions(ctx: Ctx, Path((source, id)): Path<(String, String)>) ->
 
 /// The Library page's one list (decision 0034): every album of the used libraries, with its library and facts.
 async fn albums(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::AlbumsView> {
-    Json(app.albums(f.source.as_deref()).await)
+    Json(app.albums(f.source.as_deref()).await.as_sent())
 }
 
 /// A track's file as it is (the track menu's Details): where it lies, its audio, size and dates, and every tag, in the

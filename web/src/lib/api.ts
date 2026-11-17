@@ -1781,7 +1781,8 @@ export const setReferences = (album: string, choice: { counting?: ReferenceSourc
 
 /** One copy of a record: one folder's files of it (docs/records-and-copies.md). `format` and `kbps` are as `ListedAlbum`'s,
  *  `bits` and `rate` a lossless copy's, null where one of its files is not read. `deletable`, `keepable`, `keep_to` and
- *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `plays`: the
+ *  `lacks` are what the viewer may do with this copy and what it lacks: said on the copy alone (C36; another server's album
+ *  comes with its one copy). `plays`: the
  *  one the server would play them. `size`: its files' bytes, null where not known. `tracks`: how many of the record's it
  *  holds. `job`: the conversion at work on this copy, `Job.id`. */
 export type AlbumCopy = {
@@ -1892,12 +1893,6 @@ export type LibraryInfo = {
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
   library_info: LibraryInfo[];
-  /** Per album id of an Incoming library: what it lacks of what the library requires (cover, year, genre, …). */
-  lacks?: Record<string, string[]>;
-  deletable: string[];
-  /** The Incoming albums the viewer may Keep, and where each goes by default (decision 0101 point 2). */
-  keepable: string[];
-  keep_to: Record<string, string>;
 };
 export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: string | null };
 
