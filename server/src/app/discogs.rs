@@ -473,6 +473,18 @@ pub fn start() {
     });
 }
 
+/// A background pass's albums in turn while background reading is not paused (Y7): looked at before each, so a pass paused meanwhile
+/// stops at its next album, what it found so far kept by its caller.
+pub(super) fn until_paused<T>(albums: Vec<T>, pass: &'static str) -> impl Iterator<Item = T> {
+    albums.into_iter().take_while(move |_| {
+        let paused = super::switches::background_paused();
+        if paused {
+            tracing::info!("{pass}: background reading paused; stopped at its next album");
+        }
+        !paused
+    })
+}
+
 /// Albums whose type MusicBrainz did not give (0.9.6): the format descriptions ("EP", "Single", "LP", "Compilation")
 /// of the main release of the first of their masters whose tracklist fits the album (0.10), kept by album
 /// (`dc:<album id>`). An album with a MusicBrainz release waits until MusicBrainz was asked about it; one Discogs typed
@@ -497,7 +509,7 @@ async fn types_pass() -> Result<()> {
     }
     let http = super::discover::http()?;
     let mut found = Vec::new();
-    for (album, release, artist, title, tracks, duration_ms) in due {
+    for (album, release, artist, title, tracks, duration_ms) in until_paused(due, "discogs: release types") {
         let rg = match is_mbid(&release) {
             true => release_group_of(&http, &release).await.unwrap_or_default(),
             false => None,
@@ -534,7 +546,7 @@ async fn genres_pass() -> Result<()> {
     .await??;
     let http = super::discover::http()?;
     let mut found: Vec<(String, Vec<String>)> = Vec::new();
-    for (album, release, artist, title) in due {
+    for (album, release, artist, title) in until_paused(due, "discogs: genres") {
         let rg = match is_mbid(&release) {
             true => release_group_of(&http, &release).await.unwrap_or_default(),
             false => None,
@@ -1139,5 +1151,23 @@ mod facts_tests {
         assert_eq!((a.name.as_str(), a.real_name.as_deref(), a.profile.as_str()), ("Studio", None, "Swedish duo of Dan Lissvik and Rasmus Hägg."));
         assert_eq!(a.aliases, ["Studio Barnhus"]);
         assert_eq!(a.members[1], Member { name: "Rasmus Hägg".into(), active: false });
+    }
+
+    /// Y7: a Discogs pass looks at the pause before each album: paused meanwhile, it stops at its next one, what it found kept.
+    /// Unpaused, it goes through.
+    #[test]
+    fn a_discogs_pass_stops_at_its_next_album_when_paused() {
+        use super::super::switches::{BACKGROUND, set_for_tests};
+        set_for_tests(BACKGROUND, true);
+        let mut asked = Vec::new();
+        for n in until_paused(vec![1, 2, 3], "test") {
+            asked.push(n);
+            if n == 1 {
+                set_for_tests(BACKGROUND, false);
+            }
+        }
+        set_for_tests(BACKGROUND, true);
+        assert_eq!(asked, [1]);
+        assert_eq!(until_paused(vec![1, 2, 3], "test").collect::<Vec<_>>(), [1, 2, 3]);
     }
 }

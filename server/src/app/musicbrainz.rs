@@ -126,7 +126,8 @@ pub async fn behind<F: std::future::Future>(f: F) -> F::Output {
 }
 
 /// A question to MusicBrainz: refused while it is switched off (0.9.6), asked in the server's one turn (`Turn`), its answer
-/// noted. Every question to MusicBrainz goes through this, so no caller paces itself.
+/// noted. Every question to MusicBrainz goes through this, so no caller paces itself. The background asker's (`behind`) is refused
+/// while background reading is paused (Y7), so a running pass stops at its next question; a page's still goes.
 pub trait Asked {
     fn asked(self) -> impl std::future::Future<Output = Result<reqwest::Response>> + Send;
 }
@@ -137,7 +138,16 @@ impl Asked for reqwest::RequestBuilder {
             if !super::switches::is_on(super::switches::MUSICBRAINZ) {
                 anyhow::bail!("MusicBrainz is switched off");
             }
-            TURN.take(BEHIND.try_with(|b| *b).unwrap_or(false)).await;
+            let behind = BEHIND.try_with(|b| *b).unwrap_or(false);
+            // Looked at before its turn and again once it comes (Y7): a pass's question may wait long behind a page's.
+            let paused = || behind && super::switches::background_paused();
+            if paused() {
+                anyhow::bail!(super::switches::PAUSED);
+            }
+            TURN.take(behind).await;
+            if paused() {
+                anyhow::bail!(super::switches::PAUSED);
+            }
             let r = super::reach::Sent::sent(self).await?;
             let retry_after = r.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok());
             TURN.answered(r.status(), retry_after);
@@ -211,6 +221,24 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
+
+    /// Y7: while background reading is paused the background asker's question is refused, saying so, so a running pass stops at its
+    /// next question; a page's still goes. Unpaused, the pass's goes again.
+    #[tokio::test]
+    async fn a_running_pass_stops_at_the_pause() {
+        use super::super::switches::{BACKGROUND, PAUSED, set_for_tests};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        let ask = || reqwest::Client::new().get(&url).asked();
+        set_for_tests(BACKGROUND, false);
+        let pass = behind(ask()).await;
+        let page = ask().await;
+        set_for_tests(BACKGROUND, true);
+        assert!(pass.is_err_and(|e| e.to_string() == PAUSED), "a pass's question refused");
+        assert!(page.is_ok_and(|r| r.status().is_success()), "a page's question still goes");
+        assert!(behind(ask()).await.is_ok(), "unpaused, the pass's goes again");
+    }
 
     /// O5: a 503 pushes the turn's next question out, 5 s doubling to a minute in a row, as long as Retry-After says where it says;
     /// any other answer ends the run.

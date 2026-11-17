@@ -1095,7 +1095,8 @@ enum Listing {
 /// How long an item waits after Bandcamp answered with its bot check (R23, N3): at most once a day, nothing done to get past it.
 const CHECKED_AGAIN_SECS: i64 = 86_400;
 
-/// A record's counting list, read through `read` (`references::tracklist`, kept there once read).
+/// A record's counting list, read through `read` (`references::tracklist`, kept there once read). None is read while background
+/// reading is paused (Y7): the item waits a round, never Stuck.
 async fn listing<R, F>(it: &Item, cat: &Arc<crate::catalogue::Catalogue>, read: R) -> Listing
 where
     R: Fn(crate::catalogue::records::Ref) -> F,
@@ -1103,6 +1104,9 @@ where
 {
     if it.record.record == 0 {
         return Listing::None("No record to judge it by".into());
+    }
+    if super::switches::background_paused() {
+        return Listing::Later(super::switches::PAUSED.into(), ROUND_AT_LEAST);
     }
     match super::references::tracklist(cat, it.record.record, read).await {
         Ok(Ok(lists)) => Listing::Ready(lists),
@@ -2856,6 +2860,28 @@ mod tests {
         assert!(CHECKED_AGAIN_SECS >= 86_400);
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A list reader that must not be asked.
+    fn never_read(_: crate::catalogue::records::Ref) -> std::future::Ready<Result<Option<crate::app::references::Read>>> {
+        panic!("no list is read while background reading is paused")
+    }
+
+    /// Y7: while background reading is paused Soulseek reads no list: the item waits a round, saying so, and is not Stuck. Unpaused,
+    /// its list is read again.
+    #[tokio::test]
+    async fn soulseek_reads_no_list_while_background_reading_is_paused() {
+        use super::super::switches::{BACKGROUND, PAUSED, set_for_tests};
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/music")]).unwrap());
+        let record = cat.record_for_tests("Two Rooms", 2);
+        waiting_with("ss-y7-paused", Vec::new(), Vec::new());
+        with_item("ss-y7-paused", |i| i.record.record = record);
+        let it = item("ss-y7-paused").unwrap();
+        set_for_tests(BACKGROUND, false);
+        let paused = listing(&it, &cat, never_read).await;
+        set_for_tests(BACKGROUND, true);
+        assert_eq!(paused, Listing::Later(PAUSED.into(), ROUND_AT_LEAST));
+        assert_ne!(listing(&it, &cat, |_| std::future::ready(Ok(None))).await, paused, "unpaused, its list is read");
     }
 
     /// FX01's data after 0.17's step, and the Soulseek items its approved requests make, as `read_requests` takes them; the

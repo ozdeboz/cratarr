@@ -14,14 +14,17 @@ pub const SLSKD: &str = "slskd";
 /// Bandcamp (O4): its pages, its search box, its streams.
 pub const BANDCAMP: &str = "bandcamp";
 /// Cratarr's reading of outside services on its own, in the background (O5, "Pause background reading"): MusicBrainz's lists, years
-/// and works, harvest, Discogs' passes, artist info, Spotify's looks. Off, none asks anything until it is on again; what a page asks
-/// for still goes.
+/// and works, harvest, Discogs' passes, artist info, Spotify's looks, Soulseek's list reads and its gate's AcoustID (Y7). Off, none
+/// asks anything until it is on again, a pass stopping at its next question or album; what a page asks for still goes.
 pub const BACKGROUND: &str = "background";
 
 /// Whether an administrator paused the background reading (`BACKGROUND` off).
 pub fn background_paused() -> bool {
     !is_on(BACKGROUND)
 }
+
+/// What a background read refused while background reading is paused says (Y7).
+pub const PAUSED: &str = "Background reading is paused";
 
 static KNOWN: Mutex<Option<HashMap<&'static str, bool>>> = Mutex::new(None);
 

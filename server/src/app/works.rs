@@ -529,7 +529,8 @@ pub async fn discogs_pass() -> Result<()> {
         Ok((links, artists))
     })
     .await??;
-    for link in links {
+    // The pause looked at before each (Y7).
+    for link in super::discogs::until_paused(links, "works: Discogs' genres") {
         let genres = match super::discogs::linked_genres(&link).await {
             Ok(g) => g,
             Err(e) => {
@@ -540,7 +541,7 @@ pub async fn discogs_pass() -> Result<()> {
         let ud = served.userdata.clone();
         tokio::task::spawn_blocking(move || ud.set_discogs_link_genres(&link, &genres, super::moment::now_secs())).await??;
     }
-    for id in artists {
+    for id in super::discogs::until_paused(artists, "works: Discogs' names") {
         let (real, aliases) = match super::discogs::artist_names(id).await {
             Ok(names) => names.unwrap_or_default(),
             Err(e) => {
