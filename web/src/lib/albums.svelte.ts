@@ -31,7 +31,7 @@ import { howToOpen, type Openable } from './openRecord';
 import { wantFailed } from './wantPath';
 import { artistSource, type ArtistOpen } from './artistIds';
 import { prefs } from './prefs.svelte';
-import { dotsOf, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
+import { dotsOf, withCopyAdded, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
 import { shownIn } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { can } from './capabilities.svelte';
@@ -121,6 +121,11 @@ function changeListed(changes: { source: string; id: string }[], change: (a: Lis
 export function copiesGone<G extends { source: string; id: string; from?: string }>(gone: G[]): G[] {
   changeListed(gone, (a, i) => withoutCopy(a, gone[i].from));
   return gone.filter((g) => !listedAlbum(g.source, g.id));
+}
+
+/** Copies made (Copy to, T3): their records stay as they were, each with its new copy. */
+export function copiesAdded(added: { source: string; id: string; from?: string; to: string }[]) {
+  changeListed(added, (a, i) => withCopyAdded(a, added[i].from, added[i].to));
 }
 
 /** Copies moved: their records stay, each copy in its new library. */

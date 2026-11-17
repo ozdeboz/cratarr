@@ -4,8 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { readFileSync } from 'node:fs';
 import type { AlbumCopy, AlbumsSource, Against, LibraryInfo } from '../src/lib/api.ts';
 
+const { moveSentences, moveWords, withCopyAdded } = await import('../src/lib/copiesRule.ts');
 const { adds, copies, deleteEntries, deleteGroups, heardAs, moveEntries, moveGroups, offersOf, playFromEntries, replaceEntries, withCopyMoved, withoutCopy } = await import('../src/lib/copiesRule.ts');
 
 const library = (id: string, kind: LibraryInfo['kind'], more: Partial<LibraryInfo> = {}) => ({ id, name: id.toUpperCase(), kind, ...more }) as LibraryInfo;
@@ -18,6 +20,42 @@ const against = (library: string, better = true, replaces = better): { against: 
 const none = () => null;
 const offers = (copies: AlbumCopy[], s = list(), admin = true) => offersOf(s, { id: 'al-1', copies }, admin, none);
 const ids = (l: { id: string }[]) => l.map((x) => x.id);
+
+test("a copy keeps the original's copy and says Copy", () => {
+  const said = moveSentences({ title: 'Two Rooms', from: 'Music', to: "Ann's music", folder: 'A/Two Rooms', files: 12, copy: true, adding: true });
+  assert.equal(said.ask, "Copy Two Rooms to Ann's music as A/Two Rooms (12 files)? The album stays in Music.");
+  assert.equal(said.button, "Copy to Ann's music");
+  assert.equal(said.done, "Copied Two Rooms to Ann's music.");
+  assert.ok(!said.undone.includes('back in Music'), said.undone);
+  for (const s of [said.ask, said.button, said.done, said.undone]) assert.ok(!/\b(Add|Move|Moved)\b/.test(s), s);
+  const record = { library: undefined, format: 'MP3', bitrate_kbps: 320, copies: [copy('music', { plays: true })] };
+  const after = withCopyAdded(record, 'music', 'ann');
+  assert.deepEqual(after.copies!.map((c) => [c.library, c.plays]), [['music', true], ['ann', false]], "Music's copy as it was, Ann's added");
+  // T3.2: own music into Music.
+  const back = moveSentences({ title: 'Two Rooms', from: "Ann's music", to: 'Music', folder: 'A/Two Rooms', files: 12, copy: true, adding: false });
+  assert.equal(back.ask, "Copy Two Rooms to Music as A/Two Rooms (12 files)? The album stays in Ann's music.");
+  assert.ok(copies(library('ann', 'own', { owner: 'ann' }), library('music', 'main')), "Ann's own music into Music is a copy");
+});
+
+test("a leaver's own music into Music reads Move, as the server moves it", () => {
+  const info = [library('music', 'main', { name: 'Music' }), library('gone', 'own', { owner: null, name: "gone's music" })];
+  assert.equal(copies(info[1], info[0]), false, "the server moves a departed user's music");
+  const said = moveSentences({ title: 'Two Rooms', from: "gone's music", to: 'Music', folder: 'A/Two Rooms', files: 12, copy: false, adding: false });
+  assert.ok(said.ask.startsWith('Move Two Rooms into Music') && said.done.startsWith('Moved ') && !said.ask.includes('stays'), said.ask);
+  const five = Array.from({ length: 5 }, (_, i) => ({ offers: offersOf(list({ library_info: info }), { id: `al-${i}`, copies: [copy('gone')] }, true, none) }));
+  const [group] = moveGroups(five).filter((g) => g.name === 'Music');
+  assert.equal(group.copying, false);
+  assert.equal(`${moveWords(group.copying, group.adding).verb} 5 albums to ${group.name}?`, 'Move 5 albums to Music?');
+  assert.deepEqual(withCopyMoved({ library: undefined, format: 'MP3', bitrate_kbps: 320, copies: [copy('gone', { plays: true })] }, 'gone', 'music').copies!.map((c) => c.library), ['music'], 'its copy leaves that library');
+});
+
+test("the record menu and several albums take Copy to's words from one place", () => {
+  const read = (f: string) => readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8');
+  const [menu, several] = [read('AlbumMenu.svelte'), read('SeveralAlbums.svelte')];
+  assert.ok(/moveSentences/.test(menu) && /keep\??\.copy/.test(menu) && /copiesAdded\(/.test(menu), 'the record menu: the preview\'s copy, the shared words, copiesAdded');
+  assert.ok(!/'Added' : 'Moved'/.test(menu) && !/adding \? 'Add' : 'Move'/.test(menu), 'no words of its own');
+  assert.ok(!/const moveWords/.test(several) && /moveWords\(/.test(several) && /copiesAdded\(/.test(several), 'several albums: the shared words, copiesAdded');
+});
 
 test('a record has one offer per copy, in the order the list gives them', () => {
   assert.deepEqual(offers([copy('own'), copy('music')]).map((o) => o.library), ['own', 'music']);

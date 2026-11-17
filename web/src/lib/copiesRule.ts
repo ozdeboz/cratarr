@@ -73,8 +73,35 @@ export type AlbumOffer = {
 export const adds = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind === 'incoming' || to.kind === 'own';
 
 /** Whether its move into `to` is a copy (C40, the owner 2026-11-04): a kept record into or out of someone's own music stays where
- *  it is, and a copy of it goes ("Copy to Your music"). Out of Incoming it is added, between main libraries moved. */
-export const copies = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind !== 'incoming' && (from?.kind === 'own' || to.kind === 'own');
+ *  it is, and a copy of it goes ("Copy to Your music"). Out of Incoming it is added, between main libraries moved. A departed
+ *  user's music (its owner gone: `owner` null) goes into a main library whole, as the server moves it (T3). */
+export const copies = (from: LibraryInfo | null, to: LibraryInfo) =>
+  from?.kind !== 'incoming' && (from?.kind === 'own' || to.kind === 'own') && !(from?.kind === 'own' && from.owner === null && to.kind === 'main');
+
+/** A move's words (C40, T3): a copy's, an add's, a move's. One place for the record's menu and Several albums. */
+export const moveWords = (copying: boolean, adding: boolean) =>
+  copying
+    ? { verb: 'Copy', none: 'copied to', past: 'Copied', not: 'Not copied', act: 'copy' }
+    : adding
+      ? { verb: 'Add', none: 'added to', past: 'Added', not: 'Not added', act: 'add' }
+      : { verb: 'Move', none: 'moved to', past: 'Moved', not: 'Not moved', act: 'move' };
+
+/** The record menu's sentences for a move of `title` from `from` into `to`, as its preview says it (T3: `copy` is the server's
+ *  word, so what the server moves says Move): the question (`lead`, the folder, `tail`; `ask` whole), its button, the toast,
+ *  and the Undo's toast. A copy leaves the album where it is, and its Undo takes the copy away. */
+export function moveSentences(p: { title: string; from: string; to: string; folder: string; files: number; copy: boolean; adding: boolean }) {
+  const w = moveWords(p.copy, p.adding);
+  const lead = `${w.verb} ${p.title} ${p.copy || p.adding ? 'to' : 'into'} ${p.to} as `;
+  const tail = ` (${p.files} ${p.files === 1 ? 'file' : 'files'})?${p.copy ? ` The album stays in ${p.from}.` : ''}`;
+  return {
+    lead,
+    tail,
+    ask: `${lead}${p.folder}${tail}`,
+    button: `${w.verb} to ${p.to}`,
+    done: `${w.past} ${p.title} to ${p.to}.`,
+    undone: p.copy ? `${p.title} is no longer in ${p.to}.` : `${p.title} is back in ${p.from}.`,
+  };
+}
 
 type Offered = Pick<AlbumsSource, 'library_info'>;
 type Listed = Pick<ListedAlbum, 'id' | 'library' | 'copies'>;
@@ -189,6 +216,13 @@ export function withoutCopy<A extends Copied>(a: A, library?: string): A | null 
   const at = a.copies.findIndex((c) => c.library === library);
   const rest = a.copies.filter((_, i) => i !== at);
   return rest.length ? led(a, rest) : null;
+}
+
+/** A record once its copy in `from` was copied into `to` (C40, T3): every copy stays as it was, and the new one is added, not
+ *  playing. An album of a list naming no copies is as it was. */
+export function withCopyAdded<A extends Copied>(a: A, from: string | undefined, to: string): A {
+  const c = a.copies?.find((x) => x.library === from);
+  return c ? { ...a, copies: [...a.copies!, { ...c, library: to, plays: false }] } : a;
 }
 
 /** A record once its copy in `from` moved into `to`: nothing leaves, the copy lies elsewhere. */

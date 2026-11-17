@@ -50,8 +50,8 @@
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumOfDownload, albumPlay, albumRatings, copiesGone, copiesMoved, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
-  import { adds, deleteEntries, moveEntries, playFromEntries, replaceEntries } from './copiesRule';
+  import { albumOfDownload, albumPlay, albumRatings, copiesAdded, copiesGone, copiesMoved, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
+  import { adds, deleteEntries, moveEntries, moveSentences, moveWords, playFromEntries, replaceEntries } from './copiesRule';
   import { shownIn } from './sources.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -399,6 +399,10 @@
   let to = $state<LibraryInfo | null>(null);
   const adding = $derived(!!to && adds(copy?.from ?? null, to));
   let keep = $state<KeepPreview | null>(null);
+  /** A copy, as the preview says (T3: the server's word, so a departed user's music moves). */
+  const copying = $derived(!!keep?.copy);
+  /** The move's sentences, as its preview says it (T3). */
+  const sentences = (k: KeepPreview) => moveSentences({ title: a.title, from: fromName, to: to?.name ?? '', folder: k.folder ?? '', files: k.files, copy: !!k.copy, adding });
   let swap = $state<ReplacePreview | null>(null);
   /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
   let coverWay = $state<'keep' | 'new'>('keep');
@@ -533,7 +537,7 @@
   }
   // Done: the copy leaves its library, shown at once as `left` says. Queued (lossless files above the target's quality
   // limit to convert first): its row shows the progress instead, and the queue says when it is done, to whoever asked (W13).
-  function moved(r: AlbumMoved, words: string, left: () => void, from: string | undefined) {
+  function moved(r: AlbumMoved, words: string, left: () => void, from: string | undefined, undone = `${r.title} is back in ${fromName}.`) {
     if (r.queued) {
       jobs.queued({ source, album_id: a.id, from });
       jobs.poke();
@@ -542,7 +546,7 @@
     // It stays open where it is (the owner, 2026-11-01: no U-turns): its panel follows it to its new place.
     left();
     ongone?.();
-    withUndo(words, [r.undo], { undone: `${r.title} is back in ${fromName}.`, after: onundone });
+    withUndo(words, [r.undo], { undone, after: onundone });
   }
   /** Deleted: the record stays while one copy does; with its last its panel closes. */
   function gone() {
@@ -554,8 +558,11 @@
       if (!to) return;
       const [into, from] = [to, copy?.library];
       const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined);
-      moved(r, `${adding ? 'Added' : 'Moved'} ${a.title} to ${into.name}.`, () => copiesMoved([{ source, id: a.id, from, to: into.id }]), from);
-    }, `Could not ${adding ? 'add' : 'move'} the ${word}`);
+      // A copy leaves the record's copy where it was and adds the new one (T3); a move moves it.
+      const said = keep ? sentences(keep) : null;
+      const went = [{ source, id: a.id, from, to: into.id }];
+      moved(r, said?.done ?? `Moved ${a.title} to ${into.name}.`, () => (copying ? copiesAdded(went) : copiesMoved(went)), from, said?.undone);
+    }, `Could not ${moveWords(copying, adding).act} the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
     act(async () => {
@@ -729,17 +736,17 @@
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
       {:else if keep.refused}
-        <p class="ask">Can't {adding ? 'add' : 'move'} {a.title}: {keep.refused.detail}</p>
+        <p class="ask">Can't {moveWords(copying, adding).act} {a.title}: {keep.refused.detail}</p>
       {:else}
         <p class="ask">
-          {adding ? 'Add' : 'Move'} {a.title} {adding ? 'to' : 'into'} {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
+          {sentences(keep).lead}<strong>{keep.folder}</strong>{sentences(keep).tail}{#if keep.convert}
             {` ${converted(keep.convert, to?.name ?? '')}`}{/if}{#if !keep.acquisition && !primary}
             {` ${NO_LIDARR}`}{/if}
         </p>
       {/if}
       <div class="actions">
         {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
-          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>{adding ? 'Add' : 'Move'} to {to?.name}</button>
+          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>{sentences(keep).button}</button>
         {/if}
         <button onclick={onclose}>Cancel</button>
       </div>

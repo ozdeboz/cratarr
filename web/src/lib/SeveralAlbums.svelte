@@ -15,8 +15,8 @@
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo. Of records with several
   // copies Delete is an entry per library, as Move's. No Play from: it starts one record's queue.
   import { offersIn } from './AlbumMenu.svelte';
-  import { deleteGroups, moveGroups, type AlbumOffer } from './copiesRule';
-  import { albumOfDownload, albumRatings, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
+  import { deleteGroups, moveGroups, moveWords, type AlbumOffer } from './copiesRule';
+  import { albumOfDownload, albumRatings, copiesAdded, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
   import { cancelJob, deleteAlbum, moveAlbum, movePreview, type AlbumsSource, type KeepPreview, type LibraryInfo, type ListedAlbum, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { DEVICE } from './deviceMusic.svelte';
@@ -167,12 +167,8 @@
 
   // Move: what each would become asked first, then one question for them all (those refused named, left out).
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch these ${word}s again.`);
-  /** A move's words: a copy's (C40), an add's, a move's. */
-  const moveWords = (copying: boolean, adding: boolean) =>
-    copying ? { verb: 'Copy', none: 'copied to', past: 'Copied', not: 'Not copied', act: 'copy' } : adding ? { verb: 'Add', none: 'added to', past: 'Added', not: 'Not added', act: 'add' } : { verb: 'Move', none: 'moved to', past: 'Moved', not: 'Not moved', act: 'move' };
-
   async function askMove(name: string, them: Moving[], adding: boolean, copying = false) {
-    const w = moveWords(copying, adding);
+    let w = moveWords(copying, adding);
     // Read before closing: the menu (and this) is gone by the time the previews are in.
     const ask = onask;
     close();
@@ -181,6 +177,8 @@
     const go = them.flatMap((x) => seen.filter((y) => y.x === x && !y.p.refused));
     const refused = seen.filter((y) => y.p.refused);
     if (!go.length) return toast.fail(null, `None of them can be ${w.none} ${name}`);
+    // The words as the previews say (T3: the server's `copy`, so a departed user's music moves).
+    w = moveWords(go.every((y) => !!y.p.copy), adding);
     const convert = go.reduce((k, y) => k + y.p.convert, 0);
     const why = (p: KeepPreview) => (p.refused?.kind === 'needs_year' ? 'no year in the tags' : p.refused?.kind === 'other' ? p.refused.detail : '');
     const text = [
@@ -201,23 +199,27 @@
       go: async () => {
         const tokens: (string | null)[] = [];
         const gone: { source: string; id: string; from?: string; to: string }[] = [];
+        const added: typeof gone = [];
         let queued = false;
         await fewAtATime(
           go,
-          async ({ x }) => {
+          async ({ x, p }) => {
             const r = await moveAlbum(x.s.id, x.a.id, x.from, x.to.id);
             // Queued (lossless files above the quality limit to convert first): its row shows the progress instead.
             // Its end is told to whoever asked, with its Undo (W13).
             if (r.queued) {
               queued = true;
               jobs.queued({ source: x.s.id, album_id: x.a.id, from: x.from });
-            } else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id, from: x.from, to: x.to.id }));
+            } else (tokens.push(r.undo), (p.copy ? added : gone).push({ source: x.s.id, id: x.a.id, from: x.from, to: x.to.id }));
           },
           1,
         );
         if (queued) jobs.poke();
+        // A copy leaves its record's copy where it was and adds the new one (T3); a move moves it.
         copiesMoved(gone);
-        if (gone.length) withUndo(`${w.past} ${doneOf(gone.length, go.length)} to ${name}.`, tokens, { after: reread });
+        copiesAdded(added);
+        const done = gone.length + added.length;
+        if (done) withUndo(`${w.past} ${doneOf(done, go.length)} to ${name}.`, tokens, { after: reread });
         else if (!queued) toast.fail(null, `Could not ${w.act} the ${word}s`);
       },
     });
