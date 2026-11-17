@@ -439,6 +439,36 @@ mod tests {
         assert!(!files(twin, ARTIST_3), "held by hand: kept");
     }
 
+    /// U4 (the review of 8c/8d, finding 4): the files' artist id taken from a Beyond artist credited on no had record brings the
+    /// records that artist's list made: they are the taker's, so their page and Discover list them, one the taker is credited on
+    /// already once. The Beyond artist is left with no credit, noted bare, and goes a day later (Z10).
+    #[test]
+    fn a_files_takeover_brings_the_beyond_artists_records() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (grouch, twin) = (cat.artist_for("Grouch").unwrap(), cat.artist_apart("Grouch").unwrap());
+        let beyond = open_artist(&cat, ARTIST_1, "Grouch").unwrap().expect("made");
+        assert!(beyond != grouch && beyond != twin);
+        let credit = |record: i64, artist: i64| {
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", rusqlite::params![record, artist]).unwrap();
+        };
+        let listed = [record(&cat, "Night Walks", 0, &[("musicbrainz", "release-group", GROUP_1)]), record(&cat, "Signal", 0, &[])];
+        let both = record(&cat, "Lamplight", 0, &[]);
+        for r in listed.iter().chain([&both]) {
+            credit(*r, beyond);
+        }
+        credit(both, grouch);
+        let credits = |artist: i64| {
+            let db = cat.db_for_tests();
+            let mut st = db.prepare("SELECT record FROM record_artists WHERE artist = ?1 ORDER BY record").unwrap();
+            st.query_map([artist], |r| r.get::<_, i64>(0)).unwrap().map(Result::unwrap).collect::<Vec<_>>()
+        };
+        assert!(cat.set_reference(&ids::artist(grouch), &Ref::new("musicbrainz", "artist", ARTIST_1), "files").unwrap(), "taken");
+        assert_eq!(credits(grouch), [listed[0], listed[1], both], "the Beyond artist's records are the taker's");
+        assert!(credits(beyond).is_empty(), "left with nothing");
+        let bare: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM artists_bare WHERE artist = ?1", [beyond], |r| r.get(0)).unwrap();
+        assert_eq!(bare, 1, "noted bare: forgotten a day later");
+    }
+
     /// Z6 (the review's finding 6): a row no record holds is had where the had rule's names clause would hold it, a live had record
     /// of its folded artist and title holding no reference that contradicts the row's; it names no record, and nothing is made or
     /// tied. Not where that record holds another release group, nor where the name is two albums' (Y1), nor for another artist.

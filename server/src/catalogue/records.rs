@@ -650,7 +650,9 @@ fn retired(tx: &Connection, subject: &str) -> Result<bool> {
 /// `set_reference` in the caller's transaction, found at `at`. One a subject holds alone (a release, an album page, an artist, a
 /// label): a retired record is given none, and one it held goes to whoever names it now; held by another, it is taken by hand,
 /// or where `takes` (a certain match), and never from a hand by anything else: a link pasted names what it names. An artist's id
-/// held by `search` alone, by an artist credited on no had record (one opened from Beyond, Z2), gives way to the files'.
+/// held by `search` alone, by an artist credited on no had record (one opened from Beyond, Z2), gives way to the files', and the
+/// records that artist's lists made (credited `listing`) go with it to the taker (U4): an artist with nothing of their own is
+/// merged into them, left with nothing, and forgotten a day later (Z10).
 pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, at: i64, takes: bool) -> Result<Put> {
     let mut taken = Vec::new();
     if ONE_SUBJECT.contains(&r.kind.as_str()) {
@@ -663,14 +665,27 @@ pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, 
         };
         // Decided over every holder before any lets go: a refusal leaves each where it was, though the caller commits. (The
         // schema holds one holder, `references_one`; the rule stands without counting on it.)
+        let mut giving = Vec::new();
         for (holder, held_how) in &holders {
             let gives_way = how == "files" && held_how == "search" && r.kind == "artist" && credited_on_none_had(tx, holder)?;
             if !retired(tx, holder)? && ((held_how == "hand" && how != "hand") || (!takes && how != "hand" && !gives_way)) {
                 return Ok(Put::Held);
             }
+            if gives_way {
+                giving.push(holder.clone());
+            }
         }
         for (holder, _) in holders {
             tx.prepare_cached("DELETE FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 AND subject = ?4")?.execute(params![r.source, r.kind, r.value, holder])?;
+            // The records its lists made go with the id (U4): read by it, they are the taker's to list, and its page and Discover's
+            // missing list show them. One the taker is credited on already keeps that credit alone.
+            if giving.contains(&holder)
+                && let (Some(from), Some(to)) = (ids::artist_number(&holder), ids::artist_number(subject))
+            {
+                tx.prepare_cached("UPDATE OR IGNORE record_artists SET artist = ?2 WHERE artist = ?1 AND how = 'listing'")?.execute(params![from, to])?;
+                tx.prepare_cached("DELETE FROM record_artists WHERE artist = ?1 AND how = 'listing'")?.execute([from])?;
+                tx.prepare_cached(LAST_CREDIT_WENT)?.execute(params![from, at])?;
+            }
             taken.push(holder);
         }
     }
