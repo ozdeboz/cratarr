@@ -6,8 +6,9 @@
 //!   Cratarr's Soulseek doesn't need Lidarr"); read each round. One taken off the list stays off. An item whose record is had
 //!   (arrived or done), or whose request left, goes unless it is placed: a fetch, a check or a placing under way is cancelled and
 //!   its folder removed (Y2). A placed copy partly there lets Soulseek look again; one gone (deleted from Incoming, its folder read
-//!   and its record holding no copy) makes way, and the record's request is searched again (V1). A placing past the list's last look,
-//!   just before its rename, is never cancelled: it finishes, and its item is judged once placed (V4).
+//!   and its record holding no copy) makes way, and the record's request is searched again (V1); only a last copy that went to an
+//!   Incoming library's trash is gone so (U7), and one kept into Music and deleted there later is never looked for again. A placing
+//!   past the list's last look, just before its rename, is never cancelled: it finishes, and its item is judged once placed (V4).
 //! - **Judged by its list:** each request's record is judged by its counting list (`references::tracklist`, Q31): for a record
 //!   not had, its references' in order, MusicBrainz's release (or one of its release group's), Discogs', Bandcamp's album. A
 //!   Soulseek folder is a candidate only when every track of the list is one of its files, by title and length (`folders_of`),
@@ -961,7 +962,9 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
         let moved = repoint(&ud, &cat, &placed)?;
         // Every approved request (X2), not the newest thousand: those whose record is complete give no item (`take_requests`).
         let approved = ud.requests(None, Some(super::requests::APPROVED), usize::MAX)?;
-        let of = super::requests::records_held(&cat, &approved, &kinds)?;
+        let mut of = super::requests::records_held(&cat, &approved, &kinds)?;
+        // Where each record holding no copy saw its last one go (U7): only one deleted from Incoming is looked for again.
+        super::requests::mark_gone_from_incoming(&cat, &mut of, &kinds)?;
         Ok((approved, of, moved))
     })
     .await??;
@@ -1080,9 +1083,10 @@ async fn cancel_fetch(slskd: &Slskd, downloads: &Path, it: &Item) {
 fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>], firsts: &[i64]) -> Vec<Item> {
     let ids: std::collections::HashSet<i64> = approved.iter().map(|r| r.id).collect();
     let record_of: BTreeMap<i64, i64> = approved.iter().zip(of).filter_map(|(r, o)| Some((r.id, o.as_ref()?.record))).collect();
-    // A placed copy gone (V1: deleted from Incoming, its folder read and its record holding no copy) makes way: its item goes, never
-    // handed to another request of its record (X2), nor keeping that request from being searched.
-    let held: BTreeMap<i64, super::requests::Holding> = of.iter().flatten().map(|o| (o.record, o.holding)).collect();
+    // A placed copy gone (V1: deleted from Incoming, its folder read and its record holding no copy, U7: its last copy into an
+    // Incoming library's trash) makes way: its item goes, never handed to another request of its record (X2), nor keeping that request
+    // from being searched.
+    let held: BTreeMap<i64, (super::requests::Holding, bool)> = of.iter().flatten().map(|o| (o.record, (o.holding, o.gone_from_incoming))).collect();
     k.items.retain(|i| !copy_gone(i, &held));
     // A request that left (cancelled, declined, rejected): its item goes to another approved request of its record, keeping its tick
     // and folders (X2); else it goes unless it is placed (Y2): one ticked, fetched, checked or held at its check is cancelled with it.
@@ -1176,10 +1180,11 @@ fn looks_again(i: &Item, holding: super::requests::Holding) -> bool {
 }
 
 /// Whether a placed item's copy is gone (V1): a pass read its folder (Y10 lets go of it then), and its record, as `held` has the
-/// records of the approved requests, now holds no copy (deleted from Incoming, or its album another record's). One no pass has read
-/// yet may be on its way into the catalogue. Pure.
-fn copy_gone(i: &Item, held: &BTreeMap<i64, super::requests::Holding>) -> bool {
-    i.state == State::Placed && i.placed.is_none() && held.get(&i.record.record) == Some(&super::requests::Holding::None)
+/// records of the approved requests (how each is held, and whether its last copy went to an Incoming library's trash), now holds no
+/// copy, its last one deleted from Incoming (U7). One kept into a main library and deleted there later is not: its request stays
+/// as delivered, never looked for again. One no pass has read yet may be on its way into the catalogue. Pure.
+fn copy_gone(i: &Item, held: &BTreeMap<i64, (super::requests::Holding, bool)>) -> bool {
+    i.state == State::Placed && i.placed.is_none() && held.get(&i.record.record) == Some(&(super::requests::Holding::None, true))
 }
 
 /// The next record to search: waiting and due, the longest waiting first.
@@ -2293,7 +2298,12 @@ mod tests {
 
     /// A request's record as `records_of` reads it: record `n`, named after its request.
     fn of(n: i64) -> Option<super::super::requests::RecordOf> {
-        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, holder: None, holding: Default::default(), released: None })
+        Some(super::super::requests::RecordOf { record: n, groups: Vec::new(), title: format!("Album {n}"), artist: "Artist".into(), year: Some(2000), cover: None, holder: None, holding: Default::default(), released: None, gone_from_incoming: false })
+    }
+
+    /// A record holding no copy, its last one deleted from Incoming (U7).
+    fn gone(n: i64) -> Option<super::super::requests::RecordOf> {
+        Some(super::super::requests::RecordOf { gone_from_incoming: true, ..of(n).unwrap() })
     }
 
     #[test]
@@ -3345,7 +3355,7 @@ mod tests {
         take_requests(&mut k, &[asked(1, None)], &[arrived], &[]);
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.state)).collect::<Vec<_>>(), [(1, State::Placed)]);
         // Deleted from Incoming: its request closed (W4), its record holds no copy, and someone asks for it again.
-        take_requests(&mut k, &[asked(2, None)], &[of(101)], &[]);
+        take_requests(&mut k, &[asked(2, None)], &[gone(101)], &[]);
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record, i.state)).collect::<Vec<_>>(), [(2, 101, State::Waiting)], "searched again");
         let words = words_in(&k.items, &[2]);
         assert_eq!(words.get(&2), Some(&Word::Waiting { why: None }));
@@ -3355,7 +3365,7 @@ mod tests {
 
     /// V1: an item whose request left goes to another approved request of its record (X2) only while its copy may be there: a placed
     /// one no pass has read yet does (its album may be on its way into the catalogue); one whose folder was read, its record holding no
-    /// copy (deleted, or its album another record's), never does, and that request is searched for.
+    /// copy, its last one deleted from Incoming (U7), never does, and that request is searched for.
     #[test]
     fn a_placed_item_is_never_handed_to_a_request_whose_record_it_no_longer_holds() {
         let placed = |read: bool| {
@@ -3368,8 +3378,22 @@ mod tests {
         take_requests(&mut k, &[asked(2, None)], &[of(101)], &[]);
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.state)).collect::<Vec<_>>(), [(2, State::Placed)], "not read yet: handed over");
         let mut k = placed(true);
-        take_requests(&mut k, &[asked(2, None)], &[of(101)], &[]);
+        take_requests(&mut k, &[asked(2, None)], &[gone(101)], &[]);
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.state)).collect::<Vec<_>>(), [(2, State::Waiting)], "never handed over: an item of its own");
+    }
+
+    /// U7 (the review of 8c/8d, finding 7): a copy Soulseek placed, kept into Music and deleted there months later: its record holds
+    /// no copy and its request is still approved, but its Placed item stays and Soulseek does not look for it again. Only a last copy
+    /// that went to an Incoming library's trash lets it.
+    #[test]
+    fn a_kept_album_deleted_from_music_is_not_searched_again() {
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
+        (k.items[0].state, k.items[0].folders, k.items[0].chosen) = (State::Placed, vec![two_tracks("a")], Some(0));
+        take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.state)).collect::<Vec<_>>(), [(1, State::Placed)], "not looked for again");
+        take_requests(&mut k, &[asked(1, None)], &[gone(101)], &[]);
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.state)).collect::<Vec<_>>(), [(1, State::Waiting)], "deleted from Incoming: looked for again");
     }
 
     /// V1: Incoming's Delete of a copy forgets its record's Placed items, read or not: none stands for a copy any more. The record's

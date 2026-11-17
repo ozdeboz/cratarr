@@ -1133,6 +1133,9 @@ pub struct RecordOf {
     pub holding: Holding,
     /// When it is first out ("2026-12-04", or a year), as MusicBrainz says: one not out yet waits for it (X1).
     pub released: Option<String>,
+    /// Holding no copy, whether its last one went to an Incoming library's trash (U7): a Delete from Incoming, which lets Soulseek
+    /// look for it again. One kept into a main library and deleted there months later is not, nor one that went otherwise.
+    pub gone_from_incoming: bool,
 }
 
 impl RecordOf {
@@ -1202,9 +1205,35 @@ pub fn records_held(cat: &crate::catalogue::Catalogue, rs: &[Request], kinds: &[
         .map(|r| {
             let q = read.get(&r.record?)?;
             let holding = holding_of(q, kind);
-            Some(RecordOf { record: q.row.id, groups: q.groups.clone(), title: q.row.title.clone(), artist: q.row.artist.clone(), year: q.row.year, cover: q.row.cover.clone(), holder: q.holder, holding, released: q.row.released.clone() })
+            Some(RecordOf {
+                record: q.row.id,
+                groups: q.groups.clone(),
+                title: q.row.title.clone(),
+                artist: q.row.artist.clone(),
+                year: q.row.year,
+                cover: q.row.cover.clone(),
+                holder: q.holder,
+                holding,
+                released: q.row.released.clone(),
+                gone_from_incoming: false,
+            })
         })
         .collect())
+}
+
+/// Where the last copy of each record holding none went (U7, for Soulseek's list): `gone_from_incoming` set on those whose newest
+/// trashed file lies in an Incoming library, read once for them all. Blocking.
+pub fn mark_gone_from_incoming(cat: &crate::catalogue::Catalogue, of: &mut [Option<RecordOf>], kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<()> {
+    let kind = |folder: i64| crate::serve::library::kind_in(kinds, folder).0;
+    let none: Vec<i64> = of.iter().flatten().filter(|o| o.holding == Holding::None).map(|o| o.record).collect();
+    if none.is_empty() {
+        return Ok(());
+    }
+    let trashed = cat.last_trashed_in(&none)?;
+    for o in of.iter_mut().flatten().filter(|o| o.holding == Holding::None) {
+        o.gone_from_incoming = trashed.get(&o.record).is_some_and(|f| kind(*f) == crate::settings::LibraryKind::Incoming);
+    }
+    Ok(())
 }
 
 /// `records_of` from an async caller; none for each where the catalogue cannot be read (logged).
@@ -1975,6 +2004,27 @@ mod tests {
         assert!(lidarr.0.lock().unwrap().is_empty() && lidarr.3.lock().unwrap().is_empty(), "nothing handed again");
         assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()], "Lidarr told to stop");
         assert_eq!(serve.userdata.request(bob.id).unwrap().unwrap().status, CANCELLED);
+    }
+
+    /// U7 (the review of 8c/8d, finding 7): a record holding no copy says whether its last one went to an Incoming library's trash:
+    /// deleted from Incoming, yes; kept into Music and deleted there later, no; never in a trash, no.
+    #[test]
+    fn a_record_says_whether_its_last_copy_went_from_incoming() {
+        use crate::settings::LibraryKind;
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let (incoming, kept, never) = (cat.record_for_tests("Two Rooms", 2), cat.record_for_tests("Signal", 2), cat.record_for_tests("Lamplight", 0));
+        for r in [incoming, kept] {
+            cat.copy_for_tests(r, 1);
+        }
+        cat.mark_trashed(1, &format!("copy-{incoming}"), &format!("100/copy-{incoming}")).unwrap();
+        cat.move_files(1, &format!("copy-{kept}"), 0, &format!("copy-{kept}")).unwrap();
+        cat.mark_trashed(0, &format!("copy-{kept}"), &format!("200/copy-{kept}")).unwrap();
+        let rs: Vec<Request> = [incoming, kept, never].into_iter().map(asked_for).collect();
+        let kinds = [(0, LibraryKind::Main), (1, LibraryKind::Incoming)];
+        let mut of = records_held(&cat, &rs, &kinds).unwrap();
+        mark_gone_from_incoming(&cat, &mut of, &kinds).unwrap();
+        let read: Vec<(Holding, bool)> = of.iter().map(|o| o.as_ref().map(|o| (o.holding, o.gone_from_incoming)).unwrap()).collect();
+        assert_eq!(read, [(Holding::None, true), (Holding::None, false), (Holding::None, false)]);
     }
 
     /// V9 (the review of run 8b's nits): an Undo whose request meets a newer open one of the account's of its record leaves it

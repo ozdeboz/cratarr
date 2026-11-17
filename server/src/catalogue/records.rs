@@ -1473,6 +1473,33 @@ impl Catalogue {
         self.db()
     }
 
+    /// Where each of these records' newest trashed file lies (U7): the catalogue folder of the file a Delete took last (its trash
+    /// token's time), by record; a record with nothing in a trash is not in the answer. On a reader. Blocking.
+    pub fn last_trashed_in(&self, records: &[i64]) -> Result<std::collections::HashMap<i64, i64>> {
+        let read = |db: &Connection| -> Result<std::collections::HashMap<i64, i64>> {
+            let mut newest: std::collections::HashMap<i64, (i64, i64)> = std::collections::HashMap::new();
+            if records.is_empty() {
+                return Ok(std::collections::HashMap::new());
+            }
+            let sql = format!("SELECT t.record, f.folder, f.trashed FROM files f JOIN tracks t ON t.id = f.track WHERE t.record IN ({}) AND f.trashed IS NOT NULL", id_list(records));
+            let mut st = db.prepare(&sql)?;
+            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
+                let (record, folder, token) = row?;
+                // A trash token begins with its time (`trash::token`).
+                let at: i64 = token.split('/').next().and_then(|t| t.parse().ok()).unwrap_or(0);
+                let kept = newest.entry(record).or_insert((at, folder));
+                if at > kept.0 {
+                    *kept = (at, folder);
+                }
+            }
+            Ok(newest.into_iter().map(|(record, (_, folder))| (record, folder)).collect())
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// Tests elsewhere: a copy of the record in catalogue folder `folder`, a file there behind each of its tracks (`copy-<record>/…`).
     #[cfg(test)]
     pub fn copy_for_tests(&self, record: i64, folder: i64) {
