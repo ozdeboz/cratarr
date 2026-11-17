@@ -11,10 +11,12 @@
 //!   it: a live had record of its folded artist and title, holding no reference that contradicts the row's, the name one album's
 //!   (Y1). It names no record, and nothing is made or tied.
 //! - **Made at open:** an album through `POST /api/records/open` (C56, `labels::open_record`), an artist through
-//!   `POST /api/artists/open` (`open_artist`), never by a name, but for the one live artist of the name who holds no MusicBrainz
-//!   id (Z2): the monthly read gives them it by their name anyway.
+//!   `POST /api/artists/open` (`open_asking`), never by a name, but for the one live artist of the name who holds no MusicBrainz
+//!   id (Z2) where the id is MusicBrainz's first sure match for the name, asked at open as the monthly read asks it (T6).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -232,10 +234,17 @@ pub fn artists(found: &[FoundArtist], known: &Known) -> Vec<BeyondArtist> {
 }
 
 /// An artist of Beyond's opened (C57, OQ12 (a): kept when opened): the artist who holds their MusicBrainz id; else, where the id
-/// is MusicBrainz's first sure match for the name (`sure`, U6, as `may_open` says), the one live artist of the name who holds none
-/// (Z2); else one of their own made now, though another has the name (C55: the name's next number). The one opened holds it
+/// is MusicBrainz's first sure match for the name (`sure`, T6: `open_asking` asks it), the one live artist of the name who holds
+/// none (Z2); else one of their own made now, though another has the name (C55: the name's next number). The one opened holds it
 /// (`Catalogue::artist_by_reference`). Never by the name alone: without a MusicBrainz id, or a name, none. Blocking.
 pub fn open_artist(cat: &Catalogue, id: &str, name: &str, sure: bool) -> Result<Option<i64>> {
+    let Some((id, name)) = opening(id, name)? else { return Ok(None) };
+    Ok(Some(cat.artist_by_reference(&Ref::new("musicbrainz", "artist", &id), &name, "search", sure)?))
+}
+
+/// The MusicBrainz id and the name an artist is opened by, as MusicBrainz writes the id and the name trimmed: none without an id or
+/// a name; a name longer than an artist's refused.
+fn opening(id: &str, name: &str) -> Result<Option<(String, String)>> {
     let (id, name) = (mbid(id), name.trim());
     if !super::discogs::is_mbid(&id) || name.is_empty() {
         return Ok(None);
@@ -243,21 +252,47 @@ pub fn open_artist(cat: &Catalogue, id: &str, name: &str, sure: bool) -> Result<
     if name.chars().count() > super::labels::NAME_MOST {
         anyhow::bail!("A name that long is no artist's.");
     }
-    Ok(Some(cat.artist_by_reference(&Ref::new("musicbrainz", "artist", &id), name, "search", sure)?))
+    Ok(Some((id, name.to_string())))
+}
+
+/// How long the open waits for MusicBrainz's answer (T6): past it, as when MusicBrainz is away, the id is not the name's sure match.
+const ASKED_FOR: Duration = Duration::from_secs(10);
+
+/// An artist opened (C57; T6, the review of run 10's finding 6): `open_artist`, the id taken as the name's sure match only where it
+/// is MusicBrainz's first sure match for the name, asked as the monthly read asks it (`discover::mb_artist_by_name`,
+/// `artist:"<name>"`): one question, whoever opens and whatever listed them (Beyond, a card, an administrator's name). MusicBrainz
+/// switched off (no question asked), away, or not answering within `ASKED_FOR`: not sure, so a new artist holds the id, which the
+/// monthly read gives the library's artist later where the name says so (OQ-K, T7). Nothing asked for an open that opens none.
+pub async fn open_asking(cat: Arc<Catalogue>, id: &str, name: &str) -> Result<Option<i64>> {
+    let Some((id, name)) = opening(id, name)? else { return Ok(None) };
+    let sure = sure_of(&id, &name).await;
+    tokio::task::spawn_blocking(move || open_artist(&cat, &id, &name, sure)).await?
+}
+
+/// Whether a MusicBrainz id is its first sure match for a name (T6): its answer to the name's one question. Any failure, or none in
+/// time: not sure, said in the log.
+async fn sure_of(id: &str, name: &str) -> bool {
+    let asked = async { super::discover::mb_artist_by_name(&super::discover::http()?, name).await };
+    match tokio::time::timeout(ASKED_FOR, asked).await {
+        Ok(Ok(found)) => found.is_some_and(|f| mbid(&f) == id),
+        Ok(Err(e)) => {
+            tracing::info!(target: "beyond", "{name} opened as not sure: MusicBrainz not asked who they are: {e:#}");
+            false
+        }
+        Err(_) => {
+            tracing::info!(target: "beyond", "{name} opened as not sure: MusicBrainz did not answer in time");
+            false
+        }
+    }
 }
 
 /// How long an artist Beyond listed may be opened by anyone (Z8): a day from when it was listed, so a page left open still opens it.
 pub const LISTED_FOR: i64 = 86_400;
 
-/// MusicBrainz's score from which it is sure of an artist, as the monthly read takes them by name (`discover::mb_artist_by_name`).
-const SURE: u64 = 95;
-
-/// A MusicBrainz artist Beyond listed (Z8, U6): the name it listed them by, whether they were MusicBrainz's first sure match for
-/// that name in its answer, and when.
+/// A MusicBrainz artist Beyond listed (Z8, U6): the name it listed them by, and when.
 #[derive(Debug, Clone)]
 struct Listed {
     name: String,
-    sure: bool,
     at: i64,
 }
 
@@ -267,43 +302,38 @@ fn listed_ids() -> &'static std::sync::Mutex<HashMap<String, Listed>> {
     LISTED.get_or_init(Default::default)
 }
 
-/// Beyond's artists as it answers them at `now` (Z8, U6), its surest first: each may be opened by anyone for `LISTED_FOR`, by the
-/// name it was listed by (`may_open`); the first of a name MusicBrainz is sure of (a score of 95 or more, none of the name surer
-/// before it) is that name's sure match, as the monthly read would take it. Those listed longer ago are let go of.
+/// Beyond's artists as it answers them at `now` (Z8, U6): each may be opened by anyone for `LISTED_FOR`, by the name it was listed
+/// by (`may_open`). Whether the id is the name's sure match is asked at open (T6, `open_asking`), never read from this answer to
+/// other words. Those listed longer ago are let go of.
 pub fn keep_listed(found: &[FoundArtist], now: i64) {
-    use super::import::loose;
     let mut all = listed_ids().lock().unwrap_or_else(|p| p.into_inner());
     all.retain(|_, l| now - l.at <= LISTED_FOR);
-    for (i, a) in found.iter().enumerate() {
-        let name = loose(&a.name);
-        let sure = a.score >= SURE && !found[..i].iter().any(|b| b.score >= SURE && loose(&b.name) == name);
-        all.insert(mbid(&a.mbid), Listed { name: a.name.clone(), sure, at: now });
+    for a in found {
+        all.insert(mbid(&a.mbid), Listed { name: a.name.clone(), at: now });
     }
 }
 
 /// Artists Discover's cards name by their MusicBrainz id (G7), as Beyond lists its own: each may be opened by anyone for
-/// `LISTED_FOR`, by the name the card gives. Never MusicBrainz's sure match for a name: a card's artist is its album's, which says
-/// nothing of the library's artists of that name, so opening one gives no id-less artist of the name theirs (U6).
+/// `LISTED_FOR`, by the name the card gives, and is the name's sure match only as every open asks it (T6, `open_asking`).
 pub fn keep_carded(cards: &[(String, String)], now: i64) {
     let mut all = listed_ids().lock().unwrap_or_else(|p| p.into_inner());
     for (id, name) in cards {
         let id = mbid(id);
         if super::discogs::is_mbid(&id) && !name.trim().is_empty() {
-            all.entry(id).and_modify(|l| l.at = l.at.max(now)).or_insert(Listed { name: name.trim().to_string(), sure: false, at: now });
+            all.entry(id).and_modify(|l| l.at = l.at.max(now)).or_insert(Listed { name: name.trim().to_string(), at: now });
         }
     }
 }
 
 /// Whether an artist may be opened, and by which name (Z8, the review's finding 8: random ids used up a name's numbers for good;
 /// U6): by anyone where Beyond listed them within `LISTED_FOR`, by the name it listed them by (another name is refused: one
-/// account could give a library artist an unrelated id); by an administrator (`administering`), any, by the name given. The name,
-/// and whether the id is MusicBrainz's sure match for it (`keep_listed`): the one id an id-less artist of the name is given. None:
-/// refused.
-pub fn may_open(id: &str, name: &str, administering: bool, now: i64) -> Option<(String, bool)> {
+/// account could give a library artist an unrelated id); by an administrator (`administering`), any, by the name given. The name
+/// to open by (`open_asking`, which asks whether the id is its sure match); none: refused.
+pub fn may_open(id: &str, name: &str, administering: bool, now: i64) -> Option<String> {
     let listed = listed_ids().lock().unwrap_or_else(|p| p.into_inner()).get(&mbid(id)).filter(|l| now - l.at <= LISTED_FOR).cloned();
     match listed {
-        Some(l) if ids::artist_key(name.trim()) == ids::artist_key(l.name.trim()) => Some((l.name, l.sure)),
-        _ if administering => Some((name.trim().to_string(), false)),
+        Some(l) if ids::artist_key(name.trim()) == ids::artist_key(l.name.trim()) => Some(l.name),
+        _ if administering => Some(name.trim().to_string()),
         _ => None,
     }
 }
@@ -329,7 +359,73 @@ mod tests {
     }
 
     fn person(id: &str, name: &str) -> FoundArtist {
-        FoundArtist { mbid: id.into(), name: name.into(), disambiguation: None, have: false, score: 100 }
+        FoundArtist { mbid: id.into(), name: name.into(), disambiguation: None, have: false }
+    }
+
+    /// T6's fake MusicBrainz (an axum router, as `lidarr.rs`'s tests make one), this thread's MusicBrainz while the guard lives
+    /// (`discover::FakeMusicBrainz`). It answers `GET /ws/2/artist` only where the query is exactly `artist:"<name>"` of a name it
+    /// knows (its quotes and backslashes escaped), `fmt=json` and `limit=3`, nothing else, and a User-Agent is sent: each name its
+    /// status and body (a 503 says to wait a second). Anything else, Beyond's unfielded words, another limit or another path, is
+    /// refused with 400. Every request is counted.
+    async fn fake_musicbrainz(answers: Vec<(&'static str, u16, serde_json::Value)>) -> (crate::app::discover::FakeMusicBrainz, Arc<std::sync::atomic::AtomicUsize>) {
+        use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
+        use axum::response::IntoResponse;
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = asked.clone();
+        let answer = move |method: Method, uri: Uri, headers: HeaderMap| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let pairs: Vec<(String, String)> = reqwest::Url::parse(&format!("http://fake{uri}")).unwrap().query_pairs().into_owned().collect();
+            let field = |k: &str| pairs.iter().filter(|(p, _)| p == k).map(|(_, v)| v.as_str()).collect::<Vec<_>>();
+            let fielded = |name: &str| format!("artist:\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""));
+            let known = answers.iter().find(|(name, _, _)| field("query") == [fielded(name).as_str()]);
+            let asked_right = method == Method::GET
+                && uri.path() == "/ws/2/artist"
+                && pairs.len() == 3
+                && field("fmt") == ["json"]
+                && field("limit") == ["3"]
+                && headers.get(header::USER_AGENT).is_some_and(|a| a.as_bytes() == super::super::reach::USER_AGENT.as_bytes());
+            let reply = match known {
+                Some((_, status, body)) if asked_right => {
+                    let status = StatusCode::from_u16(*status).unwrap();
+                    let mut wait = HeaderMap::new();
+                    if status == StatusCode::SERVICE_UNAVAILABLE {
+                        wait.insert(header::RETRY_AFTER, axum::http::HeaderValue::from_static("1"));
+                    }
+                    (status, wait, axum::Json(body.clone())).into_response()
+                }
+                _ => (StatusCode::BAD_REQUEST, "not a question this fake knows").into_response(),
+            };
+            std::future::ready(reply)
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
+        (crate::app::discover::FakeMusicBrainz::at(at), asked)
+    }
+
+    /// An artist as MusicBrainz's search answers them, with its score.
+    fn found(id: &str, name: &str, score: u64) -> serde_json::Value {
+        serde_json::json!({ "id": id, "name": name, "score": score })
+    }
+
+    /// The MusicBrainz ids an artist holds, and how each was found.
+    fn holds(cat: &Catalogue, artist: i64) -> Vec<(String, String)> {
+        cat.references_of(&ids::artist(artist)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect()
+    }
+
+    /// The records an artist is credited on.
+    fn credits(cat: &Catalogue, artist: i64) -> Vec<i64> {
+        let db = cat.db_for_tests();
+        let mut st = db.prepare("SELECT record FROM record_artists WHERE artist = ?1 ORDER BY record").unwrap();
+        st.query_map([artist], |r| r.get::<_, i64>(0)).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// The library's "Grouch", untagged (no MusicBrainz id), credited on a had record by their files: the artist and the record.
+    fn library_grouch(cat: &Catalogue) -> (i64, i64) {
+        let grouch = cat.artist_for("Grouch").unwrap();
+        let had = cat.record_for_tests("Fuzzy Logic", 2);
+        cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", rusqlite::params![had, grouch]).unwrap();
+        (grouch, had)
     }
 
     /// A record of this title by Kite Theory holding these references; had with `tracks`.
@@ -574,51 +670,169 @@ mod tests {
     }
 
     /// U6 (the review of 8c/8d, finding 6): an artist Beyond listed is opened by the name it listed them by. Another name is refused
-    /// to anyone but an administrator, whose name is taken as given; one the page sends in other letters is the listed name.
+    /// to anyone but an administrator, whose name is taken as given; one the page sends in other letters is the listed name. Whether
+    /// the id is the name's sure match is asked at open (T6).
     #[test]
     fn an_open_with_another_name_than_beyond_listed_is_refused() {
         const LISTED: &str = "00000000-0000-4000-8000-000000000593";
         let now = crate::app::moment::now_secs();
         keep_listed(&[person(LISTED, "Rone")], now);
         assert_eq!(may_open(LISTED, "Grouch", false, now), None, "another name: refused");
-        assert_eq!(may_open(LISTED, " rone ", false, now), Some(("Rone".to_string(), true)), "the listed name, MusicBrainz's sure match");
-        assert_eq!(may_open(LISTED, "Grouch", true, now), Some(("Grouch".to_string(), false)), "an administrator's, as given");
+        assert_eq!(may_open(LISTED, " rone ", false, now), Some("Rone".to_string()), "the listed name");
+        assert_eq!(may_open(LISTED, "Grouch", true, now), Some("Grouch".to_string()), "an administrator's, as given");
     }
 
-    /// G7: an artist a Discover card names by id is opened by anyone by the card's name, never as MusicBrainz's sure match for it.
+    /// G7: an artist a Discover card names by id is opened by anyone by the card's name; whether the id is the name's sure match is
+    /// asked at open, as for every open (T6).
     #[test]
     fn a_cards_artist_is_opened_by_anyone() {
         const CARDED: &str = "00000000-0000-4000-8000-000000000597";
         let now = crate::app::moment::now_secs();
         assert_eq!(may_open(CARDED, "Zero 7", false, now), None);
         keep_carded(&[(CARDED.to_uppercase(), "Zero 7".into()), ("not an id".into(), "Air".into())], now);
-        assert_eq!(may_open(CARDED, "Zero 7", false, now), Some(("Zero 7".to_string(), false)));
+        assert_eq!(may_open(CARDED, "Zero 7", false, now), Some("Zero 7".to_string()));
         assert_eq!(may_open(CARDED, "Air", false, now), None, "by the card's name alone");
     }
 
-    /// U6: a library artist of the name with no MusicBrainz id is given the id only where it is MusicBrainz's first sure match for
-    /// the name in Beyond's answer, as the monthly read would decide. Opening a second namesake on purpose (the rapper, beside the
-    /// library's local band) makes a new artist, and so does a match MusicBrainz is not sure of; the first sure one is the library's.
-    #[test]
-    fn a_beyond_open_of_a_second_namesake_makes_a_new_artist() {
+    /// U6, with T6: a library artist of the name with no MusicBrainz id is given the id only where it is MusicBrainz's first sure
+    /// match for the name, asked at open (`open_asking`) as the monthly read asks it. Opening a second namesake on purpose (the
+    /// rapper, beside the library's local band) makes a new artist, and so does a match MusicBrainz is not sure of; the first sure
+    /// one is the library's.
+    #[tokio::test]
+    async fn a_beyond_open_of_a_second_namesake_makes_a_new_artist() {
+        use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
         const FIRST: &str = "00000000-0000-4000-8000-000000000594";
         const SECOND: &str = "00000000-0000-4000-8000-000000000595";
         const UNSURE: &str = "00000000-0000-4000-8000-000000000596";
+        let _one = TEST_STATE.lock().await;
+        let was = set_for_tests(MUSICBRAINZ, true);
+        let grouches = serde_json::json!({ "artists": [found(FIRST, "Grouch", 100), found(SECOND, "Grouch", 100)] });
+        let lanterns = serde_json::json!({ "artists": [found(UNSURE, "Paper Lantern", 80)] });
+        let (fake, asked) = fake_musicbrainz(vec![("Grouch", 200, grouches.clone()), ("GROUCH", 200, grouches), ("Paper Lantern", 200, lanterns)]).await;
         let now = crate::app::moment::now_secs();
-        let unsure = FoundArtist { score: 80, ..person(UNSURE, "Paper Lantern") };
-        keep_listed(&[person(FIRST, "Grouch"), person(SECOND, "GROUCH"), unsure], now);
-        let open = |cat: &Catalogue, id: &str, name: &str| {
-            let (name, sure) = may_open(id, name, false, now).expect("listed");
-            open_artist(cat, id, &name, sure).unwrap().expect("opened")
-        };
-        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        keep_listed(&[person(FIRST, "Grouch"), person(SECOND, "GROUCH"), person(UNSURE, "Paper Lantern")], now);
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let (grouch, lantern) = (cat.artist_for("Grouch").unwrap(), cat.artist_for("Paper Lantern").unwrap());
-        assert_ne!(open(&cat, SECOND, "GROUCH"), grouch, "the second of the name: a new artist");
-        assert!(cat.references_of(&ids::artist(grouch)).unwrap().is_empty(), "the library's keeps no id");
-        assert_ne!(open(&cat, UNSURE, "Paper Lantern"), lantern, "MusicBrainz not sure: a new artist");
-        let cat = Catalogue::open(None, Vec::new()).unwrap();
-        let grouch = cat.artist_for("Grouch").unwrap();
-        assert_eq!(open(&cat, FIRST, "Grouch"), grouch, "the first sure match: the library's Grouch, given the id");
+        let second = open_listed(&cat, SECOND, "GROUCH", now).await;
+        let unsure = open_listed(&cat, UNSURE, "Paper Lantern", now).await;
+        let fresh = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let library = fresh.artist_for("Grouch").unwrap();
+        let first = open_listed(&fresh, FIRST, "Grouch", now).await;
+        drop(fake);
+        set_for_tests(MUSICBRAINZ, was);
+        assert_ne!(second, grouch, "the second of the name: a new artist");
+        assert!(holds(&cat, grouch).is_empty(), "the library's keeps no id");
+        assert_ne!(unsure, lantern, "MusicBrainz not sure: a new artist");
+        assert_eq!(first, library, "the first sure match: the library's Grouch, given the id");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 3, "one question an open");
+    }
+
+    /// An artist opened as `may_open` lets anyone open them by this name (`open_asking`): the one made or found.
+    async fn open_listed(cat: &Arc<Catalogue>, id: &str, name: &str, now: i64) -> i64 {
+        let name = may_open(id, name, false, now).expect("listed");
+        open_asking(cat.clone(), id, &name).await.unwrap().expect("opened")
+    }
+
+    /// T6.1 (the review of run 10, finding 6): Beyond lists the rapper "Grouch" first for "grouch living legends", but MusicBrainz's
+    /// first sure match for the name is the band. Opening the rapper asks that one question and makes "Grouch (2)" holding his id:
+    /// the library's id-less Grouch is never given it, and keeps its records.
+    #[tokio::test]
+    async fn a_namesake_found_by_other_words_is_not_sure() {
+        use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
+        const RAPPER: &str = "00000000-0000-4000-8000-000000000601";
+        const BAND: &str = "00000000-0000-4000-8000-000000000602";
+        let _one = TEST_STATE.lock().await;
+        let was = set_for_tests(MUSICBRAINZ, true);
+        let (fake, asked) = fake_musicbrainz(vec![("Grouch", 200, serde_json::json!({ "artists": [found(BAND, "Grouch", 100), found(RAPPER, "Grouch", 98)] }))]).await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (grouch, had) = library_grouch(&cat);
+        let now = crate::app::moment::now_secs();
+        // Beyond's answer to "grouch living legends": the rapper, first, scored 100 for those words.
+        keep_listed(&[person(RAPPER, "Grouch")], now);
+        let name = may_open(RAPPER, "grouch", false, now).expect("listed");
+        let opened = open_asking(cat.clone(), RAPPER, &name).await;
+        drop(fake);
+        set_for_tests(MUSICBRAINZ, was);
+        let opened = opened.unwrap().expect("opened");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1, "one question");
+        assert_ne!(opened, grouch, "never the library's Grouch");
+        assert_eq!(cat.artist_named(opened).unwrap().unwrap().number, Some(2), "Grouch (2)");
+        assert_eq!(holds(&cat, opened), [(RAPPER.to_string(), "search".to_string())], "holding the rapper's id by search");
+        assert!(holds(&cat, grouch).is_empty(), "the library's Grouch holds no id");
+        assert_eq!(credits(&cat, grouch), [had], "and keeps its records");
+    }
+
+    /// T6.2: where the rapper is MusicBrainz's first sure match for the name, the library's id-less Grouch is given his id, as the
+    /// monthly read would give it. A card's artist (G7) and an administrator's name ask the same question: one an open.
+    #[tokio::test]
+    async fn the_names_first_sure_match_is_the_library_artist() {
+        use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
+        const RAPPER: &str = "00000000-0000-4000-8000-000000000603";
+        const BAND: &str = "00000000-0000-4000-8000-000000000604";
+        const AIR: &str = "00000000-0000-4000-8000-000000000605";
+        const ZERO: &str = "00000000-0000-4000-8000-000000000606";
+        let _one = TEST_STATE.lock().await;
+        let was = set_for_tests(MUSICBRAINZ, true);
+        let (fake, asked) = fake_musicbrainz(vec![
+            ("Grouch", 200, serde_json::json!({ "artists": [found(RAPPER, "Grouch", 100), found(BAND, "Grouch", 90)] })),
+            ("Air", 200, serde_json::json!({ "artists": [found(AIR, "Air", 100)] })),
+            ("Zero 7", 200, serde_json::json!({ "artists": [found(ZERO, "Zero 7", 100)] })),
+        ])
+        .await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (grouch, had) = library_grouch(&cat);
+        let (air, zero) = (cat.artist_for("Air").unwrap(), cat.artist_for("Zero 7").unwrap());
+        let now = crate::app::moment::now_secs();
+        keep_listed(&[person(RAPPER, "Grouch")], now);
+        let opened = open_asking(cat.clone(), RAPPER, &may_open(RAPPER, "Grouch", false, now).expect("listed")).await;
+        keep_carded(&[(AIR.to_string(), "Air".to_string())], now);
+        let carded = open_asking(cat.clone(), AIR, &may_open(AIR, "Air", false, now).expect("carded")).await;
+        let given = open_asking(cat.clone(), ZERO, &may_open(ZERO, "Zero 7", true, now).expect("an administrator's")).await;
+        drop(fake);
+        set_for_tests(MUSICBRAINZ, was);
+        assert_eq!(opened.unwrap(), Some(grouch), "the name's first sure match: the library's Grouch");
+        assert_eq!(holds(&cat, grouch), [(RAPPER.to_string(), "search".to_string())], "given the id, as the monthly read would give it");
+        assert_eq!(credits(&cat, grouch), [had]);
+        assert_eq!((carded.unwrap(), given.unwrap()), (Some(air), Some(zero)), "a card's and an administrator's open: the same question");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 3, "one question an open");
+    }
+
+    /// T6.3 (OQ-K): MusicBrainz answering 503, or switched off (then asked nothing at all, though it would be sure): not sure.
+    /// "Grouch (2)" holds the rapper's id, the library's Grouch is untouched, and the open does not fail.
+    #[tokio::test]
+    async fn musicbrainz_away_at_open_is_never_sure() {
+        use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
+        const RAPPER: &str = "00000000-0000-4000-8000-000000000607";
+        let _one = TEST_STATE.lock().await;
+        let was = set_for_tests(MUSICBRAINZ, true);
+        let now = crate::app::moment::now_secs();
+        keep_listed(&[person(RAPPER, "Grouch")], now);
+        let name = may_open(RAPPER, "Grouch", false, now).expect("listed");
+        // Away: MusicBrainz answers 503.
+        let (fake, asked) = fake_musicbrainz(vec![("Grouch", 503, serde_json::json!({ "error": "busy" }))]).await;
+        let away = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (away_grouch, away_had) = library_grouch(&away);
+        let away_opened = open_asking(away.clone(), RAPPER, &name).await;
+        let away_asked = asked.load(std::sync::atomic::Ordering::SeqCst);
+        drop(fake);
+        // Switched off: nothing asked, though MusicBrainz would say he is the name's.
+        let (fake, asked) = fake_musicbrainz(vec![("Grouch", 200, serde_json::json!({ "artists": [found(RAPPER, "Grouch", 100)] }))]).await;
+        set_for_tests(MUSICBRAINZ, false);
+        let off = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (off_grouch, off_had) = library_grouch(&off);
+        let off_opened = open_asking(off.clone(), RAPPER, &name).await;
+        set_for_tests(MUSICBRAINZ, was);
+        let off_asked = asked.load(std::sync::atomic::Ordering::SeqCst);
+        drop(fake);
+        assert_eq!((away_asked, off_asked), (1, 0), "away: asked once; switched off: no request at all");
+        for (cat, grouch, had, opened) in [(&away, away_grouch, away_had, away_opened), (&off, off_grouch, off_had, off_opened)] {
+            let opened = opened.expect("the open does not fail").expect("opened");
+            assert_ne!(opened, grouch, "not sure: never the library's Grouch");
+            assert_eq!(cat.artist_named(opened).unwrap().unwrap().number, Some(2), "Grouch (2)");
+            assert_eq!(holds(cat, opened), [(RAPPER.to_string(), "search".to_string())], "holding the rapper's id by search");
+            assert!(holds(cat, grouch).is_empty(), "the library's Grouch untouched");
+            assert_eq!(credits(cat, grouch), [had]);
+        }
     }
 
     /// G5: an artist row names the artist who holds its id with their number for the name, and the catalogue gives each of a name

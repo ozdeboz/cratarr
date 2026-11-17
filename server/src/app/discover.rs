@@ -286,7 +286,51 @@ pub struct Candidate {
 }
 
 pub(super) fn http() -> Result<reqwest::Client> {
+    #[cfg(test)]
+    if MB_FAKE.with(|f| f.borrow().is_some()) {
+        // The test's fake MusicBrainz, plain http on this machine (`FakeMusicBrainz`), which `reach::client` would refuse.
+        return Ok(reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).user_agent(super::reach::USER_AGENT).timeout(Duration::from_secs(30)).build()?);
+    }
     Ok(super::reach::client(super::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?)
+}
+
+/// MusicBrainz's web service (T6's seam), where `mb_artist_by_name`, `mb_page` and Beyond's search (`musicbrainz_found`) ask.
+#[cfg(not(test))]
+fn mb_ws() -> String {
+    "https://musicbrainz.org/ws/2".to_string()
+}
+
+#[cfg(test)]
+thread_local! {
+    // The test's fake MusicBrainz on this thread (`FakeMusicBrainz`): its web service's address.
+    static MB_FAKE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: MusicBrainz's web service is the test's fake (`FakeMusicBrainz`), else an address that reaches nothing (plain http,
+/// which `reach::client` never asks): no test asks musicbrainz.org.
+#[cfg(test)]
+fn mb_ws() -> String {
+    MB_FAKE.with(|f| f.borrow().clone()).unwrap_or_else(|| "http://127.0.0.1:9/ws/2".to_string())
+}
+
+/// Tests: this thread's questions through `mb_ws` go to a fake MusicBrainz at `at` (its web service, as `http://…/ws/2`), asked
+/// through a plain client (`http`), until this is dropped.
+#[cfg(test)]
+pub(crate) struct FakeMusicBrainz;
+
+#[cfg(test)]
+impl FakeMusicBrainz {
+    pub(crate) fn at(at: String) -> Self {
+        MB_FAKE.with(|f| *f.borrow_mut() = Some(at));
+        FakeMusicBrainz
+    }
+}
+
+#[cfg(test)]
+impl Drop for FakeMusicBrainz {
+    fn drop(&mut self) {
+        MB_FAKE.with(|f| *f.borrow_mut() = None);
+    }
 }
 
 // ---- ListenBrainz
@@ -738,7 +782,7 @@ fn next_offset(v: &serde_json::Value, what: &str) -> Option<usize> {
 /// One page of a MusicBrainz browse or search (`path` under /ws/2/, its query without paging), from `offset`, in MusicBrainz's
 /// turn; once more after a pause when MusicBrainz is busy (503, the owner's sync 2026-10-25), not the read lost.
 async fn mb_page(http: &reqwest::Client, path: &str, query: &[(&str, &str)], offset: usize) -> Result<serde_json::Value> {
-    let mut url = reqwest::Url::parse(&format!("https://musicbrainz.org/ws/2/{path}"))?;
+    let mut url = reqwest::Url::parse(&format!("{}/{path}", mb_ws()))?;
     url.query_pairs_mut().extend_pairs(query).append_pair("fmt", "json").append_pair("limit", "100").append_pair("offset", &offset.to_string());
     let mut again = true;
     loop {
@@ -1405,8 +1449,9 @@ pub async fn bandcamp_artist(name: &str, mbid: Option<&str>, given: Option<&str>
 }
 
 /// The artist MusicBrainz is sure a name is (its search's score 95 or more, the name the same as the matcher reads
-/// names): their id.
-async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<String>> {
+/// names): their id, the first such of its answer to `artist:"<name>"`. The monthly read's question, and every open's (T6,
+/// `beyond::open_asking`).
+pub(super) async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<String>> {
     #[derive(Deserialize)]
     struct Artist {
         id: String,
@@ -1420,7 +1465,7 @@ async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<
         #[serde(default)]
         artists: Vec<Artist>,
     }
-    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/artist")?;
+    let mut url = reqwest::Url::parse(&format!("{}/artist", mb_ws()))?;
     url.query_pairs_mut().append_pair("query", &format!("artist:{}", quoted(name))).append_pair("fmt", "json").append_pair("limit", "3");
     let s: Search = http.get(url).asked().await?.error_for_status()?.json().await?;
     Ok(s.artists.into_iter().find(|a| a.score >= 95 && loose(&a.name) == loose(name)).map(|a| a.id))
@@ -2262,9 +2307,6 @@ pub struct FoundArtist {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disambiguation: Option<String>,
     pub have: bool,
-    /// MusicBrainz's score for the words (U6: whether they are its sure match for their name), not shown.
-    #[serde(skip)]
-    pub score: u64,
 }
 
 /// How long a query's answer from MusicBrainz is kept (in memory): the page asks again as it is typed and opened.
@@ -2292,10 +2334,10 @@ pub async fn musicbrainz_found(q: &str, limit: usize) -> Result<(Vec<FoundAlbum>
     }
     let http = http()?;
     let text = words.join(" ");
-    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release-group")?;
+    let mut url = reqwest::Url::parse(&format!("{}/release-group", mb_ws()))?;
     url.query_pairs_mut().append_pair("query", &text).append_pair("fmt", "json").append_pair("limit", &limit.to_string());
     let rg: serde_json::Value = http.get(url).asked().await?.error_for_status()?.json().await?;
-    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/artist")?;
+    let mut url = reqwest::Url::parse(&format!("{}/artist", mb_ws()))?;
     url.query_pairs_mut().append_pair("query", &text).append_pair("fmt", "json").append_pair("limit", &limit.to_string());
     let ar: serde_json::Value = http.get(url).asked().await?.error_for_status()?.json().await?;
     let credit = |g: &serde_json::Value| {
@@ -2334,7 +2376,6 @@ pub async fn musicbrainz_found(q: &str, limit: usize) -> Result<(Vec<FoundAlbum>
                     name: a["name"].as_str()?.to_string(),
                     disambiguation: a["disambiguation"].as_str().filter(|d| !d.is_empty()).map(str::to_string),
                     have: false,
-                    score: a["score"].as_u64().unwrap_or(0),
                 },
             ))
         })

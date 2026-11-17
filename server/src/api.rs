@@ -6437,17 +6437,16 @@ struct ArtistOpened {
 }
 
 /// An artist of Beyond's opened (C57, OQ12 (a)): `{ artist: "ar-<n>" }`, the artist who holds their MusicBrainz id, else the one
-/// live artist of the name who holds none where the id is MusicBrainz's sure match for the name (Z2, U6), else one of their own
-/// made now, though another has the name. Never by the name alone: one with no MusicBrainz id is refused. By anyone only as Beyond
-/// listed them within the day, by the name it listed (U6: another name refused); by an administrator, any (Z8).
+/// live artist of the name who holds none where the id is MusicBrainz's first sure match for the name, asked now (Z2, T6:
+/// `beyond::open_asking`), else one of their own made now, though another has the name. Never by the name alone: one with no
+/// MusicBrainz id is refused. By anyone only as Beyond or a card listed them within the day, by the name it listed (U6: another
+/// name refused); by an administrator, any (Z8).
 async fn open_artist(ctx: Ctx, Json(b): Json<ArtistOpened>) -> Result<Json<serde_json::Value>, ApiError> {
-    let Some((name, sure)) = crate::app::beyond::may_open(&b.mbid, &b.name, crate::serve::access::administering(), crate::app::moment::now_secs()) else {
+    let Some(name) = crate::app::beyond::may_open(&b.mbid, &b.name, crate::serve::access::administering(), crate::app::moment::now_secs()) else {
         return Err(ToggleError::Forbidden("Only an artist Beyond found is opened here, by the name it found; an administrator may open any.".into()).into());
     };
-    let cat = ctx.app.library.catalogue();
-    let artist = tokio::task::spawn_blocking(move || crate::app::beyond::open_artist(&cat, &b.mbid, &name, sure))
+    let artist = crate::app::beyond::open_asking(ctx.app.library.catalogue(), &b.mbid, &name)
         .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .ok_or_else(|| ToggleError::Refused("An artist is opened by their MusicBrainz id, and their name.".into()))?;
     Ok(Json(json!({ "artist": crate::serve::ids::artist(artist) })))
