@@ -219,6 +219,11 @@ pub struct LabelOf {
     pub catno: Option<String>,
 }
 
+/// A record's labels as its view names them (C54, G4): a record not had's page and an owned album's alike. Blocking.
+fn labels_of(cat: &crate::catalogue::Catalogue, record: i64) -> Result<Vec<LabelOf>> {
+    Ok(cat.record_labels(record)?.into_iter().map(|(l, catno)| LabelOf { id: crate::serve::ids::label(l.id), name: l.name, catno: Some(catno).filter(|c| !c.is_empty()) }).collect())
+}
+
 /// What Cratarr's album answers where the served library cannot read it (C54, `record_page`).
 enum RecordPage {
     /// A record not had: its own page (`AlbumMore::not_had`).
@@ -266,7 +271,7 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
         })
         .collect();
     let looking = list.is_none() && q.refs.iter().any(|(s, ..)| COUNTING_ORDER.contains(&s.as_str()));
-    let labels = cat.record_labels(q.row.id)?.into_iter().map(|(l, catno)| LabelOf { id: ids::label(l.id), name: l.name, catno: Some(catno).filter(|c| !c.is_empty()) }).collect();
+    let labels = labels_of(cat, q.row.id)?;
     let cover = super::cover_cache::addresses_of(q.row.cover.as_deref(), q.groups.first().map(String::as_str), q.bandcamp.as_deref()).into_iter().next();
     let id = q.row.id;
     let row = q.row;
@@ -879,6 +884,14 @@ impl PlayingService {
             }
         }
         let listening = s.album_listening(album_id).await.unwrap_or_default();
+        // Its labels (G4), as a record not had's page shows them: each a chip that opens the label's page.
+        let labels = match crate::serve::ids::record_number(album_id).filter(|_| source_id == crate::source::cratarr::KIND.id) {
+            Some(record) => {
+                let c = self.lib.catalogue();
+                tokio::task::spawn_blocking(move || labels_of(&c, record)).await.ok().and_then(Result::ok).unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
         // Its words, from the one store (decision 0097).
         let words = match crate::serve::instance() {
             Some(served) if source_id == crate::source::cratarr::KIND.id => {
@@ -900,7 +913,7 @@ impl PlayingService {
             added: listening.added,
             played: listening.played,
             plays: listening.plays,
-            more: AlbumMore { words, ..AlbumMore::default() },
+            more: AlbumMore { words, labels, ..AlbumMore::default() },
         })
     }
 
@@ -1294,6 +1307,24 @@ mod tests {
         let v = page(&cat, record);
         assert_eq!((v.more.not_had, v.more.was_until, v.more.record), (true, Some(WENT), Some(ids::record(record))));
         assert_eq!(page(&cat, cat.record_for_tests("Quiet Lanes", 0)).more.was_until, None, "one never had");
+    }
+
+    /// G4: an owned record's labels, as its view shows them (`labels_of`): each by its `la-` id, its name and its catalogue number
+    /// where it has one, so the page shows chips that open the label's page, as for a record not had.
+    #[test]
+    fn an_owned_records_labels_open_their_pages() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let owned = cat.record_for_tests("Tide Tables", 2);
+        let (low, kite) = (cat.label_for("Low Tide Records").unwrap(), cat.label_for("Kite Records").unwrap());
+        for (label, catno) in [(low, "LTR-007"), (kite, "")] {
+            cat.db_for_tests().execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, ?3, 'files')", rusqlite::params![owned, label, catno]).unwrap();
+        }
+        let mut labels = serde_json::to_value(labels_of(&cat, owned).unwrap()).unwrap().as_array().cloned().unwrap();
+        labels.sort_by_key(|l| l["name"].as_str().unwrap_or_default().to_string());
+        assert_eq!(
+            serde_json::Value::Array(labels),
+            serde_json::json!([{ "id": ids::label(kite), "name": "Kite Records" }, { "id": ids::label(low), "name": "Low Tide Records", "catno": "LTR-007" }])
+        );
     }
 
     /// C54 (R13): a record not had that another record has by the one had rule (here by its artist and title, nothing
