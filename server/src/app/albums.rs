@@ -202,15 +202,10 @@ impl App {
                 // the first main library.
                 let incoming_albums: &[source::Album] = i.map_or(&[], |i| i.albums.as_slice());
                 let theirs = |al: &source::Album| viewer.is_some() && requester(al) == viewer.as_ref();
-                let own_music = active.as_ref().is_some_and(|a| a.cfg.own_music().is_some());
-                let may_keep = |al: &source::Album| admin || (own_music && theirs(al));
+                // A user's own request's only while their own music is on (X5): theirs goes nowhere else.
+                let may_keep = |al: &source::Album| active.as_ref().map_or(admin, |a| may_add(a, admin, viewer.as_deref(), requester(al).map(String::as_str)));
                 let keepable: Vec<String> = incoming_albums.iter().filter(|al| may_keep(al)).map(|al| al.id.clone()).collect();
-                let first_main = active.as_ref().and_then(|a| a.main().into_iter().next());
-                let keeps_to = |al: &source::Album| {
-                    let a = active.as_ref()?;
-                    let set = al.library.as_deref().and_then(|l| a.cfg.libraries.get(l)).and_then(|l| l.keep_to.clone());
-                    requester(al).filter(|r| self.account_on(r)).and_then(|r| a.own_of(r)).or(set).or_else(|| first_main.clone())
-                };
+                let keeps_to = |al: &source::Album| default_target(active.as_ref()?, al.library.as_deref(), requester(al).filter(|r| self.account_on(r)).map(String::as_str));
                 let keep_to: BTreeMap<String, String> = incoming_albums.iter().filter(|al| may_keep(al)).filter_map(|al| Some((al.id.clone(), keeps_to(al)?))).collect();
                 // A requester's own music before its first use: there to add to.
                 if let Some(a) = active.as_ref() {
@@ -324,8 +319,22 @@ fn job_on<'a>(jobs: &'a [JobView], source: &str, a: &source::Album) -> Option<&'
 
 /// Who asked for the record an album is (its id names it, C49b), where this copy of it is theirs: it came after they asked (R32,
 /// N14). An Incoming copy that was there before, an upgrade another fetched, is no requester's.
-fn requester_of<'a>(asked: &'a HashMap<i64, super::requests::Requester>, al: &source::Album) -> Option<&'a String> {
+pub(super) fn requester_of<'a>(asked: &'a HashMap<i64, super::requests::Requester>, al: &source::Album) -> Option<&'a String> {
     crate::serve::ids::record_number(&al.id).and_then(|record| asked.get(&record)).filter(|r| r.of_copy(al.added)).map(|r| &r.user)
+}
+
+/// Whether the viewer may add an Incoming album (0101 point 2): an administrator any; a user their own request's, and only while
+/// their own music is on (X5): a user's album goes nowhere else. Pure.
+fn may_add(a: &Active, admin: bool, viewer: Option<&str>, requester: Option<&str>) -> bool {
+    admin || viewer.is_some_and(|v| requester == Some(v) && a.cfg.own_music_on(v))
+}
+
+/// Where an Incoming album goes by default (0101 point 2), the page's and Home Assistant's promote's alike (X5): its requester's own
+/// music, else its library's setting, else the first main library. `requester`: the first to ask for it before this copy came
+/// (`requests::requesters`), an account still on. Pure.
+pub(super) fn default_target(a: &Active, library: Option<&str>, requester: Option<&str>) -> Option<String> {
+    let set = library.and_then(|l| a.cfg.libraries.get(l)).and_then(|l| l.keep_to.clone());
+    requester.and_then(|r| a.own_of(r)).or(set).or_else(|| a.main().into_iter().next())
 }
 
 /// Whether the viewer may delete this copy: the view's `deletable` goes by id, so it holds while any copy of the record may
@@ -584,6 +593,30 @@ mod tests {
         assert_eq!(move_refused(Some(Own), Some(Main), true, false, false, false, true), None);
         assert!(move_refused(Some(Own), Some(Main), false, false, false, false, true).is_some());
         assert!(move_refused(Some(Own), Some(Own), true, false, false, false, true).is_some());
+    }
+
+    /// X5: with own music switched off for the requester, only an administrator adds their album; on, a user adds their own request's
+    /// and no one else's. Where it goes by default, the page's and Home Assistant's promote's alike: the requester's own music, else
+    /// the library's setting, else the first main library.
+    #[test]
+    fn with_own_music_off_only_an_administrator_adds_a_requesters_album() {
+        use crate::settings::{Libraries, LibrarySetting, SourceConfig};
+        let values = [(crate::settings::OWN_MUSIC.to_string(), serde_json::json!("/own")), (crate::settings::OWN_MUSIC_OFF.to_string(), serde_json::json!(["bo"]))].into_iter().collect();
+        let libraries = Libraries(vec![
+            LibrarySetting::new("/music", LibraryKind::Main),
+            LibrarySetting { keep_to: Some("/second".into()), ..LibrarySetting::new("/in", LibraryKind::Incoming) },
+            LibrarySetting::new("/second", LibraryKind::Main),
+            LibrarySetting::new("/new", LibraryKind::Incoming),
+        ]);
+        let cfg = SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries, values };
+        let a = Active { cfg, source: None, placement: Default::default(), error: None };
+        assert!(may_add(&a, false, Some("ann"), Some("ann")), "their own request's, into their own music");
+        assert!(!may_add(&a, false, Some("bo"), Some("bo")), "own music off: theirs is the administrators' to add");
+        assert!(!may_add(&a, false, Some("ann"), Some("bo")) && !may_add(&a, false, Some("ann"), None), "not another's, nor one no one asked for");
+        assert!(may_add(&a, true, Some("me"), Some("bo")), "an administrator, any");
+        assert_eq!(default_target(&a, Some("/in"), Some("ann")).as_deref(), Some("/own/ann"), "the requester's own music");
+        assert_eq!(default_target(&a, Some("/in"), Some("bo")).as_deref(), Some("/second"), "off for them: the library's setting");
+        assert_eq!(default_target(&a, Some("/new"), None).as_deref(), Some("/music"), "else the first main library");
     }
 
     fn album(id: &str, library: &str, path: &str) -> source::Album {

@@ -929,9 +929,10 @@ pub fn requested(artist: &str, album: &str) -> String {
 
 /// Who asked for each approved request, by its record (C49b, merges followed) and by the record that holds its files where that
 /// is another (R13: an album that came as a record of its own): an Incoming record goes into its requester's own music by
-/// default, and is theirs to add or delete (0101 point 2), where it came after they asked (R32, `Requester::of_copy`). The newest
-/// asker of a record. Kept `MARKS_KEEP`, as the marks are (R30, N15): the Albums page asks at every open, and a read works the had
-/// rule out for every approved request's record.
+/// default, and is theirs to add or delete (0101 point 2), where it came after they asked (R32, `Requester::of_copy`). The first
+/// asker of a record (X5): with two, the default is the first's own music; copies for the others come with C40 and C52. Kept
+/// `MARKS_KEEP`, as the marks are (R30, N15): the Albums page asks at every open, and a read works the had rule out for every
+/// approved request's record.
 pub fn requesters(serve: &Serve) -> Arc<HashMap<i64, Requester>> {
     let kept = serve.requesters_kept().0.clone();
     if let Some((at, who)) = kept
@@ -972,7 +973,8 @@ fn requesters_now(serve: &Serve) -> HashMap<i64, Requester> {
         tracing::debug!("the requests' records not read: {e:#}");
         vec![None; approved.len()]
     });
-    approved.into_iter().zip(of).rev().filter_map(|(r, o)| Some((o?, Requester { user: r.user, at: r.at }))).flat_map(|(o, who)| o.holder.into_iter().chain([o.record]).map(move |id| (id, who.clone()))).collect()
+    // Newest first: the first to ask is written last, and stands (X5).
+    approved.into_iter().zip(of).filter_map(|(r, o)| Some((o?, Requester { user: r.user, at: r.at }))).flat_map(|(o, who)| o.holder.into_iter().chain([o.record]).map(move |id| (id, who.clone()))).collect()
 }
 
 /// An album's mark where a list has no record id for it: by its release group, else by its artist's and its name's key (a
@@ -1297,6 +1299,19 @@ mod tests {
         r.id = serve.userdata.add_request(&r).unwrap();
         let who = requesters(&serve);
         assert_eq!((who.get(&asked).map(|r| r.user.as_str()), who.get(&arrived).map(|r| r.user.as_str())), (Some("bob"), Some("bob")));
+    }
+
+    /// X5: with two askers of a record, its requester (where its Incoming copy goes by default, who may add it) is the first to ask.
+    #[test]
+    fn with_two_askers_the_first_is_the_requester() {
+        let serve = served();
+        let record = record_of_album(serve.catalogue(), None, "Glass Harbour", "Two Rooms", Some(2019), None).unwrap();
+        let first = Request { user: "ann".into(), at: 10, ..asked_for(record) };
+        let second = Request { user: "bob".into(), at: 20, album_key: "k2".into(), ..asked_for(record) };
+        for r in [&second, &first] {
+            serve.userdata.add_request(r).unwrap();
+        }
+        assert_eq!(requesters(&serve).get(&record).map(|r| r.user.as_str()), Some("ann"));
     }
 
     /// R16 (F5): who asked for what is read on one reader, never under the writer's lock: while a build holds it, the Albums

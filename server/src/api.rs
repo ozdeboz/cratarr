@@ -4370,13 +4370,16 @@ struct UndoRequest {
 /// The one undo (decision 0026): every token an action returned, undone newest first. Playlist and crate changes
 /// answer with their redo tokens, in the order they were made: undone newest first in turn, the redo does the action
 /// again in its own order (an edit before the rename that followed it). Incoming's tokens (its event ids) answer with
-/// the albums' titles, and are the administrators' to undo, as their changes are (decision 0051).
+/// the albums' titles, and are the administrators' to undo, as their changes are (decision 0051), and each account's own (X5).
 async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
-    // Playlists' and crates' (`c…`) and Discover's (`d…`, the signed-in account's own) are anyone's; Incoming's are an
-    // administrator's.
-    if req.tokens.iter().any(|t| !t.starts_with('c') && !t.starts_with('d')) && !crate::serve::access::administering() {
-        return Err(ToggleError::Forbidden("This is for administrators.".into()).into());
+    // Playlists' and crates' (`c…`) and Discover's (`d…`, the signed-in account's own) are anyone's; Incoming's an administrator's,
+    // or the account's own (X5: a user's Add to or Delete of their request, by the account the journal names).
+    if !crate::serve::access::administering() {
+        let me = crate::serve::who::current().map(|w| w.user);
+        if req.tokens.iter().filter(|t| !t.starts_with('c') && !t.starts_with('d')).any(|t| me.is_none() || app.incoming.done_by(t) != me) {
+            return Err(ToggleError::Forbidden("That isn't yours to undo.".into()).into());
+        }
     }
     let (mut redo, mut restored) = (Vec::new(), Vec::new());
     for token in req.tokens.iter().rev() {

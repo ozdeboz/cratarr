@@ -368,6 +368,12 @@ impl Journal {
         self.tell.subscribe()
     }
 
+    /// Who did an event (decision 0051: the journal says who changed the library): its account; none for Cratarr itself, or an
+    /// event not known.
+    pub fn account(&self, id: EventId) -> Result<Option<String>> {
+        Ok(self.db().query_row("SELECT account FROM events WHERE id = ?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+
     pub fn get(&self, id: EventId) -> Result<Option<Entry>> {
         let row = self
             .db()

@@ -854,6 +854,17 @@ impl IncomingService {
         }
     }
 
+    /// Who did the album action an undo key names (X5): its account, as the journal has it; none for one not known.
+    pub fn done_by(&self, key: &str) -> Option<String> {
+        self.journal.account(key.parse().ok()?).ok().flatten()
+    }
+
+    /// Tests elsewhere: the journal Incoming writes to.
+    #[cfg(test)]
+    pub fn journal_for_tests(&self) -> &Journal {
+        &self.journal
+    }
+
     /// Undo an album action (Delete, Keep or Replace) by its undo key. Returns the album's title.
     pub async fn undo(&self, key: &str) -> Result<String, ToggleError> {
         let gone = || ToggleError::Refused("that can no longer be undone".into());
@@ -1009,8 +1020,42 @@ impl IncomingService {
     pub async fn keep(&self, source_id: &str, album_id: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         let at = self.locate(source_id, album_id, from).await?;
         self.refuse_if_queued(album_id, at.dir.folder)?;
-        let (target, quality) = self.keep_target(source_id, to)?;
+        // None named (Home Assistant's promote): where the page puts it by default (X5).
+        let to = match to {
+            Some(t) => Some(t.to_string()),
+            None => self.default_target(source_id, &at.album).await?,
+        };
+        let (target, quality) = self.keep_target(source_id, to.as_deref())?;
         self.move_located(source_id, at, target, quality, year).await
+    }
+
+    /// Where Keep puts an album it is given no library for (X5: Home Assistant's promote): where the page puts it by default
+    /// (`albums::default_target`), its requester's own music made now where this is its first use.
+    async fn default_target(&self, source_id: &str, album: &source::Album) -> Result<Option<String>, ToggleError> {
+        let served = crate::serve::instance();
+        let requester = match served.clone() {
+            Some(s) => {
+                let asked = tokio::task::spawn_blocking(move || super::requests::requesters(&s)).await.unwrap_or_default();
+                super::albums::requester_of(&asked, album).cloned()
+            }
+            None => None,
+        };
+        let on = |r: &String| served.as_ref().is_none_or(|s| s.users.get(r).is_some_and(|u| u.active));
+        let to = {
+            let live = self.lib.live();
+            let Some(a) = live.iter().find(|a| a.cfg.id == source_id) else { return Ok(None) };
+            match super::albums::default_target(a, album.library.as_deref(), requester.filter(on).as_deref()) {
+                Some(t) if !a.used(&t) => Err(t),
+                other => Ok(other),
+            }
+        };
+        match to {
+            Ok(to) => Ok(to),
+            Err(own) => {
+                let account = std::path::Path::new(&own).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.lib.own_library(&account).await.map_err(ToggleError::Upstream)
+            }
+        }
     }
 
     /// Keep's target (0101 point 2): `to`, a main library of the server, else its first main library (the page's

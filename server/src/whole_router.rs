@@ -338,3 +338,22 @@ async fn every_route_is_behind_the_sign_in_and_is_there() {
     open.dedup();
     assert!(open.iter().all(|p| p == "/signin" || p == "/signout" || p.starts_with("/api/health") || p.starts_with("/api/auth/check") || p.starts_with("/rest/") || p.starts_with("/api/scrobble/lastfm/callback/") || p == "/api/spotify/callback" || p == "/guest" || p.starts_with("/api/guest/")), "open: {open:?}");
 }
+
+/// X5: a user may undo their own Incoming action (Add to, Delete), by the account the journal names; another's stays the
+/// administrators'.
+#[tokio::test]
+async fn a_user_may_undo_their_own_incoming_action_and_no_one_elses() {
+    let w = Whole::open("undo").await;
+    for user in ["ann", "bo"] {
+        w.served.users.from_directory(user, false, None).unwrap();
+    }
+    let journal = w.app.incoming.journal_for_tests();
+    let deleted = |title: &str| crate::journal::Event::AlbumRejected { source: "cratarr".into(), album_id: "al-1".into(), title: title.into(), folder: 1, dir: "X/A".into(), token: "t".into(), release_group: None };
+    let anns = crate::journal::done_by(Some("ann".into()), async { journal.record(1, &deleted("Ann's")).unwrap() }).await;
+    let bos = crate::journal::done_by(Some("bo".into()), async { journal.record(1, &deleted("Bo's")).unwrap() }).await;
+    let ann = w.session("ann");
+    let undo = |id: i64| serde_json::json!({ "tokens": [id.to_string()] });
+    assert_eq!(post(&w, &ann, "/api/undo", undo(bos)).await.0, StatusCode::FORBIDDEN, "another's");
+    let (status, answer) = post(&w, &ann, "/api/undo", undo(anns)).await;
+    assert_ne!(status, StatusCode::FORBIDDEN, "their own, past the fence: {answer}");
+}
