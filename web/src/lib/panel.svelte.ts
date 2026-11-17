@@ -1,6 +1,6 @@
 // The panel's subject (decisions 0023, 0025): the player, or what is viewed lying under it: a selection of one or more
 // playlists in tabs (Tracks, Export, Repair, Sync; Info is a step of their menu since 2026-11-02), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
-// or an album (`album:<server>/<id>`).
+// an album (`album:<server>/<id>`), or a label (`label:la-<n>`, lib/labelPage).
 // It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (a reload brings
 // it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
 // The panel keeps its own history (its trail, below; the owner, 2026-11-02): beside the page, changing what it shows
@@ -10,6 +10,7 @@
 import { leaveOnArrival } from './navStep.svelte';
 import { addressOf, HOME, hrefOf, ownWordsHere, pageHere, wordsIn, type PageId } from './addresses';
 import { prefs } from './prefs.svelte';
+import { LABEL } from './labelPage';
 
 export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
@@ -118,7 +119,7 @@ export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
   (viewed.startsWith(INSIGHTS) ||
     viewed.startsWith(REQUESTS) ||
-    viewed.startsWith(DOWNLOADS) || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
+    viewed.startsWith(DOWNLOADS) || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || viewed.startsWith(LABEL) || artistOf(viewed) !== null);
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */

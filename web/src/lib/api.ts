@@ -2411,6 +2411,10 @@ export const takeBackExcluded = (what: { key: string } | { artist: string }) =>
 /** An album's page on Bandcamp, looked for when it is opened (MusicBrainz's link first, the artist's page, the search). */
 export const findOnBandcamp = (artist: string, album: string, release_group?: string) =>
   request<{ page: string | null }>(`/api/bandcamp/find?${new URLSearchParams({ artist, album, ...(release_group ? { release_group } : {}) })}`);
+/** A label's page (C56, lib/labelPage): its records by year, had or not, `looking` while its lists are read (asked again
+ *  until it is false); `more` reads the next hundred of that source's list. */
+export const getLabel = (id: string, more?: import('./labelPage').LabelSource) =>
+  quietly<import('./labelPage').LabelPageOf>(`/api/labels/${encodeURIComponent(id)}${more ? `?${new URLSearchParams({ more })}` : ''}`);
 /** A row no record holds yet opened (C56, C57; Q33: kept at open): the record made of what its sources know it by, or the one
  *  that already holds it (lib/openRecord). */
 export const openRecord = (b: import('./openRecord').RecordOpenBody) => post<{ record: string }>('/api/records/open', b);
