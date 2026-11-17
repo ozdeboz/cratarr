@@ -848,6 +848,93 @@ async fn an_artist_is_one_id_by_name_and_by_number_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// C56: a label's page from what the catalogue keeps, with MusicBrainz, Discogs and Bandcamp switched off, so nothing is read
+/// elsewhere: the label Tide Tables' files name, its records by year, newest first, each had or not with its catalogue number, a
+/// record not had among them, and nothing being read. An id that is no label is refused, and "More" reads on at MusicBrainz or
+/// Discogs alone. A row opened by its reference is the record that holds it, else one made once, and never one by its names
+/// alone; opened from the label's page, it is one of its rows.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_labels_page_from_kept_rows_end_to_end() {
+    let root = temp("label-page");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_fixtures(&music);
+    settings_0_15(&data, &music.to_string_lossy());
+    let s = Server::start(&data).await;
+    for service in ["musicbrainz", "discogs", "bandcamp"] {
+        s.ok(reqwest::Method::PUT, &format!("/api/settings/{service}"), json!({ "enabled": false })).await;
+    }
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    let albums = s.albums().await;
+    let id_of = |title: &str| albums.iter().find(|a| a["title"] == title).unwrap()["id"].as_str().unwrap().to_string();
+    let (tide, signal) = (id_of("Tide Tables"), id_of("Signal"));
+    let number = |id: &str| id.strip_prefix("al-").unwrap().parse::<i64>().unwrap();
+    let catalogue = || {
+        let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        db
+    };
+    // The label Tide Tables' files name (LABEL), once the record pass has tied it.
+    let tied = || -> Option<i64> {
+        let db = catalogue();
+        db.query_row("SELECT r.label FROM record_labels r JOIN labels l ON l.id = r.label WHERE l.name = 'Fixture Records' AND r.record = ?1", [number(&tide)], |r| r.get(0)).ok()
+    };
+    s.until("Tide Tables tied to its label", Duration::from_secs(120), || async { tied().is_some() }).await;
+    let label = tied().unwrap();
+    // A record the library has and a record not had, tied to it as a label's list ties them.
+    let dub = {
+        let db = catalogue();
+        db.execute("INSERT INTO records (born, title, artist, year, kind) VALUES (1, 'Low Water Dub', 'Glass Harbour', 2016, 'album')", []).unwrap();
+        let dub = db.last_insert_rowid();
+        for (record, catno) in [(dub, "FR-016"), (number(&signal), "FR-021")] {
+            db.execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, ?3, 'listing')", rusqlite::params![record, label, catno]).unwrap();
+        }
+        format!("al-{dub}")
+    };
+
+    let page = s.get(&format!("/api/labels/la-{label}")).await;
+    assert_eq!((page["id"].as_str(), page["name"].as_str()), (Some(&*format!("la-{label}")), Some("Fixture Records")), "{page}");
+    let rows: Vec<(&str, Option<i64>, Option<&str>, bool, Option<&str>)> = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["title"].as_str().unwrap(), r["year"].as_i64(), r["catno"].as_str(), r["had"].as_bool().unwrap(), r["record"].as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Signal", Some(2021), Some("FR-021"), true, Some(&*signal)),
+            ("Low Water Dub", Some(2016), Some("FR-016"), false, Some(&*dub)),
+            ("Tide Tables", Some(2012), None, true, Some(&*tide)),
+        ],
+        "by year, newest first: {page}"
+    );
+    assert_eq!((&page["looking"], &page["more"]), (&json!(false), &json!({ "musicbrainz": false, "discogs": false })), "nothing read elsewhere: {page}");
+    for asked in ["/api/labels/la-999999", "/api/labels/al-1", "/api/labels/la-x"] {
+        let (status, answer) = s.send(reqwest::Method::GET, asked, Value::Null).await;
+        assert_eq!((status, answer["error"].as_str()), (409, Some("That is not a label.")), "{asked}");
+    }
+    assert_eq!(s.send(reqwest::Method::GET, &format!("/api/labels/la-{label}?more=bandcamp"), Value::Null).await.0, 409, "Bandcamp's label pages are not read");
+
+    // A row opened: by its reference, the record that holds it (Tide Tables' files name its release group); one no record holds
+    // made once; by names alone, none.
+    let opened = |answer: Value| answer["record"].as_str().unwrap().to_string();
+    let by_group = json!({ "release_group": "00000000-0000-4000-8000-000000000101", "title": "Tide Tables", "artist": "Glass Harbour" });
+    assert_eq!(opened(s.ok(reqwest::Method::POST, "/api/records/open", by_group).await), tide, "the record its files name it by");
+    let lights = json!({ "discogs_master": 4401, "title": "Harbour Lights", "artist": "Glass Harbour", "year": 2014, "label": format!("la-{label}") });
+    let first = opened(s.ok(reqwest::Method::POST, "/api/records/open", lights.clone()).await);
+    assert!(![&tide, &signal, &dub].contains(&&first), "a record of its own: {first}");
+    assert_eq!(opened(s.ok(reqwest::Method::POST, "/api/records/open", lights).await), first, "opened again: the same record");
+    let by_name = json!({ "title": "Tide Tables", "artist": "Glass Harbour" });
+    assert_eq!(s.send(reqwest::Method::POST, "/api/records/open", by_name).await.0, 409, "never by its names alone");
+    let page = s.get(&format!("/api/labels/la-{label}")).await;
+    let row = page["rows"].as_array().unwrap().iter().find(|r| r["title"] == "Harbour Lights").cloned().unwrap_or(Value::Null);
+    assert_eq!((row["record"].as_str(), row["had"].as_bool(), row["discogs_master"].as_u64()), (Some(&*first), Some(false), Some(4401)), "opened from its page, one of its rows: {page}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A word of `text` that is an id from before 0.16: `al-` or `ar-` and 22 letters and digits, all of them. A record's or an
 /// artist's id for life is a number, and a track's has no hash to look for.
 fn hashes_in(text: &str) -> Vec<String> {

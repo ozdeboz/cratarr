@@ -224,6 +224,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/want", post(discover_want))
         .route("/api/requests/want", post(want_album))
         .route("/api/artists/missing", get(artist_missing))
+        // A label's page (C56), and a list's row opened: its record, made at open (Q33).
+        .route("/api/labels/{id}", get(label_page))
+        .route("/api/records/open", post(open_record))
         .route("/api/discover/missing", get(discover_missing))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
         .route("/api/discover/excluded", get(discover_excluded).delete(discover_take_back))
@@ -5131,6 +5134,48 @@ async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<s
         }
     }
     Ok(Json(json!({ "albums": albums, "looking": looking })))
+}
+
+/// What a label's page asks for: the next hundred of one source's list (OQ10 (a)), `musicbrainz` or `discogs`.
+#[derive(Deserialize)]
+struct LabelQuery {
+    #[serde(default)]
+    more: Option<String>,
+}
+
+/// A label's page (C56): `{ id, name, rows, looking, more: { musicbrainz, discogs }, musicbrainz?, discogs? }`. The kept rows at
+/// once, by year, newest first, each with its open request's mark; `looking` while its lists are read in the background, so the
+/// page asks again until it is false; `?more=<source>` reads the next hundred of that source's list. An id that is no label is
+/// refused; a label that never held anything is still a page.
+async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery>) -> Result<Json<crate::app::labels::LabelPage>, ApiError> {
+    let app = ctx.app.clone();
+    let serve = ctx.serve()?;
+    let not_a_label = || ToggleError::Refused("That is not a label.".into());
+    let label = crate::serve::ids::label_number(&id).ok_or_else(not_a_label)?;
+    let more = match q.more.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => Some(crate::app::labels::source_named(m).ok_or_else(|| ToggleError::Refused("A label's list reads on at MusicBrainz or Discogs.".into()))?),
+        None => None,
+    };
+    let page = crate::app::labels::page(app.library.catalogue(), label, more, &crate::app::labels::sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let mut page = page.ok_or_else(not_a_label)?;
+    if let Some(marks) = request_marks(&app, &serve).await {
+        for row in &mut page.rows {
+            row.request = row.record.as_deref().and_then(crate::serve::ids::record_number).and_then(|r| marks.of_record(r));
+        }
+    }
+    Ok(Json(page))
+}
+
+/// A list's row opened (C56, Q33: "kept at open"; C57's Beyond too): `{ record: "al-<n>" }`, the record that holds its reference,
+/// as merged now, else one made now with it. Never by its names alone: a row with no reference is refused.
+async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Result<Json<serde_json::Value>, ApiError> {
+    let cat = ctx.app.library.catalogue();
+    let record = tokio::task::spawn_blocking(move || crate::app::labels::open_record(&cat, &b))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .ok_or_else(|| ToggleError::Refused("An album is opened by what MusicBrainz or Discogs knows it by, and its title.".into()))?;
+    Ok(Json(json!({ "record": crate::serve::ids::record(record) })))
 }
 
 #[derive(Deserialize)]

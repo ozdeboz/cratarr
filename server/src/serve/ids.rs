@@ -68,9 +68,13 @@ pub fn artist_number(id: &str) -> Option<i64> {
 pub const LABEL: &str = "la-";
 
 /// A label's id as it is served: its number in the catalogue, for life.
-#[cfg_attr(not(test), allow(dead_code))] // a label's page (C56)
 pub fn label(id: i64) -> String {
     format!("{LABEL}{id}")
+}
+
+/// The label a served id names (C56), where it is one of the catalogue's (`la-<digits>`).
+pub fn label_number(id: &str) -> Option<i64> {
+    id.strip_prefix(LABEL).filter(|n| (1..=15).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
 }
 
 /// What makes two names one artist: the same name, ignoring case and typographic quotes.

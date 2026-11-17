@@ -256,7 +256,7 @@ pub fn id_in(urls: &[String], kind: &str) -> Option<u64> {
     urls.iter().find_map(|u| u.split(&mark).nth(1)?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok())
 }
 
-/// A MusicBrainz entity's links (`release-group`, `artist`), MusicBrainz asked at its pace.
+/// A MusicBrainz entity's links (`release-group`, `artist`, `label`), MusicBrainz asked at its pace.
 async fn mb_links(entity: &str, id: &str) -> Result<Vec<String>> {
     if !is_mbid(id) {
         return Ok(Vec::new());
@@ -664,12 +664,18 @@ pub async fn label(id: u64) -> Result<Option<LabelFacts>> {
     Ok(get(&format!("/labels/{id}")).await?.as_ref().and_then(label_of))
 }
 
-/// One page of a label's list at Discogs (S11), oldest first: a label's runs to thousands (OQ10), so it is read a page of
-/// 100 at a time, the next when it is asked for. Its rows and how many pages there are; none where Discogs has no such label.
-#[allow(dead_code)] // a label's page (C56)
+/// One page of a label's list at Discogs (S11), newest first, as its page lists it (C56): a label's runs to thousands (OQ10), so
+/// it is read a page of 100 at a time, the next when it is asked for, further back. Its rows and how many pages there are; none
+/// where Discogs has no such label.
 pub async fn label_releases(id: u64, page: u32) -> Result<Option<(Vec<Listed>, u32)>> {
-    let Some(v) = get(&format!("/labels/{id}/releases?sort=year&sort_order=asc&per_page=100&page={}", page.max(1))).await? else { return Ok(None) };
+    let Some(v) = get(&format!("/labels/{id}/releases?sort=year&sort_order=desc&per_page=100&page={}", page.max(1))).await? else { return Ok(None) };
     Ok(Some((listed_of(&v), pages_of(&v))))
+}
+
+/// A label's Discogs id by MusicBrainz's link to it from its MusicBrainz id (C56: never a search by name); none where
+/// MusicBrainz links none.
+pub async fn label_linked(mbid: &str) -> Result<Option<u64>> {
+    Ok(id_in(&mb_links("label", mbid).await?, "label"))
 }
 
 #[cfg(test)]

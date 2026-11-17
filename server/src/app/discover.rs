@@ -782,8 +782,7 @@ fn label_named(v: &serde_json::Value, name: &str) -> Option<String> {
 }
 
 /// A label's MusicBrainz id by its name (`label_named`), MusicBrainz's search asked in its turn.
-#[allow(dead_code)] // a label's page (C56)
-async fn mb_label_by_name(http: &reqwest::Client, name: &str) -> Result<Option<String>> {
+pub(super) async fn mb_label_by_name(http: &reqwest::Client, name: &str) -> Result<Option<String>> {
     let query = format!("label:\"{}\"", name.replace('"', ""));
     Ok(label_named(&mb_page(http, "label", &[("query", &query)], 0).await?, name))
 }
@@ -818,8 +817,7 @@ fn label_listings(v: &serde_json::Value) -> Vec<crate::catalogue::records::Listi
 
 /// A page of a label's releases on MusicBrainz from `offset` (`label_listings`; a label runs to thousands, OQ10, so a page at
 /// a time), and where the next starts, none at the end.
-#[allow(dead_code)] // a label's page (C56)
-async fn mb_label_releases(http: &reqwest::Client, label: &str, offset: usize) -> Result<(Vec<crate::catalogue::records::Listing>, Option<usize>)> {
+pub(super) async fn mb_label_releases(http: &reqwest::Client, label: &str, offset: usize) -> Result<(Vec<crate::catalogue::records::Listing>, Option<usize>)> {
     let v = mb_page(http, "release", &[("label", label), ("inc", "release-groups+artist-credits")], offset).await?;
     Ok((label_listings(&v), next_offset(&v, "release")))
 }

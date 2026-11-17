@@ -294,7 +294,7 @@ pub fn same_record(a: &RecordFacts, b: &RecordFacts) -> bool {
 /// A subject's id at a source: `kind` is `release-group`, `release`, `master`, `album`, `artist` or `label`, `value` the source's
 /// id (a MusicBrainz id, a Discogs number, a page as `bandcamp::page` makes it). Kept in `references` (`catalogue::records`);
 /// here, as what links two listings (`same_listing`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Ref {
     pub source: String,
     pub kind: String,

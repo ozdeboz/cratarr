@@ -3,7 +3,8 @@
 //! with its references and credits; a tombstone keeps its id, so an old link answers "no longer known", and no id is given
 //! again. In the same daily pass (RT01b), the kept lists of a record not had go after thirty days unopened, read again when
 //! asked for, and an artist left with nothing is forgotten as a record is. Before them (RT01c, F3), the library's artists'
-//! MusicBrainz and Discogs lists are read again, a month's thirtieth a day, so what is read counts as seen.
+//! MusicBrainz and Discogs lists are read again, a month's thirtieth a day, so what is read counts as seen. After them (C56), the
+//! labels' rows read thirty days ago go: a cache, not records (Q33).
 //!
 //! - **Never while something points at it.** The catalogue keeps what it holds itself (`Catalogue::forget_quiet`: a choice or
 //!   a reference by hand, a confirmation, a merge, an expected folder, a retired record, a link from before 0.16, a request's
@@ -78,13 +79,14 @@ pub struct Reread {
 }
 
 /// What a pass came to: the day's re-read (RT01c), and what it let go of: the records not had (RT01), their kept lists and the
-/// artists left with nothing (RT01b).
+/// artists left with nothing (RT01b), and the labels' rows read thirty days ago (C56).
 #[derive(Debug, Default, PartialEq)]
 pub struct Passed {
     pub reread: Reread,
     pub records: Vec<i64>,
     pub lists: usize,
     pub artists: Vec<i64>,
+    pub label_rows: usize,
 }
 
 /// The day's re-read of the library artists' lists (RT01c, F3), paced: the thirtieth of them come to longest ago
@@ -131,7 +133,8 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
 
 /// The day's pass at `now`, where due (`due`): the library artists' lists read again first (`reread`, RT01c), so what it reads
 /// counts as seen; then what keeps a record and an artist gathered, the records nothing keeps forgotten, the kept lists let go
-/// of, the artists left with nothing forgotten, and the pass's time written. What it came to; None: not due.
+/// of, the artists left with nothing forgotten, the labels' rows read thirty days ago let go of (C56), and the pass's time
+/// written. What it came to; None: not due.
 pub async fn pass(served: Arc<Serve>, now: i64) -> Result<Option<Passed>> {
     pass_reading(served, now, &super::discover::reread_sources(), super::switches::background_paused).await
 }
@@ -154,8 +157,9 @@ async fn pass_reading(served: Arc<Serve>, now: i64, sources: &[Arc<dyn ArtistLis
             // The library's names without theirs: a name credited again is given a new id, never one forgotten.
             served.library.set_artists(cat.artist_ids()?);
         }
+        let label_rows = cat.forget_label_rows(now)?;
         cat.set_meta(RAN_AT, &now.to_string());
-        Ok(Passed { reread, records, lists, artists })
+        Ok(Passed { reread, records, lists, artists, label_rows })
     })
     .await??;
     if !done.reread.read.is_empty() || !done.reread.kept_seen.is_empty() {
@@ -169,6 +173,9 @@ async fn pass_reading(served: Arc<Serve>, now: i64, sources: &[Arc<dyn ArtistLis
     }
     if !done.artists.is_empty() {
         tracing::info!(target: "library", count = done.artists.len(), "artists left with nothing forgotten");
+    }
+    if done.label_rows > 0 {
+        tracing::info!(target: "library", count = done.label_rows, "labels' rows read thirty days ago let go of");
     }
     Ok(Some(done))
 }

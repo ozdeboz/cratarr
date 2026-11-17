@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS list_reread (artist INTEGER NOT NULL, source TEXT NOT
 const MERGES: usize = 32;
 
 /// The record `id` is now, its merges followed. None: no such id, or merges that go round.
-fn merged_end(db: &Connection, mut id: i64) -> Result<Option<i64>> {
+pub(super) fn merged_end(db: &Connection, mut id: i64) -> Result<Option<i64>> {
     for _ in 0..MERGES {
         let into: Option<Option<i64>> = db.prepare_cached("SELECT merged_into FROM records WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?;
         match into {
@@ -151,7 +151,7 @@ pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[List
 
 /// The record a listing's references name: one a release or an album page names first, else the oldest of its release group
 /// or master (G1: any of them is it, for a list that names the group), each as merged now.
-fn found_by_reference(tx: &Connection, l: &Listing) -> Result<Option<i64>> {
+pub(super) fn found_by_reference(tx: &Connection, l: &Listing) -> Result<Option<i64>> {
     let mut refs: Vec<&Ref> = l.refs.iter().collect();
     refs.sort_by_key(|r| !ONE_SUBJECT.contains(&r.kind.as_str()));
     for r in refs {
@@ -829,7 +829,7 @@ fn holders_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Resu
 
 /// Records as the pages read them (R16, C53a), on the caller's connection: their rows, their references (a MusicBrainz release
 /// group, a Bandcamp album page among them) in one query each, and who holds each one's files (`holders_in`). In id order.
-fn read_records_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Result<Vec<Requested>> {
+pub(super) fn read_records_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Result<Vec<Requested>> {
     if records.is_empty() {
         return Ok(Vec::new());
     }
