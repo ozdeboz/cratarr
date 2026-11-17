@@ -2237,9 +2237,10 @@ pub struct FoundArtist {
 /// How long a query's answer from MusicBrainz is kept (in memory): the page asks again as it is typed and opened.
 const MB_SEARCH_KEEP: i64 = 600;
 
-/// "Find more music" (0.9.3): MusicBrainz's release groups and artists for the words, its surest first, each marked
-/// where the library has it; kept a few minutes per query. Two MusicBrainz calls, a second apart.
-pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, q: &str, limit: usize) -> Result<(Vec<FoundAlbum>, Vec<FoundArtist>)> {
+/// MusicBrainz's release groups and artists for the words (0.9.3; C57's Beyond), its surest first, none marked: what is here is
+/// the caller's to say. Kept a few minutes per query, in memory: a cache, which makes nothing. Two MusicBrainz calls, a second
+/// apart.
+pub async fn musicbrainz_found(q: &str, limit: usize) -> Result<(Vec<FoundAlbum>, Vec<FoundArtist>)> {
     use std::sync::{Mutex, OnceLock};
     type Kept = HashMap<String, (i64, Vec<FoundAlbum>, Vec<FoundArtist>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
@@ -2305,9 +2306,19 @@ pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate
         })
         .collect();
     artists.sort_by(|a, b| b.0.cmp(&a.0));
-    let (mut albums, mut artists): (Vec<FoundAlbum>, Vec<FoundArtist>) = (albums.into_iter().map(|x| x.1).collect(), artists.into_iter().map(|x| x.1).collect());
-    // What the library has, as Discover leaves it out: albums by release group, else by name and artist; artists by
-    // their MusicBrainz id, else their name.
+    let (albums, artists): (Vec<FoundAlbum>, Vec<FoundArtist>) = (albums.into_iter().map(|x| x.1).collect(), artists.into_iter().map(|x| x.1).collect());
+    kept.lock().unwrap_or_else(|p| p.into_inner()).insert(query, (now, albums.clone(), artists.clone()));
+    Ok((albums, artists))
+}
+
+/// "Find more music" (0.9.3), what a page asks where its server has no Beyond: MusicBrainz's albums and artists for the words
+/// (`musicbrainz_found`), each marked where the library has it, as Discover leaves it out: albums by release group, else by name
+/// and artist; artists by their MusicBrainz id, else their name.
+pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, q: &str, limit: usize) -> Result<(Vec<FoundAlbum>, Vec<FoundArtist>)> {
+    let (mut albums, mut artists) = musicbrainz_found(q, limit).await?;
+    if albums.is_empty() && artists.is_empty() {
+        return Ok((albums, artists));
+    }
     let dir = serve.data_dir.clone().context("Cratarr's data folder is needed")?;
     let lib = serve.library.clone();
     let (albums_in, artists_in) = (albums.clone(), artists.clone());
@@ -2327,7 +2338,6 @@ pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate
     for (x, h) in artists.iter_mut().zip(have_artists) {
         x.have = h;
     }
-    kept.lock().unwrap_or_else(|p| p.into_inner()).insert(query, (now, albums.clone(), artists.clone()));
     Ok((albums, artists))
 }
 

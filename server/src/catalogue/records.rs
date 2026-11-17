@@ -280,6 +280,17 @@ pub struct Requested {
     pub list: Option<usize>,
 }
 
+/// What references name here (`Catalogue::by_reference`, C57), never by a name.
+#[derive(Debug, Clone, Default)]
+pub struct ByReference {
+    /// Each album reference's record as merged now, in their order; none where no record holds it.
+    pub records: Vec<Option<i64>>,
+    /// Those records, read as the lists read them, by id.
+    pub read: std::collections::HashMap<i64, Requested>,
+    /// Each artist reference's artist, and whether the library has albums by them, in their order; none where no artist holds it.
+    pub artists: Vec<Option<(i64, bool)>>,
+}
+
 /// A record as it stands, had or not.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordRow {
@@ -1122,6 +1133,34 @@ impl Catalogue {
         let kept = keep_listing_in(&tx, artist, list, how, at, Some(at))?;
         tx.commit()?;
         Ok(kept)
+    }
+
+    /// What references name here (C57: Beyond's rows), never a name, on one reader; nothing made. Each album reference's record as
+    /// merged now, as a row opened finds it (`found_by_reference`), and those records read as the lists read them (the one had
+    /// rule's holder); each artist reference's artist, and whether the library has albums by them (`LIBRARY_ARTISTS`). Blocking.
+    pub fn by_reference(&self, albums: &[Ref], artists: &[Ref]) -> Result<ByReference> {
+        let read = |db: &Connection| -> Result<ByReference> {
+            let mut records = Vec::with_capacity(albums.len());
+            for r in albums {
+                records.push(found_by_reference(db, &Listing { refs: vec![r.clone()], ..Listing::default() })?);
+            }
+            let wanted: Vec<i64> = records.iter().flatten().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+            let mut names = None;
+            let read: std::collections::HashMap<i64, Requested> = read_records_in(db, &wanted, &mut names)?.into_iter().map(|q| (q.row.id, q)).collect();
+            let mut people = Vec::with_capacity(artists.len());
+            for r in artists {
+                let held = subjects_in(db, r)?.iter().find_map(|s| ids::artist_number(s));
+                people.push(match held {
+                    Some(artist) => Some((artist, db.prepare_cached(&format!("SELECT ?1 IN ({LIBRARY_ARTISTS})"))?.query_row([artist], |row| row.get::<_, bool>(0))?)),
+                    None => None,
+                });
+            }
+            Ok(ByReference { records, read, artists: people })
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
     }
 
     /// Two records found to be one (G3, OQ13 (a)): the one with copies keeps its id, else the older; the other answers through

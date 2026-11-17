@@ -227,6 +227,7 @@ pub fn router(app: Arc<App>) -> Router {
         // A label's page (C56), and a list's row opened: its record, made at open (Q33).
         .route("/api/labels/{id}", get(label_page))
         .route("/api/records/open", post(open_record))
+        .route("/api/artists/open", post(open_artist))
         .route("/api/discover/missing", get(discover_missing))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
         .route("/api/discover/excluded", get(discover_excluded).delete(discover_take_back))
@@ -6356,9 +6357,10 @@ async fn genre_aliases(State(app): State<Arc<App>>) -> Result<Json<std::collecti
     Ok(Json(crate::app::search::genre_aliases(&app).await.map_err(ToggleError::from)?))
 }
 
-/// Beyond the library (0076, the unindexed universe): MusicBrainz's albums and Discogs' masters for the words, together,
-/// one album once (by its artist and title), each with where it was found; what the library has marked `have`, what
-/// is asked for its request. MusicBrainz's artists beside. A page of `limit` from `offset`; kept per query.
+/// Beyond the library (0076, the unindexed universe; C57): MusicBrainz's albums and Discogs' masters for the words, each album
+/// once by reference alone (`beyond::albums`: never by a name), each with where it was found, the record that holds it where one
+/// does, `have` by the one had rule on that record, and its request. MusicBrainz's artists beside, each with the artist who holds
+/// their MusicBrainz id. A page of `limit` from `offset`; kept per query in memory, a cache: nothing is made when it answers.
 async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
@@ -6367,59 +6369,49 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
     if crate::search::words(&q).is_empty() {
         return Ok(Json(json!({ "q": q, "albums": [], "artists": [] })));
     }
-    let (mb, discogs) = tokio::join!(
-        crate::app::discover::musicbrainz_search(&serve, app.library.catalogue(), &q, (offset + limit).min(100)),
-        crate::app::discogs::search_masters(&q, limit, offset)
-    );
+    let (mb, discogs) = tokio::join!(crate::app::discover::musicbrainz_found(&q, (offset + limit).min(100)), crate::app::discogs::search_masters(&q, limit, offset));
     let (mb_albums, artists) = mb.unwrap_or_default();
+    let mb_albums: Vec<crate::app::discover::FoundAlbum> = mb_albums.into_iter().skip(offset).take(limit).collect();
+    let artists = if offset == 0 { artists } else { Vec::new() };
     let discogs = discogs.unwrap_or_default();
-    let library = crate::app::requests::library(&serve).await;
+    let (cat, a, d, p) = (app.library.catalogue(), mb_albums.clone(), discogs.clone(), artists.clone());
+    // What is here, by reference: where it cannot be read, nothing is marked.
+    let known = match tokio::task::spawn_blocking(move || crate::app::beyond::known(&cat, &a, &d, &p)).await {
+        Ok(Ok(known)) => known,
+        Ok(Err(e)) => {
+            tracing::info!("beyond: what is here not read: {e:#}");
+            crate::app::beyond::Known::default()
+        }
+        Err(e) => {
+            tracing::info!("beyond: what is here not read: {e:#}");
+            crate::app::beyond::Known::default()
+        }
+    };
     let marks = request_marks(&app, &serve).await;
-    let albums = beyond_albums(mb_albums.into_iter().skip(offset).take(limit), discogs, library.as_deref(), marks.as_deref());
-    Ok(Json(json!({ "q": q, "albums": albums, "artists": if offset == 0 { json!(artists) } else { json!([]) } })))
+    let albums = crate::app::beyond::albums(&mb_albums, &discogs, &known, marks.as_deref());
+    let artists = crate::app::beyond::artists(&artists, &known);
+    Ok(Json(json!({ "q": q, "albums": albums, "artists": artists })))
 }
 
-/// What Beyond lists of what was found, MusicBrainz's first: a master of an album it found goes on that album, and of the
-/// rest the library says what it has. Its albums alone answer that (`Matcher::library_albums`): the whole library read
-/// for it stayed in memory, 60 MB of the NAS's 768, to answer this one question.
-fn beyond_albums(
-    mb_albums: impl Iterator<Item = crate::app::discover::FoundAlbum>,
-    discogs: Vec<crate::app::discogs::FoundMaster>,
-    library: Option<&crate::app::import::Matcher>,
-    marks: Option<&crate::app::requests::Marks>,
-) -> Vec<serde_json::Value> {
-    let key = |artist: &str, title: &str| format!("{}|{}", crate::app::import::key(artist), crate::app::import::key(title));
-    let mut order: Vec<String> = Vec::new();
-    let mut by: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
-    for a in mb_albums {
-        let k = key(&a.artist, &a.title);
-        if by.contains_key(&k) {
-            continue;
-        }
-        order.push(k.clone());
-        by.insert(
-            k,
-            json!({ "title": a.title, "artist": a.artist, "year": a.year, "cover": a.cover, "release_group": a.release_group, "discogs": null,
-                "discogs_url": null, "sources": ["musicbrainz"], "have": a.have, "request": marks.and_then(|m| crate::app::requests::mark_of(m, Some(&a.release_group), &a.artist, &a.title)) }),
-        );
-    }
-    for d in discogs {
-        let k = key(&d.artist, &d.title);
-        if let Some(found) = by.get_mut(&k) {
-            found["sources"] = json!(["musicbrainz", "discogs"]);
-            found["discogs"] = json!(d.id);
-            found["discogs_url"] = json!(d.url);
-            continue;
-        }
-        let have = library.is_some_and(|l| l.find_album(&d.title, Some(&d.artist)).is_some());
-        order.push(k.clone());
-        by.insert(
-            k,
-            json!({ "title": d.title, "artist": d.artist, "year": d.year, "cover": d.cover, "release_group": null, "discogs": d.id,
-                "discogs_url": d.url, "sources": ["discogs"], "have": have, "request": marks.and_then(|m| crate::app::requests::mark_of(m, None, &d.artist, &d.title)) }),
-        );
-    }
-    order.into_iter().filter_map(|k| by.remove(&k)).collect()
+/// An artist of Beyond's (C57) opened: their MusicBrainz id and name.
+#[derive(Deserialize)]
+struct ArtistOpened {
+    #[serde(default)]
+    mbid: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// An artist of Beyond's opened (C57, OQ12 (a)): `{ artist: "ar-<n>" }`, the artist who holds their MusicBrainz id, else one of
+/// their own made now, though another has the name. Never by the name alone: one with no MusicBrainz id is refused.
+async fn open_artist(ctx: Ctx, Json(b): Json<ArtistOpened>) -> Result<Json<serde_json::Value>, ApiError> {
+    let cat = ctx.app.library.catalogue();
+    let artist = tokio::task::spawn_blocking(move || crate::app::beyond::open_artist(&cat, &b.mbid, &b.name))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .ok_or_else(|| ToggleError::Refused("An artist is opened by their MusicBrainz id, and their name.".into()))?;
+    Ok(Json(json!({ "artist": crate::serve::ids::artist(artist) })))
 }
 
 /// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name or their id (C55): as last
@@ -7802,67 +7794,6 @@ mod tests {
         let refused = super::never_offline(&t(crate::bandcamp::SOURCE)).unwrap();
         assert_eq!((refused["offline"].as_bool(), refused["error"].as_str()), (Some(false), Some(crate::bandcamp::NOT_KEPT)));
         assert!(super::never_offline(&t("cratarr")).is_none(), "a library track goes on to its file or copy");
-    }
-
-    #[test]
-    fn beyond_marks_from_the_librarys_albums_alone_what_the_whole_library_marked() {
-        use crate::app::discogs::FoundMaster;
-        use crate::app::discover::FoundAlbum;
-        use crate::app::import::{Matcher, key};
-        use crate::app::requests::Mark;
-        let dir = std::env::temp_dir().join(format!("cratarr-beyond-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("library.sqlite");
-        let _ = std::fs::remove_file(&file);
-        let db = rusqlite::Connection::open(&file).unwrap();
-        db.execute_batch(
-            "CREATE TABLE songs (id TEXT, title TEXT, artist TEXT, album TEXT, mbid TEXT, duration_ms INTEGER, album_id TEXT, album_artist TEXT);
-             INSERT INTO songs VALUES ('tr-1', 'Joga', 'Björk', 'Homogenic', 'm1', 300000, 'al-1', NULL);
-             INSERT INTO songs VALUES ('tr-2', 'Human Behaviour', 'Björk', 'Debut', NULL, 250000, 'al-2', 'Björk');
-             INSERT INTO songs VALUES ('tr-3', 'Intro', 'Guest', 'Hits', NULL, NULL, 'al-3', 'Various Artists');
-             INSERT INTO songs VALUES ('tr-4', 'Intro', 'Other', 'Hits', NULL, NULL, 'al-4', 'Someone');",
-        )
-        .unwrap();
-        drop(db);
-        let found = || {
-            let debut = FoundAlbum { release_group: "rg-1".into(), title: "Debut".into(), artist: "Björk".into(), year: Some(1993), kind: None, cover: "/c".into(), have: true };
-            std::iter::once(debut)
-        };
-        let master = |id: u64, title: &str, artist: &str| FoundMaster { id, title: title.into(), artist: artist.into(), year: None, cover: None, url: format!("/master/{id}") };
-        let masters = || {
-            vec![
-                master(1, "Debut", "Björk"),
-                master(2, "Homogenic", "Björk"),
-                // Loosely, and by the name alone where one album has it, not where two do.
-                master(3, "Homogenic (Remastered)", "Bjork"),
-                master(4, "Homogenic", "Someone Else"),
-                master(5, "Hits", "Nobody"),
-                master(6, "Post", "Björk"),
-            ]
-        };
-        let marks = crate::app::requests::Marks::by_key(
-            [("rg-1".to_string(), Mark { state: "wanted", done: None }), (format!("{}|{}", key("Björk"), key("Post")), Mark { state: "downloading", done: Some(0.5) })].into(),
-        );
-
-        let albums = Matcher::library_albums(&file, None).unwrap();
-        let answer = super::beyond_albums(found(), masters(), Some(&albums), Some(&marks));
-        assert_eq!(answer, super::beyond_albums(found(), masters(), Some(&Matcher::read(&file).unwrap()), Some(&marks)));
-        let have: Vec<(&str, &str, bool)> = answer.iter().map(|a| (a["title"].as_str().unwrap(), a["artist"].as_str().unwrap(), a["have"].as_bool().unwrap())).collect();
-        assert_eq!(
-            have,
-            [
-                ("Debut", "Björk", true),
-                ("Homogenic", "Björk", true),
-                ("Homogenic (Remastered)", "Bjork", true),
-                ("Homogenic", "Someone Else", true),
-                ("Hits", "Nobody", false),
-                ("Post", "Björk", false),
-            ]
-        );
-        assert_eq!((&answer[0]["sources"], &answer[0]["discogs"]), (&serde_json::json!(["musicbrainz", "discogs"]), &serde_json::json!(1)), "a master of an album found goes on it");
-        assert_eq!((&answer[0]["request"]["state"], &answer[5]["request"]["state"]), (&serde_json::json!("wanted"), &serde_json::json!("downloading")));
-        assert!(super::beyond_albums(std::iter::empty(), masters(), None, None).iter().all(|a| a["have"] == false && a["request"].is_null()), "no library to ask: nothing marked");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

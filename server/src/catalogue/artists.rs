@@ -110,10 +110,31 @@ impl Catalogue {
     }
 
     /// An artist of their own, though another has the name (C55): a new id, and the next number of the name. A split, and
-    /// Beyond's artists (C57), which no name merges. Blocking.
-    #[cfg_attr(not(test), allow(dead_code))] // Beyond's artists (C57)
+    /// Beyond's artists (C57, `artist_by_reference`), which no name merges. Blocking.
+    #[cfg_attr(not(test), allow(dead_code))] // a split
     pub fn artist_apart(&self, name: &str) -> Result<i64> {
         give_artist(&self.db(), &ids::artist_key(name), name, now())
+    }
+
+    /// The artist a source's id names (C57: an artist of Beyond's opened, OQ12 (a)): the one who holds it, else one of their own
+    /// made now, as `artist_apart` makes them (the name's next number where another has it), holding it, found `how`. Never by the
+    /// name alone. In one transaction, so two opens at once make one artist. Blocking.
+    pub fn artist_by_reference(&self, r: &super::records::Ref, name: &str, how: &str) -> Result<i64> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let held: Vec<String> = tx
+            .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?
+            .query_map(params![r.source, r.kind, r.value], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if let Some(artist) = held.iter().find_map(|s| ids::artist_number(s)) {
+            tx.commit()?;
+            return Ok(artist);
+        }
+        let at = now();
+        let artist = give_artist(&tx, &ids::artist_key(name), name, at)?;
+        super::records::put_reference(&tx, &ids::artist(artist), r, how, at, false)?;
+        tx.commit()?;
+        Ok(artist)
     }
 
     /// An artist as their page names them (C55): their name, number, and whether another artist has the name. None: no such

@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::import::Matcher;
 use crate::lidarr::Progress;
 use crate::ports::{Fetcher, LidarrFetcher};
 use crate::serve::Serve;
@@ -910,15 +909,8 @@ pub struct Marks {
 
 impl Marks {
     /// A record's mark, by the id it answers by now (`Catalogue::record` follows a merge).
-    #[allow(dead_code)] // the pages of records not had (C53a, C56)
     pub fn of_record(&self, record: i64) -> Option<Mark> {
         self.by_record.get(&record).copied()
-    }
-
-    /// Tests elsewhere: marks by key alone, as lists with no record id find them.
-    #[cfg(test)]
-    pub fn by_key(by_key: HashMap<String, Mark>) -> Self {
-        Self { by_key, by_record: HashMap::new() }
     }
 }
 
@@ -1178,14 +1170,6 @@ pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
         .collect()
 }
 
-/// The library's albums by name (the import's matcher), where Cratarr's data folder holds it: its albums alone, one
-/// reading shared by those asking at once and kept until the library is built again (`Matcher::library_albums`;
-/// 0.11.1: /api/discover's memory, 2026-10-30: each Discover request read every song of the library here, twice, some
-/// 70 MB each time on the NAS).
-pub(crate) async fn library(serve: &Serve) -> Option<Arc<Matcher>> {
-    let (dir, built) = (serve.data_dir.clone()?, serve.built_at());
-    tokio::task::spawn_blocking(move || Matcher::library_albums(&dir.join("library.sqlite"), Some(built)).ok()).await.ok().flatten()
-}
 
 
 

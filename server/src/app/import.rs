@@ -315,6 +315,32 @@ mod tests {
         Track { recording, artist, title, album, length_secs: length }
     }
 
+    /// 0.11.1: the library's albums alone (`library_albums`) find each album as the whole library read finds it: by name and
+    /// album artist, loosely, and by a name alone where one album has it, not where two do.
+    #[test]
+    fn the_librarys_albums_alone_find_what_the_whole_library_finds() {
+        let dir = std::env::temp_dir().join(format!("cratarr-albums-alone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("library.sqlite");
+        let _ = std::fs::remove_file(&file);
+        let db = rusqlite::Connection::open(&file).unwrap();
+        db.execute_batch(
+            "CREATE TABLE songs (id TEXT, title TEXT, artist TEXT, album TEXT, mbid TEXT, duration_ms INTEGER, album_id TEXT, album_artist TEXT);
+             INSERT INTO songs VALUES ('tr-1', 'Joga', 'Björk', 'Homogenic', 'm1', 300000, 'al-1', NULL);
+             INSERT INTO songs VALUES ('tr-2', 'Human Behaviour', 'Björk', 'Debut', NULL, 250000, 'al-2', 'Björk');
+             INSERT INTO songs VALUES ('tr-3', 'Intro', 'Guest', 'Hits', NULL, NULL, 'al-3', 'Various Artists');
+             INSERT INTO songs VALUES ('tr-4', 'Intro', 'Other', 'Hits', NULL, NULL, 'al-4', 'Someone');",
+        )
+        .unwrap();
+        drop(db);
+        let (alone, whole) = (Matcher::library_albums(&file, None).unwrap(), Matcher::read(&file).unwrap());
+        let asked = [("Debut", "Björk"), ("Homogenic", "Björk"), ("Homogenic (Remastered)", "Bjork"), ("Homogenic", "Someone Else"), ("Hits", "Nobody"), ("Post", "Björk")];
+        let found = |m: &Matcher| asked.iter().map(|(title, artist)| m.find_album(title, Some(artist)).map(str::to_string)).collect::<Vec<_>>();
+        assert_eq!(found(&*alone), found(&whole));
+        assert_eq!(found(&*alone), [Some("al-2".to_string()), Some("al-1".to_string()), Some("al-1".to_string()), Some("al-1".to_string()), None, None]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The process' peak memory so far (Linux), in MB.
     fn peak_mb() -> f64 {
         let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
