@@ -1714,16 +1714,19 @@ impl UserData {
         Ok(())
     }
 
-    /// A request's record (C49a), where it has none yet: 0.17's step's, given once. Whether it was given.
-    pub fn give_request_record(&self, id: i64, record: i64) -> Result<bool> {
+    /// A request's record (C49a), where it has none yet: 0.17's step's, given once. Whether it was given, and the request it was
+    /// closed beside as asked twice, where it was (W6; X7: the step's report lists it).
+    pub fn give_request_record(&self, id: i64, record: i64) -> Result<(bool, Option<i64>)> {
         let db = self.db();
         // A second open request of the account's for that record is closed as asked twice first (W6, as `set_request_record`).
-        db.execute(
+        let kept = open_beside(&db, id, record)?;
+        let closed = db.execute(
             "UPDATE request SET status = 'cancelled', reason = 'Asked twice', decided_at = ?3 WHERE id = ?1 AND record IS NULL AND status IN ('pending', 'approved')
              AND EXISTS (SELECT 1 FROM request o WHERE o.id != ?1 AND o.user = request.user AND o.record = ?2 AND o.status IN ('pending', 'approved'))",
             params![id, record, now()],
-        )?;
-        Ok(db.execute("UPDATE request SET record = ?2 WHERE id = ?1 AND record IS NULL", params![id, record])? > 0)
+        )? > 0;
+        let given = db.execute("UPDATE request SET record = ?2 WHERE id = ?1 AND record IS NULL", params![id, record])? > 0;
+        Ok((given, kept.filter(|_| closed)))
     }
 
     /// Every request's record, as (request, record): none where it has none. Blocking.
@@ -1734,18 +1737,20 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// A request given its record again (R19): the one it named is gone from the catalogue. Blocking.
-    pub fn set_request_record(&self, id: i64, record: i64) -> Result<()> {
+    /// A request given its record again (R19): the one it named is gone from the catalogue. The request it was closed beside as asked
+    /// twice, where it was (W6; X7: the step's report lists it). Blocking.
+    pub fn set_request_record(&self, id: i64, record: i64) -> Result<Option<i64>> {
         let db = self.db();
         // A second open request of the account's for that record (the step finding two of one album) is closed as asked twice first
         // (W6: one open request of an account's for a record).
-        db.execute(
+        let kept = open_beside(&db, id, record)?;
+        let closed = db.execute(
             "UPDATE request SET status = 'cancelled', reason = 'Asked twice', decided_at = ?3 WHERE id = ?1 AND status IN ('pending', 'approved')
              AND EXISTS (SELECT 1 FROM request o WHERE o.id != ?1 AND o.user = request.user AND o.record = ?2 AND o.status IN ('pending', 'approved'))",
             params![id, record, now()],
-        )?;
+        )? > 0;
         db.execute("UPDATE request SET record = ?2 WHERE id = ?1", params![id, record])?;
-        Ok(())
+        Ok(kept.filter(|_| closed))
     }
 
     /// A clause a fetcher's word on requests (`fetched`) says no more, taken off wherever it is, with the "; " that joins it to
@@ -2339,6 +2344,19 @@ pub struct Request {
 
 const REQUEST_COLUMNS: &str =
     "id, user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched, record";
+
+/// The account's other open request of `record` beside request `id`, `id` open too (W6): the one kept where `id` is closed as asked
+/// twice, the oldest where there are several.
+fn open_beside(db: &Connection, id: i64, record: i64) -> Result<Option<i64>> {
+    Ok(db
+        .query_row(
+            "SELECT o.id FROM request r JOIN request o ON o.id != r.id AND o.user = r.user AND o.record = ?2 AND o.status IN ('pending', 'approved')
+             WHERE r.id = ?1 AND r.status IN ('pending', 'approved') ORDER BY o.id LIMIT 1",
+            params![id, record],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
 
 fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
     Ok(Request {

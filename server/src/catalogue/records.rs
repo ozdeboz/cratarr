@@ -2304,10 +2304,12 @@ impl Catalogue {
             if tx.query_row("SELECT 1 FROM meta WHERE key = ?1", [&mark], |_| Ok(())).optional()?.is_some() {
                 continue;
             }
-            let report = carry_part(&tx, c, part, now())?;
+            // A part that fails names itself (X7).
+            let named = || format!("0.17's step, part {part}");
+            let report = carry_part(&tx, c, part, now()).with_context(named)?;
             after(part)?;
-            tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![mark, report.to_string()])?;
-            tx.commit()?;
+            tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![mark, report.to_string()]).with_context(named)?;
+            tx.commit().with_context(named)?;
             ran.push(part);
         }
         Ok(ran)

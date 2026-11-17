@@ -27,7 +27,7 @@
 //!   match (MusicBrainz matched the record's tracks to it; two on one release, the older record), the files' own (the older
 //!   record first), a likely match. A retired record holds none.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::catalogue::Catalogue;
 use crate::catalogue::records::{JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, CarriedRequest, Ref};
@@ -42,6 +42,25 @@ const SOULSEEK_016: &str = "Not handed over to Soulseek: no release group to jud
 /// The mark that 0.16's word on Soulseek is off the requests (R29): a part of the migration report, what came off in it.
 const SOULSEEK_WORD: &str = "requests: 0.16's word on Soulseek";
 
+/// The report's list of the requests the step closed as asked twice (X7): an account's second open request of one record (W6).
+const ASKED_TWICE: &str = "requests_closed_as_asked_twice";
+
+/// A request closed as asked twice, as the report lists it: the request, the one kept, their record.
+fn asked_twice_line(request: i64, kept: i64, record: i64) -> serde_json::Value {
+    serde_json::json!({ "request": request, "kept": kept, "record": record })
+}
+
+/// Those closed as asked twice added to the report's list; none, nothing added.
+fn with_asked_twice(report: &mut serde_json::Value, closed: Vec<serde_json::Value>) {
+    if closed.is_empty() {
+        return;
+    }
+    match report.get_mut(ASKED_TWICE).and_then(serde_json::Value::as_array_mut) {
+        Some(list) => list.extend(closed),
+        None => report[ASKED_TWICE] = closed.into(),
+    }
+}
+
 /// 0.16's word that it could not hand a request to Soulseek taken off every request it is on, once (R29, N12).
 fn clear_soulseek_word(ud: &UserData) -> Result<()> {
     if ud.migration_report()?.contains_key(SOULSEEK_WORD) {
@@ -54,7 +73,7 @@ fn clear_soulseek_word(ud: &UserData) -> Result<()> {
 /// The requests with no record still (the step's map unreadable, R19: F12), or naming one the catalogue no longer knows (a
 /// catalogue restored from a backup older than the request, fresh track ids: F14), each given the record its release group and
 /// names find, as a Want's is (`requests::record_of_album`). At every start; after the first, none is left. Blocking.
-fn give_again(cat: &Catalogue, ud: &UserData) -> Result<()> {
+fn give_again(cat: &Catalogue, ud: &UserData, asked_twice: &mut Vec<serde_json::Value>) -> Result<()> {
     let all = ud.request_records()?;
     let known = cat.requested(&all.iter().filter_map(|(_, record)| *record).collect::<Vec<_>>())?;
     for (id, record) in all {
@@ -63,7 +82,9 @@ fn give_again(cat: &Catalogue, ud: &UserData) -> Result<()> {
         }
         let Some(r) = ud.request(id)? else { continue };
         let given = super::requests::record_of_album(cat, r.release_group.as_deref(), &r.artist, &r.album, r.year, r.cover.clone())?;
-        ud.set_request_record(id, given)?;
+        if let Some(kept) = ud.set_request_record(id, given)? {
+            asked_twice.push(asked_twice_line(id, kept, given));
+        }
         tracing::info!(target: "library", request = id, record = given, "a request given its record again");
     }
     Ok(())
@@ -80,8 +101,12 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
     let ran = if cat.references_to_carry()?.is_empty() { Vec::new() } else { cat.carry_references(&carry_of(&ud.kept_for_017()?), after)? };
     // The records the step gave the requests, into the user data where it has none yet (C49a): at every start, so a step cut
     // off between its part and here gives them at the next.
-    for (id, record) in cat.request_records_017()? {
-        ud.give_request_record(id, record)?;
+    let mut asked_twice = Vec::new();
+    for (id, record) in cat.request_records_017().context("0.17's step, reading the records it gave the requests")? {
+        // An account's second open request of one record, closed as asked twice (W6), is no longer silent (X7): the report lists it.
+        if let (_, Some(kept)) = ud.give_request_record(id, record).context("0.17's step, giving the requests their records")? {
+            asked_twice.push(asked_twice_line(id, kept, record));
+        }
     }
     // Two repairs of the requests, each said in the log where it fails, and the start goes on: it is tried again at the next (R29,
     // N12). 0.16's word that it could not hand a request to Soulseek, untrue since 0.17's Soulseek takes in every record (C51b),
@@ -89,15 +114,26 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
     if let Err(e) = clear_soulseek_word(ud) {
         tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step: 0.16's word on Soulseek could not be taken off the requests; tried again at the next start");
     }
-    if let Err(e) = give_again(cat, ud) {
+    if let Err(e) = give_again(cat, ud, &mut asked_twice) {
         tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step: the requests could not all be given their records again; tried again at the next start");
     }
-    if ran.is_empty() && ud.migration_report()?.contains_key(PART) {
+    if !asked_twice.is_empty() {
+        tracing::info!(target: "library", count = asked_twice.len(), "0.17's step: requests closed as asked twice, each an account's second open request of one record");
+    }
+    if ran.is_empty()
+        && let Some((_, mut report)) = ud.migration_report()?.remove(PART)
+    {
+        // Done before: those closed now join its report.
+        if !asked_twice.is_empty() {
+            with_asked_twice(&mut report, asked_twice);
+            ud.set_migration_part(PART, &report).context("0.17's step, writing its report")?;
+        }
         return Ok(());
     }
     after("catalogue")?;
-    let Some(report) = cat.references_carried()? else { return Ok(()) };
-    ud.set_migration_part(PART, &report)?;
+    let Some(mut report) = cat.references_carried().context("0.17's step, reading its report")? else { return Ok(()) };
+    with_asked_twice(&mut report, asked_twice);
+    ud.set_migration_part(PART, &report).context("0.17's step, writing its report")?;
     if !ran.is_empty() {
         let references = report["tables"].as_array().and_then(|t| t.iter().find(|t| t["name"] == "references")).and_then(|t| t["after"].as_u64()).unwrap_or(0);
         tracing::info!(
@@ -626,6 +662,44 @@ mod tests {
         let report = &ud.migration_report().unwrap()[PART].1;
         let alikes: Vec<&str> = report["requests_beside_owned_look_alikes"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect();
         assert!(alikes.iter().any(|l| l.starts_with("15 Glass Harbour - Tide Tables (Deluxe) ~ ") && l.ends_with("- Tide Tables")), "{report}");
+    }
+
+    /// X7: a part that fails names itself in the error, as the step's writes outside the parts do.
+    #[test]
+    fn a_failing_part_names_itself_in_the_error() {
+        let data = Data::new("part-fails");
+        let err = {
+            // Opened first: opening makes the tables the step writes.
+            let (cat, ud) = data.open();
+            data.batch("catalogue.sqlite", "CREATE TRIGGER broken_part BEFORE INSERT ON \"references\" BEGIN SELECT RAISE(ABORT, 'broken by the test'); END;");
+            run_with(&cat, &ud, &|_| Ok(())).unwrap_err()
+        };
+        let part = err.to_string().strip_prefix("0.17's step, part ").map(str::to_string);
+        assert!(part.as_deref().is_some_and(|p| PARTS_017.contains(&p)), "{err:#}");
+        assert!(format!("{err:#}").contains("broken by the test"), "{err:#}");
+        let at = PARTS_017.iter().position(|p| Some(*p) == part.as_deref()).unwrap();
+        let mut before: Vec<String> = PARTS_017[..at].iter().map(|p| p.to_string()).collect();
+        before.sort();
+        assert_eq!(data.marks(), before, "the parts before it done");
+        // A write outside the parts: the requests given their records.
+        let given = Data::new("records-fail");
+        let (cat, ud) = given.open();
+        given.batch("userdata.sqlite", "CREATE TRIGGER broken_record BEFORE UPDATE OF record ON request BEGIN SELECT RAISE(ABORT, 'broken by the test'); END;");
+        assert_eq!(run_with(&cat, &ud, &|_| Ok(())).unwrap_err().to_string(), "0.17's step, giving the requests their records");
+    }
+
+    /// X7: a request the step closes as asked twice (an account's second open request of one record, W6) is listed in its report:
+    /// the request, the one kept, their record.
+    #[test]
+    fn the_step_reports_each_request_closed_as_asked_twice() {
+        let data = Data::new("asked-twice");
+        data.batch("userdata.sqlite", "INSERT INTO request (id, user, album_key, artist_key, album, artist, year, at, status) VALUES (14, 'bob', 'orbitlane|quietlanes2', 'orbit lane', 'Quiet Lanes', 'Orbit Lane', 2017, 1793950900, 'approved')");
+        data.run();
+        let record = data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 8");
+        assert_eq!(data.sql::<String>("userdata.sqlite", "SELECT status || ' ' || reason FROM request WHERE id = 14"), "cancelled Asked twice");
+        let (_, ud) = data.open();
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert_eq!(report[ASKED_TWICE], serde_json::json!([{ "request": 14, "kept": 8, "record": record }]), "{report}");
     }
 
     /// R14 (F3): two requests of one album with no release group share one record not had: the second finds what the first made.
