@@ -183,6 +183,26 @@ const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id
   was_album = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'album' ORDER BY t.n LIMIT 1),
   was_recording = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'musicbrainz_trackid' ORDER BY t.n LIMIT 1)";
 
+/// A table's rows of one file made again as another file's (C39, `copy_rows`): every column as it is but its place (`folder`,
+/// `rel`) and those `set` gives. The columns are the table's own (`PRAGMA table_info`), so a column added later is copied too. How
+/// many rows. Blocking.
+fn copy_row(tx: &Connection, table: &str, from: (i64, &str), to: (i64, &str), set: &[(&str, rusqlite::types::Value)]) -> Result<usize> {
+    let columns: Vec<String> = tx.prepare(&format!("PRAGMA table_info({table})"))?.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<_>>()?;
+    let picked: Vec<String> = columns
+        .iter()
+        .map(|c| match c.as_str() {
+            "folder" => "?1".to_string(),
+            "rel" => "?2".to_string(),
+            c => set.iter().position(|(name, _)| *name == c).map_or_else(|| format!("\"{c}\""), |i| format!("?{}", i + 5)),
+        })
+        .collect();
+    let named: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
+    let sql = format!("INSERT INTO {table} ({}) SELECT {} FROM {table} WHERE folder = ?3 AND rel = ?4", named.join(", "), picked.join(", "));
+    let mut values: Vec<rusqlite::types::Value> = vec![to.0.into(), to.1.to_string().into(), from.0.into(), from.1.to_string().into()];
+    values.extend(set.iter().map(|(_, v)| v.clone()));
+    Ok(tx.execute(&sql, rusqlite::params_from_iter(values))?)
+}
+
 /// Whether a folder shows nothing, or is not there: how a mount that is not up looks, and no sign its files are gone.
 fn holds_nothing(path: &str) -> bool {
     std::fs::read_dir(path).map_or(true, |mut d| !d.any(|e| e.is_ok_and(|e| !e.file_name().to_string_lossy().starts_with('.'))))
@@ -488,7 +508,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 40] = [
+const ADDED_COLUMNS: [(&str, &str); 41] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -561,6 +581,9 @@ const ADDED_COLUMNS: [(&str, &str); 40] = [
     // Y12: its names as the clash of names compares them (`records::names_of`: artist|title, each folded), kept so a Want finds the
     // records of its names by an index. NULL until folded (`records::live_named_in`), and again once either is renamed (a trigger).
     ("records", "names TEXT"),
+    // C39 (Copy to, files.md CP5): a copy whose blocks are its original's, as the file system said when it was made: it costs no
+    // room. Let go of where the file's size or time changes (a tag write makes it a file of its own); kept as it moves.
+    ("files", "shared INTEGER NOT NULL DEFAULT 0"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -1390,7 +1413,7 @@ impl Catalogue {
         {
             let mut upsert = tx.prepare(
                 "INSERT INTO files (folder, rel, size, mtime, state, came) VALUES (?1, ?2, ?3, ?4, 0, ?5)
-                 ON CONFLICT (folder, rel) DO UPDATE SET size = ?3, mtime = ?4, state = 0, error = NULL, gone_at = NULL",
+                 ON CONFLICT (folder, rel) DO UPDATE SET size = ?3, mtime = ?4, state = 0, error = NULL, gone_at = NULL, shared = 0",
             )?;
             let mut back = tx.prepare("UPDATE files SET gone_at = NULL WHERE folder = ?1 AND rel = ?2")?;
             for f in found {
@@ -2973,6 +2996,41 @@ impl Catalogue {
         Ok(rels.len())
     }
 
+    /// The catalogue's copy of files Cratarr copied (C39, Copy to): each copy's rows made from its original's (`files`, `tags`,
+    /// `analysis`, `analysis_shape`, `beat_this`; no `source_ids`, which name the original's place at another server), so the walk
+    /// finds it known, read and analysed, on the same tracks: one album, two copies. A copy shares its original's blocks
+    /// (`files.shared`) as `moves::copy` said; it came now. Rows a walk made there first give way, as `rekey`'s do. Each copy as
+    /// (its original, the copy, shared); all in one transaction. How many were copied. Blocking.
+    pub fn copy_rows(&self, copies: &[((i64, String), (i64, String), bool)]) -> Result<usize> {
+        use rusqlite::types::Value;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let now = now();
+        let mut done = 0;
+        for ((from_folder, from), (to_folder, to), shared) in copies {
+            if (from_folder, from) == (to_folder, to) {
+                continue;
+            }
+            for table in FILE_TABLES {
+                tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![to_folder, to])?;
+            }
+            let set = [("trashed", Value::Null), ("gone_at", Value::Null), ("shared", Value::Integer(i64::from(*shared))), ("came", Value::Integer(now))];
+            if copy_row(&tx, "files", (*from_folder, from), (*to_folder, to), &set)? == 0 {
+                continue;
+            }
+            for table in ["tags", "analysis", "analysis_shape", "beat_this"] {
+                copy_row(&tx, table, (*from_folder, from), (*to_folder, to), &[])?;
+            }
+            done += 1;
+        }
+        tx.commit()?;
+        drop(db);
+        if done > 0 {
+            self.changed_outside_pass();
+        }
+        Ok(done)
+    }
+
     /// Rows Cratarr moved into a trash (Replace: the old files into Music's trash; before 2026-10-16, Incoming's):
     /// they follow, marked trashed with the trash token, so they retire when the trash is emptied. Blocking.
     pub fn move_into_trash(&self, from: (i64, &str), to: (i64, &str), token: &str) -> Result<usize> {
@@ -3325,7 +3383,8 @@ impl Catalogue {
     // folder and the trash, as the tags do.
 
     /// A file's analysis and beats carried over to its new size and time (its audio as it was), and the file noted as
-    /// changed, its tags to read again. Blocking.
+    /// changed, its tags to read again; a copy that shared its original's blocks shares them no more (C39: a tag write makes a
+    /// file of its own). Blocking.
     fn carry_over(&self, folder: i64, rel: &str, before: (u64, i64), after: (u64, i64)) -> Result<()> {
         let db = self.db();
         for table in ["analysis", "beat_this"] {
@@ -3334,7 +3393,7 @@ impl Catalogue {
                 params![folder, rel, after.0 as i64, after.1, before.0 as i64, before.1],
             )?;
         }
-        db.execute("UPDATE files SET size = ?3, mtime = ?4, state = 0 WHERE folder = ?1 AND rel = ?2", params![folder, rel, after.0 as i64, after.1])?;
+        db.execute("UPDATE files SET size = ?3, mtime = ?4, state = 0, shared = 0 WHERE folder = ?1 AND rel = ?2", params![folder, rel, after.0 as i64, after.1])?;
         Ok(())
     }
 
@@ -4377,6 +4436,54 @@ pub fn served_fingerprint(db: &Connection) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file of track 7 in catalogue folder 0, read, its tags and analysis kept (C39).
+    fn read_file_in(cat: &Catalogue) {
+        let db = cat.db();
+        db.execute("INSERT INTO files (folder, rel, size, mtime, track, state, format) VALUES (0, 'A/1.flac', 10, 5, 7, ?1, 'FLAC')", [READ]).unwrap();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'A/1.flac', 0, 'TITLE', 'title', 'One')", []).unwrap();
+        db.execute("INSERT INTO analysis (folder, rel, size, mtime, version, analysed_at) VALUES (0, 'A/1.flac', 10, 5, ?1, 1)", [crate::analysis::VERSION]).unwrap();
+        db.execute("INSERT INTO source_ids (source, track_id, library, folder, rel, seen) VALUES ('jf', 'x1', 'Music', 0, 'A/1.flac', 1)", []).unwrap();
+    }
+
+    /// C39: a copy's rows are its original's: on the same track, read, its tags and analysis kept, so no pass reads or analyses it
+    /// again; it came now, shares as it was copied, and names no other server's item. A walk's row there first gives way.
+    #[test]
+    fn a_copy_is_not_analysed_again() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/own")]).unwrap();
+        read_file_in(&cat);
+        cat.db().execute("INSERT INTO files (folder, rel, size, mtime, state) VALUES (1, 'A/1.flac', 10, 5, 0)", []).unwrap();
+        assert_eq!(cat.copy_rows(&[((0, "A/1.flac".into()), (1, "A/1.flac".into()), true)]).unwrap(), 1);
+        let db = cat.db();
+        let (track, state, shared, came): (Option<i64>, i64, i64, Option<i64>) =
+            db.query_row("SELECT track, state, shared, came FROM files WHERE folder = 1 AND rel = 'A/1.flac'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
+        assert_eq!((track, state, shared), (Some(7), READ, 1), "the same track, read, shared");
+        assert!(came.is_some_and(|c| c > 5), "come now");
+        let title: String = db.query_row("SELECT value FROM tags WHERE folder = 1 AND rel = 'A/1.flac' AND name = 'title'", [], |r| r.get(0)).unwrap();
+        assert_eq!(title, "One");
+        let named: i64 = db.query_row("SELECT count(*) FROM source_ids WHERE folder = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(named, 0, "no other server's item");
+        drop(db);
+        let waiting = cat.unanalysed(10).unwrap();
+        assert!(!waiting.iter().any(|(f, rel, ..)| (*f, rel.as_str()) == (1, "A/1.flac")), "not analysed again: {waiting:?}");
+    }
+
+    /// C39: a copy shares no more once its file is written (a tag write: a new size or time, read again or walked); it keeps its
+    /// mark as it moves.
+    #[test]
+    fn a_written_file_stops_being_shared() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/own")]).unwrap();
+        read_file_in(&cat);
+        cat.copy_rows(&[((0, "A/1.flac".into()), (1, "A/1.flac".into()), true)]).unwrap();
+        let shared = |rel: &str| cat.db().query_row("SELECT shared FROM files WHERE folder = 1 AND rel = ?1", [rel], |r| r.get::<_, i64>(0)).unwrap();
+        cat.move_files(1, "A", 1, "B").unwrap();
+        assert_eq!(shared("B/1.flac"), 1, "kept as it moves");
+        cat.carry_over(1, "B/1.flac", (10, 5), (12, 9)).unwrap();
+        assert_eq!(shared("B/1.flac"), 0, "written: its own file");
+        cat.copy_rows(&[((0, "A/1.flac".into()), (1, "C/1.flac".into()), true)]).unwrap();
+        cat.record_walk(1, &[walk::Found { rel: "C/1.flac".into(), size: 11, mtime: 6 }]).unwrap();
+        assert_eq!(shared("C/1.flac"), 0, "walked with another size: its own file");
+    }
 
     fn music() -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
