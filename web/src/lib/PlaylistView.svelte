@@ -2,7 +2,7 @@
   import ChoiceMark from './ChoiceMark.svelte';
   import PlayingDots from './PlayingDots.svelte';
   import { rowRoot, rowPiece } from './glassRow.svelte';
-  import { pageHere } from './addresses';
+  import { hrefOf, pageHere } from './addresses';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { untrack } from 'svelte';
   import { holdUntil } from './holdPlace.svelte';
@@ -24,6 +24,7 @@
   // tracks in play order, with all four actions: an album, like a crate, is a list of tracks but no playlist file.
   import {
     albumResume,
+    wantAlbum,
     albumView,
     type AlbumView,
     artistFavorite,
@@ -106,7 +107,9 @@
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import { deleteServerPlaylist, isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
-  import { BANDCAMP } from './bandcampPreview';
+  import { albumIdOf, BANDCAMP } from './bandcampPreview';
+  import { albumRowSub, notHadPage, type NotHadAction } from './recordNotHad';
+  import Notice from './Notice.svelte';
   import { DISCOVER, discoverArtistView } from './discoverArtist';
   import RowHeart from './RowHeart.svelte';
   import type { ExcludeEntry } from './crates.svelte';
@@ -265,7 +268,11 @@
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   // The record's libraries, as dots before its details (0.9.3): where it lies, beside its year.
   const albumDots = $derived(album ? libraryDots(album.source, { id: album.id }) : []);
-  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words'> & { kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'was_until' | 'bandcamp'> & { kbps: number | null } | null>(null);
+  /** A record not had (C54, lib/recordNotHad): its page from the catalogue, of an album the library has no copy of. */
+  const notHad = $derived(!!album && !!albumHead?.not_had);
+  /** What its page shows of it: no heart or Resume, its header's Want or Requested and its preview's play, its lines. */
+  const notHadShown = $derived(notHad && albumHead ? notHadPage(albumHead) : null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
   let listGenres = $state<string[] | null>(null);
   /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
@@ -429,6 +436,16 @@
     }
   }
 
+  /** A record not had asked again while its list is read: this often, at most this many times for one opening. */
+  const LOOK_MS = 4000;
+  const LOOK_TRIES = 8;
+  let lookedFor = { subject: '', n: 0 };
+  function lookAgain(subject: string) {
+    if (lookedFor.subject !== subject) lookedFor = { subject, n: 0 };
+    if (lookedFor.n++ >= LOOK_TRIES) return;
+    setTimeout(() => id === subject && saved++, LOOK_MS);
+  }
+
   // The rows: asked for when the playlist is viewed and again when it changes (its counts, from the shell's state).
   let rows = $state<PlaylistRow[] | null>(null);
   let source = $state('');
@@ -492,7 +509,9 @@
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
-              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words };
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, was_until: r.was_until, bandcamp: r.bandcamp };
+            // A record not had whose list is being read (C54): asked again a little later, a few times, until its rows are in.
+            if (want === id && r.not_had && r.looking) lookAgain(want);
             return { ...r, total: r.rows.length };
           })
         : ar
@@ -1327,6 +1346,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const barActions = $derived.by((): BarAction[] => {
     // An artist from Discover: nothing of theirs to play from here (their albums play on their own panels).
     if (artist && fromDiscover(artist.source)) return [];
+    // A record not had: its Bandcamp preview's play where it has one (OQ14), and Want or Requested (W9).
+    if (notHadShown) return notHadShown.actions.map((k) => ({ key: k, ...NOT_HAD_ACTIONS[k], run: () => void notHadAct(k), disabled: k === 'want' && wanting }));
     const play = (key: PlayMode, icon: IconName, label: string): BarAction => ({ key, icon, label, run: () => act(key), disabled: !canPlay });
     const list = [play('play', 'play', 'Play')];
     // Resume only where there is somewhere to resume from (the owner, 2026-11-02), not a dead button.
@@ -1341,6 +1362,52 @@ ${r.album_artist ?? r.artist ?? ''}`;
     else if (crate && port().radio) list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: crateRadio, disabled: !canPlay });
     return list;
   });
+  const NOT_HAD_ACTIONS: Record<NotHadAction, { icon: IconName; label: string }> = {
+    play: { icon: 'play', label: 'Play' },
+    shuffle: { icon: 'shuffle', label: 'Shuffle' },
+    next: { icon: 'playNext', label: 'Play next' },
+    last: { icon: 'listAdd', label: 'Add to queue' },
+    want: { icon: 'circlePlus', label: 'Want' },
+    requested: { icon: 'inbox', label: 'Requested' },
+  };
+  let wanting = $state(false);
+  async function notHadAct(k: NotHadAction) {
+    if (k === 'requested') return void (location.hash = hrefOf('requests'));
+    if (k === 'want') return wantNotHad();
+    await playPreview(k);
+  }
+  /** Want for a record not had: by its record (C49b); its request's state then read with the record again. */
+  async function wantNotHad() {
+    const a = album;
+    if (!a || !albumHead || wanting) return;
+    wanting = true;
+    try {
+      const { request } = await wantAlbum({ record: a.id, artist: albumHead.artist ?? '', album: albumHead.title });
+      if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
+      saved++;
+    } catch (e) {
+      toast.fail(e, 'Could not ask for it');
+    } finally {
+      wanting = false;
+    }
+  }
+  /** Its Bandcamp preview (OQ14, decision 0071): its album there, played through the Bandcamp source as that album's panel plays it. */
+  async function playPreview(how: 'play' | 'shuffle' | 'next' | 'last') {
+    const page = albumHead?.bandcamp;
+    if (!page) return;
+    navigator.vibrate?.(8);
+    try {
+      const v = await albumView(BANDCAMP, albumIdOf(page));
+      const list: LocalTrack[] = v.rows
+        .filter((x) => x.id && !x.missing)
+        .map((x) => ({ source: BANDCAMP, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: x.album_id ?? null, duration_secs: x.duration_secs, addable: false }));
+      if (!list.length) throw new Error('none plays');
+      await port().playTracks(list, how, title, BANDCAMP);
+      if (how === 'next' || how === 'last') toast.show({ text: how === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
   // A genre shows all its tracks: no favourites toggles.
   // Not before the crates are known: it showed No favourites first.
   const favState = $derived(crate && !seeded(crate) && crates.list ? FAVOURITES[favouritesOf(crate)] : null);
@@ -1360,6 +1427,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     // A server's album in its mode (decision 0098): its heart, its star there; no Cratarr menu. Its playlist: a menu
     // of what that server does with one (Delete).
     if (album && isServerSource(album.source)) return [heart(albumFav, toggleAlbumFavorite)];
+    // A record not had: no heart (nothing of it is the library's), its menu.
+    if (notHadShown) return [...(notHadShown.heart ? [heart(albumFav, toggleAlbumFavorite)] : []), menu(`Menu of ${title}`, () => (albumMenuOpen = true))];
     if (serverList) return [menu(`Menu of ${title}`, () => (serverListMenu = true))];
     // The device's own music (local mode, decision 0052), an artist from Discover: no heart, no Cratarr menu.
     if (offServer) return [];
@@ -2495,9 +2564,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
               >{#if l.progress !== null}<span class="files-meter"><i style:width={`${l.progress * 100}%`}></i></span>{/if}</button
             >
           {/if}
+          <!-- A record not had (W9): the record the library has it as, which a tap opens; until when it was in Music (OQ16). -->
+          {#if notHadShown}
+            {#each notHadShown.lines as l (l.kind)}
+              {#if l.kind === 'have'}{@const to = l.record}<button class="details left-out" onclick={() => viewOver(albumSubject('cratarr', to))}><Icon name="disc" size={14} /><span>{l.text}</span></button>
+              {:else}<span class="details left-out"><Icon name="clock" size={14} /><span>{l.text}</span></span>{/if}
+            {/each}
+          {/if}
           <!-- Its missing tracks over it, to look for (the owner, 2026-11-01: it opened Health's whole list, a U-turn);
                where they can't be looked for here, only said. -->
-          {#if album && me.admin && !offServer}
+          {#if album && me.admin && !offServer && !notHad}
             {#each healthLines as l (l.key)}
               {@const whole = l.key === 'library:incomplete' ? listedHere?.a.whole_tracks : null}
               <button class="details left-out" class:warn={l.urgent} onclick={() => openRecordProblem(l.key)}
@@ -2637,6 +2713,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
     {#if tab !== 'tracks' || multi || editing || crateEditing}
       <!-- another tab, the sections, or the edit list: above -->
+    {:else if error && album}
+      <!-- Out of reach, a record this device holds nothing of (a record not had among them, PR01): it needs Cratarr. -->
+      <Notice text={error} onretry={() => saved++} away="This record needs Cratarr." />
     {:else if error}
       <p class="error" role="alert">{error}</p>
     {:else if artist && !artist.tracks && rows && artistHead}
@@ -2721,9 +2800,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {#if !own}
           {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
           {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
-          <SimilarAlbums source={album.source} album={album.id} />
+          {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
         {/if}
-        <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
+        {#if notHad}
+          <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} />
+        {:else}
+          <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
+        {/if}
       {/if}
       {#if album && albumHead && album.source === BANDCAMP}
         <!-- A Bandcamp album's About (the owner, 2026-10-25: "as much as our own panel"): what its page says. -->
@@ -2874,7 +2957,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       size="large"
       title={movement ?? r.name ?? r.file}
       active={ok && !selecting && marked === r.id}
-      sub={r.missing ? 'Missing file' : r.artist && r.artist !== albumHead?.artist ? r.artist : undefined}
+      sub={albumRowSub(r, notHad, albumHead?.artist)}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       off={!ok}
       disabled={!ok}
@@ -3030,6 +3113,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     tracks={rows ? tracksOf(playable) : null}
     genres={listGenres}
     viewable={false}
+    {notHad}
     onresumegone={() => (resumeAt = null)}
     onclose={() => (albumMenuOpen = false)}
   />

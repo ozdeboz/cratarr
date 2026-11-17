@@ -12,7 +12,6 @@
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import RelatedArtists from './RelatedArtists.svelte';
-  import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import { bandcampOf, bandcampPlay, playOnBandcamp, bandcampFailed } from './bandcampFound.svelte';
   import SectionHead from './SectionHead.svelte';
@@ -89,7 +88,7 @@
   });
   // Not in your library (the owner, 2026-10-25; the server's lookup since 0.9.3): the artist's albums MusicBrainz lists
   // that the library lacks, asked when the page opens; while the server is still reading their discography (`looking`)
-  // asked again a little later. A tap opens one on Bandcamp, else its menu (Want; lib/ElsewhereAlbum). Cratarr's own
+  // asked again a little later. A tap opens its record's page (W9: a record not had, Want in its header). Cratarr's own
   // library's artists, and an artist from Discover (the owner, 2026-10-26: whatever Discover suggests today), found by
   // the Bandcamp album the page was opened from where its release group is known.
   let missing = $state<MissingAlbum[]>([]);
@@ -116,9 +115,6 @@
     };
   });
   const missingShown = $derived(missing.filter((a) => hit(a.title)));
-  let elsewhere = $state<ElsewhereAlbum>();
-  let finding = $state<string | null>(null);
-  let asked = $state<string[]>([]);
   let aboutEl = $state<HTMLElement>();
 
   // Discogs (0.9.8, the owner: "Yes to all"): their profile where TheAudioDB has none, and who they are there: their
@@ -222,18 +218,12 @@
   <section aria-label="Not in your library">
     <SectionHead title="Not in your library" />
     <ul class="grid">
-      {#each missingShown as m (m.release_group ?? m.record)}
-        {@const key = m.release_group ?? m.record}
-        {@const page = bandcampOf(key, m.bandcamp)}
+      {#each missingShown as m (m.record)}
+        {@const key = m.record}
+        {@const page = m.bandcamp ?? (m.release_group ? bandcampOf(m.release_group) : null)}
         <li class="missing">
-          <AlbumCard
-            source="musicbrainz"
-            album={{ id: key, title: m.title, year: m.year }}
-            cover={m.cover}
-            busy={finding === key}
-            request={m.request ?? (asked.includes(key) ? { state: 'wanted' } : null)}
-            onopen={() => elsewhere?.open({ release_group: m.release_group ?? null, title: m.title, artist: m.artist, year: m.year, cover: m.cover, bandcamp: page })}
-          />
+          <!-- Its record's page (W9): a record not had, Want in its header. -->
+          <AlbumCard source="cratarr" album={{ id: m.record, title: m.title, year: m.year, artist: m.artist }} cover={m.cover} request={m.request ?? null} notHad />
           <!-- On Bandcamp: Play on its cover, as Discover's cards have it (beside the card's button, over its cover). -->
           {#if page}<CoverPlay bandcamp
               label={m.title}
@@ -247,7 +237,6 @@
     </ul>
   </section>
 {/if}
-<ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
 {#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}
 {#if searching}<!-- what the words leave none of: the pill says it (searchNone) -->
 {:else if !albums.length && !appearsOn.length && !top}

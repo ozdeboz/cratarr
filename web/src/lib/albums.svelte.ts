@@ -16,14 +16,16 @@ import {
   type ListedAlbum,
   albumsTracks,
   ApiError,
+  openRecord,
 } from './api';
 import type { DownloadedTrack } from './app.svelte';
 import { player } from './live.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { playAlbumHere, playPlaylistFrom } from './output.svelte';
 import { choosePlayer, port } from './player/port.svelte';
-import { artistSubject, viewOver } from './panel.svelte';
-import { BANDCAMP } from './bandcampPreview';
+import { albumSubject, artistSubject, viewOver } from './panel.svelte';
+import { albumIdOf, BANDCAMP } from './bandcampPreview';
+import { howToOpen, type Openable } from './openRecord';
 import { cameFrom, DISCOVER } from './discoverArtist';
 import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
 import { prefs } from './prefs.svelte';
@@ -220,6 +222,17 @@ export function goToArtist(source: string, name: string, from: { id: string; tit
   // "server is not connected"), so the library's page where it has the artist, else theirs from Discover.
   if (source === BANDCAMP) source = hasArtist(name) ? 'cratarr' : DISCOVER;
   viewOver(artistSubject(source, name));
+}
+
+/** An album not in the library opened (W9, lib/openRecord): its record's page, made one first where no record holds it yet,
+ *  over what the panel views; else its Bandcamp album. A row the server can't make a record of throws, for its opener to say. */
+export async function openNotHad(x: Openable, label?: string | null): Promise<void> {
+  const how = howToOpen(x, label);
+  if (!how) return;
+  if ('record' in how) return viewOver(albumSubject('cratarr', how.record));
+  if ('bandcamp' in how) return viewOver(albumSubject(BANDCAMP, albumIdOf(how.bandcamp)));
+  const { record } = await openRecord(how.open);
+  viewOver(albumSubject('cratarr', record));
 }
 
 /** Whether Cratarr's own library has albums by the artist (as far as the library is read). */

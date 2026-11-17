@@ -19,7 +19,6 @@
   import Cover from './Cover.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import CoverBusy from './CoverBusy.svelte';
-  import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import Icon from './Icon.svelte';
   import { beyondAlbum, globalAsked, globalFailed, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, searchAgain, showAll } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -27,7 +26,8 @@
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
   import { viewFor, viewOver } from './panel.svelte';
-  import { libraryDots } from './albums.svelte';
+  import { libraryDots, openNotHad } from './albums.svelte';
+  import type { Openable } from './openRecord';
   import { pageView } from './pageView.svelte';
   import { quickOn } from './quickCrates.svelte';
   import { leaveOnArrival } from './navStep.svelte';
@@ -62,10 +62,21 @@
     return m ? libraryDots(m[1], { id: m[2] }) : [];
   }
 
-  // A tap: a page or a part where it shows (the words kept, so it narrows to them), an album not in the library on
-  // Bandcamp or its menu, what Discover left out its menu (Take back), the rest in the panel.
-  let elsewhere = $state<ElsewhereAlbum>();
+  // A tap: a page or a part where it shows (the words kept, so it narrows to them), an album not in the library its
+  // record's page (W9, lib/openRecord), what Discover left out its menu (Take back), the rest in the panel.
+  /** The result being opened: a row no record holds yet, made one first. */
   let finding = $state<string | null>(null);
+  async function openNotHere(it: SearchResult, x: Openable) {
+    if (finding) return;
+    finding = it.subject;
+    try {
+      await openNotHad(x);
+    } catch (e) {
+      toast.fail(e, "It couldn't be opened");
+    } finally {
+      finding = null;
+    }
+  }
   let leftOut = $state<SearchResult | null>(null);
   // A result tapped empties the search (the owner, 2026-10-25: it stayed in the field over the panel it opened); a set
   // found deep keeps the words, so it opens narrowed to them as the page's own deep find does (decision 0072), its own
@@ -81,19 +92,16 @@
     if (it.kind === 'work') return void (workOpen = workOf(it));
     leaveSearch(deep(it));
     if (it.subject.startsWith('#')) location.hash = it.subject;
-    // A missing record (C53b: `album:cratarr/al-<n>`): opened as an album elsewhere is, by its names, until a record not had has
-    // a page of its own.
-    else if (it.kind === 'missing')
-      void elsewhere?.open({ release_group: null, title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null, bandcamp: it.bandcamp });
     else if (it.kind === 'excluded') leftOut = it;
-    else if (KNOWN.includes(it.kind)) {
-      // Known elsewhere: opened as a missing album is, by its release group where its subject carries one.
+    // Known elsewhere by no record (a missing record, or a request of one, is `album:cratarr/al-<n>`, C53b: opened as any): by
+    // its release group where its subject carries one, else its Bandcamp album.
+    else if (KNOWN.includes(it.kind) && !it.subject.startsWith('album:')) {
       const rg = /^[a-z]+:([0-9a-f-]{36})$/.exec(it.subject)?.[1] ?? null;
-      void elsewhere?.open({ release_group: rg, title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null, bandcamp: it.bandcamp });
+      void openNotHere(it, { release_group: rg, title: it.title, artist: it.artist ?? '', bandcamp: it.bandcamp });
     }
     else if (it.kind === 'beyond') {
       const a = beyondAlbum(it.subject);
-      if (a) void elsewhere?.open({ release_group: a.release_group ?? null, title: a.title, artist: a.artist, year: a.year, cover: a.cover, bandcamp: a.bandcamp ?? null, discogs_url: a.discogs_url ?? null });
+      if (a) void openNotHere(it, { record: a.record, release_group: a.release_group, discogs_master: a.discogs, title: a.title, artist: a.artist, year: a.year, bandcamp: a.bandcamp });
     }
     else if (it.kind === 'track' && it.track) viewFor(it.subject, it.track);
     else viewOver(it.subject);
@@ -161,7 +169,7 @@
   <li>
     {#if it.kind === 'work'}{@render work(it)}{:else}
     <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={has ? press(it) : undefined}>
-      {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if (it.kind === 'missing' && finding === it.subject.slice('missing:'.length)) || (it.kind === 'beyond' && finding === it.subject.slice('beyond:'.length))}<CoverBusy small />{/if}</span>{/if}{/snippet}
+      {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if finding === it.subject}<CoverBusy small />{/if}</span>{/if}{/snippet}
       {#snippet badges()}{#each dotsOfResult(it) as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{/snippet}
       {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if matchLine(it.matched, it.kind)}<span class="why">{it.sub ? ' · ' : ''}{matchLine(it.matched, it.kind)}</span>{/if}{/snippet}
       {#snippet action()}{#if has}<button class="icon" aria-label={`Menu of ${it.title}`} title="More" onclick={() => (menu = menuOf(it))}><Icon name="moreVert" size={22} /></button>{/if}{/snippet}
@@ -221,7 +229,6 @@
   <!-- Nothing yet, the server's answer for these words not in: the wait, not "nothing" (lib/search listShows). -->
   <Asking now={kept.loader} />
 {/if}
-<ElsewhereAlbum bind:this={elsewhere} bind:finding />
 {#if menu?.kind === 'track'}
   <TrackMenu track={menu.track} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'album'}

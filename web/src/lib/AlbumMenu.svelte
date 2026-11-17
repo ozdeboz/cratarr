@@ -65,6 +65,7 @@
   import DownloadStep from './DownloadStep.svelte';
   import MenuTable from './MenuTable.svelte';
   import { inOrder, type EntryId } from './menuTable';
+  import { offeredNotHad } from './recordNotHad';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
   import Asking from './Asking.svelte';
@@ -99,6 +100,7 @@
     tracks: givenTracks = null,
     genres: givenGenres = null,
     viewable = true,
+    notHad = false,
     start = 'menu',
     onresumegone,
     ongone,
@@ -114,6 +116,8 @@
     genres?: string[] | null;
     /** View in the panel (not from the panel showing it). */
     viewable?: boolean;
+    /** A record not had (W9, lib/recordNotHad): only what needs no copy of it; no heart, no large actions. */
+    notHad?: boolean;
     /** The step it opens on: the entries, or straight at the playlists. */
     /** 'cover': straight on Change cover (Health's albums without one). */
     start?: 'menu' | 'lists' | 'cover';
@@ -174,7 +178,7 @@
 
   // The heart, on the card: the one the panel's top bar shows (lib/favourites.svelte.ts), so both change together.
   $effect(() => {
-    loadAlbumFavorites(source, [a.id]);
+    if (!notHad) loadAlbumFavorites(source, [a.id]);
   });
   const fav = $derived(isFavorite(source, a.id));
   async function toggleFavourite() {
@@ -193,7 +197,7 @@
   let resumeAt = $state<{ track: string; position: number } | null>(null);
   $effect(() => {
     const id = a.id;
-    if (!id.startsWith('al-')) return;
+    if (notHad || !id.startsWith('al-')) return;
     albumResume(id).then((r) => r.track && (resumeAt = { track: r.track, position: r.position_secs ?? 0 }), () => {});
   });
   async function forgetResume() {
@@ -226,7 +230,7 @@
   // and classical set by hand (lib/RecordEdit), in the menu's place; the 0.10 Classical… sheet is its Classical row now.
   let editOpen = $state(false);
   const actions = $derived.by<SheetAction[]>(() => {
-    if (ask || exporting || step !== 'menu') return [];
+    if (notHad || ask || exporting || step !== 'menu') return [];
     const t = tracks;
     // Following someone (0.10): its tracks asked of them, next or at the end of their queue.
     if (followingNow()) {
@@ -587,7 +591,9 @@
 
 <!-- Missing tracks (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
 {#snippet entry(e: EntryId)}
-  {#if e === 'view'}
+  {#if notHad && !offeredNotHad(e)}
+    <!-- A record not had: nothing of a copy's (lib/recordNotHad). -->
+  {:else if e === 'view'}
     {#if viewable && panel.viewed !== albumSubject(source, a.id)}
       <MenuEntry
         icon="squareArrowOutUpRight"
@@ -699,7 +705,7 @@
   images={[cover ?? albumCoverUrl(source, a.id)]}
   title={a.title}
   chips={[a.artist ?? 'Unknown artist']}
-  heart={ask || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
+  heart={notHad || ask || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
   {actions}
   beside={ask === 'cover' && coverProgress ? lookProgress : null}
   end={ask === 'cover'

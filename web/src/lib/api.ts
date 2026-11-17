@@ -15,6 +15,7 @@ import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
 import type { PlaylistOp } from './playlistOps';
 import type { ChangesAnswer } from './changeLog';
+import type { RequestState } from './requestState';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -2345,6 +2346,8 @@ export type AlbumRequest = {
   fetched: string | null;
   /** Absent on a request just made (Want's answer). */
   album_state?: RequestedAlbum;
+  /** Its state as the server works it out, the one every view reads (W5, lib/requestState); absent on a request just made. */
+  state?: RequestState;
 };
 /** The Requests page: the account's own, everyone's waiting ones for those who answer them (else null). */
 /** `fetchers`: those connected, configured and answering (decision 0099's amendment: Lidarr and Soulseek siblings,
@@ -2412,8 +2415,11 @@ export const takeBackExcluded = (what: { key: string } | { artist: string }) =>
 /** An album's page on Bandcamp, looked for when it is opened (MusicBrainz's link first, the artist's page, the search). */
 export const findOnBandcamp = (artist: string, album: string, release_group?: string) =>
   request<{ page: string | null }>(`/api/bandcamp/find?${new URLSearchParams({ artist, album, ...(release_group ? { release_group } : {}) })}`);
+/** A row no record holds yet opened (C56, C57; Q33: kept at open): the record made of what its sources know it by, or the one
+ *  that already holds it (lib/openRecord). */
+export const openRecord = (b: import('./openRecord').RecordOpenBody) => post<{ record: string }>('/api/records/open', b);
 /** Want for any album (a missing one): the same request and rights as Discover's Want. */
-export const wantAlbum = (a: { release_group?: string; artist: string; album: string; year?: number | null; cover?: string | null }) =>
+export const wantAlbum = (a: { record?: string; release_group?: string; artist: string; album: string; year?: number | null; cover?: string | null }) =>
   post<{ request: AlbumRequest }>('/api/requests/want', a);
 /** The words looked up on MusicBrainz (Find more music, 0.9.3): its albums and artists, the surest first, `have` where
  *  the library has them. */
@@ -2544,7 +2550,28 @@ export type AlbumView = {
   listeners?: number;
   /** Its words by kind with their sources, and its tracks' own (decision 0097): Cratarr's own library's records. */
   words?: RecordWords;
+  /** A record not had (C54, lib/recordNotHad): its page from the catalogue, its rows its list's, none of them playable. */
+  not_had?: boolean;
+  /** Its list is being read: none kept yet, its rows come when the page asks again. */
+  looking?: boolean;
+  /** The record that has it by the one had rule, where it is another (`al-<n>`). */
+  have?: string;
+  /** The account's newest request of it, whatever its status, as the Requests page shows it. */
+  request?: AlbumRequest;
+  /** Its labels, each by its id for life. */
+  labels?: LabelOf[];
+  /** Its cover's address: its own, else its release group's, else its Bandcamp page's. */
+  cover?: string;
+  /** A retired record's: when it went from Music (epoch seconds, OQ16). */
+  was_until?: number;
+  /** Its album page on Bandcamp: its preview plays from there (OQ14). */
+  bandcamp?: string;
+  /** What a Want of it sends: the record that holds it (`al-<n>`), else the release group it was found by. */
+  record?: string;
+  release_group?: string;
 };
+/** A record's label as its page names it (C54): its id for life (`la-<n>`), its name, its catalogue number there. */
+export type LabelOf = { id: string; name: string; catno?: string };
 /** One search's answer from the server (decision 0072, 0.9.3): per kind, and the kinds merged for Top results. Each
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
@@ -2577,10 +2604,13 @@ export type BeyondAlbum = {
   year: number | null;
   cover: string | null;
   release_group?: string | null;
-  discogs?: string | null;
+  /** Its master at Discogs. */
+  discogs?: number | null;
   /** Its page on Discogs, where Discogs found it: Discogs' data is shown with its attribution (its terms). */
   discogs_url?: string | null;
   sources: ('musicbrainz' | 'discogs')[];
+  /** The record that holds its reference (`al-<n>`, C57); none until it is opened. */
+  record?: string | null;
   bandcamp?: string | null;
   request?: RequestMark | null;
   have?: boolean;
