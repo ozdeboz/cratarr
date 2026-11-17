@@ -21,6 +21,9 @@
 //!   it cannot read (an outage, a switch, a pause) keeps that artist's records not had seen instead.
 //! - **Once a day:** looked at hourly, run where the catalogue's note says the last pass is a day old or more (`pass`), so a
 //!   restart does not run it again.
+//! - **After a long gap** (Z9: an outage, a clock that jumped forward): a pass more than three days after the last re-reads as
+//!   ever, but forgets no record until a whole month of re-reads has passed (`forgetting_waits`), as what the re-read has not
+//!   come to again would look unseen.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -36,6 +39,12 @@ use crate::userdata::UserData;
 /// When the pass last ran, in the catalogue's notes (`meta`): at most once a day, across restarts.
 const RAN_AT: &str = "retention_at";
 const DAY: i64 = 86_400;
+/// Until when the forgetting of records waits (Z9), in the catalogue's notes: across restarts.
+const WAITS_UNTIL: &str = "retention_waits_until";
+/// How long after the last pass a pass is late (Z9): the re-read, a thirtieth of the artists a day, has fallen behind.
+const LATE: i64 = 3 * DAY;
+/// A whole month of the paced re-read (RT01c): each library artist come to again.
+const REREAD_MONTH: i64 = 30 * DAY;
 
 /// What an album asked for by its id answers once its record was forgotten (RT01).
 pub const NO_LONGER_KNOWN: &str = "This album is no longer known: nobody had opened it or seen it in a list for six months.";
@@ -45,6 +54,20 @@ pub const ARTIST_NO_LONGER_KNOWN: &str = "This artist is no longer known.";
 /// Whether the pass is due at `now`: never run, or last run a day ago or more.
 fn due(cat: &Catalogue, now: i64) -> bool {
     cat.meta(RAN_AT).and_then(|v| v.parse::<i64>().ok()).is_none_or(|at| now - at >= DAY)
+}
+
+/// Whether the forgetting of records waits at `now` (Z9): a pass more than `LATE` after the last makes it wait a whole month of
+/// re-reads from now (`REREAD_MONTH`), as the re-read has fallen behind and what it has not come to again would look unseen; a
+/// wait already there is lengthened, never cut short. Noted in the catalogue (`WAITS_UNTIL`). Before the pass is noted.
+/// Blocking.
+fn forgetting_waits(cat: &Catalogue, now: i64) -> bool {
+    let noted = |key: &str| cat.meta(key).and_then(|v| v.parse::<i64>().ok());
+    let mut until = noted(WAITS_UNTIL).unwrap_or(0);
+    if noted(RAN_AT).is_some_and(|at| now - at > LATE) {
+        until = until.max(now + REREAD_MONTH);
+        cat.set_meta(WAITS_UNTIL, &until.to_string());
+    }
+    now < until
 }
 
 /// What keeps a record not had from outside the catalogue, however long nobody saw it: every request's record, whatever its
@@ -91,11 +114,13 @@ pub struct Reread {
     pub kept_seen: Vec<(i64, &'static str)>,
 }
 
-/// What a pass came to: the day's re-read (RT01c), and what it let go of: the records not had (RT01), their kept lists and the
-/// artists left with nothing (RT01b), and the labels' rows read thirty days ago (C56).
+/// What a pass came to: the day's re-read (RT01c), whether the forgetting of records waited (Z9), and what it let go of: the
+/// records not had (RT01), their kept lists and the artists left with nothing (RT01b), and the labels' rows read thirty days ago
+/// (C56).
 #[derive(Debug, Default, PartialEq)]
 pub struct Passed {
     pub reread: Reread,
+    pub waits: bool,
     pub records: Vec<i64>,
     pub lists: usize,
     pub artists: Vec<i64>,
@@ -162,9 +187,9 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
 }
 
 /// The day's pass at `now`, where due (`due`): the library artists' lists read again first (`reread`, RT01c), so what it reads
-/// counts as seen; then what keeps a record and an artist gathered, the records nothing keeps forgotten, the kept lists let go
-/// of, the artists left with nothing forgotten, the labels' rows read thirty days ago let go of (C56), and the pass's time
-/// written. What it came to; None: not due.
+/// counts as seen; then what keeps a record and an artist gathered, the records nothing keeps forgotten (but while the forgetting
+/// waits after a long gap, `forgetting_waits`, Z9), the kept lists let go of, the artists left with nothing forgotten, the
+/// labels' rows read thirty days ago let go of (C56), and the pass's time written. What it came to; None: not due.
 pub async fn pass(served: Arc<Serve>, now: i64) -> Result<Option<Passed>> {
     pass_reading(served, now, &super::discover::reread_sources(), super::switches::background_paused).await
 }
@@ -176,11 +201,13 @@ async fn pass_reading(served: Arc<Serve>, now: i64, sources: &[Arc<dyn ArtistLis
     if !tokio::task::spawn_blocking(move || due(&c, now)).await? {
         return Ok(None);
     }
+    let c = cat.clone();
+    let waits = tokio::task::spawn_blocking(move || forgetting_waits(&c, now)).await?;
     let reread = reread(&cat, sources, paused, now).await?;
     let done = tokio::task::spawn_blocking(move || -> Result<Passed> {
         let cat = served.catalogue();
         let (kept, artists_kept) = (protected(&served.userdata, served.data_dir.as_deref())?, protected_artists(&served)?);
-        let records = cat.forget_quiet(now, &kept)?;
+        let records = if waits { Vec::new() } else { cat.forget_quiet(now, &kept)? };
         let lists = cat.forget_quiet_lists(now, &kept)?;
         let artists = cat.forget_quiet_artists(now, &artists_kept)?;
         if !artists.is_empty() {
@@ -189,9 +216,12 @@ async fn pass_reading(served: Arc<Serve>, now: i64, sources: &[Arc<dyn ArtistLis
         }
         let label_rows = cat.forget_label_rows(now)?;
         cat.set_meta(RAN_AT, &now.to_string());
-        Ok(Passed { reread, records, lists, artists, label_rows })
+        Ok(Passed { reread, waits, records, lists, artists, label_rows })
     })
     .await??;
+    if done.waits {
+        tracing::info!(target: "library", "records not had: none forgotten until a month of re-reads has passed, the last pass long ago");
+    }
     if !done.reread.read.is_empty() || !done.reread.kept_seen.is_empty() {
         tracing::info!(target: "library", read = done.reread.read.len(), kept_seen = done.reread.kept_seen.len(), "the library's artists' lists read again, a month's share");
     }
@@ -567,6 +597,34 @@ mod tests {
         assert_eq!(done.records, [gone], "the record only Bandcamp knows stays");
         let seen: Option<i64> = cat.db_for_tests().query_row("SELECT seen_at FROM records WHERE id = ?1", [kept], |r| r.get(0)).unwrap();
         assert_eq!(seen, Some(NOW), "seen at the pass's now");
+    }
+
+    /// Z9: a pass more than three days after the last (an outage, a clock that jumped forward) re-reads as ever, but forgets no
+    /// record until a whole month of re-reads has passed, the daily passes meanwhile too; then it forgets, and a pass three days
+    /// after the last is not late.
+    #[tokio::test]
+    async fn a_late_pass_rereads_but_waits_a_month_to_forget() {
+        let served = served(None, 93_000);
+        let cat = served.catalogue().clone();
+        let artists = library_artists(&cat, 2);
+        let musicbrainz = stub("musicbrainz", false);
+        let sources: Vec<Arc<dyn ArtistList>> = vec![musicbrainz.clone(), stub("discogs", false)];
+        assert!(pass_reading(served.clone(), NOW, &sources, || false).await.unwrap().is_some_and(|p| !p.waits), "the first pass");
+        let quiet = unseen(&cat, "Undertow");
+        let late = NOW + 10 * DAY;
+        let done = pass_reading(served.clone(), late, &sources, || false).await.unwrap().expect("due");
+        assert_eq!((done.waits, done.records.len()), (true, 0), "ten days on: it waits");
+        assert_eq!(*musicbrainz.asked.lock().unwrap(), artists, "and re-reads as ever: the next artist");
+        for day in 1..30 {
+            let done = pass_reading(served.clone(), late + day * DAY, &sources, || false).await.unwrap().expect("due");
+            assert!(done.waits && done.records.is_empty(), "day {day}: still waits");
+        }
+        assert!(cat.record(quiet).unwrap().is_some());
+        let done = pass_reading(served.clone(), late + 30 * DAY, &sources, || false).await.unwrap().expect("due");
+        assert_eq!((done.waits, done.records), (false, vec![quiet]), "a month of re-reads on: forgotten");
+        let next = unseen(&cat, "Open Water");
+        let done = pass_reading(served.clone(), late + 33 * DAY, &sources, || false).await.unwrap().expect("due");
+        assert_eq!((done.waits, done.records), (false, vec![next]), "three days after the last: not late");
     }
 
     /// RT01c: with the background paused, the re-read reads nothing, and keeps the artist's records not had seen instead.
