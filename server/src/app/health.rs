@@ -654,7 +654,7 @@ pub fn fetchers_down(down: &[(&'static str, i64)], now: i64) -> Option<Finding> 
 }
 
 /// Soulseek's records held a day for its own disk's trouble (Y9): slskd could not store their files three times in a row (its disk
-/// full or read-only, its folder not writable), so their users are not asked again every five minutes. `held` as `soulseek::cant_store`
+/// full or read-only, its folder not writable or gone: U1), so their users are not asked again every five minutes. `held` as `soulseek::cant_store`
 /// gives them, the latest held first: its why is the detail. None held, no finding. Pure.
 pub fn soulseek_cant_store(held: &[(String, String)]) -> Option<Finding> {
     soulseek_held("requests:soulseek-store", "can't store files", held)
