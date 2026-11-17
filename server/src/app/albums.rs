@@ -573,9 +573,12 @@ impl App {
         // it has.
         let live = self.library.live();
         let incoming = a.library.as_deref().and_then(|l| live.iter().find(|x| x.cfg.id == source)?.kind_of(l)) == Some(LibraryKind::Incoming);
-        // Whose it was (U5): an Incoming copy outside Soulseek's library is Lidarr's, whose grab is marked failed where another asker
-        // is left.
-        let lidarrs = incoming && a.library.as_deref().and_then(|l| live.iter().find(|x| x.cfg.id == source)?.cfg.libraries.get(l)?.fetcher.clone()).as_deref() != Some("soulseek");
+        // Whose it was (U5, T9): its library's fetcher, and its folder there, which Lidarr's history is matched by: a grab is marked
+        // failed only for the copy's own import, where another asker is left.
+        let copy = incoming.then(|| super::requests::DeletedCopy {
+            fetcher: a.library.as_deref().and_then(|l| live.iter().find(|x| x.cfg.id == source)?.cfg.libraries.get(l)?.fetcher.clone()),
+            folder: a.copies.first().map(|c| c.dir.clone()).unwrap_or_default(),
+        });
         // Every open request of its record too (V2): one the Delete leaves keeps a fetcher.
         let (arrived, open) = match (self.served.as_ref(), crate::serve::ids::record_number(&a.id)) {
             (Some(served), Some(record)) if incoming => (super::requests::arrived_for(served, record, a.added).await, super::requests::open_of(served, record).await),
@@ -590,7 +593,7 @@ impl App {
             let closing = super::requests::closed_by(arrived, crate::serve::access::administering(), served.current_user().as_deref());
             let id = done.undo.parse::<crate::journal::EventId>().ok();
             let soulseek = super::soulseek::connected().await;
-            let goes_on = super::requests::deleted(super::requests::fetcher(self).as_deref(), soulseek, served, &closing, open, lidarrs, id.map(|id| (self.journal.as_ref(), id))).await;
+            let goes_on = super::requests::deleted(super::requests::fetcher(self).as_deref(), soulseek, served, &closing, open, copy.as_ref(), id.map(|id| (self.journal.as_ref(), id))).await;
             if goes_on && let Some(id) = id {
                 self.incoming.keep_fetching(id, &done.title).await;
             }
