@@ -1805,6 +1805,12 @@ impl ArtistAsked {
     fn at(&self, source: &str) -> Option<&str> {
         self.refs.iter().find(|r| r.source == source && r.kind == "artist").map(|r| r.value.as_str())
     }
+
+    /// Whether they have no list of their own (Z1): "Various Artists" by name or by MusicBrainz's id, MusicBrainz's "[unknown]"
+    /// (`records::listless`).
+    fn listless(&self) -> bool {
+        crate::catalogue::records::listless(&self.name, &self.refs)
+    }
 }
 
 /// What one source lists of an artist (C53a): what it knows them by, how that was found now (none: known before), and the records
@@ -2003,8 +2009,12 @@ impl Drop for Settles {
 }
 
 /// Each of an artist's lists that is old or never read (`read_at`), read now in a task of its own (C53a); whether any is being
-/// read (`looking`). A source being read is not asked twice; one that did not answer is asked again after `LIST_RETRY_SECS`.
+/// read (`looking`). A source being read is not asked twice; one that did not answer is asked again after `LIST_RETRY_SECS`. An
+/// artist with no list of their own ("Various Artists", Z1) is never read.
 fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>, read_at: &HashMap<String, i64>, sources: &[Arc<dyn ArtistList>], now: i64) -> bool {
+    if artist.listless() {
+        return false;
+    }
     let mut looking = false;
     for source in sources.iter().filter(|s| s.on()) {
         let key = (Arc::as_ptr(cat) as usize, artist.id, source.source());
@@ -2072,12 +2082,16 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
 /// An artist's records the library has none of (C53a), newest first: the rows kept, at once (`Catalogue::missing_of`: by the one
 /// had rule, a retired record per OQ16, each album once), while their lists at MusicBrainz, Discogs and Bandcamp are read in the
 /// background where old or never read, each kept as records not had; whether any is being read (`looking`), so the page asks
-/// again until none is. A source that does not answer is not read this time. No such artist: no list.
+/// again until none is. A source that does not answer is not read this time. No such artist, or one with no list of their own
+/// ("Various Artists", MusicBrainz's "[unknown]", Z1: 0.16's rule carried): no list, and none read.
 pub async fn missing_albums(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Result<(Vec<Missing>, bool)> {
     let c = cat.clone();
     let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { return Ok((Vec::new(), false)) };
     let read_at: HashMap<String, i64> = refs.iter().filter(|(r, _)| r.kind == "artist").filter_map(|(r, row)| Some((r.source.clone(), row.read_at?))).collect();
     let asked = Arc::new(ArtistAsked { id: artist, name, refs: refs.into_iter().map(|(r, _)| r).collect() });
+    if asked.listless() {
+        return Ok((Vec::new(), false));
+    }
     let looking = read_lists(&cat, &asked, &read_at, sources, super::moment::now_secs());
     let c = cat.clone();
     let rows = tokio::task::spawn_blocking(move || c.missing_of(artist)).await??;
@@ -2703,6 +2717,53 @@ mod missing_tests {
         let miss = remembered(&serve, artist, "Tide Tables", Some(GROUP_2), bandcamp_page(&no_links, artist, "Tide Tables", search())).await.unwrap();
         assert_eq!((miss, SEARCHED.load(SeqCst)), (None, 1), "MusicBrainz read and Bandcamp searched: nothing there");
         assert_eq!(kept(GROUP_2), Some(None), "that miss is kept");
+    }
+
+    /// Z1 (0.16's rule carried): an artist with no list of their own is never read nor listed: "Various Artists" by their name, an
+    /// artist MusicBrainz knows as "Various Artists", and MusicBrainz's "[unknown]". The re-read never comes to them, Discover's
+    /// missing list lists none of their records not had, and their page lists none and reads no list; the library's other
+    /// artist is come to, listed and read.
+    #[tokio::test]
+    async fn various_artists_is_never_read_or_listed() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        static ASKED: AtomicUsize = AtomicUsize::new(0);
+        struct Counted;
+        impl ArtistList for Counted {
+            fn source(&self) -> &'static str {
+                "musicbrainz"
+            }
+
+            fn read<'a>(&'a self, _: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+                ASKED.fetch_add(1, SeqCst);
+                Box::pin(async { Ok(None) })
+            }
+        }
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        // A library artist: credited first on a record had, and on a record not had their list kept.
+        let library = |name: &str, n: usize| {
+            let (artist, had) = (cat.artist_for(name).unwrap(), cat.record_for_tests(&format!("Had {n}"), 1));
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", [had, artist]).unwrap();
+            cat.keep_listing(Some(artist), &[listing(&format!("Missing {n}"), &[("musicbrainz", "release-group", &format!("00000000-0000-4000-8000-00000000019{n}"))])], "link").unwrap();
+            artist
+        };
+        let various = library("Various Artists", 0);
+        let tagged = library("Compilations", 1);
+        let unknown = library("Unknown Artist", 2);
+        let own = library("Kite Theory", 3);
+        for (artist, mbid) in [(tagged, "89ad4ac3-39f7-470e-963a-56509c546377"), (unknown, "125ec42a-7229-4250-afc5-e057484327fe")] {
+            assert!(cat.set_reference(&crate::serve::ids::artist(artist), &Ref::new("musicbrainz", "artist", mbid), "files").unwrap());
+        }
+        // Every one never read: the day's thirtieth is the lowest id due, the library's own artist alone.
+        assert_eq!(cat.rereads_due(1_800_000_000).unwrap(), [(own, vec!["musicbrainz", "discogs"])], "the re-read comes to the library's own artist alone");
+        let (missing, _) = all_missing(cat.clone()).await.unwrap();
+        assert_eq!(missing.into_iter().map(|m| m.title).collect::<Vec<_>>(), ["Missing 3"], "Discover's missing list: theirs alone");
+        let sources: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Counted)];
+        for artist in [various, tagged, unknown] {
+            assert_eq!(missing_albums(cat.clone(), artist, &sources).await.unwrap(), (Vec::new(), false), "{artist}: nothing listed, nothing read");
+        }
+        assert_eq!(ASKED.load(SeqCst), 0, "no list of theirs asked for");
+        assert_eq!(settled(&cat, own, &sources).await.into_iter().map(|m| m.title).collect::<Vec<_>>(), ["Missing 3"]);
+        assert_eq!(ASKED.load(SeqCst), 1, "the library's own artist's list read");
     }
 
     /// C53a: an artist no source knows has no list, and nothing is looked for long; an id no artist has, the same.

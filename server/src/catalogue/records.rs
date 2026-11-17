@@ -1072,14 +1072,16 @@ impl Catalogue {
         }
     }
 
-    /// Every record not had of the artists the library has albums by (C53b, Discover's missing list), each under the album artist
-    /// it credits first, as their pages list them (`missing_of`'s rule: by the one had rule, a retired record per OQ16, each album
-    /// once); and how many of those artists have a list read anywhere. On one reader, never the writer's lock; the rows in one
-    /// query. Blocking.
+    /// Every record not had of the artists the library has albums by (C53b, Discover's missing list), but those with no list of
+    /// their own (Z1: "Various Artists", MusicBrainz's "[unknown]"), each under the album artist it credits first, as their pages
+    /// list them (`missing_of`'s rule: by the one had rule, a retired record per OQ16, each album once); and how many of those
+    /// artists have a list read anywhere. On one reader, never the writer's lock; the rows in one query. Blocking.
     pub fn missing_everywhere(&self) -> Result<(Vec<(i64, Requested)>, usize)> {
         let read = |db: &Connection| -> Result<(Vec<(i64, Requested)>, usize)> {
-            // The artists with albums here: one credited first on a live record that holds live tracks.
+            // The artists with albums here (one credited first on a live record that holds live tracks), but those with no list of
+            // their own (`library_artists_in`, Z1).
             const HERE: &str = LIBRARY_ARTISTS;
+            let here = library_artists_in(db)?;
             let rows: Vec<(i64, i64)> = db
                 .prepare_cached(&format!(
                     "SELECT a.artist, a.record FROM record_artists a JOIN records r ON r.id = a.record
@@ -1090,7 +1092,7 @@ impl Catalogue {
                 ))?
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<rusqlite::Result<_>>()?;
-            let here: Vec<i64> = db.prepare_cached(&format!("SELECT DISTINCT artist FROM ({HERE})"))?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let rows: Vec<(i64, i64)> = rows.into_iter().filter(|(artist, _)| here.binary_search(artist).is_ok()).collect();
             let read_lists: i64 = if here.is_empty() {
                 0
             } else {
@@ -2549,7 +2551,7 @@ const ARTISTS_FORGETTABLE: &str = "SELECT a.id FROM artists a
 /// A subject forgotten at `?2`, its tombstone (RT01).
 const FORGOTTEN: &str = "INSERT OR REPLACE INTO forgotten (subject, at) VALUES (?1, ?2)";
 /// The artists with albums here: each credited first on a live record that holds live tracks. Discover's missing list is theirs
-/// (C53b), and the paced re-read comes to them (RT01c).
+/// (C53b), and the paced re-read comes to them (RT01c), but for those with no list of their own (`library_artists_in`, Z1).
 const LIBRARY_ARTISTS: &str = "SELECT b.artist FROM record_artists b JOIN records h ON h.id = b.record
     WHERE b.position = 0 AND h.merged_into IS NULL AND h.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks u WHERE u.record = h.id AND u.retired_at IS NULL)";
 /// The lists the paced re-read reads, in its order (RT01c): Bandcamp's is read only when a page is opened.
@@ -2558,6 +2560,31 @@ const REREAD_SOURCES: [&str; 2] = ["musicbrainz", "discogs"];
 const REREAD_EVERY: i64 = 30 * 86_400;
 /// A day's re-read comes to one in this many of the library's artists, rounded up (RT01c): each once a month, spread over it.
 const REREAD_DAYS: usize = 30;
+/// MusicBrainz's "Various Artists" and "[unknown]": no list of their own (Z1).
+const LISTLESS_MBIDS: [&str; 2] = ["89ad4ac3-39f7-470e-963a-56509c546377", "125ec42a-7229-4250-afc5-e057484327fe"];
+
+/// Whether an artist has no list of their own (Z1, 0.16's rule carried: Discover never read one): a compilation's album artist,
+/// "Various Artists", by their name (`crates::various`) or by the id MusicBrainz knows them by (`refs`), and MusicBrainz's
+/// "[unknown]". Their list is never read, and their records not had are listed nowhere.
+pub fn listless<'r>(name: &str, refs: impl IntoIterator<Item = &'r Ref>) -> bool {
+    crate::crates::various(name) || refs.into_iter().any(|r| r.source == "musicbrainz" && r.kind == "artist" && LISTLESS_MBIDS.contains(&r.value.as_str()))
+}
+
+/// The artists with albums here (`LIBRARY_ARTISTS`) but those with no list of their own (`listless`, Z1), in id order: whom the
+/// paced re-read comes to (RT01c) and whose records not had Discover's missing list lists (C53b).
+fn library_artists_in(db: &Connection) -> Result<Vec<i64>> {
+    let named: Vec<(i64, String)> = db
+        .prepare_cached(&format!("SELECT DISTINCT l.artist, COALESCE(a.name, '') FROM ({LIBRARY_ARTISTS}) l LEFT JOIN artists a ON a.id = l.artist ORDER BY l.artist"))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    // Who MusicBrainz knows by an id of no list: a few at most.
+    let subjects: Vec<String> = db
+        .prepare_cached("SELECT subject FROM \"references\" WHERE source = 'musicbrainz' AND kind = 'artist' AND value IN (?1, ?2)")?
+        .query_map(LISTLESS_MBIDS, |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let held: std::collections::HashSet<i64> = subjects.iter().filter_map(|s| ids::artist_number(s)).collect();
+    Ok(named.into_iter().filter(|(id, name)| !crate::crates::various(name) && !held.contains(id)).map(|(id, _)| id).collect())
+}
 
 impl Catalogue {
     /// An artist's list read now at a source other than Bandcamp (RT01): their records only Bandcamp knows, or no source, seen
@@ -2666,13 +2693,13 @@ impl Catalogue {
         Ok(gone)
     }
 
-    /// The library artists the paced re-read comes to at `now` (RT01c): of the artists with albums here (`LIBRARY_ARTISTS`), a
-    /// thirtieth (rounded up), those whose MusicBrainz or Discogs list was read, or come to, longest ago first, never first of
-    /// all; each with its sources (`REREAD_SOURCES`) a month old or never read. On a reader. Blocking.
+    /// The library artists the paced re-read comes to at `now` (RT01c): of the artists with albums here but those with no list of
+    /// their own (`library_artists_in`, Z1), a thirtieth (rounded up), those whose MusicBrainz or Discogs list was read, or come to,
+    /// longest ago first, never first of all; each with its sources (`REREAD_SOURCES`) a month old or never read. On a reader.
+    /// Blocking.
     pub fn rereads_due(&self, now: i64) -> Result<Vec<(i64, Vec<&'static str>)>> {
         let read = |db: &Connection| -> Result<Vec<(i64, Vec<&'static str>)>> {
-            let artists: Vec<i64> =
-                db.prepare_cached(&format!("SELECT DISTINCT artist FROM ({LIBRARY_ARTISTS}) ORDER BY artist"))?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let artists = library_artists_in(db)?;
             // Its list there read last (`artist_list_read`), else the re-read's last coming to it, 0 for neither.
             let mut last = db.prepare_cached(
                 "SELECT max(COALESCE((SELECT max(read_at) FROM \"references\" WHERE subject = ?1 AND source = ?2 AND kind = 'artist'), 0),
