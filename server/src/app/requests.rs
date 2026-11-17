@@ -710,19 +710,18 @@ async fn hand_over_at_start(lidarr: &dyn Fetcher, serve: &Serve) -> Vec<i64> {
 }
 
 /// The first arrival stops the other (X1, the owner's 6 November order): each approved request whose album arrived or is in the
-/// library, handed to Lidarr, has Lidarr told to stop by the group it was asked with, where no other open request still wants
-/// the record; said on the request, once (`STOPPED_ON_ARRIVAL`). Soulseek drops its own item (`soulseek::take_requests`). The
-/// requests told.
+/// library, handed to Lidarr, has Lidarr told to stop by the group it was asked with; said on the request, once
+/// (`STOPPED_ON_ARRIVAL`). Every open request of a record reads it alike, so none still wants one that is had (Y12: no check for
+/// one). Soulseek drops its own item (`soulseek::take_requests`). The requests told.
 pub async fn stop_arrived(lidarr: Option<&dyn Fetcher>, serve: &Serve) -> Vec<i64> {
     let Some(f) = lidarr else { return Vec::new() };
     let open: Vec<Request> = serve.userdata.requests(None, None, OPEN).unwrap_or_default().into_iter().filter(|r| r.status == PENDING || r.status == APPROVED).collect();
     let of = named(serve, &open).await;
-    let wanting: Vec<i64> = open.iter().zip(&of).filter_map(|(_, o)| o.as_ref().filter(|o| !o.had()).map(|o| o.record)).collect();
     let mut told = Vec::new();
     for (r, o) in open.iter().zip(&of) {
         let Some(o) = o.as_ref().filter(|o| o.had()) else { continue };
         let Some(said) = r.fetched.as_deref().filter(|f| f.contains("Lidarr") && !f.starts_with("Not handed over") && !f.contains(STOPPED_ON_ARRIVAL)) else { continue };
-        if r.status != APPROVED || wanting.contains(&o.record) {
+        if r.status != APPROVED {
             continue;
         }
         let Some(group) = r.release_group.clone().or_else(|| o.groups.first().cloned()) else { continue };

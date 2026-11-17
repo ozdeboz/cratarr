@@ -226,18 +226,21 @@ mod tests {
     /// next question; a page's still goes. Unpaused, the pass's goes again.
     #[tokio::test]
     async fn a_running_pass_stops_at_the_pause() {
-        use super::super::switches::{BACKGROUND, PAUSED, set_for_tests};
+        use super::super::switches::{BACKGROUND, PAUSED, TEST_STATE, set_for_tests};
+        let _one = TEST_STATE.lock().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
         let ask = || reqwest::Client::new().get(&url).asked();
-        set_for_tests(BACKGROUND, false);
+        let was = set_for_tests(BACKGROUND, false);
         let pass = behind(ask()).await;
         let page = ask().await;
         set_for_tests(BACKGROUND, true);
+        let again = behind(ask()).await;
+        set_for_tests(BACKGROUND, was);
         assert!(pass.is_err_and(|e| e.to_string() == PAUSED), "a pass's question refused");
         assert!(page.is_ok_and(|r| r.status().is_success()), "a page's question still goes");
-        assert!(behind(ask()).await.is_ok(), "unpaused, the pass's goes again");
+        assert!(again.is_ok(), "unpaused, the pass's goes again");
     }
 
     /// O5: a 503 pushes the turn's next question out, 5 s doubling to a minute in a row, as long as Retry-After says where it says;

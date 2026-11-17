@@ -1157,8 +1157,9 @@ mod facts_tests {
     /// Unpaused, it goes through.
     #[test]
     fn a_discogs_pass_stops_at_its_next_album_when_paused() {
-        use super::super::switches::{BACKGROUND, set_for_tests};
-        set_for_tests(BACKGROUND, true);
+        use super::super::switches::{BACKGROUND, TEST_STATE, set_for_tests};
+        let _one = TEST_STATE.blocking_lock();
+        let was = set_for_tests(BACKGROUND, true);
         let mut asked = Vec::new();
         for n in until_paused(vec![1, 2, 3], "test") {
             asked.push(n);
@@ -1167,7 +1168,9 @@ mod facts_tests {
             }
         }
         set_for_tests(BACKGROUND, true);
+        let all = until_paused(vec![1, 2, 3], "test").collect::<Vec<_>>();
+        set_for_tests(BACKGROUND, was);
         assert_eq!(asked, [1]);
-        assert_eq!(until_paused(vec![1, 2, 3], "test").collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(all, [1, 2, 3]);
     }
 }

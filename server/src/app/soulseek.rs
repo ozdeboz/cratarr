@@ -82,6 +82,10 @@ const LENGTH_SLACK_MS: i64 = crate::slskd::LENGTH_SLACK_MS;
 const CHECK_AGAIN: i64 = 15 * 60;
 /// A record whose placing failed is placed again from its checked files after this long (X4).
 const PLACE_AGAIN: i64 = 15 * 60;
+/// Placings failed in a row after which a record holds a day (Y12): one that fails for good is not tried every fifteen minutes.
+const PLACE_AT_MOST: u32 = 3;
+/// How long such a record holds (Y12).
+const PLACE_HOLD: i64 = 86_400;
 /// The data folder's folder for folders set aside.
 const SET_ASIDE: &str = "soulseek-set-aside";
 /// A folder set aside is kept this long, then deleted (X4).
@@ -208,6 +212,10 @@ pub struct Item {
     /// When its placing began (epoch s, Y10): only files that came to its folder since then are its album's (`repoint`).
     #[serde(default)]
     pub placed_at: i64,
+    /// Placings in a row that failed (Y12): `PLACE_AT_MOST` hold it a day, and Health says Soulseek can't place albums. A placing that
+    /// comes through ends the row.
+    #[serde(default)]
+    pub place_failures: u32,
 }
 
 /// A folder set aside: whose, where it is kept, and why each of its files failed.
@@ -705,9 +713,25 @@ pub fn cant_store(now: i64) -> Vec<(String, String)> {
 
 /// [`cant_store`]'s: pure.
 fn cant_store_in(items: &[Item], now: i64) -> Vec<(String, String)> {
-    let mut held: Vec<&Item> = items.iter().filter(|i| i.local_failures >= LOCAL_AT_MOST && i.due > now).collect();
-    held.sort_by_key(|i| std::cmp::Reverse(i.due));
-    held.into_iter().map(|i| (format!("{} - {}", i.record.artist, i.record.album), i.why.clone().unwrap_or_default())).collect()
+    held_in(items, now, |i| i.local_failures >= LOCAL_AT_MOST)
+}
+
+/// The records held a day for their placing failing (Y12: `PLACE_AT_MOST` in a row), as [`cant_store`] gives its own: Health's
+/// "Soulseek can't place albums".
+pub fn cant_place(now: i64) -> Vec<(String, String)> {
+    kept(|k| cant_place_in(&k.items, now))
+}
+
+/// [`cant_place`]'s: pure.
+fn cant_place_in(items: &[Item], now: i64) -> Vec<(String, String)> {
+    held_in(items, now, |i| i.place_failures >= PLACE_AT_MOST)
+}
+
+/// The items `held` picks that are still held at `now`, the latest held first, each as "Artist - Record" with why. Pure.
+fn held_in(items: &[Item], now: i64, held: impl Fn(&Item) -> bool) -> Vec<(String, String)> {
+    let mut found: Vec<&Item> = items.iter().filter(|i| held(i) && i.due > now).collect();
+    found.sort_by_key(|i| std::cmp::Reverse(i.due));
+    found.into_iter().map(|i| (format!("{} - {}", i.record.artist, i.record.album), i.why.clone().unwrap_or_default())).collect()
 }
 
 /// Tests elsewhere: an item of `record` on the list as `id`, its folders found and waiting for a tick, so no worker takes it up.
@@ -734,6 +758,7 @@ pub fn list_for_tests(id: &str, record: i64) {
         local_failures: 0,
         placing: None,
         placed_at: 0,
+        place_failures: 0,
     };
     kept(|k| k.items.push(i));
 }
@@ -837,6 +862,8 @@ pub fn start(app: &Arc<super::App>) {
         }
     });
     tokio::spawn(async move {
+        // Hidden folders placings left (Y12): swept once, before this start's first fetch, so none of its own is taken.
+        sweep_at_start().await;
         loop {
             match next_fetch() {
                 Some(id) => fetch(&id).await,
@@ -846,6 +873,37 @@ pub fn start(app: &Arc<super::App>) {
             }
         }
     });
+}
+
+/// [`sweep_hidden`] in the Soulseek library, once at the start (Y12), the items as the list holds them.
+async fn sweep_at_start() {
+    let Ok(lib) = library() else { return };
+    let items = kept(|k| k.items.clone());
+    let gone = tokio::task::spawn_blocking(move || sweep_hidden(&lib, &items)).await.unwrap_or_default();
+    if !gone.is_empty() {
+        tracing::info!(target: "soulseek", count = gone.len(), "hidden folders placings left behind removed");
+    }
+}
+
+/// The hidden folders placings left in the library `lib` (Y12): one an attempt whose request changed left, or whose item went, is
+/// named by no item. Each `.cratarr-<record>-<request>.part` at its root is removed but an item's whose placing is noted (`placing`):
+/// what was removed. Blocking.
+fn sweep_hidden(lib: &Path, items: &[Item]) -> Vec<PathBuf> {
+    let placing: Vec<PathBuf> = items.iter().filter(|i| i.placing.is_some()).map(|i| hidden_folder(lib, &i.record)).collect();
+    let hidden = |name: &str| {
+        name.strip_prefix(".cratarr-")
+            .and_then(|n| n.strip_suffix(".part"))
+            .and_then(|n| n.split_once('-'))
+            .is_some_and(|(record, request)| record.parse::<i64>().is_ok() && request.parse::<i64>().is_ok())
+    };
+    let mut gone = Vec::new();
+    for e in std::fs::read_dir(lib).into_iter().flatten().flatten() {
+        let p = e.path();
+        if hidden(&*e.file_name().to_string_lossy()) && p.is_dir() && !placing.contains(&p) && std::fs::remove_dir_all(&p).is_ok() {
+            gone.push(p);
+        }
+    }
+    gone
 }
 
 /// The approved Requests taken in (decision 0099's amendment: Soulseek never reads Lidarr's Wanted), each by its record
@@ -1049,6 +1107,7 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             local_failures: 0,
             placing: None,
             placed_at: 0,
+            place_failures: 0,
         });
         // Its first search as the order has it (X1, `first_search`).
         if let Some(i) = k.items.last_mut() {
@@ -1256,7 +1315,7 @@ where
     if let Some(to) = it.placing.as_deref().filter(|to| renamed(Path::new(to), &it.record)) {
         tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), to, "a placing cut short after its rename taken as placed");
         let to = to.to_string();
-        with_item(id, |i| (i.state, i.placed, i.placing, i.batch, i.checked, i.why, i.local_failures) = (State::Placed, Some(to), None, None, None, None, 0));
+        with_item(id, |i| (i.state, i.placed, i.placing, i.batch, i.checked, i.why, i.local_failures, i.place_failures) = (State::Placed, Some(to), None, None, None, None, 0, 0));
         for b in it.batch.iter().chain(&it.checked) {
             std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(b)).ok();
         }
@@ -1559,7 +1618,10 @@ async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
     match placed {
         Ok(to) => {
             tracing::info!(target: "soulseek", record = %format!("{} - {}", r.artist, r.album), to = %to.display(), "placed in Incoming");
-            with_item(id, |i| (i.state, i.placed, i.placing, i.batch, i.checked, i.why, i.local_failures) = (State::Placed, Some(to.display().to_string()), None, None, None, None, 0));
+            with_item(id, |i| {
+                (i.state, i.placed, i.placing, i.batch, i.checked, i.why) = (State::Placed, Some(to.display().to_string()), None, None, None, None);
+                (i.local_failures, i.place_failures) = (0, 0);
+            });
             // What it came from goes after the Placed write (Y10): a stop between leaves it placed, never placed twice.
             std::fs::remove_dir_all(dir).ok();
         }
@@ -1568,7 +1630,10 @@ async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
             let checked = dir.file_name().map(|n| n.to_string_lossy().into_owned());
             with_item(id, |i| {
                 (i.state, i.batch, i.checked, i.placing) = (State::Checking, None, checked, None);
-                hold(i, format!("It could not be placed: {e:#}"), PLACE_AGAIN);
+                // Three in a row (Y12): held a day, its files kept, not tried every fifteen minutes for good; Health says why.
+                i.place_failures += 1;
+                let wait = if i.place_failures >= PLACE_AT_MOST { PLACE_HOLD } else { PLACE_AGAIN };
+                hold(i, format!("It could not be placed: {e:#}"), wait);
             });
         }
     }
@@ -1867,6 +1932,7 @@ mod tests {
             local_failures: 0,
             placing: None,
             placed_at: 0,
+            place_failures: 0,
         };
         assert!(on_failed(&mut i, "a", "a is offline".into()));
         assert_eq!((i.state, i.chosen, i.folders.len(), i.batch.clone(), i.failed.clone()), (State::Approved, Some(0), 1, None, vec!["a".to_string()]));
@@ -1910,6 +1976,7 @@ mod tests {
             local_failures: 0,
             placing: None,
             placed_at: 0,
+            place_failures: 0,
         };
         kept(|k| k.items.push(i));
     }
@@ -2187,6 +2254,7 @@ mod tests {
             local_failures: 0,
             placing: None,
             placed_at: 0,
+            place_failures: 0,
         };
         kept(|k| k.items.push(i));
         r
@@ -2482,6 +2550,80 @@ mod tests {
         let r = record("Glass Harbour", "Harbour Lights", Some(2014));
         let placed = place_with(&lib, &r, &[from.join("01 Pier.flac")], None, |_| Ok(true), |to| told.set(!to.exists() && hidden_folder(&lib, &r).is_dir())).unwrap();
         assert!(told.get() && renamed(&placed, &r), "noted before its rename, its hidden folder there then");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Y12: at the start, the hidden folders placings left in the library are removed, but the one of an item whose placing is noted;
+    /// nothing else of the library is touched.
+    #[test]
+    fn a_start_sweeps_the_hidden_folders_placings_left() {
+        let lib = data_folder("y12-sweep");
+        listed("ss-y12-placing", State::Checking, Some("b-y12-placing"));
+        with_item("ss-y12-placing", |i| (i.record.record, i.record.request, i.placing) = (5, 9, Some(lib.join("Air").join("Moon Safari (1998)").display().to_string())));
+        listed("ss-y12-other", State::Checking, Some("b-y12-other"));
+        with_item("ss-y12-other", |i| (i.record.record, i.record.request) = (6, 10));
+        let items = [item("ss-y12-placing").unwrap(), item("ss-y12-other").unwrap()];
+        let (stray, other, placing) = (lib.join(".cratarr-1-1.part"), lib.join(".cratarr-6-10.part"), lib.join(".cratarr-5-9.part"));
+        for p in [&stray, &other, &placing, &lib.join(".cratarr-trash").join("t"), &lib.join("Air").join("Moon Safari (1998)")] {
+            std::fs::create_dir_all(p).unwrap();
+            std::fs::write(p.join("01 One.flac"), b"x").unwrap();
+        }
+        let mut gone = sweep_hidden(&lib, &items);
+        gone.sort();
+        let mut want = vec![stray.clone(), other.clone()];
+        want.sort();
+        assert_eq!(gone, want, "a stray, and one whose item is placing nothing");
+        assert!(!stray.exists() && !other.exists());
+        assert!(placing.join("01 One.flac").exists(), "its placing noted: kept");
+        assert!(lib.join(".cratarr-trash").join("t").exists() && lib.join("Air").join("Moon Safari (1998)").exists(), "nothing else");
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    /// Y12: a placing that fails three times in a row holds the record a day, not fifteen minutes, its checked files kept, and Health
+    /// says Soulseek can't place albums, with why.
+    #[tokio::test]
+    async fn three_failed_placings_hold_the_record_a_day() {
+        let (id, batch) = ("ss-y12-unplaced", "b-y12-unplaced");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("y12-unplaced", batch);
+        // No library is set up in a test: each placing fails.
+        fetch_from(id, &slskd_at(all_in()).await, &d, |_, _| std::future::ready(Ok(0.97))).await;
+        for n in 1..=3 {
+            if n > 1 {
+                with_item(id, |i| i.due = 0);
+                fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+            }
+            let i = item(id).unwrap();
+            assert_eq!((i.state, i.checked.as_deref(), i.place_failures), (State::Checking, Some(batch), n), "its files kept");
+            let wait = i.due - now();
+            if n < 3 {
+                assert!(wait <= PLACE_AGAIN, "{n}: in a while");
+            } else {
+                assert!(wait > PLACE_AGAIN && wait <= PLACE_HOLD, "held a day");
+            }
+        }
+        let i = item(id).unwrap();
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("It could not be placed")), "{:?}", i.why);
+        let held = cant_place_in(std::slice::from_ref(&i), now());
+        let f = super::super::health::soulseek_cant_place(&held).expect("Health says so");
+        assert_eq!((f.title.as_str(), f.detail.as_deref(), f.items.len()), ("Soulseek can't place albums", i.why.as_deref(), 1));
+        assert!(cant_place_in(std::slice::from_ref(&i), i.due).is_empty(), "its day over: no more");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Y12: a placing that comes through ends a row of failed ones (here one a stop cut after its rename, taken as placed).
+    #[tokio::test]
+    async fn a_placing_that_comes_through_ends_the_row_of_failed_placings() {
+        let (id, batch) = ("ss-y12-reset", "b-y12-reset");
+        listed(id, State::Checking, Some(batch));
+        let d = fetched_to("y12-reset", batch);
+        let to = d.join("soulseek").join("Air").join("Moon Safari (1998)");
+        std::fs::create_dir_all(&to).unwrap();
+        with_item(id, |i| (i.placing, i.place_failures) = (Some(to.display().to_string()), 2));
+        fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.place_failures), (State::Placed, 0));
+        assert!(cant_place_in(std::slice::from_ref(&i), now()).is_empty());
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -2987,17 +3129,20 @@ mod tests {
     /// its list is read again.
     #[tokio::test]
     async fn soulseek_reads_no_list_while_background_reading_is_paused() {
-        use super::super::switches::{BACKGROUND, PAUSED, set_for_tests};
+        use super::super::switches::{BACKGROUND, PAUSED, TEST_STATE, set_for_tests};
+        let _one = TEST_STATE.lock().await;
         let cat = Arc::new(crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/music")]).unwrap());
         let record = cat.record_for_tests("Two Rooms", 2);
         waiting_with("ss-y7-paused", Vec::new(), Vec::new());
         with_item("ss-y7-paused", |i| i.record.record = record);
         let it = item("ss-y7-paused").unwrap();
-        set_for_tests(BACKGROUND, false);
+        let was = set_for_tests(BACKGROUND, false);
         let paused = listing(&it, &cat, never_read).await;
         set_for_tests(BACKGROUND, true);
+        let unpaused = listing(&it, &cat, |_| std::future::ready(Ok(None))).await;
+        set_for_tests(BACKGROUND, was);
         assert_eq!(paused, Listing::Later(PAUSED.into(), ROUND_AT_LEAST));
-        assert_ne!(listing(&it, &cat, |_| std::future::ready(Ok(None))).await, paused, "unpaused, its list is read");
+        assert_ne!(unpaused, paused, "unpaused, its list is read");
     }
 
     /// FX01's data after 0.17's step, and the Soulseek items its approved requests make, as `read_requests` takes them; the
@@ -3051,6 +3196,7 @@ mod tests {
             local_failures: 0,
             placing: None,
             placed_at: 0,
+            place_failures: 0,
         };
         let mut found = item(State::Found);
         search_again(&mut found);

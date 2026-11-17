@@ -1559,19 +1559,22 @@ mod tests {
     /// record holds at its check. Unpaused, AcoustID is asked again.
     #[tokio::test]
     async fn acoustid_is_not_asked_while_background_reading_is_paused() {
-        use super::super::switches::{BACKGROUND, PAUSED, set_for_tests};
+        use super::super::switches::{BACKGROUND, PAUSED, TEST_STATE, set_for_tests};
+        let _one = TEST_STATE.lock().await;
         let d = dir("trackfile-paused");
         let from = d.join("cratarr/Old drive/06 Bloom.flac");
         old_flac(&from, "trackfile-paused");
         let track = track_of(delight(), "r7", false).unwrap();
-        set_for_tests(BACKGROUND, false);
+        let was = set_for_tests(BACKGROUND, false);
         let paused = take(&from, &d.join("staging/f1/06 Bloom.flac"), &track, |p| unless_paused(never_asked, p)).await;
         set_for_tests(BACKGROUND, true);
+        let says = acoustid_says(0.97, "r7");
+        let unpaused = take(&from, &d.join("staging/f2/06 Bloom.flac"), &track, |p| unless_paused(says, p)).await;
+        set_for_tests(BACKGROUND, was);
         let err = paused.unwrap_err();
         assert!(err.is::<NotAsked>(), "{err:#}");
         assert_eq!(format!("{err:#}"), PAUSED);
-        let says = acoustid_says(0.97, "r7");
-        assert_eq!(take(&from, &d.join("staging/f2/06 Bloom.flac"), &track, |p| unless_paused(says, p)).await.unwrap(), 0.97);
+        assert_eq!(unpaused.unwrap(), 0.97);
         std::fs::remove_dir_all(&d).ok();
     }
 
