@@ -997,6 +997,9 @@ impl Catalogue {
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track); CREATE INDEX IF NOT EXISTS tracks_by_record ON tracks (record);")?;
         conn.execute_batch(records::SCHEMA).context("creating the records' references")?;
+        conn.execute_batch(artists::SCHEMA).context("creating the artists' numbers")?;
+        // C55: the artists from before the numbers given theirs, in the order they were made.
+        artists::number_all(&conn).context("numbering the artists of one name")?;
         // A folder in use before ids for life: its place is its id from now on.
         conn.execute_batch("UPDATE folders SET home = id WHERE id >= 0 AND home IS NULL;")?;
         // Once, before any copy takes another's track: a file came when its track was born, the one date there was. After

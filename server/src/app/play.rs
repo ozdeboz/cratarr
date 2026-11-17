@@ -365,7 +365,7 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             Ok(Candidates { named: Some(named), ..Candidates::of(v.source, ids, Some(v.title)) })
         }
         Collection::Artist { source, name, without } => {
-            let v = app.playing.artist_view(source, name, without).await?;
+            let v = app.playing.artist_view(source, name, None, without).await?;
             let named: Vec<QueueTrack> = v
                 .rows
                 .into_iter()

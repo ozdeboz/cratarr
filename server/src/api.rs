@@ -1798,45 +1798,50 @@ async fn track_favorite(
     Ok(applied(json_of(view)?, at, true))
 }
 
+/// An artist asked for by name, or Cratarr's own by their id for life (`id=ar-<n>`, C55), which goes first.
 #[derive(Deserialize)]
 struct ArtistName {
+    #[serde(default)]
     name: String,
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     on: bool,
 }
 
-/// An artist for the panel (decided 2026-10-16): by name, as the albums credit them (`?name=`).
-/// The libraries switched off come as `without` (`without_of`): their albums and tracks left out.
+/// An artist for the panel (decided 2026-10-16): by name, as the albums credit them (`?name=`), or Cratarr's own by their id
+/// (`?id=ar-<n>`, C55), who need have no album here. The libraries switched off come as `without` (`without_of`): their albums
+/// and tracks left out.
 async fn artist_view(
     State(app): State<Arc<App>>,
     Path(source): Path<String>,
     Query(q): Query<ArtistName>,
     RawQuery(raw): RawQuery,
 ) -> Result<Json<crate::app::ArtistView>, ApiError> {
-    Ok(Json(app.playing.artist_view(&source, &q.name, &without_of(raw.as_deref())).await?))
+    Ok(Json(app.playing.artist_view(&source, &q.name, q.id.as_deref(), &without_of(raw.as_deref())).await?))
 }
 
-/// Whether an artist is a favourite (`?name=`): the heart on an album's artist chip; null where the server keeps none.
+/// Whether an artist is a favourite (`?name=`, or `?id=`): the heart on an album's artist chip; null where the server keeps none.
 async fn artist_is_favorite(
     State(app): State<Arc<App>>,
     Path(source): Path<String>,
     Query(q): Query<ArtistName>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "favorite": app.playing.artist_is_favorite(&source, &q.name).await? })))
+    Ok(Json(json!({ "favorite": app.playing.artist_is_favorite(&source, &q.name, q.id.as_deref()).await? })))
 }
 
-/// The artist panel's heart (`?name=&on=`), the last change winning (decision 0087).
+/// The artist panel's heart (`?name=&on=`, or `?id=&on=`), the last change winning (decision 0087).
 async fn artist_favorite(
     ctx: Ctx,
     at: ChangeAt,
     Path(source): Path<String>,
     Query(q): Query<ArtistName>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = LastWins::of(&ctx, at, ChangeKind::Favourite, item_id("artist", &source, q.name.trim()));
+    let w = LastWins::of(&ctx, at, ChangeKind::Favourite, item_id("artist", &source, q.id.as_deref().unwrap_or(q.name.trim())));
     if is_older(&w) {
-        return Ok(applied(json!({ "favorite": ctx.app.playing.artist_is_favorite(&source, &q.name).await? }), at, false));
+        return Ok(applied(json!({ "favorite": ctx.app.playing.artist_is_favorite(&source, &q.name, q.id.as_deref()).await? }), at, false));
     }
-    let favorite = ctx.app.playing.artist_favorite(&source, &q.name, q.on).await?;
+    let favorite = ctx.app.playing.artist_favorite(&source, &q.name, q.id.as_deref(), q.on).await?;
     if let Some(w) = &w {
         w.made(Op::of(q.on));
     }
@@ -6235,23 +6240,41 @@ async fn library_find(ctx: Ctx, Query(q): Query<FindQuery>) -> Result<Json<serde
     Ok(Json(json!(found)))
 }
 
+/// An artist by name; on an artist page's own routes, Cratarr's own by their id for life (`id=ar-<n>`, C55), which goes first.
 #[derive(Deserialize)]
 struct AboutQuery {
+    #[serde(default)]
     name: String,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+/// The artist an artist page asks about (C55, `related::asked`): by id, that one, though another has the name; by name, the first.
+async fn artist_asked(served: &Arc<crate::serve::Serve>, id: Option<&str>, name: &str) -> Option<crate::app::related::Asked> {
+    let (s, id, name) = (served.clone(), id.map(str::to_string), name.to_string());
+    match tokio::task::spawn_blocking(move || crate::app::related::asked(&s, id.as_deref(), &name)).await {
+        Ok(Ok(asked)) => asked,
+        Ok(Err(e)) => {
+            tracing::debug!("an artist asked about: {e:#}");
+            None
+        }
+        Err(e) => {
+            tracing::debug!("an artist asked about: {e}");
+            None
+        }
+    }
 }
 
 /// About an artist, for their page (the owner, 2026-10-23): TheAudioDB's description and whether there is a photo
-/// (`/api/artists/{id}/photo`), read now when it never was. Nothing known: nulls.
+/// (`/api/artists/{id}/photo`), read now when it never was; by `name`, or `id` (C55). Nothing known: nulls.
 async fn artist_about(ctx: Ctx, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
     let app = ctx.app.clone();
     let found = async {
         let served = ctx.served.clone()?;
         let store = app.artists.clone()?;
-        let lib = served.library.clone();
-        let name = q.name.clone();
-        let (id, mbid) = tokio::task::spawn_blocking(move || lib.artist_by_name(&name)).await.ok()?.ok()??;
-        let info = store.get_or_read(&q.name, mbid.as_deref()).await?;
-        Some(json!({ "id": id, "bio": info.bio, "photo": info.photo.is_some(), "photo_credit": info.credit }))
+        let a = artist_asked(&served, q.id.as_deref(), &q.name).await?;
+        let info = store.get_or_read(&a.name, a.mbid.as_deref()).await?;
+        Some(json!({ "id": a.id, "bio": info.bio, "photo": info.photo.is_some(), "photo_credit": info.credit }))
     }
     .await;
     Json(found.unwrap_or_else(|| json!({ "id": null, "bio": null, "photo": false })))
@@ -6354,22 +6377,20 @@ fn beyond_albums(
     order.into_iter().filter_map(|k| by.remove(&k)).collect()
 }
 
-/// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name: as last looked up, and
-/// whether a look runs now (started here when none was kept or it is old). An artist without a MusicBrainz id has none.
+/// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name or their id (C55): as last
+/// looked up, and whether a look runs now (started here when none was kept or it is old). An artist without a MusicBrainz id
+/// has none.
 async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
-    let (s, name) = (serve.clone(), q.name.trim().to_string());
-    let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(String, Option<crate::app::related::Found>, bool)>> {
-        let Some((_, Some(mbid))) = s.library.artist_by_name(&name)? else { return Ok(None) };
-        let (kept, due) = crate::app::related::kept(&s, &mbid)?;
-        Ok(Some((mbid, kept, due)))
-    })
-    .await
-    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
-    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    let Some((mbid, kept, due)) = found else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
+    let Some(asked) = artist_asked(&serve, q.id.as_deref(), &q.name).await else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
+    let Some(mbid) = asked.mbid else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
+    let (s, key) = (serve.clone(), mbid.clone());
+    let (kept, due) = tokio::task::spawn_blocking(move || crate::app::related::kept(&s, &key))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     if due {
-        crate::app::related::start(serve, q.name.trim().to_string(), mbid.clone());
+        crate::app::related::start(serve, asked.name, mbid.clone());
     }
     let artists = kept.map(|f| f.artists).unwrap_or_default();
     Ok(Json(json!({ "artists": artists, "looking": crate::app::related::is_looking(&mbid) })))
@@ -6417,15 +6438,15 @@ async fn discover_artist_photo(State(app): State<Arc<App>>, Query(q): Query<Abou
     }
 }
 
-/// An artist's photo, as the artist store kept it.
+/// An artist's photo, as the artist store kept it: by their id for life, as About reads them (C55, `related::asked`), so one with
+/// no album here has theirs too.
 async fn artist_photo(ctx: Ctx, Path(id): Path<String>) -> Response {
     let app = ctx.app.clone();
     let found = async {
         let served = ctx.served.clone()?;
         let store = app.artists.clone()?;
-        let lib = served.library.clone();
-        let artist = tokio::task::spawn_blocking(move || lib.artist(&id)).await.ok()?.ok()??;
-        let file = store.get(&crate::app::artists::key(&artist.name, artist.music_brainz_id.as_deref()))?.photo?;
+        let artist = artist_asked(&served, Some(id.as_str()), "").await?;
+        let file = store.get(&crate::app::artists::key(&artist.name, artist.mbid.as_deref()))?.photo?;
         tokio::fs::read(store.photo_path(&file)).await.ok()
     }
     .await;

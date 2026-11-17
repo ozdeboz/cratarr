@@ -294,7 +294,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
             (Items::Tracks, row_lines(app, source, rows).await.into_iter().map(|(e, l)| one(e, l.as_deref())).collect())
         }
         List::Artist { source, name } => {
-            let rows = app.playing.artist_view(source, name, &r.without).await?.rows;
+            let rows = app.playing.artist_view(source, name, None, &r.without).await?.rows;
             (Items::Tracks, row_lines(app, source, rows).await.into_iter().map(|(e, l)| one(e, l.as_deref())).collect())
         }
         List::Library | List::Artists => {

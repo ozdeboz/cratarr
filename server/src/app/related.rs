@@ -57,6 +57,47 @@ pub struct Found {
     pub artists: Vec<Related>,
 }
 
+/// An artist an artist page asks about (C55): who they are, and their MusicBrainz id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Asked {
+    /// Their id for life, as served (`ar-<n>`).
+    pub id: String,
+    pub name: String,
+    /// Their number among the artists of their name, and whether another artist has it (`Catalogue::artist_named`).
+    pub number: Option<i64>,
+    pub namesakes: bool,
+    pub mbid: Option<String>,
+}
+
+/// The artist an artist page asks about (C55: its view, About, related artists, the photo), Cratarr's own:
+/// - by their id for life, that artist, named as the catalogue names them, though another artist has the name;
+/// - by name, the first artist of it (a bare name from outside opens the lowest number), named as asked.
+///
+/// Their MusicBrainz id is their own references' first (`Catalogue::artist_known`), else the library's row of them. None: a name
+/// no artist has, or an id no artist has (forgotten, or never given). Blocking.
+pub fn asked(serve: &crate::serve::Serve, id: Option<&str>, name: &str) -> Result<Option<Asked>> {
+    let cat = serve.catalogue();
+    let artist = match id {
+        Some(id) => crate::serve::ids::artist_number(id),
+        None if name.trim().is_empty() => None,
+        None => cat.artist_of(name.trim())?,
+    };
+    let Some(named) = artist.map(|a| cat.artist_named(a)).transpose()?.flatten() else { return Ok(None) };
+    let served = crate::serve::ids::artist(named.id);
+    let own = cat.artist_known(named.id)?.and_then(|(_, refs)| refs.into_iter().find(|(r, _)| r.source == "musicbrainz" && r.kind == "artist").map(|(r, _)| r.value));
+    let mbid = match own {
+        Some(mbid) => Some(mbid),
+        None => serve.library.artist(&served)?.and_then(|a| a.music_brainz_id),
+    };
+    Ok(Some(Asked {
+        id: served,
+        name: if id.is_some() { named.name } else { name.trim().to_string() },
+        number: named.number,
+        namesakes: named.namesakes,
+        mbid: mbid.filter(|m| !m.is_empty()),
+    }))
+}
+
 /// The artists being looked up now (by MusicBrainz id): one look each at a time.
 static LOOKING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
@@ -290,5 +331,25 @@ mod tests {
         assert_eq!(back.artists[0].bandcamp.as_deref(), Some("https://extrawelt.bandcamp.com/album/x"));
         assert_eq!((back.artists[0].album.as_deref(), back.artists[0].score), (Some("Fernweh"), 0.75), "kept with its rank, for Discover");
         assert!(super::super::moment::now_secs() - back.at <= FRESH_SECS, "fresh");
+    }
+
+    /// C55: About, related artists and the photo go by the artist asked for (`asked`): by id, that one, named as the catalogue
+    /// names them, with their own MusicBrainz id, though another has the name; by name, the first of it. An id no artist has is
+    /// no one's.
+    #[test]
+    fn about_and_related_go_by_id() {
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        let cat = serve.catalogue();
+        let (first, second) = (cat.artist_for("Rone").unwrap(), cat.artist_apart("Rone").unwrap());
+        let (french, other) = ("00000000-0000-4000-8000-000000000301", "00000000-0000-4000-8000-000000000302");
+        for (artist, mbid) in [(first, french), (second, other)] {
+            assert!(cat.set_reference(&crate::serve::ids::artist(artist), &crate::catalogue::records::Ref::new("musicbrainz", "artist", mbid), "files").unwrap());
+        }
+        let id = crate::serve::ids::artist;
+        let by = |asked_id: Option<&str>, name: &str| asked(&serve, asked_id, name).unwrap().map(|a| (a.id, a.name, a.mbid));
+        assert_eq!(by(Some(id(second).as_str()), ""), Some((id(second), "Rone".to_string(), Some(other.to_string()))), "by id: that one");
+        assert_eq!(by(None, "RONE"), Some((id(first), "RONE".to_string(), Some(french.to_string()))), "a bare name: the first");
+        assert_eq!(by(Some("ar-999999"), "Rone"), None, "an id no artist has");
     }
 }

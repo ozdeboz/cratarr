@@ -89,6 +89,36 @@ pub struct ArtistView {
     /// Their MusicBrainz id, where Cratarr's own library knows it (0.9.8: Discogs' profile by MusicBrainz's link).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mbid: Option<String>,
+    /// Their id for life (C55, `ar-<n>`): Cratarr's own artist, the one asked for by id, else the first of the name asked for.
+    /// None: a name no artist has, or another server's artist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Their number among the artists of their name (C55): the first 1, the next 2, for life.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<i64>,
+    /// Another artist has their name (C55): where a view shows two of it, each shows its number, "Rone (2)".
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub namesakes: bool,
+}
+
+/// Cratarr's own artist an artist view asks for (C55), and their works in the library, as `account` sees them (`related::asked`):
+/// by their id for life, that artist, though another has the name; by name, the first of it. One with no albums here (records
+/// not had alone, or nothing yet) is a page too, with none. None: by name, a name no artist has. An id no artist has is no
+/// longer known where it was forgotten (`retention::unknown_artist`), else no artist.
+async fn own_artist(served: &Arc<crate::serve::Serve>, account: &str, id: Option<&str>, name: &str) -> Result<Option<(super::related::Asked, source::ArtistWorks)>, ToggleError> {
+    let (s, i, n) = (served.clone(), id.map(str::to_string), name.to_string());
+    let asked = tokio::task::spawn_blocking(move || super::related::asked(&s, i.as_deref(), &n)).await.map_err(anyhow::Error::from).and_then(|r| r).map_err(ToggleError::from)?;
+    let Some(asked) = asked else {
+        let Some(id) = id else { return Ok(None) };
+        let (c, i) = (served.catalogue().clone(), id.to_string());
+        let gone = tokio::task::spawn_blocking(move || super::retention::unknown_artist(&c, &i)).await.ok().flatten();
+        return Err(gone.unwrap_or_else(|| ToggleError::Refused("That is not an artist.".into())));
+    };
+    let works = crate::source::cratarr::artist_works_of(served, account, &asked.id).await.map_err(|e| {
+        tracing::warn!("artist {}: {e:#}", asked.id);
+        ToggleError::Refused("The server could not read this artist.".into())
+    })?;
+    Ok(Some((asked, works)))
 }
 
 /// An album as its view in the panel shows it (decision 0023): what its tracks say of it, and its tracks in play order
@@ -909,16 +939,33 @@ impl PlayingService {
     /// An artist of a connected server, for their view in the panel (by name, as the albums credit them).
     /// `without`: the libraries switched off (`source/library` keys): their albums and tracks left out, as every list
     /// leaves them (the owner, 2026-11-02).
-    pub async fn artist_view(&self, source_id: &str, name: &str, without: &[String]) -> Result<ArtistView, ToggleError> {
+    /// Cratarr's own artist goes by their id for life (C55, `id`): one asked for by name is the first of it, and the view says who.
+    pub async fn artist_view(&self, source_id: &str, name: &str, id: Option<&str>, without: &[String]) -> Result<ArtistView, ToggleError> {
         let name = name.trim();
-        if name.is_empty() {
+        let own = source_id == crate::source::cratarr::KIND.id;
+        let id = id.map(str::trim).filter(|i| own && !i.is_empty());
+        if name.is_empty() && id.is_none() {
             return Err(ToggleError::Refused("That is not an artist.".into()));
         }
         let (_, s) = self.source(source_id)?;
-        let works = s.artist_works(name).await.map_err(|e| {
-            tracing::warn!("{source_id}: artist {name}: {e:#}");
-            ToggleError::Refused("The server could not read this artist.".into())
-        })?;
+        let found = match self.playlists.served() {
+            Some(served) if own => {
+                let account = served.current_user().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+                own_artist(&served, &account, id, name).await?
+            }
+            _ => None,
+        };
+        let (asked, works) = match found {
+            Some((asked, works)) => (Some(asked), Some(works)),
+            None => (
+                None,
+                s.artist_works(name).await.map_err(|e| {
+                    tracing::warn!("{source_id}: artist {name}: {e:#}");
+                    ToggleError::Refused("The server could not read this artist.".into())
+                })?,
+            ),
+        };
+        let name = asked.as_ref().map_or(name, |a| a.name.as_str());
         let w = works.ok_or_else(|| ToggleError::Refused("This server cannot show artists.".into()))?;
         let mut rows: Vec<super::playlists::PlaylistRow> = w
             .tracks
@@ -951,13 +998,8 @@ impl PlayingService {
                 row.bpm = f.bpm;
             }
         }
-        let mbid = match self.playlists.served() {
-            Some(served) if source_id == crate::source::cratarr::KIND.id => {
-                let n = name.to_string();
-                tokio::task::spawn_blocking(move || served.library.artist_by_name(&n)).await.ok().and_then(Result::ok).flatten().and_then(|(_, m)| m)
-            }
-            _ => None,
-        };
+        // Their own references' first, else the library's (C55, `related::asked`).
+        let mbid = asked.as_ref().and_then(|a| a.mbid.clone());
         // Classical (0.10), as the Library's albums say it.
         let (mut albums, mut appears_on) = (w.albums, w.appears_on);
         // Of the libraries switched on: an album of one switched off goes, and its tracks with it.
@@ -981,18 +1023,50 @@ impl PlayingService {
         super::classical::tell(source_id, &mut appears_on).await;
         super::file_facts::tell(source_id, &mut albums);
         super::file_facts::tell(source_id, &mut appears_on);
-        Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums, appears_on, rows, favorite: w.favorite, mbid })
+        Ok(ArtistView {
+            source: source_id.to_string(),
+            name: name.to_string(),
+            albums,
+            appears_on,
+            rows,
+            favorite: w.favorite,
+            mbid,
+            id: asked.as_ref().map(|a| a.id.clone()),
+            number: asked.as_ref().and_then(|a| a.number),
+            namesakes: asked.as_ref().is_some_and(|a| a.namesakes),
+        })
     }
 
-    /// Makes an artist a favourite or not (the artist panel's heart).
-    pub async fn artist_favorite(&self, source_id: &str, name: &str, on: bool) -> Result<bool, ToggleError> {
+    /// Cratarr's own artist asked for by their id for life (C55): the library, the asking account and the id. None: none asked
+    /// for, or another server's artist.
+    fn own_artist_id(&self, source_id: &str, id: Option<&str>) -> Result<Option<(Arc<crate::serve::Serve>, String, String)>, ToggleError> {
+        let Some(id) = id.map(str::trim).filter(|i| !i.is_empty() && source_id == crate::source::cratarr::KIND.id) else { return Ok(None) };
+        if crate::serve::ids::artist_number(id).is_none() {
+            return Err(ToggleError::Refused("That is not an artist.".into()));
+        }
+        let served = self.playlists.served().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let account = served.current_user().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+        Ok(Some((served, account, id.to_string())))
+    }
+
+    /// Makes an artist a favourite or not (the artist panel's heart): Cratarr's own by their id for life where one is given (C55).
+    pub async fn artist_favorite(&self, source_id: &str, name: &str, id: Option<&str>, on: bool) -> Result<bool, ToggleError> {
         let (_, s) = self.source(source_id)?;
+        if let Some((served, account, id)) = self.own_artist_id(source_id, id)? {
+            let set = tokio::task::spawn_blocking(move || crate::source::cratarr::set_artist_favorite_of(&served, &account, &id, on));
+            return set.await.map_err(anyhow::Error::from).and_then(|r| r).map_err(|e| ToggleError::CannotPlay(format!("{e:#}")));
+        }
         s.set_artist_favorite(name.trim(), on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
-    /// Whether an artist is a favourite (the heart on their chip); `None` where the server keeps no favourite artists.
-    pub async fn artist_is_favorite(&self, source_id: &str, name: &str) -> Result<Option<bool>, ToggleError> {
+    /// Whether an artist is a favourite (the heart on their chip); `None` where the server keeps no favourite artists. Cratarr's
+    /// own by their id for life where one is given (C55).
+    pub async fn artist_is_favorite(&self, source_id: &str, name: &str, id: Option<&str>) -> Result<Option<bool>, ToggleError> {
         let (_, s) = self.source(source_id)?;
+        if let Some((served, account, id)) = self.own_artist_id(source_id, id)? {
+            let read = tokio::task::spawn_blocking(move || crate::source::cratarr::artist_favorite_of(&served, &account, &id));
+            return read.await.map_err(anyhow::Error::from).and_then(|r| r).map(Some).map_err(|e| ToggleError::CannotPlay(format!("{e:#}")));
+        }
         s.artist_favorite(name.trim()).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
@@ -1196,5 +1270,48 @@ mod tests {
         let (had, wanted) = (cat.record_for_tests("Tide Tables", 2), cat.record_for_tests("Tide Tables", 0));
         assert_eq!(page(&cat, wanted).more.have, Some(ids::record(had)));
         assert_eq!(page(&cat, cat.record_for_tests("Quiet Lanes", 0)).more.have, None, "nobody has it");
+    }
+
+    // ---- C55: an artist page for anyone, by id or name
+
+    /// Cratarr's own library, in memory, its catalogue attached.
+    fn own_library() -> Arc<crate::serve::Serve> {
+        let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.attach_catalogue(Arc::new(Catalogue::open(None, Vec::new()).unwrap()));
+        served
+    }
+
+    /// C55: an artist with no albums here (a record not had of theirs alone) is a page all the same: by their id, their name and
+    /// number, no albums, no rows. A forgotten id is no longer known; an id never given is no artist.
+    #[tokio::test]
+    async fn an_artist_with_no_albums_here_is_a_page() {
+        let served = own_library();
+        let cat = served.catalogue().clone();
+        let artist = cat.artist_for("Paper Lantern").unwrap();
+        let record = cat.record_for_tests("After Hours", 0);
+        cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", [record, artist]).unwrap();
+        let (asked, works) = own_artist(&served, "me", Some(ids::artist(artist).as_str()), "").await.unwrap().expect("a page");
+        assert_eq!((asked.id, asked.name.as_str(), asked.number, asked.namesakes), (ids::artist(artist), "Paper Lantern", Some(1), false));
+        assert!(works.albums.is_empty() && works.appears_on.is_empty() && works.tracks.is_empty(), "nothing here");
+        assert_eq!(works.favorite, Some(false));
+        let gone = cat.artist_for("Quiet Lanes").unwrap();
+        let kept: std::collections::BTreeSet<i64> = [artist].into();
+        assert_eq!(cat.forget_quiet_artists(super::super::moment::now_secs() + 2 * 86_400, &kept).unwrap(), [gone]);
+        assert!(matches!(own_artist(&served, "me", Some(ids::artist(gone).as_str()), "").await, Err(ToggleError::Gone(_))), "no longer known");
+        assert!(matches!(own_artist(&served, "me", Some("ar-999999"), "").await, Err(ToggleError::Refused(_))), "no artist");
+    }
+
+    /// C55: an artist asked for by name hands back the id it resolved: the first of the name, with their number and whether
+    /// another has it, named as asked. By that other's id, the view is theirs. A name no artist has is no one's.
+    #[tokio::test]
+    async fn a_name_hands_back_its_id() {
+        let served = own_library();
+        let cat = served.catalogue().clone();
+        let (first, second) = (cat.artist_for("Rone").unwrap(), cat.artist_apart("Rone").unwrap());
+        let (asked, _) = own_artist(&served, "me", None, " rone ").await.unwrap().expect("the first of the name");
+        assert_eq!((asked.id, asked.name.as_str(), asked.number, asked.namesakes), (ids::artist(first), "rone", Some(1), true));
+        let (asked, _) = own_artist(&served, "me", Some(ids::artist(second).as_str()), "Rone").await.unwrap().expect("the second");
+        assert_eq!((asked.id, asked.name.as_str(), asked.number), (ids::artist(second), "Rone", Some(2)), "by id, though another has the name");
+        assert!(own_artist(&served, "me", None, "Nobody Here").await.unwrap().is_none());
     }
 }

@@ -2559,7 +2559,8 @@ impl Catalogue {
     /// The artists left with nothing, forgotten at `now` (RT01b), in one transaction: those `ARTISTS_FORGETTABLE` names, but for
     /// `protected` (a track's credit, what the user data or a store names, gathered outside the catalogue). Each goes with their
     /// references and leaves a tombstone (`forgotten`, `ar-<n>`); their id is never given again, and a name credited again is
-    /// given a new one. The ids forgotten. Blocking.
+    /// given a new one. Their number among the artists of their name stays theirs (C55, `artist_numbers`), so it is never given
+    /// again either. The ids forgotten. Blocking.
     pub fn forget_quiet_artists(&self, now: i64, protected: &std::collections::BTreeSet<i64>) -> Result<Vec<i64>> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
