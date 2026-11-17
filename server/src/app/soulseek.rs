@@ -3,7 +3,9 @@
 //! owner, 2026-11-03): Lidarr fetches its own Wanted through its own downloaders.
 //!
 //! - **What is wanted:** Cratarr's approved Requests, and only those (the owner, 2026-11-03: "The whole idea is that
-//!   Cratarr's Soulseek doesn't need Lidarr"); read each round. One taken off the list stays off.
+//!   Cratarr's Soulseek doesn't need Lidarr"); read each round. One taken off the list stays off. An item whose record is had
+//!   (arrived or done), or whose request left, goes unless it is placed: a fetch, a check or a placing under way is cancelled and
+//!   its folder removed (Y2). A placed copy partly there lets Soulseek look again.
 //! - **Judged by its list:** each request's record is judged by its counting list (`references::tracklist`, Q31): for a record
 //!   not had, its references' in order, MusicBrainz's release (or one of its release group's), Discogs', Bandcamp's album. A
 //!   Soulseek folder is a candidate only when every track of the list is one of its files, by title and length (`folders_of`),
@@ -271,9 +273,10 @@ fn set_aside_unreadable(p: &Path, why: &str) -> Kept {
 }
 
 /// The record an item is placed for, as the list holds it now (R24, N5), not as it was when its fetch began: an item 0.16 kept is
-/// given its record by the first round of requests, which can come while its first fetch at the upgrade start runs.
-fn record_now(k: &Kept, id: &str, was: &Record) -> Record {
-    k.items.iter().find(|i| i.id == id).map_or_else(|| was.clone(), |i| i.record.clone())
+/// given its record by the first round of requests, which can come while its first fetch at the upgrade start runs. None once it is
+/// off the list (Y2: its record had otherwise, or its request gone): it is placed nowhere.
+fn record_now(k: &Kept, id: &str) -> Option<Record> {
+    k.items.iter().find(|i| i.id == id).map(|i| i.record.clone())
 }
 
 fn with_item(id: &str, f: impl FnOnce(&mut Item)) {
@@ -808,7 +811,7 @@ pub fn start(app: &Arc<super::App>) {
 
 /// The approved Requests taken in (decision 0099's amendment: Soulseek never reads Lidarr's Wanted), each by its record
 /// (C51b, `requests::records_of`): one whose record is not on the list yet is added, waiting to be searched; one no longer
-/// approved (cancelled, declined) goes, unless it is fetched or placed.
+/// approved (cancelled, declined) goes unless it is placed, a fetch, a check or a placing under way cancelled (Y2).
 async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>) -> Result<()> {
     // Folders set aside past their 14 days, looked for hourly (X4).
     static SWEPT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
@@ -857,7 +860,8 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
             kept(|k| bring_forward(&mut k.items, &groups, &unreleased, &progress, t));
         }
     }
-    // The first arrival stops the other (X1): a fetch under way of a record that arrived otherwise is cancelled in slskd.
+    // The first arrival stops the other (X1), and a request that left takes its item with it (Y2): a fetch, a check or a placing
+    // under way is cancelled, in slskd and on disk.
     if !taken.is_empty()
         && let Ok((slskd, downloads)) = super::track_fetch::slskd_ready().await
     {
@@ -911,36 +915,39 @@ fn bring_forward(items: &mut [Item], groups: &HashMap<i64, String>, unreleased: 
     }
 }
 
-/// A fetch under way stopped (X1: the first arrival stops the other): its transfers dropped in slskd, what came of them removed
-/// from slskd's batch folder.
+/// A fetch under way stopped (X1: the first arrival stops the other; Y2: a request that left, too): its transfers dropped in slskd,
+/// what came of them removed from slskd's batch folder, and so the checked files a placing that failed kept (X4).
 async fn cancel_fetch(slskd: &Slskd, downloads: &Path, it: &Item) {
-    let Some(batch) = &it.batch else { return };
-    if let Some(user) = it.chosen.and_then(|c| it.folders.get(c)).map(|f| f.user.clone())
+    if let Some(batch) = &it.batch
+        && let Some(user) = it.chosen.and_then(|c| it.folders.get(c)).map(|f| f.user.clone())
         && let Ok(ts) = slskd.transfers(batch).await
     {
         for t in ts {
             slskd.drop_transfer(&user, &t.id).await;
         }
     }
-    std::fs::remove_dir_all(downloads.join(crate::slskd::FOLDER).join(batch)).ok();
-    tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "its fetch stopped: it arrived otherwise");
+    for folder in it.batch.iter().chain(&it.checked) {
+        std::fs::remove_dir_all(downloads.join(crate::slskd::FOLDER).join(folder)).ok();
+    }
+    tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "its fetch stopped: it arrived otherwise, or its request left");
 }
 
 /// [`read_requests`]'s list kept, each request's record as `records_of` read it (`of`, in the requests' order): pure. Every
 /// record is taken, with a release group or none: it is judged by its list, whosever that is (0100). An item 0.16 kept, by its
 /// release group, is given its request's record (row 9.26) and goes on as it was: a fetch under way keeps its batch, its
-/// folder and its tick, and is written back with its record.
+/// folder and its tick, and is written back with its record. The items it takes off with a fetch or checked files are handed back,
+/// to be cancelled (`cancel_fetch`).
 fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>], firsts: &[i64]) -> Vec<Item> {
     let ids: std::collections::HashSet<i64> = approved.iter().map(|r| r.id).collect();
     let record_of: BTreeMap<i64, i64> = approved.iter().zip(of).filter_map(|(r, o)| Some((r.id, o.as_ref()?.record))).collect();
     // A request that left (cancelled, declined, rejected): its item goes to another approved request of its record, keeping its tick
-    // and folders (X2); else it goes, unless it is under way (fetched, checked or placed): one ticked, not started, goes with it.
+    // and folders (X2); else it goes unless it is placed (Y2): one ticked, fetched, checked or held at its check is cancelled with it.
     for i in k.items.iter_mut().filter(|i| !ids.contains(&i.record.request) && i.record.record != 0) {
         if let Some(other) = record_of.iter().filter(|(_, record)| **record == i.record.record).map(|(id, _)| *id).min() {
             i.record.request = other;
         }
     }
-    k.items.retain(|i| ids.contains(&i.record.request) || matches!(i.state, State::Fetching | State::Checking | State::Placed));
+    let mut stopped = take_off(&mut k.items, |i| !ids.contains(&i.record.request) && i.state != State::Placed);
     // Taken off by record (X2): 0.16's, by request, made their records once; one no request names any more forgotten.
     for id in std::mem::take(&mut k.dropped) {
         match record_of.get(&id) {
@@ -956,20 +963,20 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             i.record.record = o.record;
         }
     }
-    // A record already had, by its own files or a record holding them (the one had rule, R26, N9), is not searched: an item of it
-    // not in flight goes, and none is made for it (Clear placed, or Lidarr's delivery, is no reason to fetch it again).
+    // A record already had, by its own files or a record holding them (the one had rule, R26, N9), is not searched: none is made for
+    // it (Clear placed, or Lidarr's delivery, is no reason to fetch it again).
     let had: std::collections::HashSet<i64> = of.iter().flatten().filter(|o| o.had()).map(|o| o.record).collect();
-    // The first arrival stops the other (X1): one ticked or being fetched goes too, its fetch cancelled by the caller; one checked
-    // or placed is the arrival.
-    let stopped: Vec<Item> = k.items.iter().filter(|i| had.contains(&i.record.record) && matches!(i.state, State::Approved | State::Fetching)).cloned().collect();
-    k.items.retain(|i| !had.contains(&i.record.record) || matches!(i.state, State::Checking | State::Placed));
+    // The first arrival stops the other (X1): an item of it goes unless it is placed, which is the arrival, as nothing is seen before
+    // its placing (Y2, X4); one ticked, fetched, checked or held at its check is cancelled.
+    stopped.extend(take_off(&mut k.items, |i| had.contains(&i.record.record) && i.state != State::Placed));
     for (n, (r, o)) in approved.iter().zip(of).enumerate() {
         if k.dropped.contains(&r.id) || o.as_ref().is_some_and(|o| k.dropped_records.contains(&o.record)) {
             continue;
         }
         // No record yet (0.17's step gives each one at the start): taken once it has one; a had one, never.
         let Some(o) = o.as_ref().filter(|o| !o.had()) else { continue };
-        if k.items.iter().any(|i| i.record.request == r.id || i.record.record == o.record) {
+        // One item a record; a placed copy partly there lets Soulseek look again, its item kept as history (Y2).
+        if k.items.iter().any(|i| (i.record.request == r.id || i.record.record == o.record) && !looks_again(i, o.holding)) {
             continue;
         }
         k.next += 1;
@@ -996,7 +1003,22 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             i.due = firsts.get(n).copied().unwrap_or(0);
         }
     }
-    stopped.into_iter().filter(|i| i.batch.is_some()).collect()
+    stopped.into_iter().filter(|i| i.batch.is_some() || i.checked.is_some()).collect()
+}
+
+/// The items `goes` picks taken off the list, in their order (`take_requests`).
+fn take_off(items: &mut Vec<Item>, goes: impl Fn(&Item) -> bool) -> Vec<Item> {
+    let (gone, stay): (Vec<Item>, Vec<Item>) = std::mem::take(items).into_iter().partition(goes);
+    *items = stay;
+    gone
+}
+
+/// Whether a placed item lets another item of its record be made (Y2): the record reads partly there, and its own copy is short of
+/// the record's list, or has been read (as many tracks there as it placed) and the record is short still. A whole copy no pass has
+/// read yet waits for one, which may make its record had: till then the record is partly there by another copy. Pure.
+fn looks_again(i: &Item, holding: super::requests::Holding) -> bool {
+    let placed = i.chosen.and_then(|c| i.folders.get(c)).map_or(0, |f| f.files.len());
+    i.state == State::Placed && matches!(holding, super::requests::Holding::Partly { has, of } if placed < of as usize || has as usize >= placed)
 }
 
 /// The next record to search: waiting and due, the longest waiting first.
@@ -1418,17 +1440,22 @@ fn folders_for(lib: &Path, r: &Record) -> impl Iterator<Item = PathBuf> {
 }
 
 /// The checked files placed (X4), the record's cover beside them, and the batch's folder they came from removed. A placing that
-/// fails keeps them there: the batch is let go (`checked`), no user is failed, and the record is placed again from them later.
+/// fails keeps them there: the batch is let go (`checked`), no user is failed, and the record is placed again from them later. One
+/// taken off the list meanwhile (Y2: its record had otherwise, or its request gone) is placed nowhere, and its files go.
 async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
-    let r = kept(|k| record_now(k, id, &it.record));
-    let placed = match library() {
-        // Its cover only once there is somewhere to put it: it may have to be fetched.
-        Ok(lib) => {
-            let cover = cover_for(r.record).await;
-            place(&lib, &r, files, cover.as_deref())
-        }
-        Err(e) => Err(e),
+    let lib = library();
+    // Its cover only once there is somewhere to put it: it may have to be fetched.
+    let cover = match &lib {
+        Ok(_) => cover_for(kept(|k| record_now(k, id)).map_or(it.record.record, |r| r.record)).await,
+        Err(_) => None,
     };
+    // The list looked at again after the cover's wait (Y2): an item gone from it meanwhile is placed nowhere.
+    let Some(r) = kept(|k| record_now(k, id)) else {
+        std::fs::remove_dir_all(dir).ok();
+        tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "not placed: it left the list");
+        return;
+    };
+    let placed = lib.and_then(|lib| place(&lib, &r, files, cover.as_deref()));
     match placed {
         Ok(to) => {
             std::fs::remove_dir_all(dir).ok();
@@ -1939,7 +1966,7 @@ mod tests {
         k.items.retain(|i| i.record.request != 3);
         take_requests(&mut k, &[asked(1, Some("rg1")), asked(3, Some("rg3"))], &[of(101), of(103)], &[]);
         assert_eq!(k.items.len(), 1);
-        // No longer approved (cancelled): it goes, unless it is being fetched or placed.
+        // No longer approved (cancelled): it goes, unless it is placed (Y2).
         k.items[0].state = State::Found;
         take_requests(&mut k, &[], &[], &[]);
         assert!(k.items.is_empty());
@@ -2293,8 +2320,8 @@ mod tests {
         let mut k: Kept = serde_json::from_str(raw).unwrap();
         let at_start = k.items[0].record.clone();
         take_requests(&mut k, &[asked(7, Some("rg"))], &[of(42)], &[]);
-        assert_eq!((at_start.record, record_now(&k, "ss-3", &at_start).record), (0, 42));
-        assert_eq!(record_now(&k, "ss-9", &at_start), at_start, "one gone from the list: as it was");
+        assert_eq!((at_start.record, record_now(&k, "ss-3").map(|r| r.record)), (0, Some(42)));
+        assert_eq!(record_now(&k, "ss-9"), None, "one gone from the list: placed nowhere (Y2)");
     }
 
     /// A request's record as `records_of` reads it, had: a record holding its files.
@@ -2338,7 +2365,7 @@ mod tests {
     }
 
     /// X2: an item whose request was taken back goes to another approved request of its record, keeping its tick and folders; with
-    /// none, one ticked and not started goes with it, while one being fetched stays.
+    /// none, it goes with it, one being fetched too, handed back to be cancelled (Y2).
     #[test]
     fn a_ticked_item_goes_with_its_request_or_to_the_other() {
         let mut k = Kept::default();
@@ -2349,9 +2376,10 @@ mod tests {
         }
         take_requests(&mut k, &[asked(2, None)], &[of(101)], &[]);
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record, i.state, i.chosen)).collect::<Vec<_>>(), [(2, 101, State::Approved, Some(0))], "to the other, ticked; 103's ticked one gone");
-        k.items[0].state = State::Fetching;
-        take_requests(&mut k, &[], &[], &[]);
-        assert_eq!(k.items.len(), 1, "under way: it stays");
+        (k.items[0].state, k.items[0].batch) = (State::Fetching, Some("b1".into()));
+        let stopped = take_requests(&mut k, &[], &[], &[]);
+        assert!(k.items.is_empty(), "under way: it goes too (Y2)");
+        assert_eq!(stopped.len(), 1, "its fetch to cancel");
     }
 
     /// X2: a record taken off the list stays off, whichever request of it there is.
@@ -2399,7 +2427,7 @@ mod tests {
     }
 
     /// X1: the first arrival stops the other: Soulseek's item of a record that arrived otherwise goes, a fetch under way with it
-    /// (handed back to be cancelled in slskd); one checked or placed is that arrival, and stays.
+    /// (handed back to be cancelled in slskd); one placed is that arrival, and stays (Y2).
     #[test]
     fn the_first_arrival_cancels_soulseeks_fetch() {
         let mut k = Kept::default();
@@ -2412,16 +2440,16 @@ mod tests {
     }
 
     /// R26 (N9), X1: Soulseek takes no record already had (its own files, or a record holding them); an item of one goes, unless it
-    /// is being checked or placed (that arrival itself); one being fetched goes too, its fetch cancelled (X1).
+    /// is placed (that arrival itself, Y2); one being fetched or checked goes too, its fetch cancelled (X1).
     #[test]
     fn soulseek_takes_no_record_already_had() {
         let mut k = Kept::default();
         let both = [asked(1, None), asked(2, None)];
         take_requests(&mut k, &both, &[had(101), of(102)], &[]);
         assert_eq!(k.items.iter().map(|i| i.record.record).collect::<Vec<_>>(), [102]);
-        k.items[0].state = State::Checking;
+        k.items[0].state = State::Placed;
         take_requests(&mut k, &both, &[had(101), had(102)], &[]);
-        assert_eq!(k.items.len(), 1, "being checked: as it was");
+        assert_eq!(k.items.len(), 1, "placed: as it was");
         k.items[0].state = State::Found;
         take_requests(&mut k, &both, &[had(101), had(102)], &[]);
         assert!(k.items.is_empty(), "found, not fetched: gone, its album had");
@@ -2437,6 +2465,122 @@ mod tests {
         k.items.retain(|i| i.state != State::Placed);
         take_requests(&mut k, &[asked(1, None)], &[had(101)], &[]);
         assert!(k.items.is_empty());
+    }
+
+    /// A folder of the record's two tracks, as `listed` gives its items.
+    fn two_tracks(user: &str) -> Folder {
+        Folder {
+            user: user.into(),
+            dir: "d".into(),
+            format: "flac".into(),
+            lossless: true,
+            free_slot: true,
+            queue: 0,
+            speed: 1,
+            extra: 0,
+            files: vec![file(r"d\01 One.flac", 100), file(r"d\02 Two.flac", 200)],
+            unchecked: None,
+        }
+    }
+
+    /// Y2: an item held at its check whose record arrived by the other fetcher goes, as one being fetched does: its transfer dropped
+    /// in slskd and its batch folder removed. Only a placed one is that arrival: nothing is seen before its placing (X4).
+    #[tokio::test]
+    async fn a_checked_item_goes_when_the_other_fetchers_copy_arrives() {
+        let batch = "b-y2-held";
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
+        let i = &mut k.items[0];
+        (i.state, i.batch, i.folders, i.chosen) = (State::Checking, Some(batch.into()), vec![two_tracks("a")], Some(0));
+        hold(i, "AcoustID could not be reached".into(), CHECK_AGAIN);
+        let stopped = take_requests(&mut k, &[asked(1, None)], &[had(101)], &[]);
+        assert!(k.items.is_empty(), "held at its check: gone, its record had");
+        assert_eq!(stopped.iter().map(|i| i.batch.as_deref()).collect::<Vec<_>>(), [Some(batch)], "handed back to be cancelled");
+        let d = fetched_to("y2-held", batch);
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = drops.clone();
+        let app = all_in().route(
+            "/api/v0/transfers/downloads/{user}/{id}",
+            axum::routing::delete(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::future::ready(axum::http::StatusCode::NO_CONTENT)
+            }),
+        );
+        cancel_fetch(&slskd_at(app).await, &d, &stopped[0]).await;
+        assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1, "its transfer dropped in slskd");
+        assert!(!d.join(crate::slskd::FOLDER).join(batch).exists(), "its batch folder removed");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Y2: an item whose placing failed, its checked files kept (X4), goes once its record arrived otherwise: off the list, so it is
+    /// never taken up to be placed again, and its checked folder removed. A placing again already under way when it went places
+    /// nothing, and its files go with it.
+    #[tokio::test]
+    async fn an_item_whose_placing_failed_is_never_placed_once_its_record_arrived() {
+        let (id, batch) = ("ss-y2-unplaced", "b-y2-unplaced");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("y2-unplaced", batch);
+        let dir = d.join(crate::slskd::FOLDER).join(batch);
+        // No library is set up in a test: its placing fails, its files kept.
+        fetch_from(id, &slskd_at(all_in()).await, &d, |_, _| std::future::ready(Ok(0.97))).await;
+        let held = item(id).unwrap();
+        assert_eq!((held.state, held.batch.as_deref(), held.checked.as_deref()), (State::Checking, None, Some(batch)));
+        let mut k = Kept { items: vec![held.clone()], ..Kept::default() };
+        let stopped = take_requests(&mut k, &[asked(1, None)], &[had(1)], &[]);
+        assert!(k.items.is_empty(), "off the list: never taken up to be placed again");
+        assert_eq!(stopped.iter().map(|i| i.checked.as_deref()).collect::<Vec<_>>(), [Some(batch)]);
+        cancel_fetch(&slskd_at(all_in()).await, &d, &stopped[0]).await;
+        assert!(!dir.exists(), "its checked folder removed");
+        // Taken off while a placing again was under way.
+        kept(|k| k.items.retain(|i| i.id != id));
+        fetched_to("y2-unplaced", batch);
+        place_from(id, &held, &dir, &files_under(&dir)).await;
+        assert!(item(id).is_none(), "nothing written back");
+        assert!(!dir.exists(), "placed nowhere, its files gone with it");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Y2: an item whose request left (cancelled, declined, rejected), no other approved request of its record there, goes unless it
+    /// is placed: one held at its check, or keeping the checked files of a placing that failed, is handed back to be cancelled, so it
+    /// is never placed for nobody.
+    #[test]
+    fn a_held_item_of_a_cancelled_request_is_not_placed() {
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(102), of(103)], &[]);
+        (k.items[0].state, k.items[0].batch) = (State::Checking, Some("b-y2-left".into()));
+        hold(&mut k.items[0], "AcoustID could not be reached".into(), CHECK_AGAIN);
+        (k.items[1].state, k.items[1].checked) = (State::Checking, Some("b-y2-checked".into()));
+        k.items[2].state = State::Placed;
+        let stopped = take_requests(&mut k, &[], &[], &[]);
+        assert_eq!(stopped.iter().map(|i| i.record.record).collect::<Vec<_>>(), [101, 102], "handed back to be cancelled");
+        assert_eq!(k.items.iter().map(|i| (i.record.record, i.state)).collect::<Vec<_>>(), [(103, State::Placed)], "a placed one stays");
+    }
+
+    /// Y2: a copy Soulseek placed that is short of its record's list, the record partly there, lets a new item of the record be made,
+    /// so Soulseek looks again; the placed one stays as history. A whole copy placed waits while its record is partly there by
+    /// another copy alone: no pass has read it yet, and once one has, its record is had.
+    #[test]
+    fn a_placed_copy_partly_there_lets_soulseek_look_again() {
+        use super::super::requests::{Holding, RecordOf};
+        let partly = |n: i64, has: u32, list: u32| Some(RecordOf { holder: Some(n), holding: Holding::Partly { has, of: list }, ..of(n).unwrap() });
+        let placed = |k: &mut Kept| {
+            let i = &mut k.items[0];
+            (i.state, i.folders, i.chosen) = (State::Placed, vec![two_tracks("a")], Some(0));
+        };
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, None)], &[of(101)], &[]);
+        placed(&mut k);
+        // Its two tracks read, of the list's three.
+        take_requests(&mut k, &[asked(1, None)], &[partly(101, 2, 3)], &[]);
+        assert_eq!(k.items.iter().map(|i| (i.record.record, i.state)).collect::<Vec<_>>(), [(101, State::Placed), (101, State::Waiting)]);
+        take_requests(&mut k, &[asked(1, None)], &[partly(101, 2, 3)], &[]);
+        assert_eq!(k.items.len(), 2, "one new item, not one a round");
+        // Its two tracks the whole list, not read yet: one of them there by a copy before it.
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(2, None)], &[of(102)], &[]);
+        placed(&mut k);
+        take_requests(&mut k, &[asked(2, None)], &[partly(102, 1, 2)], &[]);
+        assert_eq!(k.items.len(), 1, "it waits for a pass to read it");
     }
 
     /// C51b (row 9.26): an item 0.16 kept, by its release group, is given its request's record and goes on as it was: its
