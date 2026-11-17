@@ -373,9 +373,149 @@ pub fn counting(chosen: Option<&str>, lists: &[(&str, &[RefTrack])], files: &[Li
     found.map(|s| s.to_string())
 }
 
+/// A file's numbers as its tags give them (S.1): its disc, its track number, and the track count its tags say (`totaltracks`, or
+/// the "5/8" of its track number).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FileNumbers {
+    pub disc: Option<u32>,
+    pub number: Option<u32>,
+    pub total: Option<u32>,
+}
+
+impl FileNumbers {
+    /// Read from a file's `tracknumber`, `totaltracks` and `discnumber` tags: the number before a slash, the total after it
+    /// before `totaltracks`'.
+    pub fn of(tracknumber: Option<&str>, totaltracks: Option<&str>, discnumber: Option<&str>) -> Self {
+        let lead = |v: &str| -> Option<u32> {
+            let digits: String = v.trim().chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok().filter(|n| *n > 0)
+        };
+        let (number, of) = match tracknumber.map(|t| t.split_once('/')) {
+            Some(Some((n, of))) => (lead(n), lead(of)),
+            Some(None) => (tracknumber.and_then(lead), None),
+            None => (None, None),
+        };
+        Self { disc: discnumber.and_then(lead), number, total: of.or_else(|| totaltracks.and_then(lead)) }
+    }
+}
+
+/// What MusicBrainz's check of a record found (`app::incomplete`, user data `album_complete`): how many of its release's tracks a
+/// copy holds, of how many. `has` at least `of`: the check found nothing missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Missing {
+    pub has: u32,
+    pub of: u32,
+}
+
+/// A copy as judged for copying (S.1): what can say it lacks tracks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Judged {
+    /// It holds fewer of its record's tracks than its copies together (`copies.short`, which what plays reads).
+    pub fewer_than_its_copies: bool,
+    /// Where a counting list counts: whether the copy lacks a track of it. None: no list counts.
+    pub short_of_list: Option<bool>,
+    /// MusicBrainz's check, where it looked.
+    pub checked: Option<Missing>,
+    /// Its audio files' numbers.
+    pub files: Vec<FileNumbers>,
+}
+
+/// Whether a copy lacks tracks, for copying (S.1): short, whole, or not to be told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lacks {
+    Short,
+    Whole,
+    Unknown,
+}
+
+impl Lacks {
+    /// Whether a copy of it is copied (OQ-Q (b)): all but a short one, so untidy tags never refuse a copy.
+    pub fn copies(self) -> bool {
+        self != Lacks::Short
+    }
+}
+
+/// Whether a copy lacks tracks, for copying (S.1, OQ-Q (b)): fewer of its record's tracks than its copies together; else a track of
+/// the counting list; else what MusicBrainz's check found missing. Where a list or the check says it is all there, it is whole.
+/// Else its files' tags, only where they are clean (`tags_say`): fewer files than their total is short, all of it whole; tags
+/// that cannot say, or no files, are Unknown. Pure: `copies.short`, and what plays, are not this.
+pub fn lacks(c: &Judged) -> Lacks {
+    if c.fewer_than_its_copies || c.short_of_list == Some(true) || c.checked.is_some_and(|m| m.has < m.of) {
+        return Lacks::Short;
+    }
+    if c.short_of_list == Some(false) || c.checked.is_some() {
+        return Lacks::Whole;
+    }
+    match tags_say(&c.files) {
+        Some(true) => Lacks::Short,
+        Some(false) => Lacks::Whole,
+        None => Lacks::Unknown,
+    }
+}
+
+/// Whether a copy's files say it lacks tracks, where they can: every file numbered and carrying a total; numbered discs on all or
+/// none; on each disc one total, its numbers distinct and none beyond it. Then short where a disc holds fewer files than its
+/// total. None where they cannot say (a file with no total, two numbered alike, more numbers than the total, totals that
+/// disagree), or there are no files.
+fn tags_say(files: &[FileNumbers]) -> Option<bool> {
+    if files.is_empty() || files.iter().any(|f| f.number.is_none() || f.total.is_none()) {
+        return None;
+    }
+    if files.iter().any(|f| f.disc.is_some()) && files.iter().any(|f| f.disc.is_none()) {
+        return None;
+    }
+    let mut discs: std::collections::BTreeMap<Option<u32>, Vec<&FileNumbers>> = std::collections::BTreeMap::new();
+    for f in files {
+        discs.entry(f.disc).or_default().push(f);
+    }
+    let mut short = false;
+    for on in discs.values() {
+        let total = on[0].total?;
+        let numbers: std::collections::BTreeSet<u32> = on.iter().filter_map(|f| f.number).collect();
+        if on.iter().any(|f| f.total != Some(total)) || numbers.len() != on.len() || numbers.iter().any(|n| *n > total) {
+            return None;
+        }
+        short |= (on.len() as u32) < total;
+    }
+    Some(short)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S.1: a copy lacks tracks by its copies, its counting list, MusicBrainz's check, or its clean tags, in that order; tags that
+    /// cannot say are Unknown, which copies.
+    #[test]
+    fn a_copy_lacks_tracks_by_its_copies_its_list_its_check_or_its_clean_tags() {
+        let lone = Judged::default;
+        let tagged = |n: u32, total: u32| (1..=n).map(|t| FileNumbers { disc: Some(1), number: Some(t), total: Some(total) }).collect::<Vec<_>>();
+        assert_eq!(lacks(&Judged { files: tagged(3, 8), ..lone() }), Lacks::Short, "3 of 8, every file agreeing");
+        assert_eq!(lacks(&Judged { files: tagged(8, 8), ..lone() }), Lacks::Whole);
+        let mut twice = tagged(8, 8);
+        twice[1].number = Some(1);
+        assert_eq!(lacks(&Judged { files: twice, ..lone() }), Lacks::Unknown, "two files numbered 1: the tags cannot say");
+        assert_eq!(lacks(&Judged { files: vec![FileNumbers { total: None, ..tagged(1, 8)[0] }], ..lone() }), Lacks::Unknown);
+        assert_eq!(lacks(&Judged { checked: Some(Missing { has: 14, of: 15 }), files: tagged(14, 14), ..lone() }), Lacks::Short, "the check wins over tags");
+        assert_eq!(lacks(&Judged { fewer_than_its_copies: true, files: tagged(10, 10), ..lone() }), Lacks::Short, "relative first");
+        // The list: a listed track lacking is short; a list held whole is whole, whatever the tags say.
+        assert_eq!(lacks(&Judged { short_of_list: Some(true), files: tagged(10, 10), ..lone() }), Lacks::Short);
+        assert_eq!(lacks(&Judged { short_of_list: Some(false), files: tagged(3, 8), ..lone() }), Lacks::Whole);
+        assert_eq!(lacks(&Judged { checked: Some(Missing { has: 15, of: 15 }), ..lone() }), Lacks::Whole, "the check found nothing missing");
+        // Totals that disagree, more numbers than the total, a number past it: Unknown, never short.
+        let mut disagree = tagged(3, 8);
+        disagree[2].total = Some(9);
+        assert_eq!(lacks(&Judged { files: disagree, ..lone() }), Lacks::Unknown);
+        assert_eq!(lacks(&Judged { files: tagged(9, 8), ..lone() }), Lacks::Unknown);
+        // Two discs, each whole by its own total; one short of its own.
+        let disc = |d: u32, n: u32, total: u32| (1..=n).map(move |t| FileNumbers { disc: Some(d), number: Some(t), total: Some(total) });
+        assert_eq!(lacks(&Judged { files: disc(1, 5, 5).chain(disc(2, 4, 4)).collect(), ..lone() }), Lacks::Whole);
+        assert_eq!(lacks(&Judged { files: disc(1, 5, 5).chain(disc(2, 3, 4)).collect(), ..lone() }), Lacks::Short);
+        assert_eq!(lacks(&lone()), Lacks::Unknown, "nothing to go by");
+        assert!(Lacks::Unknown.copies() && Lacks::Whole.copies() && !Lacks::Short.copies(), "Unknown counts as whole for copying");
+        assert_eq!(FileNumbers::of(Some("05/08"), None, Some("1/2")), FileNumbers { disc: Some(1), number: Some(5), total: Some(8) });
+        assert_eq!(FileNumbers::of(Some("5"), Some("8"), None), FileNumbers { disc: None, number: Some(5), total: Some(8) });
+    }
 
     fn rec(release: Option<&str>, artist: &str, title: &str, tracks: &[(&str, i64)]) -> RecordFacts {
         RecordFacts {

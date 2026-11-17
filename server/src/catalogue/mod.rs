@@ -3060,6 +3060,31 @@ impl Catalogue {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// A copy's audio files (catalogue folder `folder`, under `dir`; all of it where `dir` is empty), present, each with its track
+    /// and its numbers as its tags give them (S.1, T5). On a reader where there is one. Blocking.
+    pub fn numbers_under(&self, folder: i64, dir: &str) -> Result<Vec<(Option<i64>, identity::FileNumbers)>> {
+        let prefix = if dir.is_empty() { String::new() } else { format!("{}/", dir.trim_end_matches('/')) };
+        let read = |db: &Connection| -> Result<Vec<(Option<i64>, identity::FileNumbers)>> {
+            let tag = |name: &str| format!("(SELECT t.value FROM tags t WHERE t.folder = f.folder AND t.rel = f.rel AND t.name = '{name}' ORDER BY t.n LIMIT 1)");
+            let sql = format!(
+                "SELECT f.track, {}, {}, {} FROM files f WHERE {PRESENT_F} AND f.folder = ?1 AND f.track IS NOT NULL AND substr(f.rel, 1, ?2) = ?3 ORDER BY f.rel",
+                tag("tracknumber"),
+                tag("totaltracks"),
+                tag("discnumber")
+            );
+            let mut st = db.prepare_cached(&sql)?;
+            let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| {
+                let (n, t, d): (Option<String>, Option<String>, Option<String>) = (r.get(1)?, r.get(2)?, r.get(3)?);
+                Ok((r.get(0)?, identity::FileNumbers::of(n.as_deref(), t.as_deref(), d.as_deref())))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// Rows Cratarr moved into a trash (Replace: the old files into Music's trash; before 2026-10-16, Incoming's):
     /// they follow, marked trashed with the trash token, so they retire when the trash is emptied. Blocking.
     pub fn move_into_trash(&self, from: (i64, &str), to: (i64, &str), token: &str) -> Result<usize> {

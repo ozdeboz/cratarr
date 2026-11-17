@@ -707,6 +707,11 @@ impl Library {
     }
 
     /// The albums found missing tracks, with their whole release (by album id, 0.13); a change builds the library again.
+    /// The whole release of an album the check found missing tracks (`set_incomplete`); none for one not found so (T5, S.1).
+    pub fn whole_of(&self, album: &str) -> Option<Whole> {
+        self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).get(album).copied()
+    }
+
     pub fn set_incomplete(&self, albums: HashMap<String, Whole>) {
         *self.incomplete.lock().unwrap_or_else(|p| p.into_inner()) = albums;
     }

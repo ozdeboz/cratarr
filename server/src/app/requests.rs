@@ -630,45 +630,68 @@ pub const ALREADY_HAD: &str = "Already in the library";
 /// release group Lidarr found by the record's names is kept on the record, as found by names (`search`): its state can be
 /// read from then on.
 async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
-    // A record the library has already (C52, OQ3): the asker's own copy of it, in their own music, as Copy to makes one.
-    if let Some(said) = copied_for(app, serve, r).await {
-        if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {
-            tracing::warn!("request {}: what was done was not kept: {e:#}", r.id);
-        }
-        return said;
-    }
+    // A record the library has already (C52, OQ3): the asker's own copy of it, in their own music, as Copy to makes one (T5: from
+    // anyone's whole copy).
+    let copied = copied_for(app, serve, r).await;
     let lidarr = fetcher(app);
     let soulseek = super::soulseek::connected().await;
-    hand_to(lidarr.as_deref(), soulseek, serve, r).await
+    hand_after(lidarr.as_deref(), soulseek, serve, r, copied).await
 }
+
+/// What a Want says once its asker's copy was looked at (T5): made, "Copied into your music" (whose music it came from is not said:
+/// the owner's OQ-I); not made, why, in the log (`requests`) and on its line, never "Already in the library"; no copy known whole,
+/// handed to the fetchers past a had record's shortcut, said in the log; nothing to do, as [`hand_to`].
+pub(super) async fn hand_after(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r: &Request, copied: WantCopy) -> String {
+    let record = r.record.map_or_else(|| "none".to_string(), |n| n.to_string());
+    let said = match copied {
+        WantCopy::Made => COPIED_INTO_OWN.to_string(),
+        WantCopy::Failed(why) => {
+            tracing::warn!(target: "requests", "request {}, record {record}: its asker's copy was not made: {why}", r.id);
+            format!("{NOT_COPIED}: {why}")
+        }
+        WantCopy::NoneWhole => {
+            tracing::warn!(target: "requests", "request {}, record {record}: no copy of it is known whole: handed to the fetchers", r.id);
+            return hand_to_as(lidarr, soulseek, serve, r, false).await;
+        }
+        WantCopy::Nothing => return hand_to(lidarr, soulseek, serve, r).await,
+    };
+    if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {
+        tracing::warn!("request {}: what was done was not kept: {e:#}", r.id);
+    }
+    said
+}
+
+use super::albums::WantCopy;
 
 /// What a request of a record the library has says once its asker's copy is made in their own music (C52).
 pub const COPIED_INTO_OWN: &str = "Copied into your music";
 
+/// What a request of a record the library has says where its asker's copy could not be made (T5), before why.
+pub const NOT_COPIED: &str = "Not copied into your music";
+
 /// A request whose record the library holds whole (C52, OQ3: "Add to Your music" any stored record, through Want): its asker's
-/// copy of it in their own music (`App::copy_for`), and what the request says of it. None where it is not held whole, the asker has
-/// no own music or a copy there already, or the copy failed (said in the log): the request goes on as before.
-async fn copied_for(app: &super::App, serve: &Serve, r: &Request) -> Option<String> {
-    let of = named(serve, std::slice::from_ref(r)).await.pop().flatten()?;
-    if of.holding != Holding::Done {
-        return None;
-    }
-    match app.copy_for(&r.user, of.holder?).await? {
-        Ok(_) => Some(COPIED_INTO_OWN.to_string()),
-        Err(e) => {
-            tracing::warn!("request {}: its asker's copy was not made: {e}", r.id);
-            None
-        }
+/// copy of it in their own music (`App::copy_for`, T5). Nothing to do where it is not held whole by its list.
+async fn copied_for(app: &super::App, serve: &Serve, r: &Request) -> WantCopy {
+    let Some(of) = named(serve, std::slice::from_ref(r)).await.pop().flatten() else { return WantCopy::Nothing };
+    match (of.holding, of.holder) {
+        (Holding::Done, Some(holder)) => app.copy_for(&r.user, holder).await,
+        _ => WantCopy::Nothing,
     }
 }
 
 /// [`hand`] to Lidarr where it is connected (the tests' stands in for it), and to Soulseek where it is.
 async fn hand_to(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r: &Request) -> String {
+    hand_to_as(lidarr, soulseek, serve, r, true).await
+}
+
+/// [`hand_to`]; `had`: whether a record held is said to be had and handed to no fetcher (W3), as it is unless no copy of it is known
+/// whole (T5).
+async fn hand_to_as(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r: &Request, had: bool) -> String {
     let of = named(serve, std::slice::from_ref(r)).await.pop().flatten();
     let r = shown(r.clone(), of.as_ref());
     // Its record had (W3, F4): no fetcher's to fetch, so neither is asked (Lidarr would fetch it again where its own folder no
     // longer holds it, and Soulseek takes no item of it, R26). It reads as had; C52 makes the asker's copy of it (OQ3).
-    if of.as_ref().is_some_and(RecordOf::had) {
+    if had && of.as_ref().is_some_and(RecordOf::had) {
         if let Err(e) = serve.userdata.set_request_fetched(r.id, ALREADY_HAD) {
             tracing::warn!("request {}: what the fetchers were not told was not kept: {e:#}", r.id);
         }
@@ -2155,6 +2178,86 @@ mod tests {
         assert!(arrived_for(&serve, record, Some(200)).await.is_empty());
         assert!(arrived_for(&serve, record, None).await.is_empty(), "nor one whose coming is not known");
         assert_eq!(serve.userdata.request(r.id).unwrap().unwrap().status, APPROVED);
+    }
+
+    /// A log the test reads: what a `fmt` subscriber writes.
+    #[derive(Clone, Default)]
+    struct Logged(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Logged {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Logged {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    /// T5.5: a Want whose copy cannot be made (its own music not made, its copies not read, its copy not listed) says why in the
+    /// log, as a warning of `requests` naming its request and record, and on its line, never "Already in the library", and asks no
+    /// fetcher of a record held; no own music, or a copy there already, says nothing new.
+    #[tokio::test]
+    async fn a_want_that_cannot_copy_says_why_in_the_log() {
+        let serve = served();
+        let owned = serve.catalogue().record_for_tests("Harbour Lights", 2);
+        let mut r = asked_for(owned);
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let log = Logged::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).with_max_level(tracing::Level::INFO).finish();
+        let _logging = tracing::subscriber::set_default(subscriber);
+        let lidarr = Wanting::default();
+        for why in ["its own music could not be made: no room", "its copies could not be read: the catalogue is busy", "its copies could not be read: its record is not listed"] {
+            let said = hand_after(Some(&lidarr), false, &serve, &r, WantCopy::Failed(why.into())).await;
+            assert_eq!(said, format!("{NOT_COPIED}: {why}"));
+            assert_ne!(said, ALREADY_HAD);
+            let text = log.text();
+            assert!(text.lines().any(|l| l.contains("WARN") && l.contains("requests") && l.contains(why) && l.contains(&format!("record {owned}"))), "{text}");
+        }
+        assert!(lidarr.0.lock().unwrap().is_empty(), "held: no fetcher asked");
+        log.0.lock().unwrap().clear();
+        assert_eq!(hand_after(Some(&lidarr), false, &serve, &r, WantCopy::Nothing).await, ALREADY_HAD, "no own music, or one there already: as before");
+        assert!(!log.text().contains("WARN"), "and nothing to warn of: {}", log.text());
+    }
+
+    /// S.2 (cases 1 and 2): Music's lone copy whose three files each say eight tracks is short by its clean tags (read from the
+    /// catalogue as the choice reads them), though `copies.short` says whole: no copy for Ann, and her Want goes to the fetchers
+    /// as a record not held whole, never "Copied into your music". Ten files with no totals cannot say: copied, as today.
+    #[tokio::test]
+    async fn a_want_copies_only_a_copy_not_known_short() {
+        use crate::catalogue::identity::{Judged, lacks};
+        use crate::serve::copies::{Copy, Kind};
+        use super::super::albums::{Chosen, want_copy};
+        let serve = served();
+        let owned = serve.catalogue().record_for_tests("Other Room", 8);
+        // Music's three files saying eight (folder 0), and five more saying no total (folder 1).
+        for (folder, dir, n, number) in [(0, "A", 1, "1/8"), (0, "A", 2, "2/8"), (0, "A", 3, "3/8"), (1, "B", 4, "1"), (1, "B", 5, "2")] {
+            let rel = format!("{dir}/Other Room/{n}.mp3");
+            serve.catalogue().execute_for_tests(&format!("INSERT INTO files (folder, rel, size, mtime, track) VALUES ({folder}, '{rel}', 1, 1, {n})"));
+            serve.catalogue().execute_for_tests(&format!(
+                "INSERT INTO tags (folder, rel, n, raw, name, value) VALUES ({folder}, '{rel}', 0, 'tracknumber', 'tracknumber', '{number}'), ({folder}, '{rel}', 1, 'discnumber', 'discnumber', '1')"
+            ));
+        }
+        let lone = |folder: i64, dir: &str| Copy { folder, dir: dir.into(), kind: Kind::Main, order: 0, format: Some("MP3".into()), min_kbps: Some(320), bits: None, rate: None, short: false, added: Some(1) };
+        let judged = |folder: i64, dir: &str| lacks(&Judged { files: serve.catalogue().numbers_under(folder, dir).unwrap().into_iter().map(|(_, n)| n).collect(), ..Judged::default() });
+        // 1. Three files, each saying eight: short.
+        assert_eq!(serve.catalogue().numbers_under(0, "A/Other Room").unwrap().len(), 3);
+        assert_eq!(want_copy(&[(lone(0, "A/Other Room"), judged(0, "A/Other Room"))], Some(2), &[]), Chosen::NoneWhole);
+        let mut r = asked_for(owned);
+        r.id = serve.userdata.add_request(&r).unwrap();
+        let lidarr = Wanting::default();
+        let said = hand_after(Some(&lidarr), false, &serve, &r, WantCopy::NoneWhole).await;
+        assert!(said != COPIED_INTO_OWN && said != ALREADY_HAD, "{said}");
+        assert_eq!(lidarr.0.lock().unwrap().len(), 1, "to the fetchers, as a record not held whole");
+        // 2. Files with no totals: the tags cannot say, which copies.
+        assert_eq!(want_copy(&[(lone(1, "B/Other Room"), judged(1, "B/Other Room"))], Some(2), &[]), Chosen::From(1, "B/Other Room".into()));
     }
 
     /// W3 (F4): a Want of an album the library has is handed to no fetcher: Lidarr is not asked (it would fetch it again where its

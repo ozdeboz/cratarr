@@ -328,6 +328,73 @@ fn named_copy(a: &source::Album, from: Option<&str>) -> Result<source::Album, To
     }
 }
 
+/// What a Want of a record the library holds copies into its asker's own music (T5): nothing where the asker holds a copy of it in
+/// their own music already; none where no copy is known whole; else the copy, by its catalogue folder and place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Chosen {
+    Theirs,
+    NoneWhole,
+    From(i64, String),
+}
+
+/// The copy a Want copies (T5; the owner's "Yes, from anyone's"): of a record's copies, each judged for copying (S.1), those not
+/// short, in a kept library, not switched off (`off`, catalogue folders): the one that plays for most (`copy_for` for no one: a
+/// main library's, then, where only own music holds it, anyone's first added; a tie by the libraries' order and place). `asker`:
+/// the asker's own music's folder, where it is in use. Pure.
+pub(crate) fn want_copy(copies: &[(Copy, crate::catalogue::identity::Lacks)], asker: Option<i64>, off: &[i64]) -> Chosen {
+    if asker.is_some_and(|a| copies.iter().any(|(c, _)| c.folder == a)) {
+        return Chosen::Theirs;
+    }
+    let whole: Vec<Copy> = copies.iter().filter(|(c, l)| c.kind != LibraryKind::Incoming && !off.contains(&c.folder) && l.copies()).map(|(c, _)| c.clone()).collect();
+    copy_for(&whole, None, &[]).map_or(Chosen::NoneWhole, |c| Chosen::From(c.folder, c.dir.clone()))
+}
+
+/// The one record's listing of the copy a Want copies (T5): its card with that copy alone, by its folder and place, in the library
+/// `root` names. Never the whole Albums view. Pure.
+fn copy_listed(card: source::Album, root: &str, (folder, dir): (i64, String)) -> source::Album {
+    let copy = source::AlbumCopy { library: root.to_string(), folder, dir: dir.clone(), ..Default::default() };
+    source::Album { library: Some(root.to_string()), path: Some(format!("{}/{dir}", root.trim_end_matches('/'))), copies: vec![copy], ..card }
+}
+
+/// A record's copies (`album`, the holder `record`), each judged for copying (S.1, `identity::lacks`): whether it holds fewer of its
+/// tracks than its copies together, a track of the counting list, what MusicBrainz's check found, and its files' tags. Blocking.
+fn judged_copies(served: &crate::serve::Serve, album: &str, record: i64) -> anyhow::Result<Vec<(Copy, crate::catalogue::identity::Lacks)>> {
+    use crate::catalogue::identity::{Judged, Missing, lacks};
+    let cat = served.catalogue();
+    let list = cat.requested(&[record])?.get(&record).and_then(|q| q.list);
+    let whole = served.library.whole_of(album);
+    served
+        .library
+        .copies_of(album)?
+        .into_iter()
+        .map(|c| {
+            let files = cat.numbers_under(c.folder, &c.dir)?;
+            let tracks = files.iter().filter_map(|(t, _)| *t).collect::<std::collections::BTreeSet<i64>>().len();
+            let judged = Judged {
+                fewer_than_its_copies: c.short,
+                short_of_list: list.map(|n| tracks < n),
+                checked: whole.map(|w| Missing { has: tracks as u32, of: w.tracks as u32 }),
+                files: files.into_iter().map(|(_, n)| n).collect(),
+            };
+            let said = lacks(&judged);
+            Ok((c, said))
+        })
+        .collect()
+}
+
+/// What a Want's copy of a record the library holds came to (T5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WantCopy {
+    /// Made in the asker's own music.
+    Made,
+    /// The asker has no own music, or a copy of it is in theirs already: nothing to say.
+    Nothing,
+    /// No copy of it is known whole (S.1): nothing copied; the Want goes to the fetchers.
+    NoneWhole,
+    /// Not made, and why.
+    Failed(String),
+}
+
 /// The conversion at work on this library's copy of a record: a record's other copies have nothing to do with it, and two
 /// folders of one library are told apart by place.
 fn job_on<'a>(jobs: &'a [JobView], source: &str, a: &source::Album) -> Option<&'a JobView> {
@@ -531,32 +598,53 @@ impl App {
         Ok(done)
     }
 
-    /// `account`'s copy of a record the library has, in their own music (C52, OQ3: "Add to Your music" through Want), made as Copy to
-    /// makes one (C40): from the copy that plays the record for most (`copies::copy_for` for no one: never someone else's own music
-    /// where a library holds it), named, as a record of several copies must be (C52b); into their own music, made now where it is
-    /// not in use yet. None where they have no own music, or a copy of it is in theirs already, or the record is no album listed here.
-    pub(super) async fn copy_for(&self, account: &str, record: i64) -> Option<Result<KeepResult, ToggleError>> {
-        let (source, id) = (crate::source::cratarr::KIND.id, crate::serve::ids::record(record));
-        let served = self.served.clone()?;
-        let id2 = id.clone();
-        let copies = tokio::task::spawn_blocking(move || served.library.copies_of(&id2)).await.ok()?.ok()?;
-        let row = copy_for(&copies, None, &[]).map(|c| (c.folder, c.dir.clone()))?;
-        let view = self.albums(Some(source)).await;
-        let listed = view.sources.into_iter().find(|s| s.id == source)?.albums.into_iter().find(|a| a.id == id)?;
-        let from = listed.copies.iter().find(|c| (c.folder, c.dir.clone()) == row).map(|c| c.library.clone())?;
-        let a = named_copy(&listed, Some(&from)).ok()?;
-        let own = {
+    /// `account`'s copy of a record the library holds, in their own music (C52, OQ3: "Add to Your music" through Want), made as Copy
+    /// to makes one (C40), from anyone's whole copy (T5, the owner's "Yes, from anyone's"): the copy `want_copy` chooses among those
+    /// judged whole enough (`judged_copies`), named by its folder and place, read from the one record's listing (never the whole
+    /// Albums view); into their own music, made now where it is not in use yet. The copy it is made of is never moved or changed.
+    pub(super) async fn copy_for(&self, account: &str, record: i64) -> WantCopy {
+        let source = crate::source::cratarr::KIND.id;
+        let Some(served) = self.served.clone() else { return WantCopy::Failed("Cratarr's own library is not open".into()) };
+        let (own, used, asker, off) = {
             let live = self.library.live();
-            live.iter().find(|x| x.cfg.id == source)?.own_of(account)?
+            let Some(on) = live.iter().find(|x| x.cfg.id == source) else { return WantCopy::Failed("Cratarr's own source is not connected".into()) };
+            let Some(own) = on.own_of(account) else { return WantCopy::Nothing };
+            let folders = self.library.catalogue().folders();
+            let folder = |library: &str| on.placement.libraries.iter().find(|l| l.id == library).and_then(|l| l.folders.first()).and_then(|p| folders.id_of(std::path::Path::new(p)));
+            // Own music switched off for its account (it owns none, `Active::libraries`) is copied from by no one.
+            let off: Vec<i64> = on.libraries().into_iter().filter(|u| u.kind == LibraryKind::Own && u.owner.is_none()).filter_map(|u| folder(&u.id)).collect();
+            (own.clone(), on.used(&own), folder(&own), off)
         };
-        if listed.copies.iter().any(|c| c.library == own) {
-            return None;
+        let id = crate::serve::ids::record(record);
+        let s = served.clone();
+        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<source::Album, Chosen>> {
+            let chosen = want_copy(&judged_copies(&s, &id, record)?, asker, &off);
+            let Chosen::From(folder, dir) = chosen else { return Ok(Err(chosen)) };
+            let card = s.library.albums_by_id(std::slice::from_ref(&id))?.pop().ok_or_else(|| anyhow::anyhow!("its record is not listed"))?;
+            let root = s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).ok_or_else(|| anyhow::anyhow!("its copy's library is not listed"))?;
+            Ok(Ok(copy_listed(crate::source::cratarr::card(card), &root, (folder, dir))))
+        })
+        .await;
+        let album = match read {
+            Ok(Ok(Ok(album))) => album,
+            Ok(Ok(Err(Chosen::Theirs))) => return WantCopy::Nothing,
+            Ok(Ok(Err(_))) => return WantCopy::NoneWhole,
+            Ok(Err(e)) => return WantCopy::Failed(format!("its copies could not be read: {e:#}")),
+            Err(e) => return WantCopy::Failed(format!("its copies could not be read: {e}")),
+        };
+        let to = if used {
+            own
+        } else {
+            match self.library.own_library(account).await {
+                Ok(Some(made)) => made,
+                Ok(None) => return WantCopy::Nothing,
+                Err(e) => return WantCopy::Failed(format!("its own music could not be made: {e:#}")),
+            }
+        };
+        match self.incoming.copy_album(source, album, &to, None).await {
+            Ok(_) => WantCopy::Made,
+            Err(e) => WantCopy::Failed(e.to_string()),
         }
-        let to = match self.library.live().iter().find(|x| x.cfg.id == source).is_some_and(|x| x.used(&own)) {
-            true => own,
-            false => self.library.own_library(account).await.ok()??,
-        };
-        Some(self.incoming.copy_album(source, a, &to, None).await)
     }
 
     /// Delete an album of someone's own music from the Users panel: an administrator's, only there (the owner, 2026-11-04:
@@ -637,6 +725,98 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalogue::identity::Lacks;
+
+    /// A whole copy of a record: `folder`, its place, its library's kind, its format, when it came.
+    fn copy(folder: i64, dir: &str, kind: LibraryKind, format: &str, added: i64) -> Copy {
+        let lossless = format == "FLAC";
+        Copy {
+            folder,
+            dir: dir.into(),
+            kind,
+            order: folder as usize,
+            format: Some(format.into()),
+            min_kbps: Some(if lossless { 900 } else { 320 }),
+            bits: lossless.then_some(16),
+            rate: lossless.then_some(44_100),
+            short: false,
+            added: Some(added),
+        }
+    }
+
+    /// Catalogue folders: 0 Music, 1 Incoming, 2 Ann's own music, 3 Bob's, 4 Carl's.
+    const MUSIC: i64 = 0;
+    const ANN: i64 = 2;
+    const BOB: i64 = 3;
+    const CARL: i64 = 4;
+
+    /// T5.2: a short copy is never copied, by either way of knowing it: Music's 2 of 3 (short by its copies) gives way to Bob's
+    /// whole one; a record whose one copy is short by its clean tags (3 files each saying 8) is copied from nowhere.
+    #[test]
+    fn a_want_never_copies_a_short_copy() {
+        use crate::catalogue::identity::{FileNumbers, Judged, lacks};
+        let music = Copy { short: true, ..copy(MUSIC, "Salt Meridian/Other Room (2018)", LibraryKind::Main, "MP3", 1) };
+        let bob = copy(BOB, "Salt Meridian/Other Room (2018)", LibraryKind::Own, "MP3", 2);
+        let judged = |c: &Copy| lacks(&Judged { fewer_than_its_copies: c.short, ..Judged::default() });
+        assert_eq!(want_copy(&[(music.clone(), judged(&music)), (bob.clone(), judged(&bob))], Some(ANN), &[]), Chosen::From(BOB, bob.dir.clone()), "Bob's, whole");
+        let three_of_eight: Vec<FileNumbers> = (1..=3).map(|t| FileNumbers { disc: Some(1), number: Some(t), total: Some(8) }).collect();
+        let lone = copy(MUSIC, "Salt Meridian/Other Room (2018)", LibraryKind::Main, "MP3", 1);
+        let short = lacks(&Judged { files: three_of_eight, ..Judged::default() });
+        assert_eq!(want_copy(&[(lone, short)], Some(ANN), &[]), Chosen::NoneWhole, "short by its tags, though `copies.short` says whole");
+    }
+
+    /// T5.3: a main library's whole copy first, then the asker's own (none made: they have it), then anyone's, between Bob's and
+    /// Carl's as `copy_for` orders them (the first added), whatever order they are listed in.
+    #[test]
+    fn a_want_copies_from_a_main_library_then_the_askers_then_anyones() {
+        let at = "Salt Meridian/Other Room (2018)";
+        let whole = |c: Copy| (c, Lacks::Whole);
+        let (music, bob) = (copy(MUSIC, at, LibraryKind::Main, "MP3", 5), copy(BOB, at, LibraryKind::Own, "FLAC", 1));
+        assert_eq!(want_copy(&[whole(bob.clone()), whole(music.clone())], Some(ANN), &[]), Chosen::From(MUSIC, at.into()), "Music's, though Bob's is FLAC");
+        let ann = copy(ANN, at, LibraryKind::Own, "MP3", 3);
+        assert_eq!(want_copy(&[whole(ann.clone()), whole(bob.clone())], Some(ANN), &[]), Chosen::Theirs, "Ann has it: none made");
+        let carl = copy(CARL, at, LibraryKind::Own, "MP3", 0);
+        assert_eq!(want_copy(&[whole(bob.clone()), whole(carl.clone())], Some(ANN), &[]), Chosen::From(CARL, at.into()), "Carl's, added first");
+        assert_eq!(want_copy(&[whole(carl), whole(bob)], Some(ANN), &[]), Chosen::From(CARL, at.into()), "whatever the order listed");
+    }
+
+    /// T5.4: of two folders in one library, the folder chosen (the FLAC, as `copy_for` chooses) is the one copied, named by its folder
+    /// and place, never the MP3 because it is listed first; the one record's listing names that copy alone.
+    #[test]
+    fn a_want_copies_the_folder_it_chose() {
+        let (mp3, flac) = (copy(MUSIC, "A/Album (MP3)", LibraryKind::Main, "MP3", 1), copy(MUSIC, "A/Album (FLAC)", LibraryKind::Main, "FLAC", 2));
+        let chosen = want_copy(&[(mp3, Lacks::Whole), (flac, Lacks::Whole)], Some(ANN), &[]);
+        assert_eq!(chosen, Chosen::From(MUSIC, "A/Album (FLAC)".into()));
+        let Chosen::From(folder, dir) = chosen else { unreachable!() };
+        let listed = copy_listed(album("record-7", "/music", "/music/A/Album (MP3)"), "/music", (folder, dir));
+        assert_eq!(listed.copies.len(), 1);
+        assert_eq!((listed.copies[0].folder, listed.copies[0].dir.as_str(), listed.copies[0].library.as_str()), (MUSIC, "A/Album (FLAC)", "/music"));
+        assert_eq!(listed.path.as_deref(), Some("/music/A/Album (FLAC)"), "the FLAC's folder, not the card's");
+        assert_eq!(listed.id, "record-7");
+    }
+
+    /// T5.6: Bob's own music switched off (or parked, where it has no copy listed at all) is copied from by no one: the Want goes
+    /// to the fetchers; with Music's copy too, Music's.
+    #[test]
+    fn a_want_never_copies_from_music_switched_off() {
+        let at = "Salt Meridian/Other Room (2018)";
+        let bob = (copy(BOB, at, LibraryKind::Own, "FLAC", 1), Lacks::Whole);
+        assert_eq!(want_copy(std::slice::from_ref(&bob), Some(ANN), &[BOB]), Chosen::NoneWhole);
+        assert_eq!(want_copy(&[], Some(ANN), &[]), Chosen::NoneWhole, "parked: nothing listed");
+        let music = (copy(MUSIC, at, LibraryKind::Main, "MP3", 2), Lacks::Unknown);
+        assert_eq!(want_copy(&[bob, music], Some(ANN), &[BOB]), Chosen::From(MUSIC, at.into()), "Unknown copies as whole");
+    }
+
+    /// T5.5: a Want's copy reads the one record's listing (`albums_by_id`, `copies_of` through `judged_copies`), never the whole
+    /// Albums view, so a bulk approve of many Wants builds that view for none of them; and it is named by place, not by library.
+    #[test]
+    fn a_bulk_approve_reads_one_listing_per_want() {
+        let source = include_str!("albums.rs").replace("\r\n", "\n");
+        let at = source.find("pub(super) async fn copy_for").unwrap();
+        let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
+        assert!(!body.contains("self.albums(") && !body.contains("listed_album(") && !body.contains("named_copy("), "{body}");
+        assert!(body.contains("albums_by_id") && body.contains("judged_copies") && body.contains("copy_listed"), "{body}");
+    }
 
     /// Own music is its owner's to delete from a menu; a main library the administrators'; an administrator deletes in
     /// someone else's own music only from the Users panel (the owner, 2026-11-04).

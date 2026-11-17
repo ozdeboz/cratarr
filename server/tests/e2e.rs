@@ -3462,6 +3462,54 @@ async fn a_request_for_a_stored_album_makes_a_copy_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// T5.1 (the owner's "Yes, from anyone's"): Ann, a user, Wants "Other Room", which only Bob's own music holds, and an
+/// administrator approves it. Bob's copy is copied into Ann's own music byte for byte, under its own folder's name, on the record's
+/// tracks; her request reads done and says it was copied, naming no one's music (OQ-I); no fetcher is asked; Bob's music is as it
+/// was, and nothing is written into it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_want_of_a_record_only_in_bobs_music_copies_his_end_to_end() {
+    let root = temp("want-bobs");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+    }
+    let (theirs, mine) = (own.join("bob"), own.join("ann"));
+    let album = s.read_in("Other Room", &theirs).await;
+    let (id, songs) = (album["id"].as_str().unwrap().to_string(), s.songs_of(&album).await);
+    // Bob's copy: his one folder of it, under its artist's.
+    let dirs = |at: &Path| std::fs::read_dir(at).unwrap().flatten().filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.')).collect::<Vec<_>>();
+    let folder = dirs(&theirs)
+        .iter()
+        .flat_map(|a| dirs(&a.path()).into_iter().map(move |b| format!("{}/{}", a.file_name().to_string_lossy(), b.file_name().to_string_lossy())))
+        .find(|f| f.rsplit('/').next().unwrap().starts_with("Other Room"))
+        .expect("Bob's Other Room");
+    let bobs = as_it_lies(&theirs);
+    let ann = s.sign_in("ann", "ann pw").await;
+    let asked = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Other Room" })).await;
+    let request = asked["request"]["id"].as_i64().unwrap();
+    if asked["request"]["status"] == "pending" {
+        let admin = s.sign_in("root", "root pw").await;
+        admin.ok(reqwest::Method::POST, "/api/requests/decide", json!({ "ids": [request], "approve": true })).await;
+    }
+    let copied = mine.join(&folder);
+    s.until("Ann's copy made, every file of it", Duration::from_secs(60), || async { copied.is_dir() && as_it_lies(&copied) == as_it_lies(&theirs.join(&folder)) }).await;
+    s.until("Ann's copy read on the record's tracks", Duration::from_secs(120), || async { tracks_at(&data, &mine, &folder) == songs }).await;
+    let listed = ann.get("/api/requests").await;
+    let r = listed["mine"].as_array().unwrap().iter().find(|r| r["id"] == request).cloned().expect("her request");
+    assert_eq!((r["state"]["state"].as_str(), r["fetched"].as_str()), (Some("done"), Some("Copied into your music")), "{r}");
+    assert!(!r.to_string().to_lowercase().contains("bob"), "whose music it came from is not said (OQ-I): {r}");
+    assert!(as_it_lies(&theirs) == bobs, "Bob's music as it was, nothing written into it");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A track's own word goes into its file in every copy, by the track and not the file's name, and into no other track's. One
 /// Undo takes it out of them all.
 #[tokio::test(flavor = "multi_thread")]
