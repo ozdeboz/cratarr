@@ -288,7 +288,8 @@ pub struct Requested {
     pub list: Option<usize>,
 }
 
-/// What references name here (`Catalogue::by_reference`, C57), never by a name.
+/// What references name here (`Catalogue::by_reference`, C57): a record never by a name; for a row no record holds, the had record
+/// its names point at (Z6), for display alone.
 #[derive(Debug, Clone, Default)]
 pub struct ByReference {
     /// Each album reference's record as merged now, in their order; none where no record holds it.
@@ -297,6 +298,9 @@ pub struct ByReference {
     pub read: std::collections::HashMap<i64, Requested>,
     /// Each artist reference's artist, and whether the library has albums by them, in their order; none where no artist holds it.
     pub artists: Vec<Option<(i64, bool)>>,
+    /// Each album reference no record holds: the live had record holding it through its names (`held_by_names_in`, Z6), in their
+    /// order; none where a record holds it, or its names hold nothing.
+    pub named: Vec<Option<i64>>,
 }
 
 /// A record as it stands, had or not.
@@ -893,6 +897,52 @@ fn holders_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Resu
     Ok(out)
 }
 
+/// The live had record each of these list rows (a reference, its artist and its title) is held by through its names, as the had
+/// rule's names clause holds a record (`holders_in`): the oldest of its folded artist and title holding no reference that
+/// contradicts the row's, never where the name is several albums' besides the row's own (Y1). For display alone (Z6: Beyond's
+/// `have`): nothing is made or tied. `names`, the live records by their names, read once for every call that passes it. In the
+/// rows' order.
+fn held_by_names_in(db: &Connection, rows: &[(Ref, &str, &str)], names: &mut FoldedNames) -> Result<Vec<Option<i64>>> {
+    use super::identity::fold;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    if names.is_none() {
+        let mut st = db.prepare_cached("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL ORDER BY id")?;
+        let mut by_name: std::collections::HashMap<(String, String), Vec<i64>> = std::collections::HashMap::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+            let (id, artist, title) = row?;
+            by_name.entry((fold(&artist), fold(&title))).or_default().push(id);
+        }
+        *names = Some(by_name);
+    }
+    let Some(index) = names.as_ref() else { return Ok(vec![None; rows.len()]) };
+    let keys: Vec<(String, String)> = rows.iter().map(|(_, artist, title)| (fold(artist), fold(title))).collect();
+    let others: Vec<i64> = keys.iter().filter(|(_, title)| !title.is_empty()).filter_map(|key| index.get(key)).flatten().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let theirs = refs_of(db, &others)?;
+    let none: Vec<(String, String, String)> = Vec::new();
+    let theirs_of = |h: i64| theirs.get(&h).map_or(&none[..], Vec::as_slice);
+    let had = live_had_of(db, &others)?;
+    // The row stands in its name's albums as a record of its own would: no record's id is 0.
+    const ROW: i64 = 0;
+    Ok(rows
+        .iter()
+        .zip(&keys)
+        .map(|((r, ..), key)| {
+            if key.1.is_empty() {
+                return None;
+            }
+            let same = index.get(key).map(Vec::as_slice).unwrap_or_default();
+            let own = [(r.source.clone(), r.kind.clone(), r.value.clone())];
+            let albums = albums_of(std::iter::once((ROW, &own[..])).chain(same.iter().map(|h| (*h, theirs_of(*h)))));
+            if albums.iter().filter(|a| !a.contains(&ROW)).count() > 1 {
+                return None;
+            }
+            same.iter().copied().find(|h| had.contains(h) && !contradicts(&own, theirs_of(*h)))
+        })
+        .collect())
+}
+
 /// Records as the pages read them (R16, C53a), on the caller's connection: their rows, their references (a MusicBrainz release
 /// group, a Bandcamp album page among them) in one query each, and who holds each one's files (`holders_in`). In id order.
 pub(super) fn read_records_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Result<Vec<Requested>> {
@@ -1192,18 +1242,26 @@ impl Catalogue {
         Ok(kept)
     }
 
-    /// What references name here (C57: Beyond's rows), never a name, on one reader; nothing made. Each album reference's record as
-    /// merged now, as a row opened finds it (`found_by_reference`), and those records read as the lists read them (the one had
-    /// rule's holder); each artist reference's artist, and whether the library has albums by them (`LIBRARY_ARTISTS`). Blocking.
-    pub fn by_reference(&self, albums: &[Ref], artists: &[Ref]) -> Result<ByReference> {
+    /// What references name here (C57: Beyond's rows), on one reader; nothing made or tied. Each album reference's record as merged
+    /// now, as a row opened finds it (`found_by_reference`), never by a name, and those records read as the lists read them (the one
+    /// had rule's holder); for one no record holds, the had record its artist and title point at, as the had rule's names clause
+    /// holds a record (`held_by_names_in`, Z6), the names read once for all; each artist reference's artist, and whether the
+    /// library has albums by them (`LIBRARY_ARTISTS`). Each album as (its reference, its artist, its title). Blocking.
+    pub fn by_reference(&self, albums: &[(Ref, &str, &str)], artists: &[Ref]) -> Result<ByReference> {
         let read = |db: &Connection| -> Result<ByReference> {
             let mut records = Vec::with_capacity(albums.len());
-            for r in albums {
+            for (r, ..) in albums {
                 records.push(found_by_reference(db, &Listing { refs: vec![r.clone()], ..Listing::default() })?);
             }
             let wanted: Vec<i64> = records.iter().flatten().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
             let mut names = None;
             let read: std::collections::HashMap<i64, Requested> = read_records_in(db, &wanted, &mut names)?.into_iter().map(|q| (q.row.id, q)).collect();
+            let unheld: Vec<usize> = (0..albums.len()).filter(|&i| records[i].is_none()).collect();
+            let rows: Vec<(Ref, &str, &str)> = unheld.iter().map(|&i| albums[i].clone()).collect();
+            let mut named = vec![None; albums.len()];
+            for (i, held) in unheld.into_iter().zip(held_by_names_in(db, &rows, &mut names)?) {
+                named[i] = held;
+            }
             let mut people = Vec::with_capacity(artists.len());
             for r in artists {
                 let held = subjects_in(db, r)?.iter().find_map(|s| ids::artist_number(s));
@@ -1212,7 +1270,7 @@ impl Catalogue {
                     None => None,
                 });
             }
-            Ok(ByReference { records, read, artists: people })
+            Ok(ByReference { records, read, artists: people, named })
         };
         match self.reader() {
             Some(c) => read(&c),

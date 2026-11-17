@@ -6,7 +6,10 @@
 //!   master; two albums or two artists of one name from the sources stay two.
 //! - **Here by reference alone.** An album row names the record that holds its release group or its master (`record`), as merged
 //!   now, and is had by the one had rule on that record. An artist row names the artist who holds their MusicBrainz id
-//!   (`artist`), had where the library has albums by them. A name alone names nothing: a row no reference ties is not had.
+//!   (`artist`), had where the library has albums by them. A name alone names no record.
+//! - **Had through its names, for display alone (Z6).** A row no record holds is had where the had rule's names clause would hold
+//!   it: a live had record of its folded artist and title, holding no reference that contradicts the row's, the name one album's
+//!   (Y1). It names no record, and nothing is made or tied.
 //! - **Made at open:** an album through `POST /api/records/open` (C56, `labels::open_record`), an artist through
 //!   `POST /api/artists/open` (`open_artist`), never by a name, but for the one live artist of the name who holds no MusicBrainz
 //!   id (Z2): the monthly read gives them it by their name anyway.
@@ -65,6 +68,9 @@ pub struct BeyondArtist {
 pub struct Known {
     pub groups: Vec<Option<i64>>,
     pub masters: Vec<Option<i64>>,
+    /// Each MusicBrainz album's and each Discogs master's had record through its names, where no record holds it (Z6).
+    pub groups_named: Vec<Option<i64>>,
+    pub masters_named: Vec<Option<i64>>,
     pub here: ByReference,
 }
 
@@ -76,16 +82,18 @@ fn mbid(id: &str) -> String {
 /// What the catalogue holds of what Beyond found (C57), by reference alone (`Catalogue::by_reference`), on one reader: nothing is
 /// made. Blocking.
 pub fn known(cat: &Catalogue, albums: &[FoundAlbum], masters: &[FoundMaster], artists: &[FoundArtist]) -> Result<Known> {
-    let refs: Vec<Ref> = albums
+    let refs: Vec<(Ref, &str, &str)> = albums
         .iter()
-        .map(|a| Ref::new("musicbrainz", "release-group", &mbid(&a.release_group)))
-        .chain(masters.iter().map(|d| Ref::new("discogs", "master", &d.id.to_string())))
+        .map(|a| (Ref::new("musicbrainz", "release-group", &mbid(&a.release_group)), a.artist.as_str(), a.title.as_str()))
+        .chain(masters.iter().map(|d| (Ref::new("discogs", "master", &d.id.to_string()), d.artist.as_str(), d.title.as_str())))
         .collect();
     let people: Vec<Ref> = artists.iter().map(|a| Ref::new("musicbrainz", "artist", &mbid(&a.mbid))).collect();
     let mut here = cat.by_reference(&refs, &people)?;
     let masters = here.records.split_off(albums.len().min(here.records.len()));
     let groups = std::mem::take(&mut here.records);
-    Ok(Known { groups, masters, here })
+    let masters_named = here.named.split_off(albums.len().min(here.named.len()));
+    let groups_named = std::mem::take(&mut here.named);
+    Ok(Known { groups, masters, groups_named, masters_named, here })
 }
 
 impl Known {
@@ -97,6 +105,14 @@ impl Known {
     /// Whether a record is had: the one had rule's holder.
     fn had(&self, record: Option<i64>) -> bool {
         record.and_then(|r| self.here.read.get(&r)).is_some_and(|q| q.holder.is_some())
+    }
+
+    /// Whether a row is had: its record by the one had rule, else, where no record holds it, through its names (Z6).
+    fn row_had(&self, record: Option<i64>, named: &[Option<i64>], i: usize) -> bool {
+        match record {
+            Some(_) => self.had(record),
+            None => named.get(i).copied().flatten().is_some(),
+        }
     }
 }
 
@@ -138,7 +154,7 @@ pub fn albums(mb: &[FoundAlbum], discogs: &[FoundMaster], known: &Known, marks: 
             discogs_url: None,
             sources: vec!["musicbrainz"],
             record: record.map(ids::record),
-            have: known.had(record),
+            have: known.row_had(record, &known.groups_named, i),
             request: request_of(marks, record, Some(a.release_group.as_str()), &a.artist, &a.title),
         });
     }
@@ -182,7 +198,7 @@ pub fn albums(mb: &[FoundAlbum], discogs: &[FoundMaster], known: &Known, marks: 
             discogs_url: Some(d.url.clone()),
             sources: vec!["discogs"],
             record: record.map(ids::record),
-            have: known.had(record),
+            have: known.row_had(record, &known.masters_named, i),
             request: request_of(marks, record, None, &d.artist, &d.title),
         });
     }
@@ -282,8 +298,8 @@ mod tests {
     }
 
     /// C57: an album row names the record that holds its release group or its master, as merged now, and is had by the one had
-    /// rule on it; a row of a had album's names that no reference ties to it names none and is not had; artists likewise, by
-    /// their MusicBrainz id alone.
+    /// rule on it; a row of a had album's names that no reference ties to it names none, and is had through its names alone
+    /// (Z6: the untagged Lamplight); artists by their MusicBrainz id alone.
     #[test]
     fn a_beyond_row_names_its_record_by_reference_only() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
@@ -292,7 +308,7 @@ mod tests {
         let merged = record(&cat, "Undertow", 0, &[("musicbrainz", "release-group", GROUP_2)]);
         let into = record(&cat, "Undertow (Deluxe)", 0, &[]);
         cat.merge_records(merged, into).unwrap();
-        // Had by its names, untagged: Beyond's rows of those names are not it.
+        // Had by its names, untagged: Beyond's rows of those names name no record, and are had through their names (Z6).
         record(&cat, "Lamplight", 2, &[]);
         let mb = [album(&GROUP_1.to_uppercase(), "Night Walks", "Kite Theory"), album(GROUP_2, "Undertow", "Kite Theory"), album(GROUP_3, "Lamplight", "Kite Theory")];
         let discogs = [master(3002, "Paper Kites", "Kite Theory"), master(3003, "Lamplight", "Kite Theory")];
@@ -303,11 +319,11 @@ mod tests {
             [
                 ("Night Walks", Some(ids::record(had)), true),
                 ("Undertow", Some(ids::record(into)), false),
-                ("Lamplight", None, false),
+                ("Lamplight", None, true),
                 ("Paper Kites", Some(ids::record(wanted)), false),
-                ("Lamplight", None, false),
+                ("Lamplight", None, true),
             ],
-            "by reference alone, merges followed; a name alone is no record and not had"
+            "by reference alone, merges followed; a name alone is no record, and had through its names"
         );
         // An artist by their MusicBrainz id: had where the library has albums by them; one of the same name with no id is not them.
         let theirs = cat.artist_for("Kite Theory").unwrap();
@@ -393,6 +409,42 @@ mod tests {
         assert!(!files(twin, ARTIST_1), "held by the files: kept");
         cat.set_reference(&ids::artist(beyond), &Ref::new("musicbrainz", "artist", ARTIST_3), "hand").unwrap();
         assert!(!files(twin, ARTIST_3), "held by hand: kept");
+    }
+
+    /// Z6 (the review's finding 6): a row no record holds is had where the had rule's names clause would hold it, a live had record
+    /// of its folded artist and title holding no reference that contradicts the row's; it names no record, and nothing is made or
+    /// tied. Not where that record holds another release group, nor where the name is two albums' (Y1), nor for another artist.
+    #[test]
+    fn a_beyond_row_of_an_untagged_owned_album_is_had_and_names_no_record() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        record(&cat, "Lamplight", 2, &[]);
+        record(&cat, "Signal", 2, &[("musicbrainz", "release-group", GROUP_2)]);
+        record(&cat, "Two Rooms", 2, &[]);
+        record(&cat, "Two Rooms", 0, &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000574")]);
+        let count = |table: &str| cat.db_for_tests().query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |r| r.get::<_, i64>(0)).unwrap();
+        let before = [count("records"), count("references"), count("record_labels"), count("record_artists")];
+        let mb = [
+            album(GROUP_1, "Lamplight", "Kite Theory"),
+            album(GROUP_3, "Signal", "Kite Theory"),
+            album("00000000-0000-4000-8000-000000000575", "Two Rooms", "Kite Theory"),
+            album("00000000-0000-4000-8000-000000000576", "Lamplight", "Tape Club"),
+        ];
+        let discogs = [master(3005, "LAMPLIGHT", "kite theory")];
+        let listed = rows(&cat, &mb, &discogs);
+        let had: Vec<(&str, &str, Option<String>, bool)> = listed.iter().map(|r| (r.title.as_str(), r.artist.as_str(), r.record.clone(), r.have)).collect();
+        assert_eq!(
+            had,
+            [
+                ("Lamplight", "Kite Theory", None, true),
+                ("Signal", "Kite Theory", None, false),
+                ("Two Rooms", "Kite Theory", None, false),
+                ("Lamplight", "Tape Club", None, false),
+                ("LAMPLIGHT", "kite theory", None, true),
+            ],
+            "had through its names alone, folded; another release group, a name of two albums and another artist are not"
+        );
+        assert_eq!(listed.len(), 5, "no merge by names: the two Lamplights of Kite Theory are two rows");
+        assert_eq!([count("records"), count("references"), count("record_labels"), count("record_artists")], before, "nothing made or tied");
     }
 
     /// C57: Beyond's answer makes nothing: no record, artist or reference, whatever it finds.
