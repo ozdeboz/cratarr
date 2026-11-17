@@ -1402,6 +1402,26 @@ fn armed(settings: &serde_json::Value) -> Option<(super::radio::AutoMode, bool)>
     Some((mode, a["albums"].as_bool().unwrap_or(false)))
 }
 
+/// The id a name means among playlists, each (id, name, the asker's own) (X6): an id as it is; else the one of that very name, the
+/// asker's own first; else the one alone of it regardless of capitals. None where none is, or several are alike but for their
+/// capitals: then the exact name is needed. Pure.
+fn named_in(list: &[(String, String, bool)], asked: &str) -> Option<String> {
+    if list.iter().any(|(id, ..)| id == asked) {
+        return Some(asked.to_string());
+    }
+    let mut exact: Vec<&(String, String, bool)> = list.iter().filter(|(_, name, _)| name == asked).collect();
+    exact.sort_by_key(|(.., mine)| !mine);
+    if let Some((id, ..)) = exact.first() {
+        return Some(id.clone());
+    }
+    let want = asked.to_lowercase();
+    let mut like = list.iter().filter(|(_, name, _)| name.to_lowercase() == want);
+    match (like.next(), like.next()) {
+        (Some((id, ..)), None) => Some(id.clone()),
+        _ => None,
+    }
+}
+
 /// Whether `e` is `user`'s (`first`: the first administrator's name).
 fn belongs_to(e: &Entry, user: &str, first: Option<&str>) -> bool {
     e.owner.as_deref().or(first) == Some(user)
@@ -3203,19 +3223,12 @@ impl PlayOn {
         named.unwrap_or(sent)
     }
 
-    /// The playlist a name means: the very name, else the one that has it regardless of capitals ("Restaurant de Lift" for
-    /// "Restaurant De Lift"), as the spoken names are found.
+    /// The playlist a name means, as its id, which Play On then asks for (X6: ids are `pl-<hex>` since 0.16, and Home Assistant
+    /// plays playlists by their spoken names): among the asking account's own playlists and those others share (`reach`'s), as
+    /// `named_in` finds it ("Restaurant de Lift" for "Restaurant De Lift").
     async fn playlist_named(&self, playlist: &str) -> Result<String, ToggleError> {
-        let list = self.playlists.view(None).await?;
-        if list.iter().any(|p| p.id == playlist) {
-            return Ok(playlist.to_string());
-        }
-        let want = playlist.to_lowercase();
-        let mut like = list.iter().filter(|p| p.id.to_lowercase() == want);
-        Ok(match (like.next(), like.next()) {
-            (Some(p), None) => p.id.clone(),
-            _ => playlist.to_string(),
-        })
+        let list: Vec<(String, String, bool)> = self.playlists.view(None).await?.into_iter().map(|p| (p.id, p.name, p.mine)).collect();
+        named_in(&list, playlist).ok_or(ToggleError::UnknownPlaylist)
     }
 
     pub fn settings(&self) -> PlayOnSettings {
@@ -3797,6 +3810,40 @@ mod tests {
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
         PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal, None)), None)
+    }
+
+    /// X6: Home Assistant names a playlist as it is spoken: Play On finds it by its name, whatever its capitals, and asks for it by
+    /// its id. A name no playlist has is said to be none.
+    #[tokio::test]
+    async fn play_on_plays_a_playlist_by_its_name_regardless_of_capitals() {
+        let app = super::super::every_copy::app("playon-named").await;
+        app.playlists.create("Restaurant de Lift").await.unwrap();
+        let id = app.playlists.view(None).await.unwrap().into_iter().find(|p| p.name == "Restaurant de Lift").unwrap().id;
+        assert!(id.starts_with("pl-"), "{id}");
+        let p = &app.play_on;
+        let _page = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
+        let play = |name: &str| Command::Play { from: PlayFrom { playlist: Some(name.into()), ..PlayFrom::default() }, tracks: None, index: 0, position_ms: 0, shuffle: false, paused: false, queue_id: None, queue_name: None };
+        // Found and read, by its id: it holds nothing that plays (no library here), which is all it can say.
+        for asked in ["Restaurant de Lift", "restaurant DE lift"] {
+            let r = p.command("ThinkPad", play(asked)).await;
+            assert!(matches!(&r, Err(ToggleError::Refused(_))), "{asked}: {r:?}");
+        }
+        assert!(matches!(p.command("ThinkPad", play("Restaurant de Gare")).await, Err(ToggleError::UnknownPlaylist)));
+        assert_eq!(p.playlist_named("restaurant DE lift").await.unwrap(), id);
+    }
+
+    /// X6: two playlists alike but for their capitals (one's own and another's shared) need the exact name; of two of one name, the
+    /// asker's own.
+    #[test]
+    fn two_playlists_differing_only_in_capitals_need_the_exact_name() {
+        let pl = |id: &str, name: &str, mine: bool| (id.to_string(), name.to_string(), mine);
+        let list = [pl("pl-1", "Chill", true), pl("pl-2", "CHILL", false), pl("pl-3", "Road", false)];
+        assert_eq!(named_in(&list, "chill"), None, "two alike: the exact name is needed");
+        assert_eq!(named_in(&list, "CHILL").as_deref(), Some("pl-2"));
+        assert_eq!(named_in(&list, "Chill").as_deref(), Some("pl-1"));
+        assert_eq!(named_in(&list, "road").as_deref(), Some("pl-3"), "one alone: whatever its capitals");
+        assert_eq!(named_in(&list, "pl-3").as_deref(), Some("pl-3"), "an id as it is");
+        assert_eq!(named_in(&[pl("pl-4", "Road", false), pl("pl-5", "Road", true)], "Road").as_deref(), Some("pl-5"), "of one name, the asker's own");
     }
 
     #[tokio::test]
