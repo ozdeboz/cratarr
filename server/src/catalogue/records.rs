@@ -65,8 +65,8 @@ CREATE TABLE IF NOT EXISTS expected (
   PRIMARY KEY (folder, dir)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TEXT NOT NULL, at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0);
 -- RT01: what was forgotten and when, by its subject: `al-<record>` (a record not had nobody saw or opened for six months,
--- `Catalogue::forget_quiet`), `ar-<artist>` from RT01b. Its id is never given again (AUTOINCREMENT), and a link to it
--- answers \"no longer known\".
+-- `Catalogue::forget_quiet`), `ar-<artist>` (an artist left with nothing, RT01b, `Catalogue::forget_quiet_artists`). Its id is
+-- never given again (AUTOINCREMENT), and a link to it answers \"no longer known\".
 CREATE TABLE IF NOT EXISTS forgotten (subject TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID;
 ";
 
@@ -2414,26 +2414,45 @@ const KEPT_UNSEEN: i64 = 183 * 86_400;
 const RETENTION_FROM: &str = "retention_from";
 /// A record seen at `?2`, never earlier than it was seen before (RT01).
 const SEEN: &str = "UPDATE records SET seen_at = max(COALESCE(seen_at, 0), ?2) WHERE id = ?1";
-/// The records the forgetting takes (RT01), `?1` the first pass (`RETENTION_FROM`), `?2` six months ago: not had (no track,
-/// ever), not seen nor opened since `?2`, and nothing pointing at it: no merge either way, not retired ("Was in Music until…"),
-/// no count or check chosen by hand, no reference pasted by hand nor confirmed, no folder expected for it, no link from before
-/// 0.16, no request's shared name (X9). One never seen (from before 0.17, or made by Bandcamp's list alone) counts from when it
-/// was made or from the first pass, the later. A request's and a Soulseek item's are left out by the caller (`forget_quiet`'s
-/// `protected`).
-const FORGETTABLE: &str = "SELECT n.id FROM records n
-     WHERE n.merged_into IS NULL
+/// A record not had that nothing keeps (RT01), as `n`: no track, ever, and nothing pointing at it: no merge either way, not
+/// retired ("Was in Music until…"), no count or check chosen by hand, no reference pasted by hand nor confirmed, no folder
+/// expected for it, no link from before 0.16, no request's shared name (X9). A request's and a Soulseek item's are left out by
+/// the caller (`protected`).
+const UNKEPT: &str = "n.merged_into IS NULL
        AND n.id NOT IN (SELECT merged_into FROM records WHERE merged_into IS NOT NULL)
        AND n.retired_at IS NULL
        AND n.counted_by_hand = 0 AND n.checked_by_hand = 0
-       AND COALESCE(n.seen_at, max(n.born, ?1)) < ?2
-       AND COALESCE(n.opened_at, 0) < ?2
        AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = n.id)
        AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || n.id AND f.how = 'hand')
        AND NOT EXISTS (SELECT 1 FROM \"references\" c WHERE c.subject = 'al-' || n.id AND c.confirmed = 1)
        AND n.id NOT IN (SELECT record FROM expected)
        AND n.id NOT IN (SELECT record FROM album_moved)
-       AND n.id NOT IN (SELECT record FROM shared_name_records)
-     ORDER BY n.id";
+       AND n.id NOT IN (SELECT record FROM shared_name_records)";
+/// The records the forgetting takes of those nothing keeps (`UNKEPT`, RT01), `?1` the first pass (`RETENTION_FROM`), `?2` six
+/// months ago: neither seen nor opened since `?2`. One never seen (from before 0.17, or made by Bandcamp's list alone) counts
+/// from when it was made or from the first pass, the later.
+const FORGETTABLE: &str = "COALESCE(n.seen_at, max(n.born, ?1)) < ?2
+       AND COALESCE(n.opened_at, 0) < ?2";
+/// How long the kept lists of a record not had that nothing keeps stay unopened (RT01b): read again when they are asked for.
+const LISTS_KEPT: i64 = 30 * 86_400;
+/// The kept lists the forgetting lets go of (RT01b), `?1` thirty days ago: each read before then, of a record nothing keeps
+/// (`UNKEPT`) not opened since.
+const LISTS_FORGETTABLE: &str = "k.at < ?1 AND COALESCE(n.opened_at, 0) < ?1";
+/// How long an artist given an id is left before having nothing forgets them (RT01b): a build or a heart may be about to
+/// credit one just named.
+const ARTIST_NEW: i64 = 86_400;
+/// The artists the forgetting takes (RT01b), `?1` a day ago: credited on no record, named by no reference by hand nor
+/// confirmed, no id from before 0.16 went to them, given theirs before `?1`. One a track credits, or the user data or a store
+/// names, is the caller's (`forget_quiet_artists`'s `protected`).
+const ARTISTS_FORGETTABLE: &str = "SELECT a.id FROM artists a
+     WHERE a.born < ?1
+       AND NOT EXISTS (SELECT 1 FROM record_artists ra WHERE ra.artist = a.id)
+       AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.how = 'hand')
+       AND NOT EXISTS (SELECT 1 FROM \"references\" c WHERE c.subject = 'ar-' || a.id AND c.confirmed = 1)
+       AND a.id NOT IN (SELECT id FROM artist_moved)
+     ORDER BY a.id";
+/// A subject forgotten at `?2`, its tombstone (RT01).
+const FORGOTTEN: &str = "INSERT OR REPLACE INTO forgotten (subject, at) VALUES (?1, ?2)";
 
 impl Catalogue {
     /// An artist's list read now at a source other than Bandcamp (RT01): their records only Bandcamp knows, or no source, seen
@@ -2473,7 +2492,7 @@ impl Catalogue {
         let from: String = tx.query_row("SELECT value FROM meta WHERE key = ?1", [RETENTION_FROM], |r| r.get(0))?;
         let from: i64 = from.parse().unwrap_or(now);
         let gone: Vec<i64> = {
-            let mut st = tx.prepare_cached(FORGETTABLE)?;
+            let mut st = tx.prepare_cached(&format!("SELECT n.id FROM records n WHERE {UNKEPT} AND {FORGETTABLE} ORDER BY n.id"))?;
             let all: Vec<i64> = st.query_map(params![from, now - KEPT_UNSEEN], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
             all.into_iter().filter(|record| !protected.contains(record)).collect()
         };
@@ -2484,9 +2503,51 @@ impl Catalogue {
                 tx.prepare_cached(&format!("DELETE FROM {table} WHERE record = ?1"))?.execute([record])?;
             }
             tx.prepare_cached("DELETE FROM records WHERE id = ?1")?.execute([record])?;
-            tx.prepare_cached("INSERT OR REPLACE INTO forgotten (subject, at) VALUES (?1, ?2)")?.execute(params![subject, now])?;
+            tx.prepare_cached(FORGOTTEN)?.execute(params![subject, now])?;
         }
         tx.execute("DELETE FROM shared_name_records WHERE record NOT IN (SELECT id FROM records)", [])?;
+        tx.commit()?;
+        Ok(gone)
+    }
+
+    /// The kept lists of records not had that nothing keeps (RT01b, `UNKEPT`), let go of at `now` where read thirty days before
+    /// and the record not opened since, but for `protected` (a request's record and a Soulseek item's: they are judged by
+    /// them). A list let go of is read again when it is asked for (`references::tracklist`); the record's count stays, so its
+    /// source is read. How many lists. Blocking.
+    pub fn forget_quiet_lists(&self, now: i64, protected: &std::collections::BTreeSet<i64>) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let gone: Vec<(i64, String)> = {
+            let sql = format!("SELECT k.record, k.source FROM reference_tracks k JOIN records n ON n.id = k.record WHERE {LISTS_FORGETTABLE} AND {UNKEPT}");
+            let mut st = tx.prepare_cached(&sql)?;
+            let all: Vec<(i64, String)> = st.query_map([now - LISTS_KEPT], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            all.into_iter().filter(|(record, _)| !protected.contains(record)).collect()
+        };
+        for (record, source) in &gone {
+            tx.prepare_cached("DELETE FROM reference_tracks WHERE record = ?1 AND source = ?2")?.execute(params![record, source])?;
+        }
+        tx.commit()?;
+        Ok(gone.len())
+    }
+
+    /// The artists left with nothing, forgotten at `now` (RT01b), in one transaction: those `ARTISTS_FORGETTABLE` names, but for
+    /// `protected` (a track's credit, what the user data or a store names, gathered outside the catalogue). Each goes with their
+    /// references and leaves a tombstone (`forgotten`, `ar-<n>`); their id is never given again, and a name credited again is
+    /// given a new one. The ids forgotten. Blocking.
+    pub fn forget_quiet_artists(&self, now: i64, protected: &std::collections::BTreeSet<i64>) -> Result<Vec<i64>> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let gone: Vec<i64> = {
+            let mut st = tx.prepare_cached(ARTISTS_FORGETTABLE)?;
+            let all: Vec<i64> = st.query_map([now - ARTIST_NEW], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            all.into_iter().filter(|artist| !protected.contains(artist)).collect()
+        };
+        for &artist in &gone {
+            let subject = ids::artist(artist);
+            tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1")?.execute([&subject])?;
+            tx.prepare_cached("DELETE FROM artists WHERE id = ?1")?.execute([artist])?;
+            tx.prepare_cached(FORGOTTEN)?.execute(params![subject, now])?;
+        }
         tx.commit()?;
         Ok(gone)
     }
@@ -3331,5 +3392,26 @@ mod tests {
         assert_eq!(credited(&cat, artist, "Undertow", &group), listed);
         assert_eq!(seen_at(), Some(NOW), "never seen earlier than it was");
         assert!(cat.forget_quiet(NOW + 5 * MONTH, &std::collections::BTreeSet::new()).unwrap().is_empty(), "seen five months before: kept");
+    }
+
+    /// RT01b: an artist a record credits, a reference pasted by hand or confirmed names, or an id from before 0.16 went to is
+    /// kept, and so is one given an id within the day; one with nothing goes, their tombstone written, and their name credited
+    /// again is a new artist.
+    #[test]
+    fn an_artist_a_record_a_hand_or_an_old_id_names_is_kept() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let [credited, pasted, confirmed, moved, new, lonely] =
+            ["Glass Harbour", "Orbit Lane", "Tape Club", "Kite Theory", "Noor Field", "Paper Lantern"].map(|n| cat.artist_for(n).unwrap());
+        let record = cat.record_for_tests("Tide Tables", 0);
+        cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", params![record, credited]).unwrap();
+        assert!(cat.set_reference(&ids::artist(pasted), &Ref::new("musicbrainz", "artist", "00000000-0000-4000-8000-000000000401"), "hand").unwrap());
+        assert!(cat.set_reference(&ids::artist(confirmed), &Ref::new("musicbrainz", "artist", "00000000-0000-4000-8000-000000000402"), "search").unwrap());
+        assert_eq!(cat.confirm_reference(&ids::artist(confirmed), "musicbrainz").unwrap(), 1);
+        cat.db().execute("INSERT INTO artist_moved (old, id) VALUES ('ar-5vcUvYmuWJAgyxLXEUmaPz', ?1)", [moved]).unwrap();
+        cat.db().execute("UPDATE artists SET born = ?2 WHERE id = ?1", params![new, NOW - 3600]).unwrap();
+        assert_eq!(cat.forget_quiet_artists(NOW, &std::collections::BTreeSet::new()).unwrap(), [lonely]);
+        assert_eq!(cat.forgotten_at(&ids::artist(lonely)).unwrap(), Some(NOW), "their tombstone");
+        assert_eq!(cat.artist_of("Paper Lantern").unwrap(), None, "their row gone");
+        assert!(cat.artist_for("Paper Lantern").unwrap() > lonely, "named again: a new id, never theirs");
     }
 }

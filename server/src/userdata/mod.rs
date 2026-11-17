@@ -595,6 +595,30 @@ fn snapshot_of(r: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
 
 const SNAPSHOT_COLUMNS: &str = "id, name, settings, created, picture";
 
+/// Where the user data names records and artists by their ids for life, (table, column): what `top_named` and `artists_named`
+/// read.
+const NAMING: [(&str, &str); 19] = [
+    ("annotation", "item"),
+    ("added", "album"),
+    ("imported", "item"),
+    ("album_review", "album"),
+    ("album_tags", "album"),
+    ("record_overrides", "album"),
+    ("album_matches", "album"),
+    ("album_complete", "album"),
+    ("intake_heard", "album"),
+    ("record_references", "album"),
+    ("discogs_genres", "album"),
+    ("renumber_matched", "album"),
+    ("release_types", "key"),
+    ("words", "subject"),
+    ("words_asked", "subject"),
+    ("discogs_facts", "subject"),
+    ("change_at", "item"),
+    ("preference", "value"),
+    ("related_artists", "found"),
+];
+
 /// The `folder` of what was kept by record before a record had copies: it goes for every copy.
 const NO_FOLDER: i64 = -1;
 
@@ -914,36 +938,30 @@ impl UserData {
     /// The highest record or artist id for life the user data names (`ids::highest_named`), 0 for none: with the JSON stores,
     /// what a fresh start of lost ids must number above. Blocking.
     pub fn top_named(&self) -> Result<i64> {
-        const COLUMNS: [(&str, &str); 19] = [
-            ("annotation", "item"),
-            ("added", "album"),
-            ("imported", "item"),
-            ("album_review", "album"),
-            ("album_tags", "album"),
-            ("record_overrides", "album"),
-            ("album_matches", "album"),
-            ("album_complete", "album"),
-            ("intake_heard", "album"),
-            ("record_references", "album"),
-            ("discogs_genres", "album"),
-            ("renumber_matched", "album"),
-            ("release_types", "key"),
-            ("words", "subject"),
-            ("words_asked", "subject"),
-            ("discogs_facts", "subject"),
-            ("change_at", "item"),
-            ("preference", "value"),
-            ("related_artists", "found"),
-        ];
         let db = self.db();
         let mut top = 0;
-        for (table, column) in COLUMNS {
+        for (table, column) in NAMING {
             let mut st = db.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE '%al-%' OR {column} LIKE '%ar-%'"))?;
             for text in st.query_map([], |r| r.get::<_, String>(0))? {
                 top = top.max(crate::serve::ids::highest_named(&text?));
             }
         }
         Ok(top)
+    }
+
+    /// Every artist the user data names by their id for life (`ids::artists_named`), wherever `NAMING` looks: a favourite, plays
+    /// or a rating, what an import brought, their words, a preference, a related artist (RT01b: never forgotten while it does).
+    /// Blocking.
+    pub fn artists_named(&self) -> Result<std::collections::BTreeSet<i64>> {
+        let db = self.db();
+        let mut named = std::collections::BTreeSet::new();
+        for (table, column) in NAMING {
+            let mut st = db.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE '%ar-%'"))?;
+            for text in st.query_map([], |r| r.get::<_, String>(0))? {
+                named.extend(crate::serve::ids::artists_named(&text?));
+            }
+        }
+        Ok(named)
     }
 
     /// The annotations of several items of one kind, by item; items without any are left out.

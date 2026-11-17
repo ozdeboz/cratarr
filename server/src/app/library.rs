@@ -244,14 +244,20 @@ fn ids_state(remembered: Option<&str>, generation: &str) -> Ids {
     }
 }
 
-/// The highest record or artist id for life the JSON stores in the data folder name: crates, everyone's, the players'
-/// queues and the jobs waiting. A store that cannot be read names nothing.
-fn top_in_stores(data: &Path) -> i64 {
+/// The JSON stores in the data folder that name records and artists by their ids for life: crates, everyone's (their seeds,
+/// conditions and what goes by a Sounds like's id), the players' queues and the jobs waiting. One may not be there.
+pub(super) fn id_stores(data: &Path) -> Vec<PathBuf> {
     let mut stores: Vec<PathBuf> = ["crates.json", "queues.json", "convert-queue.json", "track-intake.json"].into_iter().map(|f| data.join(f)).collect();
     if let Ok(users) = std::fs::read_dir(data.join("users")) {
-        stores.extend(users.flatten().map(|u| u.path().join("crates.json")));
+        stores.extend(users.flatten().map(|u| u.path()).filter(|account| account.is_dir()).map(|account| account.join("crates.json")));
     }
-    stores.iter().filter_map(|f| std::fs::read_to_string(f).ok()).map(|text| crate::serve::ids::highest_named(&text)).max().unwrap_or(0)
+    stores
+}
+
+/// The highest record or artist id for life the JSON stores in the data folder name (`id_stores`). A store that cannot be
+/// read names nothing.
+fn top_in_stores(data: &Path) -> i64 {
+    id_stores(data).iter().filter_map(|f| std::fs::read_to_string(f).ok()).map(|text| crate::serve::ids::highest_named(&text)).max().unwrap_or(0)
 }
 
 /// A fresh start of lost track ids: where the new ids begin, and what still names an old track (rows per table).

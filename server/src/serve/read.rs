@@ -501,6 +501,15 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Every artist a song or an album credits, by their number for life: a track's credit is held here, not in the catalogue
+    /// (RT01b: never forgotten while credited). Blocking.
+    pub fn artists_credited(&self) -> Result<std::collections::BTreeSet<i64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT artist_id FROM song_artists UNION SELECT artist_id FROM album_artists")?;
+        let credited: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(credited.iter().filter_map(|id| crate::serve::ids::artist_number(id)).collect())
+    }
+
     /// An artist with their albums, newest release last.
     pub fn artist(&self, id: &str) -> Result<Option<Artist>> {
         let db = self.db();

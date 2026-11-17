@@ -5091,6 +5091,13 @@ async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<s
     };
     let Some(artist) = artist else { return Ok(Json(json!({ "albums": [], "looking": false }))) };
     let (mut albums, looking) = crate::app::discover::missing_albums(cat, artist, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    // An artist forgotten (RT01b) says so, by their tombstone: asked where nothing is listed nor looked for, as for one unknown.
+    if albums.is_empty() && !looking {
+        let (c, id) = (app.library.catalogue(), crate::serve::ids::artist(artist));
+        if let Ok(Some(gone)) = tokio::task::spawn_blocking(move || crate::app::retention::unknown_artist(&c, &id)).await {
+            return Err(gone.into());
+        }
+    }
     if let Some(marks) = request_marks(&app, &serve).await {
         for a in &mut albums {
             a.request = crate::serve::ids::record_number(&a.record).and_then(|r| marks.of_record(r));

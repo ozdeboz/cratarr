@@ -554,7 +554,8 @@ const ADDED_COLUMNS: [(&str, &str); 39] = [
     // The rank of the copy that named a record last (R28): a copy ranked lower does not name it again.
     ("records", "named_rank INTEGER"),
     // RT01: when a list read last showed a record not had (but Bandcamp's), and when it was last opened. One neither for six
-    // months, that nothing points at, is forgotten (`Catalogue::forget_unseen`). NULL: not since 0.17, or never.
+    // months, that nothing points at, is forgotten (`Catalogue::forget_quiet`); its kept lists go after thirty days unopened
+    // (RT01b). NULL: not since 0.17, or never.
     ("records", "seen_at INTEGER"),
     ("records", "opened_at INTEGER"),
 ];

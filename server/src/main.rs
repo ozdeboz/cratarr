@@ -332,9 +332,10 @@ async fn main() -> Result<()> {
     app::scrobble::run(served.clone());
     // Soulseek in Cratarr (0.15): Lidarr's Wanted searched, records fetched on a tick, once a library takes them.
     app::soulseek::start(&app);
-    // Records not had that nothing keeps and nobody saw for six months, forgotten once a day (RT01): after Soulseek's list is
-    // read, whose items keep theirs (read sooner, an empty list would be begun and written over the kept one).
-    app::retention::start(app.library.catalogue(), served.userdata.clone());
+    // Records not had that nothing keeps and nobody saw for six months, forgotten once a day (RT01), with their kept lists and
+    // the artists left with nothing (RT01b): after Soulseek's list is read, whose items keep theirs (read sooner, an empty list
+    // would be begun and written over the kept one), and the catalogue attached.
+    app::retention::start(served.clone());
     app::requests::start(&app);
     // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).
     let importer = app.clone();
