@@ -227,8 +227,8 @@ enum RecordPage {
     Held(String),
 }
 
-/// The page of Cratarr's record `record` from the catalogue alone (C54), merges followed. A record not had is opened at `at` (RT01:
-/// kept six months from then), and shows:
+/// The page of Cratarr's record `record` from the catalogue alone (C54), merges followed, read on readers: it never waits on the
+/// writer (Z11). A record not had is opened at `at` (RT01: kept six months from then; not while the writer is busy), and shows:
 /// - its names, year, genres and release date;
 /// - its rows from its counting list as kept, else from the first kept in the design's order, none of them playable; with none
 ///   kept and a reference to read one by, `looking`;
@@ -1246,6 +1246,34 @@ mod tests {
         assert_eq!(at(opened), Some(NOW - MONTH), "never earlier than it was");
         assert_eq!(at(other), None, "only the record opened");
         assert_eq!(cat.forget_quiet(NOW, &Default::default()).unwrap(), [other], "the record opened stays");
+    }
+
+    /// Z11: a record not had's page never waits on the writer: while a build holds it, the page answers, its list's rows from a
+    /// reader, and its opening's mark is skipped (a missed mark only shortens the keep by one visit); the writer free, it is marked.
+    #[test]
+    fn a_record_page_never_waits_on_the_writer() {
+        let dir = std::env::temp_dir().join(format!("cratarr-page-writer-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let cat = Catalogue::open(Some(&dir.join("catalogue.sqlite")), Vec::new()).unwrap();
+        let record = cat.record_for_tests("Night Walks", 0);
+        cat.set_reference_tracks(record, "musicbrainz", &[track(1, "Lamplight")]).unwrap();
+        let opened_at = || cat.db_for_tests().query_row("SELECT opened_at FROM records WHERE id = ?1", [record], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        let build = cat.writer_for_tests();
+        let answered = std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let c = &cat;
+            s.spawn(move || tx.send(record_page(c, record, NOW).map(|p| matches!(p, Some(RecordPage::NotHad(v)) if v.rows.len() == 1))).ok());
+            let answered = rx.recv_timeout(std::time::Duration::from_secs(5));
+            drop(build);
+            answered
+        });
+        assert!(answered.expect("answered while a build holds the writer").unwrap(), "its page, its list's rows");
+        assert_eq!(opened_at(), None, "the mark skipped");
+        record_page(&cat, record, NOW).unwrap();
+        assert_eq!(opened_at(), Some(NOW), "the writer free: marked");
+        drop(cat);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// OQ16 (a): a retired record's page is a record not had's, what a Want sends with it, and says when it went from Music; one

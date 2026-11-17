@@ -1416,12 +1416,18 @@ impl Catalogue {
         subjects_in(&self.db(), r)
     }
 
-    /// Each source's tracklist of a record, as kept, by source. Blocking.
+    /// Each source's tracklist of a record, as kept, by source. On a reader. Blocking.
     pub fn reference_tracks(&self, record: i64) -> Result<Vec<(String, Vec<RefTrack>)>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT source, tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
-        let rows: Vec<(String, String)> = st.query_map([record], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        rows.into_iter().map(|(source, tracks)| Ok((source, serde_json::from_str(&tracks)?))).collect()
+        let read = |db: &Connection| -> Result<Vec<(String, Vec<RefTrack>)>> {
+            let mut st = db.prepare_cached("SELECT source, tracks FROM reference_tracks WHERE record = ?1 ORDER BY source")?;
+            let rows: Vec<(String, String)> = st.query_map([record], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            rows.into_iter().map(|(source, tracks)| Ok((source, serde_json::from_str(&tracks)?))).collect()
+        };
+        // Z11: a record's page, which reads them, never waits on the writer.
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
     }
 
     /// Records waiting for their certain match's list (0.17's step, `lists_to_read`), those tried least first, then the oldest:
@@ -2700,10 +2706,16 @@ impl Catalogue {
     }
 
     /// A record's page opened at `at` (RT01, C54): kept six months from then, and its kept lists thirty days. Never earlier than it
-    /// was opened before. Blocking.
-    pub fn opened(&self, record: i64, at: i64) -> Result<()> {
-        self.db().execute(OPENED, params![record, at])?;
-        Ok(())
+    /// was opened before. Never waits on the writer (Z11): while it is busy (a build's record pass holds it for minutes) the mark is
+    /// skipped, which only shortens the keep by this one visit. Whether it was marked. Blocking.
+    pub fn opened(&self, record: i64, at: i64) -> Result<bool> {
+        let db = match self.db.try_lock() {
+            Ok(db) => db,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+        };
+        db.execute(OPENED, params![record, at])?;
+        Ok(true)
     }
 
     /// When a subject was forgotten (RT01): its tombstone, by which a link to it answers "no longer known". None: never
