@@ -245,8 +245,9 @@ async fn kept_or_find_by(served: &std::sync::Arc<crate::serve::Serve>, albums: V
         // One running for the account already: it is left to finish (asked again later, it takes the rest).
         // A page started it: one album's questions (an intake card, a one-album fix) are a page's, never the background asker's (V6),
         // so "Pause background reading" does not refuse them (Y7). A whole finding's list (Health's "library:musicbrainz", every album
-        // lacking ids) asks behind the pages, as the background reads do, and the pause holds it (U8).
-        let page = due.len() == 1;
+        // lacking ids) asks behind the pages, as the background reads do, and the pause holds it (U8). One album asked, not one left
+        // of many by the matches kept (T13.4): a finding whose other albums are matched already is still the background's.
+        let page = albums.len() == 1;
         let _ = super::tasks::spawn(KIND, &account, false, move |h| async move {
             let matching = match_each(h, due, ud, served, finder);
             if page { matching.await } else { super::musicbrainz::behind(matching).await }
@@ -456,6 +457,51 @@ mod tests {
         assert!(kept.unwrap().is_empty());
         assert_eq!(WENT.load(std::sync::atomic::Ordering::SeqCst), 0, "no question went while paused");
         assert!(matched.is_empty(), "nothing kept");
+    }
+
+    /// T13.4 (run 10's review, the nits, U8): a whole finding asks behind the pages however many of its albums are matched already:
+    /// three asked, two matched a moment ago, one left to ask; while background reading is paused its question does not go, and
+    /// nothing is kept of it.
+    #[tokio::test]
+    async fn a_finding_with_one_album_left_to_match_still_waits_while_paused() {
+        use crate::app::switches::{BACKGROUND, MUSICBRAINZ, TEST_STATE, set_for_tests};
+        static AT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        static WENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn asking(_: reqwest::Client, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
+            use crate::app::musicbrainz::Asked as _;
+            Box::pin(async {
+                let at = AT.lock().unwrap().clone();
+                reqwest::Client::new().get(at).asked().await?.error_for_status()?;
+                WENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                anyhow::Ok(None::<Found>)
+            })
+        }
+        let _one = TEST_STATE.lock().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        const ACCOUNT: &str = "a-findings-last-album-while-paused";
+        let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
+        let albums = vec!["al-1".to_string(), "al-2".to_string(), "al-3".to_string()];
+        for a in &albums[..2] {
+            serve.userdata.set_album_match(a, None, crate::app::moment::now_secs()).unwrap();
+        }
+        let (musicbrainz, background) = (set_for_tests(MUSICBRAINZ, true), set_for_tests(BACKGROUND, false));
+        let kept = crate::serve::who::acting_as(who, kept_or_find_by(&serve, albums.clone(), asking)).await;
+        for _ in 0..500 {
+            if !running(ACCOUNT) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let matched = serve.userdata.album_matches(&albums).unwrap();
+        set_for_tests(BACKGROUND, background);
+        set_for_tests(MUSICBRAINZ, musicbrainz);
+        assert!(kept.unwrap().is_empty(), "none kept with a release");
+        assert_eq!(WENT.load(std::sync::atomic::Ordering::SeqCst), 0, "the last album's question did not go while paused");
+        assert!(!matched.contains_key("al-3"), "nothing kept of it");
     }
 
     /// A match keeps its files' names; the release's list keeps MusicBrainz's own titles, to the ms, at their medium and place

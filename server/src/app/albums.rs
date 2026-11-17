@@ -25,7 +25,8 @@ fn may_delete(kind: Option<LibraryKind>, mine: bool, admin: bool) -> bool {
 /// Why a record may not move, if so. Out of Incoming it is added: to where it goes by default, or by an administrator to
 /// a main library or their own music. Between other libraries only an administrator moves one; into or out of own music it
 /// is a copy (the owner, 2026-11-04; C40: `copies`), and the music of someone who left (`left`) moves into a main library, as
-/// the account's page asks (0101 point 7).
+/// the account's page asks (0101 point 7). Nothing is copied into Incoming (T13.3): what waits there is a fetcher's or a
+/// request's, and no page offers it.
 fn move_refused(from: Option<LibraryKind>, to: Option<LibraryKind>, admin: bool, keepable: bool, default: bool, viewers_own: bool, left: bool) -> Option<&'static str> {
     if from == Some(LibraryKind::Incoming) {
         if !keepable {
@@ -36,8 +37,7 @@ fn move_refused(from: Option<LibraryKind>, to: Option<LibraryKind>, admin: bool,
     if !admin {
         return Some("Moving between libraries is the administrators'");
     }
-    let _ = (left, viewers_own);
-    None
+    (to == Some(LibraryKind::Incoming) && copies(from, to, viewers_own, left)).then_some("It can't be copied into Incoming")
 }
 
 /// Whether a move between these libraries is a copy (C40, the owner 2026-11-04): into or out of someone's own music the album
@@ -856,6 +856,27 @@ mod tests {
         assert_eq!(move_refused(Some(Own), Some(Main), true, false, false, false, true), None);
         assert!(move_refused(Some(Own), Some(Main), false, false, false, false, true).is_some());
         assert!(!copies(Some(Own), Some(Main), false, true) && copies(Some(Own), Some(Own), false, true), "a leaver's into another's own music: a copy");
+    }
+
+    /// T13.3 (run 10's review, the nits): an administrator's Copy from someone's own music into an Incoming library is refused in
+    /// `move_refused`, whoever's music it is (a departed account's too); a copy into a main library or own music is not. Both doors
+    /// ask `move_target`, which refuses, before anything is copied: nothing is written (the end-to-end test looks on disk).
+    #[test]
+    fn a_copy_into_incoming_is_refused() {
+        use LibraryKind::{Incoming, Main, Own};
+        for left in [false, true] {
+            assert!(copies(Some(Own), Some(Incoming), false, left), "it would be a copy (left {left})");
+            assert!(move_refused(Some(Own), Some(Incoming), true, false, false, false, left).is_some(), "refused (left {left})");
+        }
+        assert_eq!(move_refused(Some(Own), Some(Main), true, false, false, false, false), None, "into a main library: a copy still");
+        assert_eq!(move_refused(Some(Own), Some(Own), true, false, false, false, false), None, "into someone's own music: a copy still");
+        let source = include_str!("albums.rs").replace("\r\n", "\n");
+        for door in ["pub async fn move_album(", "pub async fn move_preview("] {
+            let at = source.find(door).unwrap();
+            let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
+            let (asked, copied) = (body.find("self.move_target(source, &s, &a, to).await?").unwrap(), body.find("self.incoming.copy_").unwrap());
+            assert!(asked < copied, "refused before anything is copied: {body}");
+        }
     }
 
     /// X5: with own music switched off for the requester, only an administrator adds their album; on, a user adds their own request's

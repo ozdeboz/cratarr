@@ -221,6 +221,9 @@ pub fn run(cat: Arc<Catalogue>) {
                 tokio::time::sleep(started.elapsed() * REST).await;
                 continue;
             }
+            // New music to analyse: the waveforms in three bands are asked for again after it, so the newest come first (T13.4),
+            // not after the rest of a batch taken before it came.
+            banding = BandWaves::default();
             for (folder, rel, path, size, mtime) in batch {
                 crate::memwatch::wait_for_room().await;
                 let turn = HEAVY.acquire().await.expect("the turn is never closed");

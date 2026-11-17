@@ -3396,6 +3396,37 @@ async fn a_copy_is_one_album_two_copies_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// T13.3: an administrator's Copy from someone's own music into an Incoming library is refused (`move_refused`), its preview and
+/// its tap alike, and nothing is written: Ann's own music and Incoming lie as they did.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_into_incoming_is_refused_end_to_end() {
+    let root = temp("copy-into-incoming");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, incoming, own) = (library.join("music"), library.join("incoming"), library.join("own"));
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let hers = own.join("ann");
+    let album = s.read_in("Own Room", &hers).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "carl", "password": "carl's password", "admin": true })).await;
+    let carl = s.sign_in("carl", "carl's password").await;
+    let (theirs, waiting) = (as_it_lies(&hers), as_it_lies(&incoming));
+    let path = format!("/api/albums/cratarr/{id}/move");
+    let at = |p: &Path| id_of(p).replace('/', "%2F");
+    let (status, preview) = carl.send(reqwest::Method::GET, &format!("{path}?from={}&to={}", at(&hers), at(&incoming)), Value::Null).await;
+    assert_eq!(status, 409, "the preview refused: {preview}");
+    let (status, answer) = carl.send(reqwest::Method::POST, &path, json!({ "from": id_of(&hers), "to": id_of(&incoming) })).await;
+    assert_eq!(status, 409, "the copy refused: {answer}");
+    assert!(answer.to_string().contains("can't be copied into Incoming"), "move_refused's words: {answer}");
+    assert!(as_it_lies(&hers) == theirs && as_it_lies(&incoming) == waiting, "nothing written");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// T1.5: a Copy to's Undo, as Health's list of changes gives it, takes the copied files into Bob's library's trash and leaves a
 /// picture set in the copy's folder since; the record is listed with Music's copy alone after.
 #[tokio::test(flavor = "multi_thread")]

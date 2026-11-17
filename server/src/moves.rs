@@ -233,6 +233,22 @@ fn link_into(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::remove_file(from)
 }
 
+/// The folder `path` is in, made sure of on disk once a name is placed in it (T13.4, run 10's review: a power cut after the
+/// rename could lose a copy the journal calls applied). Best effort: a file system that cannot sync a folder leaves the copy as
+/// it is. Blocking.
+fn sync_folder_of(path: &Path) {
+    #[cfg(unix)]
+    {
+        if let Some(dir) = path.parent() {
+            std::fs::File::open(dir).and_then(|d| d.sync_all()).ok();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 fn move_file(from: &Path, to: &Path) -> Result<()> {
     create_dirs_like_parent(to.parent().context("target has no folder")?)?;
     match rename_new(from, to) {
@@ -250,7 +266,9 @@ fn copy_across(from: &Path, to: &Path, remove: impl FnOnce(&Path) -> std::io::Re
     let placed = (|| -> Result<()> {
         std::fs::copy(from, &part).with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
         std::fs::File::open(&part)?.sync_all()?;
-        Ok(rename_new(&part, to)?)
+        rename_new(&part, to)?;
+        sync_folder_of(to);
+        Ok(())
     })();
     if let Err(e) = placed {
         std::fs::remove_file(&part).ok();
@@ -300,18 +318,22 @@ pub fn copy(plan: &[Step]) -> Result<Vec<bool>> {
 
 /// One file copied (C38): by the kernel's copy where it can (`std::fs::copy` asks for `copy_file_range` first: btrfs shares the
 /// blocks), else byte by byte, into a hidden name beside its target, made sure of on disk, its modification time the original's,
-/// then renamed into place. Its folders made like their neighbours. On any error what this made goes. Whether it shares the
-/// original's blocks, as the file system says (`shared`). Blocking.
+/// then renamed into place, its folder made sure of too. A read-only source copies (T13.1): the part, which takes the source's
+/// mode, is never opened to write. Its folders made like their neighbours. On any error what this made goes. Whether it shares
+/// the original's blocks, as the file system says (`shared`). Blocking.
 pub fn clone_file(from: &Path, to: &Path) -> Result<bool> {
     create_dirs_like_parent(to.parent().context("target has no folder")?)?;
     let part = part_of(to);
     let placed = (|| -> Result<()> {
         std::fs::copy(from, &part).with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
         let at = std::fs::metadata(from)?.modified()?;
-        let file = std::fs::OpenOptions::new().write(true).open(&part)?;
+        // To read alone where that sets its time (its owner may, on any handle): a part of mode 0444 refuses an open to write.
+        let file = std::fs::OpenOptions::new().read(true).write(cfg!(not(unix))).open(&part)?;
         file.set_modified(at)?;
         file.sync_all()?;
-        Ok(rename_new(&part, to)?)
+        rename_new(&part, to)?;
+        sync_folder_of(to);
+        Ok(())
     })();
     if let Err(e) = placed {
         std::fs::remove_file(&part).ok();
@@ -399,23 +421,55 @@ mod fiemap {
     }
 }
 
+/// The hidden folder the share probe works in, inside each of the two folders it tries (T13.2): out of every walk's sight, and
+/// taken away whole after each probe and before it, so what a probe a stop cut short left goes at the next.
+const PROBE_DIR: &str = ".cratarr-probe";
+
+#[cfg(test)]
+thread_local! {
+    /// What runs while the share probe's files are there (T13.2's test): a look at the folders.
+    static MID_PROBE: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+}
+
 /// Whether a copy from folder `from` into folder `to` shares its blocks (C38), tried once with a small file of its own each way
 /// and kept for the server's life, as `mounts::writable` tries a write: a copy made between two libraries on one btrfs shares, and
-/// costs no room (CP5). False where it cannot be tried. Leaves nothing behind. Blocking.
+/// costs no room (CP5). It works in a hidden folder of its own in each (`PROBE_DIR`) and leaves nothing behind. A folder not there
+/// is never made for it (T13.2): false, tried again once it is there. False where it cannot be tried. Blocking.
 pub fn shares(from: &Path, to: &Path) -> bool {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     static KEPT: OnceLock<Mutex<HashMap<(PathBuf, PathBuf), bool>>> = OnceLock::new();
+    // One probe at a time: each clears what an earlier one left in the folders it tries, which another pair may share.
+    static PROBING: Mutex<()> = Mutex::new(());
     let key = (from.to_path_buf(), to.to_path_buf());
     if let Some(known) = KEPT.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
         return *known;
     }
-    let probe = |dir: &Path| dir.join(format!(".cratarr-share-test-{}", std::process::id()));
-    let (source, copy) = (probe(from), probe(to));
-    // A few blocks' worth: a file of a few bytes may live inside the file system's own records, never in a block of its own.
-    let tried = std::fs::write(&source, vec![7u8; 64 << 10]).is_ok() && clone_file(&source, &copy).unwrap_or(false);
-    std::fs::remove_file(&copy).ok();
-    std::fs::remove_file(&source).ok();
+    if !from.is_dir() || !to.is_dir() {
+        return false;
+    }
+    let _one = PROBING.lock().unwrap_or_else(|p| p.into_inner());
+    let (source, copy) = (from.join(PROBE_DIR), to.join(PROBE_DIR));
+    let clear = || {
+        std::fs::remove_dir_all(&source).ok();
+        std::fs::remove_dir_all(&copy).ok();
+    };
+    // What a probe a stop cut short left, this process's or an earlier one's.
+    clear();
+    let name = format!("probe-{}", std::process::id());
+    // Each hidden folder made in its folder alone, never a folder above it. A few blocks' worth: a file of a few bytes may live
+    // inside the file system's own records, never in a block of its own.
+    let tried = std::fs::create_dir(&source).is_ok()
+        && std::fs::create_dir(&copy).is_ok()
+        && std::fs::write(source.join(&name), vec![7u8; 64 << 10]).is_ok()
+        && clone_file(&source.join(&name), &copy.join(&name)).unwrap_or(false);
+    #[cfg(test)]
+    MID_PROBE.with(|h| {
+        if let Some(f) = h.take() {
+            f()
+        }
+    });
+    clear();
     KEPT.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner()).insert(key, tried);
     tried
 }
@@ -559,6 +613,68 @@ mod tests {
         assert!(d.join("part").is_file(), "the part kept for its caller to take away");
         link_into(&d.join("part"), &d.join("free")).unwrap();
         assert_eq!((std::fs::read(d.join("free")).unwrap(), d.join("part").exists()), (b"new".to_vec(), false), "a free name: placed");
+    }
+
+    /// T13.1 (run 10's review, the nits): a source of mode 0444 is copied, its bytes, its time and its mode kept; the part
+    /// `std::fs::copy` gives the source's mode is never opened to write. The tests run as root in the container, where a mode refuses
+    /// no open: the copy runs on a thread of its own as another account (`setresuid` by the system call, which changes that thread
+    /// alone, not libc's wrapper, which changes them all), so a write's open is refused there as it is for any account but root.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_read_only_source_is_copied() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let d = tmp();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let (from, to) = (d.join("01 Slack Water.flac"), d.join("Copy/01 Slack Water.flac"));
+        std::fs::write(&from, b"read only").unwrap();
+        let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+        std::fs::OpenOptions::new().write(true).open(&from).unwrap().set_modified(at).unwrap();
+        std::fs::set_permissions(&from, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let (f, t) = (from.clone(), to.clone());
+        let copied = std::thread::spawn(move || {
+            // SAFETY: plain numbers to a system call that changes the calling thread's account alone; the thread ends with the copy.
+            if unsafe { libc::geteuid() } == 0 {
+                let nobody: libc::uid_t = 65_534;
+                let done = unsafe { libc::syscall(libc::SYS_setresuid, nobody, nobody, nobody) };
+                assert_eq!(done, 0, "another account: {}", std::io::Error::last_os_error());
+            }
+            clone_file(&f, &t).map_err(|e| format!("{e:#}"))
+        })
+        .join()
+        .unwrap();
+        assert!(copied.is_ok(), "copied: {copied:?}");
+        let meta = std::fs::metadata(&to).unwrap();
+        assert_eq!((std::fs::read(&to).unwrap(), meta.modified().unwrap(), meta.mode() & 0o777), (b"read only".to_vec(), at, 0o444), "its bytes, its time and its mode");
+        assert_eq!(all_in(&d.join("Copy")), ["01 Slack Water.flac"], "no part left");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// T13.2 (run 10's review, the nits): the share probe works in a hidden folder of its own in each folder it tries and takes
+    /// both away; a target folder not there is not made (nothing tried: false); and what a probe a stop cut short left, another
+    /// process's, goes at the next probe.
+    #[test]
+    fn the_share_probe_leaves_nothing_and_makes_no_root() {
+        let (music, own) = (tmp(), tmp());
+        std::fs::create_dir_all(music.join("A/Album")).unwrap();
+        std::fs::write(music.join("A/Album/1.flac"), b"one").unwrap();
+        let missing = own.join("ann");
+        assert!(!shares(&music, &missing), "a target not there: nothing tried");
+        assert!(!missing.exists(), "its root not made");
+        assert_eq!(all_in(&music), ["A"], "nothing written into the source");
+        for d in [&music, &own] {
+            std::fs::create_dir_all(d.join(PROBE_DIR)).unwrap();
+            std::fs::write(d.join(PROBE_DIR).join("probe-0"), b"left by a stop").unwrap();
+        }
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (m, o, s) = (music.clone(), own.clone(), seen.clone());
+        MID_PROBE.with(|h| h.set(Some(Box::new(move || s.borrow_mut().extend([all_in(&m), all_in(&m.join(PROBE_DIR)), all_in(&o), all_in(&o.join(PROBE_DIR))])))));
+        shares(&music, &own);
+        let probe = format!("probe-{}", std::process::id());
+        assert_eq!(*seen.borrow(), [vec![PROBE_DIR.to_string(), "A".into()], vec![probe.clone()], vec![PROBE_DIR.to_string()], vec![probe]], "in its hidden folders alone, what a stop left gone");
+        assert_eq!((all_in(&music), all_in(&own)), (vec!["A".to_string()], Vec::<String>::new()), "nothing left");
+        for d in [music, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     /// C38: where the file system shares no blocks (the tests' own, ext4 on staging), the copy says so: a copy of its own, which
