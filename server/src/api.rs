@@ -5072,7 +5072,8 @@ async fn discover_want(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serd
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
     let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "request": r })))
+    // Where it stands with it (G11), as every view reads it.
+    Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await })))
 }
 
 #[derive(Deserialize)]
@@ -5116,7 +5117,8 @@ async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_jso
         }
     }
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "request": r })))
+    // Where it stands with it (G11), as every view reads it.
+    Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await })))
 }
 
 /// An artist's missing albums (0.9.3): their albums and EPs the library has none of, newest first; read when asked

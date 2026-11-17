@@ -960,6 +960,22 @@ pub async fn request_of(app: &super::App, serve: &Serve, account: &str, record: 
     Ok(shown_to(newest.into_iter().collect(), crate::serve::access::administering()).pop())
 }
 
+/// A request just asked for as every view shows it (G11): with where it stands (`state`), as the Requests page reads it, so Want's
+/// answer needs no second read. As it was asked where it has no record, which no request since 0.17 lacks.
+pub async fn as_viewed(app: &super::App, serve: &Serve, account: &str, r: Request) -> serde_json::Value {
+    let f = fetcher(app);
+    match viewed(serve, f.as_deref(), account, &r).await {
+        Some(v) => serde_json::json!(shown_to(vec![v], crate::serve::access::administering()).pop()),
+        None => serde_json::json!(r),
+    }
+}
+
+/// `as_viewed`'s view, Lidarr asked as `f`: the account's newest request of its record, where that is it.
+async fn viewed(serve: &Serve, f: Option<&dyn Fetcher>, account: &str, r: &Request) -> Option<View> {
+    let record = r.record?;
+    newest_of_record(serve, f, account, record).await.ok().flatten().filter(|v| v.request.id == r.id)
+}
+
 /// `request_of`, Lidarr asked as `f`.
 async fn newest_of(serve: &Serve, f: Option<&dyn Fetcher>, account: &str, record: Option<i64>, group: Option<&str>) -> Result<Option<View>> {
     let record = match (record, group) {
@@ -1834,6 +1850,18 @@ mod tests {
         assert!(matches!(v.state, RequestState::Wanted { .. }) && v.hand_over_again, "as the Requests page shows it");
         assert_eq!(newest_of_record(&serve, None, "bob", other).await.unwrap().map(|v| v.request.id), Some(elsewhere.id));
         assert!(newest_of_record(&serve, None, "carol", record).await.unwrap().is_none(), "carol asked for nothing");
+    }
+
+    /// G11: a request just asked for is answered as the Requests page shows it, where it stands with it.
+    #[tokio::test]
+    async fn a_request_just_asked_for_says_where_it_stands() {
+        let serve = served();
+        let record = serve.catalogue().record_for_tests("Quiet Lanes", 0);
+        let asked = Request { status: PENDING.into(), ..asked_for(record) };
+        let asked = Request { id: serve.userdata.add_request(&asked).unwrap(), ..asked };
+        let v = viewed(&serve, None, "bob", &asked).await.expect("viewed");
+        assert_eq!((v.request.id, v.state), (asked.id, RequestState::WaitingForApproval));
+        assert!(viewed(&serve, None, "bob", &Request { record: None, ..asked }).await.is_none(), "no record: as asked");
     }
 
     /// G3: a view names its album by its record, else by its release group: the request of the record that group names is found

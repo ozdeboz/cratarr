@@ -96,6 +96,14 @@ pub struct Ref {
     pub id: String,
 }
 
+/// A request as a row shows it (G11): the request, and where it stands, as every view reads it (`requests::RequestState`).
+#[derive(Debug, Clone, Serialize)]
+pub struct Shown {
+    #[serde(flatten)]
+    pub request: Request,
+    pub state: crate::app::requests::RequestState,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AlbumView {
     pub id: String,
@@ -112,7 +120,7 @@ pub struct AlbumView {
     /// by this where it has no group.
     pub record: Option<String>,
     pub album: Option<Ref>,
-    pub request: Option<Request>,
+    pub request: Option<Shown>,
     /// The page looks for Bandcamp's itself, as for every missing album (lib/ElsewhereAlbum).
     pub preview: Option<Ref>,
 }
@@ -128,7 +136,7 @@ pub struct TrackView {
     pub added_at: Option<i64>,
     pub status: &'static str,
     pub track: Option<Ref>,
-    pub request: Option<Request>,
+    pub request: Option<Shown>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -257,7 +265,7 @@ impl Marks<'_> {
             record,
             album: found.map(|id| Ref { source: self.library.source.clone(), id }),
             // In the library, it is the library's (the owner, 2026-10-30): requested only on the Requests page.
-            request: request.map(|(r, _)| r).filter(|_| status != IN),
+            request: request.map(|(request, state)| Shown { request, state }).filter(|_| status != IN),
             preview: None,
         }
     }
@@ -278,7 +286,7 @@ impl Marks<'_> {
             added_at: t.added_at,
             status,
             track: song.map(|id| Ref { source: self.library.source.clone(), id }),
-            request: request.map(|(r, _)| r).filter(|_| status != IN),
+            request: request.map(|(request, state)| Shown { request, state }).filter(|_| status != IN),
         }
     }
 
@@ -380,6 +388,7 @@ mod tests {
         let a = Album { id: "x.b|h".into(), title: "Homogenic".into(), artist: "Björk".into(), ..Default::default() };
         let v = marks.album(&a, None);
         assert_eq!((v.status, v.release_group.as_deref()), (REQUESTED, Some("rg-homogenic")));
+        assert_eq!(v.request.map(|r| r.state), Some(crate::app::requests::RequestState::WaitingForApproval), "G11: where it stands");
         // Declined: missing again.
         let marks = Marks { library: &lib, answers: &answers, requests: requests_by_key(vec![request("rg-homogenic", "declined")], &[]), catalogue: None };
         assert_eq!(marks.album(&a, None).status, MISSING);
