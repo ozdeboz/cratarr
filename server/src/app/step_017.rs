@@ -665,6 +665,19 @@ mod tests {
         assert!(alikes.iter().any(|l| l.starts_with("15 Glass Harbour - Tide Tables (Deluxe) ~ ") && l.ends_with("- Tide Tables")), "{report}");
     }
 
+    /// O3: a 0.16 Want's cover that fails W6's check (any address could be one then) is dropped by the step, each listed in its
+    /// report; no record keeps one.
+    #[test]
+    fn the_step_drops_016_want_covers_that_fail_and_lists_them() {
+        let data = Data::new("want-covers");
+        data.run();
+        let (_, ud) = data.open();
+        let report = &ud.migration_report().unwrap()[PART].1;
+        let dropped: Vec<&str> = report["want_covers_dropped"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect();
+        assert_eq!(dropped, ["7 https://example.org/covers/two-rooms.jpg", "8 https://example.org/covers/quiet-lanes.jpg"], "{report}");
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM records WHERE cover LIKE 'https://example.org/%'"), 0);
+    }
+
     /// X7: a part that fails names itself in the error, as the step's writes outside the parts do.
     #[test]
     fn a_failing_part_names_itself_in_the_error() {

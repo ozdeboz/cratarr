@@ -2087,6 +2087,7 @@ impl Carrying<'_> {
         let mut given: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
         let (mut made, mut paged) = (0, 0);
         let (mut made_for, mut found_by_names, mut look_alikes, mut shared_names) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut covers_dropped = Vec::new();
         // The owned albums the import matcher finds loosely (W2, B1): no request takes one any more, exact folded names alone do;
         // each request one would have been, listed whole for the rehearsal to check.
         let owned: Vec<(i64, String, String)> = self
@@ -2107,7 +2108,15 @@ impl Carrying<'_> {
             // Its page as `bandcamp_found` kept it, by its names or by its release group (R19, F13): where its record is made only
             // here, the pages part found none to give it to. Counted where it is put now; one another record holds is reported so.
             let page = pages.get(&lower(&r.key)).or_else(|| r.group.as_deref().and_then(|g| pages.get(&lower(g)))).map(|p| p.to_string());
-            let w = Wanted { group: r.group.clone(), artist: named.artist, artists: Vec::new(), title: named.title, label: named.label, year: r.year, cover: r.cover.clone(), page };
+            // A 0.16 Want's cover that fails W6's check, any address then, is dropped (O3), each listed.
+            let cover = r.cover.clone().filter(|c| {
+                let kept = crate::app::requests::cover_kept(c);
+                if !kept {
+                    covers_dropped.push(format!("{} {c}", r.id));
+                }
+                kept
+            });
+            let w = Wanted { group: r.group.clone(), artist: named.artist, artists: Vec::new(), title: named.title, label: named.label, year: r.year, cover, page };
             let RequestRecord { record, made: new, by_names, paged: mut page, shared } = request_record_in(self.tx, &w, r.at)?;
             if shared {
                 shared_names.push(format!("{} {} - {}", r.id, r.artist, r.album));
@@ -2153,6 +2162,7 @@ impl Carrying<'_> {
             ("requests_found_by_names", found_by_names),
             ("requests_beside_owned_look_alikes", look_alikes),
             ("names_shared_by_several_records", shared_names),
+            ("want_covers_dropped", covers_dropped),
         ];
         Ok(())
     }

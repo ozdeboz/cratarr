@@ -253,11 +253,13 @@ fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Reques
     serve.userdata.open_request(account, None, key)
 }
 
-/// Whether a Want's cover is one every account may be shown (W6): Cratarr's own (`/api/covers/…`), or the Cover Art Archive's,
-/// Bandcamp's, Spotify's or Discogs' images over https. Any other address is left out.
-fn cover_kept(cover: &str) -> bool {
-    if cover.starts_with("/api/covers/") {
-        return true;
+/// Whether a Want's cover is one every account may be shown (W6): Cratarr's own, in the exact shapes it makes (O3: a release
+/// group's `/api/covers/release-group/<id>`, a Bandcamp album's `/api/cover/bandcamp/<id>`, never a path that climbs out with `..`),
+/// or the Cover Art Archive's, Bandcamp's, Spotify's or Discogs' images over https. Any other address is left out. Checked on the
+/// way to every record (`record_of_album_paged`) and by 0.17's step for 0.16's Wants.
+pub(crate) fn cover_kept(cover: &str) -> bool {
+    if cover.starts_with('/') {
+        return super::cover_cache::Of::of_address(cover).is_some();
     }
     let Ok(u) = reqwest::Url::parse(cover) else { return false };
     let host = u.host_str().unwrap_or_default().to_ascii_lowercase();
@@ -284,6 +286,8 @@ pub fn record_of_album(cat: &crate::catalogue::Catalogue, release_group: Option<
 /// `record_of_album`, its names sorted out by the caller, its Bandcamp album page given (R22): kept on the record as a reference
 /// (`search`), so a record only Bandcamp lists is judged by Bandcamp's list.
 fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, named: crate::bandcamp::Named, artists: Vec<String>, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
+    // Every way to a record checks its cover (O3).
+    let cover = cover.filter(|c| cover_kept(c));
     let wanted = crate::catalogue::records::Wanted { group: release_group.map(str::to_string), artist: named.artist, artists, title: named.title, label: named.label, year, cover, page };
     cat.record_for_request(&wanted)
 }
@@ -1556,6 +1560,21 @@ mod tests {
         for left in ["https://example.org/a.jpg", "http://coverartarchive.org/x", "javascript:alert(1)", "https://notbcbits.com/a.jpg"] {
             assert!(!cover_kept(left), "{left}");
         }
+    }
+
+    /// O3: Cratarr's own cover addresses are kept only in the shapes it makes, a Bandcamp album's included; one that climbs out of
+    /// them with `..` is not.
+    #[test]
+    fn a_want_cover_takes_only_the_shapes_cratarr_makes() {
+        let bandcamp = format!("/api/cover/bandcamp/{}", crate::bandcamp::track_id("https://glassharbour.bandcamp.com/album/two-rooms", 0));
+        assert!(cover_kept(&bandcamp), "{bandcamp}");
+        assert!(cover_kept("/api/covers/release-group/00000000-0000-4000-8000-000000000116"));
+        for left in ["/api/covers/../stream/bandcamp/bc.x", "/api/covers/release-group/../../players/kitchen/connect", "/api/cover/bandcamp/../x", "/api/covers/", "/api/albums/cratarr/1/cover"] {
+            assert!(!cover_kept(left), "{left}");
+        }
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let record = record_of_album(&cat, None, "Glass Harbour", "Two Rooms", None, Some("/api/covers/../stream/bandcamp/bc.x".into())).unwrap();
+        assert_eq!(cat.requested(&[record]).unwrap()[&record].row.cover, None, "checked on the way to the record");
     }
 
     /// W6 (H): an account other than an administrator reads each request's state, never the fetchers' own words (Lidarr's errors
