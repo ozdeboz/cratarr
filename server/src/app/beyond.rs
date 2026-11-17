@@ -227,7 +227,35 @@ pub fn open_artist(cat: &Catalogue, id: &str, name: &str) -> Result<Option<i64>>
     if !super::discogs::is_mbid(&id) || name.is_empty() {
         return Ok(None);
     }
+    if name.chars().count() > super::labels::NAME_MOST {
+        anyhow::bail!("A name that long is no artist's.");
+    }
     Ok(Some(cat.artist_by_reference(&Ref::new("musicbrainz", "artist", &id), name, "search")?))
+}
+
+/// How long an artist Beyond listed may be opened by anyone (Z8): a day from when it was listed, so a page left open still opens it.
+pub const LISTED_FOR: i64 = 86_400;
+
+/// The MusicBrainz artists Beyond listed, by id, and when (Z8).
+fn listed_ids() -> &'static std::sync::Mutex<HashMap<String, i64>> {
+    static LISTED: std::sync::OnceLock<std::sync::Mutex<HashMap<String, i64>>> = std::sync::OnceLock::new();
+    LISTED.get_or_init(Default::default)
+}
+
+/// Beyond's artists as it answers them at `now` (Z8): each may be opened by anyone for `LISTED_FOR` (`may_open`); those listed
+/// longer ago are let go of.
+pub fn keep_listed(found: &[FoundArtist], now: i64) {
+    let mut all = listed_ids().lock().unwrap_or_else(|p| p.into_inner());
+    all.retain(|_, at| now - *at <= LISTED_FOR);
+    for a in found {
+        all.insert(mbid(&a.mbid), now);
+    }
+}
+
+/// Whether an artist may be opened (Z8, the review's finding 8: random ids used up a name's numbers for good): by anyone where Beyond
+/// listed them within `LISTED_FOR`; by an administrator (`administering`), any.
+pub fn may_open(id: &str, administering: bool, now: i64) -> bool {
+    administering || listed_ids().lock().unwrap_or_else(|p| p.into_inner()).get(&mbid(id)).is_some_and(|at| now - at <= LISTED_FOR)
 }
 
 #[cfg(test)]
@@ -445,6 +473,24 @@ mod tests {
         );
         assert_eq!(listed.len(), 5, "no merge by names: the two Lamplights of Kite Theory are two rows");
         assert_eq!([count("records"), count("references"), count("record_labels"), count("record_artists")], before, "nothing made or tied");
+    }
+
+    /// Z8 (the review's finding 8): an artist is opened by anyone only where Beyond listed them within the day; by an administrator,
+    /// any. A name longer than an artist's is refused.
+    #[test]
+    fn an_artist_is_opened_only_as_beyond_listed_them() {
+        const LISTED: &str = "00000000-0000-4000-8000-000000000591";
+        const NEVER: &str = "00000000-0000-4000-8000-000000000592";
+        let now = crate::app::moment::now_secs();
+        assert!(!may_open(LISTED, false, now), "not listed yet");
+        keep_listed(&[person(LISTED, "Rone")], now);
+        assert!(may_open(&LISTED.to_uppercase(), false, now + 3600), "listed: by anyone");
+        assert!(!may_open(LISTED, false, now + LISTED_FOR + 1), "a day on: no more");
+        assert!(!may_open(NEVER, false, now), "never listed");
+        assert!(may_open(NEVER, true, now), "an administrator: any");
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        assert!(open_artist(&cat, LISTED, &"x".repeat(super::super::labels::NAME_MOST + 1)).is_err(), "a name that long is no artist's");
+        assert!(open_artist(&cat, LISTED, "Rone").unwrap().is_some());
     }
 
     /// C57: Beyond's answer makes nothing: no record, artist or reference, whatever it finds.

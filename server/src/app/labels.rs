@@ -311,7 +311,7 @@ fn readings() -> &'static Readings {
     READINGS.get_or_init(Default::default)
 }
 
-/// How long a source that did not answer is left before an open asks it again; "More" asks at once.
+/// How long a source that did not answer is left before it is asked again, by an open or by "More" (Z8).
 const RETRY_SECS: i64 = 15 * 60;
 /// The longest a page of a label's list may take: past it, it counts as not read, and `looking` ends.
 const READ_AT_MOST: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 300 });
@@ -383,15 +383,15 @@ async fn read_page(cat: &Arc<Catalogue>, label: &LabelAsked, source: &dyn LabelL
     tokio::task::spawn_blocking(move || c.keep_label_rows(id, name, &rows, next, from.is_none(), at)).await?
 }
 
-/// A page of the label's list at `source` read in a task of its own (C56), unless one is being read (one at a time) or, but for
-/// "More" (`by_hand`), one failed lately. Whether one is being read now.
-fn start_read(cat: &Arc<Catalogue>, label: &Arc<LabelAsked>, source: &Arc<dyn LabelList>, from: Option<i64>, by_hand: bool, now: i64) -> bool {
+/// A page of the label's list at `source` read in a task of its own (C56), unless one is being read (one at a time) or one failed
+/// within `RETRY_SECS`: "More" waits too (Z8), so it cannot ask a source over and over. Whether one is being read now.
+fn start_read(cat: &Arc<Catalogue>, label: &Arc<LabelAsked>, source: &Arc<dyn LabelList>, from: Option<i64>, now: i64) -> bool {
     let key = (Arc::as_ptr(cat) as usize, label.id, source.source());
     {
         let mut all = readings().lock().unwrap_or_else(|p| p.into_inner());
         match all.get(&key) {
             Some(Reading::Now) => return true,
-            Some(Reading::Failed(at)) if !by_hand && now - at <= RETRY_SECS => return false,
+            Some(Reading::Failed(at)) if now - at <= RETRY_SECS => return false,
             _ => {}
         }
         all.insert(key, Reading::Now);
@@ -428,7 +428,7 @@ pub async fn page(cat: Arc<Catalogue>, label: i64, more: Option<&str>, sources: 
             Some(_) => None,
         };
         looking |= match from {
-            Some(from) => start_read(&cat, &asked, source, from, by_hand, now),
+            Some(from) => start_read(&cat, &asked, source, from, now),
             None => being_read(&cat, label, source.source()),
         };
     }
@@ -443,6 +443,9 @@ pub async fn page(cat: Arc<Catalogue>, label: i64, more: Option<&str>, sources: 
         discogs: label_id_at(&kept.refs, "discogs"),
     }))
 }
+
+/// The longest title or artist a row opened, or an artist opened, may have (Z8): longer, it is no album's or artist's.
+pub const NAME_MOST: usize = 500;
 
 /// A row of a list opened (C56, Q33's "kept at open"; C57's Beyond too): what names its album at its sources, what the row says
 /// of it, and the label whose page it was opened from, where it was.
@@ -481,8 +484,9 @@ impl Opened {
 
 /// The record a row opened is (C56, Q33: "kept at open"): the one that holds its reference, as merged now, else one made now with
 /// it (`Catalogue::keep_listing`: seen now, RT01's rules from then on), what a source's kept row says of it filling what the row
-/// does not (its type, its cover). Tied to the label it was opened from. Never by its names alone: a row with no reference, or no
-/// title, is none. Blocking.
+/// does not (its type, its cover). Tied to the label it was opened from where it is made now, or found through that label's own
+/// kept row (Z8): an album found otherwise is not tied to a label by asking. Never by its names alone: a row with no reference,
+/// or no title, is none; a title or an artist longer than `NAME_MOST` is refused. Blocking.
 pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
     let refs = o.refs();
     let label = o.label.as_deref().and_then(ids::label_number);
@@ -498,8 +502,20 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
     if refs.is_empty() || title.is_empty() {
         return Ok(None);
     }
+    let artist = said(&o.artist, listed.as_ref().map(|(_, l)| &l.artist));
+    if title.chars().count() > NAME_MOST || artist.chars().count() > NAME_MOST {
+        anyhow::bail!("A title or an artist that long is no album's.");
+    }
+    // Made now, where no record holds any of its references yet.
+    let mut made = true;
+    for r in &refs {
+        if !cat.subject_of(r)?.is_empty() {
+            made = false;
+            break;
+        }
+    }
     let listing = Listing {
-        artist: said(&o.artist, listed.as_ref().map(|(_, l)| &l.artist)),
+        artist,
         year: o.year.or(listed.as_ref().and_then(|(_, l)| l.year)),
         kind: listed.as_ref().and_then(|(_, l)| l.kind.clone()),
         cover: listed.as_ref().and_then(|(_, l)| l.cover.clone()),
@@ -509,8 +525,11 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
     };
     let Some(record) = cat.keep_listing(None, &[listing], "link")?.into_iter().next() else { return Ok(None) };
     if let Some(label) = label {
-        let catno = listed.as_ref().filter(|(of, _)| *of == label).map(|(_, l)| l.catno.as_str()).unwrap_or_default();
-        cat.tie_label(record, label, catno)?;
+        // Its catalogue number there, where it was found through this label's own kept row.
+        let catno = listed.as_ref().filter(|(of, _)| *of == label).map(|(_, l)| l.catno.as_str());
+        if made || catno.is_some() {
+            cat.tie_label(record, label, catno.unwrap_or_default())?;
+        }
     }
     Ok(Some(record))
 }
@@ -721,6 +740,79 @@ mod tests {
         left.sort();
         assert_eq!(left, ["Paper Kites", "Undertow"]);
         assert_eq!(kept.reads.keys().collect::<Vec<_>>(), ["musicbrainz"], "Discogs' list read anew at the next open");
+    }
+
+    /// Z8 (the review's finding 8): a row opened from a label's page is tied to that label only where its record is made now, or found
+    /// through that label's own kept row: an album the library has, opened by its reference with a label, is not tied to it, nor
+    /// through another label's row.
+    #[test]
+    fn a_label_ties_only_a_record_made_now_or_found_through_its_rows() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (low, kite) = (cat.label_for("Low Tide Records").unwrap(), cat.label_for("Kite Records").unwrap());
+        let owned = cat.record_for_tests("Tide Tables", 2);
+        cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", GROUP_1), "files").unwrap();
+        let ties = |record: i64| cat.record_labels(record).unwrap().into_iter().map(|(l, catno)| (l.id, catno)).collect::<Vec<_>>();
+        let opened = |group: &str, label: i64| {
+            let row = Opened { release_group: Some(group.into()), title: "Tide Tables".into(), artist: "Glass Harbour".into(), label: Some(ids::label(label)), ..Opened::default() };
+            open_record(&cat, &row).unwrap().expect("a record")
+        };
+        assert_eq!(opened(GROUP_1, low), owned, "found by its reference");
+        assert!(ties(owned).is_empty(), "found, not through the label's rows: not tied");
+        let kept = LabelListed { catno: "KR-1".into(), ..group_row(GROUP_1, "Tide Tables", 2012) };
+        cat.keep_label_rows(kite, "musicbrainz", &[kept], None, true, crate::app::moment::now_secs()).unwrap();
+        assert_eq!(opened(GROUP_1, low), owned);
+        assert!(ties(owned).is_empty(), "another label's kept row ties it to none");
+        assert_eq!(opened(GROUP_1, kite), owned);
+        assert_eq!(ties(owned), [(kite, "KR-1".to_string())], "found through the label's own kept row: tied");
+        let made = opened(GROUP_2, low);
+        assert_ne!(made, owned);
+        assert_eq!(ties(made), [(low, String::new())], "made now: tied");
+    }
+
+    /// Z8: a row opened with a title or an artist longer than `NAME_MOST` is refused, and nothing is made; one as long is opened.
+    #[test]
+    fn an_opened_rows_names_are_capped() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let row = |title: &str, artist: &str| Opened { release_group: Some(GROUP_1.into()), title: title.into(), artist: artist.into(), ..Opened::default() };
+        let (long, most) = ("é".repeat(NAME_MOST + 1), "é".repeat(NAME_MOST));
+        assert!(open_record(&cat, &row(&long, "Glass Harbour")).is_err(), "a title that long");
+        assert!(open_record(&cat, &row("Tide Tables", &long)).is_err(), "an artist that long");
+        let made: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM records", [], |r| r.get(0)).unwrap();
+        assert_eq!(made, 0, "nothing made");
+        assert!(open_record(&cat, &row(&most, &most)).unwrap().is_some(), "as long as may be, counted in letters");
+    }
+
+    /// Z8: a source that failed is not asked again for fifteen minutes, by an open nor by "More".
+    #[tokio::test]
+    async fn more_waits_after_a_failure_too() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        struct Failing(AtomicUsize);
+        impl LabelList for Failing {
+            fn source(&self) -> &'static str {
+                "musicbrainz"
+            }
+
+            fn find<'a>(&'a self, _: &'a str, _: &'a [Ref]) -> crate::source::Fut<'a, Found> {
+                self.0.fetch_add(1, SeqCst);
+                let answer: Result<Found> = Err(anyhow::anyhow!("out of reach"));
+                Box::pin(async move { answer })
+            }
+
+            fn page<'a>(&'a self, _: &'a str, _: Option<i64>) -> crate::source::Fut<'a, Page> {
+                Box::pin(async { Ok((Vec::new(), None)) })
+            }
+        }
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        // Kept for the process: no later test's catalogue takes its address, and with it this failure.
+        std::mem::forget(cat.clone());
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let failing = Arc::new(Failing(AtomicUsize::new(0)));
+        let sources: Vec<Arc<dyn LabelList>> = vec![failing.clone()];
+        settled(&cat, label, None, &sources).await;
+        assert_eq!(failing.0.load(SeqCst), 1, "asked once, and failed");
+        settled(&cat, label, Some("musicbrainz"), &sources).await;
+        settled(&cat, label, None, &sources).await;
+        assert_eq!(failing.0.load(SeqCst), 1, "not asked again within fifteen minutes, by More either");
     }
 
     /// C56 (OQ10 (a)): a label's first hundred at a source at open, "More" the next hundred, one read at a time: a second "More"

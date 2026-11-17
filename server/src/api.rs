@@ -6390,6 +6390,7 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
     };
     let marks = request_marks(&app, &serve).await;
     let albums = crate::app::beyond::albums(&mb_albums, &discogs, &known, marks.as_deref());
+    crate::app::beyond::keep_listed(&artists, crate::app::moment::now_secs());
     let artists = crate::app::beyond::artists(&artists, &known);
     Ok(Json(json!({ "q": q, "albums": albums, "artists": artists })))
 }
@@ -6403,9 +6404,13 @@ struct ArtistOpened {
     name: String,
 }
 
-/// An artist of Beyond's opened (C57, OQ12 (a)): `{ artist: "ar-<n>" }`, the artist who holds their MusicBrainz id, else one of
-/// their own made now, though another has the name. Never by the name alone: one with no MusicBrainz id is refused.
+/// An artist of Beyond's opened (C57, OQ12 (a)): `{ artist: "ar-<n>" }`, the artist who holds their MusicBrainz id, else the one
+/// live artist of the name who holds none (Z2), else one of their own made now, though another has the name. Never by the name
+/// alone: one with no MusicBrainz id is refused. By anyone only as Beyond listed them within the day; by an administrator, any (Z8).
 async fn open_artist(ctx: Ctx, Json(b): Json<ArtistOpened>) -> Result<Json<serde_json::Value>, ApiError> {
+    if !crate::app::beyond::may_open(&b.mbid, crate::serve::access::administering(), crate::app::moment::now_secs()) {
+        return Err(ToggleError::Forbidden("Only an artist Beyond found is opened here; an administrator may open any.".into()).into());
+    }
     let cat = ctx.app.library.catalogue();
     let artist = tokio::task::spawn_blocking(move || crate::app::beyond::open_artist(&cat, &b.mbid, &b.name))
         .await
