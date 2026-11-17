@@ -2,7 +2,8 @@
 //! no tracks) pile up three to one against records had. One that no list showed and nobody opened for six months is forgotten,
 //! with its references and credits; a tombstone keeps its id, so an old link answers "no longer known", and no id is given
 //! again. In the same daily pass (RT01b), the kept lists of a record not had go after thirty days unopened, read again when
-//! asked for, and an artist left with nothing is forgotten as a record is.
+//! asked for, and an artist left with nothing is forgotten as a record is. Before them (RT01c, F3), the library's artists'
+//! MusicBrainz and Discogs lists are read again, a month's thirtieth a day, so what is read counts as seen.
 //!
 //! - **Never while something points at it.** The catalogue keeps what it holds itself (`Catalogue::forget_quiet`: a choice or
 //!   a reference by hand, a confirmation, a merge, an expected folder, a retired record, a link from before 0.16, a request's
@@ -13,7 +14,8 @@
 //!   `protected_artists`.
 //! - **Seen** is a list read: MusicBrainz's or Discogs' sees what it lists (`Catalogue::keep_listing`) and the artist's records
 //!   only Bandcamp knows (`Catalogue::bandcamp_only_seen`); Bandcamp's, no longer read whole (O4), sees nothing. A page showing
-//!   a record sees nothing; opening it does (C54).
+//!   a record sees nothing; opening it does (C54). The paced re-read (`reread`) comes to each library artist once a month; a
+//!   list it cannot read (an outage, a switch, a pause) keeps that artist's records not had seen instead.
 //! - **Once a day:** looked at hourly, run where the catalogue's note says the last pass is a day old or more (`pass`), so a
 //!   restart does not run it again.
 
@@ -23,6 +25,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::ToggleError;
+use super::discover::{ArtistAsked, ArtistList};
 use crate::catalogue::Catalogue;
 use crate::serve::Serve;
 use crate::userdata::UserData;
@@ -66,23 +69,83 @@ fn protected_artists(served: &Serve) -> Result<BTreeSet<i64>> {
     Ok(kept)
 }
 
-/// What a pass let go of: the records not had (RT01), their kept lists and the artists left with nothing (RT01b).
+/// What the day's re-read came to (RT01c), by (artist, source): the lists read, and those it could not read (failed, switched
+/// off, the background paused), whose artist's records not had it kept seen instead.
 #[derive(Debug, Default, PartialEq)]
-pub struct Forgotten {
+pub struct Reread {
+    pub read: Vec<(i64, &'static str)>,
+    pub kept_seen: Vec<(i64, &'static str)>,
+}
+
+/// What a pass came to: the day's re-read (RT01c), and what it let go of: the records not had (RT01), their kept lists and the
+/// artists left with nothing (RT01b).
+#[derive(Debug, Default, PartialEq)]
+pub struct Passed {
+    pub reread: Reread,
     pub records: Vec<i64>,
     pub lists: usize,
     pub artists: Vec<i64>,
 }
 
-/// The forgetting at `now`, where due (`due`): what keeps a record and an artist gathered first, then the records nothing keeps
-/// forgotten, the kept lists let go of, the artists left with nothing forgotten, and the pass's time written. What went; None:
-/// not due.
-pub async fn pass(served: Arc<Serve>, now: i64) -> Result<Option<Forgotten>> {
-    let done = tokio::task::spawn_blocking(move || -> Result<Option<Forgotten>> {
-        let cat = served.catalogue();
-        if !due(cat, now) {
-            return Ok(None);
+/// The day's re-read of the library artists' lists (RT01c, F3), paced: the thirtieth of them come to longest ago
+/// (`Catalogue::rereads_due`), one artist at a time, each due source in turn, behind any page's question to MusicBrainz
+/// (`musicbrainz::behind`) and in the source's one turn (`discover::reread_one`). A list it cannot read (the read fails or runs
+/// past the cut, the source is switched off or not among `sources`, the background is paused) keeps the artist's records not
+/// had seen at `now` instead, so an outage, a switch or a pause never makes an album forgotten. Each is come to again a month
+/// later, whatever came of it. One re-read at a time in the process.
+async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: fn() -> bool, now: i64) -> Result<Reread> {
+    static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = ONE.lock().await;
+    let c = cat.clone();
+    let batch = tokio::task::spawn_blocking(move || c.rereads_due(now)).await??;
+    let mut done = Reread::default();
+    for (artist, due_at) in batch {
+        let c = cat.clone();
+        let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { continue };
+        let asked = ArtistAsked { id: artist, name, refs: refs.into_iter().map(|(r, _)| r).collect() };
+        for source in due_at {
+            let readable = sources.iter().find(|s| s.source() == source).filter(|s| s.on() && !paused());
+            let read = match readable {
+                Some(s) => match super::musicbrainz::behind(super::discover::reread_one(cat, &asked, s.as_ref())).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::info!(target: "discover", artist, source, "an artist's list not read again: {e:#}");
+                        false
+                    }
+                },
+                None => false,
+            };
+            let c = cat.clone();
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                if !read {
+                    c.artist_records_seen(artist, now)?;
+                }
+                c.reread_tried(artist, source, now)
+            })
+            .await??;
+            if read { done.read.push((artist, source)) } else { done.kept_seen.push((artist, source)) }
         }
+    }
+    Ok(done)
+}
+
+/// The day's pass at `now`, where due (`due`): the library artists' lists read again first (`reread`, RT01c), so what it reads
+/// counts as seen; then what keeps a record and an artist gathered, the records nothing keeps forgotten, the kept lists let go
+/// of, the artists left with nothing forgotten, and the pass's time written. What it came to; None: not due.
+pub async fn pass(served: Arc<Serve>, now: i64) -> Result<Option<Passed>> {
+    pass_reading(served, now, &super::discover::reread_sources(), super::switches::background_paused).await
+}
+
+/// `pass`, reading by `sources` and pausing by `paused`: the server's own, or a test's.
+async fn pass_reading(served: Arc<Serve>, now: i64, sources: &[Arc<dyn ArtistList>], paused: fn() -> bool) -> Result<Option<Passed>> {
+    let cat = served.catalogue().clone();
+    let c = cat.clone();
+    if !tokio::task::spawn_blocking(move || due(&c, now)).await? {
+        return Ok(None);
+    }
+    let reread = reread(&cat, sources, paused, now).await?;
+    let done = tokio::task::spawn_blocking(move || -> Result<Passed> {
+        let cat = served.catalogue();
         let (kept, artists_kept) = (protected(&served.userdata)?, protected_artists(&served)?);
         let records = cat.forget_quiet(now, &kept)?;
         let lists = cat.forget_quiet_lists(now, &kept)?;
@@ -92,26 +155,32 @@ pub async fn pass(served: Arc<Serve>, now: i64) -> Result<Option<Forgotten>> {
             served.library.set_artists(cat.artist_ids()?);
         }
         cat.set_meta(RAN_AT, &now.to_string());
-        Ok(Some(Forgotten { records, lists, artists }))
+        Ok(Passed { reread, records, lists, artists })
     })
     .await??;
-    if let Some(f) = &done {
-        if !f.records.is_empty() {
-            tracing::info!(target: "library", count = f.records.len(), "records not had that no list showed and nobody opened for six months forgotten");
-        }
-        if f.lists > 0 {
-            tracing::info!(target: "library", count = f.lists, "kept lists of records not had, unopened for thirty days, let go of");
-        }
-        if !f.artists.is_empty() {
-            tracing::info!(target: "library", count = f.artists.len(), "artists left with nothing forgotten");
-        }
+    if !done.reread.read.is_empty() || !done.reread.kept_seen.is_empty() {
+        tracing::info!(target: "library", read = done.reread.read.len(), kept_seen = done.reread.kept_seen.len(), "the library's artists' lists read again, a month's share");
     }
-    Ok(done)
+    if !done.records.is_empty() {
+        tracing::info!(target: "library", count = done.records.len(), "records not had that no list showed and nobody opened for six months forgotten");
+    }
+    if done.lists > 0 {
+        tracing::info!(target: "library", count = done.lists, "kept lists of records not had, unopened for thirty days, let go of");
+    }
+    if !done.artists.is_empty() {
+        tracing::info!(target: "library", count = done.artists.len(), "artists left with nothing forgotten");
+    }
+    Ok(Some(done))
 }
 
 /// The pass looked at hourly, from ten minutes after the start (the start's own work first), run where due. Started once
-/// Soulseek's list is read (`soulseek::start`), whose items keep their records, and the catalogue attached.
+/// Soulseek's list is read (`soulseek::start`), whose items keep their records, and the catalogue attached; started once, so
+/// there is one re-reader.
 pub fn start(served: Arc<Serve>) {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
     tokio::spawn(async move {
         let every = std::time::Duration::from_secs(3600);
         let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + std::time::Duration::from_secs(600), every);
@@ -181,6 +250,45 @@ mod tests {
         d
     }
 
+    /// A pass that reads no list (no source given, nothing paused): what is due to be read again keeps its records seen.
+    async fn quiet_pass(served: &Arc<Serve>, now: i64) -> Option<Passed> {
+        pass_reading(served.clone(), now, &[], || false).await.unwrap()
+    }
+
+    /// `count` library artists (`Artist <n>`), each credited first on a had record of their own.
+    fn library_artists(cat: &Catalogue, count: usize) -> Vec<i64> {
+        (0..count)
+            .map(|n| {
+                let (artist, record) = (cat.artist_for(&format!("Artist {n}")).unwrap(), cat.record_for_tests(&format!("Album {n}"), 1));
+                cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", rusqlite::params![record, artist]).unwrap();
+                artist
+            })
+            .collect()
+    }
+
+    /// A list source of the test's own: who it was asked for, in turn; it knows nobody, or it fails.
+    struct Stub {
+        source: &'static str,
+        fails: bool,
+        asked: std::sync::Mutex<Vec<i64>>,
+    }
+
+    impl ArtistList for Stub {
+        fn source(&self) -> &'static str {
+            self.source
+        }
+
+        fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, crate::app::discover::ListRead> {
+            self.asked.lock().unwrap().push(a.id);
+            let answer: Result<crate::app::discover::ListRead> = if self.fails { Err(anyhow::anyhow!("out of reach")) } else { Ok(None) };
+            Box::pin(async move { answer })
+        }
+    }
+
+    fn stub(source: &'static str, fails: bool) -> Arc<Stub> {
+        Arc::new(Stub { source, fails, asked: Default::default() })
+    }
+
     /// A request for `record`, cancelled long ago.
     fn asked_for(record: i64) -> crate::userdata::Request {
         crate::userdata::Request {
@@ -243,13 +351,13 @@ mod tests {
     async fn the_pass_runs_once_a_day() {
         let served = served(None, 82_000);
         let cat = served.catalogue().clone();
-        let records = |done: Option<Forgotten>| done.map(|f| f.records);
+        let records = |done: Option<Passed>| done.map(|f| f.records);
         let first = unseen(&cat, "Undertow");
-        assert_eq!(records(pass(served.clone(), NOW).await.unwrap()), Some(vec![first]), "never run: due");
+        assert_eq!(records(quiet_pass(&served, NOW).await), Some(vec![first]), "never run: due");
         let second = unseen(&cat, "Open Water");
-        assert_eq!(records(pass(served.clone(), NOW + 3600).await.unwrap()), None, "an hour later: not due");
+        assert_eq!(records(quiet_pass(&served, NOW + 3600).await), None, "an hour later: not due");
         assert!(cat.record(second).unwrap().is_some());
-        assert_eq!(records(pass(served.clone(), NOW + DAY).await.unwrap()), Some(vec![second]), "a day later");
+        assert_eq!(records(quiet_pass(&served, NOW + DAY).await), Some(vec![second]), "a day later");
     }
 
     /// RT01b: the kept list of a record not had nothing keeps goes thirty days after it was read where nobody opened the record
@@ -292,7 +400,7 @@ mod tests {
         cat.db_for_tests().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", rusqlite::params![kept, NOW - MONTH]).unwrap();
         // Tape Club, credited on a track of the library and on no record.
         served.library.db().execute("INSERT INTO song_artists (song_id, artist_id, name, position) VALUES ('tr-1', ?1, 'Tape Club', 0)", [ids::artist(featured)]).unwrap();
-        let done = pass(served.clone(), NOW).await.unwrap().expect("due");
+        let done = quiet_pass(&served, NOW).await.expect("due");
         assert_eq!((done.records, done.artists), (vec![gone], vec![lonely]));
         assert_eq!(cat.forgotten_at(&ids::artist(lonely)).unwrap(), Some(NOW), "their tombstone");
         let answer = unknown_artist(&cat, &ids::artist(lonely)).expect("no longer known");
@@ -324,5 +432,75 @@ mod tests {
         assert_eq!(cat.forget_quiet_artists(NOW, &protected_artists(&served).unwrap()).unwrap(), [other]);
         drop((cat, served));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// RT01c (F3): with sixty library artists all due, a day's pass reads two of them, a thirtieth, the oldest first (never read
+    /// before read longest ago), at each source due; the next day's pass reads the next two.
+    #[tokio::test]
+    async fn the_reread_spreads_over_the_month() {
+        let served = served(None, 88_000);
+        let cat = served.catalogue().clone();
+        let artists = library_artists(&cat, 60);
+        // Every list read 31 days ago, but the 41st artist's never and the 11th's 45 days ago.
+        {
+            let db = cat.db_for_tests();
+            for (n, artist) in artists.iter().enumerate().filter(|(n, _)| *n != 40) {
+                let read_at = if n == 10 { NOW - 45 * DAY } else { NOW - 31 * DAY };
+                for source in ["musicbrainz", "discogs"] {
+                    db.execute(
+                        "INSERT INTO \"references\" (subject, source, kind, value, at, how, read_at) VALUES (?1, ?2, 'artist', ?3, 1, 'files', ?4)",
+                        rusqlite::params![ids::artist(*artist), source, format!("{source}-{artist}"), read_at],
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        let (musicbrainz, discogs) = (stub("musicbrainz", false), stub("discogs", false));
+        let sources: Vec<Arc<dyn ArtistList>> = vec![musicbrainz.clone(), discogs.clone()];
+        let done = pass_reading(served.clone(), NOW, &sources, || false).await.unwrap().expect("due");
+        let first = vec![artists[40], artists[10]];
+        assert_eq!(*musicbrainz.asked.lock().unwrap(), first, "a thirtieth, the oldest first");
+        assert_eq!(*discogs.asked.lock().unwrap(), first);
+        assert_eq!(done.reread.read.len(), 4);
+        pass_reading(served.clone(), NOW + DAY, &sources, || false).await.unwrap().expect("due");
+        assert_eq!(*musicbrainz.asked.lock().unwrap(), [artists[40], artists[10], artists[0], artists[1]], "the next day, the next two");
+    }
+
+    /// RT01c: a list the re-read cannot read (its source fails) keeps the artist's records not had seen at the pass's now, so the
+    /// same pass's forgetting keeps them; the artist is come to again a month later, not the next day.
+    #[tokio::test]
+    async fn a_failed_reread_keeps_records_seen() {
+        let served = served(None, 89_000);
+        let cat = served.catalogue().clone();
+        let artist = library_artists(&cat, 1)[0];
+        let listing = crate::catalogue::records::Listing { title: "Undertow".into(), kind: Some("album".into()), ..Default::default() };
+        let quiet = cat.keep_listing(Some(artist), &[listing], "link").unwrap()[0];
+        cat.db_for_tests().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", rusqlite::params![quiet, NOW - 7 * MONTH]).unwrap();
+        let (musicbrainz, discogs) = (stub("musicbrainz", true), stub("discogs", true));
+        let sources: Vec<Arc<dyn ArtistList>> = vec![musicbrainz.clone(), discogs.clone()];
+        let done = pass_reading(served.clone(), NOW, &sources, || false).await.unwrap().expect("due");
+        assert_eq!(done.reread.kept_seen, [(artist, "musicbrainz"), (artist, "discogs")]);
+        assert!(done.records.is_empty(), "not forgotten by the same pass");
+        let seen: Option<i64> = cat.db_for_tests().query_row("SELECT seen_at FROM records WHERE id = ?1", [quiet], |r| r.get(0)).unwrap();
+        assert_eq!(seen, Some(NOW), "seen at the pass's now");
+        pass_reading(served.clone(), NOW + DAY, &sources, || false).await.unwrap().expect("due");
+        assert_eq!(musicbrainz.asked.lock().unwrap().len(), 1, "come to again a month later, not the next day");
+    }
+
+    /// RT01c: with the background paused, the re-read reads nothing, and keeps the artist's records not had seen instead.
+    #[tokio::test]
+    async fn a_paused_reread_reads_nothing_and_keeps_records_seen() {
+        let served = served(None, 90_000);
+        let cat = served.catalogue().clone();
+        let artist = library_artists(&cat, 1)[0];
+        let listing = crate::catalogue::records::Listing { title: "Undertow".into(), kind: Some("album".into()), ..Default::default() };
+        let quiet = cat.keep_listing(Some(artist), &[listing], "link").unwrap()[0];
+        cat.db_for_tests().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", rusqlite::params![quiet, NOW - 7 * MONTH]).unwrap();
+        let musicbrainz = stub("musicbrainz", false);
+        let sources: Vec<Arc<dyn ArtistList>> = vec![musicbrainz.clone()];
+        let done = pass_reading(served.clone(), NOW, &sources, || true).await.unwrap().expect("due");
+        assert!(musicbrainz.asked.lock().unwrap().is_empty(), "paused: nothing asked");
+        assert_eq!(done.reread.kept_seen, [(artist, "musicbrainz"), (artist, "discogs")], "Discogs' not given: kept seen too");
+        assert!(done.records.is_empty(), "kept seen, not forgotten");
     }
 }

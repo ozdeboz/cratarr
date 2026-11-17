@@ -1943,6 +1943,23 @@ pub fn artist_sources() -> Vec<Arc<dyn ArtistList>> {
     vec![Arc::new(MusicBrainzList), Arc::new(DiscogsList), Arc::new(BandcampList)]
 }
 
+/// The sources the paced re-read of the library's artists reads (RT01c, `retention`): MusicBrainz's and Discogs' lists. Bandcamp's
+/// is read only when a page is opened.
+pub fn reread_sources() -> Vec<Arc<dyn ArtistList>> {
+    vec![Arc::new(MusicBrainzList), Arc::new(DiscogsList)]
+}
+
+/// An artist's list at one source read again by the paced re-read (RT01c, `retention`), as a page's is (`read_lists`): in the
+/// source's one turn, so it never runs beside a page's read there, with the same cut once it asks. An error where it failed or
+/// ran past the cut; read, or the source does not know them, Ok.
+pub(crate) async fn reread_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<()> {
+    let _turn = turn_of(source.source()).acquire_owned().await?;
+    match tokio::time::timeout(LIST_READ_AT_MOST, read_one(cat, artist, source)).await {
+        Ok(read) => read,
+        Err(_) => anyhow::bail!("no answer in time"),
+    }
+}
+
 /// An artist's list at one source, as it stands: being read now; read (or known not to be there) at a time; failed at a time.
 #[derive(Debug, Clone, Copy)]
 enum Reading {
@@ -2562,6 +2579,37 @@ mod missing_tests {
         }))];
         settled(&cat, artist, &musicbrainz).await;
         assert!(seen_at().is_some_and(|at| at >= read_at), "the artist's MusicBrainz list sees their record only Bandcamp knows");
+    }
+
+    /// RT01c: the paced re-read reads MusicBrainz's and Discogs' lists, never Bandcamp's, and waits for a page's read of the same
+    /// source (it holds the source's one turn) before it asks.
+    #[tokio::test]
+    async fn the_reread_reads_no_bandcamp_and_waits_for_pages() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        assert_eq!(reread_sources().iter().map(|s| s.source()).collect::<Vec<_>>(), ["musicbrainz", "discogs"], "never Bandcamp's");
+        static ASKED: AtomicBool = AtomicBool::new(false);
+        struct Counted;
+        impl ArtistList for Counted {
+            fn source(&self) -> &'static str {
+                "reread"
+            }
+
+            fn read<'a>(&'a self, _: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+                ASKED.store(true, SeqCst);
+                Box::pin(async { Ok(None) })
+            }
+        }
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artist = ArtistAsked { id: cat.artist_for("Kite Theory").unwrap(), name: "Kite Theory".into(), refs: Vec::new() };
+        // A page's read of the source, under way.
+        let page = turn_of("reread").acquire_owned().await.unwrap();
+        let c = cat.clone();
+        let reread = tokio::spawn(async move { reread_one(&c, &artist, &Counted).await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!ASKED.load(SeqCst), "it waits for the page's read");
+        drop(page);
+        reread.await.unwrap().unwrap();
+        assert!(ASKED.load(SeqCst), "then it reads");
     }
 
     /// O5: one reader a source, first come first served: two artists' lists at one source are read one after the other, and the cut

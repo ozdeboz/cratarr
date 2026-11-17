@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS lists_to_read (record INTEGER PRIMARY KEY, release TE
 -- `Catalogue::forget_quiet`), `ar-<artist>` (an artist left with nothing, RT01b, `Catalogue::forget_quiet_artists`). Its id is
 -- never given again (AUTOINCREMENT), and a link to it answers \"no longer known\".
 CREATE TABLE IF NOT EXISTS forgotten (subject TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID;
+-- RT01c: when the paced re-read last came to a library artist's list at a source, read or not (`Catalogue::reread_tried`): it
+-- comes again a month later, so each comes once a month whatever came of it.
+CREATE TABLE IF NOT EXISTS list_reread (artist INTEGER NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (artist, source)) WITHOUT ROWID;
 ";
 
 /// A chain of merges longer than this is a loop: the record it began at answers none.
@@ -1028,8 +1031,7 @@ impl Catalogue {
     pub fn missing_everywhere(&self) -> Result<(Vec<(i64, Requested)>, usize)> {
         let read = |db: &Connection| -> Result<(Vec<(i64, Requested)>, usize)> {
             // The artists with albums here: one credited first on a live record that holds live tracks.
-            const HERE: &str = "SELECT b.artist FROM record_artists b JOIN records h ON h.id = b.record
-                WHERE b.position = 0 AND h.merged_into IS NULL AND h.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks u WHERE u.record = h.id AND u.retired_at IS NULL)";
+            const HERE: &str = LIBRARY_ARTISTS;
             let rows: Vec<(i64, i64)> = db
                 .prepare_cached(&format!(
                     "SELECT a.artist, a.record FROM record_artists a JOIN records r ON r.id = a.record
@@ -2453,6 +2455,16 @@ const ARTISTS_FORGETTABLE: &str = "SELECT a.id FROM artists a
      ORDER BY a.id";
 /// A subject forgotten at `?2`, its tombstone (RT01).
 const FORGOTTEN: &str = "INSERT OR REPLACE INTO forgotten (subject, at) VALUES (?1, ?2)";
+/// The artists with albums here: each credited first on a live record that holds live tracks. Discover's missing list is theirs
+/// (C53b), and the paced re-read comes to them (RT01c).
+const LIBRARY_ARTISTS: &str = "SELECT b.artist FROM record_artists b JOIN records h ON h.id = b.record
+    WHERE b.position = 0 AND h.merged_into IS NULL AND h.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks u WHERE u.record = h.id AND u.retired_at IS NULL)";
+/// The lists the paced re-read reads, in its order (RT01c): Bandcamp's is read only when a page is opened.
+const REREAD_SOURCES: [&str; 2] = ["musicbrainz", "discogs"];
+/// How long a library artist's list stays read before the paced re-read comes to it again (RT01c): a month, as a page's.
+const REREAD_EVERY: i64 = 30 * 86_400;
+/// A day's re-read comes to one in this many of the library's artists, rounded up (RT01c): each once a month, spread over it.
+const REREAD_DAYS: usize = 30;
 
 impl Catalogue {
     /// An artist's list read now at a source other than Bandcamp (RT01): their records only Bandcamp knows, or no source, seen
@@ -2545,11 +2557,70 @@ impl Catalogue {
         for &artist in &gone {
             let subject = ids::artist(artist);
             tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1")?.execute([&subject])?;
+            tx.prepare_cached("DELETE FROM list_reread WHERE artist = ?1")?.execute([artist])?;
             tx.prepare_cached("DELETE FROM artists WHERE id = ?1")?.execute([artist])?;
             tx.prepare_cached(FORGOTTEN)?.execute(params![subject, now])?;
         }
         tx.commit()?;
         Ok(gone)
+    }
+
+    /// The library artists the paced re-read comes to at `now` (RT01c): of the artists with albums here (`LIBRARY_ARTISTS`), a
+    /// thirtieth (rounded up), those whose MusicBrainz or Discogs list was read, or come to, longest ago first, never first of
+    /// all; each with its sources (`REREAD_SOURCES`) a month old or never read. On a reader. Blocking.
+    pub fn rereads_due(&self, now: i64) -> Result<Vec<(i64, Vec<&'static str>)>> {
+        let read = |db: &Connection| -> Result<Vec<(i64, Vec<&'static str>)>> {
+            let artists: Vec<i64> =
+                db.prepare_cached(&format!("SELECT DISTINCT artist FROM ({LIBRARY_ARTISTS}) ORDER BY artist"))?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            // Its list there read last (`artist_list_read`), else the re-read's last coming to it, 0 for neither.
+            let mut last = db.prepare_cached(
+                "SELECT max(COALESCE((SELECT max(read_at) FROM \"references\" WHERE subject = ?1 AND source = ?2 AND kind = 'artist'), 0),
+                            COALESCE((SELECT at FROM list_reread WHERE artist = ?3 AND source = ?2), 0))",
+            )?;
+            let mut due: Vec<(i64, i64, Vec<&'static str>)> = Vec::new();
+            for &artist in &artists {
+                let (mut oldest, mut sources) = (i64::MAX, Vec::new());
+                for source in REREAD_SOURCES {
+                    let at: i64 = last.query_row(params![ids::artist(artist), source, artist], |r| r.get(0))?;
+                    if at < now - REREAD_EVERY {
+                        oldest = oldest.min(at);
+                        sources.push(source);
+                    }
+                }
+                if !sources.is_empty() {
+                    due.push((oldest, artist, sources));
+                }
+            }
+            due.sort_by_key(|(oldest, artist, _)| (*oldest, *artist));
+            due.truncate(artists.len().div_ceil(REREAD_DAYS));
+            Ok(due.into_iter().map(|(_, artist, sources)| (artist, sources)).collect())
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// The paced re-read came to an artist's list at `source` at `at` (RT01c), read or not: it comes again a month later. Never
+    /// earlier than it came before. Blocking.
+    pub fn reread_tried(&self, artist: i64, source: &str, at: i64) -> Result<()> {
+        self.db().execute(
+            "INSERT INTO list_reread (artist, source, at) VALUES (?1, ?2, ?3) ON CONFLICT (artist, source) DO UPDATE SET at = max(at, excluded.at)",
+            params![artist, source, at],
+        )?;
+        Ok(())
+    }
+
+    /// An artist's records not had seen at `at` (RT01c), never earlier than they were: where the paced re-read could not read
+    /// their list (it failed, or its source is switched off, or the background paused), so an outage, a switch or a pause never
+    /// makes an album forgotten. Blocking.
+    pub fn artist_records_seen(&self, artist: i64, at: i64) -> Result<()> {
+        self.db().execute(
+            "UPDATE records SET seen_at = max(COALESCE(seen_at, 0), ?2)
+             WHERE id IN (SELECT record FROM record_artists WHERE artist = ?1) AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)",
+            params![artist, at],
+        )?;
+        Ok(())
     }
 }
 
