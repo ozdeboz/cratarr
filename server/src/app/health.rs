@@ -653,10 +653,25 @@ pub fn fetchers_down(down: &[(&'static str, i64)], now: i64) -> Option<Finding> 
     Some(f)
 }
 
-/// Requests waiting for an answer (decision 0070), each named, opening the Requests page; and the fetchers out of reach (X1).
+/// Soulseek's records held a day for its own disk's trouble (Y9): slskd could not store their files three times in a row (its disk
+/// full, its folder gone or not writable), so their users are not asked again every five minutes. `held` as `soulseek::cant_store`
+/// gives them, the latest held first: its why is the detail. None held, no finding. Pure.
+pub fn soulseek_cant_store(held: &[(String, String)]) -> Option<Finding> {
+    let (_, why) = held.first()?;
+    let count = held.len() as u64;
+    let mut f = finding("requests", "requests:soulseek-store", Level::Warning, count, "Soulseek can't store files");
+    f.name = "Soulseek".to_string();
+    (f.thing, f.state) = (Some(f.name.clone()), Some("can't store files".into()));
+    f.detail = Some(why.clone());
+    f.items = held.iter().map(|(record, _)| Item { title: record.clone(), line: Some("held a day".into()), ..Item::default() }).collect();
+    Some(f)
+}
+
+/// Requests waiting for an answer (decision 0070), each named, opening the Requests page; the fetchers out of reach (X1); and
+/// Soulseek's records held for its own disk's trouble (Y9).
 fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let now = super::moment::now_secs();
-    let down = fetchers_down(&super::requests::fetchers_down(now), now);
+    let down: Vec<Finding> = fetchers_down(&super::requests::fetchers_down(now), now).into_iter().chain(soulseek_cant_store(&super::soulseek::cant_store(now))).collect();
     let Some(serve) = served else { return Ok(down.into_iter().collect()) };
     // Those whose state says they wait for an answer (W5): one whose album the library has meanwhile waits for no one. Each by its
     // record's names (C49b): a label's "Artist - Title" is the artist's title.

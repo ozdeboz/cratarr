@@ -34,6 +34,8 @@
 //!   folder, the record's cover beside it (`cover.jpg`, its large picture: Y3); a placing that fails keeps its checked files and
 //!   is tried again (X4).
 //!   Trouble on Cratarr's own side (a disk full, slskd's folder gone) blames no user; free space is looked at before a fetch.
+//!   Only slskd's own words that it could not store a file count as such; three in a row hold the record a day, and Health says
+//!   Soulseek can't store files (Y9).
 //! - **Kept on disk** (`soulseek.json` in the data folder), so a restart forgets nothing: a fetch under way is followed
 //!   again.
 
@@ -65,6 +67,11 @@ const READS: u32 = 15;
 const READ_AGAIN: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 4 });
 /// A record held for slskd is tried again after this long.
 const SLSKD_AGAIN: i64 = 300;
+/// Fetches failed on Cratarr's own side in a row after which a record holds a day (Y9): its folder is not asked of its user every
+/// five minutes all day.
+const LOCAL_AT_MOST: u32 = 3;
+/// How long such a record holds (Y9).
+const LOCAL_HOLD: i64 = 86_400;
 /// Folders a record shows, best first.
 const SHOWN: usize = 5;
 /// The shortest wait between two rounds of searches for one record (the ladder's "at once" still waits this).
@@ -190,6 +197,10 @@ pub struct Item {
     /// them, nothing fetched again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked: Option<String>,
+    /// Fetches in a row that failed on Cratarr's own side (X4, Y9: slskd could not store a file): `LOCAL_AT_MOST` hold it a day, and
+    /// Health says Soulseek can't store files. A fetch that comes through, or a placing, ends the row.
+    #[serde(default)]
+    pub local_failures: u32,
 }
 
 /// A folder set aside: whose, where it is kept, and why each of its files failed.
@@ -679,6 +690,19 @@ pub fn item_records() -> std::collections::BTreeSet<i64> {
     kept(|k| k.items.iter().map(|i| i.record.record).filter(|record| *record != 0).collect())
 }
 
+/// The records held a day for Cratarr's own trouble (Y9: `LOCAL_AT_MOST` fetches in a row slskd could not store), the latest held
+/// first, each as "Artist - Record" with why: Health's "Soulseek can't store files".
+pub fn cant_store(now: i64) -> Vec<(String, String)> {
+    kept(|k| cant_store_in(&k.items, now))
+}
+
+/// [`cant_store`]'s: pure.
+fn cant_store_in(items: &[Item], now: i64) -> Vec<(String, String)> {
+    let mut held: Vec<&Item> = items.iter().filter(|i| i.local_failures >= LOCAL_AT_MOST && i.due > now).collect();
+    held.sort_by_key(|i| std::cmp::Reverse(i.due));
+    held.into_iter().map(|i| (format!("{} - {}", i.record.artist, i.record.album), i.why.clone().unwrap_or_default())).collect()
+}
+
 /// Tests elsewhere: an item of `record` on the list as `id`, its folders found and waiting for a tick, so no worker takes it up.
 #[cfg(test)]
 pub fn list_for_tests(id: &str, record: i64) {
@@ -700,6 +724,7 @@ pub fn list_for_tests(id: &str, record: i64) {
         placed: None,
         set_aside: Vec::new(),
         checked: None,
+        local_failures: 0,
     };
     kept(|k| k.items.push(i));
 }
@@ -1002,6 +1027,7 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             placed: None,
             set_aside: Vec::new(),
             checked: None,
+            local_failures: 0,
         });
         // Its first search as the order has it (X1, `first_search`).
         if let Some(i) = k.items.last_mut() {
@@ -1260,7 +1286,10 @@ where
                     tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "a fetch failed on Cratarr's side; held");
                     return with_item(id, |i| {
                         (i.state, i.batch, i.percent) = (State::Approved, None, 0.0);
-                        hold(i, format!("{e:#}"), SLSKD_AGAIN);
+                        // Three in a row (Y9): held a day, not asked of its user every five minutes all day; Health says why.
+                        i.local_failures += 1;
+                        let wait = if i.local_failures >= LOCAL_AT_MOST { LOCAL_HOLD } else { SLSKD_AGAIN };
+                        hold(i, format!("{e:#}"), wait);
                     });
                 }
                 tracing::info!(target: "soulseek", user = %f.user, reason = %format!("{e:#}"), "a user failed; the next folder");
@@ -1270,7 +1299,8 @@ where
             }
         }
     };
-    with_item(id, |i| (i.state, i.percent) = (State::Checking, 100.0));
+    // Its files in: a row of failures on Cratarr's side ends (Y9).
+    with_item(id, |i| (i.state, i.percent, i.local_failures) = (State::Checking, 100.0, 0));
     let dir = folder.join(crate::slskd::FOLDER).join(&batch);
     let release: Vec<ReleaseTrack> =
         judged_by(&it, &f).iter().map(|t| super::track_fetch::track_for(t.disc, t.position, &t.title, &it.record.artist, t.length_ms, t.recording.as_deref().unwrap_or_default())).collect();
@@ -1323,8 +1353,8 @@ async fn follow(slskd: &Slskd, id: &str, batch: &str) -> Result<Vec<crate::slskd
         };
         if let Some(bad) = ts.iter().find(|t| t.done() && !t.succeeded()) {
             let said = bad.exception.as_deref().unwrap_or_default();
-            // Cratarr's own side, not the user's (X4): slskd could not store it.
-            if local_failure(said) {
+            // Cratarr's own side, not the user's (X4, Y9): slskd could not store it.
+            if local_failure(bad) {
                 return Err(Local(format!("slskd could not store {}: {said}", crate::slskd::base_name(&bad.filename))).into());
             }
             bail!("{} was not sent{}", crate::slskd::base_name(&bad.filename), bad.exception.as_ref().map(|e| format!(": {e}")).unwrap_or_default());
@@ -1356,13 +1386,40 @@ impl std::fmt::Display for Local {
 
 impl std::error::Error for Local {}
 
-/// Whether slskd's word on a failed transfer is its own disk's trouble (X4), not the user's: .NET's words for a disk full, or a
-/// folder gone or not writable.
-fn local_failure(said: &str) -> bool {
-    let s = said.to_lowercase();
-    ["no space left", "disk full", "not enough space", "could not find a part of the path", "directorynotfound", "access to the path", "read-only file system", "unauthorizedaccess"]
-        .iter()
-        .any(|w| s.contains(w))
+/// .NET's exception types that are slskd's own disk's alone (Y9), as a transfer's exception may begin with one
+/// ("System.IO.DirectoryNotFoundException: …").
+const LOCAL_KINDS: [&str; 4] = ["System.UnauthorizedAccessException", "System.IO.DirectoryNotFoundException", "System.IO.FileNotFoundException", "System.IO.PathTooLongException"];
+
+/// .NET's own words for slskd's disk's trouble (Y9), as a transfer's exception begins with them, alone or after its type
+/// ("System.IO.IOException: No space left on device"): "No space left on device : '/downloads/…'", "There is not enough space on
+/// the disk.", "Disk full", "Disk quota exceeded", "Read-only file system", "Access to the path '/downloads/…' is denied.", "Could
+/// not find a part of the path '/downloads/…'.", "Could not find file '/downloads/…'.".
+const LOCAL_SAYS: [&str; 8] = [
+    "No space left on device",
+    "There is not enough space on the disk",
+    "Disk full",
+    "Disk quota exceeded",
+    "Read-only file system",
+    "Access to the path '",
+    "Could not find a part of the path '",
+    "Could not find file '",
+];
+
+/// Whether a failed transfer is slskd's own disk's trouble (X4, Y9), not its user's: errored, never refused ("Completed, Rejected"),
+/// timed out or cancelled, and its exception one of .NET's local kinds (`LOCAL_KINDS`) or beginning with its words for them
+/// (`LOCAL_SAYS`). Words anywhere else are its user's: a refusal ("Transfer rejected: Access to the path 'D:\…' is denied.") is
+/// the user's own disk's, whatever it says.
+fn local_failure(t: &crate::slskd::Transfer) -> bool {
+    if !t.state.contains("Errored") {
+        return false;
+    }
+    let said = t.exception.as_deref().unwrap_or_default().trim();
+    let (kind, words) = match said.split_once(": ") {
+        Some((kind, words)) if kind.starts_with("System.") && kind.ends_with("Exception") => (kind, words),
+        _ => ("", said),
+    };
+    let words = words.to_lowercase();
+    LOCAL_KINDS.contains(&kind) || LOCAL_SAYS.iter().any(|w| words.starts_with(&w.to_lowercase()))
 }
 
 /// Why a fetch of `need` bytes would not fit (X4): one of `dirs` (slskd's folder, the library) with less free than it and
@@ -1465,7 +1522,7 @@ async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
         Ok(to) => {
             std::fs::remove_dir_all(dir).ok();
             tracing::info!(target: "soulseek", record = %format!("{} - {}", r.artist, r.album), to = %to.display(), "placed in Incoming");
-            with_item(id, |i| (i.state, i.placed, i.batch, i.checked, i.why) = (State::Placed, Some(to.display().to_string()), None, None, None));
+            with_item(id, |i| (i.state, i.placed, i.batch, i.checked, i.why, i.local_failures) = (State::Placed, Some(to.display().to_string()), None, None, None, 0));
         }
         Err(e) => {
             tracing::warn!(target: "soulseek", record = %format!("{} - {}", r.artist, r.album), reason = %format!("{e:#}"), "not placed; its checked files kept");
@@ -1755,6 +1812,7 @@ mod tests {
             placed: None,
             set_aside: Vec::new(),
             checked: None,
+            local_failures: 0,
         };
         assert!(on_failed(&mut i, "a", "a is offline".into()));
         assert_eq!((i.state, i.chosen, i.folders.len(), i.batch.clone(), i.failed.clone()), (State::Approved, Some(0), 1, None, vec!["a".to_string()]));
@@ -1795,6 +1853,7 @@ mod tests {
             placed: None,
             set_aside: Vec::new(),
             checked: None,
+            local_failures: 0,
         };
         kept(|k| k.items.push(i));
     }
@@ -2069,6 +2128,7 @@ mod tests {
             placed: None,
             set_aside: Vec::new(),
             checked: None,
+            local_failures: 0,
         };
         kept(|k| k.items.push(i));
         r
@@ -2336,7 +2396,86 @@ mod tests {
         assert!(i.why.as_deref().is_some_and(|w| w.contains("No space left on device")), "{:?}", i.why);
         assert!(i.due > now());
         assert!(!d.join(crate::slskd::FOLDER).join(batch).exists(), "what came of it removed");
-        assert!(local_failure("Could not find a part of the path '/downloads/x'") && !local_failure("Transfer rejected: Queue full"));
+        assert!(local_failure(&ended("Completed, Errored", "Could not find a part of the path '/downloads/x'")) && !local_failure(&ended("Completed, Rejected", "Transfer rejected: Queue full")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A transfer slskd says ended so (`state`), with its exception.
+    fn ended(state: &str, said: &str) -> crate::slskd::Transfer {
+        crate::slskd::Transfer { id: "t1".into(), filename: r"d\01 One.flac".into(), state: state.into(), percent_complete: 0.0, exception: Some(said.into()) }
+    }
+
+    /// slskd saying, of every batch, that it could not store its file: its disk full.
+    fn storing_nothing() -> axum::Router {
+        let full = serde_json::json!({ "transfers": [{ "id": "t1", "filename": r"d\01 One.flac", "state": "Completed, Errored", "percentComplete": 40.0, "exception": "No space left on device : '/downloads/cratarr/01 One.flac'" }] });
+        axum::Router::new().route("/api/v0/transfers/downloads/batches/{id}", axum::routing::get(move || std::future::ready(axum::Json(full.clone()))))
+    }
+
+    /// Y9: only slskd's own words that it could not store a file are Cratarr's side. A refusal is its user's, whatever words it
+    /// carries (the uploader's own disk's), and the next folder is tried.
+    #[tokio::test]
+    async fn a_remote_refusal_with_disk_words_fails_the_user() {
+        assert!(local_failure(&ended("Completed, Errored", "System.IO.IOException: No space left on device")));
+        assert!(local_failure(&ended("Completed, Errored", "Access to the path '/downloads/cratarr/b1/01 One.flac' is denied.")));
+        assert!(local_failure(&ended("Completed, Errored", "System.IO.DirectoryNotFoundException: The folder is gone.")));
+        assert!(!local_failure(&ended("Completed, Rejected", r"Transfer rejected: Access to the path 'D:\Music' is denied.")));
+        assert!(!local_failure(&ended("Completed, Errored", r"Transfer rejected: Access to the path 'D:\Music' is denied.")), "not slskd's own words");
+        assert!(!local_failure(&ended("Completed, Errored", "Remote connection closed: no space left on device")));
+        assert!(!local_failure(&ended("Completed, TimedOut", "No space left on device")));
+        let (id, batch) = ("ss-y9-remote", "b-y9-remote");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("y9-remote", batch);
+        let refused = serde_json::json!({ "transfers": [{ "id": "t1", "filename": r"d\01 One.flac", "state": "Completed, Rejected", "percentComplete": 0.0, "exception": r"Access to the path 'D:\Music\01 One.flac' is denied." }] });
+        let app = axum::Router::new().route("/api/v0/transfers/downloads/batches/{id}", axum::routing::get(move || std::future::ready(axum::Json(refused.clone()))));
+        fetch_from(id, &slskd_at(app).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.failed.clone(), i.folders[0].user.as_str(), i.local_failures), (State::Approved, vec!["a".to_string()], "b", 0), "the next folder");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Y9: three fetches in a row that slskd could not store hold the record a day, not five minutes, and Health says Soulseek can't
+    /// store files, with why; no user is failed.
+    #[tokio::test]
+    async fn three_local_failures_hold_the_record_a_day() {
+        let (id, batch) = ("ss-y9-full", "b-y9-full");
+        listed(id, State::Fetching, Some(batch));
+        let d = data_folder("y9-full");
+        let slskd = slskd_at(storing_nothing()).await;
+        for n in 1..=3 {
+            with_item(id, |i| (i.state, i.batch, i.due) = (State::Fetching, Some(batch.into()), 0));
+            fetch_from(id, &slskd, &d, never_gated).await;
+            let i = item(id).unwrap();
+            assert_eq!((i.local_failures, i.failed.len(), i.chosen), (n, 0, Some(0)), "no user failed");
+            let wait = i.due - now();
+            if n < 3 {
+                assert!(wait <= SLSKD_AGAIN, "{n}: in a while");
+            } else {
+                assert!(wait > SLSKD_AGAIN && wait <= LOCAL_HOLD, "held a day");
+            }
+        }
+        let i = item(id).unwrap();
+        assert!(i.why.as_deref().is_some_and(|w| w.contains("No space left on device")), "{:?}", i.why);
+        let held = cant_store_in(std::slice::from_ref(&i), now());
+        let f = super::super::health::soulseek_cant_store(&held).expect("Health says so");
+        assert_eq!((f.title.as_str(), f.detail.as_deref(), f.items.len()), ("Soulseek can't store files", i.why.as_deref(), 1));
+        assert!(cant_store_in(std::slice::from_ref(&i), i.due).is_empty(), "its day over: no more");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Y9: a fetch that comes through ends a row of failures on Cratarr's side: the next one counts from one, and holds a while only.
+    #[tokio::test]
+    async fn a_fetch_that_comes_through_ends_the_row_of_local_failures() {
+        let (id, batch) = ("ss-y9-reset", "b-y9-reset");
+        listed(id, State::Fetching, Some(batch));
+        with_item(id, |i| i.local_failures = 2);
+        let d = fetched_to("y9-reset", batch);
+        fetch_from(id, &slskd_at(all_in()).await, &d, |_, _| std::future::ready(Ok(0.97))).await;
+        assert_eq!(item(id).unwrap().local_failures, 0, "its files came");
+        with_item(id, |i| (i.state, i.batch, i.checked, i.due) = (State::Fetching, Some(batch.into()), None, 0));
+        fetch_from(id, &slskd_at(storing_nothing()).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!(i.local_failures, 1);
+        assert!(i.due <= now() + SLSKD_AGAIN, "a while, not a day");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -2767,6 +2906,7 @@ mod tests {
             placed: None,
             set_aside: Vec::new(),
             checked: None,
+            local_failures: 0,
         };
         let mut found = item(State::Found);
         search_again(&mut found);
