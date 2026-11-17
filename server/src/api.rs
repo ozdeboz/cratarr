@@ -1687,7 +1687,7 @@ async fn moved_to(app: &Arc<App>, old: &str) -> Option<String> {
 /// gives them, each played through the relay as a preview's; the ones Bandcamp does not stream shown, not playable.
 async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::AlbumView, ToggleError> {
     let (url, _) = crate::bandcamp::read_id(album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
-    let a = crate::bandcamp::Bandcamp::get().album(&url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let a = crate::bandcamp::Bandcamp::get().album(&url).await.map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
     // What Discover knows of it, where it suggested it (the owner, 2026-10-25: "as much as our own panel").
     let known = match ctx.served.clone().and_then(|s| ctx.account().map(|a| (s, a))) {
         Some((s, account)) => {
@@ -5261,7 +5261,7 @@ async fn bandcamp_find(ctx: Ctx, Query(q): Query<FindOnBandcamp>) -> Result<Json
     let serve = ctx.serve()?;
     let page = crate::app::discover::find_on_bandcamp(&serve, q.artist.trim(), q.album.trim(), q.release_group.as_deref())
         .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        .map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
     Ok(Json(json!({ "page": page })))
 }
 
@@ -5846,7 +5846,8 @@ async fn spotify_cover(ctx: Ctx, Path((kind, id)): Path<(String, String)>) -> Re
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     let kind = r.headers().get(header::CONTENT_TYPE).cloned().unwrap_or(HeaderValue::from_static("image/jpeg"));
-    let Ok(bytes) = r.bytes().await else { return Ok(StatusCode::BAD_GATEWAY.into_response()) };
+    // An image, read in pieces and cut at the covers' cap (O1, Y11): a longer one is refused, never held whole.
+    let Ok(bytes) = crate::app::reach::read_image(r, crate::app::cover_cache::MOST_BYTES).await else { return Ok(StatusCode::BAD_GATEWAY.into_response()) };
     Ok(([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"))], bytes).into_response())
 }
 
@@ -7600,6 +7601,30 @@ mod tests {
             }
         }
         assert!(seen.len() > 100, "the table was not read: {}", seen.len());
+    }
+
+    /// Y11 (O1): a Bandcamp read that failed tells anyone but an administrator a plain word (its bot check in its own words), an
+    /// administrator its cause, on every route that reads Bandcamp. No test builds those routes, so each read of Bandcamp's in this
+    /// file is looked at here: its failure goes through `bandcamp_failed`.
+    #[tokio::test]
+    async fn a_users_bandcamp_failure_is_plain_on_every_route() {
+        use crate::serve::who::{Scope, Who, acting_as};
+        let cause = || anyhow::anyhow!("192.168.1.20 refused the connection").context("cannot reach Bandcamp");
+        let user = || Who { user: "bob".into(), admin: false, scope: Scope::Full, home: true };
+        let admin = Who { user: "ann".into(), admin: true, scope: Scope::Full, home: true };
+        assert_eq!(acting_as(user(), async { super::bandcamp_failed(&cause()) }).await, "Bandcamp could not be read");
+        let check = anyhow::Error::from(crate::bandcamp::NotRead);
+        assert_eq!(acting_as(user(), async { super::bandcamp_failed(&check) }).await, check.to_string(), "its bot check in its own words");
+        assert!(acting_as(admin, async { super::bandcamp_failed(&cause()) }).await.contains("192.168.1.20"), "an administrator its cause");
+        let code: Vec<&str> = include_str!("api.rs").split("#[cfg(test)]").next().unwrap().lines().collect();
+        let reads = ["::get().album(", "::get().stream(", "discover::find_on_bandcamp(", "discover::bandcamp_artist("];
+        let mut seen = 0;
+        for (i, line) in code.iter().enumerate().filter(|(_, l)| reads.iter().any(|r| l.contains(r))) {
+            let read = code[i..(i + 3).min(code.len())].concat();
+            assert!(read.contains("bandcamp_failed") || read.contains(".ok()"), "line {}: its failure is not made plain: {line}", i + 1);
+            seen += 1;
+        }
+        assert!(seen >= 5, "the reads were not found: {seen}");
     }
 
     #[tokio::test]

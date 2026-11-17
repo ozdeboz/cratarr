@@ -189,7 +189,7 @@ impl Track {
 }
 
 /// A page on Bandcamp's own domain only (`bandcamp.com` and its artists' subdomains): no other address is read. Its
-/// address made plain (https, no query, no fragment).
+/// address made plain (https, no port (Y11), no query, no fragment).
 pub fn page(url: &str) -> Option<String> {
     let mut u = reqwest::Url::parse(url).ok()?;
     let host = u.host_str()?.to_ascii_lowercase();
@@ -197,6 +197,7 @@ pub fn page(url: &str) -> Option<String> {
         return None;
     }
     u.set_scheme("https").ok()?;
+    u.set_port(None).ok()?;
     u.set_query(None);
     u.set_fragment(None);
     Some(u.to_string())
@@ -788,6 +789,14 @@ mod tests {
         assert!(album_page("https://bandcamp.com.evil.example/album/x").is_none());
         assert!(album_page("https://music.airband.example/album/x").is_none(), "an artist's own domain is left to its link");
         assert!(page("https://air.bandcamp.com").is_some());
+    }
+
+    /// Y11: a Bandcamp page written with a port is made plain without it: its own page at Bandcamp's usual address.
+    #[test]
+    fn a_bandcamp_page_loses_its_port() {
+        assert_eq!(album_page("https://air.bandcamp.com:8443/album/moon-safari").as_deref(), Some("https://air.bandcamp.com/album/moon-safari"));
+        assert_eq!(page("http://air.bandcamp.com:8080/").as_deref(), Some("https://air.bandcamp.com/"));
+        assert_eq!(page("http://air.bandcamp.com:443/music").as_deref(), Some("https://air.bandcamp.com/music"));
     }
 
     #[test]

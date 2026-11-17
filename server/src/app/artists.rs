@@ -256,9 +256,10 @@ impl ArtistInfo {
     }
 
     /// A photo's bytes (O1): from the photo hosts only (TheAudioDB's, Wikimedia's, Discogs'), an image, at most `PHOTO_MOST`; none
-    /// otherwise.
+    /// otherwise. Their plain http made https first (Y11).
     async fn photo(&self, url: &str) -> Result<Option<Vec<u8>>> {
-        let Some(u) = reqwest::Url::parse(url).ok().filter(|u| super::reach::Purpose::ArtistPhotos.allows(u)) else { return Ok(None) };
+        let photos = super::reach::Purpose::ArtistPhotos;
+        let Some(u) = reqwest::Url::parse(url).ok().map(|u| photos.upgraded(u)).filter(|u| photos.allows(u)) else { return Ok(None) };
         let r = self.http.get(u).sent().await?.error_for_status()?;
         if !r.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("image/")) {
             return Ok(None);

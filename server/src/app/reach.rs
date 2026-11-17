@@ -190,6 +190,15 @@ impl Purpose {
         url.scheme() == "https" && self.has_host(url)
     }
 
+    /// An address on one of the purpose's hosts given as plain http (older TheAudioDB entries name their photos so), made https
+    /// before it is checked (Y11); any other as it is.
+    pub fn upgraded(self, mut url: reqwest::Url) -> reqwest::Url {
+        if url.scheme() == "http" && url.port().is_none() && self.has_host(&url) {
+            let _ = url.set_scheme("https");
+        }
+        url
+    }
+
     /// Whether its host is one of the purpose's by name: an address by its number never ends as a name does.
     fn has_host(self, url: &reqwest::Url) -> bool {
         let Some(host) = url.host_str().map(str::to_ascii_lowercase) else { return false };
@@ -199,9 +208,10 @@ impl Purpose {
 
 /// A client for a purpose (O1): https only; a redirect followed only while every hop stays on the purpose's hosts (one off them is
 /// answered as it came, unfollowed); loopback, private, link-local and shared addresses refused on the address connected to
-/// (`Public`), so a name pointing home is refused too; Cratarr's User-Agent.
+/// (`Public`), so a name pointing home is refused too; Cratarr's User-Agent. No proxy from the environment (Y11): a proxy would look
+/// the names up, not `Public`.
 pub fn client(purpose: Purpose) -> reqwest::ClientBuilder {
-    reqwest::Client::builder().https_only(true).redirect(staying(purpose, true)).dns_resolver(std::sync::Arc::new(Public)).user_agent(USER_AGENT)
+    reqwest::Client::builder().https_only(true).no_proxy().redirect(staying(purpose, true)).dns_resolver(std::sync::Arc::new(Public)).user_agent(USER_AGENT)
 }
 
 /// The redirect rule of `client`, plain http let through where `https` is false (the tests' fake servers).
@@ -219,23 +229,38 @@ fn staying(purpose: Purpose, https: bool) -> reqwest::redirect::Policy {
 }
 
 /// A client for a service an administrator set up, on the LAN (O1: Lidarr, Jellyfin, slskd, Subsonic, Kodi, webhooks): never a
-/// redirect, so a key it carries stays on the host given.
+/// redirect, so a key it carries stays on the host given; no proxy from the environment (Y11).
 pub fn lan_client() -> reqwest::ClientBuilder {
-    reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+    reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
 }
 
 /// Whether an address is out in the world: not loopback, private, link-local, shared (CGNAT), unique-local, unspecified, broadcast
-/// or documentation's (O1).
+/// or documentation's (O1); nor multicast, the benchmark range (198.18/15), the reserved 240/4 or the old site-local fec0::/10 (Y11).
+/// An IPv4 address carried in an IPv6 one (mapped, the old compatible `::a.b.c.d`, NAT64's 64:ff9b::/96) is judged as itself.
 pub fn is_public(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
             let [a, b, ..] = v4.octets();
-            !(v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast() || v4.is_documentation() || a == 0 || (a == 100 && (64..128).contains(&b)))
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_multicast()
+                || a == 0
+                || a >= 240
+                || (a == 100 && (64..128).contains(&b))
+                || (a == 198 && (b & 0xfe) == 18))
         }
-        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => is_public(std::net::IpAddr::V4(v4)),
-            None => !(v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80),
-        },
+        std::net::IpAddr::V6(v6) => {
+            let s = v6.segments();
+            let nat64 = (s[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| std::net::Ipv4Addr::from(u128::from(v6) as u32));
+            match v6.to_ipv4().or(nat64) {
+                Some(v4) => is_public(std::net::IpAddr::V4(v4)),
+                None => !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80 || (s[0] & 0xffc0) == 0xfec0),
+            }
+        }
     }
 }
 
@@ -257,6 +282,19 @@ impl reqwest::dns::Resolve for Public {
             Ok(Box::new(public.into_iter()) as reqwest::dns::Addrs)
         })
     }
+}
+
+/// An image's answer (Y11: the Spotify picture relay, an administrator's chosen cover): its type an image's, its body read as
+/// `read_capped` reads it; an empty one is no image.
+pub async fn read_image(resp: reqwest::Response, cap: usize) -> anyhow::Result<Vec<u8>> {
+    if !resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("image/")) {
+        anyhow::bail!("the answer is not an image");
+    }
+    let bytes = read_capped(resp, cap).await?;
+    if bytes.is_empty() {
+        anyhow::bail!("the image is empty");
+    }
+    Ok(bytes)
 }
 
 /// An answer's body read in pieces and stopped at `cap` bytes (O1): a longer one is refused, never held whole.
@@ -413,6 +451,32 @@ mod tests {
         assert!(format!("{e:?}").contains("is not a public address"), "{e:?}");
     }
 
+    /// Y11: the special ranges are not out in the world either: multicast, 198.18/15, 240/4, fec0::/10; an IPv4 address carried in
+    /// an IPv6 one (the old compatible form, NAT64's) is judged as itself.
+    #[test]
+    fn special_ranges_and_carried_addresses_are_judged() {
+        let refused = ["224.0.0.1", "239.255.255.250", "198.18.0.1", "198.19.255.255", "240.0.0.1", "255.255.255.255", "ff02::1", "fec0::1", "::192.168.1.20", "::127.0.0.1", "64:ff9b::192.168.1.20", "64:ff9b::10.0.0.5"];
+        for ip in refused {
+            assert!(!is_public(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["198.17.255.255", "198.20.0.1", "223.255.255.1", "64:ff9b::93.184.216.34", "::93.184.216.34"] {
+            assert!(is_public(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    /// Y11: a photo host's address given as plain http is read over https; any other address stays as it is, and is not the photos'.
+    #[test]
+    fn a_photo_hosts_http_address_is_read_over_https() {
+        let up = |u: &str| Purpose::ArtistPhotos.upgraded(reqwest::Url::parse(u).unwrap());
+        let thumb = up("http://www.theaudiodb.com/images/media/artist/thumb/x.jpg");
+        assert_eq!(thumb.as_str(), "https://www.theaudiodb.com/images/media/artist/thumb/x.jpg");
+        assert!(Purpose::ArtistPhotos.allows(&thumb));
+        assert_eq!(up("http://upload.wikimedia.org/a.jpg").scheme(), "https");
+        let away = up("http://photos.example.org/x.jpg");
+        assert!(away.scheme() == "http" && !Purpose::ArtistPhotos.allows(&away), "not one of its hosts");
+        assert_eq!(up("http://www.theaudiodb.com:8080/x.jpg").scheme(), "http", "an odd port left as it is");
+    }
+
     /// O1: an answer longer than its cap is cut there and refused, never read whole.
     #[tokio::test]
     async fn an_answer_over_the_cap_is_cut() {
@@ -424,6 +488,23 @@ mod tests {
         assert!(read_capped(long, 100_000).await.unwrap_err().to_string().contains("cut there"));
         let short = c.get(format!("http://127.0.0.1:{at}/short")).send().await.unwrap();
         assert_eq!(read_capped(short, 100_000).await.unwrap().len(), 1_000);
+    }
+
+    /// Y11: a picture relayed or chosen is an image, read in pieces and cut at its cap: a page in its place is refused, a longer one
+    /// cut there.
+    #[tokio::test]
+    async fn a_picture_read_is_an_image_cut_at_its_cap() {
+        use axum::{http::header::CONTENT_TYPE, routing::get};
+        let app = axum::Router::new()
+            .route("/page", get(|| async { ([(CONTENT_TYPE, "text/html")], "<html>".repeat(10)) }))
+            .route("/big", get(|| async { ([(CONTENT_TYPE, "image/jpeg")], vec![0xFFu8; 300_000]) }))
+            .route("/small", get(|| async { ([(CONTENT_TYPE, "image/jpeg")], vec![0xFFu8; 1_000]) }));
+        let at = fake(app).await;
+        let c = reqwest::Client::new();
+        let ask = |p: &str| c.get(format!("http://127.0.0.1:{at}{p}")).send();
+        assert!(read_image(ask("/page").await.unwrap(), 100_000).await.unwrap_err().to_string().contains("not an image"));
+        assert!(read_image(ask("/big").await.unwrap(), 100_000).await.unwrap_err().to_string().contains("cut there"));
+        assert_eq!(read_image(ask("/small").await.unwrap(), 100_000).await.unwrap().len(), 1_000);
     }
 
     /// O1: a service an administrator set up (slskd here) never follows a redirect: its key stays on the host given.
