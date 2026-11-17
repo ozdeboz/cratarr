@@ -951,6 +951,28 @@ pub async fn request_of_record(app: &super::App, serve: &Serve, account: &str, r
     Ok(shown_to(newest.into_iter().collect(), crate::serve::access::administering()).pop())
 }
 
+/// The account's newest request of an album a view names by its record, else by its release group (G3: a Bandcamp album Discover
+/// found by its group, which no record holds by its page): the record that group names. As the Requests page shows it; none where
+/// it asked for neither.
+pub async fn request_of(app: &super::App, serve: &Serve, account: &str, record: Option<i64>, group: Option<&str>) -> Result<Option<View>> {
+    let f = fetcher(app);
+    let newest = newest_of(serve, f.as_deref(), account, record, group).await?;
+    Ok(shown_to(newest.into_iter().collect(), crate::serve::access::administering()).pop())
+}
+
+/// `request_of`, Lidarr asked as `f`.
+async fn newest_of(serve: &Serve, f: Option<&dyn Fetcher>, account: &str, record: Option<i64>, group: Option<&str>) -> Result<Option<View>> {
+    let record = match (record, group) {
+        (Some(record), _) => Some(record),
+        (None, Some(group)) => serve.catalogue().record_named_by(Some(group), None)?,
+        (None, None) => None,
+    };
+    match record {
+        Some(record) => newest_of_record(serve, f, account, record).await,
+        None => Ok(None),
+    }
+}
+
 /// `request_of_record`, Lidarr asked as `f`: the account's requests by the record each asked for, as merged now (`named`).
 async fn newest_of_record(serve: &Serve, f: Option<&dyn Fetcher>, account: &str, record: i64) -> Result<Option<View>> {
     let asked: Vec<Request> = serve.userdata.requests(Some(account), None, LIST)?.into_iter().filter(|r| r.record.is_some()).collect();
@@ -1812,6 +1834,27 @@ mod tests {
         assert!(matches!(v.state, RequestState::Wanted { .. }) && v.hand_over_again, "as the Requests page shows it");
         assert_eq!(newest_of_record(&serve, None, "bob", other).await.unwrap().map(|v| v.request.id), Some(elsewhere.id));
         assert!(newest_of_record(&serve, None, "carol", record).await.unwrap().is_none(), "carol asked for nothing");
+    }
+
+    /// G3: a view names its album by its record, else by its release group: the request of the record that group names is found
+    /// either way; nothing by neither, or by a group no record holds.
+    #[tokio::test]
+    async fn a_request_is_found_by_its_record_or_its_group() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let group = "00000000-0000-4000-8000-000000000392";
+        let record = cat.record_for_tests("Quiet Lanes", 0);
+        assert!(cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", group), "link").unwrap());
+        let asked = serve.userdata.add_request(&Request { album_key: group.into(), release_group: Some(group.into()), ..asked_for(record) }).unwrap();
+        let found = |record: Option<i64>, group: Option<&str>| {
+            let serve = serve.clone();
+            let group = group.map(str::to_string);
+            async move { newest_of(&serve, None, "bob", record, group.as_deref()).await.unwrap().map(|v| v.request.id) }
+        };
+        assert_eq!(found(Some(record), None).await, Some(asked), "by its record");
+        assert_eq!(found(None, Some(group)).await, Some(asked), "by its group's record");
+        assert_eq!(found(None, Some("00000000-0000-4000-8000-000000000393")).await, None, "a group no record holds");
+        assert_eq!(found(None, None).await, None);
     }
 
     /// W4 (D3): Health's "Ask for the full album" fetches it again: its group finds the owned record, short of the list its files

@@ -1720,6 +1720,17 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
         }
         None => (None, None),
     };
+    // Where the viewer's request of it stands (G3), as a record not had's page says: by its record, else its group's.
+    let request = match (ctx.served.clone(), ctx.account()) {
+        (Some(serve), Some(account)) => {
+            let by = record.as_deref().and_then(crate::serve::ids::record_number);
+            crate::app::requests::request_of(&ctx.app, &serve, &account, by, release_group.as_deref()).await.unwrap_or_else(|e| {
+                tracing::debug!("the request of {}: {e:#}", a.url);
+                None
+            })
+        }
+        _ => None,
+    };
     let more = crate::app::AlbumMore {
         released: a.released.clone(),
         label: a.label.clone(),
@@ -1731,6 +1742,7 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
         words: None,
         record,
         release_group,
+        request,
         ..crate::app::AlbumMore::default()
     };
     let rows = a

@@ -52,15 +52,19 @@
         if (found) return (suggestion = { album: found, asked: requestOpen(r), may: !!v.may_request });
         const may = !!v.may_request;
         // Its album as Bandcamp's page and Cratarr name it: the record that holds the page, else the group it was found by,
-        // and the album's own artist and title. Not read: its names as given, by its page.
+        // and the album's own artist and title, with where the viewer's request of it stands (G3). Not read: its names as
+        // given, by its page, whose request the Requests list says.
         albumView(BANDCAMP, albumIdOf(p))
           .then(
-            (b): Wantable | null => (b.artist ? { record: b.record, release_group: b.release_group, page: p, artist: b.artist, album: b.title } : null),
+            (b): { want: Wantable; asked: boolean } | null =>
+              b.artist ? { want: { record: b.record, release_group: b.release_group, page: p, artist: b.artist, album: b.title }, asked: requestOpen(b.request) } : null,
             () => null,
           )
-          .then((want) => {
-            const w = want ?? (ar && al ? { page: p, artist: ar, album: al } : null);
-            if (!current || !w) return;
+          .then((viewed) => {
+            if (!current) return;
+            if (viewed) return (other = { want: viewed.want, asked: viewed.asked, may });
+            const w: Wantable | null = ar && al ? { page: p, artist: ar, album: al } : null;
+            if (!w) return;
             other = { want: w, asked: false, may };
             getRequests().then(
               (q) => current && (other = { want: w, may, asked: askedFor(q.mine, w) }),
