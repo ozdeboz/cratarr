@@ -24,6 +24,9 @@ struct Server {
     child: Child,
     base: String,
     http: reqwest::Client,
+    /// Whom the server's own calls (`get`, `send`, `ok` and the helpers on them) are made as, once accounts exist (`act_as`);
+    /// none: as nobody, who may call only while there is no account.
+    acting: std::sync::Mutex<Option<String>>,
 }
 
 impl Server {
@@ -44,7 +47,7 @@ impl Server {
             .stderr(Stdio::inherit())
             .spawn()
             .expect("the server starts");
-        let s = Server { child, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new() };
+        let s = Server { child, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new(), acting: std::sync::Mutex::new(None) };
         let answered = |r: reqwest::Response| r.status().is_success() || r.status() == reqwest::StatusCode::UNAUTHORIZED;
         s.until("the server answers", Duration::from_secs(60), || async { s.http.get(format!("{}/api/albums", s.base)).send().await.is_ok_and(answered) }).await;
         s
@@ -53,6 +56,18 @@ impl Server {
     /// Calls as nobody.
     fn anyone(&self) -> Caller<'_> {
         Caller { server: self, session: None }
+    }
+
+    /// The server's own calls from now on made as this account (signed in as `sign_in` does): a test that makes several
+    /// accounts reads through the helpers as one of them, as nobody may call only while there is none.
+    async fn act_as(&self, name: &str, password: &str) {
+        let session = self.sign_in(name, password).await.session;
+        *self.acting.lock().unwrap() = session;
+    }
+
+    /// Whom the server's own calls are made as: the account `act_as` named, else nobody.
+    fn acting(&self) -> Caller<'_> {
+        Caller { server: self, session: self.acting.lock().unwrap().clone() }
     }
 
     /// Signs in as the page's form does: the answer sends a browser on, with the session in its cookie.
@@ -65,16 +80,16 @@ impl Server {
     }
 
     async fn get(&self, path: &str) -> Value {
-        self.anyone().get(path).await
+        self.acting().get(path).await
     }
 
     /// A call that may be refused: (status, answer).
     async fn send(&self, method: reqwest::Method, path: &str, body: Value) -> (u16, Value) {
-        self.anyone().send(method, path, body).await
+        self.acting().send(method, path, body).await
     }
 
     async fn ok(&self, method: reqwest::Method, path: &str, body: Value) -> Value {
-        self.anyone().ok(method, path, body).await
+        self.acting().ok(method, path, body).await
     }
 
     async fn until<F, Fut>(&self, what: &str, within: Duration, mut f: F)
@@ -2548,7 +2563,9 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     s.until("both copies read", Duration::from_secs(120), || async { bob.albums().await.iter().any(|a| a["title"] == "Both Shores" && holds(a, &music) && holds(a, &incoming)) }).await;
     let catalogue = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
     catalogue.busy_timeout(Duration::from_secs(10)).unwrap();
-    catalogue.execute("INSERT INTO records (born, title, artist) VALUES (1, 'Both Shores', 'Salt Meridian')", []).unwrap();
+    // A single (T10): the layout's Both Shores is three tracks of a few seconds, a single by the release type rule, which holds a
+    // record of its name of its own class.
+    catalogue.execute("INSERT INTO records (born, title, artist, kind) VALUES (1, 'Both Shores', 'Salt Meridian', 'single')", []).unwrap();
     let record = catalogue.last_insert_rowid();
     drop(catalogue);
     let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
@@ -3445,6 +3462,7 @@ async fn a_copys_undo_leaves_what_came_after_end_to_end() {
     let original = as_it_lies(&music.join(SHORES));
     s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password", "admin": true })).await;
     let bob = s.sign_in("bob", "bob's password").await;
+    s.act_as("bob", "bob's password").await;
     let mine = own.join("bob");
     let copied = bob.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/move"), json!({ "from": id_of(&music), "to": id_of(&mine) })).await;
     let folder = copied["folder"].as_str().unwrap().to_string();
@@ -3510,6 +3528,9 @@ async fn a_want_of_a_record_only_in_bobs_music_copies_his_end_to_end() {
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
     for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
         s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
     }
     let (theirs, mine) = (own.join("bob"), own.join("ann"));
     let album = s.read_in("Other Room", &theirs).await;
@@ -4463,6 +4484,9 @@ async fn ry01_shape(name: &str, before: impl FnOnce(&Places)) -> (Server, PathBu
     s.read_in("Both Shores", &p.ann).await;
     for (name, admin) in [("root", true), ("carl", true), ("ann", false), ("bob", false)] {
         s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
     }
     (s, root, p, album["id"].as_str().unwrap().to_string())
 }
