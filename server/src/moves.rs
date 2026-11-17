@@ -66,6 +66,12 @@ pub fn apply(plan: &[Step]) -> Result<()> {
             bail!("{} exists already; not overwriting it", to.display());
         }
     }
+    #[cfg(test)]
+    AFTER_CHECK.with(|h| {
+        if let Some(f) = h.take() {
+            f()
+        }
+    });
     // Only now, the look behind it: a plan refused takes nothing away. Before the moves, so a stop in them leaves one step
     // at both ends, never two.
     if let Some((from, _)) = &stopped {
@@ -191,9 +197,45 @@ pub fn replace_through_part(path: &Path, fill: impl FnOnce(&Path) -> Result<()>)
     done
 }
 
+#[cfg(test)]
+thread_local! {
+    /// What runs between `apply`'s look at its targets and its first move (T11.3's test): a file coming meanwhile.
+    static AFTER_CHECK: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+}
+
+/// A rename that never replaces what is at `to` (T11): where a file came there since it was looked for, it fails
+/// (`AlreadyExists`) and both stay. Linux's `renameat2(RENAME_NOREPLACE)`; where the file system does not know that flag,
+/// `link_into`. Across file systems it fails as a rename does (`CrossesDevices`). Blocking.
+pub fn rename_new(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(std::io::Error::other);
+        let (f, t) = (c(from)?, c(to)?);
+        const RENAME_NOREPLACE: libc::c_uint = 1;
+        // SAFETY: two NUL-ended paths that live through the call, and the flag renameat2 takes.
+        let done = unsafe { libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), RENAME_NOREPLACE) };
+        if done == 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        if !matches!(e.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)) {
+            return Err(e);
+        }
+    }
+    link_into(from, to)
+}
+
+/// `rename_new` where the file system knows no `RENAME_NOREPLACE`: a hard link, which refuses an existing name, then the old
+/// name removed. Where links fail too, the step fails (OQ-L): never a rename that could replace. Blocking.
+fn link_into(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(from, to)?;
+    std::fs::remove_file(from)
+}
+
 fn move_file(from: &Path, to: &Path) -> Result<()> {
     create_dirs_like_parent(to.parent().context("target has no folder")?)?;
-    match std::fs::rename(from, to) {
+    match rename_new(from, to) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => copy_across(from, to, |f| std::fs::remove_file(f)),
         Err(e) => Err(e).with_context(|| format!("moving {} to {}", from.display(), to.display())),
@@ -208,7 +250,7 @@ fn copy_across(from: &Path, to: &Path, remove: impl FnOnce(&Path) -> std::io::Re
     let placed = (|| -> Result<()> {
         std::fs::copy(from, &part).with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
         std::fs::File::open(&part)?.sync_all()?;
-        Ok(std::fs::rename(&part, to)?)
+        Ok(rename_new(&part, to)?)
     })();
     if let Err(e) = placed {
         std::fs::remove_file(&part).ok();
@@ -269,7 +311,7 @@ pub fn clone_file(from: &Path, to: &Path) -> Result<bool> {
         let file = std::fs::OpenOptions::new().write(true).open(&part)?;
         file.set_modified(at)?;
         file.sync_all()?;
-        Ok(std::fs::rename(&part, to)?)
+        Ok(rename_new(&part, to)?)
     })();
     if let Err(e) = placed {
         std::fs::remove_file(&part).ok();
@@ -442,6 +484,81 @@ mod tests {
         std::fs::remove_file(own.join("A/Album/1.flac")).unwrap();
         assert!(copy(&plan).is_err(), "another file there: refused");
         assert!(!own.join("A/Album/1.flac").exists(), "refused before a file was copied");
+    }
+
+    /// The folder's names, a part's hidden one too.
+    fn all_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    /// T11.1: a copy whose target came to be between its check and its placing never replaces it: refused, the file that came
+    /// kept byte for byte, no part left.
+    #[test]
+    fn a_copy_never_replaces_a_file_that_came_meanwhile() {
+        let (music, own) = (tmp(), tmp());
+        std::fs::create_dir_all(music.join("A")).unwrap();
+        std::fs::create_dir_all(own.join("A")).unwrap();
+        std::fs::write(music.join("A/1.flac"), b"copied").unwrap();
+        std::fs::write(own.join("A/1.flac"), b"came meanwhile").unwrap();
+        let e = clone_file(&music.join("A/1.flac"), &own.join("A/1.flac")).unwrap_err();
+        assert!(format!("{e:#}").contains("exists"), "{e:#}");
+        assert_eq!(std::fs::read(own.join("A/1.flac")).unwrap(), b"came meanwhile");
+        assert_eq!(all_in(&own.join("A")), ["1.flac"], "no part left");
+        assert_eq!(std::fs::read(music.join("A/1.flac")).unwrap(), b"copied");
+    }
+
+    /// T11.2: a move on one file system, and a copy across, alike: refused, the target's file and the source kept.
+    #[test]
+    fn a_move_never_replaces_a_file_that_came_meanwhile() {
+        let (music, own) = (tmp(), tmp());
+        std::fs::create_dir_all(music.join("A")).unwrap();
+        std::fs::create_dir_all(own.join("A")).unwrap();
+        std::fs::write(music.join("A/1.flac"), b"moving").unwrap();
+        std::fs::write(own.join("A/1.flac"), b"came meanwhile").unwrap();
+        assert!(move_file(&music.join("A/1.flac"), &own.join("A/1.flac")).is_err(), "a move refused");
+        assert!(copy_across(&music.join("A/1.flac"), &own.join("A/1.flac"), |f| std::fs::remove_file(f)).is_err(), "a copy across refused");
+        assert_eq!(std::fs::read(own.join("A/1.flac")).unwrap(), b"came meanwhile");
+        assert_eq!(std::fs::read(music.join("A/1.flac")).unwrap(), b"moving", "the source kept");
+        assert_eq!(all_in(&own.join("A")), ["1.flac"], "no part left");
+    }
+
+    /// T11.3: a Keep's plan of two files meeting a file that came to its second target after the look: refused, the first file
+    /// back where it was, the file that came untouched, the folder made for the plan pruned where empty.
+    #[test]
+    fn a_plan_that_meets_a_file_that_came_meanwhile_puts_back_what_it_moved() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("X")).unwrap();
+        std::fs::write(inc.join("X/1.flac"), b"one").unwrap();
+        std::fs::write(inc.join("X/2.flac"), b"two").unwrap();
+        let plan = [step(&inc, "X/1.flac", &music, "A/B/1.flac"), step(&inc, "X/2.flac", &music, "A/C/2.flac")];
+        let came = music.join("A/C/2.flac");
+        AFTER_CHECK.with(|h| {
+            h.set(Some(Box::new(move || {
+                std::fs::create_dir_all(came.parent().unwrap()).unwrap();
+                std::fs::write(&came, b"came meanwhile").unwrap();
+            })))
+        });
+        assert!(apply(&plan).is_err(), "refused");
+        assert_eq!(std::fs::read(inc.join("X/1.flac")).unwrap(), b"one", "the first file back");
+        assert_eq!(std::fs::read(inc.join("X/2.flac")).unwrap(), b"two");
+        assert_eq!(std::fs::read(music.join("A/C/2.flac")).unwrap(), b"came meanwhile", "the file that came untouched");
+        assert!(!music.join("A/B").exists(), "the folder made for the plan pruned");
+    }
+
+    /// T11.4: where the file system will not refuse a name by its rename, the fallback places by a hard link, which refuses an
+    /// existing name, never by a plain rename.
+    #[test]
+    fn placing_falls_back_to_a_link_never_to_a_rename() {
+        let d = tmp();
+        std::fs::write(d.join("part"), b"new").unwrap();
+        std::fs::write(d.join("taken"), b"there").unwrap();
+        assert_eq!(link_into(&d.join("part"), &d.join("taken")).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(d.join("taken")).unwrap(), b"there", "never replaced");
+        assert!(d.join("part").is_file(), "the part kept for its caller to take away");
+        link_into(&d.join("part"), &d.join("free")).unwrap();
+        assert_eq!((std::fs::read(d.join("free")).unwrap(), d.join("part").exists()), (b"new".to_vec(), false), "a free name: placed");
     }
 
     /// C38: where the file system shares no blocks (the tests' own, ext4 on staging), the copy says so: a copy of its own, which
