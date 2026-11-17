@@ -24,6 +24,8 @@
 //! - **After a long gap** (Z9: an outage, a clock that jumped forward): a pass more than three days after the last re-reads as
 //!   ever, but forgets no record until a whole month of re-reads has passed (`forgetting_waits`), as what the re-read has not
 //!   come to again would look unseen.
+//! - **A clock that ran ahead and was put right** (U9): a pass or a wait noted more than a day ahead of now is no reason to wait for
+//!   it. The pass runs, and the forgetting waits a month from now at most.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -51,20 +53,24 @@ pub const NO_LONGER_KNOWN: &str = "This album is no longer known: nobody had ope
 /// What an artist asked for by their id answers once forgotten (RT01b).
 pub const ARTIST_NO_LONGER_KNOWN: &str = "This artist is no longer known.";
 
-/// Whether the pass is due at `now`: never run, or last run a day ago or more.
+/// Whether the pass is due at `now`: never run, last run a day ago or more, or noted more than a day ahead of now (U9: a clock that
+/// ran ahead, put right since, would hold every pass off till it caught up).
 fn due(cat: &Catalogue, now: i64) -> bool {
-    cat.meta(RAN_AT).and_then(|v| v.parse::<i64>().ok()).is_none_or(|at| now - at >= DAY)
+    cat.meta(RAN_AT).and_then(|v| v.parse::<i64>().ok()).is_none_or(|at| now - at >= DAY || at - now > DAY)
 }
 
 /// Whether the forgetting of records waits at `now` (Z9): a pass more than `LATE` after the last makes it wait a whole month of
 /// re-reads from now (`REREAD_MONTH`), as the re-read has fallen behind and what it has not come to again would look unseen; a
-/// wait already there is lengthened, never cut short. Noted in the catalogue (`WAITS_UNTIL`). Before the pass is noted.
-/// Blocking.
+/// wait already there is lengthened, never cut short, but to a month from now at most (U9: one noted by a clock that ran ahead
+/// would otherwise hold for as long as it ran ahead). Noted in the catalogue (`WAITS_UNTIL`). Before the pass is noted. Blocking.
 fn forgetting_waits(cat: &Catalogue, now: i64) -> bool {
     let noted = |key: &str| cat.meta(key).and_then(|v| v.parse::<i64>().ok());
-    let mut until = noted(WAITS_UNTIL).unwrap_or(0);
+    let was = noted(WAITS_UNTIL).unwrap_or(0);
+    let mut until = was.min(now + REREAD_MONTH);
     if noted(RAN_AT).is_some_and(|at| now - at > LATE) {
         until = until.max(now + REREAD_MONTH);
+    }
+    if until != was {
         cat.set_meta(WAITS_UNTIL, &until.to_string());
     }
     now < until
@@ -628,6 +634,28 @@ mod tests {
         let next = unseen(&cat, "Open Water");
         let done = pass_reading(served.clone(), late + 33 * DAY, &sources, || false).await.unwrap().expect("due");
         assert_eq!((done.waits, done.records), (false, vec![next]), "three days after the last: not late");
+    }
+
+    /// U9 (the review of 8c/8d, finding 9): a pass noted seven months ahead, and a wait noted from that clock (it ran ahead, and was
+    /// put right): the pass runs, the wait is cut to a month from now, and a month of daily passes on it forgets again.
+    #[tokio::test]
+    async fn a_pass_noted_in_the_future_runs_and_waits_a_month() {
+        let served = served(None, 94_000);
+        let cat = served.catalogue().clone();
+        library_artists(&cat, 2);
+        let sources: Vec<Arc<dyn ArtistList>> = vec![stub("musicbrainz", false), stub("discogs", false)];
+        cat.set_meta(RAN_AT, &(NOW + 7 * MONTH).to_string());
+        cat.set_meta(WAITS_UNTIL, &(NOW + 8 * MONTH).to_string());
+        let quiet = unseen(&cat, "Undertow");
+        let done = pass_reading(served.clone(), NOW, &sources, || false).await.unwrap().expect("due: noted in the future");
+        assert!(done.waits && done.records.is_empty(), "it waits");
+        assert_eq!(cat.meta(WAITS_UNTIL), Some((NOW + REREAD_MONTH).to_string()), "a month from now, not from the clock that ran ahead");
+        for day in 1..30 {
+            let done = pass_reading(served.clone(), NOW + day * DAY, &sources, || false).await.unwrap().expect("due");
+            assert!(done.waits && done.records.is_empty(), "day {day}: still waits");
+        }
+        let done = pass_reading(served.clone(), NOW + 30 * DAY, &sources, || false).await.unwrap().expect("due");
+        assert_eq!((done.waits, done.records), (false, vec![quiet]), "a month on: forgotten");
     }
 
     /// RT01c: with the background paused, the re-read reads nothing, and keeps the artist's records not had seen instead.
