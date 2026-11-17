@@ -28,6 +28,12 @@ pub fn is_on(name: &'static str) -> bool {
     on
 }
 
+/// Tests: a connection taken as switched on or off, nothing written.
+#[cfg(test)]
+pub fn set_for_tests(name: &'static str, on: bool) {
+    KNOWN.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(name, on);
+}
+
 /// A connection switched on or off. Blocking.
 pub fn set_on(name: &'static str, on: bool) -> Result<()> {
     let serve = crate::serve::instance().ok_or_else(|| anyhow::anyhow!("Cratarr's own library is not open"))?;

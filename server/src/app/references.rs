@@ -325,6 +325,10 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
     if r.source == "musicbrainz" && !super::switches::is_on(super::switches::MUSICBRAINZ) {
         return Err(SwitchedOff("MusicBrainz").into());
     }
+    // Discogs switched off is passed over as MusicBrainz is (X3): out of reach until it is on, nothing said against the record.
+    if r.source == "discogs" && !super::switches::is_on(super::switches::DISCOGS) {
+        return Err(SwitchedOff("Discogs").into());
+    }
     match (r.source.as_str(), r.kind.as_str()) {
         ("musicbrainz", "release") => Ok(release(r.value).await?.map(|list| (list, None))),
         ("musicbrainz", "release-group") => match release_of_group(&r.value).await? {
@@ -1130,6 +1134,15 @@ mod tests {
         let nothing = |_| std::future::ready(Err::<Option<Read>, _>(anyhow::anyhow!("nothing is read again")));
         let again = tracklist(&cat, record, nothing).await.unwrap().unwrap();
         assert_eq!(again.timed.map(|(s, _)| s).as_deref(), Some("bandcamp"), "both kept: the counted list first, then the next");
+    }
+
+    /// X3: with Discogs switched off, a Discogs reference is passed over as MusicBrainz's is: nothing is asked of Discogs.
+    #[tokio::test]
+    async fn with_discogs_off_a_record_is_judged_by_its_next_list() {
+        super::super::switches::set_for_tests(super::super::switches::DISCOGS, false);
+        let read = read_reference(Ref::new("discogs", "release", "2000009")).await;
+        super::super::switches::set_for_tests(super::super::switches::DISCOGS, true);
+        assert!(read.unwrap_err().is::<SwitchedOff>());
     }
 
     /// R15 (F4): a release MusicBrainz says it will not give (a 404) has no list, at once; its rate limit (a 429) is no such answer.

@@ -548,7 +548,16 @@ async fn hand_to(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r:
                     && let Some(record) = r.record
                 {
                     let (cat, group) = (serve.catalogue().clone(), handed.release_group.to_ascii_lowercase());
-                    let kept = tokio::task::spawn_blocking(move || cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", &group), "search")).await;
+                    // Lidarr's guess, by names, goes only onto a record no reference speaks for at all (X3): over a Bandcamp page or a
+                    // Discogs release it would become the list Soulseek judges by.
+                    let kept = tokio::task::spawn_blocking(move || -> Result<bool> {
+                        let subject = crate::serve::ids::record(record);
+                        if !cat.references_of(&subject)?.is_empty() {
+                            return Ok(false);
+                        }
+                        cat.set_reference(&subject, &crate::catalogue::records::Ref::new("musicbrainz", "release-group", &group), "search")
+                    })
+                    .await;
                     if let Err(e) = kept.map_err(anyhow::Error::from).and_then(|k| k) {
                         tracing::warn!("request {}: its release group was not kept: {e:#}", r.id);
                     }
@@ -1473,6 +1482,25 @@ mod tests {
         tell_stopped(Some(&lidarr), &serve, &bob).await;
         assert!(lidarr.1.lock().unwrap().is_empty(), "ann's still wants it");
         assert!(serve.userdata.request(bob.id).unwrap().unwrap().fetched.as_deref().unwrap().ends_with(LIDARR_KEPT));
+    }
+
+    /// X3: Lidarr's guess of a release group by names goes only onto a record no reference speaks for: one holding a Bandcamp page
+    /// keeps it as what Soulseek judges by.
+    #[tokio::test]
+    async fn lidarrs_guessed_group_goes_only_onto_a_record_with_no_reference() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let paged = record_of_album(cat, None, "Glass Harbour", "Two Rooms", None, None).unwrap();
+        assert!(cat.set_reference(&crate::serve::ids::record(paged), &crate::catalogue::records::Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/two-rooms"), "link").unwrap());
+        let bare = record_of_album(cat, None, "Glass Harbour", "Quiet Lanes", None, None).unwrap();
+        let lidarr = Wanting::default();
+        for record in [paged, bare] {
+            let mut r = asked_for(record);
+            r.id = serve.userdata.add_request(&r).unwrap();
+            hand_to(Some(&lidarr), false, &serve, &r).await;
+        }
+        let groups = |record: i64| cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().filter(|(r, _)| r.kind == "release-group").count();
+        assert_eq!((groups(paged), groups(bare)), (0, 1));
     }
 
     /// X1: a fetcher out of reach for over an hour shows on Health.

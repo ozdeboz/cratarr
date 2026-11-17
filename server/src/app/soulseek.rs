@@ -370,6 +370,40 @@ fn titles_of(name: &str) -> Vec<String> {
     out
 }
 
+/// Whether a folder's name is one disc's of a release (X3): "CD1", "CD 2", "Disc 1", "Disk 2 - …".
+fn is_disc_folder(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    ["cd", "disc", "disk"].iter().any(|p| n.strip_prefix(p).is_some_and(|rest| rest.trim_start().starts_with(|c: char| c.is_ascii_digit())))
+}
+
+/// The disc folder a file lies in (`CD2`), where it lies in one.
+fn disc_of(path: &str) -> Option<&str> {
+    let dir = path.rsplit_once(['\\', '/'])?.0;
+    let last = dir.rsplit_once(['\\', '/']).map_or(dir, |(_, l)| l);
+    is_disc_folder(last).then_some(last)
+}
+
+/// Words that make a recording another version of its title (X3): a file's title saying one its list's title does not is not
+/// that track.
+const VERSIONS: [&str; 12] = ["instrumental", "live", "remix", "mix", "acoustic", "demo", "karaoke", "acapella", "cappella", "unplugged", "reprise", "edit"];
+
+/// Whether a file's title (one way its name reads, `titles_of`) is a list track's (X3): as `renumber::same_title` has it, but an
+/// "Artist - Title" list compares its title part, never its artist alone; and a version word in brackets or after " - " that the
+/// list's title lacks (Instrumental, Live, Remix…) makes the file another version. Pure.
+fn titled_as(file: &str, list: &str) -> bool {
+    let words = |s: &str| -> Vec<String> { s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect() };
+    let listed = words(list);
+    let lower = file.to_lowercase();
+    let marked: Vec<&str> = lower.split(['(', '[']).skip(1).chain(lower.split(" - ").skip(1)).collect();
+    if marked.iter().any(|part| words(part).iter().any(|w| VERSIONS.contains(&w.as_str()) && !listed.contains(w))) {
+        return false;
+    }
+    match list.split_once(" - ") {
+        Some((_, title)) => crate::app::import::loose(file) == crate::app::import::loose(list) || super::renumber::same_title(file, title.trim()),
+        None => super::renumber::same_title(file, list),
+    }
+}
+
 fn format_of(f: &Offered) -> String {
     f.extension.clone().filter(|e| !e.is_empty()).unwrap_or_else(|| crate::slskd::base_name(&f.filename).rsplit('.').next().unwrap_or("").to_string()).to_lowercase()
 }
@@ -386,8 +420,13 @@ pub fn folders_of(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Ve
     for a in answers.iter().filter(|a| !failed.contains(&a.username)) {
         let mut dirs: BTreeMap<String, Vec<&Offered>> = BTreeMap::new();
         for f in a.files.iter().filter(|f| !f.is_locked && matches!(format_of(f).as_str(), "flac" | "mp3")) {
-            let dir = f.filename.rsplit_once(['\\', '/']).map_or("", |(d, _)| d).to_string();
-            dirs.entry(dir).or_default().push(f);
+            let dir = f.filename.rsplit_once(['\\', '/']).map_or("", |(d, _)| d);
+            // A release split into disc folders (CD1, CD2…) is one candidate, its folders' parent (X3).
+            let dir = match dir.rsplit_once(['\\', '/']) {
+                Some((parent, last)) if is_disc_folder(last) => parent,
+                _ => dir,
+            };
+            dirs.entry(dir.to_string()).or_default().push(f);
         }
         'dir: for (dir, files) in dirs {
             if files.len() < tracks.len() {
@@ -401,7 +440,7 @@ pub fn folders_of(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Ve
                     .enumerate()
                     .filter(|(i, f)| {
                         !used[*i]
-                            && titles_of(&f.filename).iter().any(|n| super::renumber::same_title(n, &t.title))
+                            && titles_of(&f.filename).iter().any(|n| titled_as(n, &t.title))
                             && match (t.length_ms, f.length) {
                                 (Some(want), Some(secs)) => (want - secs * 1000).abs() <= LENGTH_SLACK_MS,
                                 _ => true,
@@ -472,7 +511,18 @@ fn agreeing(folders: &[Folder]) -> Vec<usize> {
 
 /// The list a folder's files are gated by: the one it was found by (R33), without lengths for one found by titles alone.
 fn judged_by<'a>(it: &'a Item, f: &Folder) -> &'a [Track] {
-    if f.unchecked.is_some() { &it.untimed } else { &it.tracks }
+    if f.unchecked.as_deref() == Some(NO_LENGTHS) { &it.untimed } else { &it.tracks }
+}
+
+/// The folders among a search's answers that hold every track of the list and more audio files besides (X3: a fuller release
+/// for a shorter list, a single's list in an album's folder): a fallback after the folders of the list's own count, each saying
+/// what it takes of it ("Takes 10 of 14 files"). Only the list's files are fetched. Pure.
+fn fuller_folders(answers: &[Answer], tracks: &[Track], failed: &[String]) -> Vec<Folder> {
+    folders_of(answers, tracks, failed)
+        .into_iter()
+        .filter(|f| f.extra > 0)
+        .map(|f| Folder { unchecked: Some(format!("Takes {} of {} files", f.files.len(), f.files.len() + f.extra)), ..f })
+        .collect()
 }
 
 /// After a folder's user failed (`user`): the record's next folder, approved by the same tick, else searched again at
@@ -967,21 +1017,28 @@ where
         }
         match ask(q.clone()).await {
             Ok(a) => {
-                let found = folders_of(&a, &it.tracks, &it.failed);
+                // Folders of the list's own count first (X3): one holding more files is a fallback after every rung.
+                let found: Vec<Folder> = folders_of(&a, &it.tracks, &it.failed).into_iter().filter(|f| f.extra == 0).collect();
                 if !found.is_empty() {
                     tracing::info!(target: "soulseek", record = %record, search = %q, folders = found.len(), "found");
                     return with_item(id, |i| {
                         (i.folders, i.state, i.misses, i.why) = (found.into_iter().take(SHOWN).collect(), State::Found, 0, None);
                     });
                 }
-                if !it.untimed.is_empty() {
-                    heard.extend(a);
-                }
+                heard.extend(a);
             }
             // slskd away says nothing of the record: no miss, or a week's wait would meet it when slskd came back.
             Err(e) if e.is::<Away>() => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
             Err(e) => why = Some(format!("{e:#}")),
         }
+    }
+    // A fuller folder for the list (X3): every track of it there, and more; offered for the tick, saying what it takes of it.
+    let fuller = fuller_folders(&heard, &it.tracks, &it.failed);
+    if !fuller.is_empty() {
+        tracing::info!(target: "soulseek", record = %record, folders = fuller.len(), "found in fuller folders alone");
+        return with_item(id, |i| {
+            (i.folders, i.state, i.misses, i.why) = (fuller.into_iter().take(SHOWN).collect(), State::Found, 0, None);
+        });
     }
     let found = untimed_folders(&heard, &it.untimed, &it.failed);
     if !found.is_empty() {
@@ -1161,7 +1218,10 @@ where
     let mut why = BTreeMap::new();
     for (offered, track) in f.files.iter().zip(release) {
         let name = crate::slskd::base_name(&offered.filename).to_string();
-        let Some(path) = on_disk.iter().find(|p| p.file_name().is_some_and(|n| n.to_string_lossy() == name)).cloned() else {
+        // One disc's file in its disc folder (X3): two discs may name a file alike.
+        let disc = disc_of(&offered.filename);
+        let at = |p: &&PathBuf| p.file_name().is_some_and(|n| n.to_string_lossy() == name) && disc.is_none_or(|d| p.parent().and_then(Path::file_name).is_some_and(|n| n.to_string_lossy() == d));
+        let Some(path) = on_disk.iter().find(at).cloned() else {
             why.insert(name, "It is not in slskd's folder".into());
             continue;
         };
@@ -1239,6 +1299,14 @@ fn place_with(lib: &Path, r: &Record, files: &[PathBuf], expect: impl Fn(&Path) 
     std::fs::create_dir_all(&to).with_context(|| format!("{} cannot be made", to.display()))?;
     for f in files {
         let name = f.file_name().context("no file name")?;
+        // One disc's file goes into its disc folder (X3), as the catalogue reads a release of several.
+        let to = match f.parent().and_then(Path::file_name).map(|d| d.to_string_lossy().into_owned()).filter(|d| is_disc_folder(d)) {
+            Some(disc) => {
+                std::fs::create_dir_all(to.join(&disc)).with_context(|| format!("{} cannot be made", to.join(&disc).display()))?;
+                to.join(disc)
+            }
+            None => to.clone(),
+        };
         let hidden = to.join(format!(".{}.part", name.to_string_lossy()));
         if std::fs::rename(f, &hidden).is_err() {
             std::fs::copy(f, &hidden).with_context(|| format!("copying {}", f.display()))?;
@@ -1829,6 +1897,41 @@ mod tests {
     /// A request's record as `records_of` reads it, had: a record holding its files.
     fn had(n: i64) -> Option<super::super::requests::RecordOf> {
         Some(super::super::requests::RecordOf { holder: Some(n + 1000), holding: super::super::requests::Holding::Done, ..of(n).unwrap() })
+    }
+
+    /// X3: a release split into disc folders under one parent is one candidate, each disc's files from its own folder.
+    #[test]
+    fn disc_folders_under_one_parent_are_one_candidate() {
+        let list = [Track { disc: 1, ..track(1, "One", 100) }, Track { disc: 2, position: 1, ..track(1, "Two", 200) }];
+        let found = folders_of(&[answer("u", true, vec![file(r"x\Air\Moon Safari\CD1\01 One.flac", 100), file(r"x\Air\Moon Safari\CD2\01 Two.flac", 200)])], &list, &[]);
+        assert_eq!(found.iter().map(|f| (f.dir.as_str(), f.files.len())).collect::<Vec<_>>(), [(r"x\Air\Moon Safari", 2)]);
+        assert_eq!(disc_of(r"x\Air\Moon Safari\CD2\01 Two.flac"), Some("CD2"));
+        assert!(is_disc_folder("Disc 1") && is_disc_folder("cd2") && !is_disc_folder("CDs and more"));
+    }
+
+    /// X3: a version word in a file's title that the list's title lacks makes it another version; an "Artist - Title" list is
+    /// compared by its title part, never its artist alone.
+    #[test]
+    fn a_bracketed_version_word_is_another_version() {
+        assert!(!titled_as("01 Pier (Instrumental)", "Pier") && !titled_as("Pier - Live", "Pier") && !titled_as("Pier [Remix]", "Pier"));
+        assert!(titled_as("Pier (Live)", "Pier (Live)") && titled_as("Pier (Remastered)", "Pier"));
+        assert!(titled_as("Pier", "Glass Harbour - Pier") && !titled_as("Glass Harbour - Landing", "Glass Harbour - Pier"));
+        assert!(!titled_as("Glass Harbour", "Glass Harbour - Pier"), "never by the artist alone");
+    }
+
+    /// X3: a folder holding more files than the list is a fallback after folders of the list's own count, saying what it takes.
+    #[tokio::test]
+    async fn a_fuller_folder_is_a_fallback_after_exact_ones() {
+        waiting_with("ss-x3-fuller", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
+        let fuller = answer("big", true, vec![file(r"z\01 One.flac", 100), file(r"z\02 Two.flac", 200), file(r"z\03 Three.flac", 300)]);
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        search_with("ss-x3-fuller", answering(vec![vec![fuller.clone()]], &asked)).await;
+        let i = item("ss-x3-fuller").unwrap();
+        assert_eq!((i.folders[0].user.as_str(), i.folders[0].unchecked.as_deref()), ("big", Some("Takes 2 of 3 files")));
+        assert_eq!(judged_by(&i, &i.folders[0]).len(), 2, "gated by its list with lengths");
+        waiting_with("ss-x3-exact", vec![track(1, "One", 100), track(2, "Two", 200)], Vec::new());
+        search_with("ss-x3-exact", answering(vec![vec![fuller], vec![exact_folder("exact")]], &std::sync::atomic::AtomicUsize::new(0))).await;
+        assert_eq!(item("ss-x3-exact").unwrap().folders.iter().map(|f| f.user.as_str()).collect::<Vec<_>>(), ["exact"], "the exact one, a rung later");
     }
 
     /// X2: an item whose request was taken back goes to another approved request of its record, keeping its tick and folders; with

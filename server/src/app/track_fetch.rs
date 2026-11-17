@@ -612,6 +612,11 @@ where
         return Ok(1.0);
     }
     let found = lookup(print).await.map_err(|e| NotAsked(format!("{e:#}")))?;
+    // AcoustID knowing nothing of the file (X3: a small release with no fingerprints) is judged as with no recording, by its titles
+    // and lengths, which its folder was found by; knowing it as another recording refuses it.
+    if !found.iter().any(|f| !f.recordings.is_empty()) {
+        return Ok(1.0);
+    }
     crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
 }
 
@@ -1462,6 +1467,21 @@ mod tests {
         tag(&file, &neighbour, &t).unwrap();
         let got = super::super::fixes::values(&file, &["tracknumber", "title", "album", "musicbrainz_trackid"]).unwrap();
         assert_eq!(got, [Some("7".to_string()), Some("Bloom".into()), Some("Delight".into()), Some("r7".into())], "the tag a plain number, as Cratarr tags; the name padded as its neighbours");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// X3: AcoustID knowing nothing of a file (no print, or a print it holds no recording for) is judged by titles and lengths, as
+    /// with no recording: a small release with no fingerprints is no wrong file.
+    #[tokio::test]
+    async fn acoustid_knowing_nothing_is_judged_by_titles_and_lengths() {
+        let d = dir("trackfile-unknown");
+        let from = d.join("cratarr/Old drive/06 Bloom.flac");
+        old_flac(&from, "trackfile-unknown");
+        let track = track_of(delight(), "r7", false).unwrap();
+        let nothing = |_| std::future::ready(Ok::<Vec<crate::acoustid::Found>, anyhow::Error>(Vec::new()));
+        assert_eq!(take(&from, &d.join("staging/f1/06 Bloom.flac"), &track, nothing).await.unwrap(), 1.0);
+        let unlinked = |_| std::future::ready(Ok::<Vec<crate::acoustid::Found>, anyhow::Error>(vec![crate::acoustid::Found { score: 0.9, recordings: Vec::new() }]));
+        assert_eq!(take(&from, &d.join("staging/f2/06 Bloom.flac"), &track, unlinked).await.unwrap(), 1.0, "a print it holds no recording for");
         std::fs::remove_dir_all(&d).ok();
     }
 
