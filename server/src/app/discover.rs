@@ -1958,8 +1958,8 @@ pub fn reread_sources() -> Vec<Arc<dyn ArtistList>> {
 
 /// An artist's list at one source read again by the paced re-read (RT01c, `retention`), as a page's is (`read_lists`): in the
 /// source's one turn, so it never runs beside a page's read there, with the same cut once it asks. An error where it failed or
-/// ran past the cut; read, or the source does not know them, Ok.
-pub(crate) async fn reread_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<()> {
+/// ran past the cut; read, whether the source knows them (`read_one`).
+pub(crate) async fn reread_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<bool> {
     let _turn = turn_of(source.source()).acquire_owned().await?;
     match tokio::time::timeout(LIST_READ_AT_MOST, read_one(cat, artist, source)).await {
         Ok(read) => read,
@@ -2042,7 +2042,7 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
             let Ok(_turn) = turn_of(source.source()).acquire_owned().await else { return };
             let at = |done: bool| if done { Reading::Done(super::moment::now_secs()) } else { Reading::Failed(super::moment::now_secs()) };
             settles.1 = Some(match tokio::time::timeout(LIST_READ_AT_MOST, read_one(&cat, &artist, source.as_ref())).await {
-                Ok(Ok(())) => at(true),
+                Ok(Ok(_)) => at(true),
                 Ok(Err(e)) => {
                     tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: {e:#}");
                     at(false)
@@ -2059,10 +2059,10 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
 
 /// One source's list of the artist read and kept (C53a): what it knows them by (where found now), its rows as records not had
 /// credited to them (`keep_listing`: each found by its references first), and when it was read. A source that does not know them
-/// keeps nothing. A list but Bandcamp's sees what it lists, and the artist's records only Bandcamp knows too (RT01): Bandcamp's
-/// own is no longer read whole (O4), so it sees nothing.
-async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<()> {
-    let Some((known, how, listings)) = source.read(artist).await? else { return Ok(()) };
+/// keeps nothing. Each list sees what it lists, Bandcamp's too (Z4); a list but Bandcamp's sees the artist's records only Bandcamp
+/// knows too (RT01), as Bandcamp's own lists only its search box's first answers (O4). Whether the source knows them.
+async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<bool> {
+    let Some((known, how, listings)) = source.read(artist).await? else { return Ok(false) };
     let (cat, id, name) = (cat.clone(), artist.id, artist.name.clone());
     let sees_bandcamp_only = source.source() != "bandcamp";
     tokio::task::spawn_blocking(move || -> Result<()> {
@@ -2072,11 +2072,12 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
         let listings: Vec<crate::catalogue::records::Listing> = listings.into_iter().map(|l| crate::catalogue::records::Listing { artist: name.clone(), ..l }).collect();
         cat.keep_listing(Some(id), &listings, "link")?;
         if sees_bandcamp_only {
-            cat.bandcamp_only_seen(id)?;
+            cat.bandcamp_only_seen(id, super::moment::now_secs())?;
         }
         cat.artist_list_read(id, &known.source)
     })
-    .await?
+    .await??;
+    Ok(true)
 }
 
 /// An artist's records the library has none of (C53a), newest first: the rows kept, at once (`Catalogue::missing_of`: by the one
@@ -2580,25 +2581,28 @@ mod missing_tests {
         assert_eq!(known.iter().filter(|(_, row)| row.read_at.is_some()).count(), 3, "each list read, its time kept: {known:?}");
     }
 
-    /// RT01: Bandcamp's list (O4: its search box's first answers, never read whole) sees nothing: a record only Bandcamp knows is
-    /// not seen when Bandcamp's list makes it nor when it finds it again, but when the artist's MusicBrainz list is read.
+    /// RT01, Z4: Bandcamp's list (O4: its search box's first answers) sees what it lists, as every list an artist page reads does
+    /// (the owner's rule: an artist page's reads refresh what they show): a record only Bandcamp knows is seen when Bandcamp's
+    /// list makes it and when it finds it again; the artist's MusicBrainz list sees it too. Was RT01a's
+    /// `a_bandcamp_list_never_keeps_a_record_seen`, which held that Bandcamp's list sees nothing: Z4 turned that round.
     #[tokio::test]
-    async fn a_bandcamp_list_never_keeps_a_record_seen() {
+    async fn a_bandcamp_list_sees_what_it_lists() {
         const PAGE: &str = "https://kitetheory.bandcamp.com/album/night-walks";
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let artist = cat.artist_for("Kite Theory").unwrap();
         let bandcamp: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Stub("bandcamp", |_| {
             Ok(Some((Ref::new("bandcamp", "artist", "https://kitetheory.bandcamp.com"), Some("search"), vec![listing("Night Walks", &[("bandcamp", "album", PAGE)])])))
         }))];
+        let read_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
         let listed = settled(&cat, artist, &bandcamp).await;
         let record = crate::serve::ids::record_number(&listed[0].record).unwrap();
         let seen_at = || cat.db_for_tests().query_row("SELECT seen_at FROM records WHERE id = ?1", [record], |r| r.get::<_, Option<i64>>(0)).unwrap();
-        assert_eq!(seen_at(), None, "made by Bandcamp's list: not seen");
+        assert!(seen_at().is_some_and(|at| at >= read_at), "made by Bandcamp's list: seen");
         cat.db_for_tests().execute("UPDATE records SET seen_at = 5 WHERE id = ?1", [record]).unwrap();
         let again = Listing { artist: "Kite Theory".into(), ..listing("Night Walks", &[("bandcamp", "album", PAGE)]) };
         assert_eq!(cat.keep_listing(Some(artist), &[again], "link").unwrap(), [record], "found again");
-        assert_eq!(seen_at(), Some(5), "nor found again by it");
-        let read_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        assert!(seen_at().is_some_and(|at| at >= read_at), "and found again by it: seen again");
+        cat.db_for_tests().execute("UPDATE records SET seen_at = 5 WHERE id = ?1", [record]).unwrap();
         let musicbrainz: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Stub("musicbrainz", |_| {
             Ok(Some((Ref::new("musicbrainz", "artist", "00000000-0000-4000-8000-000000000271"), Some("search"), vec![listing("Paper Kites", &[("musicbrainz", "release-group", GROUP_2)])])))
         }))];

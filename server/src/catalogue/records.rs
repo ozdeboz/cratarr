@@ -116,8 +116,7 @@ pub struct Listing {
 
 /// `Catalogue::keep_listing` in the caller's transaction, found at `at`. A record it makes, and one it finds that no artist is
 /// credited on (Z3), is credited to `artist`. Each record it finds or makes is seen at `seen` (RT01), never earlier than it was,
-/// but by a listing only Bandcamp's references are on; none for a list read before 0.17 (0.17's step), whose clock starts at the
-/// first forgetting.
+/// Bandcamp's listings too (Z4); none for a list read before 0.17 (0.17's step), whose clock starts at the first forgetting.
 pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64, seen: Option<i64>) -> Result<Vec<i64>> {
     let mut out = Vec::with_capacity(list.len());
     for l in list {
@@ -148,10 +147,9 @@ pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[List
         for r in &l.refs {
             put_reference(tx, &ids::record(record), r, how, at, false)?;
         }
-        // Bandcamp's list is no longer read whole (O4: its search box's first answers), so a record only it knows is seen by the
-        // artist's other lists (`Catalogue::bandcamp_only_seen`). A listing with no reference (a Want's) sees its record.
-        let sees = l.refs.is_empty() || l.refs.iter().any(|r| r.source != "bandcamp");
-        if let Some(seen) = seen.filter(|_| sees) {
+        // Seen by the list that names it, Bandcamp's too (Z4, the owner's rule: an artist page's reads refresh what they show),
+        // though it lists only its search box's first answers (O4); a listing with no reference (a Want's) as well.
+        if let Some(seen) = seen {
             tx.prepare_cached(SEEN)?.execute(params![record, seen])?;
         }
         out.push(record);
@@ -2546,7 +2544,7 @@ const UNKEPT: &str = "n.merged_into IS NULL
        AND n.id NOT IN (SELECT record FROM album_moved)
        AND n.id NOT IN (SELECT record FROM shared_name_records)";
 /// The records the forgetting takes of those nothing keeps (`UNKEPT`, RT01), `?1` the first pass (`RETENTION_FROM`), `?2` six
-/// months ago: neither seen nor opened since `?2`. One never seen (from before 0.17, or made by Bandcamp's list alone) counts
+/// months ago: neither seen nor opened since `?2`. One never seen (from before 0.17, or kept by 0.17's step from its lists) counts
 /// from when it was made or from the first pass, the later.
 const FORGETTABLE: &str = "COALESCE(n.seen_at, max(n.born, ?1)) < ?2
        AND COALESCE(n.opened_at, 0) < ?2";
@@ -2607,14 +2605,16 @@ fn library_artists_in(db: &Connection) -> Result<Vec<i64>> {
 }
 
 impl Catalogue {
-    /// An artist's list read now at a source other than Bandcamp (RT01): their records only Bandcamp knows, or no source, seen
-    /// now too, as Bandcamp's own list, no longer read whole (O4), sees nothing (`keep_listing_in`). Blocking.
-    pub fn bandcamp_only_seen(&self, artist: i64) -> Result<()> {
+    /// An artist's records only Bandcamp knows, or no source, seen at `at` (RT01), never earlier than they were: where a list of
+    /// theirs other than Bandcamp's is read (`discover::read_one`), as Bandcamp's own lists only its search box's first answers
+    /// (O4); and where the paced re-read finds that neither MusicBrainz nor Discogs knows a library artist (Z4), as it never reads
+    /// Bandcamp's. Blocking.
+    pub fn bandcamp_only_seen(&self, artist: i64, at: i64) -> Result<()> {
         self.db().execute(
             "UPDATE records SET seen_at = max(COALESCE(seen_at, 0), ?2)
              WHERE id IN (SELECT record FROM record_artists WHERE artist = ?1)
                AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || records.id AND f.source <> 'bandcamp')",
-            params![artist, now()],
+            params![artist, at],
         )?;
         Ok(())
     }
@@ -3552,7 +3552,7 @@ mod tests {
         for kept in [had, recent, opened, before] {
             assert!(cat.record(kept).unwrap().is_some() && cat.forgotten_at(&ids::record(kept)).unwrap().is_none(), "{kept} kept");
         }
-        // Made a month after the first pass, never seen (as by Bandcamp's list alone).
+        // Made a month after the first pass, never seen.
         let since = unseen_for(&cat, "Open Water", None);
         cat.db().execute("UPDATE records SET born = ?2 WHERE id = ?1", params![since, NOW + MONTH]).unwrap();
         assert!(since > stale, "its id never given again");

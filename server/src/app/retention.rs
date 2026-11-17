@@ -13,10 +13,12 @@
 //!   (`Catalogue::forget_quiet_artists`), and by a track's credit, anything the user data names them in (a favourite, plays, a
 //!   rating, words) and the stores in the data folder (every account's crates, their seeds and conditions; the queues):
 //!   `protected_artists`.
-//! - **Seen** is a list read: MusicBrainz's or Discogs' sees what it lists (`Catalogue::keep_listing`) and the artist's records
-//!   only Bandcamp knows (`Catalogue::bandcamp_only_seen`); Bandcamp's, no longer read whole (O4), sees nothing. A page showing
-//!   a record sees nothing; opening it does (C54). The paced re-read (`reread`) comes to each library artist once a month; a
-//!   list it cannot read (an outage, a switch, a pause) keeps that artist's records not had seen instead.
+//! - **Seen** is a list read: each sees what it lists (`Catalogue::keep_listing`), Bandcamp's too (Z4, the owner's rule: an
+//!   artist page's reads refresh what they show), and MusicBrainz's or Discogs' the artist's records only Bandcamp knows
+//!   (`Catalogue::bandcamp_only_seen`), as Bandcamp's lists only its search box's first answers (O4). A page showing a record sees
+//!   nothing; opening it does (C54). The paced re-read (`reread`) comes to each library artist once a month, never to Bandcamp's
+//!   list: a library artist neither MusicBrainz nor Discogs knows has their records only Bandcamp knows seen instead (Z4); a list
+//!   it cannot read (an outage, a switch, a pause) keeps that artist's records not had seen instead.
 //! - **Once a day:** looked at hourly, run where the catalogue's note says the last pass is a day old or more (`pass`), so a
 //!   restart does not run it again.
 
@@ -93,8 +95,10 @@ pub struct Passed {
 /// (`Catalogue::rereads_due`), one artist at a time, each due source in turn, behind any page's question to MusicBrainz
 /// (`musicbrainz::behind`) and in the source's one turn (`discover::reread_one`). A list it cannot read (the read fails or runs
 /// past the cut, the source is switched off or not among `sources`, the background is paused) keeps the artist's records not
-/// had seen at `now` instead, so an outage, a switch or a pause never makes an album forgotten. Each is come to again a month
-/// later, whatever came of it. One re-read at a time in the process.
+/// had seen at `now` instead, so an outage, a switch or a pause never makes an album forgotten. A library artist that the lists
+/// read now do not know (Z4: one only Bandcamp knows, whose list it never reads) has their records only Bandcamp knows seen at
+/// `now`, as a list that knows them sees them (`discover::read_one`). Each is come to again a month later, whatever came of it.
+/// One re-read at a time in the process.
 async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: fn() -> bool, now: i64) -> Result<Reread> {
     static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _one = ONE.lock().await;
@@ -105,11 +109,20 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
         let c = cat.clone();
         let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { continue };
         let asked = ArtistAsked { id: artist, name, refs: refs.into_iter().map(|(r, _)| r).collect() };
+        // Whether a list read now knew them, and whether one did not (Z4).
+        let (mut known, mut unknown) = (false, false);
         for source in due_at {
             let readable = sources.iter().find(|s| s.source() == source).filter(|s| s.on() && !paused());
             let read = match readable {
                 Some(s) => match super::musicbrainz::behind(super::discover::reread_one(cat, &asked, s.as_ref())).await {
-                    Ok(()) => true,
+                    Ok(true) => {
+                        known = true;
+                        true
+                    }
+                    Ok(false) => {
+                        unknown = true;
+                        true
+                    }
                     Err(e) => {
                         tracing::info!(target: "discover", artist, source, "an artist's list not read again: {e:#}");
                         false
@@ -126,6 +139,12 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
             })
             .await??;
             if read { done.read.push((artist, source)) } else { done.kept_seen.push((artist, source)) }
+        }
+        // Z4: no list read now knows them: their records only Bandcamp knows (or no source) seen all the same, so a library artist
+        // only Bandcamp knows keeps what their page's Bandcamp list showed. One a list knows had them seen by it.
+        if unknown && !known {
+            let c = cat.clone();
+            tokio::task::spawn_blocking(move || c.bandcamp_only_seen(artist, now)).await??;
         }
     }
     Ok(done)
@@ -492,6 +511,27 @@ mod tests {
         assert_eq!(seen, Some(NOW), "seen at the pass's now");
         pass_reading(served.clone(), NOW + DAY, &sources, || false).await.unwrap().expect("due");
         assert_eq!(musicbrainz.asked.lock().unwrap().len(), 1, "come to again a month later, not the next day");
+    }
+
+    /// Z4: a library artist neither MusicBrainz nor Discogs knows (one only Bandcamp knows, whose list the re-read never reads):
+    /// both read, their record only Bandcamp knows is seen at the pass's now and stays; their record Discogs names, which no list
+    /// showed, goes.
+    #[tokio::test]
+    async fn a_library_artists_bandcamp_only_records_stay() {
+        use crate::catalogue::records::{Listing, Ref};
+        let served = served(None, 91_000);
+        let cat = served.catalogue().clone();
+        let artist = library_artists(&cat, 1)[0];
+        let listing = |title: &str, r: Ref| Listing { title: title.into(), kind: Some("album".into()), refs: vec![r], ..Default::default() };
+        let kept = cat.keep_listing(Some(artist), &[listing("Night Walks", Ref::new("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks"))], "link").unwrap()[0];
+        let gone = cat.keep_listing(Some(artist), &[listing("Paper Kites", Ref::new("discogs", "master", "3001"))], "link").unwrap()[0];
+        cat.db_for_tests().execute("UPDATE records SET seen_at = ?1 WHERE id IN (?2, ?3)", rusqlite::params![NOW - 7 * MONTH, kept, gone]).unwrap();
+        let sources: Vec<Arc<dyn ArtistList>> = vec![stub("musicbrainz", false), stub("discogs", false)];
+        let done = pass_reading(served.clone(), NOW, &sources, || false).await.unwrap().expect("due");
+        assert_eq!(done.reread.read, [(artist, "musicbrainz"), (artist, "discogs")], "both read: neither knows them");
+        assert_eq!(done.records, [gone], "the record only Bandcamp knows stays");
+        let seen: Option<i64> = cat.db_for_tests().query_row("SELECT seen_at FROM records WHERE id = ?1", [kept], |r| r.get(0)).unwrap();
+        assert_eq!(seen, Some(NOW), "seen at the pass's now");
     }
 
     /// RT01c: with the background paused, the re-read reads nothing, and keeps the artist's records not had seen instead.
