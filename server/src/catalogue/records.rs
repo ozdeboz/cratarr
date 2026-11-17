@@ -821,12 +821,13 @@ fn an_album(refs: &[(String, String, String)], had: bool) -> bool {
     had || refs.iter().any(|(s, k, _)| s == "musicbrainz" && (k == "release-group" || k == "release"))
 }
 
-/// Whether a record's kind is a single's (U2): none where no kind is known (a record the files made, a Want's).
+/// Whether a record's kind is a single's (U2): none where no kind is known (a Want's; a record the files made is classed by them,
+/// `singles_of`).
 fn single_kind(kind: Option<&str>) -> Option<bool> {
     kind.map(|k| k.trim().eq_ignore_ascii_case("single"))
 }
 
-/// A record as `albums_of` counts it: its id, its references, whether it is had, and whether its kind is a single's (`single_kind`).
+/// A record as `albums_of` counts it: its id, its references, whether it is had, and whether it is a single (`singles_of`).
 type Counted<'r> = (i64, &'r [(String, String, String)], bool, Option<bool>);
 
 /// The albums of one name as a record of one kind class counts them (`albums_of`).
@@ -857,8 +858,9 @@ impl Albums {
 ///   neither, one of its own (Y1: two untagged copies are two albums); one not had holding neither (a Bandcamp or Discogs list's,
 ///   a request's) none of its own (`an_album`, V3), left out;
 /// - of one kind class (U2): an album its records' kinds say is a single is no other album of an album's name, nor an album a
-///   single's. An album whose records say no kind (an owned album the files made) is of the class asked, but where the name
-///   holds an album of the other class too it may be either (`unsure`);
+///   single's. A had record of no kind (an owned album the files made) is what its own files make it by the release type rule
+///   (T10, `singles_of`). An album whose records say no kind still (one the rule cannot place, its lengths not read yet) is of the
+///   class asked, but where the name holds an album of the other class too it may be either (`unsure`);
 /// - of two albums left, one had and one not, the one not had is the had one's where no record of it contradicts a had record of
 ///   it (U2): the had record already holds it by its names, as the had rule's names clause has it, so a list's record of the
 ///   name beside it is one album's, not a third. `contradicts` so says two only between a had record and one not had, never
@@ -909,14 +911,46 @@ fn albums_of(records: &[Counted], single: bool) -> Albums {
     }
 }
 
-/// These records' kinds as `single_kind` reads them, by record, in one query.
+/// Whether each of these records is a single, by record: as its kind says (`single_kind`); a had record of no kind (one the files
+/// made, as every had record on production is) by its own files, with the release type rule itself (T10, `library::single_by_rule`):
+/// its title, and its live tracks' lengths as their files read them. None where no kind is said and the rule cannot place it (a
+/// record not had; a short one whose lengths are not read yet). In two queries.
 fn singles_of(db: &Connection, records: &[i64]) -> Result<std::collections::HashMap<i64, Option<bool>>> {
     if records.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
-    let mut st = db.prepare(&format!("SELECT id, kind FROM records WHERE id IN ({})", id_list(records)))?;
-    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, single_kind(r.get::<_, Option<String>>(1)?.as_deref()))))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    let mut st = db.prepare(&format!("SELECT id, kind, COALESCE(title, '') FROM records WHERE id IN ({})", id_list(records)))?;
+    let rows: Vec<(i64, Option<String>, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    let lengths = lengths_of(db, &rows.iter().filter(|(_, kind, _)| kind.is_none()).map(|(id, ..)| *id).collect::<Vec<_>>())?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, kind, title)| match kind {
+            Some(k) => (id, single_kind(Some(k.as_str()))),
+            None => (id, lengths.get(&id).and_then(|l| crate::serve::library::single_by_rule(&title, l))),
+        })
+        .collect())
+}
+
+/// The live tracks of these records where the record is live and had (each track as `live_had_of` has one hold its record), each
+/// its length as its files read it (none not read yet), by record, in one query.
+fn lengths_of(db: &Connection, records: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Option<u64>>>> {
+    let mut out: std::collections::HashMap<i64, Vec<Option<u64>>> = std::collections::HashMap::new();
+    if records.is_empty() {
+        return Ok(out);
+    }
+    let sql = format!(
+        "SELECT t.record, (SELECT max(f.duration_ms) FROM files f WHERE f.track = t.id AND f.trashed IS NULL AND f.duration_ms > 0)
+         FROM tracks t JOIN records r ON r.id = t.record
+         WHERE t.record IN ({}) AND r.merged_into IS NULL AND r.retired_at IS NULL AND t.retired_at IS NULL
+           AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))",
+        id_list(records)
+    );
+    let mut st = db.prepare(&sql)?;
+    for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)))? {
+        let (record, ms) = row?;
+        out.entry(record).or_default().push(ms.map(|m| m.max(0) as u64));
+    }
+    Ok(out)
 }
 
 /// Which record holds each record's files (R13, the one rule for "had": a request's record's, an artist's list's, C53a), each
@@ -3481,8 +3515,9 @@ mod tests {
         assert_eq!(cat.record_for_request(&Wanted { artist: "Glass Harbour".into(), title: "Two Rooms".into(), ..Wanted::default() }).unwrap(), owned);
     }
 
-    /// U2: an untagged owned record beside an album and a single of its name that MusicBrainz lists may be either: it holds neither
-    /// by its names, and a request by the names alone is a clash, as before the kind class was counted.
+    /// U2: an untagged owned record beside an album and a single of its name that MusicBrainz lists may be either where the release
+    /// type rule cannot place it (two tracks, their lengths not read: T10): it holds neither by its names, and a request by the names
+    /// alone is a clash, as before the kind class was counted.
     #[test]
     fn an_untagged_record_beside_an_album_and_a_single_of_its_name_holds_neither() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
@@ -3499,6 +3534,168 @@ mod tests {
         assert_eq!((read[&album].holder, read[&single].holder), (None, None));
         let asked = cat.record_for_request(&Wanted { artist: "Glass Harbour".into(), title: "Two Rooms".into(), ..Wanted::default() }).unwrap();
         assert!(![owned, album, single].contains(&asked), "a clash of names");
+    }
+
+    /// A had record of no kind (one the files made, as every had record on production is), titled `title`: a track for each of
+    /// `lengths`, each a file read that long (ms; none, not read yet).
+    fn untyped(cat: &Catalogue, title: &str, lengths: &[Option<i64>]) -> i64 {
+        let record = cat.record_for_tests(title, lengths.len());
+        cat.copy_for_tests(record, 0);
+        let db = cat.db();
+        let tracks: Vec<i64> = db.prepare("SELECT id FROM tracks WHERE record = ?1 ORDER BY number").unwrap().query_map([record], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        for (track, ms) in tracks.iter().zip(lengths) {
+            db.execute("UPDATE files SET duration_ms = ?2 WHERE track = ?1", params![track, ms]).unwrap();
+        }
+        record
+    }
+
+    /// Minutes as a file's length is read (ms).
+    fn minutes(m: f64) -> Option<i64> {
+        Some((m * 60_000.0) as i64)
+    }
+
+    /// A record not had of `title` that a list made, of `kind` (none: a list that says none, Bandcamp's), holding `refs`.
+    fn not_had(cat: &Catalogue, title: &str, kind: Option<&str>, refs: &[(&str, &str, &str)]) -> i64 {
+        let r = cat.record_for_tests(title, 0);
+        cat.db().execute("UPDATE records SET kind = ?2 WHERE id = ?1", params![r, kind]).unwrap();
+        for (s, k, v) in refs {
+            assert!(cat.set_reference(&ids::record(r), &Ref::new(s, k, v), "link").unwrap());
+        }
+        r
+    }
+
+    /// The albums of a name's records as the had rule counts them (`albums_of`) for a record of the class `single`, each record read
+    /// as the had rule reads it (`singles_of` among them).
+    fn counted(cat: &Catalogue, named: &[i64], single: bool) -> Albums {
+        let db = cat.db();
+        let (refs, had, kinds, none) = (refs_of(&db, named).unwrap(), live_had_of(&db, named).unwrap(), singles_of(&db, named).unwrap(), Vec::new());
+        let records: Vec<Counted> = named.iter().map(|id| (*id, refs.get(id).unwrap_or(&none).as_slice(), had.contains(id), kinds.get(id).copied().flatten())).collect();
+        albums_of(&records, single)
+    }
+
+    /// Each album's records, in id order.
+    fn sorted(albums: &Albums) -> Vec<Vec<i64>> {
+        albums
+            .of
+            .iter()
+            .map(|a| {
+                let mut a = a.clone();
+                a.sort_unstable();
+                a
+            })
+            .collect()
+    }
+
+    /// T10.1 (run 10's review, finding 10): an untagged owned album (no kind, ten tracks, 48 minutes) beside the album MusicBrainz's
+    /// discography lists of its name (D, its group), the single of its title track (S, kind single, its own group), and the records
+    /// Bandcamp's (B) and Discogs' (L) lists made of it, neither with a group: by the release type rule it is an album, so it counts
+    /// once and is never either class's; B, D and L are its album's and read had; S stays apart, not had.
+    #[test]
+    fn an_untagged_owned_album_beside_its_title_single_holds_its_list_records() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let owned = untyped(&cat, "Two Rooms", &[minutes(4.8); 10]);
+        let discography = not_had(&cat, "Two Rooms", Some("album"), &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000001001")]);
+        let single = not_had(&cat, "Two Rooms", Some("single"), &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000001002")]);
+        let bandcamp = not_had(&cat, "Two Rooms", None, &[("bandcamp", "album", "https://glassharbour.bandcamp.com/album/two-rooms")]);
+        let discogs = not_had(&cat, "Two Rooms", Some("album"), &[("discogs", "master", "4001")]);
+        let all = [owned, discography, single, bandcamp, discogs];
+        let albums = counted(&cat, &all, false);
+        assert_eq!((sorted(&albums), albums.unsure.len()), (vec![vec![owned, discography]], 0), "one album, the owned one counted once");
+        assert_eq!([albums.apart(bandcamp), albums.apart(discography), albums.apart(discogs)], [1, 0, 1], "B and L beside one album, D in it");
+        let singles = counted(&cat, &all, true);
+        assert_eq!((sorted(&singles), singles.unsure.len()), (vec![vec![single]], 0), "the single apart; the owned album not of its class");
+        let read = cat.requested(&[bandcamp, discography, discogs, single]).unwrap();
+        assert_eq!([read[&bandcamp].holder, read[&discography].holder, read[&discogs].holder], [Some(owned); 3], "B, D and L had");
+        assert_eq!(read[&single].holder, None, "the single not had");
+    }
+
+    /// T10.2: the owned record untagged, two tracks of eight minutes in all: a single by the rule. It and S are one single, so S
+    /// reads had; the album D and the lists' records B and L read missing.
+    #[test]
+    fn an_untagged_owned_single_holds_the_single() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let owned = untyped(&cat, "Two Rooms", &[minutes(4.0); 2]);
+        let discography = not_had(&cat, "Two Rooms", Some("album"), &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000001003")]);
+        let single = not_had(&cat, "Two Rooms", Some("single"), &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000001004")]);
+        let bandcamp = not_had(&cat, "Two Rooms", None, &[("bandcamp", "album", "https://glassharbour.bandcamp.com/album/two-rooms")]);
+        let discogs = not_had(&cat, "Two Rooms", Some("album"), &[("discogs", "master", "4002")]);
+        let all = [owned, discography, single, bandcamp, discogs];
+        let singles = counted(&cat, &all, true);
+        assert_eq!((sorted(&singles), singles.unsure.len()), (vec![vec![owned, single]], 0), "the owned single and S one, counted once");
+        let albums = counted(&cat, &all, false);
+        assert_eq!((sorted(&albums), albums.unsure.len()), (vec![vec![discography]], 0), "the owned single is no album of the name");
+        let read = cat.requested(&[bandcamp, discography, discogs, single]).unwrap();
+        assert_eq!(read[&single].holder, Some(owned), "the single had");
+        assert_eq!([read[&bandcamp].holder, read[&discography].holder, read[&discogs].holder], [None; 3], "B, D and L missing");
+    }
+
+    /// T10.3: the rule's edges, by the rule itself (`library::single_by_rule`, on `release_type_of`), never a second classifier. An
+    /// untagged owned record of five tracks and 20 minutes is an EP; of two and 16 minutes, an EP; named "... EP" with two short
+    /// tracks, an EP: none a single, so beside an album and a single of its name each counts once and holds the album. Two tracks
+    /// whose lengths are not read yet the rule cannot place: it may be either class (`unsure`), as before, and holds nothing.
+    #[test]
+    fn the_untagged_record_is_classed_by_the_release_type_rule() {
+        let cases: [(&str, Vec<Option<i64>>, Option<bool>); 4] = [
+            ("Two Rooms", vec![minutes(4.0); 5], Some(false)),
+            ("Two Rooms", vec![minutes(8.0); 2], Some(false)),
+            ("Two Rooms EP", vec![minutes(4.0); 2], Some(false)),
+            ("Two Rooms", vec![None; 2], None),
+        ];
+        for (n, (title, lengths, single)) in cases.into_iter().enumerate() {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let owned = untyped(&cat, title, &lengths);
+            let discography = not_had(&cat, title, Some("album"), &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000001011")]);
+            let listed_single = not_had(&cat, title, Some("single"), &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000001012")]);
+            assert_eq!(singles_of(&cat.db(), &[owned]).unwrap()[&owned], single, "case {n}: as the rule places it");
+            let albums = counted(&cat, &[owned, discography, listed_single], false);
+            let placed = single.is_some();
+            assert_eq!(albums.unsure.is_empty(), placed, "case {n}: unsure only where the rule cannot place it");
+            assert_eq!(albums.apart(0), if placed { 1 } else { 3 }, "case {n}: one album, or the owned one counted twice beside the album");
+            assert_eq!(cat.requested(&[discography]).unwrap()[&discography].holder, placed.then_some(owned), "case {n}: the album held where placed");
+        }
+        // The rule itself, not a copy: the had rule asks the library's, and that is the rule every build types albums by.
+        let records = include_str!("records.rs").replace("\r\n", "\n");
+        let at = records.find("fn singles_of(").unwrap();
+        let body = &records[at..at + records[at..].find("\n}\n").unwrap()];
+        assert!(body.contains("crate::serve::library::single_by_rule("), "{body}");
+        let library = include_str!("../serve/library.rs").replace("\r\n", "\n");
+        let at = library.find("pub fn single_by_rule(").unwrap();
+        let rule = &library[at..at + library[at..].find("\n}\n").unwrap()];
+        assert!(rule.contains("release_type_of(None, None, &shape)"), "{rule}");
+    }
+
+    /// T10.4, the census's 156 (production's shape): a had album, untagged and of ten tracks, shadowed by the record of its name that
+    /// MusicBrainz's discography made (D, its group). 1. By the rule an album: it and D are one album, D reads had and is off its
+    /// artist's missing list. 2. An EP of the name listed too (E): three albums of one class (an EP is no single), and U2 joins none
+    /// of three, so D and E read missing. 3. The owned record a two-track single by the rule: it holds neither, and both read missing.
+    /// Never merged by the name, and the owned record never counted twice, by either class.
+    #[test]
+    fn an_untagged_had_album_holds_the_not_had_record_of_its_name() {
+        for case in 1..=3 {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let artist = cat.artist_for("Glass Harbour").unwrap();
+            let owned = if case == 3 { untyped(&cat, "Two Rooms", &[minutes(4.0); 2]) } else { untyped(&cat, "Two Rooms", &[minutes(4.5); 10]) };
+            let listed = |kind: &str, group: &str| {
+                let l = Listing { title: "Two Rooms".into(), artist: "Glass Harbour".into(), kind: Some(kind.into()), refs: vec![Ref::new("musicbrainz", "release-group", group)], ..Listing::default() };
+                cat.keep_listing(Some(artist), &[l], "link").unwrap()[0]
+            };
+            let discography = listed("album", "00000000-0000-4000-8000-000000001021");
+            let ep = (case > 1).then(|| listed("ep", "00000000-0000-4000-8000-000000001022"));
+            let named: Vec<i64> = [owned, discography].into_iter().chain(ep).collect();
+            for single in [false, true] {
+                assert!(counted(&cat, &named, single).unsure.is_empty(), "case {case}, single {single}: the owned record never counted twice");
+            }
+            let missing: Vec<i64> = cat.missing_of(artist).unwrap().iter().map(|q| q.row.id).collect();
+            let holder = cat.requested(&[discography]).unwrap()[&discography].holder;
+            if case == 1 {
+                assert_eq!(sorted(&counted(&cat, &named, false)), [vec![owned, discography]], "one album, listed once");
+                assert_eq!((holder, missing), (Some(owned), Vec::new()), "D had, not missing beside the owned album");
+            } else {
+                assert_eq!((holder, missing), (None, [Some(discography), ep].into_iter().flatten().collect::<Vec<_>>()), "case {case}: D and E missing");
+            }
+            let merged: i64 = cat.db().query_row("SELECT count(*) FROM records WHERE merged_into IS NOT NULL", [], |r| r.get(0)).unwrap();
+            assert_eq!(merged, 0, "case {case}: nothing merged by the name");
+        }
     }
 
     /// V3: two albums of one name, each of its own release group (Orbital's 1991 album owned, its 1993 one a discography's), are two

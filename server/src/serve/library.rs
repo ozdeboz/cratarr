@@ -282,6 +282,23 @@ pub fn type_by_rule(album: &mut crate::source::Album) {
     album.release.secondary = secondary;
 }
 
+/// Whether a record is a single by the owner's rule (`release_type_of`), nothing said of it: its name, and each of its tracks'
+/// length where its files' was read (T10: a had record of no kind, classed by its own files). None where the rule cannot say:
+/// its answer hangs on a length not read yet (a short record whose files the walker has not read), or it has no tracks.
+pub fn single_by_rule(name: &str, lengths: &[Option<u64>]) -> Option<bool> {
+    if lengths.is_empty() {
+        return None;
+    }
+    // The rule with each length not read the shortest it could be, and the longest: placed where the two agree.
+    let single = |unread: u64| {
+        let ms = || lengths.iter().map(|l| l.unwrap_or(unread));
+        let shape = Shape { tracks: lengths.len(), duration_ms: ms().fold(0, u64::saturating_add), longest_ms: ms().max().unwrap_or(0), name, various: false };
+        release_type_of(None, None, &shape).0.as_deref() == Some("single")
+    };
+    let (shortest, longest) = (single(0), single(u64::MAX));
+    (shortest == longest).then_some(shortest)
+}
+
 /// The type an album's name gives: its last word "EP" an EP, "LP" an album (any case).
 fn named(name: &str) -> Option<&'static str> {
     name.split(|c: char| !c.is_alphanumeric()).rev().find_map(|w| match w.to_ascii_lowercase().as_str() {
