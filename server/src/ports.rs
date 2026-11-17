@@ -25,6 +25,13 @@ pub trait Files: Send + Sync {
     fn move_back(&self, plan: &[crate::moves::Step]) -> Result<()>;
     /// Take away what a `move_all` stopped before any file arrived left at its targets.
     fn clear_parts(&self, plan: &[crate::moves::Step]);
+    /// Copy files between Cratarr's folders, all or none, nothing overwritten, safe to repeat (Copy to, C38): which copies share
+    /// the original's blocks, in the plan's order.
+    #[allow(dead_code)] // Copy to's action (C40) is its first caller.
+    fn copy_all(&self, plan: &[crate::moves::Step]) -> Result<Vec<bool>>;
+    /// Whether a copy from folder `from` into folder `to` shares its blocks: tried once, and kept. Read by the room count (AL01).
+    #[allow(dead_code)]
+    fn shares(&self, from: &Path, to: &Path) -> bool;
 }
 
 /// The disk itself.
@@ -57,6 +64,14 @@ impl Files for Disk {
 
     fn clear_parts(&self, plan: &[crate::moves::Step]) {
         crate::moves::clear_parts(plan)
+    }
+
+    fn copy_all(&self, plan: &[crate::moves::Step]) -> Result<Vec<bool>> {
+        crate::moves::copy(plan)
+    }
+
+    fn shares(&self, from: &Path, to: &Path) -> bool {
+        crate::moves::shares(from, to)
     }
 }
 

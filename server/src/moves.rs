@@ -1,6 +1,8 @@
 //! Moving an album's files between Cratarr's folders (Keep and Replace, decision 0013): every file of a plan goes, or
 //! none does. A rename where the two folders share a file system (instant); a copy then delete where they do not.
-//! Folders left empty behind are removed, up to the folder's root. Blocking file operations.
+//! Folders left empty behind are removed, up to the folder's root. Copying one (Copy to, C38): every file of a plan is
+//! copied, or none is, each by the kernel's copy (`copy_file_range`, which btrfs makes a copy sharing the original's blocks,
+//! across bind mounts of one file system too, where FICLONE answers EXDEV), else byte by byte. Blocking file operations.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -218,6 +220,164 @@ fn copy_across(from: &Path, to: &Path, remove: impl FnOnce(&Path) -> std::io::Re
     })
 }
 
+/// Copy every file of the plan (C38, Copy to): all or none. Each comes through a hidden name (`part_of`) and is renamed into
+/// place, its modification time the original's, so the walker reads nothing new. Nothing is overwritten: a target there already
+/// holding the original's bytes is a step done (a plan cut short, tried again), any other refuses the plan before a file is
+/// copied. A copy that fails takes away what this made, folders too. Which copies share the original's blocks (`shared`), in the
+/// plan's order. Blocking.
+pub fn copy(plan: &[Step]) -> Result<Vec<bool>> {
+    let all: Vec<(PathBuf, PathBuf)> = plan.iter().map(|s| Ok((full(&s.from)?, full(&s.to)?))).collect::<Result<_>>()?;
+    let mut todo = Vec::new();
+    for (from, to) in &all {
+        if !from.is_file() {
+            bail!("{} is not there", from.display());
+        }
+        if to.exists() {
+            if to.is_file() && same_bytes(from, to)? {
+                continue;
+            }
+            bail!("{} exists already; not overwriting it", to.display());
+        }
+        todo.push((from, to));
+    }
+    let mut made: Vec<&PathBuf> = Vec::new();
+    for (from, to) in todo {
+        if let Err(e) = clone_file(from, to) {
+            for to in made {
+                std::fs::remove_file(to).ok();
+            }
+            for s in plan {
+                prune_empty(&s.to.0, &s.to.1);
+            }
+            return Err(e);
+        }
+        made.push(to);
+    }
+    Ok(all.iter().map(|(_, to)| shared(to)).collect())
+}
+
+/// One file copied (C38): by the kernel's copy where it can (`std::fs::copy` asks for `copy_file_range` first: btrfs shares the
+/// blocks), else byte by byte, into a hidden name beside its target, made sure of on disk, its modification time the original's,
+/// then renamed into place. Its folders made like their neighbours. On any error what this made goes. Whether it shares the
+/// original's blocks, as the file system says (`shared`). Blocking.
+pub fn clone_file(from: &Path, to: &Path) -> Result<bool> {
+    create_dirs_like_parent(to.parent().context("target has no folder")?)?;
+    let part = part_of(to);
+    let placed = (|| -> Result<()> {
+        std::fs::copy(from, &part).with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+        let at = std::fs::metadata(from)?.modified()?;
+        let file = std::fs::OpenOptions::new().write(true).open(&part)?;
+        file.set_modified(at)?;
+        file.sync_all()?;
+        Ok(std::fs::rename(&part, to)?)
+    })();
+    if let Err(e) = placed {
+        std::fs::remove_file(&part).ok();
+        return Err(e);
+    }
+    Ok(shared(to))
+}
+
+/// Whether every block of a file is shared with another file (C38), as the file system says (Linux's FIEMAP, its extents' shared
+/// flag): a copy btrfs cloned. False where it cannot say: an empty file, another system, a file system that keeps no such flag.
+pub fn shared(path: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        fiemap::all_shared(path).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Linux's FIEMAP read for its extents' shared flag (`linux/fiemap.h`), the structures as the kernel lays them out.
+#[cfg(target_os = "linux")]
+mod fiemap {
+    use std::os::fd::AsRawFd;
+
+    const EXTENTS: usize = 64;
+    /// `_IOWR('f', 11, struct fiemap)`.
+    const FS_IOC_FIEMAP: u32 = 0xC020_660B;
+    const FIEMAP_FLAG_SYNC: u32 = 0x1;
+    const FIEMAP_EXTENT_LAST: u32 = 0x1;
+    const FIEMAP_EXTENT_SHARED: u32 = 0x2000;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct Extent {
+        logical: u64,
+        physical: u64,
+        length: u64,
+        reserved64: [u64; 2],
+        flags: u32,
+        reserved: [u32; 3],
+    }
+
+    #[repr(C)]
+    struct Map {
+        start: u64,
+        length: u64,
+        flags: u32,
+        mapped: u32,
+        count: u32,
+        reserved: u32,
+        extents: [Extent; EXTENTS],
+    }
+
+    /// Whether the file has extents and every one is shared; None where the file system will not say.
+    pub fn all_shared(path: &std::path::Path) -> Option<bool> {
+        let file = std::fs::File::open(path).ok()?;
+        let (mut start, mut any) = (0u64, false);
+        loop {
+            let mut map = Map { start, length: u64::MAX - start, flags: FIEMAP_FLAG_SYNC, mapped: 0, count: EXTENTS as u32, reserved: 0, extents: [Extent::default(); EXTENTS] };
+            // SAFETY: `map` is a `struct fiemap` with room for `EXTENTS` extents, as `count` says, and lives through the call. The
+            // request is passed as its bits: an int on musl, an unsigned long on glibc.
+            let done = unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_FIEMAP as _, &mut map as *mut Map) };
+            if done != 0 {
+                return None;
+            }
+            let found = &map.extents[..(map.mapped as usize).min(EXTENTS)];
+            if found.is_empty() {
+                return Some(any);
+            }
+            for e in found {
+                if e.flags & FIEMAP_EXTENT_SHARED == 0 {
+                    return Some(false);
+                }
+                any = true;
+                if e.flags & FIEMAP_EXTENT_LAST != 0 {
+                    return Some(true);
+                }
+            }
+            let last = found[found.len() - 1];
+            start = last.logical + last.length;
+        }
+    }
+}
+
+/// Whether a copy from folder `from` into folder `to` shares its blocks (C38), tried once with a small file of its own each way
+/// and kept for the server's life, as `mounts::writable` tries a write: a copy made between two libraries on one btrfs shares, and
+/// costs no room (CP5). False where it cannot be tried. Leaves nothing behind. Blocking.
+pub fn shares(from: &Path, to: &Path) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static KEPT: OnceLock<Mutex<HashMap<(PathBuf, PathBuf), bool>>> = OnceLock::new();
+    let key = (from.to_path_buf(), to.to_path_buf());
+    if let Some(known) = KEPT.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
+        return *known;
+    }
+    let probe = |dir: &Path| dir.join(format!(".cratarr-share-test-{}", std::process::id()));
+    let (source, copy) = (probe(from), probe(to));
+    // A few blocks' worth: a file of a few bytes may live inside the file system's own records, never in a block of its own.
+    let tried = std::fs::write(&source, vec![7u8; 64 << 10]).is_ok() && clone_file(&source, &copy).unwrap_or(false);
+    std::fs::remove_file(&copy).ok();
+    std::fs::remove_file(&source).ok();
+    KEPT.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner()).insert(key, tried);
+    tried
+}
+
 /// Remove the folders of `rel` that are now empty, deepest first, never `root` itself.
 fn prune_empty(root: &Path, rel: &str) {
     let mut dir = root.join(rel).parent().map(Path::to_path_buf);
@@ -256,6 +416,44 @@ mod tests {
 
     fn step(from: &Path, a: &str, to: &Path, b: &str) -> Step {
         Step { from: (from.to_path_buf(), a.into()), to: (to.to_path_buf(), b.into()) }
+    }
+
+    /// C38: a copy holds the original's bytes and its modification time, comes through a hidden name and leaves none, and the
+    /// original stays. Tried again, a target holding the same bytes is a step done; one holding others refuses the plan before a
+    /// file is copied.
+    #[test]
+    fn a_copy_has_the_sources_time_and_bytes() {
+        let (music, own) = (tmp(), tmp());
+        std::fs::create_dir_all(music.join("A/Album")).unwrap();
+        for (n, body) in [("1.flac", b"one".as_slice()), ("2.flac", b"two".as_slice())] {
+            std::fs::write(music.join("A/Album").join(n), body).unwrap();
+        }
+        let at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+        std::fs::OpenOptions::new().write(true).open(music.join("A/Album/1.flac")).unwrap().set_modified(at).unwrap();
+        let plan = [step(&music, "A/Album/1.flac", &own, "A/Album/1.flac"), step(&music, "A/Album/2.flac", &own, "A/Album/2.flac")];
+        assert_eq!(copy(&plan).unwrap().len(), 2);
+        assert_eq!(std::fs::read(own.join("A/Album/1.flac")).unwrap(), b"one");
+        assert_eq!(std::fs::read(own.join("A/Album/2.flac")).unwrap(), b"two");
+        assert_eq!(std::fs::metadata(own.join("A/Album/1.flac")).unwrap().modified().unwrap(), at, "the original's time");
+        assert!(music.join("A/Album/1.flac").is_file(), "the original stays");
+        assert_eq!(names_in(&own.join("A/Album")), ["1.flac", "2.flac"], "no hidden part left");
+        assert!(copy(&plan).is_ok(), "tried again: done already");
+        std::fs::write(own.join("A/Album/2.flac"), b"other").unwrap();
+        std::fs::remove_file(own.join("A/Album/1.flac")).unwrap();
+        assert!(copy(&plan).is_err(), "another file there: refused");
+        assert!(!own.join("A/Album/1.flac").exists(), "refused before a file was copied");
+    }
+
+    /// C38: where the file system shares no blocks (the tests' own, ext4 on staging), the copy says so: a copy of its own, which
+    /// costs room; and so does the kept probe between two such folders.
+    #[test]
+    fn a_copy_that_cannot_share_says_so() {
+        let (a, b) = (tmp(), tmp());
+        std::fs::write(a.join("1.flac"), vec![1u8; 256 << 10]).unwrap();
+        assert!(!clone_file(&a.join("1.flac"), &b.join("1.flac")).unwrap(), "not shared");
+        assert!(!shared(&a.join("1.flac")), "nor the original");
+        assert!(!shares(&a, &b), "the probe neither");
+        assert!(names_in(&a) == ["1.flac"] && names_in(&b) == ["1.flac"], "the probe leaves nothing");
     }
 
     #[test]
