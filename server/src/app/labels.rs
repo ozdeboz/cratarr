@@ -484,9 +484,10 @@ impl Opened {
 
 /// The record a row opened is (C56, Q33: "kept at open"): the one that holds its reference, as merged now, else one made now with
 /// it (`Catalogue::keep_listing`: seen now, RT01's rules from then on), what a source's kept row says of it filling what the row
-/// does not (its type, its cover). Tied to the label it was opened from where it is made now, or found through that label's own
-/// kept row (Z8): an album found otherwise is not tied to a label by asking. Never by its names alone: a row with no reference,
-/// or no title, is none; a title or an artist longer than `NAME_MOST` is refused. Blocking.
+/// does not (its type, its cover). Tied to the label it was opened from only where that label's own kept row lists it (Z8, U10): a
+/// real open from a label's page always has one, so an album found otherwise, or made up by any account (made now from ids no
+/// label listed), is not tied to a label by asking. Never by its names alone: a row with no reference, or no title, is none; a title
+/// or an artist longer than `NAME_MOST` is refused. Blocking.
 pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
     let refs = o.refs();
     let label = o.label.as_deref().and_then(ids::label_number);
@@ -506,14 +507,6 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
     if title.chars().count() > NAME_MOST || artist.chars().count() > NAME_MOST {
         anyhow::bail!("A title or an artist that long is no album's.");
     }
-    // Made now, where no record holds any of its references yet.
-    let mut made = true;
-    for r in &refs {
-        if !cat.subject_of(r)?.is_empty() {
-            made = false;
-            break;
-        }
-    }
     let listing = Listing {
         artist,
         year: o.year.or(listed.as_ref().and_then(|(_, l)| l.year)),
@@ -525,10 +518,9 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
     };
     let Some(record) = cat.keep_listing(None, &[listing], "link")?.into_iter().next() else { return Ok(None) };
     if let Some(label) = label {
-        // Its catalogue number there, where it was found through this label's own kept row.
-        let catno = listed.as_ref().filter(|(of, _)| *of == label).map(|(_, l)| l.catno.as_str());
-        if made || catno.is_some() {
-            cat.tie_label(record, label, catno.unwrap_or_default())?;
+        // Through this label's own kept row alone, with its catalogue number there (U10).
+        if let Some(catno) = listed.as_ref().filter(|(of, _)| *of == label).map(|(_, l)| l.catno.as_str()) {
+            cat.tie_label(record, label, catno)?;
         }
     }
     Ok(Some(record))
@@ -742,9 +734,9 @@ mod tests {
         assert_eq!(kept.reads.keys().collect::<Vec<_>>(), ["musicbrainz"], "Discogs' list read anew at the next open");
     }
 
-    /// Z8 (the review's finding 8): a row opened from a label's page is tied to that label only where its record is made now, or found
-    /// through that label's own kept row: an album the library has, opened by its reference with a label, is not tied to it, nor
-    /// through another label's row.
+    /// Z8 (the review's finding 8), U10: a row opened from a label's page is tied to that label only where it is found through that
+    /// label's own kept row: an album the library has, opened by its reference with a label, is not tied to it, nor through another
+    /// label's row, nor a record made now with no row of the label's.
     #[test]
     fn a_label_ties_only_a_record_made_now_or_found_through_its_rows() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
@@ -766,7 +758,23 @@ mod tests {
         assert_eq!(ties(owned), [(kite, "KR-1".to_string())], "found through the label's own kept row: tied");
         let made = opened(GROUP_2, low);
         assert_ne!(made, owned);
-        assert_eq!(ties(made), [(low, String::new())], "made now: tied");
+        assert!(ties(made).is_empty(), "made now, no row of the label's: not tied (U10)");
+    }
+
+    /// U10 (the review of 8c/8d, finding 10): any account posting ids no label listed, with a label, makes a record that is tied to
+    /// no label, so the label's page shows nothing of it; the same opened through the label's own kept row is tied, with its number.
+    #[test]
+    fn a_made_up_row_opened_with_a_label_is_not_tied() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let made_up = Opened { discogs_release: Some(9_999_001), title: "x".repeat(40), artist: "Anyone".into(), label: Some(ids::label(label)), ..Opened::default() };
+        let record = open_record(&cat, &made_up).unwrap().expect("made");
+        assert!(cat.record_labels(record).unwrap().is_empty(), "tied to no label");
+        cat.keep_label_rows(label, "discogs", &[night_walks()], None, true, crate::app::moment::now_secs()).unwrap();
+        let opened = Opened { discogs_master: Some(3001), title: "Night Walks".into(), artist: "Kite Theory".into(), label: Some(ids::label(label)), ..Opened::default() };
+        let night = open_record(&cat, &opened).unwrap().expect("made");
+        let ties: Vec<(i64, String)> = cat.record_labels(night).unwrap().into_iter().map(|(l, catno)| (l.id, catno)).collect();
+        assert_eq!(ties, [(label, "LTR-040".to_string())], "through its own kept row: tied");
     }
 
     /// Z8: a row opened with a title or an artist longer than `NAME_MOST` is refused, and nothing is made; one as long is opened.
