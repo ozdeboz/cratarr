@@ -1780,6 +1780,24 @@ impl UserData {
         Ok(kept.filter(|_| closed))
     }
 
+    /// The request rows' covers that fail `kept` taken off (0.17's step, Y5: 0.16 kept a Want's cover from any address, and the
+    /// Requests page drew it for every viewer), and the migration report's `part` written in the same transaction, listing each as
+    /// "<request> <address>": its mark, so it is done once and its list is never lost. The lines. Blocking.
+    pub fn drop_request_covers(&self, kept: impl Fn(&str) -> bool, part: &str) -> Result<Vec<String>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let covers: Vec<(i64, String)> =
+            tx.prepare("SELECT id, cover FROM request WHERE cover IS NOT NULL ORDER BY id")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut dropped = Vec::new();
+        for (id, cover) in covers.into_iter().filter(|(_, c)| !kept(c.as_str())) {
+            tx.execute("UPDATE request SET cover = NULL WHERE id = ?1", [id])?;
+            dropped.push(format!("{id} {cover}"));
+        }
+        put_migration_part(&tx, part, &serde_json::json!({ "request_covers_dropped": dropped }))?;
+        tx.commit()?;
+        Ok(dropped)
+    }
+
     /// A clause a fetcher's word on requests (`fetched`) says no more, taken off wherever it is, with the "; " that joins it to
     /// another, the word gone where nothing else is left (0.17's step, R29). How many.
     pub fn clear_fetched_clause(&self, clause: &str) -> Result<usize> {

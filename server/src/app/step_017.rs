@@ -42,6 +42,9 @@ const SOULSEEK_016: &str = "Not handed over to Soulseek: no release group to jud
 /// The mark that 0.16's word on Soulseek is off the requests (R29): a part of the migration report, what came off in it.
 const SOULSEEK_WORD: &str = "requests: 0.16's word on Soulseek";
 
+/// The mark that 0.16's Want covers that fail are off the request rows (Y5): a part of the migration report, listing each.
+const REQUEST_COVERS: &str = "requests: 0.16's covers that fail";
+
 /// The report's list of the requests the step closed as asked twice (X7): an account's second open request of one record (W6).
 const ASKED_TWICE: &str = "requests_closed_as_asked_twice";
 
@@ -68,6 +71,17 @@ fn clear_soulseek_word(ud: &UserData) -> Result<()> {
     }
     let cleared = ud.clear_fetched_clause(SOULSEEK_016)?;
     ud.set_migration_part(SOULSEEK_WORD, &serde_json::json!({ "cleared": cleared }))
+}
+
+/// 0.16's Want covers that fail W6's check (any address could be one then) taken off the request rows too, once, under their
+/// mark (Y5): the requests part keeps them off the records (O3, `want_covers_dropped`), but each row's own `cover` still reached
+/// every viewer of the Requests page. Each listed in the mark's part, as "<request> <address>"; a cover that passes stays.
+fn drop_016_request_covers(ud: &UserData) -> Result<()> {
+    if ud.migration_report()?.contains_key(REQUEST_COVERS) {
+        return Ok(());
+    }
+    ud.drop_request_covers(super::requests::cover_kept, REQUEST_COVERS)?;
+    Ok(())
 }
 
 /// The requests with no record still (the step's map unreadable, R19: F12), or naming one the catalogue no longer knows (a
@@ -108,11 +122,15 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
             asked_twice.push(asked_twice_line(id, kept, record));
         }
     }
-    // Two repairs of the requests, each said in the log where it fails, and the start goes on: it is tried again at the next (R29,
-    // N12). 0.16's word that it could not hand a request to Soulseek, untrue since 0.17's Soulseek takes in every record (C51b),
-    // comes off once, under its mark, nothing claimed in its place: whether Soulseek searches for it is Soulseek's own row's to say.
+    // Repairs of the requests, each said in the log where it fails, and the start goes on: it is tried again at the next (R29, N12).
+    // 0.16's word that it could not hand a request to Soulseek, untrue since 0.17's Soulseek takes in every record (C51b), comes off
+    // once, under its mark, nothing claimed in its place: whether Soulseek searches for it is Soulseek's own row's to say. 0.16's
+    // Want covers that fail come off the rows once, after the requests part has listed them off the records (Y5).
     if let Err(e) = clear_soulseek_word(ud) {
         tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step: 0.16's word on Soulseek could not be taken off the requests; tried again at the next start");
+    }
+    if let Err(e) = drop_016_request_covers(ud) {
+        tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step: 0.16's request covers that fail could not be taken off; tried again at the next start");
     }
     if let Err(e) = give_again(cat, ud, &mut asked_twice) {
         tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step: the requests could not all be given their records again; tried again at the next start");
@@ -676,6 +694,21 @@ mod tests {
         let dropped: Vec<&str> = report["want_covers_dropped"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect();
         assert_eq!(dropped, ["7 https://example.org/covers/two-rooms.jpg", "8 https://example.org/covers/quiet-lanes.jpg"], "{report}");
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM records WHERE cover LIKE 'https://example.org/%'"), 0);
+    }
+
+    /// Y5 (the review's finding 5): the step takes 0.16's Want covers that fail W6's check off the request rows too, whose own
+    /// `cover` the Requests page drew for every viewer, each listed in its part of the report; a cover that passes stays.
+    #[test]
+    fn the_step_nulls_016_request_covers_that_fail() {
+        let data = Data::new("request-covers");
+        data.run();
+        let cover = |id: i64| data.sql::<Option<String>>("userdata.sqlite", &format!("SELECT cover FROM request WHERE id = {id}"));
+        assert_eq!((cover(7), cover(8)), (None, None), "Two Rooms' and Quiet Lanes', from example.org");
+        assert_eq!(cover(1).as_deref(), Some("/api/covers/release-group/00000000-0000-4000-8000-000000000112"), "Cratarr's own stays");
+        let (_, ud) = data.open();
+        let parts = ud.migration_report().unwrap();
+        let dropped: Vec<&str> = parts[REQUEST_COVERS].1["request_covers_dropped"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect();
+        assert_eq!(dropped, ["7 https://example.org/covers/two-rooms.jpg", "8 https://example.org/covers/quiet-lanes.jpg"]);
     }
 
     /// X7: a part that fails names itself in the error, as the step's writes outside the parts do.

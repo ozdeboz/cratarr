@@ -237,7 +237,9 @@ fn asked_of(cat: &crate::catalogue::Catalogue, record: i64, key: Option<String>,
         cat.set_reference(&crate::serve::ids::record(row.id), &crate::catalogue::records::Ref::new("musicbrainz", "release-group", g), "search")?;
     }
     let key = key.or_else(|| group.clone()).unwrap_or_else(|| format!("{}|{}", super::import::key(&row.artist), super::import::key(&row.title)));
-    Ok(Asked { record: row.id, key, artist_key: super::import::loose(&row.artist), release_group: group, album: row.title, artist: row.artist, year: row.year, cover: row.cover })
+    // The row keeps only a cover every account may be shown (Y5): this is the one way a request row is written.
+    let cover = row.cover.filter(|c| cover_kept(c));
+    Ok(Asked { record: row.id, key, artist_key: super::import::loose(&row.artist), release_group: group, album: row.title, artist: row.artist, year: row.year, cover })
 }
 
 /// The release group a request names (F15, R21): the one it was asked with, whatever its record holds (a record found by names
@@ -255,7 +257,8 @@ fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Reques
 /// Whether a Want's cover is one every account may be shown (W6): Cratarr's own, in the exact shapes it makes (O3: a release
 /// group's `/api/covers/release-group/<id>`, a Bandcamp album's `/api/cover/bandcamp/<id>`, never a path that climbs out with `..`),
 /// or the Cover Art Archive's, Bandcamp's, Spotify's or Discogs' images over https. Any other address is left out. Checked on the
-/// way to every record (`record_of_album_paged`) and by 0.17's step for 0.16's Wants.
+/// way to every record (`record_of_album_paged`) and by 0.17's step for 0.16's Wants, on the records and on the request rows; on
+/// the way onto a request row (`asked_of`) and on every view of one (`shown`, Y5).
 pub(crate) fn cover_kept(cover: &str) -> bool {
     if cover.starts_with('/') {
         return super::cover_cache::Of::of_address(cover).is_some();
@@ -1154,11 +1157,13 @@ fn shown(mut r: Request, of: Option<&RecordOf>) -> Request {
         r.album = o.title.clone();
         r.artist = o.artist.clone();
         r.year = o.year.or(r.year);
-        r.cover = o.cover.clone().or(r.cover);
+        r.cover = o.cover.clone().filter(|c| cover_kept(c)).or(r.cover);
         let own = r.release_group.take();
         r.release_group = own.clone().filter(|g| o.groups.iter().any(|x| x.eq_ignore_ascii_case(g))).or_else(|| o.groups.first().cloned()).or(own);
         r.record = Some(o.record);
     }
+    // Only a cover every account may be shown (W6, Y5), the record's or the row's, whenever the row was written.
+    r.cover = r.cover.filter(|c| cover_kept(c));
     r
 }
 
@@ -1621,6 +1626,22 @@ mod tests {
         let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
         let record = record_of_album(&cat, None, "Glass Harbour", "Two Rooms", None, Some("/api/covers/../stream/bandcamp/bc.x".into())).unwrap();
         assert_eq!(cat.requested(&[record]).unwrap()[&record].row.cover, None, "checked on the way to the record");
+    }
+
+    /// Y5 (the review's finding 5): a request is never written with a cover that fails W6's check, whatever its record holds, and no
+    /// view of one shows such a cover, the record's or a row's written before; a kept one shows.
+    #[tokio::test]
+    async fn a_request_keeps_and_shows_only_a_kept_cover() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let record = cat.record_for_tests("Two Rooms", 0);
+        cat.db_for_tests().execute("UPDATE records SET cover = 'https://example.org/two-rooms.jpg' WHERE id = ?1", [record]).unwrap();
+        assert_eq!(asked_of(cat, record, None, None).unwrap().cover, None, "never onto the row");
+        let row = Request { cover: Some("https://example.org/old.jpg".into()), ..asked_for(record) };
+        assert_eq!(views(&serve, None, vec![row.clone()]).await[0].request.cover, None, "neither the record's nor the row's");
+        let kept = "/api/covers/release-group/00000000-0000-4000-8000-000000000116";
+        cat.db_for_tests().execute("UPDATE records SET cover = ?2 WHERE id = ?1", rusqlite::params![record, kept]).unwrap();
+        assert_eq!(views(&serve, None, vec![row]).await[0].request.cover.as_deref(), Some(kept), "a kept one shows");
     }
 
     /// W6 (H): an account other than an administrator reads each request's state, never the fetchers' own words (Lidarr's errors
