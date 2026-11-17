@@ -305,6 +305,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/lastfm", get(get_lastfm_key).put(put_lastfm_key))
             .route("/api/settings/discogs", get(get_discogs_keys).put(put_discogs_keys))
             .route("/api/settings/musicbrainz", get(musicbrainz_status).put(musicbrainz_switch))
+            // Bandcamp's switch, and until when it is left alone after its bot check (O4).
+            .route("/api/settings/bandcamp", get(bandcamp_status).put(bandcamp_switch))
             .route("/api/server/restart", post(restart_server))
             .route("/api/settings/connections/state", get(connections_state))
             .route(
@@ -1716,14 +1718,14 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
             crate::app::PlaylistRow {
                 entry: id.clone(),
                 file: t.title.clone(),
-                id: t.stream.is_some().then_some(id),
+                id: t.plays().then_some(id),
                 name: Some(t.title.clone()),
                 artist: Some(t.artist.clone().unwrap_or_else(|| a.artist.clone())),
                 album: Some(a.title.clone()),
                 duration_secs: t.duration_secs,
                 track: Some(t.n),
                 album_id: Some(album.to_string()),
-                missing: t.stream.is_none(),
+                missing: !t.plays(),
                 ..Default::default()
             }
         })
@@ -7139,6 +7141,20 @@ async fn musicbrainz_switch(Json(b): Json<Switched>) -> Result<Json<crate::app::
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     musicbrainz_status().await
+}
+
+/// Bandcamp's switch (O4: off, Cratarr asks it nothing), and until when it is left alone after its bot check (epoch s), where it is.
+async fn bandcamp_status() -> Json<serde_json::Value> {
+    Json(json!({ "enabled": crate::app::switches::is_on(crate::app::switches::BANDCAMP), "held_until": crate::bandcamp::held_until(crate::app::moment::now_secs()) }))
+}
+
+/// Bandcamp switched on or off (O4).
+async fn bandcamp_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
+    tokio::task::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::BANDCAMP, b.enabled))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(bandcamp_status().await)
 }
 
 /// A release group's cover for albums not in the library (0.9.5): to the Cover Art Archive's, else Discogs' master's;

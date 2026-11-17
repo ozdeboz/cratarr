@@ -11,6 +11,8 @@ pub const LASTFM: &str = "lastfm";
 pub const DISCOGS: &str = "discogs";
 pub const MUSICBRAINZ: &str = "musicbrainz";
 pub const SLSKD: &str = "slskd";
+/// Bandcamp (O4): its pages, its search box, its streams.
+pub const BANDCAMP: &str = "bandcamp";
 
 static KNOWN: Mutex<Option<HashMap<&'static str, bool>>> = Mutex::new(None);
 

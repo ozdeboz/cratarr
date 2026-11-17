@@ -1285,24 +1285,14 @@ struct MbRelation {
 struct MbAlbum {
     /// Their pages ("url" relations).
     urls: Vec<String>,
-    /// Their artists' ids, for their own pages.
-    artists: Vec<String>,
     /// How many tracks one of them has (an official one first), and how long it is when every track's length is known.
     tracks: Option<u32>,
     length_secs: Option<u32>,
 }
 
-/// The pages MusicBrainz keeps for a release group and its releases (their "url" relations), its releases' artists,
-/// and one release's tracks and length, in the one call.
+/// The pages MusicBrainz keeps for a release group and its releases (their "url" relations), and one release's tracks and
+/// length, in the one call.
 async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<MbAlbum> {
-    #[derive(Deserialize)]
-    struct Artist {
-        id: String,
-    }
-    #[derive(Deserialize)]
-    struct Credit {
-        artist: Artist,
-    }
     #[derive(Deserialize)]
     struct Track {
         length: Option<u64>,
@@ -1318,8 +1308,6 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<MbAlbum>
     struct Release {
         #[serde(default)]
         relations: Vec<MbRelation>,
-        #[serde(rename = "artist-credit", default)]
-        credits: Vec<Credit>,
         status: Option<String>,
         #[serde(default)]
         media: Vec<Medium>,
@@ -1329,14 +1317,8 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<MbAlbum>
         #[serde(default)]
         releases: Vec<Release>,
     }
-    let url = format!("https://musicbrainz.org/ws/2/release?release-group={release_group}&inc=url-rels+artist-credits+media+recordings&fmt=json&limit=10");
+    let url = format!("https://musicbrainz.org/ws/2/release?release-group={release_group}&inc=url-rels+media+recordings&fmt=json&limit=10");
     let b: Browse = http.get(url).asked().await?.error_for_status()?.json().await?;
-    let mut artists: Vec<String> = Vec::new();
-    for id in b.releases.iter().flat_map(|r| r.credits.iter().map(|c| c.artist.id.clone())) {
-        if !artists.contains(&id) {
-            artists.push(id);
-        }
-    }
     let with_tracks = |r: &&Release| r.media.iter().any(|m| m.count > 0);
     let one = b.releases.iter().filter(with_tracks).find(|r| r.status.as_deref() == Some("Official")).or_else(|| b.releases.iter().find(with_tracks));
     let tracks = one.map(|r| r.media.iter().map(|m| m.count).sum::<u32>());
@@ -1345,7 +1327,7 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<MbAlbum>
         let ms: Option<u64> = all.iter().map(|t| t.length).sum();
         ms.filter(|_| !all.is_empty()).map(|ms| (ms / 1000) as u32)
     });
-    Ok(MbAlbum { urls: b.releases.into_iter().flat_map(|r| r.relations).filter_map(|r| r.url.map(|u| u.resource)).collect(), artists, tracks, length_secs })
+    Ok(MbAlbum { urls: b.releases.into_iter().flat_map(|r| r.relations).filter_map(|r| r.url.map(|u| u.resource)).collect(), tracks, length_secs })
 }
 
 /// The pages MusicBrainz keeps for an artist (their "url" relations).
@@ -1365,25 +1347,17 @@ fn same(a: &str, b: &str) -> bool {
     key(a) == key(b) || loose(a) == loose(b)
 }
 
-/// An album's page on Bandcamp (decision 0071): its own on MusicBrainz, else found on its artist's own Bandcamp page
-/// (MusicBrainz's for the artist) by its title, else Bandcamp's search box where artist and title both match; none
-/// otherwise. Bandcamp is asked at most once a second, in its own turn (`Bandcamp::send`), as MusicBrainz is in its.
-async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[String], artist: &str, album: &str) -> Option<String> {
+/// An album's page on Bandcamp (decision 0071): its own on MusicBrainz, else Bandcamp's search box where artist and title both
+/// match (O4: an artist's `/music` page is not read); none otherwise, or with Bandcamp switched off. Bandcamp is asked at most once
+/// a second, in its own turn (`Bandcamp::send`), as MusicBrainz is in its.
+async fn bandcamp_page(urls: &[String], artist: &str, album: &str) -> Option<String> {
     if let Some(p) = urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
         return Some(p);
     }
-    let bc = crate::bandcamp::Bandcamp::get();
-    if let Some(id) = artists.first() {
-        let own = mb_artist_urls(http, id).await.unwrap_or_default();
-        let page = own.iter().filter_map(|u| crate::bandcamp::page(u)).find(|p| reqwest::Url::parse(p).ok().and_then(|u| u.host_str().map(|h| h != "bandcamp.com")).unwrap_or(false));
-        if let Some(page) = page {
-            let releases = bc.releases(&page).await.unwrap_or_default();
-            if let Some((_, url)) = releases.into_iter().find(|(t, _)| same(t, album)) {
-                return Some(url);
-            }
-        }
+    if !super::switches::is_on(super::switches::BANDCAMP) {
+        return None;
     }
-    let found = bc.search(artist, album).await.unwrap_or_default();
+    let found = crate::bandcamp::Bandcamp::get().search(artist, album).await.unwrap_or_default();
     found.into_iter().find(|(t, a, _)| same(t, album) && same(a, artist)).map(|(_, _, url)| url)
 }
 
@@ -1410,7 +1384,7 @@ pub async fn bandcamp_artist(name: &str, mbid: Option<&str>, given: Option<&str>
         page = bc.search_artist(name).await.unwrap_or_default().into_iter().find(|(n, _)| same(n, name)).map(|(_, p)| p);
     }
     let Some(page) = page else { return Ok((None, Vec::new())) };
-    let releases = bc.releases(&page).await.unwrap_or_default();
+    let releases = bc.albums_on(&page, name).await.unwrap_or_default();
     Ok((Some(page), releases))
 }
 
@@ -1642,7 +1616,7 @@ pub async fn look(
         };
         (s.track_count, s.length_secs) = (mb.tracks, mb.length_secs);
         if s.bandcamp.is_none() {
-            s.bandcamp = bandcamp_page(&http, &mb.urls, &mb.artists, &s.artist, &s.album).await;
+            s.bandcamp = bandcamp_page(&mb.urls, &s.artist, &s.album).await;
         }
         if let Some(p) = &s.bandcamp {
             mb.urls.insert(0, p.clone());
@@ -1900,13 +1874,18 @@ fn discogs_listing(l: &super::discogs::Listed) -> crate::catalogue::records::Lis
     }
 }
 
-/// Bandcamp's list of an artist: the albums on their page (`Bandcamp::releases`), by the page MusicBrainz links them to, else a
-/// search for their name. Its bot check is no answer about the artist: the read fails, and their list waits.
+/// Bandcamp's list of an artist: the albums on their page as the search box lists them (`Bandcamp::albums_on`, O4: their `/music`
+/// page is not read), by the page MusicBrainz links them to, else a search for their name. Its bot check is no answer about the
+/// artist: the read fails, and their list waits. Switched off, it is not read.
 struct BandcampList;
 
 impl ArtistList for BandcampList {
     fn source(&self) -> &'static str {
         "bandcamp"
+    }
+
+    fn on(&self) -> bool {
+        super::switches::is_on(super::switches::BANDCAMP)
     }
 
     fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
@@ -1929,7 +1908,7 @@ impl ArtistList for BandcampList {
                 }
             };
             let listings = bc
-                .releases(&page)
+                .albums_on(&page, &a.name)
                 .await?
                 .into_iter()
                 .map(|(title, album)| crate::catalogue::records::Listing { title, refs: vec![crate::catalogue::records::Ref::new("bandcamp", "album", &album)], ..Default::default() })
@@ -2080,14 +2059,11 @@ pub async fn find_on_bandcamp(serve: &Arc<crate::serve::Serve>, artist: &str, al
 /// The look itself, `find_on_bandcamp`'s.
 async fn look_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>) -> Result<Option<String>> {
     let http = http()?;
-    let (urls, artists) = match release_group.filter(|g| !g.is_empty()) {
-        Some(g) => {
-            let got = mb_urls(&http, g).await.unwrap_or_default();
-            (got.urls, got.artists)
-        }
-        None => (Vec::new(), Vec::new()),
+    let urls = match release_group.filter(|g| !g.is_empty()) {
+        Some(g) => mb_urls(&http, g).await.unwrap_or_default().urls,
+        None => Vec::new(),
     };
-    Ok(bandcamp_page(&http, &urls, &artists, artist, album).await)
+    Ok(bandcamp_page(&urls, artist, album).await)
 }
 
 /// Every record not had of the library's artists (Insights › Discovery › Missing albums, 0.9.3; C53b: one query,

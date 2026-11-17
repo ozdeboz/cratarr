@@ -69,7 +69,6 @@ pub fn label(name: &str) -> &'static str {
 
 /// A request's answer noted for its connection.
 pub fn note(name: &'static str, r: &reqwest::Result<reqwest::Response>) {
-    let now = super::moment::now_secs();
     let failed = match r {
         Ok(r) => {
             let s = r.status();
@@ -77,6 +76,16 @@ pub fn note(name: &'static str, r: &reqwest::Result<reqwest::Response>) {
         }
         Err(e) => Some(plain(name, e)),
     };
+    noted(name, failed);
+}
+
+/// A connection's answer that came, but was no answer (O4: Bandcamp's bot check), noted as a failure.
+pub fn failed(name: &'static str, why: String) {
+    noted(name, Some(why));
+}
+
+fn noted(name: &'static str, failed: Option<String>) {
+    let now = super::moment::now_secs();
     let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
     let s = states.get_or_insert_with(HashMap::new).entry(name).or_default();
     match failed {

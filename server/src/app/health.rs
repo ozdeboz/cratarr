@@ -536,7 +536,7 @@ fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums
 /// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. Each a warning:
 /// it retries by itself (the owner, 2026-11-04, "broken or blind"; MusicBrainz was critical until then, as the
 /// background pass and Find more music stop while it fails).
-fn check_connections(at: i64) -> Vec<Finding> {
+pub(crate) fn check_connections(at: i64) -> Vec<Finding> {
     let tz = super::moment::tz(super::moment::told(at).as_ref());
     let clock = |t: i64| {
         let s = (t + tz).rem_euclid(86_400);
@@ -548,9 +548,19 @@ fn check_connections(at: i64) -> Vec<Finding> {
         "lastfm" => !super::switches::is_on(super::switches::LASTFM),
         _ => false,
     };
+    // Bandcamp's bot check (O4): Cratarr stopped asking it for a day.
+    let day = |t: i64| (t + tz).div_euclid(86_400);
+    let held = crate::bandcamp::held_until(at).filter(|_| super::switches::is_on(super::switches::BANDCAMP)).map(|until| {
+        let when = if day(until) > day(at) { format!("tomorrow {}", clock(until)) } else { clock(until) };
+        let mut f = finding("connections", "connections:bandcamp-check", Level::Warning, 1, format!("Bandcamp asked for a browser check; Cratarr stopped asking until {when}"));
+        f.name = "Bandcamp".to_string();
+        (f.thing, f.state) = (Some(f.name.clone()), Some("paused".into()));
+        f
+    });
+    let bandcamp_held = held.is_some();
     super::reach::failing(at)
         .into_iter()
-        .filter(|(name, _)| !switched_off(name))
+        .filter(|(name, _)| !switched_off(name) && !(*name == "bandcamp" && bandcamp_held))
         .map(|(name, s)| {
             let mut f = finding("connections", format!("connections:{name}"), Level::Warning, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
             f.name = super::reach::label(name).to_string();
@@ -559,6 +569,7 @@ fn check_connections(at: i64) -> Vec<Finding> {
             f.open = matches!(name, "musicbrainz" | "discogs" | "lastfm").then_some(Open { page: "settings", switch: None, thing: Some(name_static(name)) });
             f
         })
+        .chain(held)
         .collect()
 }
 

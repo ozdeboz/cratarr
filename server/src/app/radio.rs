@@ -369,7 +369,7 @@ async fn with_elsewhere(index: &Index, req: &Ask, picks: &[usize], mut tracks: V
                 continue;
             }
         };
-        let streams: Vec<&crate::bandcamp::Track> = album.tracks.iter().filter(|t| t.stream.is_some()).collect();
+        let streams: Vec<&crate::bandcamp::Track> = album.tracks.iter().filter(|t| t.plays()).collect();
         if streams.is_empty() {
             continue;
         }

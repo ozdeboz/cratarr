@@ -189,13 +189,15 @@ async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<(MbRelated, Ve
     Ok((related, persons))
 }
 
-/// An album of the artist that plays on Bandcamp, and its title: their own Bandcamp page as MusicBrainz keeps it, its
-/// newest release.
-async fn on_bandcamp(http: &reqwest::Client, mbid: &str) -> Option<(String, String)> {
+/// An album of the artist that plays on Bandcamp, and its title: their own Bandcamp page only as MusicBrainz links it (O5), an
+/// album the search box lists on it (O4: its `/music` page is not read). None with Bandcamp switched off.
+async fn on_bandcamp(http: &reqwest::Client, mbid: &str, name: &str) -> Option<(String, String)> {
+    if !super::switches::is_on(super::switches::BANDCAMP) {
+        return None;
+    }
     let urls = super::discover::mb_artist_urls(http, mbid).await.ok()?;
     let own = urls.iter().filter_map(|u| crate::bandcamp::page(u)).find(|p| reqwest::Url::parse(p).ok().and_then(|u| u.host_str().map(|h| h != "bandcamp.com")).unwrap_or(false))?;
-    let releases = crate::bandcamp::Bandcamp::get().releases(&own).await.ok()?;
-    releases.into_iter().find_map(|(title, url)| Some((title, crate::bandcamp::album_page(&url)?)))
+    crate::bandcamp::Bandcamp::get().albums_on(&own, name).await.ok()?.into_iter().next()
 }
 
 /// Looks up the artists related to one (`name`, `mbid`): ListenBrainz's and MusicBrainz's, the library's marked, the new
@@ -251,7 +253,7 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
         }
         looked += 1;
         if let Some(id) = r.mbid.clone()
-            && let Some((title, page)) = on_bandcamp(&http, &id).await
+            && let Some((title, page)) = on_bandcamp(&http, &id, &r.name).await
         {
             (r.album, r.bandcamp) = (Some(title), Some(page));
         }
