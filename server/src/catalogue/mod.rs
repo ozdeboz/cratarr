@@ -120,6 +120,15 @@ CREATE TABLE IF NOT EXISTS beat_this (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
   beats BLOB NOT NULL, downbeats BLOB NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
+-- The waveform in three bands (`analysis::band_wave`), apart from the shape since 0.17 (M1): in `analysis_shape` it lay
+-- behind each row's signals for the visuals (`bands`, about 250 KB), so the pass's question of which files have none read
+-- 1.3 GB every ten minutes. `form` says what `band_wave` holds (`BandWave::form`), and the index holds it too, so that
+-- question reads the index alone. A rowid table: a row of 1.5 KB stays on its page, where WITHOUT ROWID would put most of
+-- each on an overflow page of its own. `analysis_shape.band_wave` stays as 0.16 left it, read by nothing.
+CREATE TABLE IF NOT EXISTS analysis_band_wave (
+  folder INTEGER NOT NULL, rel TEXT NOT NULL, form INTEGER NOT NULL, band_wave BLOB NOT NULL,
+  PRIMARY KEY (folder, rel));
+CREATE INDEX IF NOT EXISTS analysis_band_wave_form ON analysis_band_wave (folder, rel, form);
 ";
 
 /// The tables whose ids are for life and held in user data: what a fresh start of lost ids lifts.
@@ -173,7 +182,7 @@ const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along. A table with
 /// both goes here or says why not (`every_table_by_folder_and_path_goes_with_its_file`), or it stays at a place its file left.
-const FILE_TABLES: [&str; 7] = ["files", "cover_files", "tags", "source_ids", "analysis", "analysis_shape", "beat_this"];
+const FILE_TABLES: [&str; 8] = ["files", "cover_files", "tags", "source_ids", "analysis", "analysis_shape", "analysis_band_wave", "beat_this"];
 
 /// What a retiring track was, from its file and tags while they are still there (`tracks`' kept columns).
 const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id LIMIT 1),
@@ -2500,7 +2509,7 @@ impl Catalogue {
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
                 carry_came(&tx, (*nf, nr), (*gf, gr))?;
                 // The same sound under another name: what was worked out of it goes along, and is read while the file is as it was then.
-                for table in ["analysis", "analysis_shape", "beat_this"] {
+                for table in ["analysis", "analysis_shape", "analysis_band_wave", "beat_this"] {
                     tx.execute(&format!("UPDATE OR IGNORE {table} SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2"), params![gf, gr, nf, nr])?;
                 }
                 for table in FILE_TABLES {
@@ -2988,7 +2997,7 @@ impl Catalogue {
                 "UPDATE files SET folder = ?3, rel = ?4, trashed = ?5, gone_at = NULL WHERE folder = ?1 AND rel = ?2",
                 params![from_folder, rel, to_folder, new_rel, trashed],
             )?;
-            for table in ["tags", "analysis", "analysis_shape", "beat_this"] {
+            for table in ["tags", "analysis", "analysis_shape", "analysis_band_wave", "beat_this"] {
                 tx.execute(&format!("UPDATE {table} SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2"), params![from_folder, rel, to_folder, new_rel])?;
             }
         }
@@ -2997,7 +3006,7 @@ impl Catalogue {
     }
 
     /// The catalogue's copy of files Cratarr copied (C39, Copy to): each copy's rows made from its original's (`files`, `tags`,
-    /// `analysis`, `analysis_shape`, `beat_this`; no `source_ids`, which name the original's place at another server), so the walk
+    /// `analysis`, `analysis_shape`, `analysis_band_wave`, `beat_this`; no `source_ids`, which name the original's place at another server), so the walk
     /// finds it known, read and analysed, on the same tracks: one album, two copies. A copy shares its original's blocks
     /// (`files.shared`) as `moves::copy` said; it came now. Rows a walk made there first give way, as `rekey`'s do. Each copy as
     /// (its original, the copy, shared); all in one transaction. How many were copied. Blocking.
@@ -3018,7 +3027,7 @@ impl Catalogue {
             if copy_row(&tx, "files", (*from_folder, from), (*to_folder, to), &set)? == 0 {
                 continue;
             }
-            for table in ["tags", "analysis", "analysis_shape", "beat_this"] {
+            for table in ["tags", "analysis", "analysis_shape", "analysis_band_wave", "beat_this"] {
                 copy_row(&tx, table, (*from_folder, from), (*to_folder, to), &[])?;
             }
             done += 1;
@@ -3604,15 +3613,32 @@ impl Catalogue {
         self.store_shape_blob(folder, rel, size, mtime, "bands", &signals.0)
     }
 
-    /// One of the shape's blobs worked out apart (`beats`, `bands`), while the file is as it was analysed.
-    /// A file's waveform in three bands, as `signals_of`: `Some(None)` until it is first worked out.
+    /// A file's waveform in three bands, as `signals_of`: `Some(None)` until it is first worked out. Apart from the shape (M1).
     pub fn band_wave_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::band_wave::BandWave>> {
-        self.shape_blob(folder, rel, "band_wave").map(|b| b.map(crate::analysis::band_wave::BandWave))
+        self.db()
+            .query_row(
+                "SELECT w.band_wave FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+                   LEFT JOIN analysis_band_wave w ON w.folder = a.folder AND w.rel = a.rel
+                 WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime",
+                params![folder, rel],
+                |r| r.get::<_, Option<Vec<u8>>>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .map(|w| w.map(crate::analysis::band_wave::BandWave))
     }
 
-    /// Keeps a file's waveform in three bands beside its analysis (false: the file has no analysis as it is now).
+    /// Keeps a file's waveform in three bands, or the mark of one that failed, apart from the shape with its form (M1), where
+    /// the file has an analysis as it is now (`size`, `mtime`): false where it has none.
     pub fn store_band_wave(&self, folder: i64, rel: &str, size: u64, mtime: i64, wave: &crate::analysis::band_wave::BandWave) -> Result<bool> {
-        self.store_shape_blob(folder, rel, size, mtime, "band_wave", &wave.0)
+        let n = self.db().execute(
+            "INSERT INTO analysis_band_wave (folder, rel, form, band_wave)
+               SELECT ?1, ?2, ?5, ?6 WHERE EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)
+             ON CONFLICT (folder, rel) DO UPDATE SET form = excluded.form, band_wave = excluded.band_wave",
+            params![folder, rel, size as i64, mtime, wave.form(), wave.0],
+        )?;
+        Ok(n > 0)
     }
 
     /// A file's spectrum (`analysis::spectrum`): None without an analysis as the file is now; Some(None) not worked
@@ -3629,26 +3655,18 @@ impl Catalogue {
 
     /// Marks a file its waveform in three bands could not be worked out of (`band_wave::FAILED`), as it is now.
     pub fn store_band_wave_failed(&self, folder: i64, rel: &str, size: u64, mtime: i64) -> Result<bool> {
-        self.store_shape_blob(folder, rel, size, mtime, "band_wave", &[crate::analysis::band_wave::FAILED])
+        self.store_band_wave(folder, rel, size, mtime, &crate::analysis::band_wave::BandWave(vec![crate::analysis::band_wave::FAILED]))
     }
 
     /// Present files with an analysis as they are now but no waveform in three bands (or one of an older form), and not
-    /// marked as failed: the analysis pass's work when it has nothing else to do, newest music first. Blocking.
+    /// marked as failed: the analysis pass's work when it has nothing else to do, newest music first. Asked through the
+    /// index of forms alone (M1, `without_band_wave_sql`). Blocking.
     pub fn without_band_wave(&self, limit: usize) -> Result<Vec<(i64, String, PathBuf, u64, i64)>> {
+        use crate::analysis::band_wave::{FAILED, FORMAT};
         let folders = self.folders();
         let db = self.db();
-        let mut st = db.prepare(&format!(
-            "SELECT f.folder, f.rel, f.size, f.mtime FROM files f
-               JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
-               LEFT JOIN analysis_shape s ON s.folder = a.folder AND s.rel = a.rel
-               LEFT JOIN tracks t ON t.id = f.track
-             WHERE {PRESENT_F} AND f.state = ?1 AND (a.complete IS NULL OR a.complete != 0)
-               AND (s.band_wave IS NULL OR (s.band_wave != ?5 AND (length(s.band_wave) != ?2 OR substr(s.band_wave, 1, 1) != ?3)))
-             ORDER BY t.born DESC, f.mtime DESC LIMIT ?4"
-        ))?;
-        let format = vec![crate::analysis::band_wave::FORMAT];
-        let failed = vec![crate::analysis::band_wave::FAILED];
-        let rows = st.query_map(params![READ, crate::analysis::band_wave::LEN as i64, format, limit as i64, failed], |r| {
+        let mut st = db.prepare(&without_band_wave_sql())?;
+        let rows = st.query_map(params![READ, FORMAT, FAILED, limit as i64], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?.max(0) as u64, r.get::<_, i64>(3)?))
         })?;
         let mut out = Vec::new();
@@ -3660,6 +3678,51 @@ impl Catalogue {
         Ok(out)
     }
 
+    /// 0.17's step's part `band_wave` (M1): the waveforms in three bands 0.16 kept in `analysis_shape`, copied into
+    /// `analysis_band_wave` once, `batch` of the shape's rows at a time in key order, each batch a transaction of its own and
+    /// the last one's last write the part's mark (`BAND_WAVE_MARK`). A start cut off goes on at the next from the last one
+    /// copied: nothing else writes there before the mark, as the step runs before the pass and the pages. The shape is read and
+    /// never written: a row rewritten is rewritten whole, its signals with it. `after` hears each batch done but the last (what
+    /// the tests cut it by). None: done before; else how many waves are apart now. Blocking.
+    pub fn band_waves_apart(&self, batch: usize, after: &dyn Fn() -> Result<()>) -> Result<Option<u64>> {
+        use crate::analysis::band_wave::BandWave;
+        let mut db = self.db();
+        if db.query_row("SELECT 1 FROM meta WHERE key = ?1", [BAND_WAVE_MARK], |_| Ok(())).optional()?.is_some() {
+            return Ok(None);
+        }
+        let mut from: (i64, String) = db
+            .query_row("SELECT folder, rel FROM analysis_band_wave ORDER BY folder DESC, rel DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+            .unwrap_or((i64::MIN, String::new()));
+        loop {
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let rows: Vec<(i64, String, Option<Vec<u8>>)> = tx
+                .prepare("SELECT folder, rel, band_wave FROM analysis_shape WHERE (folder, rel) > (?1, ?2) ORDER BY folder, rel LIMIT ?3")?
+                .query_map(params![from.0, from.1, batch as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            let last = rows.len() < batch;
+            if let Some((folder, rel, _)) = rows.last() {
+                from = (*folder, rel.clone());
+            }
+            {
+                let mut put = tx.prepare("INSERT OR IGNORE INTO analysis_band_wave (folder, rel, form, band_wave) VALUES (?1, ?2, ?3, ?4)")?;
+                for (folder, rel, wave) in rows {
+                    let Some(wave) = wave.map(BandWave) else { continue };
+                    put.execute(params![folder, rel, wave.form(), wave.0])?;
+                }
+            }
+            if last {
+                let apart: i64 = tx.query_row("SELECT count(*) FROM analysis_band_wave", [], |r| r.get(0))?;
+                tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![BAND_WAVE_MARK, serde_json::json!({ "band_waves": apart }).to_string()])?;
+                tx.commit()?;
+                return Ok(Some(apart.max(0) as u64));
+            }
+            tx.commit()?;
+            after()?;
+        }
+    }
+
+    /// One of the shape's blobs worked out apart (`beats`, `bands`, `spectrum`), while the file is as it was analysed.
     fn shape_blob(&self, folder: i64, rel: &str, column: &'static str) -> Option<Option<Vec<u8>>> {
         self.db()
             .query_row(
@@ -4114,6 +4177,25 @@ const ANALYSIS_COLS: &str =
 /// The join `ANALYSIS_COLS` needs, after `analysis a`.
 const SHAPE_JOIN: &str = "LEFT JOIN analysis_shape s ON s.folder = a.folder AND s.rel = a.rel";
 
+/// 0.17's step's part `band_wave` done (M1, `Catalogue::band_waves_apart`), its report the waves apart.
+const BAND_WAVE_MARK: &str = "017:band_wave";
+
+/// The analysis pass's question (M1): present files with an analysis as they are now and no waveform in three bands of this
+/// form (`?2`) nor the mark of one that failed (`?3`), newest music first. `analysis_band_wave` is read through its index of
+/// forms (`INDEXED BY`, whatever the planner would guess), so no wave is read, and `analysis_shape`, whose rows hold the
+/// visuals' signals behind which 0.16.2 kept the wave, not at all.
+fn without_band_wave_sql() -> String {
+    format!(
+        "SELECT f.folder, f.rel, f.size, f.mtime FROM files f
+           JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
+           LEFT JOIN analysis_band_wave w INDEXED BY analysis_band_wave_form ON w.folder = a.folder AND w.rel = a.rel
+           LEFT JOIN tracks t ON t.id = f.track
+         WHERE {PRESENT_F} AND f.state = ?1 AND (a.complete IS NULL OR a.complete != 0)
+           AND (w.form IS NULL OR w.form NOT IN (?2, ?3))
+         ORDER BY t.born DESC, f.mtime DESC LIMIT ?4"
+    )
+}
+
 fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -4171,6 +4253,8 @@ fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64
     ])?;
     db.prepare_cached("INSERT OR REPLACE INTO analysis_shape (folder, rel, waveform, blocks, beats) VALUES (?1, ?2, ?3, ?4, ?5)")?
         .execute(params![folder, rel, a.waveform, blocks_bytes(&a.blocks), a.beats.as_ref().map(|b| b.0.as_slice())])?;
+    // The old analysis' waveform in three bands goes with it, as what the shape's row held goes as it is replaced (M1).
+    db.prepare_cached("DELETE FROM analysis_band_wave WHERE folder = ?1 AND rel = ?2")?.execute(params![folder, rel])?;
     Ok(())
 }
 
@@ -4466,6 +4550,7 @@ mod tests {
     fn a_copy_is_not_analysed_again() {
         let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/own")]).unwrap();
         read_file_in(&cat);
+        assert!(cat.store_band_wave(0, "A/1.flac", 10, 5, &a_band_wave()).unwrap());
         cat.db().execute("INSERT INTO files (folder, rel, size, mtime, state) VALUES (1, 'A/1.flac', 10, 5, 0)", []).unwrap();
         assert_eq!(cat.copy_rows(&[((0, "A/1.flac".into()), (1, "A/1.flac".into()), true)]).unwrap(), 1);
         let db = cat.db();
@@ -4480,6 +4565,87 @@ mod tests {
         drop(db);
         let waiting = cat.unanalysed(10).unwrap();
         assert!(!waiting.iter().any(|(f, rel, ..)| (*f, rel.as_str()) == (1, "A/1.flac")), "not analysed again: {waiting:?}");
+        assert_eq!(cat.without_band_wave(10).unwrap(), Vec::new(), "nor its waveform in three bands worked out again");
+    }
+
+    /// M1: the pass's question of which files have no waveform in three bands reads `analysis_band_wave`'s index of forms
+    /// alone: no wave, and nothing of `analysis_shape`, whose rows hold the visuals' signals (250 KB each: 0.16.2's question read
+    /// 1.3 GB behind them every ten minutes). With the shape's table away, it answers as before.
+    #[test]
+    fn the_band_wave_question_reads_the_index_alone() {
+        use crate::analysis::band_wave::{FAILED, FORMAT};
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let todo = cat.unanalysed(10).unwrap();
+        for (folder, rel, _, size, mtime) in &todo {
+            cat.store_analysis(*folder, rel, *size, *mtime, &an_analysis(-3.0, 500)).unwrap();
+        }
+        let (folder, one, _, size, mtime) = todo.iter().find(|t| t.1.ends_with("One.mp3")).unwrap().clone();
+        assert!(cat.store_band_wave(folder, &one, size, mtime, &a_band_wave()).unwrap());
+        let plan: Vec<String> = {
+            let db = cat.db();
+            let mut st = db.prepare(&format!("EXPLAIN QUERY PLAN {}", without_band_wave_sql())).unwrap();
+            st.query_map(params![READ, FORMAT, FAILED, 10], |r| r.get::<_, String>(3)).unwrap().map(Result::unwrap).collect()
+        };
+        assert!(plan.iter().any(|p| p.contains("USING COVERING INDEX analysis_band_wave_form")), "{plan:?}");
+        assert!(!plan.iter().any(|p| p.contains("analysis_shape")), "{plan:?}");
+        let wanted = |cat: &Catalogue| cat.without_band_wave(10).unwrap().into_iter().map(|t| t.1).collect::<Vec<_>>();
+        let before = wanted(&cat);
+        assert_eq!(before.len(), 1, "{before:?}");
+        assert!(!before.contains(&one));
+        cat.db().execute_batch("ALTER TABLE analysis_shape RENAME TO analysis_shape_away").unwrap();
+        assert_eq!(wanted(&cat), before, "the shape's table away, the same answer");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// M1, 0.17's step's part `band_wave`: the waves 0.16 kept in `analysis_shape` copied apart once, a batch at a time, each
+    /// with its form (current, the mark of a failure, an older form); a start cut off after a batch goes on at the next and
+    /// copies each once; the shape's rows, signals and all, are read and never written; done, the part does not run again.
+    #[test]
+    fn the_band_waves_move_apart_once_a_batch_at_a_time() {
+        use crate::analysis::band_wave::{FAILED, FORMAT};
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let current = a_band_wave().0;
+        {
+            let db = cat.db();
+            let mut put = db.prepare("INSERT INTO analysis_shape (folder, rel, bands, band_wave, spectrum) VALUES (?1, ?2, zeroblob(300000), ?3, x'0102')").unwrap();
+            let waves = [Some(current.clone()), Some(vec![FAILED]), None, Some(vec![FORMAT, 1, 2]), Some(current.clone()), Some(current.clone()), Some(current.clone())];
+            for (n, wave) in waves.into_iter().enumerate() {
+                put.execute(params![if n == 6 { -2 } else { 0 }, format!("A/{n}.flac"), wave]).unwrap();
+            }
+        }
+        let shapes = |cat: &Catalogue| -> Vec<(i64, i64, String, i64, Option<Vec<u8>>, Option<Vec<u8>>)> {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT rowid, folder, rel, length(bands), band_wave, spectrum FROM analysis_shape ORDER BY rowid").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let apart = |cat: &Catalogue| -> Vec<(i64, String, u8)> {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT folder, rel, form FROM analysis_band_wave ORDER BY folder, rel").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let marked = |cat: &Catalogue| cat.meta(BAND_WAVE_MARK);
+        let before = shapes(&cat);
+        let cut = cat.band_waves_apart(2, &|| anyhow::bail!("stopped")).unwrap_err();
+        assert_eq!(cut.to_string(), "stopped");
+        assert_eq!(apart(&cat), [(-2, "A/6.flac".to_string(), FORMAT), (0, "A/0.flac".to_string(), FORMAT)], "the first batch, kept");
+        assert_eq!(marked(&cat), None, "not done");
+        assert_eq!(cat.band_waves_apart(2, &|| Ok(())).unwrap(), Some(6));
+        let each = |rel: &str, form: u8| (0, rel.to_string(), form);
+        assert_eq!(
+            apart(&cat),
+            [(-2, "A/6.flac".to_string(), FORMAT), each("A/0.flac", FORMAT), each("A/1.flac", FAILED), each("A/3.flac", 0), each("A/4.flac", FORMAT), each("A/5.flac", FORMAT)],
+            "each once, by its form; none where there was none"
+        );
+        let same: i64 = cat.db().query_row("SELECT count(*) FROM analysis_band_wave w JOIN analysis_shape s USING (folder, rel) WHERE w.band_wave = s.band_wave", [], |r| r.get(0)).unwrap();
+        assert_eq!(same, 6, "the waves as they were");
+        assert_eq!(shapes(&cat), before, "the shape's rows read, never written");
+        assert_eq!(marked(&cat).as_deref(), Some(r#"{"band_waves":6}"#));
+        cat.db().execute("DELETE FROM analysis_band_wave WHERE rel = 'A/4.flac'", []).unwrap();
+        assert_eq!(cat.band_waves_apart(2, &|| Ok(())).unwrap(), None, "done: not again");
+        assert_eq!(apart(&cat).len(), 5);
     }
 
     /// C39: a copy shares no more once its file is written (a tag write: a new size or time, read again or walked); it keeps its
@@ -4664,9 +4830,12 @@ mod tests {
         assert!(cat.store_band_wave(two.0, &two.1, two.3, two.4, &BandWave(w)).unwrap());
         assert!(wanted(&cat).is_empty());
         // An older form's mark is not this one's: asked for again.
-        cat.store_band_wave_failed(folder, &one, size, mtime).unwrap();
-        cat.db().execute("UPDATE analysis_shape SET band_wave = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, one, vec![FAILED - 1]]).unwrap();
+        assert!(cat.store_band_wave(folder, &one, size, mtime, &BandWave(vec![FAILED - 1])).unwrap());
         assert_eq!(wanted(&cat), vec![one.clone()]);
+        // A new analysis of a file lets go of the waveform worked out of it before (M1, as the shape's row did): asked for again.
+        cat.store_analysis(two.0, &two.1, two.3, two.4, &an_analysis(-5.0, 480)).unwrap();
+        assert_eq!(cat.band_wave_of(two.0, &two.1), Some(None));
+        assert_eq!(wanted(&cat).len(), 2);
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -4721,13 +4890,21 @@ mod tests {
         cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
         let row = BeatThisRow { folder, rel: one.clone(), size, mtime, beats: vec![500, 1_000], downbeats: vec![500] };
         cat.store_beat_this(std::slice::from_ref(&row)).unwrap();
+        assert!(cat.store_band_wave(folder, &one, size, mtime, &a_band_wave()).unwrap());
         (one, row)
     }
 
-    /// How many rows of a file's shape and beats are kept at a place.
-    fn parts_at(cat: &Catalogue, folder: i64, rel: &str) -> (i64, i64) {
+    /// A waveform in three bands of the form this Cratarr makes.
+    fn a_band_wave() -> crate::analysis::band_wave::BandWave {
+        let mut w = vec![crate::analysis::band_wave::FORMAT];
+        w.resize(crate::analysis::band_wave::LEN, 9);
+        crate::analysis::band_wave::BandWave(w)
+    }
+
+    /// How many rows of a file's shape, beats and waveform in three bands are kept at a place.
+    fn parts_at(cat: &Catalogue, folder: i64, rel: &str) -> (i64, i64, i64) {
         let count = |table: &str| cat.db().query_row(&format!("SELECT COUNT(*) FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel], |r| r.get(0)).unwrap();
-        (count("analysis_shape"), count("beat_this"))
+        (count("analysis_shape"), count("beat_this"), count("analysis_band_wave"))
     }
 
     /// Beats left behind would list the file for hearing again, and a row a walk left in the way would break the shape's key.
@@ -4744,7 +4921,8 @@ mod tests {
         cat.move_files(0, "A - B (2020)", 0, "A - B (2020) moved").unwrap();
         assert_eq!(cat.beat_this_of(0, &moved).map(|(beats, _)| beats), Some(vec![0.5, 1.0]), "its own beats, not what stood there");
         assert_eq!(cat.analysis_of(0, &moved).unwrap().waveform.len(), 512, "its shape came along");
-        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "nothing left behind");
+        assert_eq!(cat.band_wave_of(0, &moved), Some(Some(a_band_wave())), "its waveform in three bands too");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0, 0), "nothing left behind");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -4756,15 +4934,18 @@ mod tests {
         read_as_audio(&cat);
         let (one, _) = heard(&cat, 0);
         cat.set_folders(vec![b.clone()]).unwrap();
-        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "parked, with its files");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0, 0), "parked, with its files");
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
-        assert_eq!(parts_at(&cat, 0, &one), (1, 1), "back, with them");
+        assert_eq!(parts_at(&cat, 0, &one), (1, 1, 1), "back, with them");
         assert!(cat.beat_this_of(0, &one).is_some());
         cat.set_folders(vec![b.clone()]).unwrap();
         std::fs::remove_dir_all(a.join("A - B (2020)")).unwrap();
         std::fs::write(a.join("other.mp3"), "x").unwrap();
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
-        let left: i64 = cat.db().query_row("SELECT (SELECT COUNT(*) FROM analysis_shape) + (SELECT COUNT(*) FROM beat_this)", [], |r| r.get(0)).unwrap();
+        let left: i64 = cat
+            .db()
+            .query_row("SELECT (SELECT COUNT(*) FROM analysis_shape) + (SELECT COUNT(*) FROM beat_this) + (SELECT COUNT(*) FROM analysis_band_wave)", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(left, 0, "its files gone from its path: forgotten, and all of theirs with them");
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
@@ -6694,12 +6875,12 @@ mod tests {
         read_as_audio(&cat);
         cat.identify().unwrap();
         let (one, _) = heard(&cat, 0);
-        assert_eq!(parts_at(&cat, 0, &one), (1, 1));
+        assert_eq!(parts_at(&cat, 0, &one), (1, 1, 1));
         std::fs::remove_file(d.join(&one)).unwrap();
         cat.walk_all();
         cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
         cat.identify().unwrap();
-        assert_eq!(parts_at(&cat, 0, &one), (0, 0));
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0, 0));
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -7813,8 +7994,8 @@ mod tests {
         assert_eq!(cat.identify().unwrap(), (2, 0), "recognised");
         let moved = one.replace("A - B (2020)", "A - B (2020) moved");
         assert_eq!(cat.analysis_of(0, &moved).map(|a| a.waveform.len()), Some(crate::analysis::WAVEFORM_BINS), "its analysis, as it is the file it was");
-        assert_eq!(parts_at(&cat, 0, &moved), (1, 1), "its shape and beats");
-        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "nothing left behind");
+        assert_eq!(parts_at(&cat, 0, &moved), (1, 1, 1), "its shape, beats and waveform in three bands");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0, 0), "nothing left behind");
         let left: i64 = cat.db().query_row("SELECT count(*) FROM analysis WHERE rel = ?1", [&one], |r| r.get(0)).unwrap();
         assert_eq!(left, 0);
         std::fs::remove_dir_all(&d).ok();

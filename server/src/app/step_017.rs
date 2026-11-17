@@ -23,6 +23,9 @@
 //!   `link`; the artist's reference is read when the discography was. `related_artists` and the matches are read for the names
 //!   of artists nothing here names. Before the pages, so a record not had gets the page kept by its group. `discography` stays
 //!   as it was, read by Discover as before.
+//! - **The waveforms in three bands** (M1, a part of its own after the references, `Catalogue::band_waves_apart`): copied out of
+//!   `analysis_shape` into `analysis_band_wave` in batches, so the analysis pass asks which files have none without reading the
+//!   visuals' signals stored before them (1.3 GB on production). The shape's rows are never written.
 //! - **One release on two records** (G1): who keeps it goes by the order the parts run in: a link pasted by hand, a certain
 //!   match (MusicBrainz matched the record's tracks to it; two on one release, the older record), the files' own (the older
 //!   record first), a likely match. A retired record holds none.
@@ -104,9 +107,22 @@ fn give_again(cat: &Catalogue, ud: &UserData, asked_twice: &mut Vec<serde_json::
     Ok(())
 }
 
+/// The rows of `analysis_shape` the part `band_wave` reads at a time (M1): a batch a transaction.
+const BAND_WAVE_BATCH: usize = 500;
+
 /// The step at a start: done before, or done now. Blocking.
 pub fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
-    run_with(cat, ud, &|_| Ok(()))
+    run_with(cat, ud, &|_| Ok(()))?;
+    band_waves(cat)
+}
+
+/// The part `band_wave` (M1): the waveforms in three bands apart from the visuals' signals, once. Blocking.
+fn band_waves(cat: &Catalogue) -> Result<()> {
+    let started = std::time::Instant::now();
+    if let Some(apart) = cat.band_waves_apart(BAND_WAVE_BATCH, &|| Ok(())).context("0.17's step, part band_wave")? {
+        tracing::info!(target: "library", band_waves = apart, secs = started.elapsed().as_secs(), "0.17's step: the waveforms in three bands apart from the visuals' signals");
+    }
+    Ok(())
 }
 
 /// `run`, `after` hearing each part done: an error from it stops the step there, as a stop would (what the tests cut it by).
@@ -438,7 +454,7 @@ mod tests {
         data.run();
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp' AND value NOT LIKE 'https://paperlantern.%'"), pages, "the part it lacked ran");
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE subject = 'al-2' AND source = 'discogs' AND how = 'hand'"), 0, "a part done did not run again");
-        assert_eq!(data.marks().len(), PARTS_017.len());
+        assert_eq!(data.marks().len(), PARTS_017.len() + 1, "and the band waves'");
         let (_, ud) = data.open();
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!(table(report, "bandcamp_found").0, data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM bandcamp_found") as u64, "{report}");
@@ -574,7 +590,7 @@ mod tests {
         data.batch("userdata.sqlite", "DELETE FROM migration_report WHERE part = 'references'");
         let (cat, ud) = data.open();
         run(&cat, &ud).expect("the start goes on");
-        assert_eq!(data.marks().len(), PARTS_017.len(), "no part run again");
+        assert_eq!(data.marks().len(), PARTS_017.len() + 1, "no part run again (and the band waves')");
         let report = &ud.migration_report().unwrap()[PART].1;
         assert!(report["tables"].as_array().unwrap().iter().all(|t| t["name"] != "bandcamp_found"), "{report}");
         assert!(report["tables"].as_array().unwrap().iter().any(|t| t["name"] == "record_references"));

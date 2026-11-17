@@ -915,7 +915,7 @@ mod switched_off_tests {
         let (d, db) = data_0_16("step-runs");
         drop(started(&d, &db).await.unwrap());
         let marks = marks_017(&d);
-        assert_eq!(marks.len(), crate::catalogue::records::PARTS_017.len(), "{marks:?}");
+        assert_eq!(marks.len(), crate::catalogue::records::PARTS_017.len() + 1, "and the band waves': {marks:?}");
         let report = db.migration_report().unwrap()[crate::app::step_017::PART].clone();
         drop(started(&d, &db).await.unwrap());
         assert_eq!((marks_017(&d), db.migration_report().unwrap()[crate::app::step_017::PART].clone()), (marks, report));
@@ -951,7 +951,7 @@ mod switched_off_tests {
 
         catalogue().execute_batch("DROP TRIGGER no_pages").unwrap();
         drop(started(&d, &db).await.expect("it starts"));
-        assert_eq!(marks().len(), crate::catalogue::records::PARTS_017.len());
+        assert_eq!(marks().len(), crate::catalogue::records::PARTS_017.len() + 1, "and the band waves'");
         assert!(db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
         std::fs::remove_dir_all(&d).ok();
     }

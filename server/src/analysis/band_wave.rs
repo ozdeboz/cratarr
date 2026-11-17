@@ -8,8 +8,8 @@
 //! each band's RMS over its share of the track, as a byte against the loudest bin of any band, so the bands stay in
 //! proportion to each other (a quiet treble looks quiet); the display chooses how to draw them.
 //!
-//! Kept beside the analysis (`analysis_shape.band_wave`): a format byte, then the 512 low bins, the 512 mid and the
-//! 512 high. Worked out the first time a track plays, and for the rest of the library by the analysis pass when it has
+//! Kept beside the analysis (`analysis_band_wave`, apart from the shape since 0.17: M1): a format byte, then the 512 low
+//! bins, the 512 mid and the 512 high. Worked out the first time a track plays, and for the rest of the library by the analysis pass when it has
 //! nothing else to do (`app::analysis_pass`).
 //!
 //! Blocking; run on a blocking thread.
@@ -43,6 +43,18 @@ impl BandWave {
     /// Whether this is the mark of a file they could not be worked out of ([`FAILED`]).
     pub fn failed(&self) -> bool {
         self.0 == [FAILED]
+    }
+
+    /// What these are, as the catalogue keeps beside them (`analysis_band_wave.form`, M1), so the pass asks which files have
+    /// none without reading a wave: [`FORMAT`] when current, [`FAILED`] for the mark, 0 of an older form.
+    pub fn form(&self) -> u8 {
+        if self.current() {
+            FORMAT
+        } else if self.failed() {
+            FAILED
+        } else {
+            0
+        }
     }
 }
 

@@ -38,6 +38,29 @@ const IDLE: Duration = Duration::from_secs(600);
 const REST: u32 = 3;
 /// `keep` starts once this share (percent) of the library has an analysis.
 const STARTED_AT: u64 = 50;
+/// How many files' waveforms in three bands the pass asks the catalogue for at once (M1): a question a batch, not a file.
+const BANDS: usize = 50;
+
+/// A file the pass works on: (folder, rel, path, size, mtime).
+type Work = (i64, String, std::path::PathBuf, u64, i64);
+
+/// The files whose waveform in three bands the pass works out next (M1): taken `BANDS` at a time, with room for those that
+/// failed this run (the answer holds them again), handed out one at a time, and asked for again once all are.
+#[derive(Default)]
+struct BandWaves(std::collections::VecDeque<Work>);
+
+impl BandWaves {
+    /// The next file not among those that `failed` this run: of those taken, else of a new batch `ask` answers, at most the
+    /// number it is given.
+    fn next(&mut self, failed: &HashSet<(i64, String, u64, i64)>, ask: impl FnOnce(usize) -> Vec<Work>) -> Option<Work> {
+        let fresh = |w: &Work| !failed.contains(&(w.0, w.1.clone(), w.3, w.4));
+        if let Some(w) = std::iter::from_fn(|| self.0.pop_front()).find(fresh) {
+            return Some(w);
+        }
+        self.0 = ask(BANDS + failed.len()).into();
+        std::iter::from_fn(|| self.0.pop_front()).find(fresh)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -82,6 +105,7 @@ pub fn run(cat: Arc<Catalogue>) {
         let mut failed: HashSet<(i64, String, u64, i64)> = HashSet::new();
         let mut unheard: HashSet<(i64, String, u64, i64)> = HashSet::new();
         let mut unbanded: HashSet<(i64, String, u64, i64)> = HashSet::new();
+        let mut banding = BandWaves::default();
         let mut waiting_said = false;
         loop {
             let settings = super::runtime::now();
@@ -119,15 +143,16 @@ pub fn run(cat: Arc<Catalogue>) {
                         .find(|(f, r, _, s, m)| !unheard.contains(&(*f, r.clone(), *s, *m)))
                 };
                 let Some((folder, rel, path, size, mtime)) = next else {
-                    // No beats to hear either: one file's waveform in three bands, else a rest.
-                    let (c, limit) = (cat.clone(), 1 + unbanded.len());
-                    let next = tokio::task::spawn_blocking(move || c.without_band_wave(limit))
-                        .await
-                        .ok()
-                        .and_then(|r| r.ok())
-                        .unwrap_or_default()
-                        .into_iter()
-                        .find(|(f, r, _, s, m)| !unbanded.contains(&(*f, r.clone(), *s, *m)));
+                    // No beats to hear either: the next file's waveform in three bands, of a batch taken at once (M1), else a
+                    // rest.
+                    let (c, mut queue, failed) = (cat.clone(), std::mem::take(&mut banding), unbanded.clone());
+                    let (queue, next) = tokio::task::spawn_blocking(move || {
+                        let next = queue.next(&failed, |limit| c.without_band_wave(limit).unwrap_or_default());
+                        (queue, next)
+                    })
+                    .await
+                    .unwrap_or_default();
+                    banding = queue;
                     let Some((folder, rel, path, size, mtime)) = next else {
                         rest_idle().await;
                         continue;
@@ -139,6 +164,10 @@ pub fn run(cat: Arc<Catalogue>) {
                     let r = rel.clone();
                     let done = tokio::task::spawn_blocking(move || {
                         let _turn = turn;
+                        // Taken with its batch, a while ago maybe: still there as it was, or passed over.
+                        if c.file_to_analyse(folder, &r).is_none_or(|(_, s, m)| (s, m) != (size, mtime)) {
+                            return Ok(false);
+                        }
                         let _job = crate::memwatch::job(format!("band wave: {r}"));
                         match crate::analysis::band_wave::work_out(&path) {
                             Ok(w) => c.store_band_wave(folder, &r, size, mtime, &w),
@@ -529,6 +558,29 @@ async fn ahead(cat: Arc<Catalogue>, folder: i64, rel: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M1: the pass asks the catalogue for the files with no waveform in three bands a batch at a time, not once a file; one
+    /// that failed this run is passed over, and the batch leaves room for it.
+    #[test]
+    fn band_waves_are_asked_for_a_batch_at_a_time() {
+        let work = |n: usize| -> Work { (0, format!("{n}.flac"), std::path::PathBuf::new(), 1, 1) };
+        let mut left: Vec<Work> = (0..120).map(work).collect();
+        let failed: HashSet<(i64, String, u64, i64)> = [(0, "7.flac".to_string(), 1, 1)].into();
+        let (mut queue, asked, mut done) = (BandWaves::default(), std::cell::Cell::new(0), Vec::new());
+        loop {
+            let next = queue.next(&failed, |limit| {
+                asked.set(asked.get() + 1);
+                left.iter().take(limit).cloned().collect()
+            });
+            let Some(w) = next else { break };
+            // Worked out: no longer in the answer.
+            left.retain(|l| l.1 != w.1);
+            done.push(w.1);
+        }
+        assert_eq!(done.len(), 119, "all but the one that failed");
+        assert!(!done.contains(&"7.flac".to_string()));
+        assert_eq!(asked.get(), 4, "three batches, and the answer that holds only the one that failed");
+    }
 
     #[tokio::test]
     async fn the_visuals_decode_a_track_once_and_what_was_kept_stays_as_it_was() {
