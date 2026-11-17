@@ -676,8 +676,8 @@ fn subjects_in(db: &Connection, r: &Ref) -> Result<Vec<String>> {
 /// names say.
 const IDENTIFYING: [(&str, &str); 5] = [("musicbrainz", "release-group"), ("musicbrainz", "release"), ("discogs", "master"), ("discogs", "release"), ("bandcamp", "album")];
 
-/// Records by their folded artist and title, read once for all a caller asks after: the live, had ones (`holders_in`); the records
-/// not had, once a record pass (`wanted_record`).
+/// Records by their folded artist and title, read once for all a caller asks after: the live ones, had or not (`holders_in`, Y1:
+/// which are had it asks of the few it needs); the records not had, once a record pass (`wanted_record`).
 pub(super) type FoldedNames = Option<std::collections::HashMap<(String, String), Vec<i64>>>;
 
 /// Ids as a query holds them: numbers alone, so the text is safe.
@@ -748,13 +748,34 @@ fn contradicts(mine: &[(String, String, String)], theirs: &[(String, String, Str
     })
 }
 
+/// Records of one name as albums (X8, X9): records holding one MusicBrainz release group or release are one album, its copies
+/// or editions; a record holding neither, one of its own. Each album's records, from each record's references.
+fn albums_of<'r>(records: impl IntoIterator<Item = (i64, &'r [(String, String, String)])>) -> Vec<Vec<i64>> {
+    let mut albums: Vec<(std::collections::BTreeSet<(String, String)>, Vec<i64>)> = Vec::new();
+    for (record, refs) in records {
+        let mine: std::collections::BTreeSet<(String, String)> =
+            refs.iter().filter(|(s, k, _)| s == "musicbrainz" && (k == "release-group" || k == "release")).map(|(_, k, v)| (k.clone(), v.to_ascii_lowercase())).collect();
+        let (same, apart): (Vec<_>, Vec<_>) = albums.into_iter().partition(|(held, _)| !mine.is_disjoint(held));
+        albums = apart;
+        albums.push(same.into_iter().fold((mine, vec![record]), |(mut held, mut members), (theirs, of)| {
+            held.extend(theirs);
+            members.extend(of);
+            (held, members)
+        }));
+    }
+    albums.into_iter().map(|(_, members)| members).collect()
+}
+
 /// Which record holds each record's files (R13, the one rule for "had": a request's record's, an artist's list's, C53a), each
 /// record a merge's end; those had alone are in the answer, by record. The record itself where it holds live tracks; else the
 /// oldest live, had record that holds its MusicBrainz release or release group (an album that arrived as a record of its own,
 /// its group known since by its tags, a match or Lidarr); else the oldest live, had record of its artist with its title, both
-/// folded, where no reference contradicts (`contradicts`). A retired record is had the same way: by a live record of its group or
-/// of its names. For a whole list at once, in a few queries whatever its length (C53a: an artist's page of hundreds of records
-/// asks once, not once a record); `names`, the live, had records by their names, read once for every call that passes it.
+/// folded, where no reference contradicts (`contradicts`). Never by a name that is several albums' besides the record's own,
+/// records had and not had counted as X9 counts them (`albums_of`), nor for a record made for a clash of names
+/// (`shared_name_records`): which album the name means, nothing says, so a request of it stays Wanted (Y1). A retired record is
+/// had the same way: by a live record of its group or of its names. For a whole list at once, in a few queries whatever its
+/// length (C53a: an artist's page of hundreds of records asks once, not once a record); `names`, the live records by their
+/// names, had or not, read once for every call that passes it.
 fn holders_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Result<std::collections::HashMap<i64, i64>> {
     use super::identity::fold;
     let mut out: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
@@ -805,19 +826,21 @@ fn holders_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Resu
             None => by_names.push(r),
         }
     }
-    // By its artist and title, folded, where nothing contradicts: the oldest.
+    // By its artist and title, folded, where nothing contradicts: the oldest had. Never a record made for a clash of names (X9, Y1),
+    // as merged now: a merge points at its end (`merge_records_in`).
     if by_names.is_empty() {
         return Ok(out);
     }
-    let named: Vec<(i64, String, String)> = db
-        .prepare(&format!("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id IN ({})", id_list(&by_names)))?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+    let named: Vec<(i64, String, String, bool)> = db
+        .prepare(&format!(
+            "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, ''), r.id IN (SELECT COALESCE(m.merged_into, m.id) FROM shared_name_records s JOIN records m ON m.id = s.record)
+             FROM records r WHERE r.id IN ({})",
+            id_list(&by_names)
+        ))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<rusqlite::Result<_>>()?;
     if names.is_none() {
-        let mut st = db.prepare_cached(
-            "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
-             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))) ORDER BY r.id",
-        )?;
+        let mut st = db.prepare_cached("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL ORDER BY id")?;
         let mut by_name: std::collections::HashMap<(String, String), Vec<i64>> = std::collections::HashMap::new();
         for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
             let (id, artist, title) = row?;
@@ -826,12 +849,21 @@ fn holders_in(db: &Connection, records: &[i64], names: &mut FoldedNames) -> Resu
         *names = Some(by_name);
     }
     let Some(index) = names.as_ref() else { return Ok(out) };
-    let keyed: Vec<(i64, (String, String))> = named.into_iter().map(|(id, artist, title)| (id, (fold(&artist), fold(&title)))).filter(|(_, (_, title))| !title.is_empty()).collect();
+    let keyed: Vec<(i64, (String, String))> =
+        named.into_iter().filter(|(.., clashed)| !*clashed).map(|(id, artist, title, _)| (id, (fold(&artist), fold(&title)))).filter(|(_, (_, title))| !title.is_empty()).collect();
+    // Every live record of those names, had or not: which are albums apart (X9), and which are had.
     let others: Vec<i64> = keyed.iter().filter_map(|(_, key)| index.get(key)).flatten().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     let theirs = refs_of(db, &others)?;
+    let theirs_of = |h: i64| theirs.get(&h).map_or(&none[..], Vec::as_slice);
+    let had_ones = live_had_of(db, &others)?;
     for (r, key) in keyed {
         let same = index.get(&key).map(Vec::as_slice).unwrap_or_default();
-        if let Some(h) = same.iter().copied().find(|h| *h != r && !contradicts(own_of(r), theirs.get(h).map_or(&none[..], Vec::as_slice))) {
+        // Its name's albums, its own among them (X9): two besides its own, and its names cannot say which it is.
+        let albums = albums_of(std::iter::once((r, own_of(r).as_slice())).chain(same.iter().filter(|h| **h != r).map(|h| (*h, theirs_of(*h)))));
+        if albums.iter().filter(|a| !a.contains(&r)).count() > 1 {
+            continue;
+        }
+        if let Some(h) = same.iter().copied().find(|h| *h != r && had_ones.contains(h) && !contradicts(own_of(r), theirs_of(*h))) {
             out.insert(r, h);
         }
     }
@@ -1558,7 +1590,8 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         Ok(None)
     };
     // Its names several live albums of the artist share, had or not had (X8): exact folded names cannot say which. Records holding
-    // one MusicBrainz release group or release are one album, its copies or editions (X9); a record holding neither, one of its own.
+    // one MusicBrainz release group or release are one album, its copies or editions (X9, `albums_of`, as the had rule counts them,
+    // Y1); a record holding neither, one of its own.
     let shared_names = || -> Result<bool> {
         let (artist, title) = (fold(&w.artist), fold(&w.title));
         if title.is_empty() {
@@ -1570,21 +1603,8 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         if named.len() < 2 {
             return Ok(false);
         }
-        let mut albums: Vec<std::collections::BTreeSet<(String, String)>> = Vec::new();
-        for id in named {
-            let mine: std::collections::BTreeSet<(String, String)> = refs_in(tx, &ids::record(id))?
-                .into_iter()
-                .filter(|(s, k, _)| s == "musicbrainz" && (k == "release-group" || k == "release"))
-                .map(|(_, k, v)| (k, v.to_ascii_lowercase()))
-                .collect();
-            let (same, apart): (Vec<_>, Vec<_>) = albums.into_iter().partition(|a| !mine.is_disjoint(a));
-            albums = apart;
-            albums.push(same.into_iter().fold(mine, |mut one, a| {
-                one.extend(a);
-                one
-            }));
-        }
-        Ok(albums.len() > 1)
+        let (refs, none) = (refs_of(tx, &named)?, Vec::new());
+        Ok(albums_of(named.iter().map(|id| (*id, refs.get(id).unwrap_or(&none).as_slice()))).len() > 1)
     };
     let shared = by_group.or(by_page).is_none() && shared_names()?;
     // A request by its names alone whose names clash takes the record made for the first such request, while it is live (X9): two
@@ -2924,8 +2944,10 @@ mod tests {
         assert!(![had[0], had[1], first].contains(&by_group), "one asked by its group: that group's own record");
     }
 
-    /// X9: an album held as two had records of one name reads had through the had rule (`holders_in`), whichever record its request
-    /// takes, so no fetcher takes it: two copies of one album (a release group in common), and two records nothing tells apart.
+    /// X9, Y1: an album held as two copies (a release group in common) reads had through the had rule (`holders_in`), so no
+    /// fetcher takes it: its request takes the older copy by its names. Two had records nothing tells apart are two albums of one
+    /// name (X8's clash), no longer one owned twice: the request takes a record of its own, which neither holds by its names, and
+    /// stays Wanted (Y1, the triage's rule).
     #[test]
     fn a_request_for_an_album_owned_twice_reads_had() {
         for grouped in [true, false] {
@@ -2937,7 +2959,55 @@ mod tests {
                 }
             }
             let record = cat.record_for_request(&Wanted { artist: "Glass Harbour".into(), title: "Two Rooms".into(), ..Wanted::default() }).unwrap();
-            assert_eq!(cat.requested(&[record]).unwrap()[&record].holder, Some(twice[0]), "grouped {grouped}: held, by the older copy");
+            assert_eq!(cat.requested(&[record]).unwrap()[&record].holder, grouped.then_some(twice[0]), "grouped {grouped}: held by the older copy; else Wanted");
+        }
+    }
+
+    /// Y1 (the review's finding 1, the rehearsal's request 89): of two albums of one name, one had and one not (Orbital's 1991
+    /// album owned, its 1993 one a discography's), a request for the name is not had by the owned one: by its names alone it takes
+    /// X9's shared record, by a group no record holds a record of its own (X8), and neither is held by names. Both stay Wanted.
+    #[test]
+    fn a_request_for_one_of_two_same_named_albums_is_not_had_by_the_other() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let owned = cat.record_for_tests("Glass Harbour", 2);
+        let listed = cat.record_for_tests("Glass Harbour", 0);
+        assert!(cat.set_reference(&ids::record(listed), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000320"), "link").unwrap());
+        let named = Wanted { artist: "Glass Harbour".into(), title: "Glass Harbour".into(), ..Wanted::default() };
+        let alone = cat.record_for_request(&named).unwrap();
+        let by_group = cat.record_for_request(&Wanted { group: Some("00000000-0000-4000-8000-000000000321".into()), ..named }).unwrap();
+        assert!(![owned, listed].contains(&alone) && ![owned, listed, alone].contains(&by_group), "each its own record (X8, X9)");
+        let read = cat.requested(&[alone, by_group]).unwrap();
+        assert_eq!((read[&alone].holder, read[&by_group].holder), (None, None), "neither had by the owned album");
+    }
+
+    /// Y1: a record made for a clash of names (`shared_name_records`, X9) is never held by its names, though the clash is over: the
+    /// album of the two that went from the library may be the one its request meant. It stays Wanted.
+    #[test]
+    fn a_record_made_for_a_clash_of_names_is_not_held_by_its_names() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let had = [cat.record_for_tests("Glass Harbour", 2), cat.record_for_tests("Glass Harbour", 3)];
+        let record = cat.record_for_request(&Wanted { artist: "Glass Harbour".into(), title: "Glass Harbour".into(), ..Wanted::default() }).unwrap();
+        assert!(shared_names(&cat).iter().any(|(_, r)| *r == record), "made for the clash");
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [had[1]]).unwrap();
+        assert_eq!(cat.requested(&[record]).unwrap()[&record].holder, None, "one album of its name left, and not had by it");
+    }
+
+    /// Y1, X9: two copies of one album (a release group in common) are one album of their name, so a record not had of that name
+    /// that no reference ties to them (a Discogs list's) is still held by names, by the older copy; two had records nothing tells
+    /// apart are two albums, and hold it no longer.
+    #[test]
+    fn two_copies_of_one_album_still_hold_by_names() {
+        for grouped in [true, false] {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let copies = [cat.record_for_tests("Two Rooms", 2), cat.record_for_tests("Two Rooms", 2)];
+            if grouped {
+                for c in copies {
+                    assert!(cat.set_reference(&ids::record(c), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000322"), "files").unwrap());
+                }
+            }
+            let listed = cat.record_for_tests("Two Rooms", 0);
+            assert!(cat.set_reference(&ids::record(listed), &Ref::new("discogs", "master", "3020"), "link").unwrap());
+            assert_eq!(cat.requested(&[listed]).unwrap()[&listed].holder, grouped.then_some(copies[0]), "grouped {grouped}");
         }
     }
 
