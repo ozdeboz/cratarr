@@ -463,12 +463,8 @@ impl App {
             (Some(served), Some(record)) if incoming => (super::requests::arrived_for(served, record, a.added).await, super::requests::open_of(served, record).await),
             _ => (Vec::new(), Vec::new()),
         };
-        // Its record, read before the copy goes (V1): Soulseek's Placed items of it are forgotten once it has.
-        let record = crate::serve::ids::record_number(&a.id).filter(|_| incoming);
+        // Soulseek's Placed items of its record are forgotten by the Delete itself (V1, U3: `delete_listed`).
         let done = self.incoming.delete_listed(source, a).await?;
-        if let Some(record) = record {
-            super::soulseek::forget_placed(record);
-        }
         if let Some(served) = self.served.as_ref() {
             // An administrator's Delete closes every asker's request, a requester's their own alone (Y4); what it closed is kept on
             // its journal entry, for its Undo. An open request of the record it leaves has Lidarr go on, and what Incoming's handler

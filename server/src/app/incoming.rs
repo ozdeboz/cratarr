@@ -765,6 +765,14 @@ impl IncomingService {
             return Err(ToggleError::Refused(format!("{e:#}")));
         }
         self.finish_reject(&event).await;
+        // Its record's Placed Soulseek items (V1, U3): none stands for a copy any more, nor keeps the record's next request from
+        // being searched, though no round reads its folder again. Every Delete of an Incoming copy comes here: App's, and
+        // Incoming's own endpoint, an administrator's.
+        if !self.lib.is_kept(dir.folder)
+            && let Some(record) = crate::serve::ids::record_number(&album.id)
+        {
+            super::soulseek::forget_placed(record);
+        }
         self.journal.applied(id)?;
         self.hidden.lock().await.insert(hidden_key(&album));
         catalogue.poke();
@@ -2014,6 +2022,31 @@ mod tests {
             assert!(standing(None), "back where it was: {n}");
         }
         for d in roots {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// U3 (the review of 8c/8d, finding 3): a Delete through Incoming's own endpoint (an administrator's, before the next Soulseek
+    /// round reads the folder) forgets the record's Placed Soulseek items, as App's Delete does: one left would keep the record's
+    /// next request from Soulseek for good. Other records' items stay, and a Delete in a main library forgets nothing.
+    #[tokio::test]
+    async fn an_admin_delete_before_the_round_still_frees_the_record() {
+        let (music, inc) = (folder("u3-music"), folder("u3-inc"));
+        let svc = on_disk(&music, &inc).await;
+        in_both(&music, &inc);
+        let c = svc.lib.catalogue();
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        crate::app::soulseek::placed_for_tests("ss-u3-placed", 1);
+        crate::app::soulseek::placed_for_tests("ss-u3-other", 9_301);
+        svc.delete_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        assert!(crate::app::soulseek::listed_for_tests("ss-u3-placed"), "a Delete in Music forgets nothing");
+        svc.delete_listed("cratarr", copy_at("al-1", 1, &inc.to_string_lossy(), "A/Album")).await.unwrap();
+        assert!(!crate::app::soulseek::listed_for_tests("ss-u3-placed"), "forgotten");
+        assert!(crate::app::soulseek::listed_for_tests("ss-u3-other"), "another record's stays");
+        crate::app::soulseek::forget_placed(9_301);
+        for d in [music, inc] {
             std::fs::remove_dir_all(d).ok();
         }
     }

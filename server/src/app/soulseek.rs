@@ -773,6 +773,23 @@ pub fn list_for_tests(id: &str, record: i64) {
     kept(|k| k.items.push(i));
 }
 
+/// Tests elsewhere: a Placed item of `record` on the list as `id`, its folder read (U3).
+#[cfg(test)]
+pub fn placed_for_tests(id: &str, record: i64) {
+    list_for_tests(id, record);
+    kept(|k| {
+        if let Some(i) = k.items.iter_mut().find(|i| i.id == id) {
+            i.state = State::Placed;
+        }
+    });
+}
+
+/// Tests elsewhere: whether an item `id` is on the list.
+#[cfg(test)]
+pub fn listed_for_tests(id: &str) -> bool {
+    kept(|k| k.items.iter().any(|i| i.id == id))
+}
+
 /// A record taken off the list (not while it is fetched): its Request is not taken in again. What it fetched goes with
 /// it: nothing else looks in a batch's folder.
 pub async fn drop_item(app: &Arc<super::App>, id: &str) -> View {
@@ -806,8 +823,8 @@ pub fn clear_placed(app: &Arc<super::App>) -> View {
     view(app)
 }
 
-/// A record's Placed items forgotten (V1): Incoming's Delete took its copy, so none of them stands for one any more, nor keeps the
-/// record's next request from being searched. Its items under way stay.
+/// A record's Placed items forgotten (V1): a Delete took its copy from Incoming (any of them, U3: `IncomingService::delete_listed`),
+/// so none of them stands for one any more, nor keeps the record's next request from being searched. Its items under way stay.
 pub fn forget_placed(record: i64) {
     kept(|k| k.items.retain(|i| !(i.state == State::Placed && i.record.record == record)));
 }
@@ -2021,7 +2038,8 @@ mod tests {
         assert_eq!(i.failed, ["a", "b"]);
     }
 
-    /// A record with two folders and two tracks, put on the list under `id`.
+    /// A record with two folders and two tracks, put on the list under `id`. Its record is none that Incoming's tests delete (their
+    /// copy is record 1, and a Delete forgets its Placed items, U3).
     fn listed(id: &str, state: State, batch: Option<&str>) {
         let f = |user: &str| Folder {
             user: user.into(),
@@ -2037,7 +2055,7 @@ mod tests {
         };
         let i = Item {
             id: id.into(),
-            record: record("Air", "Moon Safari", Some(1998)),
+            record: Record { record: 9_000, ..record("Air", "Moon Safari", Some(1998)) },
             state,
             tracks: vec![track(1, "One", 100), track(2, "Two", 200)],
             untimed: Vec::new(),
@@ -3257,7 +3275,7 @@ mod tests {
         let held = item(id).unwrap();
         assert_eq!((held.state, held.batch.as_deref(), held.checked.as_deref()), (State::Checking, None, Some(batch)));
         let mut k = Kept { items: vec![held.clone()], ..Kept::default() };
-        let stopped = take_requests(&mut k, &[asked(1, None)], &[had(1)], &[]);
+        let stopped = take_requests(&mut k, &[asked(1, None)], &[had(held.record.record)], &[]);
         assert!(k.items.is_empty(), "off the list: never taken up to be placed again");
         assert_eq!(stopped.iter().map(|i| i.checked.as_deref()).collect::<Vec<_>>(), [Some(batch)]);
         cancel_fetch(&slskd_at(all_in()).await, &d, &stopped[0]).await;
