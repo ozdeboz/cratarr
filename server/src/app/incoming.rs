@@ -2035,17 +2035,19 @@ mod tests {
         let svc = on_disk(&music, &inc).await;
         in_both(&music, &inc);
         let c = svc.lib.catalogue();
+        // A record of its own: the other tests here delete record 1's copy, which forgets record 1's Placed items.
+        c.number_above(9_300).unwrap();
         c.walk_all();
         c.pretend_read_for_tests();
         c.identify().unwrap();
-        crate::app::soulseek::placed_for_tests("ss-u3-placed", 1);
-        crate::app::soulseek::placed_for_tests("ss-u3-other", 9_301);
-        svc.delete_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        crate::app::soulseek::placed_for_tests("ss-u3-placed", 9_301);
+        crate::app::soulseek::placed_for_tests("ss-u3-other", 9_302);
+        svc.delete_listed("cratarr", copy_at("al-9301", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
         assert!(crate::app::soulseek::listed_for_tests("ss-u3-placed"), "a Delete in Music forgets nothing");
-        svc.delete_listed("cratarr", copy_at("al-1", 1, &inc.to_string_lossy(), "A/Album")).await.unwrap();
+        svc.delete_listed("cratarr", copy_at("al-9301", 1, &inc.to_string_lossy(), "A/Album")).await.unwrap();
         assert!(!crate::app::soulseek::listed_for_tests("ss-u3-placed"), "forgotten");
         assert!(crate::app::soulseek::listed_for_tests("ss-u3-other"), "another record's stays");
-        crate::app::soulseek::forget_placed(9_301);
+        crate::app::soulseek::forget_placed(9_302);
         for d in [music, inc] {
             std::fs::remove_dir_all(d).ok();
         }
