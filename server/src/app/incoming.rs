@@ -766,7 +766,7 @@ impl IncomingService {
             let (title, _) = entry.event.album();
             if happened
                 && matches!(entry.event, Event::AlbumCopied { .. })
-                && let Err(e) = self.finish_copy(entry.id, &entry.event, None).await
+                && let Err((_, e)) = self.finish_copy(entry.id, &entry.event, None).await
             {
                 tracing::warn!("could not finish copying {title}: {e:#}");
                 continue;
@@ -1260,11 +1260,16 @@ impl IncomingService {
             if copied.is_ok() {
                 t.step(&doing, files, Some(files));
             }
-            t.finish(copied.as_ref().map(|_| ()).map_err(|e| anyhow::anyhow!("{e:#}")));
+            t.finish(copied.as_ref().map(|_| ()).map_err(|(_, e)| anyhow::anyhow!("{e:#}")));
         }
-        if let Err(e) = copied {
-            self.journal.forget(id)?;
-            return Err(ToggleError::Refused(format!("{e:#}")));
+        match copied {
+            Ok(()) => {}
+            // The copies stand (T4): the intent stays, for the pass to finish (`reconcile`) and the entry to have its Undo.
+            Err((true, e)) => return Err(ToggleError::Refused(format!("{e:#}"))),
+            Err((false, e)) => {
+                self.journal.forget(id)?;
+                return Err(ToggleError::Refused(format!("{e:#}")));
+            }
         }
         self.journal.applied(id)?;
         c.poke();
@@ -1275,22 +1280,25 @@ impl IncomingService {
 
     /// A Copy to's files and rows (C40), safe to repeat: every file copied (`Files::copy_all`: all or none, the original's time
     /// kept), then the copies' rows made from the originals' (`Catalogue::copy_rows`), each shared as its copy is. `held`: the
-    /// action's mark as under way, kept through it.
-    async fn finish_copy(&self, id: EventId, event: &Event, held: Option<Underway>) -> anyhow::Result<()> {
+    /// action's mark as under way, kept through it. A failure says whether the copies were written by then (T4).
+    async fn finish_copy(&self, id: EventId, event: &Event, held: Option<Underway>) -> Result<(), (bool, anyhow::Error)> {
         let Event::AlbumCopied { copies, .. } = event else { return Ok(()) };
-        let steps = self.steps(event).ok_or_else(|| anyhow::anyhow!("the folders are not in use any more"))?;
+        let (before, after) = (|e: anyhow::Error| (false, e), |e: anyhow::Error| (true, e));
+        let steps = self.steps(event).ok_or_else(|| before(anyhow::anyhow!("the folders are not in use any more")))?;
         let files = self.files.clone();
         let (shared, made) = tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<bool>, Vec<Option<(u64, i64)>>)> {
             let _held = held;
             let shared = files.copy_all(&steps)?;
             Ok((shared, steps.iter().map(|s| stamp_of(&s.to.0.join(&s.to.1))).collect()))
         })
-        .await??;
+        .await
+        .map_err(|e| before(anyhow::anyhow!("{e}")))?
+        .map_err(before)?;
         // What it wrote, as its Undo will find it (T1).
-        self.journal.done(id, COPIED, epoch_now(), &serde_json::json!(made))?;
+        self.journal.done(id, COPIED, epoch_now(), &serde_json::json!(made)).map_err(after)?;
         let rows: Vec<((i64, String), (i64, String), bool)> = copies.iter().zip(shared).map(|(m, s)| (m.from.clone(), m.to.clone(), s)).collect();
         let c = self.lib.catalogue();
-        tokio::task::spawn_blocking(move || c.copy_rows(&rows)).await??;
+        tokio::task::spawn_blocking(move || c.copy_rows(&rows)).await.map_err(|e| after(anyhow::anyhow!("{e}")))?.map_err(after)?;
         Ok(())
     }
 
@@ -2276,6 +2284,105 @@ mod tests {
     /// The tokens a Copy to's Undo kept on its entry (T1).
     fn uncopied(svc: &IncomingService, id: EventId) -> Vec<String> {
         svc.journal.result(id, UNCOPIED).unwrap().and_then(|v| serde_json::from_value(v["tokens"].clone()).ok()).unwrap_or_default()
+    }
+
+    /// T4.1: a Copy to whose rows are refused once, after its files are written (a catalogue refusing the copies' rows): the tap
+    /// fails with its reason, the intent is kept and the copies stand; the pass then finishes it, its rows copies on the record's
+    /// tracks, the entry applied, and its Undo works.
+    #[tokio::test]
+    async fn a_copy_whose_rows_fail_is_finished_by_the_pass() {
+        let (svc, music, inc, own) = with_own_music("t4-rows").await;
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        let c = svc.lib.catalogue();
+        c.execute_for_tests("CREATE TEMP TRIGGER refuse BEFORE INSERT ON files WHEN NEW.folder = 2 BEGIN SELECT RAISE(ABORT, 'refused once'); END");
+        let e = svc.copying(&at, 2, None).await.unwrap_err();
+        assert!(e.to_string().contains("refused once"), "the tap fails with its reason: {e}");
+        let intents: Vec<EventId> = svc.journal.intents().unwrap().into_iter().filter(|e| matches!(e.event, Event::AlbumCopied { .. })).map(|e| e.id).collect();
+        assert_eq!(intents.len(), 1, "its intent kept");
+        assert!(own.join("A/Album/1.flac").is_file() && own.join("A/Album/2.flac").is_file(), "the copies stand");
+        c.execute_for_tests("DROP TRIGGER refuse");
+        svc.reconcile().await;
+        assert!(c.track_of(2, "A/Album/1.flac").is_some() && c.track_of(2, "A/Album/1.flac") == c.track_of(0, "A/Album/1.flac"), "copies on the record's tracks");
+        assert!(svc.journal.album_events_since(0).unwrap().iter().any(|(id, _, e, undone)| *id == intents[0] && matches!(e, Event::AlbumCopied { .. }) && !undone), "applied");
+        svc.undo(&intents[0].to_string()).await.unwrap();
+        assert!(!own.join("A/Album/1.flac").exists(), "and its Undo takes it away");
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Files as the disk has them, but a copy fails (T4.2): all or none, as `Files::copy_all` promises, nothing written.
+    struct CopyFails(Arc<dyn crate::ports::Files>);
+
+    impl crate::ports::Files for CopyFails {
+        fn trash(&self, folder: &std::path::Path, rel: &str, now_epoch: i64) -> anyhow::Result<String> {
+            self.0.trash(folder, rel, now_epoch)
+        }
+        fn restore(&self, folder: &std::path::Path, token: &str) -> anyhow::Result<String> {
+            self.0.restore(folder, token)
+        }
+        fn purge(&self, folder: &std::path::Path, now_epoch: i64, keep_days: u32) -> anyhow::Result<usize> {
+            self.0.purge(folder, now_epoch, keep_days)
+        }
+        fn can_write(&self, folder: &std::path::Path) -> bool {
+            self.0.can_write(folder)
+        }
+        fn move_all(&self, plan: &[crate::moves::Step]) -> anyhow::Result<()> {
+            self.0.move_all(plan)
+        }
+        fn move_back(&self, plan: &[crate::moves::Step]) -> anyhow::Result<()> {
+            self.0.move_back(plan)
+        }
+        fn clear_parts(&self, plan: &[crate::moves::Step]) {
+            self.0.clear_parts(plan)
+        }
+        fn copy_all(&self, _plan: &[crate::moves::Step]) -> anyhow::Result<Vec<bool>> {
+            anyhow::bail!("the second file could not be copied")
+        }
+        fn shares(&self, from: &std::path::Path, to: &std::path::Path) -> bool {
+            self.0.shares(from, to)
+        }
+    }
+
+    /// T4.2: a Copy to failing while it copies its files leaves nothing under the target, no part, and no intent (as before T4).
+    #[tokio::test]
+    async fn a_copy_that_fails_while_copying_leaves_nothing_and_no_intent() {
+        let (svc, music, inc, own) = with_own_music("t4-files").await;
+        let svc = IncomingService { files: Arc::new(CopyFails(crate::ports::disk())), ..svc };
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        assert!(svc.copying(&at, 2, None).await.is_err());
+        assert!(lying(&own).is_empty(), "nothing under the target, no part");
+        assert!(svc.journal.intents().unwrap().is_empty(), "no intent");
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// T4.3: a restart between a Copy to's files and its rows (the intent in the journal, both files copied, no rows): the pass
+    /// makes the rows as copies, applies it, and its Undo works.
+    #[tokio::test]
+    async fn a_copy_stopped_before_its_rows_is_finished_by_the_pass() {
+        let (svc, music, inc, own) = with_own_music("t4-restart").await;
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        let (_, plan) = svc.plan_move(&at, 2, None).await.unwrap();
+        let plan = plan.unwrap();
+        let c = svc.lib.catalogue();
+        let from = |rel: &str| format!("A/Album/{rel}");
+        let copies: Vec<TrackMove> = plan.moves.iter().map(|(rel, to)| TrackMove { track: c.track_of(0, &from(rel)), from: (0, from(rel)), to: (2, to.clone()), was: None }).collect();
+        let event = Event::AlbumCopied { source: "cratarr".into(), album_id: "al-1".into(), title: "Zebra".into(), from_dir: (0, "A/Album".into()), to_dir: (2, plan.folder.clone()), copies };
+        let underway = svc.intend(epoch_now(), &event).unwrap();
+        let id = underway.id();
+        svc.files.copy_all(&svc.steps(&event).unwrap()).unwrap();
+        drop(underway);
+        assert!(!c.has_row(2, "A/Album/1.flac"), "no rows yet");
+        svc.reconcile().await;
+        assert!(svc.journal.get(id).unwrap().is_some_and(|e| e.applied), "applied");
+        assert!(c.track_of(2, "A/Album/1.flac").is_some() && c.track_of(2, "A/Album/1.flac") == c.track_of(0, "A/Album/1.flac"), "rows made as copies");
+        svc.undo(&id.to_string()).await.unwrap();
+        assert!(!own.join("A/Album/1.flac").exists(), "its Undo works");
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     /// T1.1: a Copy to's Undo takes only the files it copied, still as copied: a cover added to the copy's folder since and a track
