@@ -462,6 +462,11 @@ impl Serve {
         let (whole, folders) = self.library.build_from(self.catalogue(), &rules, &print)?;
         let why = if change == library::Change::Analyses { "new analyses" } else { "files, tags or rules changed" };
         self.built_now(why, whole, folders, change == library::Change::Songs)?;
+        // The backup's list of shared copies anew (C41): what a Delete, a move or an emptied trash changed of the copies' originals,
+        // the build has read.
+        if let Err(e) = crate::app::backup_list::write_for(self) {
+            tracing::warn!(target: "library", "the backup's list of shared copies was not written: {e:#}");
+        }
         Ok(true)
     }
 

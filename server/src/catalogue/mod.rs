@@ -3031,6 +3031,20 @@ impl Catalogue {
         Ok(done)
     }
 
+    /// The copies sharing their blocks with an original in catalogue folder `main` (C41, the backup's list): present, shared
+    /// (`files.shared`), on a track whose file lies in `main`, its trash counting as there still (Q16). A copy whose original left
+    /// is its own, and is not listed. In folder and path order. Blocking.
+    pub fn shared_copies(&self, main: i64) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(&format!(
+            "SELECT f.folder, f.rel FROM files f WHERE {PRESENT_F} AND f.shared = 1 AND f.folder <> ?1 AND f.track IS NOT NULL
+               AND EXISTS (SELECT 1 FROM files o WHERE o.track = f.track AND o.folder = ?1 AND o.gone_at IS NULL)
+             ORDER BY f.folder, f.rel"
+        ))?;
+        let rows = st.query_map([main], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Rows Cratarr moved into a trash (Replace: the old files into Music's trash; before 2026-10-16, Incoming's):
     /// they follow, marked trashed with the trash token, so they retire when the trash is emptied. Blocking.
     pub fn move_into_trash(&self, from: (i64, &str), to: (i64, &str), token: &str) -> Result<usize> {

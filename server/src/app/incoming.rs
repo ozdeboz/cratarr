@@ -966,6 +966,8 @@ impl IncomingService {
         }
         self.journal.mark_undone(entry.id, now)?;
         catalogue.poke();
+        // The backup's list of shared copies, anew (C41).
+        super::backup_list::refresh();
         Ok(title.clone())
     }
 
@@ -1289,6 +1291,8 @@ impl IncomingService {
         }
         self.journal.applied(id)?;
         c.poke();
+        // The backup's list of shared copies, anew (C41).
+        super::backup_list::refresh();
         Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
     }
 
