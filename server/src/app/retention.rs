@@ -474,8 +474,9 @@ mod tests {
         }
     }
 
-    /// RT01b: an artist whose only record was forgotten goes in the same pass, their tombstone written, and their id answers
-    /// "no longer known"; one a track credits stays, and so does one a kept record credits. Named again, they are a new artist.
+    /// RT01b: an artist whose only record was forgotten goes a day later (Z10: their day counts from when their last credit went,
+    /// not from their birth), their tombstone written, and their id answers "no longer known"; one a track credits stays, and so
+    /// does one a kept record credits. Named again, they are a new artist.
     #[tokio::test]
     async fn an_artist_left_with_nothing_is_forgotten() {
         let served = served(None, 85_000);
@@ -490,8 +491,10 @@ mod tests {
         // Tape Club, credited on a track of the library and on no record.
         served.library.db().execute("INSERT INTO song_artists (song_id, artist_id, name, position) VALUES ('tr-1', ?1, 'Tape Club', 0)", [ids::artist(featured)]).unwrap();
         let done = quiet_pass(&served, NOW).await.expect("due");
-        assert_eq!((done.records, done.artists), (vec![gone], vec![lonely]));
-        assert_eq!(cat.forgotten_at(&ids::artist(lonely)).unwrap(), Some(NOW), "their tombstone");
+        assert_eq!((done.records, done.artists), (vec![gone], vec![]), "their last credit went now: kept the day");
+        let done = quiet_pass(&served, NOW + DAY).await.expect("due");
+        assert_eq!(done.artists, [lonely], "a day on, still with nothing");
+        assert_eq!(cat.forgotten_at(&ids::artist(lonely)).unwrap(), Some(NOW + DAY), "their tombstone");
         let answer = unknown_artist(&cat, &ids::artist(lonely)).expect("no longer known");
         assert_eq!(answer.to_string(), "This artist is no longer known.");
         assert!(unknown_artist(&cat, &ids::artist(featured)).is_none(), "known: answered as before");

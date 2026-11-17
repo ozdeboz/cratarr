@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS forgotten (subject TEXT PRIMARY KEY, at INTEGER NOT N
 -- RT01c: when the paced re-read last came to a library artist's list at a source, read or not (`Catalogue::reread_tried`): it
 -- comes again a month later, so each comes once a month whatever came of it.
 CREATE TABLE IF NOT EXISTS list_reread (artist INTEGER NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (artist, source)) WITHOUT ROWID;
+-- Z10: when an artist's last credit went (`record_artists`: a build's retag, the forgetting of their last record), noted where
+-- it went: the forgetting counts their day from it, not from their birth. A row of one credited again means nothing.
+CREATE TABLE IF NOT EXISTS artists_bare (artist INTEGER PRIMARY KEY, since INTEGER NOT NULL) WITHOUT ROWID;
 -- Y12: the records of a name, by the names each row keeps folded (`names_of`); a rename makes them to be folded again.
 CREATE INDEX IF NOT EXISTS records_by_names ON records (names);
 DROP TRIGGER IF EXISTS records_names_unfolded;
@@ -542,6 +545,8 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         }
         out
     };
+    // The artists a credit went from here (Z10), noted at the end where it was their last.
+    let mut uncredited: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     for (record, a) in first {
         // Its names change on a retag only (R28, N11), as its list is let go of (R17): the copy that counts must rank at least as
         // high as the one that named it last (`named_rank`). A build without that copy (its library parked or out of reach, an
@@ -563,10 +568,14 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
         // discography's) give way wherever the files credit one; a listing's row of a label gives way to the files' own row of
         // that label. A label the files do not name stays, as a merge brought it (R9).
         if !ids.is_empty() {
-            tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND how = 'listing'")?.execute([record])?;
+            let mut gone = tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND how = 'listing' RETURNING artist")?;
+            for artist in gone.query_map([record], |r| r.get::<_, i64>(0))? {
+                uncredited.insert(artist?);
+            }
         }
         if held_artists.get(&record).map_or(&[][..], Vec::as_slice) != ids.as_slice() {
             tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND how = 'files'")?.execute([record])?;
+            uncredited.extend(held_artists.get(&record).into_iter().flatten());
             for (position, artist) in ids.iter().enumerate() {
                 tx.prepare_cached(
                     "INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'files')
@@ -597,6 +606,9 @@ pub(super) fn record_credits(tx: &Connection, albums: &[super::AlbumCopy], recor
                     .execute(params![record, label, catno])?;
             }
         }
+    }
+    for artist in uncredited {
+        tx.prepare_cached(LAST_CREDIT_WENT)?.execute(params![artist, at])?;
     }
     Ok(())
 }
@@ -2617,19 +2629,23 @@ const LISTS_KEPT: i64 = 30 * 86_400;
 /// The kept lists the forgetting lets go of (RT01b), `?1` thirty days ago: each read before then, of a record nothing keeps
 /// (`UNKEPT`) not opened since.
 const LISTS_FORGETTABLE: &str = "k.at < ?1 AND COALESCE(n.opened_at, 0) < ?1";
-/// How long an artist given an id is left before having nothing forgets them (RT01b): a build or a heart may be about to
-/// credit one just named.
+/// How long an artist is left with nothing before they are forgotten (RT01b), from when they were given their id or, later, when
+/// their last credit went (Z10, `artists_bare`): a build or a heart may be about to credit one just named, and an Undo of a retag
+/// to credit one again.
 const ARTIST_NEW: i64 = 86_400;
 /// The artists the forgetting takes (RT01b), `?1` a day ago: credited on no record, named by no reference by hand nor
-/// confirmed, no id from before 0.16 went to them, given theirs before `?1`. One a track credits, or the user data or a store
-/// names, is the caller's (`forget_quiet_artists`'s `protected`).
+/// confirmed, no id from before 0.16 went to them, given theirs, and their last credit gone (Z10), at `?1` or before. One a track
+/// credits, or the user data or a store names, is the caller's (`forget_quiet_artists`'s `protected`).
 const ARTISTS_FORGETTABLE: &str = "SELECT a.id FROM artists a
-     WHERE a.born < ?1
+     WHERE max(a.born, COALESCE((SELECT b.since FROM artists_bare b WHERE b.artist = a.id), 0)) <= ?1
        AND NOT EXISTS (SELECT 1 FROM record_artists ra WHERE ra.artist = a.id)
        AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.how = 'hand')
        AND NOT EXISTS (SELECT 1 FROM \"references\" c WHERE c.subject = 'ar-' || a.id AND c.confirmed = 1)
        AND a.id NOT IN (SELECT id FROM artist_moved)
      ORDER BY a.id";
+/// An artist's last credit gone at `?2` (Z10), where no record credits them now: their day's grace counts from then.
+const LAST_CREDIT_WENT: &str =
+    "INSERT OR REPLACE INTO artists_bare (artist, since) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM record_artists WHERE artist = ?1)";
 /// A subject forgotten at `?2`, its tombstone (RT01).
 const FORGOTTEN: &str = "INSERT OR REPLACE INTO forgotten (subject, at) VALUES (?1, ?2)";
 /// The artists with albums here: each credited first on a live record that holds live tracks. Discover's missing list is theirs
@@ -2719,14 +2735,23 @@ impl Catalogue {
             let all: Vec<i64> = st.query_map(params![from, now - KEPT_UNSEEN], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
             all.into_iter().filter(|record| !protected.contains(record)).collect()
         };
+        // The artists a credit went from here (Z10), noted where it was their last.
+        let mut uncredited: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
         for &record in &gone {
             let subject = ids::record(record);
             tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1")?.execute([&subject])?;
-            for table in ["record_artists", "record_labels", "reference_tracks", "lists_to_read"] {
+            let mut credits = tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 RETURNING artist")?;
+            for artist in credits.query_map([record], |r| r.get::<_, i64>(0))? {
+                uncredited.insert(artist?);
+            }
+            for table in ["record_labels", "reference_tracks", "lists_to_read"] {
                 tx.prepare_cached(&format!("DELETE FROM {table} WHERE record = ?1"))?.execute([record])?;
             }
             tx.prepare_cached("DELETE FROM records WHERE id = ?1")?.execute([record])?;
             tx.prepare_cached(FORGOTTEN)?.execute(params![subject, now])?;
+        }
+        for artist in uncredited {
+            tx.prepare_cached(LAST_CREDIT_WENT)?.execute(params![artist, now])?;
         }
         tx.execute("DELETE FROM shared_name_records WHERE record NOT IN (SELECT id FROM records)", [])?;
         tx.commit()?;
@@ -2753,14 +2778,16 @@ impl Catalogue {
         Ok(gone.len())
     }
 
-    /// The artists left with nothing, forgotten at `now` (RT01b), in one transaction: those `ARTISTS_FORGETTABLE` names, but for
-    /// `protected` (a track's credit, what the user data or a store names, gathered outside the catalogue). Each goes with their
-    /// references and leaves a tombstone (`forgotten`, `ar-<n>`); their id is never given again, and a name credited again is
-    /// given a new one. Their number among the artists of their name stays theirs (C55, `artist_numbers`), so it is never given
-    /// again either. The ids forgotten. Blocking.
+    /// The artists left with nothing, forgotten at `now` (RT01b), in one transaction: those `ARTISTS_FORGETTABLE` names (a day
+    /// after their last credit went, Z10), but for `protected` (a track's credit, what the user data or a store names, gathered
+    /// outside the catalogue). Each goes with their references and leaves a tombstone (`forgotten`, `ar-<n>`); their id is never
+    /// given again, and a name credited again is given a new one. Their number among the artists of their name stays theirs (C55,
+    /// `artist_numbers`), so it is never given again either. The ids forgotten. Blocking.
     pub fn forget_quiet_artists(&self, now: i64, protected: &std::collections::BTreeSet<i64>) -> Result<Vec<i64>> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // When the last credit went of one credited again means nothing: let go of (Z10).
+        tx.execute("DELETE FROM artists_bare WHERE artist IN (SELECT artist FROM record_artists)", [])?;
         let gone: Vec<i64> = {
             let mut st = tx.prepare_cached(ARTISTS_FORGETTABLE)?;
             let all: Vec<i64> = st.query_map([now - ARTIST_NEW], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -2770,6 +2797,7 @@ impl Catalogue {
             let subject = ids::artist(artist);
             tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1")?.execute([&subject])?;
             tx.prepare_cached("DELETE FROM list_reread WHERE artist = ?1")?.execute([artist])?;
+            tx.prepare_cached("DELETE FROM artists_bare WHERE artist = ?1")?.execute([artist])?;
             tx.prepare_cached("DELETE FROM artists WHERE id = ?1")?.execute([artist])?;
             tx.prepare_cached(FORGOTTEN)?.execute(params![subject, now])?;
         }
@@ -3780,6 +3808,32 @@ mod tests {
         assert_eq!(credited(&cat, artist, "Undertow", &group), listed);
         assert_eq!(seen_at(), Some(later), "never seen earlier than it was");
         assert!(cat.forget_quiet(later + 5 * MONTH, &std::collections::BTreeSet::new()).unwrap().is_empty(), "seen five months before: kept");
+    }
+
+    /// Z10: an artist is forgotten a day after their last credit went, not a day after they were given their id: one a retag took
+    /// their last credit from (the build), and one whose only record not had was forgotten, each born long before, are kept within
+    /// the day and go a day on; the name the retag credits stays.
+    #[test]
+    fn an_artist_is_forgotten_a_day_after_their_last_credit_went() {
+        const DAY: i64 = 86_400;
+        let cat = crate::catalogue::tests::tracks(2);
+        let album = |artist: &str| crate::catalogue::AlbumCopy {
+            artists: vec![artist.to_string()],
+            ..crate::catalogue::tests::copy(None, artist, "Tide Tables", &[(1, "One", 200_000), (2, "Two", 180_000)])
+        };
+        cat.assign_records(&[album("The Grouch")]).unwrap();
+        let (grouch, lonely) = (cat.artist_of("The Grouch").unwrap().unwrap(), cat.artist_for("Orbit Lane").unwrap());
+        let quiet = credited(&cat, lonely, "Undertow", &[]);
+        cat.db().execute("UPDATE records SET seen_at = 1 WHERE id = ?1", [quiet]).unwrap();
+        cat.db().execute("UPDATE artists SET born = 1", []).unwrap();
+        let went = now();
+        // The owner's plan retags The Grouch's album "Grouch" (0092); the forgetting takes Orbit Lane's only record.
+        cat.assign_records(&[album("Grouch")]).unwrap();
+        assert_eq!(cat.forget_quiet(went, &std::collections::BTreeSet::new()).unwrap(), [quiet]);
+        let none = std::collections::BTreeSet::new();
+        assert!(cat.forget_quiet_artists(went + DAY - 1, &none).unwrap().is_empty(), "within the day their last credit went: kept");
+        assert_eq!(cat.forget_quiet_artists(went + 2 * DAY, &none).unwrap(), [grouch, lonely], "a day on, still with nothing");
+        assert!(cat.artist_of("Grouch").unwrap().is_some(), "the name the retag credits stays");
     }
 
     /// RT01b: an artist a record credits, a reference pasted by hand or confirmed names, or an id from before 0.16 went to is
