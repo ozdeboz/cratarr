@@ -34,6 +34,8 @@ struct Turn {
     quiet: tokio::sync::Notify,
     /// The 503s' wait in a row (O5), none after any other answer.
     backing: std::sync::Mutex<Option<Duration>>,
+    /// A 503's back-off (Y8): every question waiting honours it in its turn, not only the next.
+    not_before: super::reach::NotBefore,
 }
 
 /// A question waiting that is not the background's, counted while it waits, a question dropped meanwhile too.
@@ -49,12 +51,19 @@ impl Drop for Waiting<'_> {
 
 impl Turn {
     const fn new() -> Self {
-        Self { next: tokio::sync::Mutex::const_new(None), waiting: AtomicUsize::new(0), quiet: tokio::sync::Notify::const_new(), backing: std::sync::Mutex::new(None) }
+        Self {
+            next: tokio::sync::Mutex::const_new(None),
+            waiting: AtomicUsize::new(0),
+            quiet: tokio::sync::Notify::const_new(),
+            backing: std::sync::Mutex::new(None),
+            not_before: super::reach::NotBefore::new(),
+        }
     }
 
-    /// An answer heard (O5): a 503 pushes the turn's next question out, `BACK_OFF_FIRST` doubling in a row to `BACK_OFF_MOST`, or as
-    /// long as its Retry-After says (at most a quarter of an hour); any other answer ends the run. The wait, after a 503.
-    async fn answered(&self, status: reqwest::StatusCode, retry_after: Option<u64>) -> Option<Duration> {
+    /// An answer heard (O5): a 503 holds the turn's questions, `BACK_OFF_FIRST` doubling in a row to `BACK_OFF_MOST`, or as long as its
+    /// Retry-After says (at most a quarter of an hour); any other answer ends the run. The wait, after a 503. Held at once, not behind
+    /// the questions waiting for the turn's lock, and each of those honours it in its turn (Y8).
+    fn answered(&self, status: reqwest::StatusCode, retry_after: Option<u64>) -> Option<Duration> {
         let wait = {
             let mut backing = self.backing.lock().unwrap_or_else(|p| p.into_inner());
             if status != reqwest::StatusCode::SERVICE_UNAVAILABLE {
@@ -65,12 +74,8 @@ impl Turn {
             *backing = Some(base);
             retry_after.map_or(base, |secs| Duration::from_secs(secs.min(15 * 60)))
         };
-        let at = tokio::time::Instant::now() + wait;
-        let mut next = self.next.lock().await;
-        if next.is_none_or(|n| n < at) {
-            *next = Some(at);
-        }
-        tracing::warn!(target: "musicbrainz", secs = wait.as_secs(), "MusicBrainz answered 503: its next question waits");
+        self.not_before.hold(tokio::time::Instant::now() + wait);
+        tracing::warn!(target: "musicbrainz", secs = wait.as_secs(), "MusicBrainz answered 503: its questions wait");
         Some(wait)
     }
 
@@ -81,9 +86,7 @@ impl Turn {
             self.waiting.fetch_add(1, Ordering::SeqCst);
             let _waiting = Waiting(self);
             let mut next = self.next.lock().await;
-            if let Some(at) = *next {
-                tokio::time::sleep_until(at).await;
-            }
+            self.not_before.wait(*next).await;
             *next = Some(tokio::time::Instant::now() + APART);
             return;
         }
@@ -94,7 +97,7 @@ impl Turn {
                 continue;
             }
             let mut next = self.next.lock().await;
-            match *next {
+            match (*next).max(self.not_before.get()) {
                 Some(at) if at > tokio::time::Instant::now() => {
                     drop(next);
                     tokio::time::sleep_until(at).await;
@@ -137,7 +140,7 @@ impl Asked for reqwest::RequestBuilder {
             TURN.take(BEHIND.try_with(|b| *b).unwrap_or(false)).await;
             let r = super::reach::Sent::sent(self).await?;
             let retry_after = r.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok());
-            TURN.answered(r.status(), retry_after).await;
+            TURN.answered(r.status(), retry_after);
             Ok(r)
         }
     }
@@ -216,18 +219,35 @@ mod tests {
         let t = Turn::new();
         let busy = reqwest::StatusCode::SERVICE_UNAVAILABLE;
         let secs = |d: Option<Duration>| d.map(|d| d.as_secs());
-        assert_eq!(secs(t.answered(busy, None).await), Some(5));
-        assert_eq!(secs(t.answered(busy, None).await), Some(10));
-        assert_eq!(secs(t.answered(busy, None).await), Some(20));
-        assert_eq!(secs(t.answered(busy, Some(7)).await), Some(7), "Retry-After honoured");
+        assert_eq!(secs(t.answered(busy, None)), Some(5));
+        assert_eq!(secs(t.answered(busy, None)), Some(10));
+        assert_eq!(secs(t.answered(busy, None)), Some(20));
+        assert_eq!(secs(t.answered(busy, Some(7))), Some(7), "Retry-After honoured");
         for _ in 0..4 {
-            t.answered(busy, None).await;
+            t.answered(busy, None);
         }
-        assert_eq!(secs(t.answered(busy, None).await), Some(60), "at most a minute");
-        let next = t.next.lock().await.unwrap();
-        assert!(next > Instant::now() + Duration::from_secs(50), "the next question waits");
-        assert_eq!(t.answered(reqwest::StatusCode::OK, None).await, None);
-        assert_eq!(secs(t.answered(busy, None).await), Some(5), "a run ends at any other answer");
+        assert_eq!(secs(t.answered(busy, None)), Some(60), "at most a minute");
+        let held = t.not_before.get().unwrap();
+        assert!(held > Instant::now() + Duration::from_secs(50), "the next question waits");
+        assert_eq!(t.answered(reqwest::StatusCode::OK, None), None);
+        assert_eq!(secs(t.answered(busy, None)), Some(5), "a run ends at any other answer");
+    }
+
+    /// Y8: a 503 holds the questions already waiting for the turn, not only the next: three wait while the first's answer is a 503,
+    /// and none goes before its back-off is out, each a turn after the one before.
+    #[tokio::test(start_paused = true)]
+    async fn a_503_holds_the_questions_already_waiting() {
+        let (turn, start) = (Turn::new(), Instant::now());
+        turn.take(false).await;
+        let busy = async {
+            tokio::task::yield_now().await;
+            turn.answered(reqwest::StatusCode::SERVICE_UNAVAILABLE, None)
+        };
+        let (a, b, c, wait) = tokio::join!(went(&turn, start), went(&turn, start), went(&turn, start), busy);
+        assert_eq!(wait, Some(BACK_OFF_FIRST));
+        let mut at = [a, b, c];
+        at.sort();
+        assert_eq!(at, [BACK_OFF_FIRST, BACK_OFF_FIRST + APART, BACK_OFF_FIRST + APART * 2]);
     }
 
     /// When a question asked at `start` went.

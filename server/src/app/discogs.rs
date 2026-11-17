@@ -101,6 +101,16 @@ fn too_many() {
     HOLD_UNTIL.fetch_max(now_ms() + TOO_MANY_WAIT.as_millis() as u64, Ordering::Relaxed);
 }
 
+/// Whether `get` asks once more after an answer of `status`: after its first 429 only (`again`). Every 429 holds every caller first, a
+/// second in a row too, and one while a hold is on pushes it out (O6, Y8).
+fn again_after(status: reqwest::StatusCode, again: &mut bool) -> bool {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return false;
+    }
+    too_many();
+    std::mem::take(again)
+}
+
 /// Whether a release group's kept cover answer is a fresh "none" (O6): no cover anywhere, so the Cover Art Archive is not asked for
 /// it either while it is kept. Pure.
 pub fn none_kept(kept: Option<(i64, Option<String>)>, now: i64) -> bool {
@@ -192,12 +202,11 @@ async fn get(path: &str) -> Result<Option<Value>> {
         }
         let r = req.sent().await?;
         note_limits(r.headers());
+        // Everyone held, not only this caller (O6): `pace` waits it out.
+        if again_after(r.status(), &mut again) {
+            continue;
+        }
         match r.status() {
-            reqwest::StatusCode::TOO_MANY_REQUESTS if std::mem::take(&mut again) => {
-                // Everyone held, not only this caller (O6): `pace` waits it out.
-                too_many();
-                continue;
-            }
             reqwest::StatusCode::NOT_FOUND => return Ok(None),
             _ => return Ok(Some(r.error_for_status()?.json().await?)),
         }
@@ -745,10 +754,32 @@ mod listing_tests {
 mod tests {
     use super::*;
 
+    /// The tests that set or read the hold every caller honours: one at a time.
+    static HOLDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Y8: every 429 holds every caller, a second in a row too (which is not asked again); any other answer holds no one.
+    #[test]
+    fn every_discogs_429_holds_everyone() {
+        let _one = HOLDING.lock().unwrap_or_else(|p| p.into_inner());
+        let busy = reqwest::StatusCode::TOO_MANY_REQUESTS;
+        let mut again = true;
+        HOLD_UNTIL.store(0, Ordering::Relaxed);
+        let first = again_after(busy, &mut again);
+        HOLD_UNTIL.store(0, Ordering::Relaxed);
+        let second = again_after(busy, &mut again);
+        let held = HOLD_UNTIL.swap(0, Ordering::Relaxed);
+        let other = again_after(reqwest::StatusCode::OK, &mut true);
+        let after_other = HOLD_UNTIL.load(Ordering::Relaxed);
+        assert!(first && !second, "the first asked once more, the second not");
+        assert!(held >= now_ms() + 59_000, "the second holds every caller all the same");
+        assert!(!other && after_other == 0, "any other answer holds no one");
+    }
+
     /// O6: Discogs' "too many" holds every caller, not only the one it answered; a release group kept as having no cover anywhere
     /// is not asked of the Cover Art Archive again while that is kept.
     #[test]
     fn a_discogs_429_holds_everyone_and_a_kept_none_asks_nothing() {
+        let _one = HOLDING.lock().unwrap_or_else(|p| p.into_inner());
         too_many();
         let held = HOLD_UNTIL.load(Ordering::Relaxed);
         HOLD_UNTIL.store(0, Ordering::Relaxed);

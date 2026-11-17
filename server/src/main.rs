@@ -249,6 +249,8 @@ async fn main() -> Result<()> {
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
     serve::set_instance(served.clone());
+    // Bandcamp's day after its bot check, kept across a restart (Y8).
+    bandcamp::hold_kept(&served.userdata);
     // The environment's server settings, with what Settings saved over them (0.9.8).
     let runtime = app::runtime::start(app::runtime::Seed::from_env(&env), Some(&served.userdata), &cfg.bind);
     let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), runtime.snapcast_host.clone());
