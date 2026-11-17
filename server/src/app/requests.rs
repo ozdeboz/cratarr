@@ -545,29 +545,65 @@ pub async fn reject(lidarr: Option<&dyn Fetcher>, ud: &crate::userdata::UserData
     closed
 }
 
-/// A Delete of a copy in Incoming, for its requests (W4, Y4, V2): those it closes (`closed_by`) closed as rejected (`reject`). Where
-/// it leaves an open request of the record (`open`, read before the copy went: `open_of`) whose record it no longer holds, Lidarr
-/// goes on, as when one of two requests is taken back (`tell_stopped`): it is not told to stop, and each one closed says so
-/// (`LIDARR_KEPT`); each approved one left is handed to the fetchers again (`hand_to`), its word that Lidarr was told to stop on the
-/// arrival gone. Whether Lidarr goes on: Incoming's handler then puts back what it stopped for the copy (`Incoming::keep_fetching`).
-pub async fn deleted(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, closing: &[Request], open: Vec<Request>, undo: Option<(&crate::journal::Journal, crate::journal::EventId)>) -> bool {
-    let left: Vec<Request> = open.into_iter().filter(|r| !closing.iter().any(|c| c.id == r.id)).collect();
+/// A Delete of a copy in Incoming, for its requests (W4, Y4, V2, U5): those it closes (`closed_by`) closed as rejected (`reject`).
+/// Where it leaves an approved request of the record (`open`, read before the copy went: `open_of`) whose record it no longer holds,
+/// a fetcher goes on for it. Each one's status is read again now the copy has gone (U5): a pending one alone is no reason to fetch,
+/// and one cancelled meanwhile is not handed again.
+/// - A copy Lidarr brought (`lidarrs`) first has its grab marked failed in Lidarr's history (U5): Lidarr blocklists that release
+///   and looks for another, so the next asker is not handed the same bad rip. Where no grab is found, or Lidarr can't be told,
+///   Lidarr stays stopped: the closed ones tell it so, and Soulseek alone looks for those left.
+/// - Where Lidarr goes on, as when one of two requests is taken back (`tell_stopped`), it is not told to stop, and each one closed
+///   says so (`LIDARR_KEPT`).
+///
+/// Each one left is handed to the fetchers again (`hand_to`), its word that Lidarr was told to stop on the arrival gone. Whether
+/// Lidarr goes on: Incoming's handler then puts back what it stopped for the copy (`Incoming::keep_fetching`).
+#[allow(clippy::too_many_arguments)]
+pub async fn deleted(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, closing: &[Request], open: Vec<Request>, lidarrs: bool, undo: Option<(&crate::journal::Journal, crate::journal::EventId)>) -> bool {
+    // Approved now, as the copy has gone (U5).
+    let left: Vec<Request> = open
+        .into_iter()
+        .filter(|r| !closing.iter().any(|c| c.id == r.id))
+        .filter(|r| serve.userdata.request(r.id).ok().flatten().is_some_and(|now| now.status == APPROVED))
+        .collect();
     // Had still, by another whole copy: none left wants it.
     let of = named(serve, &left).await;
     let left: Vec<Request> = left.into_iter().zip(of).filter(|(_, o)| !o.as_ref().is_some_and(RecordOf::had)).map(|(r, _)| r).collect();
-    let closed = reject(lidarr.filter(|_| left.is_empty()), &serve.userdata, closing, undo).await;
     if left.is_empty() {
+        reject(lidarr, &serve.userdata, closing, undo).await;
         return false;
     }
-    for r in closing.iter().filter(|r| closed.iter().any(|c| c.id == r.id)) {
-        if let Some(said) = r.fetched.as_deref().filter(|f| f.contains("Lidarr") && !f.starts_with("Not handed over")) {
-            let _ = serve.userdata.set_request_fetched(r.id, &format!("{said}; {LIDARR_KEPT}"));
+    // Lidarr's copy (U5): its grab failed first, by the group Lidarr was asked by; none found, Lidarr stays stopped.
+    let goes_on = match (lidarrs, lidarr) {
+        (false, _) => true,
+        (true, None) => false,
+        (true, Some(f)) => match left.iter().chain(closing).find_map(|r| r.release_group.clone()) {
+            Some(group) => match f.fail_grab(&group).await {
+                Ok(found) => {
+                    if !found {
+                        tracing::info!(target: "requests", group = %group, "a deleted copy's grab is not in Lidarr's history: Lidarr stays stopped, Soulseek looks");
+                    }
+                    found
+                }
+                Err(e) => {
+                    tracing::warn!(target: "requests", group = %group, reason = %format!("{e:#}"), "a deleted copy's grab not marked failed: Lidarr stays stopped, Soulseek looks");
+                    false
+                }
+            },
+            None => false,
+        },
+    };
+    let closed = reject(lidarr.filter(|_| !goes_on), &serve.userdata, closing, undo).await;
+    if goes_on {
+        for r in closing.iter().filter(|r| closed.iter().any(|c| c.id == r.id)) {
+            if let Some(said) = r.fetched.as_deref().filter(|f| f.contains("Lidarr") && !f.starts_with("Not handed over")) {
+                let _ = serve.userdata.set_request_fetched(r.id, &format!("{said}; {LIDARR_KEPT}"));
+            }
         }
     }
-    for r in left.iter().filter(|r| r.status == APPROVED) {
-        hand_to(lidarr, soulseek, serve, r).await;
+    for r in &left {
+        hand_to(lidarr.filter(|_| goes_on), soulseek, serve, r).await;
     }
-    true
+    goes_on
 }
 
 /// The requests a Delete closed, opened again by its Undo (Y4), each as it was (`Closed`), where it still reads as the Delete
@@ -1851,7 +1887,8 @@ mod tests {
         let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
         assert_eq!((arrived.len(), open.len()), (2, 2), "both asked for it, by one group");
         let lidarr = Wanting::default();
-        assert!(deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("ann")), open, None).await, "Lidarr goes on");
+        assert!(deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("ann")), open, true, None).await, "Lidarr goes on");
+        assert_eq!(*lidarr.3.lock().unwrap(), [format!("failed {group}"), "want".to_string()], "U5: its grab marked failed first");
         assert!(lidarr.1.lock().unwrap().is_empty(), "Lidarr not told to stop: Bob's still wants it");
         assert_eq!(*lidarr.0.lock().unwrap(), [(Some(group.to_string()), "Glass Harbour".to_string(), "Two Rooms".to_string())], "Bob's handed to it again");
         let now = |id: i64| serve.userdata.request(id).unwrap().unwrap();
@@ -1859,9 +1896,85 @@ mod tests {
         assert!(now(ann.id).fetched.unwrap().ends_with(LIDARR_KEPT), "hers says Lidarr goes on");
         assert_eq!(now(bob.id).fetched.unwrap(), format!("Lidarr added it and is looking for it; {SOULSEEK_SEARCHES}"), "his no longer told to stop");
         let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
-        assert!(!deleted(Some(&lidarr), false, &serve, &closed_by(arrived, true, Some("root")), open, None).await, "none left");
+        assert!(!deleted(Some(&lidarr), false, &serve, &closed_by(arrived, true, Some("root")), open, true, None).await, "none left");
         assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()], "Lidarr told to stop");
         assert_eq!(now(bob.id).status, REJECTED);
+    }
+
+    /// U5 (the review of 8c/8d, finding 5): Ann's Delete of a copy Lidarr brought, Bob's request left, and Lidarr's history holds no
+    /// grab of it: Lidarr stays stopped (told so for Ann's, never asked to want it again), and Soulseek alone looks for Bob's. A copy
+    /// Soulseek brought leaves Lidarr to go on, no grab asked after.
+    #[tokio::test]
+    async fn a_lidarr_copy_whose_grab_is_not_found_leaves_lidarr_stopped() {
+        let serve = served();
+        let group = "00000000-0000-4000-8000-000000000312";
+        let record = record_of_album(serve.catalogue(), Some(group), "Glass Harbour", "Two Rooms", None, None).unwrap();
+        let ask = |user: &str| {
+            let fetched = Some(format!("Lidarr added it and is looking for it; {STOPPED_ON_ARRIVAL}"));
+            let r = Request { user: user.into(), album_key: format!("k-{user}"), release_group: Some(group.into()), at: 100, fetched, ..asked_for(record) };
+            Request { id: serve.userdata.add_request(&r).unwrap(), ..r }
+        };
+        let (ann, bob) = (ask("ann"), ask("bob"));
+        let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
+        let lidarr = Wanting::default();
+        lidarr.4.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(!deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("ann")), open, true, None).await, "Lidarr stays stopped");
+        assert_eq!(*lidarr.3.lock().unwrap(), [format!("failed {group}")], "asked for its grab, never to want it");
+        assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()], "told to stop for Ann's");
+        let now = |id: i64| serve.userdata.request(id).unwrap().unwrap();
+        assert_eq!((now(ann.id).status, now(bob.id).status), (REJECTED.to_string(), APPROVED.to_string()));
+        assert_eq!(now(bob.id).fetched.unwrap(), SOULSEEK_SEARCHES, "Soulseek alone looks for Bob's");
+        // A copy Soulseek brought: Lidarr goes on for the one left, no grab asked after.
+        let carol = ask("carol");
+        let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
+        let lidarr = Wanting::default();
+        assert!(deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("bob")), open, false, None).await);
+        assert_eq!(*lidarr.3.lock().unwrap(), ["want".to_string()], "no grab asked after: Carol's handed to it");
+        assert_eq!(now(carol.id).status, APPROVED);
+    }
+
+    /// U5: only an approved request left keeps a fetcher. A pending one alone is no reason to fetch: Ann's Delete of her arrival tells
+    /// Lidarr to stop, and Bob's pending request stays as it is, handed to no one.
+    #[tokio::test]
+    async fn a_delete_leaves_no_fetcher_for_a_pending_request_alone() {
+        let serve = served();
+        let group = "00000000-0000-4000-8000-000000000313";
+        let record = record_of_album(serve.catalogue(), Some(group), "Glass Harbour", "Two Rooms", None, None).unwrap();
+        let ask = |user: &str, status: &str| {
+            let r = Request { user: user.into(), album_key: format!("k-{user}"), release_group: Some(group.into()), at: 100, status: status.into(), ..asked_for(record) };
+            Request { id: serve.userdata.add_request(&r).unwrap(), ..r }
+        };
+        let (_ann, bob) = (ask("ann", APPROVED), ask("bob", PENDING));
+        let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
+        assert_eq!((arrived.len(), open.len()), (1, 2), "arrived for Ann's; both open");
+        let lidarr = Wanting::default();
+        assert!(!deleted(Some(&lidarr), false, &serve, &closed_by(arrived, false, Some("ann")), open, true, None).await, "no fetcher goes on");
+        assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()], "Lidarr told to stop");
+        assert!(lidarr.3.lock().unwrap().is_empty(), "no grab marked, nothing wanted");
+        let now = serve.userdata.request(bob.id).unwrap().unwrap();
+        assert_eq!((now.status.as_str(), now.fetched), (PENDING, None), "Bob's pending, as it was");
+    }
+
+    /// U5: the requests left are read again once the copy has gone: Bob's, cancelled while the Delete ran, is not handed to Lidarr
+    /// again, and Lidarr is told to stop.
+    #[tokio::test]
+    async fn a_request_cancelled_during_a_delete_is_not_handed_again() {
+        let serve = served();
+        let group = "00000000-0000-4000-8000-000000000314";
+        let record = record_of_album(serve.catalogue(), Some(group), "Glass Harbour", "Two Rooms", None, None).unwrap();
+        let ask = |user: &str| {
+            let r = Request { user: user.into(), album_key: format!("k-{user}"), release_group: Some(group.into()), at: 100, ..asked_for(record) };
+            Request { id: serve.userdata.add_request(&r).unwrap(), ..r }
+        };
+        let (_ann, bob) = (ask("ann"), ask("bob"));
+        let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
+        assert_eq!(open.len(), 2);
+        assert!(serve.userdata.set_request_status(bob.id, APPROVED, CANCELLED, None, None).unwrap(), "Bob takes his back meanwhile");
+        let lidarr = Wanting::default();
+        assert!(!deleted(Some(&lidarr), false, &serve, &closed_by(arrived, false, Some("ann")), open, true, None).await);
+        assert!(lidarr.0.lock().unwrap().is_empty() && lidarr.3.lock().unwrap().is_empty(), "nothing handed again");
+        assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()], "Lidarr told to stop");
+        assert_eq!(serve.userdata.request(bob.id).unwrap().unwrap().status, CANCELLED);
     }
 
     /// V9 (the review of run 8b's nits): an Undo whose request meets a newer open one of the account's of its record leaves it
@@ -1976,16 +2089,18 @@ mod tests {
         serve
     }
 
-    /// The Lidarr a test hands requests to: what it was asked to want, and to stop wanting; the release group it finds; and whether it
-    /// is out of reach (the third).
+    /// The Lidarr a test hands requests to: what it was asked to want, and to stop wanting; the release group it finds; whether it
+    /// is out of reach (the third); its grabs marked failed and its wants, in order (the fourth, U5); and whether it finds no grab to
+    /// mark (the fifth).
     #[derive(Default)]
-    struct Wanting(Mutex<Vec<(Option<String>, String, String)>>, Mutex<Vec<String>>, std::sync::atomic::AtomicBool);
+    struct Wanting(Mutex<Vec<(Option<String>, String, String)>>, Mutex<Vec<String>>, std::sync::atomic::AtomicBool, Mutex<Vec<String>>, std::sync::atomic::AtomicBool);
 
     const FOUND: &str = "00000000-0000-4000-8000-000000000131";
 
     impl Fetcher for Wanting {
         fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> crate::source::Fut<'a, crate::lidarr::Handed> {
             self.0.lock().unwrap().push((release_group.map(str::to_string), artist.to_string(), album.to_string()));
+            self.3.lock().unwrap().push("want".into());
             Box::pin(async { Ok(crate::lidarr::Handed { said: "Lidarr added it and is looking for it".into(), release_group: FOUND.into() }) })
         }
 
@@ -1999,6 +2114,12 @@ mod tests {
             }
             self.1.lock().unwrap().push(release_group.to_string());
             Box::pin(async { Ok(()) })
+        }
+
+        fn fail_grab<'a>(&'a self, release_group: &'a str) -> crate::source::Fut<'a, bool> {
+            self.3.lock().unwrap().push(format!("failed {release_group}"));
+            let found = !self.4.load(std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move { Ok(found) })
         }
     }
 

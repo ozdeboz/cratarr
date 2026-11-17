@@ -496,6 +496,34 @@ impl Lidarr {
         Ok(out)
     }
 
+    /// The latest grab of a release group's album marked failed in Lidarr's history (U5): Lidarr blocklists that release and, with
+    /// "Redownload failed" on (its default), looks for another. Its albums of the group, each one's grabs (event type 1), the newest
+    /// first; the newest of them all is marked. Whether a grab was found.
+    pub async fn fail_grab(&self, release_group: &str) -> Result<bool> {
+        let mut newest: Option<(String, i64)> = None;
+        for a in self.albums(release_group).await? {
+            let album = a.id.to_string();
+            let v: serde_json::Value = self
+                .get("/api/v1/history", &[("page", "1"), ("pageSize", "50"), ("sortKey", "date"), ("sortDirection", "descending"), ("eventType", "1"), ("albumId", album.as_str())])
+                .await?;
+            // Its own grabs alone, whatever the filter did.
+            for r in v["records"].as_array().into_iter().flatten().filter(|r| r["albumId"].as_i64() == Some(a.id)) {
+                if let (Some(id), Some(date)) = (r["id"].as_i64(), r["date"].as_str())
+                    && newest.as_ref().is_none_or(|(d, _)| date > d.as_str())
+                {
+                    newest = Some((date.to_string(), id));
+                }
+            }
+        }
+        let Some((_, grab)) = newest else { return Ok(false) };
+        let url = format!("{}/api/v1/history/failed/{grab}", self.base);
+        let status = self.http.post(&url).send().await.context("telling Lidarr")?.status();
+        if !status.is_success() {
+            bail!("Lidarr answered {status}");
+        }
+        Ok(true)
+    }
+
     /// Lidarr looks for these albums now.
     async fn search(&self, ids: &[i64]) -> Result<()> {
         let url = format!("{}/api/v1/command", self.base);
@@ -615,6 +643,40 @@ mod tests {
         let (lidarr, _) = lidarr_at(|_| None, json!([])).await;
         let e = lidarr.want(&AddWith::default(), None, "The Funky Lowlives", "Cartouche").await.unwrap_err();
         assert_eq!(e.to_string(), "Lidarr answered 503 Service Unavailable");
+    }
+
+    /// U5: a grab marked failed is the newest grab of the release group's album in Lidarr's history, another album's grabs and
+    /// other events passed over; with none, nothing is marked.
+    #[tokio::test]
+    async fn the_newest_grab_of_the_album_is_marked_failed() {
+        let history = |records: Value| {
+            let marked = Calls::default();
+            let m = marked.clone();
+            let app = Router::new()
+                .route("/api/v1/album", get(|| ready(Json(json!([{ "id": 7, "monitored": false }])))))
+                .route("/api/v1/history", get(move |Query(q): Query<HashMap<String, String>>| ready(Json(if q.get("eventType").map(String::as_str) == Some("1") { json!({ "records": records.clone() }) } else { json!({ "records": [] }) }))))
+                .route(
+                    "/api/v1/history/failed/{id}",
+                    post(move |axum::extract::Path(id): axum::extract::Path<i64>| {
+                        m.lock().unwrap().push(id.to_string());
+                        ready(Json(json!({})))
+                    }),
+                );
+            (app, marked)
+        };
+        let grabs = json!([
+            { "id": 52, "albumId": 8, "eventType": "grabbed", "date": "2026-11-12T10:00:00Z" },
+            { "id": 50, "albumId": 7, "eventType": "grabbed", "date": "2026-11-10T10:00:00Z" },
+            { "id": 49, "albumId": 7, "eventType": "grabbed", "date": "2026-11-01T10:00:00Z" },
+        ]);
+        for (records, found, marked) in [(grabs, true, vec!["50".to_string()]), (json!([]), false, Vec::new())] {
+            let (app, calls) = history(records);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            assert_eq!(Lidarr::new(&url, "key").unwrap().fail_grab("rg-1").await.unwrap(), found);
+            assert_eq!(*calls.lock().unwrap(), marked);
+        }
     }
 
     #[tokio::test]

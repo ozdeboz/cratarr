@@ -89,6 +89,9 @@ pub trait Fetcher: Send + Sync {
     fn statuses<'a>(&'a self, release_groups: &'a [String]) -> Fut<'a, std::collections::HashMap<String, crate::lidarr::Progress>>;
     /// Stop fetching it (what is there already stays).
     fn cancel<'a>(&'a self, release_group: &'a str) -> Fut<'a, ()>;
+    /// Its latest grab marked failed (U5): what it fetched was deleted as bad, so that release is not taken again and another is
+    /// looked for. Whether a grab was found.
+    fn fail_grab<'a>(&'a self, release_group: &'a str) -> Fut<'a, bool>;
 }
 
 /// Lidarr as the fetcher: Want with the profiles and root folder chosen on its page in Connections.
@@ -108,6 +111,10 @@ impl Fetcher for LidarrFetcher {
 
     fn cancel<'a>(&'a self, release_group: &'a str) -> Fut<'a, ()> {
         Box::pin(self.lidarr.unwant(release_group))
+    }
+
+    fn fail_grab<'a>(&'a self, release_group: &'a str) -> Fut<'a, bool> {
+        Box::pin(self.lidarr.fail_grab(release_group))
     }
 }
 
