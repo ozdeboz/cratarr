@@ -218,7 +218,8 @@ impl Purpose {
 /// `/stream_redirect` and the `popplers<n>.bandcamp.com` hosts older pages name, https on its usual port. Never an artist's page.
 fn bandcamp_stream(url: &reqwest::Url) -> bool {
     let host = url.host_str().map(str::to_ascii_lowercase).unwrap_or_default();
-    let popplers = host.strip_suffix(".bandcamp.com").and_then(|h| h.strip_prefix("popplers")).is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()));
+    // Its number there (V9): `popplers.bandcamp.com` is none of Bandcamp's stream hosts.
+    let popplers = host.strip_suffix(".bandcamp.com").and_then(|h| h.strip_prefix("popplers")).is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
     url.scheme() == "https" && url.port().is_none() && (popplers || (host == "bandcamp.com" && url.path() == "/stream_redirect"))
 }
 
@@ -252,11 +253,12 @@ pub fn lan_client() -> reqwest::ClientBuilder {
 
 /// Whether an address is out in the world: not loopback, private, link-local, shared (CGNAT), unique-local, unspecified, broadcast
 /// or documentation's (O1); nor multicast, the benchmark range (198.18/15), the reserved 240/4 or the old site-local fec0::/10 (Y11).
-/// An IPv4 address carried in an IPv6 one (mapped, the old compatible `::a.b.c.d`, NAT64's 64:ff9b::/96) is judged as itself.
+/// An IPv4 address carried in an IPv6 one (mapped, the old compatible `::a.b.c.d`, NAT64's 64:ff9b::/96, 6to4's 2002::/16) is judged
+/// as itself; nor Teredo's 2001::/32 nor the IETF's protocol range 192.0.0.0/24 (V9).
 pub fn is_public(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
+            let [a, b, c, _] = v4.octets();
             !(v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
@@ -267,14 +269,16 @@ pub fn is_public(ip: std::net::IpAddr) -> bool {
                 || a == 0
                 || a >= 240
                 || (a == 100 && (64..128).contains(&b))
-                || (a == 198 && (b & 0xfe) == 18))
+                || (a == 198 && (b & 0xfe) == 18)
+                || (a == 192 && b == 0 && c == 0))
         }
         std::net::IpAddr::V6(v6) => {
             let s = v6.segments();
             let nat64 = (s[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| std::net::Ipv4Addr::from(u128::from(v6) as u32));
-            match v6.to_ipv4().or(nat64) {
+            let six_to_four = (s[0] == 0x2002).then(|| std::net::Ipv4Addr::from((u32::from(s[1]) << 16) | u32::from(s[2])));
+            match v6.to_ipv4().or(nat64).or(six_to_four) {
                 Some(v4) => is_public(std::net::IpAddr::V4(v4)),
-                None => !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80 || (s[0] & 0xffc0) == 0xfec0),
+                None => !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80 || (s[0] & 0xffc0) == 0xfec0 || (s[0] == 0x2001 && s[1] == 0)),
             }
         }
     }
@@ -483,6 +487,26 @@ mod tests {
         assert!(!media.starts_at(&url("https://popplers5.bandcamp.com:8443/download/track")), "its usual port only");
         assert!(!media.allows(&url("https://popplers5.bandcamp.com/download/track")), "a first hop, never a redirect's");
         assert!(!Purpose::Covers.starts_at(&url("https://popplers5.bandcamp.com/download/track")), "Bandcamp's media alone");
+    }
+
+    /// V9 (the review of run 8b's nits): a `popplers` host is one of Bandcamp's stream hosts only with its number.
+    #[test]
+    fn a_popplers_host_without_its_number_starts_no_stream() {
+        let url = |u: &str| reqwest::Url::parse(u).unwrap();
+        assert!(Purpose::BandcampMedia.starts_at(&url("https://popplers5.bandcamp.com/download/track")));
+        assert!(!Purpose::BandcampMedia.starts_at(&url("https://popplers.bandcamp.com/download/track")));
+    }
+
+    /// V9: a 6to4 address is judged by the IPv4 address it carries; Teredo's and the IETF's protocol range (192.0.0.0/24) are not
+    /// out in the world.
+    #[test]
+    fn six_to_four_teredo_and_the_ietf_range_are_judged() {
+        for ip in ["2002:c0a8:0114::1", "2002:7f00:0001::", "2002:0a00:0005:1::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2", "192.0.0.1", "192.0.0.170"] {
+            assert!(!is_public(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["2002:5db8:d822::1", "2001:4860:4860::8888", "192.0.1.1", "192.1.0.1"] {
+            assert!(is_public(ip.parse().unwrap()), "{ip}");
+        }
     }
 
     /// O1: an address at home is refused on the address a name resolves to, whatever the name: loopback, private, link-local, shared.

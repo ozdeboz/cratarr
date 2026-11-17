@@ -1864,6 +1864,26 @@ mod tests {
         assert_eq!(now(bob.id).status, REJECTED);
     }
 
+    /// V9 (the review of run 8b's nits): an Undo whose request meets a newer open one of the account's of its record leaves it
+    /// closed, quietly: no write the one-open-request rule refuses (W6), and the newer one as it is.
+    #[test]
+    fn an_undo_meeting_a_newer_open_request_leaves_it_closed_quietly() {
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        let ask = || {
+            let r = Request { user: "ann".into(), ..asked_for(1) };
+            Request { id: ud.add_request(&r).unwrap(), ..r }
+        };
+        let old = ask();
+        assert!(ud.set_request_status(old.id, APPROVED, REJECTED, Some(REJECTED_WHY), None).unwrap());
+        let newer = ask();
+        let restored = ud.restore_request_status(old.id, REJECTED, APPROVED, None, None, None);
+        assert!(restored.is_ok_and(|written| !written), "not written, and no error");
+        let closed = Closed { id: old.id, status: APPROVED.into(), reason: None, decided_by: None, decided_at: None };
+        assert!(reopen(&ud, &[closed]).is_empty());
+        let status = |id: i64| ud.request(id).unwrap().unwrap().status;
+        assert_eq!((status(old.id), status(newer.id)), (REJECTED.to_string(), APPROVED.to_string()));
+    }
+
     /// W4: deleting a copy that was there before the request was asked changes nothing of it.
     #[tokio::test]
     async fn deleting_an_older_copy_leaves_the_request_alone() {

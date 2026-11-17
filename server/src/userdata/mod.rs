@@ -1721,10 +1721,13 @@ impl UserData {
     }
 
     /// A request a Delete closed, put back by its Undo as it was (Y4): its status, why, by whom and when, where it still has the
-    /// status the Delete gave it (`from`): an answer since wins. Whether it was written.
+    /// status the Delete gave it (`from`): an answer since wins, and so does a newer open request of the account's of its record (one
+    /// open request a record, W6), quietly (V9). Whether it was written.
     pub fn restore_request_status(&self, id: i64, from: &str, status: &str, reason: Option<&str>, by: Option<&str>, at: Option<i64>) -> Result<bool> {
         Ok(self.db().execute(
-            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1 AND status = ?6",
+            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1 AND status = ?6
+             AND NOT (?2 IN ('pending', 'approved') AND record IS NOT NULL AND EXISTS (SELECT 1 FROM request o WHERE o.user = request.user
+               AND o.record = request.record AND o.id != request.id AND o.status IN ('pending', 'approved')))",
             params![id, status, reason, by, at, from],
         )? > 0)
     }
