@@ -106,7 +106,7 @@ impl Server {
 
     /// The fixture library's albums as the Library lists them.
     async fn albums(&self) -> Vec<Value> {
-        self.anyone().albums().await
+        self.acting().albums().await
     }
 
     /// The newest run once it is done and kept, other than `not`.
@@ -195,7 +195,7 @@ impl Server {
 
     /// A file as it is served for a song.
     async fn served(&self, song: &str) -> Vec<u8> {
-        let (status, bytes) = self.anyone().bytes(&format!("/api/file/cratarr/{song}")).await;
+        let (status, bytes) = self.acting().bytes(&format!("/api/file/cratarr/{song}")).await;
         assert_eq!(status, 200, "{song}");
         bytes
     }
@@ -990,10 +990,10 @@ fn held(data: &Path) -> Held {
     st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?, r.get(2)?), (r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))).unwrap().map(Result::unwrap).collect()
 }
 
-/// Every play there is: (who, when, its event, its song).
-fn plays(data: &Path) -> Vec<(String, i64, String, String)> {
+/// Every play there is: (who, when, its event, its song). A play a player gave no id of its own has no event.
+fn plays(data: &Path) -> Vec<(String, i64, Option<String>, String)> {
     let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
-    let mut st = db.prepare("SELECT user, at, event, song FROM plays ORDER BY event").unwrap();
+    let mut st = db.prepare("SELECT user, at, event, song FROM plays ORDER BY event, rowid").unwrap();
     st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect()
 }
 
@@ -1087,7 +1087,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
         *row = (row.0 + played, row.1 + own, row.2.max(*rating), row.3 || *star);
     }
     assert_eq!(held(&data), told, "each account's, told over");
-    let expected: Vec<(String, i64, String, String)> = plays_before.iter().map(|(who, at, event, song)| (who.clone(), *at, event.clone(), now(song))).collect();
+    let expected: Vec<(String, i64, Option<String>, String)> = plays_before.iter().map(|(who, at, event, song)| (who.clone(), *at, event.clone(), now(song))).collect();
     assert_eq!(plays(&data), expected, "every play once, on the track it is now");
 
     // One album's two ids, from before its library changed place and after, either way round: one row of each, with what both held.
@@ -3379,7 +3379,7 @@ async fn a_moved_copy_stays_on_the_records_tracks_and_plays_from_where_it_went_e
 
 /// C40: Copy to, end to end. An administrator copies Music's album into their own music through Move's own door: its preview says
 /// it is a copy, the album stays in Music, and its copy holds the same files on the same tracks: one album, listed once, with
-/// two copies.
+/// his copy beside Music's (and Ann's, which the layout gives her).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_copy_is_one_album_two_copies_end_to_end() {
@@ -3406,8 +3406,10 @@ async fn a_copy_is_one_album_two_copies_end_to_end() {
     assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
     assert!(contents(&as_it_lies(&mine.join(&folder))) == contents(&original), "the copy is the original's files alone");
     let copies = || async { bob.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect::<Vec<_>>() };
-    s.until("its copy read in own music", Duration::from_secs(120), || async { copies().await.iter().flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).count() == 2 }).await;
+    let libraries = || async { copies().await.iter().flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).filter_map(|c| c["library"].as_str().map(str::to_string)).collect::<Vec<_>>() };
+    s.until("its copy read in own music", Duration::from_secs(120), || async { libraries().await.contains(&id_of(&mine)) }).await;
     assert_eq!(copies().await.len(), 1, "one album, listed once");
+    assert!(libraries().await.contains(&id_of(&music)), "Music's copy beside it");
     assert_eq!(tracks_at(&data, &mine, &folder), songs, "the copy on the record's tracks");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
@@ -3445,7 +3447,8 @@ async fn a_copy_into_incoming_is_refused_end_to_end() {
 }
 
 /// T1.5: a Copy to's Undo, as Health's list of changes gives it, takes the copied files into Bob's library's trash and leaves a
-/// picture set in the copy's folder since; the record is listed with Music's copy alone after.
+/// picture set in the copy's folder since; the record is listed once after, with no copy in Bob's music: the copies it had before
+/// (Music's, and Ann's, which the layout gives her).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_copys_undo_leaves_what_came_after_end_to_end() {
@@ -3464,10 +3467,17 @@ async fn a_copys_undo_leaves_what_came_after_end_to_end() {
     let bob = s.sign_in("bob", "bob's password").await;
     s.act_as("bob", "bob's password").await;
     let mine = own.join("bob");
+    // The record's copies, by library, as Bob's Library lists them.
+    let libraries = || async {
+        let mut at: Vec<String> = bob.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).filter_map(|c| c["library"].as_str().map(str::to_string)).collect();
+        at.sort();
+        at
+    };
+    let before = libraries().await;
+    assert!(before.contains(&id_of(&music)) && !before.contains(&id_of(&mine)), "Music's copy, none in Bob's music: {before:?}");
     let copied = bob.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/move"), json!({ "from": id_of(&music), "to": id_of(&mine) })).await;
     let folder = copied["folder"].as_str().unwrap().to_string();
-    let copies = || async { bob.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).count() };
-    s.until("its copy read in own music", Duration::from_secs(120), || async { copies().await == 2 }).await;
+    s.until("its copy read in own music", Duration::from_secs(120), || async { libraries().await.contains(&id_of(&mine)) }).await;
     std::fs::write(mine.join(&folder).join("folder.jpg"), b"a picture set since").unwrap();
     let run = s.album_run("copy").await;
     let (status, answer) = s.undo_a_moment_later(run["id"].as_str().unwrap()).await;
@@ -3476,7 +3486,8 @@ async fn a_copys_undo_leaves_what_came_after_end_to_end() {
     assert_eq!(left.keys().cloned().collect::<Vec<_>>(), ["folder.jpg"], "what came after stays");
     assert_eq!(in_the_trash(&mine), audio_under(&music.join(SHORES)).len(), "the copied files in Bob's library's trash");
     assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
-    s.until("the record listed with Music's copy alone", Duration::from_secs(120), || async { copies().await == 1 }).await;
+    s.until("the record listed with the copies it had before, none in Bob's music", Duration::from_secs(120), || async { libraries().await == before }).await;
+    assert_eq!(bob.albums().await.iter().filter(|a| a["title"] == "Both Shores").count(), 1, "listed once");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
@@ -3513,8 +3524,9 @@ async fn a_request_for_a_stored_album_makes_a_copy_end_to_end() {
 
 /// T5.1 (the owner's "Yes, from anyone's"): Ann, a user, Wants "Other Room", which only Bob's own music holds, and an
 /// administrator approves it. Bob's copy is copied into Ann's own music byte for byte, under its own folder's name, on the record's
-/// tracks; her request reads done and says it was copied, naming no one's music (OQ-I); no fetcher is asked; Bob's music is as it
-/// was, and nothing is written into it.
+/// tracks; her request reads done, its state alone as an account other than an administrator reads one (W6; OQ-I: "just
+/// Arrived"), and the line it keeps, the administrators' words, says it was copied, naming no one's music; no fetcher is asked; Bob's
+/// music is as it was, and nothing is written into it.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_want_of_a_record_only_in_bobs_music_copies_his_end_to_end() {
@@ -3555,11 +3567,20 @@ async fn a_want_of_a_record_only_in_bobs_music_copies_his_end_to_end() {
     s.until("Ann's copy read on the record's tracks", Duration::from_secs(120), || async { tracks_at(&data, &mine, &folder) == songs }).await;
     let listed = ann.get("/api/requests").await;
     let r = listed["mine"].as_array().unwrap().iter().find(|r| r["id"] == request).cloned().expect("her request");
-    assert_eq!((r["state"]["state"].as_str(), r["fetched"].as_str()), (Some("done"), Some("Copied into your music")), "{r}");
-    assert!(!r.to_string().to_lowercase().contains("bob"), "whose music it came from is not said (OQ-I): {r}");
+    assert_eq!((r["state"]["state"].as_str(), &r["fetched"]), (Some("done"), &Value::Null), "done, its state alone (W6): {r}");
+    let line = request_line(&data, request);
+    assert_eq!(line.as_deref(), Some("Copied into your music"), "the line it keeps: {r}");
+    assert!(!r.to_string().to_lowercase().contains("bob") && !line.unwrap_or_default().to_lowercase().contains("bob"), "whose music it came from is not said (OQ-I): {r}");
     assert!(as_it_lies(&theirs) == bobs, "Bob's music as it was, nothing written into it");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
+}
+
+/// The line a request keeps (`fetched`): what was done with it, in the words an administrator reads (W6).
+fn request_line(data: &Path, id: i64) -> Option<String> {
+    let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    db.query_row("SELECT fetched FROM request WHERE id = ?1", [id], |r| r.get(0)).unwrap()
 }
 
 /// A track's own word goes into its file in every copy, by the track and not the file's name, and into no other track's. One
@@ -4637,7 +4658,7 @@ async fn undo_as(who: &Caller<'_>, id: &str) -> (u16, Value) {
 fn requests_kept(data: &Path) -> Vec<(i64, String)> {
     let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
     db.busy_timeout(Duration::from_secs(10)).unwrap();
-    let mut st = db.prepare("SELECT id, status FROM requests ORDER BY id").unwrap();
+    let mut st = db.prepare("SELECT id, status FROM request ORDER BY id").unwrap();
     st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
 }
 
@@ -4831,7 +4852,8 @@ async fn undo_after_bob_deleted_his_copy_leaves_his_trash_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// RY01.10: Bob's FLAC spells a title otherwise than Music's MP3 ("Return (Original Mix)"), so tags alone would not pair them. Before
+/// RY01.10: Bob's FLAC spells a title otherwise than Music's MP3 ("Return (Original Mix)", written once his copy is on the record's
+/// tracks, and read again), so tags alone would not pair them. Before
 /// RY01 Ann played track 1 four times and starred it, and rated track 2; root starred the album; root's shared playlist "Evening" holds
 /// tracks 2 and 3 and Bob's own holds track 3. Replace paired the tracks by `files.track` (3 taken over, none added) and its sheet shows
 /// the title's difference. After RY01 and after its Undo: the same song ids; the annotations and plays as they were; each list the same
@@ -4839,12 +4861,18 @@ async fn undo_after_bob_deleted_his_copy_leaves_his_trash_end_to_end() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn plays_hearts_ratings_and_playlists_stay_on_their_tracks_through_a_replace_from_a_copy_end_to_end() {
-    let (s, root, p, id) = ry01_shape("ry01-plays", |p| {
-        let mine = p.bob.join(SHORES);
-        set_vorbis(&mine.join(&audio_under(&mine)[2]), "TITLE", "Return (Original Mix)");
-    })
-    .await;
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-plays").await;
     let (admin, ann, bob) = (s.sign_in("root", "root pw").await, s.sign_in("ann", "ann pw").await, s.sign_in("bob", "bob pw").await);
+    let third = format!("{SHORES}/{}", audio_under(&p.bob.join(SHORES))[2]);
+    set_vorbis(&p.bob.join(&third), "TITLE", "Return (Original Mix)");
+    s.anyone().get("/rest/startScan?u=root&p=root%20pw&v=1.16.1&c=e2e").await;
+    let retitled = || {
+        let db = rusqlite::Connection::open(p.data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        let sql = "SELECT count(*) FROM tags t JOIN folders d ON d.id = t.folder WHERE d.path = ?1 AND t.rel = ?2 AND t.name = 'title' AND t.value = 'Return (Original Mix)'";
+        db.query_row(sql, rusqlite::params![id_of(&p.bob), third], |r| r.get::<_, i64>(0)).unwrap() == 1
+    };
+    s.until("Bob's retitled track read again", Duration::from_secs(120), || async { retitled() }).await;
     let songs = songs_for(&admin, &id).await;
     assert_eq!(songs.len(), 3, "the retitled track still the record's");
     for _ in 0..4 {
