@@ -75,6 +75,8 @@ pub struct KeepPreview {
     pub convert: usize,
     /// Whether a Lidarr is set, to be told to stop fetching the album; without one it may fetch it again.
     pub acquisition: bool,
+    /// A copy (C40): the album stays where it is, and the copied files are all that is written.
+    pub copy: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -832,8 +834,21 @@ impl IncomingService {
                     let root = self.lib.catalogue().folders().get(trash).cloned();
                     root.is_some_and(|r| crate::trash::holds(&r, token))
                 }
+                // Copy to (C40): it happened when any copy reached its target; then it is finished forward (the copies repeat
+                // safely).
+                Event::AlbumCopied { copies, .. } => {
+                    let folders = self.lib.catalogue().folders();
+                    copies.iter().any(|m| folders.get(m.to.0).is_some_and(|f| f.join(&m.to.1).is_file()))
+                }
             };
             let (title, _) = entry.event.album();
+            if happened
+                && matches!(entry.event, Event::AlbumCopied { .. })
+                && let Err(e) = self.finish_copy(&entry.event, None).await
+            {
+                tracing::warn!("could not finish copying {title}: {e:#}");
+                continue;
+            }
             if happened && matches!(entry.event, Event::AlbumAdopted { .. } | Event::AlbumReplaced { .. }) {
                 let moving = self.lib.catalogue().copies_moving();
                 if let Some(steps) = self.steps(&entry.event) {
@@ -891,6 +906,7 @@ impl IncomingService {
             Event::AlbumRejected { .. } => self.undo_delete(key).await,
             Event::AlbumAdopted { .. } => self.undo_keep(&entry).await,
             Event::AlbumReplaced { .. } => self.undo_replace(&entry).await,
+            Event::AlbumCopied { .. } => self.undo_copy(&entry).await,
         }
     }
 
@@ -924,6 +940,31 @@ impl IncomingService {
         self.journal.mark_undone(id, epoch_now())?;
         self.resume_fetching(id, title).await;
         self.unhide(source, album_id, *folder).await;
+        catalogue.poke();
+        Ok(title.clone())
+    }
+
+    /// Undo a Copy to (C40): the copy into its library's trash (Q13: as every Undo), its rows marked trashed as a Delete marks them;
+    /// the original as it was.
+    async fn undo_copy(&self, entry: &Entry) -> Result<String, ToggleError> {
+        let gone = || ToggleError::Refused("that copy can no longer be undone".into());
+        let Event::AlbumCopied { title, to_dir, .. } = &entry.event else { return Err(gone()) };
+        if entry.undone {
+            return Err(ToggleError::Refused(format!("{title} is no longer copied")));
+        }
+        let catalogue = self.lib.catalogue();
+        let root = catalogue.folders().get(to_dir.0).cloned().ok_or_else(|| ToggleError::Refused("that library is not in use any more".into()))?;
+        let now = epoch_now();
+        let (rel, files) = (to_dir.1.clone(), self.files.clone());
+        let token = tokio::task::spawn_blocking(move || files.trash(&root, &rel, now))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        let (c, folder, rel) = (catalogue.clone(), to_dir.0, to_dir.1.clone());
+        if let Err(e) = tokio::task::spawn_blocking(move || c.mark_trashed(folder, &rel, &token)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
+            tracing::warn!("catalogue: could not mark the copy of {title} as trashed: {e:#}");
+        }
+        self.journal.mark_undone(entry.id, now)?;
         catalogue.poke();
         Ok(title.clone())
     }
@@ -1008,8 +1049,8 @@ impl IncomingService {
         let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some();
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition, copy: false },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition, copy: false },
         })
     }
 
@@ -1117,6 +1158,14 @@ impl IncomingService {
         }
     }
 
+    /// A Copy to's task, as `app::tasks` lists it (C40).
+    const COPY_TASK: &'static str = "copy";
+
+    /// What a Copy to is called on Health's list of changes to files, and its title (C40).
+    pub(super) fn copied_named(&self, source_id: &str, to: i64, title: &str) -> (&'static str, String) {
+        ("copy", format!("Copied to {}: {title}", self.library_name(source_id, to)))
+    }
+
     /// The id of a server's used library in catalogue folder `folder`.
     fn library_at(&self, source_id: &str, folder: i64) -> Option<String> {
         let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
@@ -1156,9 +1205,109 @@ impl IncomingService {
         let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some() && !self.lib.is_kept(at.dir.folder);
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition, copy: false },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition, copy: false },
         })
+    }
+
+    /// Copy to (C40): a listed copy of Cratarr's own copied into another used library of its server (someone's own music), the
+    /// original staying where it is: one album, two copies on the same tracks. An album action like Keep (the owner, 2026-11-17):
+    /// named as the target names its albums (`plan_move`), copied as it is whatever the target's quality limit (OQ4 (a): shared, and
+    /// free), told on Health's list of changes as it goes, one Undo into the target's trash. Only the copied files are written:
+    /// no cover or tag into or beside them, nor into the original (files.md CP2), nothing carried on, Lidarr not told.
+    pub async fn copy_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let at = self.locate_listed(source_id, album).await?;
+        self.refuse_if_queued(&at.album.id, at.dir.folder)?;
+        let (target, _) = self.target_of(source_id, to)?;
+        if target == at.dir.folder {
+            return Err(ToggleError::Refused("the album is in that library already".into()));
+        }
+        let (what, title) = self.copied_named(source_id, target, &at.album.title);
+        let run = super::file_runs::track(&self.journal, what, title);
+        let done = self.copying(&at, target, year).await;
+        match &done {
+            Ok(k) => run.moved(k.undo.clone(), self.read_in(&at, target)),
+            Err(e) => run.failed(&at.album.id, e.to_string()),
+        }
+        done
+    }
+
+    /// What a Copy to would do (C40), for the page to show before asking: as a move's, said to be a copy, nothing converted, Lidarr
+    /// not told. Changes nothing.
+    pub async fn copy_preview(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
+        let at = self.locate_listed(source_id, album).await?;
+        let (target, _) = self.target_of(source_id, to)?;
+        let (_, plan) = self.plan_move(&at, target, year).await?;
+        Ok(match plan {
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert: 0, acquisition: false, copy: true },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert: 0, acquisition: false, copy: true },
+        })
+    }
+
+    /// Copy to's copying (`copy_album`): its plan, its intent in the journal first (`AlbumCopied`), the copies and their rows, then
+    /// applied. What a failure made goes, and the intent is forgotten.
+    async fn copying(&self, at: &Located, target: i64, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let (root, plan) = self.plan_move(at, target, year).await?;
+        let plan = plan.map_err(|r| match r {
+            KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
+            KeepRefused::Other(why) => ToggleError::Refused(why),
+        })?;
+        if !self.can_write(&root).await {
+            return Err(ToggleError::Refused("Cratarr cannot write in that library".into()));
+        }
+        let c = self.lib.catalogue();
+        let from = |rel: &str| format!("{}/{rel}", at.dir.dir);
+        let copies: Vec<TrackMove> =
+            plan.moves.iter().map(|(rel, to)| TrackMove { track: c.track_of(at.dir.folder, &from(rel)), from: (at.dir.folder, from(rel)), to: (target, to.clone()), was: None }).collect();
+        let event = Event::AlbumCopied {
+            source: at.source.clone(),
+            album_id: at.album.id.clone(),
+            title: at.album.title.clone(),
+            from_dir: (at.dir.folder, at.dir.dir.clone()),
+            to_dir: (target, plan.folder.clone()),
+            copies,
+        };
+        let underway = self.intend(epoch_now(), &event)?;
+        let id = underway.id();
+        // Its progress where long work shows it (the owner's light rule for 0.17: `app::tasks`), as its account's: its files to
+        // copy, then done. A second copy of the account's at once copies all the same, with no task of its own.
+        let (files, doing) = (plan.moves.len() as u64, format!("Copying {}", at.album.title));
+        let task = crate::serve::who::current().and_then(|w| super::tasks::tasks().begin(Self::COPY_TASK, &w.user, false).ok());
+        if let Some(t) = &task {
+            t.step(&doing, 0, Some(files));
+        }
+        let copied = self.finish_copy(&event, Some(underway.clone())).await;
+        if let Some(t) = task {
+            if copied.is_ok() {
+                t.step(&doing, files, Some(files));
+            }
+            t.finish(copied.as_ref().map(|_| ()).map_err(|e| anyhow::anyhow!("{e:#}")));
+        }
+        if let Err(e) = copied {
+            self.journal.forget(id)?;
+            return Err(ToggleError::Refused(format!("{e:#}")));
+        }
+        self.journal.applied(id)?;
+        c.poke();
+        Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
+    }
+
+    /// A Copy to's files and rows (C40), safe to repeat: every file copied (`Files::copy_all`: all or none, the original's time
+    /// kept), then the copies' rows made from the originals' (`Catalogue::copy_rows`), each shared as its copy is. `held`: the
+    /// action's mark as under way, kept through it.
+    async fn finish_copy(&self, event: &Event, held: Option<Underway>) -> anyhow::Result<()> {
+        let Event::AlbumCopied { copies, .. } = event else { return Ok(()) };
+        let steps = self.steps(event).ok_or_else(|| anyhow::anyhow!("the folders are not in use any more"))?;
+        let files = self.files.clone();
+        let shared = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.copy_all(&steps)
+        })
+        .await??;
+        let rows: Vec<((i64, String), (i64, String), bool)> = copies.iter().zip(shared).map(|(m, s)| (m.from.clone(), m.to.clone(), s)).collect();
+        let c = self.lib.catalogue();
+        tokio::task::spawn_blocking(move || c.copy_rows(&rows)).await??;
+        Ok(())
     }
 
     async fn move_located(&self, source_id: &str, at: Located, target: i64, quality: settings::Quality, year: Option<&str>) -> Result<KeepResult, ToggleError> {
@@ -1435,6 +1584,7 @@ impl IncomingService {
         let moves: Vec<&TrackMove> = match event {
             Event::AlbumAdopted { moves, .. } => moves.iter().collect(),
             Event::AlbumReplaced { moves, replaced, .. } => replaced.iter().chain(moves).collect(),
+            Event::AlbumCopied { copies, .. } => copies.iter().collect(),
             _ => return Some(Vec::new()),
         };
         moves
@@ -2073,6 +2223,89 @@ mod tests {
         }
     }
 
+    /// Each file under `dir` (hidden ones too), by its path there, with its bytes and its time.
+    fn lying(dir: &std::path::Path) -> std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut todo = vec![dir.to_path_buf()];
+        while let Some(d) = todo.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    todo.push(p);
+                } else {
+                    let rel = p.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
+                    out.insert(rel, (std::fs::read(&p).unwrap(), std::fs::metadata(&p).unwrap().modified().unwrap()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Music's album (catalogue folder 0, record 1), Incoming (1) and someone's own music (2): the service, and the three folders.
+    async fn with_own_music(tag: &str) -> (IncomingService, PathBuf, PathBuf, PathBuf) {
+        let (music, inc, own) = (folder(&format!("{tag}-music")), folder(&format!("{tag}-inc")), folder(&format!("{tag}-own")));
+        let svc = on_disk(&music, &inc).await;
+        let c = svc.lib.catalogue();
+        c.set_folders(vec![music.clone(), inc.clone(), own.clone()]).unwrap();
+        std::fs::create_dir_all(music.join("A/Album")).unwrap();
+        for (n, body) in [("1.flac", b"one".as_slice()), ("2.flac", b"two".as_slice())] {
+            std::fs::write(music.join("A/Album").join(n), body).unwrap();
+        }
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        (svc, music, inc, own)
+    }
+
+    /// C40: Copy to copies Music's album into someone's own music and leaves it where it was: the copy holds exactly the
+    /// original's files, their bytes and times, and nothing else is written, beside the copy or into the original (the owner: only
+    /// what the sheet shows); its files are on the same tracks, one album with two copies; the journal holds one Copy to.
+    #[tokio::test]
+    async fn copy_to_own_music_leaves_the_record_where_it_was() {
+        let (svc, music, inc, own) = with_own_music("c40-copy").await;
+        let before = lying(&music);
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        const ACCOUNT: &str = "c40-copier";
+        let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
+        let done = crate::serve::who::acting_as(who, svc.copying(&at, 2, None)).await.unwrap();
+        let tasks = crate::app::tasks::tasks().of(ACCOUNT);
+        assert!(tasks.iter().any(|t| t.kind == "copy" && t.finished.is_some() && t.error.is_none()), "its progress a task of its account's: {} tasks", tasks.len());
+        assert_eq!((done.folder.as_str(), done.queued), ("A/Album", false));
+        assert_eq!(lying(&music), before, "the original as it was, nothing written into or beside it");
+        let copied: std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> = lying(&own);
+        let expected: std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> = before.into_iter().collect();
+        assert_eq!(copied, expected, "the copy is the original's files alone, their bytes and their times");
+        let c = svc.lib.catalogue();
+        for f in ["1.flac", "2.flac"] {
+            let (original, copy) = (c.track_of(0, &format!("A/Album/{f}")), c.track_of(2, &format!("A/Album/{f}")));
+            assert!(original.is_some() && original == copy, "{f}: on the same track");
+        }
+        let entry = svc.journal.get(done.undo.unwrap().parse().unwrap()).unwrap().unwrap();
+        assert!(entry.applied && matches!(entry.event, Event::AlbumCopied { .. }));
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// C40: a Copy to's Undo takes the copy into its library's trash, its rows with it, and leaves the original as it was; once.
+    #[tokio::test]
+    async fn undo_takes_the_copy_away() {
+        let (svc, music, inc, own) = with_own_music("c40-undo").await;
+        let before = lying(&music);
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        assert_eq!(svc.undo(&undo).await.unwrap(), "Zebra", "its title");
+        assert!(!own.join("A/Album").exists(), "the copy gone");
+        assert_eq!(lying(&own.join(crate::trash::TRASH_DIR)).len(), 2, "into its library's trash");
+        assert_eq!(lying(&music), before, "the original as it was");
+        let c = svc.lib.catalogue();
+        assert!(!c.has_row(2, "A/Album/1.flac") && c.has_row(0, "A/Album/1.flac"), "the copy's rows into the trash too");
+        assert!(svc.undo(&undo).await.is_err(), "undone once");
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     /// An album waiting in Incoming (catalogue folder 1), record 1, and an approved request of it by each of `users`, asked before
     /// it came and answered by root: what a Delete of the copy closes (Y4).
     fn waiting_with_requests(svc: &IncomingService, inc: &std::path::Path, users: &[&str]) -> Vec<crate::userdata::Request> {
@@ -2361,6 +2594,7 @@ async fn fate_of(lib: &Library, journal: &Journal, source_id: &str, album_id: &s
     let (moves, title) = match &event {
         Event::AlbumAdopted { moves, title, .. } | Event::AlbumReplaced { moves, title, .. } => (moves, title),
         Event::AlbumRejected { title, .. } => return Some(AlbumFate::Deleted(title.clone())),
+        Event::AlbumCopied { .. } => return None,
     };
     if source_id == crate::source::cratarr::KIND.id {
         return Some(AlbumFate::NotYet(title.clone()));

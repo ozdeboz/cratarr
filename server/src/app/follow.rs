@@ -42,7 +42,8 @@ fn renames(event: &Event, folders: &InUse, back: bool) -> HashMap<String, String
         }
     };
     match event {
-        Event::AlbumRejected { .. } => {}
+        // A copy renames nothing: the original stays where it was (C40).
+        Event::AlbumRejected { .. } | Event::AlbumCopied { .. } => {}
         Event::AlbumAdopted { moves, from_dir, converted, .. } => {
             for m in moves {
                 // A converted file that was renamed (a WAV became FLAC): its lines may still name the original.
@@ -100,8 +101,8 @@ async fn apply(stores: &[&Store], folders: &InUse, journal: &Journal, entry: &En
         return Ok(Vec::new());
     }
     let changed = match &entry.event {
-        // Its tracks stay, missing (decision 0101 point 11).
-        Event::AlbumRejected { .. } => Vec::new(),
+        // Its tracks stay, missing (decision 0101 point 11); a copy's original stays where it was (C40).
+        Event::AlbumRejected { .. } | Event::AlbumCopied { .. } => Vec::new(),
         event => {
             let map = renames(event, folders, false);
             edit_all(stores, |_, entries| renamed(entries, &map)).await?
@@ -117,8 +118,8 @@ async fn undo(stores: &[&Store], folders: &InUse, journal: &Journal, entry: &Ent
         return Ok(Vec::new());
     }
     let changed = match &entry.event {
-        // Nothing was taken out: its tracks play again as their files come back.
-        Event::AlbumRejected { .. } => Vec::new(),
+        // Nothing was taken out: its tracks play again as their files come back; a copy renamed nothing.
+        Event::AlbumRejected { .. } | Event::AlbumCopied { .. } => Vec::new(),
         event => {
             if journal.result(entry.id, PLAYLISTS)?.is_none() {
                 return Ok(Vec::new()); // nothing was renamed

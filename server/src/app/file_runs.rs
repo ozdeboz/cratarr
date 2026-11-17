@@ -802,6 +802,7 @@ fn named(app: &super::App, e: &crate::journal::Event) -> (&'static str, String) 
         Event::AlbumAdopted { source, title, from_dir, to_dir, .. } => app.incoming.adopted_named(source, from_dir.0, to_dir.0, title),
         Event::AlbumReplaced { title, .. } => ("replace", format!("Replaced: {title}")),
         Event::AlbumRejected { title, .. } => ("delete", format!("Deleted: {title}")),
+        Event::AlbumCopied { source, title, to_dir, .. } => app.incoming.copied_named(source, to_dir.0, title),
     }
 }
 
@@ -904,6 +905,7 @@ pub async fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
         let (album, title, before, after, files) = match &entry.event {
             Event::AlbumAdopted { album_id, title, from_dir, to_dir, moves, .. } => (album_id, title, vec![place(from_dir)], vec![place(to_dir)], moves.len()),
             Event::AlbumReplaced { album_id, title, moves, .. } => (album_id, title, Vec::new(), Vec::new(), moves.len()),
+            Event::AlbumCopied { album_id, title, from_dir, to_dir, copies, .. } => (album_id, title, vec![place(from_dir)], vec![place(to_dir)], copies.len()),
             Event::AlbumRejected { album_id, title, folder, dir, token, .. } => {
                 // A delete keeps no list of its files: they are those of its folder in the trash, or back in its place once undone.
                 let lies = folders.get(*folder).map(|root| if entry.undone { root.join(dir) } else { root.join(crate::trash::TRASH_DIR).join(token) });

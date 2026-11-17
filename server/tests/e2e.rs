@@ -3357,6 +3357,42 @@ async fn a_moved_copy_stays_on_the_records_tracks_and_plays_from_where_it_went_e
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// C40: Copy to, end to end. An administrator copies Music's album into their own music through Move's own door: its preview says
+/// it is a copy, the album stays in Music, and its copy holds the same files on the same tracks: one album, listed once, with
+/// two copies.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_is_one_album_two_copies_end_to_end() {
+    let root = temp("copy-to");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let album = s.read_in("Both Shores", &music).await;
+    let (id, songs) = (album["id"].as_str().unwrap().to_string(), s.songs_of(&album).await);
+    let original = as_it_lies(&music.join(SHORES));
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    let mine = own.join("ann");
+    let at = |p: &Path| id_of(p).replace('/', "%2F");
+    let path = format!("/api/albums/cratarr/{id}/move");
+    let preview = ann.get(&format!("{path}?from={}&to={}", at(&music), at(&mine))).await;
+    assert_eq!((&preview["copy"], &preview["refused"]), (&json!(true), &Value::Null), "{preview}");
+    let copied = ann.ok(reqwest::Method::POST, &path, json!({ "from": id_of(&music), "to": id_of(&mine) })).await;
+    let folder = copied["folder"].as_str().unwrap().to_string();
+    assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
+    assert!(contents(&as_it_lies(&mine.join(&folder))) == contents(&original), "the copy is the original's files alone");
+    let copies = || async { ann.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect::<Vec<_>>() };
+    s.until("its copy read in own music", Duration::from_secs(120), || async { copies().await.iter().flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).count() == 2 }).await;
+    assert_eq!(copies().await.len(), 1, "one album, listed once");
+    assert_eq!(tracks_at(&data, &mine, &folder), songs, "the copy on the record's tracks");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A track's own word goes into its file in every copy, by the track and not the file's name, and into no other track's. One
 /// Undo takes it out of them all.
 #[tokio::test(flavor = "multi_thread")]

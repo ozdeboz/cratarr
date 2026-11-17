@@ -133,7 +133,7 @@ pub(super) fn carry_on(lib: Arc<Library>, p: Playing, event: &Event) {
         Event::AlbumReplaced { title, moves, replaced, .. } => {
             (title.clone(), replaced.iter().chain(moves).map(|m| (m.from.clone(), m.to.clone())).collect())
         }
-        Event::AlbumRejected { .. } => (String::new(), Vec::new()),
+        Event::AlbumRejected { .. } | Event::AlbumCopied { .. } => (String::new(), Vec::new()),
     };
     tokio::spawn(async move {
         follow(&lib, &p).await;

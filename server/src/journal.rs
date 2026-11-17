@@ -68,6 +68,20 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         converted: Vec<Converted>,
     },
+    /// Copy to (C40): an album copied into another library, someone's own music above all, its original staying where it is: one
+    /// album, two copies on the same tracks (`Catalogue::copy_rows`). An album action like Keep (the owner, 2026-11-17: "Like
+    /// Keep"), on its own path: the copied files are all it writes, nothing into or beside them or the original (files.md CP2). Its
+    /// Undo takes the copy into its library's trash.
+    AlbumCopied {
+        source: String,
+        album_id: String,
+        title: String,
+        /// The original's folder and the copy's: (catalogue folder, relative path).
+        from_dir: (i64, String),
+        to_dir: (i64, String),
+        /// Every file, audio and others, from the original to the copy.
+        copies: Vec<TrackMove>,
+    },
 }
 
 impl Event {
@@ -77,6 +91,7 @@ impl Event {
             Event::AlbumRejected { title, release_group, .. }
             | Event::AlbumAdopted { title, release_group, .. }
             | Event::AlbumReplaced { title, release_group, .. } => (title, release_group.as_deref()),
+            Event::AlbumCopied { title, .. } => (title, None),
         }
     }
 }
@@ -443,7 +458,7 @@ impl Journal {
         let db = self.db();
         let event: Option<String> = db
             .query_row(
-                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL
+                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL AND json_extract(event, '$.kind') <> 'album_copied'
                  AND json_extract(event, '$.source') = ?1 AND json_extract(event, '$.album_id') = ?2 ORDER BY id DESC LIMIT 1",
                 params![source, album_id],
                 |r| r.get(0),

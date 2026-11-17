@@ -24,9 +24,9 @@ fn may_delete(kind: Option<LibraryKind>, mine: bool, admin: bool) -> bool {
 }
 
 /// Why a record may not move, if so. Out of Incoming it is added: to where it goes by default, or by an administrator to
-/// a main library or their own music. Between other libraries only an administrator moves one, and into or out of own
-/// music it would be a copy (the owner, 2026-11-04), which comes with records and copies; but the music of someone who
-/// left (`left`) moves into a main library, as the account's page asks (0101 point 7).
+/// a main library or their own music. Between other libraries only an administrator moves one; into or out of own music it
+/// is a copy (the owner, 2026-11-04; C40: `copies`), and the music of someone who left (`left`) moves into a main library, as
+/// the account's page asks (0101 point 7).
 fn move_refused(from: Option<LibraryKind>, to: Option<LibraryKind>, admin: bool, keepable: bool, default: bool, viewers_own: bool, left: bool) -> Option<&'static str> {
     if from == Some(LibraryKind::Incoming) {
         if !keepable {
@@ -37,10 +37,15 @@ fn move_refused(from: Option<LibraryKind>, to: Option<LibraryKind>, admin: bool,
     if !admin {
         return Some("Moving between libraries is the administrators'");
     }
-    if left && to == Some(LibraryKind::Main) {
-        return None;
-    }
-    (from == Some(LibraryKind::Own) || to == Some(LibraryKind::Own) || viewers_own).then_some("A copy into or out of own music isn't here yet")
+    let _ = (left, viewers_own);
+    None
+}
+
+/// Whether a move between these libraries is a copy (C40, the owner 2026-11-04): into or out of someone's own music the album
+/// stays where it is, and a copy of it goes. Out of Incoming it is Keep, a move; between main libraries a move; and the music of
+/// someone who left moves into a main library (0101 point 7). Pure.
+fn copies(from: Option<LibraryKind>, to: Option<LibraryKind>, viewers_own: bool, left: bool) -> bool {
+    from != Some(LibraryKind::Incoming) && !(left && to == Some(LibraryKind::Main)) && (from == Some(LibraryKind::Own) || to == Some(LibraryKind::Own) || viewers_own)
 }
 
 /// A used library of a server, as the page shows it (0101 point 1: no roles; the list's order is the default, the
@@ -496,7 +501,8 @@ impl App {
     }
 
     /// Where a move of `a` goes, if the viewer may: `to`, someone's own music made now if this is its first use.
-    async fn move_target(&self, source: &str, s: &AlbumsSourceView, a: &source::Album, to: &str) -> Result<String, ToggleError> {
+    /// Where a move of `a` goes, if the viewer may, and whether it is a copy (`copies`).
+    async fn move_target(&self, source: &str, s: &AlbumsSourceView, a: &source::Album, to: &str) -> Result<(String, bool), ToggleError> {
         let live = self.library.live();
         let on = live.iter().find(|x| x.cfg.id == source).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
         let viewer = self.served.as_ref().and_then(|s| s.current_user());
@@ -512,26 +518,32 @@ impl App {
         if let Some(why) = move_refused(from, on.kind_of(to), crate::serve::access::administering(), keepable, default, viewers_own, left) {
             return Err(ToggleError::Refused(why.into()));
         }
+        // Into someone's own music not in use yet: their own library, made now; a copy, as into any own music.
+        let copy = copies(from, on.kind_of(to).or_else(|| (!on.used(to)).then_some(LibraryKind::Own)), viewers_own, left);
         if on.used(to) {
-            return Ok(to.to_string());
+            return Ok((to.to_string(), copy));
         }
         let account = std::path::Path::new(to).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let made = self.library.own_library(&account).await.map_err(ToggleError::Upstream)?;
-        made.ok_or_else(|| ToggleError::Refused("no own-music folder is set".into()))
+        made.map(|m| (m, copy)).ok_or_else(|| ToggleError::Refused("no own-music folder is set".into()))
     }
 
     /// Move a copy into another used library of its server (decision 0034).
     pub async fn move_album(&self, source: &str, album: &str, from: Option<&str>, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         let (s, a) = self.listed_album(source, album, from).await?;
-        let to = self.move_target(source, &s, &a, to).await?;
-        self.incoming.move_album(source, a, &to, year).await
+        match self.move_target(source, &s, &a, to).await? {
+            (to, true) => self.incoming.copy_album(source, a, &to, year).await,
+            (to, false) => self.incoming.move_album(source, a, &to, year).await,
+        }
     }
 
     /// What that move would do.
     pub async fn move_preview(&self, source: &str, album: &str, from: Option<&str>, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let (s, a) = self.listed_album(source, album, from).await?;
-        let to = self.move_target(source, &s, &a, to).await?;
-        self.incoming.move_preview(source, a, &to, year).await
+        match self.move_target(source, &s, &a, to).await? {
+            (to, true) => self.incoming.copy_preview(source, a, &to, year).await,
+            (to, false) => self.incoming.move_preview(source, a, &to, year).await,
+        }
     }
 
     /// `source`'s own-music libraries as the viewer sees them: (id, name, theirs).
@@ -599,14 +611,15 @@ mod tests {
         assert_eq!(move_refused(inc, None, true, true, true, false, false), None, "a requester's before its first use");
         assert!(move_refused(inc, Some(Own), true, true, false, false, false).is_some(), "not just anyone's own music");
         assert_eq!(move_refused(Some(Main), Some(Main), true, false, false, false, false), None);
-        // Into or out of own music it would be a copy.
-        assert!(move_refused(Some(Main), Some(Own), true, false, false, false, false).is_some());
-        assert!(move_refused(Some(Main), None, true, false, false, true, false).is_some());
-        assert!(move_refused(Some(Own), Some(Main), true, false, false, false, false).is_some());
+        // Into or out of own music it is a copy (C40), an administrator's.
+        assert_eq!(move_refused(Some(Main), Some(Own), true, false, false, false, false), None);
+        assert!(move_refused(Some(Main), Some(Own), false, false, false, false, false).is_some(), "not a user's");
+        assert!(copies(Some(Main), Some(Own), false, false) && copies(Some(Own), Some(Main), false, false) && copies(Some(Main), None, true, false));
+        assert!(!copies(Some(Main), Some(Main), false, false) && !copies(Some(Incoming), Some(Own), true, false), "moved; added");
         // The music of someone who left moves into a main library, by an administrator.
         assert_eq!(move_refused(Some(Own), Some(Main), true, false, false, false, true), None);
         assert!(move_refused(Some(Own), Some(Main), false, false, false, false, true).is_some());
-        assert!(move_refused(Some(Own), Some(Own), true, false, false, false, true).is_some());
+        assert!(!copies(Some(Own), Some(Main), false, true) && copies(Some(Own), Some(Own), false, true), "a leaver's into another's own music: a copy");
     }
 
     /// X5: with own music switched off for the requester, only an administrator adds their album; on, a user adds their own request's
