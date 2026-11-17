@@ -1420,7 +1420,7 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     assert!([path(&music), path(&second)].contains(&in_order[0]), "a FLAC first, her own MP3 being worse: {in_order:?}");
     assert_eq!(in_order[2], path(&own.join("ann")), "her own music by its quality");
     assert_eq!(in_order[3], path(&incoming), "Incoming last");
-    assert_eq!((copies(&shores[0])[0]["plays"].as_bool(), shores[0]["format"].as_str(), shores[0]["library"].as_str()), (Some(true), Some("FLAC"), Some(&*in_order[0])), "the card is what plays");
+    assert_eq!((copies(&shores[0])[0]["plays"].as_bool(), shores[0]["format"].as_str(), shores[0].get("library")), (Some(true), Some("FLAC"), None), "the card is what plays, its copies saying where (C36)");
     assert_eq!(copies(&shores[0]).iter().filter(|c| c["plays"] == true).count(), 1);
     let of = |list: &[Value], p: &Path| list.iter().find(|c| c["library"].as_str() == Some(&*path(p))).cloned().unwrap();
     assert_eq!(of(&copies(&shores[0]), &music)["deletable"], true, "an administrator deletes in a main library");
@@ -1666,7 +1666,8 @@ async fn a_device_on_the_feed_holds_what_a_fresh_index_holds_end_to_end() {
     let was = listed(&device, "Just Arrived").unwrap();
     who.ok(reqwest::Method::POST, &format!("/api/incoming/keep/cratarr/{album}"), json!({})).await;
     let in_music = music.to_string_lossy().to_string();
-    s.until("the Keep listed", Duration::from_secs(60), || async { who.albums().await.iter().any(|a| a["title"] == "Just Arrived" && a["library"].as_str() == Some(&*in_music)) }).await;
+    let in_music_now = |a: &Value| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"].as_str() == Some(&*in_music)));
+    s.until("the Keep listed", Duration::from_secs(60), || async { who.albums().await.iter().any(|a| a["title"] == "Just Arrived" && in_music_now(a)) }).await;
     in_step(&who, &mut device, "a Keep", |d| listed(d, "Just Arrived").is_some_and(|t| t.facts.folders != was.facts.folders)).await;
     assert_eq!(listed(&device, "Just Arrived").unwrap().id, was.id, "the same track, in the library it was added to");
 
@@ -2411,7 +2412,8 @@ async fn the_copy_named_is_the_copy_touched_end_to_end() {
     s.read_in("Both Shores", &music).await;
     let album = s.read_in("Both Shores", &incoming).await;
     let id = album["id"].as_str().unwrap();
-    assert_eq!(album["library"].as_str(), Some(&*path(&music)), "the entry is the copy that plays");
+    let playing = album["copies"].as_array().unwrap().iter().find(|c| c["plays"] == true).map(|c| c["library"].clone());
+    assert_eq!(playing.as_ref().and_then(Value::as_str), Some(&*path(&music)), "the entry is the copy that plays");
     let (kept, waiting) = (as_it_lies(&music.join(dir)), as_it_lies(&incoming.join(dir)));
     let (deleting, moving) = (format!("/api/albums/cratarr/{id}/delete"), format!("/api/albums/cratarr/{id}/move"));
 
@@ -2563,7 +2565,7 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     let of = |p: &Path| copies(&album).into_iter().find(|c| c["library"].as_str() == Some(&*path(p))).unwrap();
     assert_eq!((of(&incoming)["deletable"].as_bool(), of(&music)["deletable"].as_bool()), (Some(true), Some(false)), "{album}");
     let view = bob.get("/api/albums").await;
-    assert!(view["sources"][0]["deletable"].as_array().unwrap().contains(&album["id"]), "by id, the record is on his list: what must not count");
+    assert!(view["sources"][0].get("deletable").is_none(), "by id, the record's list stays the server's: each copy says it (C36)");
 
     let (dir, deleting) = ("Salt Meridian/Both Shores (2018)", format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()));
     let kept = as_it_lies(&music.join(dir));
@@ -3565,7 +3567,8 @@ async fn a_length_fix_stays_in_its_file_end_to_end() {
     // Three seconds in both copies: a track of two is no shorter than it says at a second heard, within Health's slack.
     let rel = format!("{SHORES}/02 Crossing.flac");
     // By quality either can play, and on the copy that plays a fix by the track would find the same file.
-    let plays = s.read_in("Both Shores", &music).await["library"].as_str().unwrap().to_string();
+    let shores = s.read_in("Both Shores", &music).await;
+    let plays = shores["copies"].as_array().unwrap().iter().find(|c| c["plays"] == true).unwrap()["library"].as_str().unwrap().to_string();
     let (fixed, playing) = if plays == music.to_string_lossy() { (&second, &music) } else { (&music, &second) };
     let (track, other) = (fixed.join(&rel), playing.join(&rel));
     let (before, kept) = (std::fs::read(&track).unwrap(), std::fs::read(&other).unwrap());
