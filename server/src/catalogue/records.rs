@@ -630,7 +630,8 @@ fn retired(tx: &Connection, subject: &str) -> Result<bool> {
 
 /// `set_reference` in the caller's transaction, found at `at`. One a subject holds alone (a release, an album page, an artist, a
 /// label): a retired record is given none, and one it held goes to whoever names it now; held by another, it is taken by hand,
-/// or where `takes` (a certain match), and never from a hand by anything else: a link pasted names what it names.
+/// or where `takes` (a certain match), and never from a hand by anything else: a link pasted names what it names. An artist's id
+/// held by `search` alone, by an artist credited on no had record (one opened from Beyond, Z2), gives way to the files'.
 pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, at: i64, takes: bool) -> Result<Put> {
     let mut taken = Vec::new();
     if ONE_SUBJECT.contains(&r.kind.as_str()) {
@@ -644,7 +645,8 @@ pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, 
         // Decided over every holder before any lets go: a refusal leaves each where it was, though the caller commits. (The
         // schema holds one holder, `references_one`; the rule stands without counting on it.)
         for (holder, held_how) in &holders {
-            if !retired(tx, holder)? && ((held_how == "hand" && how != "hand") || (!takes && how != "hand")) {
+            let gives_way = how == "files" && held_how == "search" && r.kind == "artist" && credited_on_none_had(tx, holder)?;
+            if !retired(tx, holder)? && ((held_how == "hand" && how != "hand") || (!takes && how != "hand" && !gives_way)) {
                 return Ok(Put::Held);
             }
         }
@@ -667,6 +669,19 @@ pub(super) fn put_reference(tx: &Connection, subject: &str, r: &Ref, how: &str, 
         Some(_) => {}
     }
     Ok(Put::Kept(taken))
+}
+
+/// Whether an artist (`ar-<n>`) is credited on no live record that holds live tracks (Z2): their id held by `search` alone gives
+/// way to the files' (`put_reference`).
+fn credited_on_none_had(tx: &Connection, subject: &str) -> Result<bool> {
+    let Some(artist) = ids::artist_number(subject) else { return Ok(false) };
+    let credited: bool = tx
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM record_artists a JOIN records r ON r.id = a.record WHERE a.artist = ?1 AND r.merged_into IS NULL AND r.retired_at IS NULL
+               AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL))",
+        )?
+        .query_row([artist], |row| row.get(0))?;
+    Ok(!credited)
 }
 
 fn subjects_in(db: &Connection, r: &Ref) -> Result<Vec<String>> {

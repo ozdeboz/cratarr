@@ -8,7 +8,8 @@
 //!   now, and is had by the one had rule on that record. An artist row names the artist who holds their MusicBrainz id
 //!   (`artist`), had where the library has albums by them. A name alone names nothing: a row no reference ties is not had.
 //! - **Made at open:** an album through `POST /api/records/open` (C56, `labels::open_record`), an artist through
-//!   `POST /api/artists/open` (`open_artist`), never by a name.
+//!   `POST /api/artists/open` (`open_artist`), never by a name, but for the one live artist of the name who holds no MusicBrainz
+//!   id (Z2): the monthly read gives them it by their name anyway.
 
 use std::collections::{HashMap, HashSet};
 
@@ -201,9 +202,10 @@ pub fn artists(found: &[FoundArtist], known: &Known) -> Vec<BeyondArtist> {
         .collect()
 }
 
-/// An artist of Beyond's opened (C57, OQ12 (a): kept when opened): the artist who holds their MusicBrainz id, else one of their own
-/// made now, though another has the name (C55: the name's next number), holding it (`Catalogue::artist_by_reference`). Never by the
-/// name alone: without a MusicBrainz id, or a name, none. Blocking.
+/// An artist of Beyond's opened (C57, OQ12 (a): kept when opened): the artist who holds their MusicBrainz id; else the one live
+/// artist of the name who holds none (Z2); else one of their own made now, though another has the name (C55: the name's next
+/// number). The one opened holds it (`Catalogue::artist_by_reference`). Never by the name alone: without a MusicBrainz id, or a
+/// name, none. Blocking.
 pub fn open_artist(cat: &Catalogue, id: &str, name: &str) -> Result<Option<i64>> {
     let (id, name) = (mbid(id), name.trim());
     if !super::discogs::is_mbid(&id) || name.is_empty() {
@@ -318,7 +320,8 @@ mod tests {
     }
 
     /// C57 (OQ12 (a)): an artist of Beyond's opened is the artist who holds their MusicBrainz id, else one made then with it, never
-    /// one of the same name: a second of a name is numbered 2; the same id opened again is the same artist.
+    /// one of the same name that holds another id, nor one of two of the name (Z2): a second of a name is numbered 2; the same id
+    /// opened again is the same artist.
     #[test]
     fn opening_a_beyond_artist_never_merges_by_name() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
@@ -328,11 +331,11 @@ mod tests {
         assert_ne!(first, second, "another id of the same name: another artist");
         let number = |artist: i64| cat.artist_named(artist).unwrap().unwrap().number;
         assert_eq!((number(first), number(second)), (Some(1), Some(2)));
-        // The library's artist of a name, with no MusicBrainz id: not them either.
-        let theirs = cat.artist_for("Kite Theory").unwrap();
+        // Two artists of a name with no MusicBrainz id: which one, nothing says, so neither (Z2).
+        let (theirs, twin) = (cat.artist_for("Kite Theory").unwrap(), cat.artist_apart("Kite Theory").unwrap());
         let opened = open_artist(&cat, ARTIST_3, "Kite Theory").unwrap().expect("made");
-        assert_ne!(opened, theirs);
-        assert_eq!(number(opened), Some(2));
+        assert!(opened != theirs && opened != twin);
+        assert_eq!(number(opened), Some(3));
         // One who holds the id by their files is the one opened.
         let harbour = cat.artist_for("Glass Harbour").unwrap();
         cat.set_reference(&ids::artist(harbour), &Ref::new("musicbrainz", "artist", ARTIST_4), "files").unwrap();
@@ -342,6 +345,54 @@ mod tests {
         assert_eq!(open_artist(&cat, "not an id", "Rone").unwrap(), None);
         let known_by = |artist: i64| cat.references_of(&ids::artist(artist)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect::<Vec<_>>();
         assert_eq!(known_by(second), [(ARTIST_2.to_string(), "search".to_string())], "their MusicBrainz id kept");
+    }
+
+    /// Z2 (the review's finding 2): with no artist holding the id opened, the one live artist of its name who holds no MusicBrainz
+    /// artist id is them, given it as `search`, as the monthly read finds them by their name: not a second of the name. One holding
+    /// another id, or two of the name, are not: a new artist.
+    #[test]
+    fn a_beyond_artist_is_the_library_artist_of_its_name_with_no_id() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let grouch = cat.artist_for("Grouch").unwrap();
+        assert_eq!(open_artist(&cat, ARTIST_1, "grouch").unwrap(), Some(grouch), "the library's Grouch, not Grouch (2)");
+        let holds = |artist: i64| cat.references_of(&ids::artist(artist)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect::<Vec<_>>();
+        assert_eq!(holds(grouch), [(ARTIST_1.to_string(), "search".to_string())], "given the id, as the monthly read would");
+        let number = |artist: i64| cat.artist_named(artist).unwrap().unwrap().number;
+        assert_eq!(number(grouch), Some(1));
+        assert_eq!(open_artist(&cat, ARTIST_1, "Grouch").unwrap(), Some(grouch), "held: the same artist");
+        let other = open_artist(&cat, ARTIST_2, "Grouch").unwrap().expect("made");
+        assert_ne!(other, grouch, "the one of the name holds another id: another artist");
+        assert_eq!(number(other), Some(2));
+        let (club, twin) = (cat.artist_for("Tape Club").unwrap(), cat.artist_apart("Tape Club").unwrap());
+        let made = open_artist(&cat, ARTIST_3, "Tape Club").unwrap().expect("made");
+        assert!(made != club && made != twin, "two of the name with no id: neither");
+        assert_eq!(number(made), Some(3));
+    }
+
+    /// Z2: the files' MusicBrainz artist id takes it from an artist who holds it by `search` alone and is credited on no had record
+    /// (one opened from Beyond while the name was two artists'); never from one credited on a had record, nor from one holding it
+    /// by their files or by hand.
+    #[test]
+    fn a_files_artist_id_takes_it_from_a_beyond_artist() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (grouch, twin) = (cat.artist_for("Grouch").unwrap(), cat.artist_apart("Grouch").unwrap());
+        let beyond = open_artist(&cat, ARTIST_1, "Grouch").unwrap().expect("made");
+        assert!(beyond != grouch && beyond != twin);
+        let files = |artist: i64, id: &str| cat.set_reference(&ids::artist(artist), &Ref::new("musicbrainz", "artist", id), "files").unwrap();
+        let holds = |artist: i64| cat.references_of(&ids::artist(artist)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect::<Vec<_>>();
+        assert!(files(grouch, ARTIST_1), "taken from the Beyond artist");
+        assert_eq!(holds(grouch), [(ARTIST_1.to_string(), "files".to_string())]);
+        assert!(holds(beyond).is_empty(), "let go of");
+        // Credited on a had record: kept.
+        let credited = open_artist(&cat, ARTIST_2, "Grouch").unwrap().expect("made");
+        let album = record(&cat, "Night Walks", 2, &[]);
+        cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", rusqlite::params![album, credited]).unwrap();
+        assert!(!files(twin, ARTIST_2), "credited on a had record: kept");
+        assert_eq!(holds(credited), [(ARTIST_2.to_string(), "search".to_string())]);
+        // Held by the files, or by hand: kept.
+        assert!(!files(twin, ARTIST_1), "held by the files: kept");
+        cat.set_reference(&ids::artist(beyond), &Ref::new("musicbrainz", "artist", ARTIST_3), "hand").unwrap();
+        assert!(!files(twin, ARTIST_3), "held by hand: kept");
     }
 
     /// C57: Beyond's answer makes nothing: no record, artist or reference, whatever it finds.

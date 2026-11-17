@@ -116,9 +116,11 @@ impl Catalogue {
         give_artist(&self.db(), &ids::artist_key(name), name, now())
     }
 
-    /// The artist a source's id names (C57: an artist of Beyond's opened, OQ12 (a)): the one who holds it, else one of their own
-    /// made now, as `artist_apart` makes them (the name's next number where another has it), holding it, found `how`. Never by the
-    /// name alone. In one transaction, so two opens at once make one artist. Blocking.
+    /// The artist a source's id names (C57: an artist of Beyond's opened, OQ12 (a)): the one who holds it; else the one live artist
+    /// of the name who holds no id at that source (Z2), as the monthly read finds a library artist by their name
+    /// (`discover::mb_artist_by_name`); else one of their own made now, as `artist_apart` makes them (the name's next number where
+    /// another has it). Two or more of the name, or one holding another id, say nothing of which: a new artist. The one found or
+    /// made holds the id, found `how`. In one transaction, so two opens at once make one artist. Blocking.
     pub fn artist_by_reference(&self, r: &super::records::Ref, name: &str, how: &str) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -130,8 +132,20 @@ impl Catalogue {
             tx.commit()?;
             return Ok(artist);
         }
+        let key = ids::artist_key(name);
+        // The live artists of the name (a forgotten one's row stays, RT01b), and whether each holds an id at that source.
+        let named: Vec<(i64, bool)> = tx
+            .prepare_cached(
+                "SELECT a.id, EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.source = ?2 AND f.kind = ?3)
+                 FROM artists a WHERE a.key = ?1 AND NOT EXISTS (SELECT 1 FROM forgotten g WHERE g.subject = 'ar-' || a.id) ORDER BY a.id",
+            )?
+            .query_map(params![key, r.source, r.kind], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
         let at = now();
-        let artist = give_artist(&tx, &ids::artist_key(name), name, at)?;
+        let artist = match named.as_slice() {
+            [(only, false)] => *only,
+            _ => give_artist(&tx, &key, name, at)?,
+        };
         super::records::put_reference(&tx, &ids::artist(artist), r, how, at, false)?;
         tx.commit()?;
         Ok(artist)
