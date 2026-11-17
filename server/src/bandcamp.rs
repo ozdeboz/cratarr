@@ -968,8 +968,11 @@ mod tests {
         bc.keep(Album { url: page.into(), title: "Two Rooms".into(), artist: "Glass Harbour".into(), cover: None, tracks: vec![track(1, true), track(2, false)], released: None, label: None, account: None, about: None, credits: None, tags: Vec::new() });
         let listed = bc.album(page).await.unwrap().queue_tracks().len();
         let played = bc.stream(page, 2, None).await;
-        let said: Vec<String> = crate::app::health::check_connections(now).into_iter().filter(|f| f.key == "connections:bandcamp-check").map(|f| f.title).collect();
+        let found: Vec<crate::app::health::Finding> = crate::app::health::check_connections(now).into_iter().filter(|f| f.key == "connections:bandcamp-check").collect();
+        let said: Vec<String> = found.iter().map(|f| f.title.clone()).collect();
         HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        let opens = found.iter().map(|f| f.open.as_ref().map(|o| (o.page, o.thing))).collect::<Vec<_>>();
+        assert_eq!(opens, [Some(("settings", Some("bandcamp")))], "G9: opens Bandcamp's page in Settings");
         assert!(said.len() == 1 && said[0].starts_with("Bandcamp asked for a browser check; Cratarr stopped asking until "), "{said:?}");
         assert!(until.is_some_and(|u| u >= now + CHECK_HOLD_SECS), "{until:?}");
         assert!(searched.is_err_and(|e| not_read(&e)), "not read, not nothing found");

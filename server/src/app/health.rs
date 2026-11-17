@@ -24,7 +24,8 @@ pub enum Level {
     Info,
 }
 
-/// Where a finding is dealt with: a page, and the switch to turn on there (the Library's `upgrades`).
+/// Where a finding is dealt with: a page, and the switch to turn on there (the Library's `upgrades`). `connections`: Settings'
+/// Connections list itself, where the switches of every service are (G9: background reading).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Open {
     pub page: &'static str,
@@ -555,6 +556,8 @@ pub(crate) fn check_connections(at: i64) -> Vec<Finding> {
         let mut f = finding("connections", "connections:bandcamp-check", Level::Warning, 1, format!("Bandcamp asked for a browser check; Cratarr stopped asking until {when}"));
         f.name = "Bandcamp".to_string();
         (f.thing, f.state) = (Some(f.name.clone()), Some("paused".into()));
+        // Bandcamp's own page in Settings › Connections, its switch there (G9).
+        f.open = Some(Open { page: "settings", switch: None, thing: Some("bandcamp") });
         f
     });
     let bandcamp_held = held.is_some();
@@ -563,6 +566,8 @@ pub(crate) fn check_connections(at: i64) -> Vec<Finding> {
         let mut f = finding("connections", "connections:background-paused", Level::Info, 1, "Background reading is paused: Cratarr asks no service anything on its own".to_string());
         f.name = "Background reading".to_string();
         (f.thing, f.state) = (Some(f.name.clone()), Some("paused".into()));
+        // Its switch is on Settings' Connections list itself (G9).
+        f.open = Some(Open { page: "connections", switch: None, thing: None });
         f
     });
     super::reach::failing(at)
@@ -1251,13 +1256,14 @@ mod tests {
     #[test]
     fn background_reading_paused_shows_on_health() {
         let _one = super::super::switches::TEST_STATE.blocking_lock();
-        let shown = || check_connections(super::super::moment::now_secs()).into_iter().any(|f| f.key == "connections:background-paused");
+        let shown = || check_connections(super::super::moment::now_secs()).into_iter().find(|f| f.key == "connections:background-paused");
         let was = super::super::switches::set_for_tests(super::super::switches::BACKGROUND, false);
         let paused = shown();
         super::super::switches::set_for_tests(super::super::switches::BACKGROUND, true);
         let on = shown();
         super::super::switches::set_for_tests(super::super::switches::BACKGROUND, was);
-        assert!(paused && !on);
+        assert!(on.is_none());
+        assert_eq!(paused.expect("shown").open, Some(Open { page: "connections", switch: None, thing: None }), "G9: opens Settings' Connections list");
     }
 
     /// W4 (E1): records arrived in Incoming and waiting to be added are one Health item, each opening its intake card ("Before

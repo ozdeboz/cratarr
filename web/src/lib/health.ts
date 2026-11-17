@@ -40,8 +40,9 @@ export const areaOf = (domain: string): Area => AREA_OF[domain] ?? 'Connections'
 export function openFinding(f: HealthFinding) {
   if (!f.open) return;
   if (f.open.page === 'library' && f.open.switch) setSwitch('library', f.open.switch, true);
-  // A connection's own page in Settings › Connections.
+  // A connection's own page in Settings › Connections; the Connections list itself, where every service's switch is (G9).
   if (f.open.page === 'settings' && f.open.thing) return void (location.hash = viewOn('settings', `settings:connections/${f.open.thing}`));
+  if (f.open.page === 'connections') return void (location.hash = viewOn('settings', 'settings:connections'));
   // The page the server names (lib/addresses); one the page does not have: nothing.
   if (isPage(f.open.page) && pageHere() !== f.open.page) location.hash = hrefOf(f.open.page);
 }
