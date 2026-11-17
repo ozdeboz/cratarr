@@ -72,6 +72,10 @@ export type AlbumOffer = {
  *  is added to it ("Add to Your music", "Add to Music"); one between main libraries moves. */
 export const adds = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind === 'incoming' || to.kind === 'own';
 
+/** Whether its move into `to` is a copy (C40, the owner 2026-11-04): a kept record into or out of someone's own music stays where
+ *  it is, and a copy of it goes ("Copy to Your music"). Out of Incoming it is added, between main libraries moved. */
+export const copies = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind !== 'incoming' && (from?.kind === 'own' || to.kind === 'own');
+
 type Offered = Pick<AlbumsSource, 'library_info' | 'verdicts' | 'deletable' | 'keepable' | 'keep_to'>;
 type Listed = Pick<ListedAlbum, 'id' | 'library' | 'copies'>;
 type Rights = Pick<AlbumCopy, 'deletable' | 'keepable' | 'keep_to'> & { library?: string };
@@ -99,14 +103,14 @@ export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?
     const from = info(c.library);
     const keepTo = c.keep_to;
     // An Incoming copy is added where it goes by default; by an administrator also to a main library or their own music
-    // (decision 0101 point 2). A kept one moves between an administrator's libraries, never into or out of own music:
-    // that would be a copy (the owner, 2026-11-04), which comes with records and copies.
+    // (decision 0101 point 2). A kept one goes between an administrator's libraries: into or out of own music as a copy (C40,
+    // `copies`), never out of it into Incoming; between the others moved.
     const targets = !c.deletable
       ? []
       : from?.kind === 'incoming'
         ? others.filter((l) => c.keepable && (l.id === keepTo || (admin && (l.kind === 'main' || l.mine))))
-        : admin && from?.kind !== 'own'
-          ? others.filter((l) => l.kind !== 'own')
+        : admin
+          ? others.filter((l) => !(from?.kind === 'own' && l.kind === 'incoming'))
           : [];
     const kept = from?.kind === 'main' || from?.kind === 'own';
     return {
@@ -131,8 +135,9 @@ const named = (offers: AlbumOffer[], entries: CopyEntry[]) => (offers.length > 1
 const free = (offers: AlbumOffer[]) => offers.filter((o) => o.job === null);
 const entry = (offer: AlbumOffer, to: LibraryInfo, label: string): CopyEntry => ({ key: `${offer.library}>${to.id}`, offer, to, label });
 
-/** Add to and Move to, each copy's targets in turn. */
-export const moveEntries = (offers: AlbumOffer[]) => named(offers, free(offers).flatMap((o) => o.targets.map((to) => entry(o, to, `${adds(o.from, to) ? 'Add' : 'Move'} to ${to.name}`))));
+/** Add to, Copy to and Move to, each copy's targets in turn. */
+export const moveEntries = (offers: AlbumOffer[]) =>
+  named(offers, free(offers).flatMap((o) => o.targets.map((to) => entry(o, to, `${copies(o.from, to) ? 'Copy' : adds(o.from, to) ? 'Add' : 'Move'} to ${to.name}`))));
 
 /** Replace in, one per main library it can take a copy's place in. */
 export const replaceEntries = (offers: AlbumOffer[]) => named(offers, free(offers).flatMap((o) => o.replaceInto.map((to) => entry(o, to, `Replace in ${to.name}`))));
@@ -160,15 +165,15 @@ export function deleteGroups<T extends Ticked>(items: T[]) {
 /** Each library they can move into, by its name (whichever server's), with what would go. A record goes once: the first
  *  of its copies that can, in the order they would play, as one entry cannot say which. */
 export function moveGroups<T extends Ticked>(items: T[]) {
-  const by = new Map<string, { item: T; offer: AlbumOffer; to: LibraryInfo; add: boolean }[]>();
+  const by = new Map<string, { item: T; offer: AlbumOffer; to: LibraryInfo; add: boolean; copy: boolean }[]>();
   for (const item of items)
     for (const offer of free(item.offers))
       for (const to of offer.targets) {
         const them = by.get(to.name) ?? [];
-        if (!them.some((x) => x.item === item)) by.set(to.name, [...them, { item, offer, to, add: adds(offer.from, to) }]);
+        if (!them.some((x) => x.item === item)) by.set(to.name, [...them, { item, offer, to, add: adds(offer.from, to), copy: copies(offer.from, to) }]);
       }
-  // Added where every one of them is (`adds`), else moved.
-  return [...by].map(([name, them]) => ({ name, them, adding: them.every((x) => x.add) }));
+  // Copied where every one of them is (`copies`), else added where every one is (`adds`), else moved.
+  return [...by].map(([name, them]) => ({ name, them, adding: them.every((x) => x.add), copying: them.every((x) => x.copy) }));
 }
 
 type Copied = Pick<ListedAlbum, 'library' | 'copies' | 'format' | 'bitrate_kbps'>;

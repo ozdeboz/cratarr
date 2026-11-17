@@ -2721,6 +2721,8 @@ export type KeepPreview = {
   convert: number;
   /** Whether a Lidarr is set to be told to stop fetching it; without one it may fetch the album again. */
   acquisition: boolean;
+  /** A copy (C40): the album stays where it is, and its copied files are all that is written. */
+  copy?: boolean;
 };
 /** What a move or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
 export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
