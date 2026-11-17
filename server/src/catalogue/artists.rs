@@ -134,7 +134,8 @@ impl Catalogue {
             return Ok(artist);
         }
         let key = ids::artist_key(name);
-        // The live artists of the name (a forgotten one's row stays, RT01b), and whether each holds an id at that source.
+        // The live artists of the name (a forgotten one's row goes, RT01b, its tombstone kept), and whether each holds an id at
+        // that source.
         let named: Vec<(i64, bool)> = tx
             .prepare_cached(
                 "SELECT a.id, EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.source = ?2 AND f.kind = ?3)

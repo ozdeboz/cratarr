@@ -37,9 +37,15 @@ static HELD_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::
 /// Where that is kept across a restart (Y8): the user data's server choices, epoch seconds.
 const HELD_CHOICE: &str = "bandcamp:held_until";
 
-/// Until when Cratarr leaves Bandcamp alone after its bot check (O4), where it does at `now`.
+/// Until when Cratarr leaves Bandcamp alone after its bot check (O4), where it does at `now`. Never longer than the check's own day
+/// from now (U11, as V8 has it for the kept one): a hold set while the clock ran ahead is cut to that, and held so.
 pub fn held_until(now: i64) -> Option<i64> {
-    let until = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+    let mut until = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+    if until > now + CHECK_HOLD_SECS {
+        let cut = now + CHECK_HOLD_SECS;
+        let _ = HELD_UNTIL.compare_exchange(until, cut, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+        until = cut;
+    }
     (until > now).then_some(until)
 }
 
@@ -992,6 +998,21 @@ mod tests {
         let a_day = now + CHECK_HOLD_SECS..=now + CHECK_HOLD_SECS + 60;
         assert!(until.is_some_and(|u| a_day.contains(&u)), "a day from now: {until:?}");
         assert!(kept.is_some_and(|k| a_day.contains(&k)), "kept cut too: {kept:?}");
+    }
+
+    /// U11 (the review of 8c/8d's nits): a hold set in memory while the clock ran ahead is cut to a day from now as it is read, and
+    /// held so: a day on, it is over.
+    #[tokio::test]
+    async fn a_hold_set_while_the_clock_ran_ahead_is_a_day_at_most() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let now = crate::app::moment::now_secs();
+        HELD_UNTIL.store(now + 200 * 86_400, std::sync::atomic::Ordering::Relaxed);
+        let until = held_until(now);
+        let after = held_until(now + CHECK_HOLD_SECS + 1);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(until, Some(now + CHECK_HOLD_SECS), "a day from now");
+        assert_eq!(after, None, "a day on: over");
     }
 
     /// V8: an administrator switching Bandcamp on again lifts its hold, in memory and in the user data: it is asked again at once,

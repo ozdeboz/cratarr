@@ -112,12 +112,21 @@ pub fn jpeg_at(data: &[u8], size: u32, quality: u8) -> Result<Vec<u8>> {
     jpeg_of(img, size, quality)
 }
 
+/// The most a picture's decode may hold (U11): a 6000 px square JPEG decodes to about 108 MB, a 16-bit PNG of that size to 288 MB,
+/// where `image::Limits`' own default allows 512 MiB.
+const DECODE_MOST: u64 = 192 << 20;
+
 /// `jpeg_within` for a picture no larger than `most` on either side (V7): its decoder is held to that (`image::Limits`), so a larger
-/// one is refused from its header, before its pixels are read.
+/// one is refused from its header, before its pixels are read; and its decode to `DECODE_MOST` bytes (U11).
 pub fn jpeg_within_at_most(data: &[u8], size: u32, most: u32) -> Result<Vec<u8>> {
+    jpeg_within_limits(data, size, most, DECODE_MOST)
+}
+
+/// `jpeg_within_at_most`, its decode held to `alloc` bytes.
+fn jpeg_within_limits(data: &[u8], size: u32, most: u32, alloc: u64) -> Result<Vec<u8>> {
     let mut r = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format()?;
     let mut limits = image::Limits::default();
-    (limits.max_image_width, limits.max_image_height) = (Some(most), Some(most));
+    (limits.max_image_width, limits.max_image_height, limits.max_alloc) = (Some(most), Some(most), Some(alloc));
     r.limits(limits);
     jpeg_of(r.decode().context("not a picture Cratarr can read at that size")?, size, 85)
 }
@@ -198,6 +207,17 @@ mod tests {
         let mut out = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgb8(img).write_to(&mut out, image::ImageFormat::Png).unwrap();
         out.into_inner()
+    }
+
+    /// U11 (the review of 8c/8d's nits): a picture's decode is held to its allowance: one within the sides allowed whose pixels need
+    /// more is refused; the server's allowance is below the decoder's own default.
+    #[test]
+    fn a_decode_past_its_allowance_is_refused() {
+        let picture = png(100, 100);
+        assert!(jpeg_within_limits(&picture, 50, 1000, 200_000).is_ok(), "100 × 100 × 3 bytes, allowed");
+        assert!(jpeg_within_limits(&picture, 50, 1000, 20_000).is_err(), "more than 20 000 bytes: refused");
+        assert!(jpeg_within_at_most(&picture, 50, 1000).is_ok());
+        assert!(DECODE_MOST < image::Limits::default().max_alloc.unwrap());
     }
 
     #[test]
