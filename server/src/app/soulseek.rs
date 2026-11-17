@@ -201,6 +201,13 @@ pub struct Item {
     /// Health says Soulseek can't store files. A fetch that comes through, or a placing, ends the row.
     #[serde(default)]
     pub local_failures: u32,
+    /// The folder its album is being placed in, noted before the rename (Y10): a stop between the rename and the Placed write is taken
+    /// as placed when the item is taken up again, never placed twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placing: Option<String>,
+    /// When its placing began (epoch s, Y10): only files that came to its folder since then are its album's (`repoint`).
+    #[serde(default)]
+    pub placed_at: i64,
 }
 
 /// A folder set aside: whose, where it is kept, and why each of its files failed.
@@ -725,6 +732,8 @@ pub fn list_for_tests(id: &str, record: i64) {
         set_aside: Vec::new(),
         checked: None,
         local_failures: 0,
+        placing: None,
+        placed_at: 0,
     };
     kept(|k| k.items.push(i));
 }
@@ -852,10 +861,12 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
         tokio::task::spawn_blocking(move || sweep_set_asides(&data, now())).await.ok();
     }
     let (ud, cat, kinds) = (served.userdata.clone(), served.catalogue().clone(), served.library.kinds());
-    // Placed for a record retired meanwhile (X4, D17): its request follows the record its album joined or made.
-    let placed: Vec<(i64, i64, String)> =
-        kept(|k| k.items.iter().filter(|i| i.state == State::Placed && i.record.record != 0).filter_map(|i| Some((i.record.request, i.record.record, i.placed.clone()?))).collect());
-    let (approved, of, moved) = tokio::task::spawn_blocking(move || -> Result<_> {
+    // Placed for a record retired meanwhile (X4, D17): its request follows the record its album joined or made, once its folder is
+    // read (Y10), which the item then lets go of.
+    let placed: Vec<(String, i64, i64, String, i64)> = kept(|k| {
+        k.items.iter().filter(|i| i.state == State::Placed && i.record.record != 0).filter_map(|i| Some((i.id.clone(), i.record.request, i.record.record, i.placed.clone()?, i.placed_at))).collect()
+    });
+    let (approved, of, (moved, read)) = tokio::task::spawn_blocking(move || -> Result<_> {
         let moved = repoint(&ud, &cat, &placed)?;
         // Every approved request (X2), not the newest thousand: those whose record is complete give no item (`take_requests`).
         let approved = ud.requests(None, Some(super::requests::APPROVED), usize::MAX)?;
@@ -863,12 +874,16 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
         Ok((approved, of, moved))
     })
     .await??;
-    if !moved.is_empty() {
+    if !moved.is_empty() || !read.is_empty() {
         kept(|k| {
             for (request, _, to) in &moved {
                 for i in k.items.iter_mut().filter(|i| i.record.request == *request) {
                     i.record.record = *to;
                 }
+            }
+            // Once (Y10): its folder read, an item lets go of it, and nothing that comes there later re-points its request.
+            for i in k.items.iter_mut().filter(|i| read.contains(&i.id)) {
+                i.placed = None;
             }
         });
     }
@@ -903,22 +918,26 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
 }
 
 /// Requests whose record is retired re-pointed to the record their placed album joined or made (X4, D17): one on a retired record
-/// (the reject workflow) is otherwise never done, and its album is fetched again after Clear placed. `placed` is (request, record,
-/// the folder its album was placed in); what moved, as (request, from, to). Blocking.
-fn repoint(ud: &crate::userdata::UserData, cat: &crate::catalogue::Catalogue, placed: &[(i64, i64, String)]) -> Result<Vec<(i64, i64, i64)>> {
-    let read = cat.requested(&placed.iter().map(|(_, record, _)| *record).collect::<Vec<_>>())?;
-    let mut moved = Vec::new();
-    for (request, record, at) in placed {
-        if !read.get(record).is_some_and(|q| q.row.retired_at.is_some()) {
-            continue;
-        }
-        if let Some(to) = cat.record_placed_in(Path::new(at))?.filter(|to| to != record) {
-            ud.set_request_record(*request, to)?;
-            tracing::info!(target: "soulseek", request, from = record, to, "a request on a retired record follows its placed album");
-            moved.push((*request, *record, to));
+/// (the reject workflow) is otherwise never done, and its album is fetched again after Clear placed. Once (Y10): at the first pass
+/// that reads the folder, by the files that came to it since its placing alone, and for an approved request only. `placed` is
+/// (item, request, record, the folder its album was placed in, when its placing began); what moved, as (request, from, to), and the
+/// items whose folder was read, which let go of it. Blocking.
+fn repoint(ud: &crate::userdata::UserData, cat: &crate::catalogue::Catalogue, placed: &[(String, i64, i64, String, i64)]) -> Result<(Vec<(i64, i64, i64)>, Vec<String>)> {
+    let read = cat.requested(&placed.iter().map(|(_, _, record, ..)| *record).collect::<Vec<_>>())?;
+    let (mut moved, mut done) = (Vec::new(), Vec::new());
+    for (item, request, record, at, since) in placed {
+        // Not read yet: looked at again next round.
+        let Some(joined) = cat.record_placed_in(Path::new(at), *since)? else { continue };
+        done.push(item.clone());
+        let retired = read.get(record).is_some_and(|q| q.row.retired_at.is_some());
+        let approved = ud.request(*request)?.is_some_and(|r| r.status == super::requests::APPROVED);
+        if retired && approved && joined != *record {
+            ud.set_request_record(*request, joined)?;
+            tracing::info!(target: "soulseek", request, from = record, to = joined, "a request on a retired record follows its placed album");
+            moved.push((*request, *record, joined));
         }
     }
-    Ok(moved)
+    Ok((moved, done))
 }
 
 /// How long Soulseek leaves a request to Lidarr, which goes first (X1, the owner's 6 November order).
@@ -1028,6 +1047,8 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             set_aside: Vec::new(),
             checked: None,
             local_failures: 0,
+            placing: None,
+            placed_at: 0,
         });
         // Its first search as the order has it (X1, `first_search`).
         if let Some(i) = k.items.last_mut() {
@@ -1230,6 +1251,17 @@ where
     Fut: std::future::Future<Output = Result<f32>>,
 {
     let Some(it) = item(id) else { return };
+    // A placing a stop cut after its rename (Y10): its album is in place, so it is taken as placed, never placed again; what it came
+    // from goes after.
+    if let Some(to) = it.placing.as_deref().filter(|to| renamed(Path::new(to), &it.record)) {
+        tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), to, "a placing cut short after its rename taken as placed");
+        let to = to.to_string();
+        with_item(id, |i| (i.state, i.placed, i.placing, i.batch, i.checked, i.why, i.local_failures) = (State::Placed, Some(to), None, None, None, None, 0));
+        for b in it.batch.iter().chain(&it.checked) {
+            std::fs::remove_dir_all(folder.join(crate::slskd::FOLDER).join(b)).ok();
+        }
+        return;
+    }
     // Checked files whose placing failed (X4): placed again from where they were kept, nothing fetched or checked again.
     if let Some(checked) = &it.checked {
         let dir = folder.join(crate::slskd::FOLDER).join(checked);
@@ -1521,18 +1553,21 @@ async fn place_from(id: &str, it: &Item, dir: &Path, files: &[PathBuf]) {
         tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), "not placed: it left the list");
         return;
     };
-    let placed = lib.and_then(|lib| place(&lib, &r, files, cover.as_deref()));
+    // Its target noted before the rename (Y10), with when.
+    let noted = |to: &Path| with_item(id, |i| (i.placing, i.placed_at) = (Some(to.display().to_string()), now()));
+    let placed = lib.and_then(|lib| place(&lib, &r, files, cover.as_deref(), noted));
     match placed {
         Ok(to) => {
-            std::fs::remove_dir_all(dir).ok();
             tracing::info!(target: "soulseek", record = %format!("{} - {}", r.artist, r.album), to = %to.display(), "placed in Incoming");
-            with_item(id, |i| (i.state, i.placed, i.batch, i.checked, i.why, i.local_failures) = (State::Placed, Some(to.display().to_string()), None, None, None, 0));
+            with_item(id, |i| (i.state, i.placed, i.placing, i.batch, i.checked, i.why, i.local_failures) = (State::Placed, Some(to.display().to_string()), None, None, None, None, 0));
+            // What it came from goes after the Placed write (Y10): a stop between leaves it placed, never placed twice.
+            std::fs::remove_dir_all(dir).ok();
         }
         Err(e) => {
             tracing::warn!(target: "soulseek", record = %format!("{} - {}", r.artist, r.album), reason = %format!("{e:#}"), "not placed; its checked files kept");
             let checked = dir.file_name().map(|n| n.to_string_lossy().into_owned());
             with_item(id, |i| {
-                (i.state, i.batch, i.checked) = (State::Checking, None, checked);
+                (i.state, i.batch, i.checked, i.placing) = (State::Checking, None, checked, None);
                 hold(i, format!("It could not be placed: {e:#}"), PLACE_AGAIN);
             });
         }
@@ -1615,12 +1650,24 @@ fn cover_source(cover: Option<&str>, groups: &[String]) -> Option<super::cover_c
 /// The checked files into the Soulseek library `lib` (`place_with`); the record's folder. The catalogue is told first that the
 /// album arriving there is the record (`Catalogue::expect_record`, C50), so its tracks join that record rather than make another,
 /// and again once it is in place, from when the expectation waits its week (F9).
-fn place(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>) -> Result<PathBuf> {
+fn place(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, noted: impl FnOnce(&Path)) -> Result<PathBuf> {
     let served = crate::serve::instance();
-    place_with(lib, r, files, cover, |to| match served.as_ref().filter(|_| r.record != 0).and_then(|s| Some((s, s.catalogue().place_of_path(to)?))) {
+    let expect = |to: &Path| match served.as_ref().filter(|_| r.record != 0).and_then(|s| Some((s, s.catalogue().place_of_path(to)?))) {
         Some((s, (folder, dir))) => s.catalogue().expect_record(folder, &dir, r.record),
         None => Ok(true),
-    })
+    };
+    place_with(lib, r, files, cover, expect, noted)
+}
+
+/// A record's hidden folder in the library `lib`, its album made in it before the rename (X4): its own, so a placing cut short is
+/// begun again in it, not left beside it.
+fn hidden_folder(lib: &Path, r: &Record) -> PathBuf {
+    lib.join(format!(".cratarr-{}-{}.part", r.record, r.request))
+}
+
+/// Whether a placing noted for `to` went through its rename (Y10): its album's folder there, its hidden folder gone.
+fn renamed(to: &Path, r: &Record) -> bool {
+    to.is_dir() && to.parent().and_then(Path::parent).is_some_and(|lib| !hidden_folder(lib, r).exists())
 }
 
 /// How many folders a record is offered before its placing gives up: each was another record's expectation.
@@ -1631,8 +1678,9 @@ const FOLDERS_AT_MOST: usize = 50;
 /// (R27, N10): an album placed there would join that other record. The files are copied into a hidden folder of the library, the
 /// cover beside them, and the folder renamed into place whole (X4): no catalogue pass sees half an album, and the checked files
 /// stay where they are until it is in place, so a placing that fails, or is cut short, loses none. Said again once in place; a
-/// failure then is said in the log and the files stay placed: they are in Incoming, and fetching them again would not help.
-fn place_with(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, expect: impl Fn(&Path) -> Result<bool>) -> Result<PathBuf> {
+/// failure then is said in the log and the files stay placed: they are in Incoming, and fetching them again would not help. Its
+/// target is told to `noted` before the rename (Y10).
+fn place_with(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, expect: impl Fn(&Path) -> Result<bool>, noted: impl FnOnce(&Path)) -> Result<PathBuf> {
     let mut to = None;
     for folder in folders_for(lib, r).take(FOLDERS_AT_MOST) {
         if expect(&folder)? {
@@ -1641,12 +1689,12 @@ fn place_with(lib: &Path, r: &Record, files: &[PathBuf], cover: Option<&[u8]>, e
         }
     }
     let to = to.context("Another record is expected in every folder it could go in")?;
-    // The record's own: a placing cut short is begun again in it, not left beside it.
-    let hidden = lib.join(format!(".cratarr-{}-{}.part", r.record, r.request));
+    let hidden = hidden_folder(lib, r);
     std::fs::remove_dir_all(&hidden).ok();
     let made = fill(&hidden, files, cover).and_then(|()| {
         let parent = to.parent().context("no folder")?;
         std::fs::create_dir_all(parent).with_context(|| format!("{} cannot be made", parent.display()))?;
+        noted(&to);
         std::fs::rename(&hidden, &to).with_context(|| format!("{} cannot be made", to.display()))
     });
     if let Err(e) = made {
@@ -1817,6 +1865,8 @@ mod tests {
             set_aside: Vec::new(),
             checked: None,
             local_failures: 0,
+            placing: None,
+            placed_at: 0,
         };
         assert!(on_failed(&mut i, "a", "a is offline".into()));
         assert_eq!((i.state, i.chosen, i.folders.len(), i.batch.clone(), i.failed.clone()), (State::Approved, Some(0), 1, None, vec!["a".to_string()]));
@@ -1858,6 +1908,8 @@ mod tests {
             set_aside: Vec::new(),
             checked: None,
             local_failures: 0,
+            placing: None,
+            placed_at: 0,
         };
         kept(|k| k.items.push(i));
     }
@@ -2133,6 +2185,8 @@ mod tests {
             set_aside: Vec::new(),
             checked: None,
             local_failures: 0,
+            placing: None,
+            placed_at: 0,
         };
         kept(|k| k.items.push(i));
         r
@@ -2234,7 +2288,7 @@ mod tests {
                 _ => Ok(to != taken.as_path()),
             }
         };
-        let to = place_with(&lib, &r, &[from.join("01 Pier.flac")], None, expect).unwrap();
+        let to = place_with(&lib, &r, &[from.join("01 Pier.flac")], None, expect, |_| {}).unwrap();
         assert_eq!(to, lib.join("Glass Harbour").join("Harbour Lights (2014) 2"));
         assert!(to.join("01 Pier.flac").exists() && !taken.exists());
         assert_eq!(*asked.lock().unwrap(), 3, "told again once placed");
@@ -2254,12 +2308,12 @@ mod tests {
         let to = lib.join("Glass Harbour").join("Harbour Lights (2014)");
         let files = [from.join("01 Pier.flac"), from.join("CD2").join("01 Quay.flac")];
         // A file gone on the way: nothing placed, nothing left half made, the checked files where they were.
-        let err = place_with(&lib, &r, &[files[0].clone(), from.join("02 Gone.flac")], None, |_| Ok(true)).unwrap_err();
+        let err = place_with(&lib, &r, &[files[0].clone(), from.join("02 Gone.flac")], None, |_| Ok(true), |_| {}).unwrap_err();
         assert!(format!("{err:#}").contains("02 Gone.flac"), "{err:#}");
         assert!(!to.exists(), "no half album");
         assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 0, "no hidden folder left behind");
         assert!(files.iter().all(|f| f.exists()), "the checked files kept");
-        let placed = place_with(&lib, &r, &files, None, |_| Ok(true)).unwrap();
+        let placed = place_with(&lib, &r, &files, None, |_| Ok(true), |_| {}).unwrap();
         assert_eq!(placed, to);
         assert!(to.join("01 Pier.flac").exists() && to.join("CD2").join("01 Quay.flac").exists(), "whole, each disc in its folder");
         assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 1, "the artist's folder alone");
@@ -2274,9 +2328,9 @@ mod tests {
         let (lib, from) = (d.join("soulseek"), d.join("fetched"));
         std::fs::create_dir_all(&from).unwrap();
         std::fs::write(from.join("01 Pier.flac"), b"flac").unwrap();
-        let to = place_with(&lib, &record("Glass Harbour", "Harbour Lights", Some(2014)), &[from.join("01 Pier.flac")], Some(&b"jpeg"[..]), |_| Ok(true)).unwrap();
+        let to = place_with(&lib, &record("Glass Harbour", "Harbour Lights", Some(2014)), &[from.join("01 Pier.flac")], Some(&b"jpeg"[..]), |_| Ok(true), |_| {}).unwrap();
         assert_eq!(std::fs::read(to.join("cover.jpg")).unwrap(), b"jpeg");
-        let bare = place_with(&lib, &record("Glass Harbour", "Low Tide", None), &[from.join("01 Pier.flac")], None, |_| Ok(true)).unwrap();
+        let bare = place_with(&lib, &record("Glass Harbour", "Low Tide", None), &[from.join("01 Pier.flac")], None, |_| Ok(true), |_| {}).unwrap();
         assert!(bare.join("01 Pier.flac").exists() && !bare.join("cover.jpg").exists(), "none where it has none");
         use super::super::cover_cache::Of;
         let rg = "00000000-0000-4000-8000-000000000140";
@@ -2362,11 +2416,73 @@ mod tests {
         let on_gone = ud.add_request(&crate::userdata::Request { record: Some(gone), ..asked(1, None) }).unwrap();
         let on_live = ud.add_request(&crate::userdata::Request { record: Some(live), ..asked(2, None) }).unwrap();
         let at = format!("/incoming/copy-{new}");
-        assert_eq!(cat.record_placed_in(Path::new(&at)).unwrap(), Some(new));
-        let moved = repoint(&ud, &cat, &[(on_gone, gone, at.clone()), (on_live, live, at)]).unwrap();
+        assert_eq!(cat.record_placed_in(Path::new(&at), 0).unwrap(), Some(new));
+        let (moved, read) = repoint(&ud, &cat, &[("ss-gone".into(), on_gone, gone, at.clone(), 0), ("ss-live".into(), on_live, live, at, 0)]).unwrap();
         assert_eq!(moved, [(on_gone, gone, new)]);
+        assert_eq!(read, ["ss-gone", "ss-live"], "both folders read: let go of");
         assert_eq!(ud.request(on_gone).unwrap().unwrap().record, Some(new));
         assert_eq!(ud.request(on_live).unwrap().unwrap().record, Some(live), "a live record's request stays");
+    }
+
+    /// Y10: re-pointing goes by the files that came to the folder since the placing alone, and for an approved request only: a placed
+    /// path another album came to before it (its files older) re-points nothing and is not taken as read; a request no longer approved
+    /// stays where it is, its folder let go of all the same.
+    #[test]
+    fn a_placed_path_reused_by_another_album_repoints_nothing() {
+        let cat = crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/incoming")]).unwrap();
+        let folder = cat.folders().iter().next().map(|(id, _)| id).unwrap();
+        let (gone, other_gone) = (cat.record_for_tests("Two Rooms", 2), cat.record_for_tests("Open Water", 2));
+        cat.db_for_tests().execute("UPDATE records SET retired_at = 5 WHERE id IN (?1, ?2)", [gone, other_gone]).unwrap();
+        let other = cat.record_for_tests("Two Rooms", 2);
+        cat.copy_for_tests(other, folder);
+        cat.db_for_tests().execute_batch("UPDATE files SET came = 100").unwrap();
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        let on_gone = ud.add_request(&crate::userdata::Request { record: Some(gone), ..asked(1, None) }).unwrap();
+        let at = format!("/incoming/copy-{other}");
+        let (moved, read) = repoint(&ud, &cat, &[("ss-reused".into(), on_gone, gone, at.clone(), 200)]).unwrap();
+        assert!(moved.is_empty() && read.is_empty(), "its files came before the placing: another album's");
+        assert_eq!(ud.request(on_gone).unwrap().unwrap().record, Some(gone));
+        let declined = ud.add_request(&crate::userdata::Request { record: Some(other_gone), status: "declined".into(), ..asked(2, None) }).unwrap();
+        let (moved, read) = repoint(&ud, &cat, &[("ss-declined".into(), declined, other_gone, at, 50)]).unwrap();
+        assert_eq!((moved.len(), read), (0, vec!["ss-declined".to_string()]), "read and let go of, not followed");
+        assert_eq!(ud.request(declined).unwrap().unwrap().record, Some(other_gone));
+    }
+
+    /// Y10: a placing a stop cut after its rename, before the Placed write, is taken as placed when its item is taken up again: never
+    /// placed twice, its batch folder removed only then. One cut before its rename is checked and placed again. The target is noted
+    /// before the rename.
+    #[tokio::test]
+    async fn a_placing_cut_after_its_rename_is_taken_as_placed() {
+        let (id, batch) = ("ss-y10-cut", "b-y10-cut");
+        listed(id, State::Checking, Some(batch));
+        let d = fetched_to("y10-cut", batch);
+        let to = d.join("soulseek").join("Air").join("Moon Safari (1998)");
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(to.join("01 One.flac"), b"x").unwrap();
+        with_item(id, |i| (i.placing, i.placed_at) = (Some(to.display().to_string()), now()));
+        fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.placed.as_deref(), i.placing.as_deref(), i.batch.as_deref()), (State::Placed, Some(to.to_str().unwrap()), None, None));
+        assert!(!d.join(crate::slskd::FOLDER).join(batch).exists(), "its batch folder removed, after");
+        assert!(!to.with_file_name("Moon Safari (1998) 2").exists(), "never placed twice");
+        // Cut before its rename: nothing there, so it is checked and placed again (no library in a test: its files kept).
+        let (id, batch) = ("ss-y10-early", "b-y10-early");
+        listed(id, State::Checking, Some(batch));
+        fetched_to("y10-cut", batch);
+        let nowhere = d.join("soulseek").join("Air").join("Premiers Symptomes");
+        with_item(id, |i| i.placing = Some(nowhere.display().to_string()));
+        fetch_from(id, &slskd_gone().await, &d, |_, _| std::future::ready(Ok(0.97))).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.placing.as_deref(), i.checked.as_deref()), (State::Checking, None, Some(batch)));
+        // The target is told before the rename.
+        let (lib, from) = (d.join("soulseek-lib"), d.join("fetched"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::write(from.join("01 Pier.flac"), b"flac").unwrap();
+        let told = std::cell::Cell::new(false);
+        let r = record("Glass Harbour", "Harbour Lights", Some(2014));
+        let placed = place_with(&lib, &r, &[from.join("01 Pier.flac")], None, |_| Ok(true), |to| told.set(!to.exists() && hidden_folder(&lib, &r).is_dir())).unwrap();
+        assert!(told.get() && renamed(&placed, &r), "noted before its rename, its hidden folder there then");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// X4: too little free space for a folder's files holds the record before anything is fetched, and blames no user.
@@ -2933,6 +3049,8 @@ mod tests {
             set_aside: Vec::new(),
             checked: None,
             local_failures: 0,
+            placing: None,
+            placed_at: 0,
         };
         let mut found = item(State::Found);
         search_again(&mut found);

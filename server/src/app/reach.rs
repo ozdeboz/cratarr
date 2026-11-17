@@ -148,7 +148,8 @@ pub const USER_AGENT: &str = concat!("Cratarr/", env!("CARGO_PKG_VERSION"), " +h
 pub enum Purpose {
     /// Bandcamp's pages and its search box.
     BandcampPages,
-    /// Bandcamp's media: the streams a preview plays.
+    /// Bandcamp's media: the streams a preview plays. A stream may start on Bandcamp's own stream hosts (`starts_at`, Y10); every
+    /// redirect stays on its media hosts.
     BandcampMedia,
     /// Covers: the Cover Art Archive's, Discogs', Spotify's, Bandcamp's pictures.
     Covers,
@@ -190,6 +191,13 @@ impl Purpose {
         url.scheme() == "https" && self.has_host(url)
     }
 
+    /// Whether an address may be a request's first hop (Y10): the purpose's own, and for Bandcamp's media also Bandcamp's own stream
+    /// addresses on its domain (`bandcamp_stream`). A redirect from there is followed only onto the purpose's hosts (`client`), so a
+    /// stream there goes on to `*.bcbits.com` or nowhere.
+    pub fn starts_at(self, url: &reqwest::Url) -> bool {
+        self.allows(url) || (self == Purpose::BandcampMedia && bandcamp_stream(url))
+    }
+
     /// An address on one of the purpose's hosts given as plain http (older TheAudioDB entries name their photos so), made https
     /// before it is checked (Y11); any other as it is.
     pub fn upgraded(self, mut url: reqwest::Url) -> reqwest::Url {
@@ -204,6 +212,14 @@ impl Purpose {
         let Some(host) = url.host_str().map(str::to_ascii_lowercase) else { return false };
         self.hosts().iter().any(|h| host == *h || host.ends_with(&format!(".{h}")))
     }
+}
+
+/// Bandcamp's own stream addresses on its own domain (Y10, allowed without a live look, the owner's default): `bandcamp.com`'s
+/// `/stream_redirect` and the `popplers<n>.bandcamp.com` hosts older pages name, https on its usual port. Never an artist's page.
+fn bandcamp_stream(url: &reqwest::Url) -> bool {
+    let host = url.host_str().map(str::to_ascii_lowercase).unwrap_or_default();
+    let popplers = host.strip_suffix(".bandcamp.com").and_then(|h| h.strip_prefix("popplers")).is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()));
+    url.scheme() == "https" && url.port().is_none() && (popplers || (host == "bandcamp.com" && url.path() == "/stream_redirect"))
 }
 
 /// A client for a purpose (O1): https only; a redirect followed only while every hop stays on the purpose's hosts (one off them is
@@ -436,6 +452,37 @@ mod tests {
         assert!(!Purpose::BandcampPages.allows(&url("http://glassharbour.bandcamp.com/album/x")), "https only");
         assert!(!Purpose::BandcampPages.allows(&url("https://bandcamp.com.example.org/album/x")) && !Purpose::BandcampPages.allows(&url("https://notbandcamp.com/x")));
         assert!(!Purpose::Covers.allows(&url("https://192.168.1.20/cover.jpg")), "never an address by its number");
+    }
+
+    /// Y10: a preview's stream may start on Bandcamp's own stream hosts and is followed from there onto its media hosts only: a
+    /// redirect anywhere else, a Bandcamp page too, is answered as it came. No other Bandcamp address starts a stream.
+    #[tokio::test]
+    async fn a_stream_on_bandcamps_own_host_is_followed_to_bcbits_only() {
+        use axum::{response::Redirect, routing::get};
+        let port = std::sync::Arc::new(std::sync::OnceLock::<u16>::new());
+        let (p, q) = (port.clone(), port.clone());
+        let app = axum::Router::new()
+            .route("/download/track", get(move || std::future::ready(Redirect::temporary(&format!("http://t4.bcbits.com:{}/stream/1", p.get().unwrap())))))
+            .route("/stream_redirect", get(move || std::future::ready(Redirect::temporary(&format!("http://air.bandcamp.com:{}/album/x", q.get().unwrap())))))
+            .route("/stream/1", get(|| async { "the stream" }))
+            .route("/album/x", get(|| async { "a page" }));
+        let at = fake(app).await;
+        port.set(at).unwrap();
+        let c = at_fake(Purpose::BandcampMedia, &["popplers5.bandcamp.com", "bandcamp.com", "t4.bcbits.com", "air.bandcamp.com"], at);
+        let followed = c.get(format!("http://popplers5.bandcamp.com:{at}/download/track")).send().await.unwrap();
+        assert_eq!(followed.text().await.unwrap(), "the stream", "followed onto bcbits.com");
+        let off = c.get(format!("http://bandcamp.com:{at}/stream_redirect")).send().await.unwrap();
+        assert!(off.status().is_redirection(), "not followed onto a Bandcamp page: {}", off.status());
+        let url = |u: &str| reqwest::Url::parse(u).unwrap();
+        let media = Purpose::BandcampMedia;
+        assert!(media.starts_at(&url("https://popplers5.bandcamp.com/download/track?enc=mp3-128&id=1")));
+        assert!(media.starts_at(&url("https://bandcamp.com/stream_redirect?enc=mp3-128&track_id=1")));
+        assert!(media.starts_at(&url("https://t4.bcbits.com/stream/1")), "its media hosts, as ever");
+        assert!(!media.starts_at(&url("https://air.bandcamp.com/album/x")) && !media.starts_at(&url("https://bandcamp.com/album/x")), "no other Bandcamp page");
+        assert!(!media.starts_at(&url("http://popplers5.bandcamp.com/download/track")), "https only");
+        assert!(!media.starts_at(&url("https://popplers5.bandcamp.com:8443/download/track")), "its usual port only");
+        assert!(!media.allows(&url("https://popplers5.bandcamp.com/download/track")), "a first hop, never a redirect's");
+        assert!(!Purpose::Covers.starts_at(&url("https://popplers5.bandcamp.com/download/track")), "Bandcamp's media alone");
     }
 
     /// O1: an address at home is refused on the address a name resolves to, whatever the name: loopback, private, link-local, shared.

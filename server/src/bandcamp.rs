@@ -345,13 +345,14 @@ impl Bandcamp {
     }
 
     /// The client a stream is fetched with: Bandcamp's own media hosts only (O1), as a page's data could name any address and a stream
-    /// goes back to the listener whole; none for any other address. Tests: a fake media server at home (`fake_media_at`), plainly.
+    /// goes back to the listener whole, or a first hop on Bandcamp's own stream hosts, followed on to its media hosts only (Y10,
+    /// `Purpose::starts_at`); none for any other address. Tests: a fake media server at home (`fake_media_at`), plainly.
     fn media_for(&self, stream: &str) -> Option<reqwest::Client> {
         #[cfg(test)]
         if FAKE_MEDIA.lock().unwrap_or_else(|p| p.into_inner()).iter().any(|f| f == stream) {
             return Some(reqwest::Client::new());
         }
-        reqwest::Url::parse(stream).is_ok_and(|u| crate::app::reach::Purpose::BandcampMedia.allows(&u)).then(|| self.media.clone())
+        reqwest::Url::parse(stream).is_ok_and(|u| crate::app::reach::Purpose::BandcampMedia.starts_at(&u)).then(|| self.media.clone())
     }
 
     /// A track's stream from its own page (O4: read as it is played), kept on its album while the album is kept.

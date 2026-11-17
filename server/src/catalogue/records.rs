@@ -2359,18 +2359,20 @@ impl Catalogue {
     }
 
     /// The record the album a fetcher placed in `dir` (as Cratarr sees it) went to, once a record pass has read it (X4): the one
-    /// most of its present tracks are on, followed through merges. None before then. Blocking.
-    pub fn record_placed_in(&self, dir: &std::path::Path) -> Result<Option<i64>> {
+    /// most of its present tracks are on, followed through merges, of the files that came at `since` or after (Y10: an album that came
+    /// to the folder before the placing is not its). None before then. Blocking.
+    pub fn record_placed_in(&self, dir: &std::path::Path, since: i64) -> Result<Option<i64>> {
         let Some((folder, rel)) = self.place_of_path(dir) else { return Ok(None) };
         let db = self.db();
         let found: Option<i64> = db
             .prepare_cached(&format!(
                 "SELECT t.record FROM files f JOIN tracks t ON t.id = f.track
-                 WHERE f.folder = ?1 AND substr(f.rel, 1, length(?2) + 1) = ?2 || '/' AND {} AND t.retired_at IS NULL AND t.record IS NOT NULL
+                 WHERE f.folder = ?1 AND substr(f.rel, 1, length(?2) + 1) = ?2 || '/' AND COALESCE(f.came, 0) >= ?3 AND {} AND t.retired_at IS NULL
+                   AND t.record IS NOT NULL
                  GROUP BY t.record ORDER BY count(*) DESC, t.record LIMIT 1",
                 super::PRESENT_F
             ))?
-            .query_row(params![folder, rel], |r| r.get(0))
+            .query_row(params![folder, rel, since], |r| r.get(0))
             .optional()?;
         match found {
             Some(record) => merged_end(&db, record),
