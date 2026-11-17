@@ -10,12 +10,12 @@
   import Cover from './lib/Cover.svelte';
   import CoverStatus from './lib/CoverStatus.svelte';
   import CoverBusy from './lib/CoverBusy.svelte';
-  import LinkSheet from './lib/LinkSheet.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import Row from './lib/Row.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import { pageView } from './lib/pageView.svelte';
-  import { goToArtist, openNotHad } from './lib/albums.svelte';
+  import { openArtistPage, openNotHad } from './lib/albums.svelte';
+  import { artistOpen } from './lib/artistIds';
   import { toast } from './lib/toast.svelte';
 
   /** The words: the pill's while it searches, else the address's. */
@@ -89,7 +89,9 @@
       finding = null;
     }
   }
-  let link = $state<{ url: string; name: string } | null>(null);
+  /** An artist opened (W10): their page, by their id where Cratarr has them, else opened by their MusicBrainz id. */
+  const openArtist = (x: BeyondFound['artists'][number]) =>
+    openArtistPage(artistOpen({ id: x.artist, mbid: x.mbid, name: x.name })).catch((e) => toast.fail(e, "Their page couldn't be opened"));
 </script>
 
 <main>
@@ -112,7 +114,7 @@
               size="large"
               title={x.name}
               label={`Open ${x.name}`}
-              onclick={() => (x.have ? goToArtist('cratarr', x.name) : (link = { url: `https://musicbrainz.org/artist/${x.mbid}`, name: 'MusicBrainz' }))}
+              onclick={() => openArtist(x)}
             >
               {#snippet sub()}{x.disambiguation ?? ''}{#if x.have}<span class="have">{x.disambiguation ? ' · ' : ''}in your library</span>{/if}{/snippet}
             </Row>
@@ -139,7 +141,6 @@
   {/if}
 </main>
 
-{#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
 
 <style>
   main {

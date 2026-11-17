@@ -16,7 +16,8 @@ import { keep } from './searchKept';
 import { untrack } from 'svelte';
 import { TERM_KINDS, answerOfTerms, conditionsOf, crateOfLine, modesFrom, readLine, type Chip, type Found as Finds, type Modes } from './quickCrate';
 
-export type Found = SearchResult & { track?: string };
+/** A result: a track's own id in `track`; an artist's id for life in `id` (W10: their page), their number where the server gives it. */
+export type Found = SearchResult & { track?: string; id?: string; number?: number };
 export type FoundGroup = { kind: string; label: string; items: Found[]; total: number };
 
 /** The server's kinds, the library's first, then what is not in it (decision 0072, 7). */

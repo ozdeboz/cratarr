@@ -237,12 +237,16 @@ impl Index {
         out
     }
 
-    /// An artist as their panel shows them, by any name the files give them: the records credited to them and those they only appear
-    /// on, newest first, and their tracks record by record: `{albums, appears_on, tracks}`. None where no artist goes by it.
+    /// An artist as their panel shows them, by their id for life (`ar-<n>`, the page's artist since W10) or by any name the files give
+    /// them: who they are, the records credited to them and those they only appear on, newest first, and their tracks record by
+    /// record: `{id, name, albums, appears_on, tracks}`. None where no artist has the id or goes by the name.
     pub fn artist_json(&self, name: &str, without: &[String]) -> Option<String> {
         let p = &self.packed;
         let (a, r, t) = (&p.artists, &p.records, &p.tracks);
-        let at = (0..a.id.len()).find(|&row| std::iter::once(&a.name[row]).chain(a.spelled.of(row)).any(|n| p.words.word(*n) == name))?;
+        let by_id = name.strip_prefix(crate::ids::ARTIST).filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse::<i64>().ok());
+        let at = by_id
+            .and_then(|id| (0..a.id.len()).find(|&row| a.id[row] == id))
+            .or_else(|| (0..a.id.len()).find(|&row| std::iter::once(&a.name[row]).chain(a.spelled.of(row)).any(|n| p.words.word(*n) == name)))?;
         let id = a.id[at];
         let off = p.records_off(without);
         let places = p.record_rows();
@@ -258,7 +262,11 @@ impl Index {
         });
         let (keys, made) = (p.library_keys(), p.made());
         let mut out = String::with_capacity((own.len() + on.len()) * 400 + tracks.len() * 200);
-        out.push_str("{\"albums\":");
+        out.push_str("{\"id\":");
+        quoted(&mut out, &artist_id(id));
+        out.push_str(",\"name\":");
+        quoted(&mut out, p.words.word(a.name[at]));
+        out.push_str(",\"albums\":");
         p.say_records(&mut out, &own, &keys, &made);
         out.push_str(",\"appears_on\":");
         p.say_records(&mut out, &on, &keys, &made);
@@ -523,6 +531,16 @@ mod tests {
     #[test]
     fn an_artist_is_found_by_any_name_the_files_give_them() {
         assert_eq!(ids(&artist("Davis Quintet", &[]).unwrap(), "albums"), ["al-3"]);
+    }
+
+    #[test]
+    fn an_artist_is_answered_by_their_id() {
+        let them = artist("ar-7", &[]).unwrap();
+        assert_eq!((them["id"].as_str(), them["name"].as_str()), (Some("ar-7"), Some("Miles Davis")), "who they are");
+        assert_eq!(ids(&them, "albums"), ["al-3"]);
+        assert_eq!(ids(&them, "tracks"), ["tr-4", "tr-1", "tr-2"]);
+        assert_eq!(artist("ar-99", &[]), None, "an id nobody has");
+        assert_eq!(artist("Davis Quintet", &[]).unwrap()["id"], "ar-7", "by a name, who they are too");
     }
 
     #[test]

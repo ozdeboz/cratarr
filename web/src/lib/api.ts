@@ -16,6 +16,7 @@ import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk
 import type { PlaylistOp } from './playlistOps';
 import type { ChangesAnswer } from './changeLog';
 import type { RequestState } from './requestState';
+import { artistAsk } from './artistIds';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -2155,8 +2156,9 @@ export const findTracks = (q: string, line?: string) =>
   request<FoundTrack[]>(`/api/library/find?${new URLSearchParams(line ? { line } : { q })}`);
 /** Whose a photo is and under which licence, where it is free to use with credit (Wikimedia Commons', 0.9.3). */
 export type PhotoCredit = { author: string; licence: string; url: string };
-export const getArtistAbout = (name: string) =>
-  quietly<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null }>(`/api/artists/about?name=${encodeURIComponent(name)}`);
+/** By their id for life where it is one (`ar-<n>`, W10), else by name. */
+export const getArtistAbout = (nameOrId: string) =>
+  quietly<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null }>(`/api/artists/about?${new URLSearchParams(artistAsk(nameOrId))}`);
 export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** An artist's Top recommendations (the owner, 2026-10-23: "a list of tracks which follows taste"): their tracks
@@ -2397,15 +2399,9 @@ export type MissingAlbum = {
 };
 /** Every album missing from the library's artists read so far (`artists`: how many), newest first. */
 export const getDiscoverMissing = () => quietly<{ albums: MissingAlbum[]; artists: number }>('/api/discover/missing');
-/** One artist's missing albums (their page). */
-/** `release_group`: one of theirs, so an artist the library lacks is found by it on MusicBrainz (0.9.6); `mbid`
- *  the artist's own. */
-export const getArtistMissing = (name: string, hint: { release_group?: string | null; mbid?: string | null } = {}) => {
-  const q = new URLSearchParams({ name });
-  if (hint.mbid) q.set('mbid', hint.mbid);
-  if (hint.release_group) q.set('release_group', hint.release_group);
-  return quietly<{ albums: MissingAlbum[]; looking: boolean }>(`/api/artists/missing?${q}`);
-};
+/** One artist's missing albums (their page), by their id for life where it is one (W10), else by name (the first of it). */
+export const getArtistMissing = (nameOrId: string) =>
+  quietly<{ albums: MissingAlbum[]; looking: boolean }>(`/api/artists/missing?${new URLSearchParams(artistAsk(nameOrId))}`);
 /** What Discover leaves out for the account: its answers (Not interested: `no`, Hide: `hidden`), the artists left out. */
 export type DiscoverExcluded = { key: string; album: string; artist: string; year?: number | null; cover?: string | null; how: 'no' | 'hidden'; at: number };
 export const getDiscoverExcluded = () => quietly<{ albums: DiscoverExcluded[]; artists: { artist: string; key: string; at: number }[] }>('/api/discover/excluded');
@@ -2434,8 +2430,11 @@ export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/ph
  *  Bandcamp. */
 export type RelatedArtist = { name: string; mbid?: string; why: string[]; id?: string; bandcamp?: string };
 /** An artist's related artists to explore (0.9.2) as last looked up; `looking`: a look runs now. */
-export const getRelatedArtists = (name: string) =>
-  quietly<{ artists: RelatedArtist[]; looking: boolean }>(`/api/artists/related?name=${encodeURIComponent(name)}`);
+export const getRelatedArtists = (nameOrId: string) =>
+  quietly<{ artists: RelatedArtist[]; looking: boolean }>(`/api/artists/related?${new URLSearchParams(artistAsk(nameOrId))}`);
+/** An artist Beyond listed opened (C57, Z8): Cratarr's artist who holds their MusicBrainz id, made now where none does. Refused
+ *  (403) to one who is no administrator for an artist Beyond did not list within the day. */
+export const openArtist = (mbid: string, name: string) => post<{ artist: string }>('/api/artists/open', { mbid, name });
 export const previewBandcamp = (url: string) =>
   request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);
 /** Everything an artist has on Bandcamp to hear as previews (New to you's Listen; the owner, 2026-10-27): their own
@@ -2577,11 +2576,12 @@ export type LabelOf = { id: string; name: string; catno?: string };
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
  *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
 export type SearchKind = 'album' | 'artist' | 'track' | 'work' | 'genre' | 'style' | 'mood' | 'tag' | 'label' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
-/** An item found: a track's own id in `track`; an artist's library id in `id` (`ar-…`, 0.11: a Sounds like's seed). */
+/** An item found: a track's own id in `track`; an artist's library id in `id` (`ar-…`, 0.11: a Sounds like's seed; W10: their
+ *  page), and their number among those of their name, where the server gives it. */
 export type ServerSearch = {
   q: string;
-  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string; id?: string })[] }>>;
-  top: (SearchResult & { track?: string; id?: string })[];
+  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string; id?: string; number?: number })[] }>>;
+  top: (SearchResult & { track?: string; id?: string; number?: number })[];
 };
 /** Searches the server: `kinds` only (all where none), `limit` a kind (20; 100 at most), from `offset` on (a Show all's
  *  next page, decision 0076; a server before 0.9.13 answers from the start again). */
@@ -2617,10 +2617,12 @@ export type BeyondAlbum = {
 };
 /** Beyond's albums for the words (decision 0076): the server's own merged search where it has it (0.9.13), else
  *  MusicBrainz's alone, as Find more music asks it. */
-export type BeyondFound = { albums: BeyondAlbum[]; artists: MusicBrainzFound['artists'] };
+/** An artist Beyond lists (C57): by their MusicBrainz id; `artist`, Cratarr's who holds it (`ar-<n>`), none until opened. */
+export type BeyondArtist = { mbid: string; name: string; disambiguation?: string | null; artist?: string | null; have: boolean };
+export type BeyondFound = { albums: BeyondAlbum[]; artists: BeyondArtist[] };
 export async function searchBeyond(q: string, limit = 20, offset = 0): Promise<BeyondFound> {
   try {
-    const r = await request<{ albums: BeyondAlbum[]; artists?: MusicBrainzFound['artists'] }>(
+    const r = await request<{ albums: BeyondAlbum[]; artists?: BeyondArtist[] }>(
       `/api/search/beyond?${new URLSearchParams({ q, limit: String(limit), ...(offset ? { offset: String(offset) } : {}) })}`,
     );
     return { albums: r.albums, artists: r.artists ?? [] };
@@ -2655,21 +2657,27 @@ export type ArtistView = {
   rows: PlaylistRow[];
   /** Null where the server keeps no favourite artists. */
   favorite?: boolean;
+  /** Cratarr's own artist's id for life (C55), the one asked for, else the first of the name; none for a name nobody has. */
+  id?: string;
+  /** Their number among the artists of their name, and whether another has it: shown only where a view shows two of it. */
+  number?: number;
+  namesakes?: boolean;
 };
-/** `without`: the libraries switched off; theirs left out of its records, appearances and tracks. */
-export const artistView = (source: string, name: string, without?: string[]) => {
-  const u = new URLSearchParams({ name });
+/** `without`: the libraries switched off; theirs left out of its records, appearances and tracks. By their id for life where it is
+ *  one (W10), else by name. */
+export const artistView = (source: string, nameOrId: string, without?: string[]) => {
+  const u = new URLSearchParams(artistAsk(nameOrId));
   for (const w of without ?? []) u.append('without', w);
   return read(
     () => quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?${u}`),
-    () => deviceArtist(source, name, without),
+    () => deviceArtist(source, nameOrId, without),
   );
 };
 /** Whether an artist is a favourite (the heart on an album's artist chip); null where the server keeps none. */
-export const artistFavorite = (source: string, name: string) =>
-  quietly<{ favorite: boolean | null }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}`);
-export const setArtistFavorite = (source: string, name: string, on: boolean) =>
-  later<{ favorite: boolean }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}&on=${on}`, { method: 'POST' }, () => ({ favorite: on }));
+export const artistFavorite = (source: string, nameOrId: string) =>
+  quietly<{ favorite: boolean | null }>(`/api/artists/${encodeURIComponent(source)}/favorite?${new URLSearchParams(artistAsk(nameOrId))}`);
+export const setArtistFavorite = (source: string, nameOrId: string, on: boolean) =>
+  later<{ favorite: boolean }>(`/api/artists/${encodeURIComponent(source)}/favorite?${new URLSearchParams({ ...artistAsk(nameOrId), on: String(on) })}`, { method: 'POST' }, () => ({ favorite: on }));
 /** Where an album of Cratarr's own library was left (Resume): a track and a position, from the bookmarks apps keep
  *  (decision 0030); `track` null when there is none. */
 export const albumResume = (album: string) =>

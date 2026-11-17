@@ -5,7 +5,7 @@
   // narrows them. What is here is the library's own: an album's cover plays it and a tap opens it (lib/AlbumCard), a
   // track plays from it, an artist opens their page. What is not: an album its record's page (W9, lib/openRecord: made one
   // by its release group, Want in its header; with none known, its Bandcamp album), Play on its cover its Bandcamp preview
-  // where one is found; a track its album so; an artist their page from Discover. A playlist opens its tracks here (`?spotify=` in the
+  // where one is found; a track its album so; an artist their page, by their id where Cratarr has them (W10). A playlist opens its tracks here (`?spotify=` in the
   // address, so back returns).
   import { untrack } from 'svelte';
   import { hereWith, wordHere } from './addresses';
@@ -28,7 +28,6 @@
   import { previewPage } from './bandcampPreview';
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
-  import { DISCOVER } from './discoverArtist';
   import type { SpotifyView } from './discoverModes';
   import type { LocalTrack } from './localPlayer.svelte';
   import { playPlaylistFrom } from './output.svelte';
@@ -246,7 +245,7 @@
           title={a.name}
           sub={a.status === 'missing' ? 'Not here' : `${a.have} ${a.have === 1 ? 'album' : 'albums'} here`}
           off={!a.artist}
-          onclick={() => goToArtist(a.artist ? 'cratarr' : DISCOVER, a.name)}
+          onclick={() => goToArtist('cratarr', a.artist?.id ?? a.name)}
         >
           {#snippet lead()}<span class="face"><Cover src={a.photo} /></span>{/snippet}
         </Row>

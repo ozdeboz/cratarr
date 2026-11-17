@@ -20,12 +20,13 @@
   import CoverStatus from './CoverStatus.svelte';
   import CoverBusy from './CoverBusy.svelte';
   import Icon from './Icon.svelte';
-  import { beyondAlbum, globalAsked, globalFailed, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, searchAgain, showAll } from './globalSearch.svelte';
+  import { beyondAlbum, globalAsked, globalFailed, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, searchAgain, showAll, type Found } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { viewFor, viewOver } from './panel.svelte';
+  import { artistSubject, viewFor, viewOver } from './panel.svelte';
+  import { artistLabel } from './artistIds';
   import { libraryDots, openNotHad } from './albums.svelte';
   import type { Openable } from './openRecord';
   import { pageView } from './pageView.svelte';
@@ -54,6 +55,10 @@
   // then the loader in their place.
   const kept = keepWhile(() => groups, () => !!q && !asked && !failed, () => q);
   const shownGroups = $derived(kept.loader ? [] : kept.value);
+  /** The artists' names shown at once: one of them shared by two shows each one's number (W10, lib/artistIds). */
+  const artistNames = $derived(
+    (globalSearch.all ? (globalSearch.allFound?.items ?? []) : shownGroups.flatMap((g) => g.items)).filter((x) => x.kind === 'artist').map((x) => x.title),
+  );
   // An album's or a track's libraries, as dots after its title, as the Library's lists show them (0.9.5): from its
   // album's subject (`album:<source>/<id>`), the Library's list knowing which libraries hold each.
   function dotsOfResult(it: SearchResult) {
@@ -88,7 +93,7 @@
   let workOpen = $state<{ mbid: string; title: string } | null>(null);
   let workMenu = $state<{ mbid: string; title: string } | null>(null);
   const workOf = (it: SearchResult) => ({ mbid: it.subject.slice('work:'.length), title: it.title });
-  function open(it: SearchResult & { track?: string }) {
+  function open(it: Found) {
     if (it.kind === 'work') return void (workOpen = workOf(it));
     leaveSearch(deep(it));
     if (it.subject.startsWith('#')) location.hash = it.subject;
@@ -104,6 +109,8 @@
       if (a) void openNotHere(it, { record: a.record, release_group: a.release_group, discogs_master: a.discogs, title: a.title, artist: a.artist, year: a.year, bandcamp: a.bandcamp });
     }
     else if (it.kind === 'track' && it.track) viewFor(it.subject, it.track);
+    // Cratarr's own artist by their id (W10): two of one name are two pages.
+    else if (it.kind === 'artist' && it.id && it.subject.startsWith(artistSubject('cratarr', ''))) viewOver(artistSubject('cratarr', it.id));
     else viewOver(it.subject);
   }
   async function takeBack(it: SearchResult) {
@@ -164,11 +171,11 @@
   }
 </script>
 
-{#snippet found(it: SearchResult & { track?: string })}
+{#snippet found(it: Found)}
   {@const has = menuOf(it) !== null}
   <li>
     {#if it.kind === 'work'}{@render work(it)}{:else}
-    <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={has ? press(it) : undefined}>
+    <Row size="large" title={it.kind === 'artist' ? artistLabel(it.title, it.number, artistNames) : it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={has ? press(it) : undefined}>
       {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if finding === it.subject}<CoverBusy small />{/if}</span>{/if}{/snippet}
       {#snippet badges()}{#each dotsOfResult(it) as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{/snippet}
       {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if matchLine(it.matched, it.kind)}<span class="why">{it.sub ? ' · ' : ''}{matchLine(it.matched, it.kind)}</span>{/if}{/snippet}
