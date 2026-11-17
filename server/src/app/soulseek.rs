@@ -963,7 +963,8 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
         // Every approved request (X2), not the newest thousand: those whose record is complete give no item (`take_requests`).
         let approved = ud.requests(None, Some(super::requests::APPROVED), usize::MAX)?;
         let mut of = super::requests::records_held(&cat, &approved, &kinds)?;
-        // Where each record holding no copy saw its last one go (U7): only one deleted from Incoming is looked for again.
+        // Where each record holding no copy saw its last one go (U7, T8): only one gone from Incoming, deleted there or removed outside
+        // Cratarr, is looked for again.
         super::requests::mark_gone_from_incoming(&cat, &mut of, &kinds)?;
         Ok((approved, of, moved))
     })
@@ -1083,8 +1084,8 @@ async fn cancel_fetch(slskd: &Slskd, downloads: &Path, it: &Item) {
 fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>], firsts: &[i64]) -> Vec<Item> {
     let ids: std::collections::HashSet<i64> = approved.iter().map(|r| r.id).collect();
     let record_of: BTreeMap<i64, i64> = approved.iter().zip(of).filter_map(|(r, o)| Some((r.id, o.as_ref()?.record))).collect();
-    // A placed copy gone (V1: deleted from Incoming, its folder read and its record holding no copy, U7: its last copy into an
-    // Incoming library's trash) makes way: its item goes, never handed to another request of its record (X2), nor keeping that request
+    // A placed copy gone (V1: deleted from Incoming, its folder read and its record holding no copy, U7, T8: its last copy gone from
+    // an Incoming library) makes way: its item goes, never handed to another request of its record (X2), nor keeping that request
     // from being searched.
     let held: BTreeMap<i64, (super::requests::Holding, bool)> = of.iter().flatten().map(|o| (o.record, (o.holding, o.gone_from_incoming))).collect();
     k.items.retain(|i| !copy_gone(i, &held));
@@ -1180,8 +1181,9 @@ fn looks_again(i: &Item, holding: super::requests::Holding) -> bool {
 }
 
 /// Whether a placed item's copy is gone (V1): a pass read its folder (Y10 lets go of it then), and its record, as `held` has the
-/// records of the approved requests (how each is held, and whether its last copy went to an Incoming library's trash), now holds no
-/// copy, its last one deleted from Incoming (U7). One kept into a main library and deleted there later is not: its request stays
+/// records of the approved requests (how each is held, and whether its last copy went from an Incoming library), now holds no copy,
+/// its last one gone from Incoming (U7, T8: deleted there, or removed outside Cratarr). One kept into a main library and deleted
+/// there later is not: its request stays
 /// as delivered, never looked for again. One no pass has read yet may be on its way into the catalogue. Pure.
 fn copy_gone(i: &Item, held: &BTreeMap<i64, (super::requests::Holding, bool)>) -> bool {
     i.state == State::Placed && i.placed.is_none() && held.get(&i.record.record) == Some(&(super::requests::Holding::None, true))
@@ -3394,6 +3396,127 @@ mod tests {
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.state)).collect::<Vec<_>>(), [(1, State::Placed)], "not looked for again");
         take_requests(&mut k, &[asked(1, None)], &[gone(101)], &[]);
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.state)).collect::<Vec<_>>(), [(1, State::Waiting)], "deleted from Incoming: looked for again");
+    }
+
+    /// Seconds since the epoch, `days` ago: a time a test gives the catalogue.
+    fn days_ago(days: i64) -> i64 {
+        now() - days * 86_400
+    }
+
+    /// The places of a test copy's rows (`Catalogue::copy_for_tests`) of `record`, in order.
+    fn rows_of(cat: &crate::catalogue::Catalogue, record: i64) -> Vec<String> {
+        let db = cat.db_for_tests();
+        let mut st = db.prepare("SELECT rel FROM files WHERE rel LIKE ?1 ORDER BY rel").unwrap();
+        let rows: Vec<String> = st.query_map([format!("copy-{record}/%")], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        rows
+    }
+
+    /// T8: Soulseek's round as `read_requests` reads its list, on the catalogue alone (Music folder 0, Incoming 1): each request's
+    /// record as held and whether its last copy went from Incoming, then the list taken.
+    fn round(cat: &crate::catalogue::Catalogue, k: &mut Kept, rs: &[crate::userdata::Request]) -> Vec<(super::super::requests::Holding, bool)> {
+        use crate::settings::LibraryKind;
+        let kinds = [(0, LibraryKind::Main), (1, LibraryKind::Incoming)];
+        let mut of = super::super::requests::records_held(cat, rs, &kinds).unwrap();
+        super::super::requests::mark_gone_from_incoming(cat, &mut of, &kinds).unwrap();
+        take_requests(k, rs, &of, &[]);
+        of.iter().map(|o| o.as_ref().map(|o| (o.holding, o.gone_from_incoming)).unwrap()).collect()
+    }
+
+    /// T8.1, T8.2 (the review of run 10, finding 8): a copy Soulseek placed and a pass read, its files removed from Incoming on the NAS
+    /// (gone, never in a trash), nothing of its record in a main library. Gone a while, they hold their record for their day (the had
+    /// rule); once the catalogue retires them, the record says its last copy went from Incoming, its Placed item is let go and its
+    /// approved request looked for again, never "fetching 100%". So too a copy fetched again after an older one went into Music's
+    /// trash. U7's case stays: kept into Music and deleted there, into Music's trash or on the NAS; and so does one whose Incoming
+    /// file went before its other file was kept into Music and deleted there, in Music's trash still.
+    #[test]
+    fn a_placed_copy_removed_from_incoming_by_hand_is_looked_for_again() {
+        use super::super::requests::{Holding, RequestState, request_state};
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let records: Vec<i64> = ["By Hand", "Kept Then Trashed", "Kept Then Removed", "Kept After", "Fetched Again"].iter().map(|n| cat.record_for_tests(n, 2)).collect();
+        let (by_hand, trashed, removed, after, again) = (records[0], records[1], records[2], records[3], records[4]);
+        for r in &records {
+            cat.copy_for_tests(*r, 1);
+        }
+        let rs: Vec<crate::userdata::Request> = records.iter().enumerate().map(|(n, r)| crate::userdata::Request { record: Some(*r), ..asked(n as i64 + 1, None) }).collect();
+        // Each asked for, its item made, placed, and its folder read by a pass (Y10 let go of it).
+        let mut k = Kept::default();
+        take_requests(&mut k, &rs, &records.iter().map(|r| of(*r)).collect::<Vec<_>>(), &[]);
+        assert_eq!(k.items.len(), 5);
+        for i in k.items.iter_mut() {
+            (i.state, i.folders, i.chosen) = (State::Placed, vec![two_tracks("a")], Some(0));
+        }
+        let gone = |folder: i64, rel: &str, at: i64| cat.execute_for_tests(&format!("UPDATE files SET gone_at = {at} WHERE folder = {folder} AND rel = '{rel}'"));
+        let dir = |r: i64| format!("copy-{r}");
+        // T8.1: removed from Incoming on the NAS two days ago.
+        for rel in rows_of(&cat, by_hand) {
+            gone(1, &rel, days_ago(2));
+        }
+        // T8.2, U7's case: kept into Music (its rows moved by Cratarr), then deleted there two days ago: into Music's trash, or on the NAS.
+        for r in [trashed, removed] {
+            cat.move_files(1, &dir(r), 0, &dir(r)).unwrap();
+        }
+        cat.mark_trashed(0, &dir(trashed), &format!("{}/{}", days_ago(2), dir(trashed))).unwrap();
+        for rel in rows_of(&cat, removed) {
+            gone(0, &rel, days_ago(2));
+        }
+        // One file gone from Incoming three days ago (its other one kept into Music after the pass below).
+        let after_rows = rows_of(&cat, after);
+        gone(1, &after_rows[0], days_ago(3));
+        // A file of it in Music's trash since three days ago; the copy fetched again into Incoming removed on the NAS two days ago.
+        let rows = rows_of(&cat, again);
+        cat.move_files(1, &rows[0], 0, &rows[0]).unwrap();
+        cat.mark_trashed(0, &rows[0], &format!("{}/{}", days_ago(3), rows[0])).unwrap();
+        gone(1, &rows[1], days_ago(2));
+        // Gone a while, its files hold the record still; U7's, in Music's trash, holds none and did not go from Incoming.
+        let read = round(&cat, &mut k, &rs);
+        assert_eq!((read[0], read[1]), ((Holding::Arrived, false), (Holding::None, false)));
+        assert!(k.items.iter().all(|i| i.state == State::Placed), "none let go while its files are gone a while");
+        // The catalogue's pass retires what went (a trash emptied too: no library here keeps one).
+        cat.identify().unwrap();
+        // Then the other file of "Kept After" is kept into Music and deleted there: in Music's trash still, after its Incoming one went.
+        cat.move_files(1, &after_rows[1], 0, &after_rows[1]).unwrap();
+        cat.mark_trashed(0, &after_rows[1], &format!("{}/{}", days_ago(0), after_rows[1])).unwrap();
+        let read = round(&cat, &mut k, &rs);
+        assert_eq!(read, [(Holding::None, true), (Holding::None, false), (Holding::None, false), (Holding::None, false), (Holding::None, true)]);
+        let states = |request: i64| k.items.iter().filter(|i| i.record.request == request).map(|i| i.state).collect::<Vec<_>>();
+        assert_eq!((states(1), states(5)), (vec![State::Waiting], vec![State::Waiting]), "let go, and looked for again");
+        for request in [2, 3, 4] {
+            assert_eq!(states(request), [State::Placed], "kept into Music and deleted there: never looked for again ({request})");
+        }
+        let words = words_in(&k.items, &[1]);
+        assert_eq!(words.get(&1), Some(&Word::Waiting { why: None }));
+        let state = request_state(&rs[0], Holding::None, None, words.get(&1));
+        assert!(matches!(state, RequestState::Wanted { soulseek: Some(Word::Waiting { .. }), .. }), "not fetching 100%: {state:?}");
+    }
+
+    /// T8.3: a copy Soulseek placed and a pass read, its folder read since as another record (the files there rows on that record's
+    /// tracks), its own files gone: once the catalogue retires them, its item is let go and its request looked for again, as one
+    /// removed by hand; the other record holds the folder.
+    #[test]
+    fn a_placed_copy_read_as_another_record_frees_its_item() {
+        use super::super::requests::{Holding, RequestState, request_state};
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let (placed, other) = (cat.record_for_tests("Two Rooms", 2), cat.record_for_tests("Other Shore", 2));
+        cat.copy_for_tests(placed, 1);
+        let rs = [crate::userdata::Request { record: Some(placed), ..asked(1, None) }];
+        let mut k = Kept::default();
+        take_requests(&mut k, &rs, &[of(placed)], &[]);
+        (k.items[0].state, k.items[0].folders, k.items[0].chosen) = (State::Placed, vec![two_tracks("a")], Some(0));
+        let dir = format!("copy-{placed}");
+        cat.execute_for_tests(&format!(
+            "UPDATE files SET gone_at = {gone} WHERE rel LIKE '{dir}/%';
+             INSERT INTO files (folder, rel, size, mtime, track, came) SELECT 1, '{dir}/other-' || id || '.flac', 1, 1, id, {gone} FROM tracks WHERE record = {other};",
+            gone = days_ago(2)
+        ));
+        cat.identify().unwrap();
+        let read = round(&cat, &mut k, &rs);
+        assert_eq!(read, [(Holding::None, true)], "its last copy went from Incoming");
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record, i.state)).collect::<Vec<_>>(), [(1, placed, State::Waiting)], "let go, and looked for again");
+        let words = words_in(&k.items, &[1]);
+        let state = request_state(&rs[0], Holding::None, None, words.get(&1));
+        assert!(matches!(state, RequestState::Wanted { soulseek: Some(Word::Waiting { .. }), .. }), "not fetching 100%: {state:?}");
+        let theirs = [crate::userdata::Request { record: Some(other), ..asked(2, None) }];
+        assert_eq!(round(&cat, &mut Kept::default(), &theirs), [(Holding::Arrived, false)], "the other record holds the folder");
     }
 
     /// V1: Incoming's Delete of a copy forgets its record's Placed items, read or not: none stands for a copy any more. The record's

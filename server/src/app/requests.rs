@@ -1221,8 +1221,9 @@ pub struct RecordOf {
     pub holding: Holding,
     /// When it is first out ("2026-12-04", or a year), as MusicBrainz says: one not out yet waits for it (X1).
     pub released: Option<String>,
-    /// Holding no copy, whether its last one went to an Incoming library's trash (U7): a Delete from Incoming, which lets Soulseek
-    /// look for it again. One kept into a main library and deleted there months later is not, nor one that went otherwise.
+    /// Holding no copy, whether its last one went from an Incoming library (U7, T8: `went_from_incoming`): deleted from Incoming, or
+    /// removed there outside Cratarr, which lets Soulseek look for it again. One kept into a main library and deleted there months
+    /// later is not, nor one that went otherwise.
     pub gone_from_incoming: bool,
 }
 
@@ -1309,19 +1310,35 @@ pub fn records_held(cat: &crate::catalogue::Catalogue, rs: &[Request], kinds: &[
         .collect())
 }
 
-/// Where the last copy of each record holding none went (U7, for Soulseek's list): `gone_from_incoming` set on those whose newest
-/// trashed file lies in an Incoming library, read once for them all. Blocking.
+/// Where the last copy of each record holding none went (U7, T8, for Soulseek's list): `gone_from_incoming` set on those whose files
+/// say it went from an Incoming library (`went_from_incoming`), read once for them all (`Catalogue::went_of`). Blocking.
 pub fn mark_gone_from_incoming(cat: &crate::catalogue::Catalogue, of: &mut [Option<RecordOf>], kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<()> {
-    let kind = |folder: i64| crate::serve::library::kind_in(kinds, folder).0;
+    // An Incoming library's catalogue folder; a parked one (a negative id) is no library's.
+    let incoming = |folder: i64| folder >= 0 && crate::serve::library::kind_in(kinds, folder).0 == crate::settings::LibraryKind::Incoming;
     let none: Vec<i64> = of.iter().flatten().filter(|o| o.holding == Holding::None).map(|o| o.record).collect();
     if none.is_empty() {
         return Ok(());
     }
-    let trashed = cat.last_trashed_in(&none)?;
+    let went = cat.went_of(&none)?;
     for o in of.iter_mut().flatten().filter(|o| o.holding == Holding::None) {
-        o.gone_from_incoming = trashed.get(&o.record).is_some_and(|f| kind(*f) == crate::settings::LibraryKind::Incoming);
+        o.gone_from_incoming = went.get(&o.record).is_some_and(|files| went_from_incoming(files, &incoming));
     }
     Ok(())
+}
+
+/// Whether a record holding no copy saw its last one go from an Incoming library (U7, T8), its files as `Catalogue::went_of` reads
+/// them, `incoming` saying which catalogue folders are Incoming libraries': its newest file in a trash lies in one (a Delete from
+/// Incoming, U7); or its newest file gone does (removed outside Cratarr, or read as another record since: T8, the review of run 10,
+/// finding 8), and no file of it came, went, or went into a trash in a main library or anyone's own music at that time or after.
+/// One kept into a main library and deleted there is not. Pure.
+pub fn went_from_incoming(files: &[crate::catalogue::records::Went], incoming: impl Fn(i64) -> bool) -> bool {
+    use crate::catalogue::records::Went;
+    let newest = |at: &dyn Fn(&Went) -> Option<i64>| files.iter().filter_map(|f| Some((at(f)?, f.folder))).max();
+    if newest(&|f| f.trashed).is_some_and(|(_, folder)| incoming(folder)) {
+        return true;
+    }
+    let Some((at, folder)) = newest(&|f| f.gone) else { return false };
+    incoming(folder) && !files.iter().filter(|f| !incoming(f.folder)).any(|f| [f.came, f.gone, f.trashed].into_iter().flatten().any(|t| t >= at))
 }
 
 /// `records_of` from an async caller; none for each where the catalogue cannot be read (logged).

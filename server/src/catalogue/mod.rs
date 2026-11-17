@@ -198,7 +198,9 @@ const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id
   was_title = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'title' ORDER BY t.n LIMIT 1),
   was_artist = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'artist' ORDER BY t.n LIMIT 1),
   was_album = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'album' ORDER BY t.n LIMIT 1),
-  was_recording = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'musicbrainz_trackid' ORDER BY t.n LIMIT 1)";
+  was_recording = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'musicbrainz_trackid' ORDER BY t.n LIMIT 1),
+  was_folder = (SELECT folder FROM files WHERE track = tracks.id LIMIT 1),
+  was_gone = (SELECT COALESCE(gone_at, CAST(substr(trashed, 1, instr(trashed, '/') - 1) AS INTEGER)) FROM files WHERE track = tracks.id LIMIT 1)";
 
 /// A table's rows of one file made again as another file's (C39, `copy_rows`): every column as it is but its place (`folder`,
 /// `rel`) and those `set` gives. The columns are the table's own (`PRAGMA table_info`), so a column added later is copied too. How
@@ -525,7 +527,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 41] = [
+const ADDED_COLUMNS: [(&str, &str); 43] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -546,6 +548,10 @@ const ADDED_COLUMNS: [(&str, &str); 41] = [
     ("tracks", "was_artist TEXT"),
     ("tracks", "was_album TEXT"),
     ("tracks", "was_recording TEXT"),
+    // T8: where a retiring track's last file lay, and when it went (its `gone_at`, else its trash token's time): where a record's
+    // last copy went, read once its files gone a while have retired (`Catalogue::went_of`).
+    ("tracks", "was_folder INTEGER"),
+    ("tracks", "was_gone INTEGER"),
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.

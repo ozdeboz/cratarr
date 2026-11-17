@@ -274,6 +274,16 @@ pub struct ReferenceRow {
     pub read_at: Option<i64>,
 }
 
+/// A file of a record as `Catalogue::went_of` reads it (U7, T8): its catalogue folder, and when it came there, went (`gone_at`), or
+/// went into a trash (its token's time); for a track retired since, where its last file lay and when that went, as kept then.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Went {
+    pub folder: i64,
+    pub came: Option<i64>,
+    pub gone: Option<i64>,
+    pub trashed: Option<i64>,
+}
+
 /// A record as requests and lists read it (`Catalogue::requested`, R16; `Catalogue::missing_of`, C53a): its row, its MusicBrainz
 /// release groups (in value order), its Bandcamp album page, every reference it holds, and the record that holds its files where
 /// it is had (R13).
@@ -1475,26 +1485,32 @@ impl Catalogue {
         self.db()
     }
 
-    /// Where each of these records' newest trashed file lies (U7): the catalogue folder of the file a Delete took last (its trash
-    /// token's time), by record; a record with nothing in a trash is not in the answer. On a reader. Blocking.
-    pub fn last_trashed_in(&self, records: &[i64]) -> Result<std::collections::HashMap<i64, i64>> {
-        let read = |db: &Connection| -> Result<std::collections::HashMap<i64, i64>> {
-            let mut newest: std::collections::HashMap<i64, (i64, i64)> = std::collections::HashMap::new();
+    /// How these records' files went (U7, T8): each file of their tracks, where it lies and when it came there, went (`gone_at`) or
+    /// went into a trash (its token's time); and each of their tracks retired since, where its last file lay and when that went, as
+    /// kept as it retired (`was_folder`, `was_gone`; else when it retired). A file gone a while holds its record for its day, then
+    /// retires: what is read after is the track's. By record; a record with neither is not in the answer. On a reader. Blocking.
+    pub fn went_of(&self, records: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Went>>> {
+        let read = |db: &Connection| -> Result<std::collections::HashMap<i64, Vec<Went>>> {
+            let mut out: std::collections::HashMap<i64, Vec<Went>> = std::collections::HashMap::new();
             if records.is_empty() {
-                return Ok(std::collections::HashMap::new());
+                return Ok(out);
             }
-            let sql = format!("SELECT t.record, f.folder, f.trashed FROM files f JOIN tracks t ON t.id = f.track WHERE t.record IN ({}) AND f.trashed IS NOT NULL", id_list(records));
-            let mut st = db.prepare(&sql)?;
-            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
-                let (record, folder, token) = row?;
+            let ids = id_list(records);
+            let mut st = db.prepare(&format!("SELECT t.record, f.folder, f.came, f.gone_at, f.trashed FROM files f JOIN tracks t ON t.id = f.track WHERE t.record IN ({ids})"))?;
+            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<String>>(4)?)))? {
+                let (record, folder, came, gone, token) = row?;
                 // A trash token begins with its time (`trash::token`).
-                let at: i64 = token.split('/').next().and_then(|t| t.parse().ok()).unwrap_or(0);
-                let kept = newest.entry(record).or_insert((at, folder));
-                if at > kept.0 {
-                    *kept = (at, folder);
-                }
+                let trashed = token.map(|t| t.split('/').next().and_then(|t| t.parse().ok()).unwrap_or(0));
+                out.entry(record).or_default().push(Went { folder, came, gone, trashed });
             }
-            Ok(newest.into_iter().map(|(record, (_, folder))| (record, folder)).collect())
+            let mut st = db.prepare(&format!(
+                "SELECT record, was_folder, COALESCE(was_gone, retired_at) FROM tracks WHERE record IN ({ids}) AND retired_at IS NOT NULL AND was_folder IS NOT NULL"
+            ))?;
+            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
+                let (record, folder, at) = row?;
+                out.entry(record).or_default().push(Went { folder, came: None, gone: Some(at), trashed: None });
+            }
+            Ok(out)
         };
         match self.reader() {
             Some(c) => read(&c),
