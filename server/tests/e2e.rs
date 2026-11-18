@@ -1046,10 +1046,12 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let both = |a: &Value| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 3);
     s.until("the record's three copies", Duration::from_secs(120), || async { ann.albums().await.iter().any(both) }).await;
 
-    // The catalogue: the main library's tracks stand, the other two copies on them, and nothing new, nothing else moved.
+    // The catalogue: the main library's tracks stand, the other two copies on them, and nothing new, nothing else moved. F11.1 (the
+    // owner: "One record, two copies"; RG2): Long Cut's copy in Second, an Incoming here, pairs one for one with Music's, so 0.17's
+    // fold joins it to Music's record, its two tracks on Music's.
     let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
     let taken: std::collections::HashMap<i64, i64> = db.prepare("SELECT old, id FROM track_moved").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
-    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46), (15, 41), (14, 40), (13, 39)].into(), "Music's ids survive, each track by its place");
+    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46), (15, 41), (14, 40), (13, 39), (3, 44), (4, 45)].into(), "Music's ids survive, each track by its place");
     let followed: Vec<(i64, String, i64)> = left.iter().map(|(folder, rel, track)| (*folder, rel.clone(), *taken.get(track).unwrap_or(track))).collect();
     assert_eq!(tracks_of_files(&db), followed, "nothing new, and nothing moved but what the merge moved");
     assert_eq!(db.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), left.len() as i64 + 1, "a taken id keeps its row, and the retired one stands");
@@ -1082,6 +1084,12 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     assert_eq!((part["shapes_moved"].as_u64(), part["beats_moved"].as_u64()), (Some(2), Some(2)), "{part}");
     assert_eq!(report["parts"]["libraries"]["sources"]["cratarr"], json!({ "main": 1, "incoming": 2 }));
     assert_eq!((report["parts"]["playlists"]["playlists"].as_u64(), report["parts"]["playlists"]["lines"].as_u64()), (Some(2), Some(4)), "{report}");
+    // The fold joined that one pair and nothing else (Bonus Round's copy in Second holds a track Music's has not: another edition).
+    let cuts: Vec<Value> = ann.albums().await.into_iter().filter(|a| a["title"] == "Long Cut").collect();
+    assert_eq!((cuts.len(), cuts.first().and_then(|c| c["copies"].as_array()).map(Vec::len)), (1, Some(2)), "one record, two copies: {cuts:?}");
+    let folded = &report["parts"]["references: the doubles of one name folded"]["folded"];
+    assert_eq!(folded.as_array().map(Vec::len), Some(1), "{report}");
+    assert!(folded[0].as_str().unwrap().ends_with(&format!(" into {}", cuts[0]["id"].as_str().unwrap())), "{folded}");
 
     // Every play, heart and rating, by the map as the owner's release run reads it: added up, the better rating, the first star.
     let moved = ann.get("/api/admin/migration/moved").await;
@@ -1118,7 +1126,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let picture = format!("x{}.jpg", format!("like:{}", now("al-4Jx9dQszNKgnbo4mZtic7y")).bytes().map(|b| format!("{b:02x}")).collect::<String>());
     assert!(data.join("crate-images").join(picture).is_file(), "a crate's picture follows its seed");
     assert_eq!(every_text(&data.join("journal.sqlite")).iter().flat_map(|(_, text)| hashes_in(text)).collect::<Vec<_>>(), Vec::<String>::new());
-    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6", "tr-15", "tr-14", "tr-13"];
+    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6", "tr-15", "tr-14", "tr-13", "tr-3", "tr-4"];
     let names_one = |text: &str| gone.iter().any(|id| text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|word| word == *id));
     // A device told of a heart hears it went, by the id it knew, and a play keeps the event it was told by.
     let kept = |table: &str, text: &str| table == "migration_report" || table == "change_log" || text.starts_with("backfill:");
@@ -3083,9 +3091,10 @@ async fn replace_takes_the_old_tracks_ids_and_its_undo_gives_both_back_end_to_en
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// RF2 (RB2, the census's five): the layout's Long Cut from Second waits in Incoming. Its two tracks are Music's by name and number,
-/// but its last is three seconds longer, which makes it a record of its own, as an untagged copy in Music made production's five two.
-/// It stands against Music's copy all the same, as a copy of one record does: the Library says so on it, Health lists it among the
+/// RF2 (RB2, the census's five), as F11.1 has it (the owner: "One record, two copies"): the layout's Long Cut from Second waits in
+/// Incoming. Its two tracks are Music's by name and number, its last three seconds longer: they pair one for one as Replace pairs them,
+/// so it joins Music's record as it arrives (RG2: a copy in Incoming alone, the other in a main library), where 0.16 made production's
+/// five two records. It stands against Music's copy as a copy of one record does: the Library says so on it, Health lists it among the
 /// copies waiting, and the card names Music's copy. Replace takes Music's copy's place: Music holds the copy's files on Music's tracks,
 /// their play, heart and playlist lines with them, and Music's old files in its trash. Bonus Round's copy waiting holds a track
 /// Music's has not (OQ1): another edition, said so with no action, and Replace refused, nothing moved.
@@ -3108,10 +3117,15 @@ async fn a_copy_split_from_musics_record_stands_against_it_and_replaces_it_end_t
     s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
     let ann = s.sign_in(ANN.0, ANN.1).await;
     s.act_as(ANN.0, ANN.1).await;
+    // F11.1: joined as the build it arrives in ends, then built again: one Long Cut on the Library, with both copies.
+    let holds = |a: &Value, library: &Path| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"].as_str() == Some(&*library.to_string_lossy())));
+    s.until("Long Cut's copy waiting on Music's record", Duration::from_secs(120), || async { s.albums().await.iter().any(|a| a["title"] == "Long Cut" && holds(a, &music) && holds(a, &incoming)) }).await;
+    let cuts: Vec<Value> = s.albums().await.into_iter().filter(|a| a["title"] == "Long Cut").collect();
+    assert_eq!(cuts.len(), 1, "one record of one name: {cuts:?}");
     let kept = s.read_in("Long Cut", &music).await;
     let waiting = s.read_in("Long Cut", &incoming).await;
     let other = s.read_in("Bonus Round", &incoming).await;
-    assert_ne!(kept["id"], waiting["id"], "two records of one name");
+    assert_eq!((&kept["id"], kept["copies"].as_array().map(Vec::len)), (&waiting["id"], Some(2)), "one record, two copies (Music's, Incoming's): {kept}");
     let from = incoming.to_string_lossy().replace('/', "%2F");
     let copy_in = |a: &Value, library: &Path| a["copies"].as_array().unwrap().iter().find(|c| c["library"].as_str() == Some(&*library.to_string_lossy())).cloned().unwrap();
 
