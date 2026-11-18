@@ -2612,6 +2612,11 @@ impl Catalogue {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Whether any track is not retired (W2): a library that credits nobody while there is one read no rows. Blocking.
+    pub fn holds_live_tracks(&self) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM tracks WHERE retired_at IS NULL LIMIT 1")?.exists([])?)
+    }
+
     /// Whether a track in use has no record yet, or is back from retirement and not yet held against its album: only then,
     /// or with a stray in an album (`AlbumCopy::split`), is [`Self::assign_records`] worth its reading. Blocking.
     pub fn records_unsettled(&self) -> bool {

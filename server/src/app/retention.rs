@@ -13,6 +13,10 @@
 //!   record's credit, a reference by hand or confirmed, an id from before 0.16 (`Catalogue::forget_quiet_artists`), and by a
 //!   track's credit, anything the user data names them in (a favourite, plays, a rating, words) and the stores in the data
 //!   folder (every account's crates, their seeds and conditions; the queues): `protected_artists`.
+//! - **Artists wait for the library** (W2): a track's credit is held in Cratarr's own library alone, so no artist is forgotten
+//!   until it has been built whole at its layout, and while it credits nobody though the catalogue holds live tracks
+//!   (`credits_kept`). One of another layout, or library.sqlite deleted as a repair, holds no credit until its first build ends;
+//!   a restart with it built waits for nothing. Records not had and kept lists go as ever.
 //! - **Seen** is a list read: each sees what it lists (`Catalogue::keep_listing`), Bandcamp's too (Z4, the owner's rule: an
 //!   artist page's reads refresh what they show), and MusicBrainz's or Discogs' the artist's records only Bandcamp knows
 //!   (`Catalogue::bandcamp_only_seen`), as Bandcamp's lists only its search box's first answers (O4). A page showing a record sees
@@ -88,11 +92,24 @@ fn protected(ud: &UserData, data: Option<&std::path::Path>) -> Result<BTreeSet<i
     Ok(kept)
 }
 
-/// What keeps an artist with no record from outside the catalogue (RT01b): a track's credit (Cratarr's own library holds it),
-/// anything the user data names them in (`UserData::artists_named`), and the stores in the data folder (`stores_name`). Blocking.
-fn protected_artists(served: &Serve) -> Result<BTreeSet<i64>> {
+/// The artists Cratarr's own library credits (`Library::artists_credited`: a track's credit is held there alone), where they can
+/// be trusted to keep every artist a track credits (W2): the library built whole at its layout (`Library::built`), and crediting
+/// someone while the catalogue holds live tracks (a build that read no rows, every library off at that moment, credits nobody).
+/// None: no artist is forgotten this pass. Blocking.
+fn credits_kept(served: &Serve) -> Result<Option<BTreeSet<i64>>> {
+    if !served.library.built() {
+        return Ok(None);
+    }
+    let credited = served.library.artists_credited()?;
+    Ok((!credited.is_empty() || !served.catalogue().holds_live_tracks()?).then_some(credited))
+}
+
+/// What keeps an artist with no record from outside the catalogue (RT01b): a track's credit (`credited`, what Cratarr's own library
+/// credits), anything the user data names them in (`UserData::artists_named`), and the stores in the data folder (`stores_name`).
+/// Blocking.
+fn protected_artists(served: &Serve, credited: BTreeSet<i64>) -> Result<BTreeSet<i64>> {
     let mut kept = served.userdata.artists_named()?;
-    kept.extend(served.library.artists_credited()?);
+    kept.extend(credited);
     kept.extend(stores_name(served.data_dir.as_deref(), |text| crate::serve::ids::artists_named(text).collect())?);
     Ok(kept)
 }
@@ -122,7 +139,7 @@ pub struct Reread {
 
 /// What a pass came to: the day's re-read (RT01c), whether the forgetting of records waited (Z9), and what it let go of: the
 /// records not had (RT01), their kept lists and the artists left with nothing (RT01b), and the labels' rows read thirty days ago
-/// (C56).
+/// (C56); and whether the artists waited for the library (W2, `credits_kept`).
 #[derive(Debug, Default, PartialEq)]
 pub struct Passed {
     pub reread: Reread,
@@ -130,6 +147,7 @@ pub struct Passed {
     pub records: Vec<i64>,
     pub lists: usize,
     pub artists: Vec<i64>,
+    pub artists_wait: bool,
     pub label_rows: usize,
 }
 
@@ -194,8 +212,9 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
 
 /// The day's pass at `now`, where due (`due`): the library artists' lists read again first (`reread`, RT01c), so what it reads
 /// counts as seen; then what keeps a record and an artist gathered, the records nothing keeps forgotten (but while the forgetting
-/// waits after a long gap, `forgetting_waits`, Z9), the kept lists let go of, the artists left with nothing forgotten, the
-/// labels' rows read thirty days ago let go of (C56), and the pass's time written. What it came to; None: not due.
+/// waits after a long gap, `forgetting_waits`, Z9), the kept lists let go of, the artists left with nothing forgotten (but while
+/// Cratarr's own library's credits cannot be trusted, `credits_kept`, W2), the labels' rows read thirty days ago let go of (C56),
+/// and the pass's time written. What it came to; None: not due.
 pub async fn pass(served: Arc<Serve>, now: i64) -> Result<Option<Passed>> {
     pass_reading(served, now, &super::discover::reread_sources(), super::switches::background_paused).await
 }
@@ -212,21 +231,29 @@ async fn pass_reading(served: Arc<Serve>, now: i64, sources: &[Arc<dyn ArtistLis
     let reread = reread(&cat, sources, paused, now).await?;
     let done = tokio::task::spawn_blocking(move || -> Result<Passed> {
         let cat = served.catalogue();
-        let (kept, artists_kept) = (protected(&served.userdata, served.data_dir.as_deref())?, protected_artists(&served)?);
+        let kept = protected(&served.userdata, served.data_dir.as_deref())?;
         let records = if waits { Vec::new() } else { cat.forget_quiet(now, &kept)? };
         let lists = cat.forget_quiet_lists(now, &kept)?;
-        let artists = cat.forget_quiet_artists(now, &artists_kept)?;
+        let credited = credits_kept(&served)?;
+        let artists_wait = credited.is_none();
+        let artists = match credited {
+            Some(credited) => cat.forget_quiet_artists(now, &protected_artists(&served, credited)?)?,
+            None => Vec::new(),
+        };
         if !artists.is_empty() {
             // The library's names without theirs: a name credited again is given a new id, never one forgotten.
             served.library.set_artists(cat.artist_ids()?);
         }
         let label_rows = cat.forget_label_rows(now)?;
         cat.set_meta(RAN_AT, &now.to_string());
-        Ok(Passed { reread, waits, records, lists, artists, label_rows })
+        Ok(Passed { reread, waits, records, lists, artists, artists_wait, label_rows })
     })
     .await??;
     if done.waits {
         tracing::info!(target: "library", "records not had: none forgotten until a month of re-reads has passed, the last pass long ago");
+    }
+    if done.artists_wait {
+        tracing::info!(target: "library", "artists: none forgotten until the library is built");
     }
     if !done.reread.read.is_empty() || !done.reread.kept_seen.is_empty() {
         tracing::info!(target: "library", read = done.reread.read.len(), kept_seen = done.reread.kept_seen.len(), "the library's artists' lists read again, a month's share");
@@ -332,6 +359,174 @@ mod tests {
     /// A pass that reads no list (no source given, nothing paused): what is due to be read again keeps its records seen.
     async fn quiet_pass(served: &Arc<Serve>, now: i64) -> Option<Passed> {
         pass_reading(served.clone(), now, &[], || false).await.unwrap()
+    }
+
+    /// Cratarr's own library built from its catalogue, as a start's check builds it (`Library::change`, `build_from`).
+    fn build(served: &Serve) {
+        let rules = crate::catalogue::Rules::default();
+        let (_, print) = served.library.change(served.catalogue(), &rules).unwrap();
+        served.library.build_from(served.catalogue(), &rules, &print).unwrap();
+    }
+
+    /// `quiet_pass` on a runtime of its own, on this thread, and what it logged (`diagnostics::logged_lines`).
+    fn logged_pass(served: &Arc<Serve>, now: i64) -> (Passed, Vec<String>) {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let mut done = None;
+        let lines = crate::diagnostics::logged_lines(|| done = runtime.block_on(quiet_pass(served, now)));
+        (done.expect("due"), lines)
+    }
+
+    /// P2's day: three days before `NOW`.
+    const BORN: i64 = NOW - 3 * DAY;
+    /// Both Shores' two files in Music.
+    const SHORES: [&str; 2] = ["Salt Meridian/Both Shores (2020)/01 Low Bank.flac", "Salt Meridian/Both Shores (2020)/02 Far Bank.flac"];
+    /// What the pass says while the artists wait for the library (W2).
+    const ARTISTS_WAIT: &str = "library: artists: none forgotten until the library is built";
+
+    /// P2's library (W2): Music holds Both Shores by Salt Meridian, its second track featuring Ferro Lane; Salt Meridian, Ferro Lane
+    /// and Nobody (credited nowhere, named by nothing) born three days before `NOW`, and Old Lane whose last credit went the day
+    /// before `NOW`; none credited on a record (before P3); a record not had unseen for seven months, nothing keeping it. Cratarr's
+    /// own library in `dir`, where one of another layout was built (a layout change: its tables dropped at open), not built since.
+    struct Shores {
+        served: Arc<Serve>,
+        cat: Arc<Catalogue>,
+        salt: i64,
+        ferro: i64,
+        nobody: i64,
+        old: i64,
+        quiet: i64,
+    }
+
+    fn shores(dir: &std::path::Path, floor: i64) -> Shores {
+        rusqlite::Connection::open(dir.join("library.sqlite"))
+            .unwrap()
+            .execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta VALUES ('built_from', 'an older layout'); PRAGMA user_version = 1;")
+            .unwrap();
+        let cat = Arc::new(Catalogue::open(None, vec![std::path::PathBuf::from("/music")]).unwrap());
+        cat.number_above(floor).unwrap();
+        cat.execute_for_tests(&format!(
+            "INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, came) VALUES
+               (0, '{}', 24000000, 1760000000, 1, 'FLAC', 900, 200000, 1760000000), (0, '{}', 24001000, 1760000000, 1, 'FLAC', 900, 210000, 1760000000)",
+            SHORES[0], SHORES[1]
+        ));
+        let album = [("album", "Both Shores"), ("albumartist", "Salt Meridian")];
+        cat.tag_for_tests(0, SHORES[0], &[("title", "Low Bank"), ("artist", "Salt Meridian"), ("tracknumber", "1"), album[0], album[1]]);
+        cat.tag_for_tests(
+            0,
+            SHORES[1],
+            &[("title", "Far Bank"), ("artist", "Salt Meridian feat. Ferro Lane"), ("artists", "Salt Meridian"), ("artists", "Ferro Lane"), ("tracknumber", "2"), album[0], album[1]],
+        );
+        cat.identify().unwrap();
+        let [salt, ferro, nobody, old] = ["Salt Meridian", "Ferro Lane", "Nobody", "Old Lane"].map(|n| cat.artist_for(n).unwrap());
+        {
+            let db = cat.db_for_tests();
+            db.execute("UPDATE artists SET born = ?1", [BORN]).unwrap();
+            db.execute("UPDATE artists SET born = ?2 WHERE id = ?1", rusqlite::params![old, NOW - MONTH]).unwrap();
+            db.execute("INSERT INTO artists_bare (artist, since) VALUES (?1, ?2)", rusqlite::params![old, NOW - DAY]).unwrap();
+        }
+        let quiet = unseen(&cat, "Undertow");
+        let served = Serve::open(Some(dir), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.attach_catalogue(cat.clone());
+        Shores { served, cat, salt, ferro, nobody, old, quiet }
+    }
+
+    fn count(cat: &Catalogue, sql: &str) -> i64 {
+        cat.db_for_tests().query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    fn bare(cat: &Catalogue) -> Vec<(i64, i64)> {
+        let db = cat.db_for_tests();
+        let mut st = db.prepare("SELECT artist, since FROM artists_bare ORDER BY artist").unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// P2.1 (W2): Cratarr's own library of another layout, its tables dropped at open and not built since: the pass forgets no
+    /// artist (no tombstone, no row gone, no day's grace changed) and says so once, while the record not had goes as RT01 says and
+    /// the pass is noted: only the artists wait.
+    #[test]
+    fn an_unbuilt_library_forgets_no_artist() {
+        let dir = data_dir("unbuilt");
+        let s = shores(&dir, 95_100);
+        assert!(!s.served.library.built(), "a layout change: not built");
+        let (before, was_bare) = (count(&s.cat, "SELECT count(*) FROM artists"), bare(&s.cat));
+        let (done, lines) = logged_pass(&s.served, NOW);
+        assert!(done.artists.is_empty() && done.artists_wait, "{done:?}");
+        assert_eq!(count(&s.cat, "SELECT count(*) FROM artists"), before, "every artist's row kept");
+        assert_eq!(count(&s.cat, "SELECT count(*) FROM forgotten WHERE subject LIKE 'ar-%'"), 0, "no artist's tombstone");
+        assert_eq!(bare(&s.cat), was_bare, "no day's grace changed");
+        assert_eq!(lines.iter().filter(|l| *l == ARTISTS_WAIT).count(), 1, "said once: {lines:#?}");
+        assert_eq!(done.records, [s.quiet], "the records not had go as before");
+        assert_eq!(s.cat.meta(RAN_AT), Some(NOW.to_string()), "the pass noted");
+        drop(s);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// P2.2 (W2): P2.1's library built after its pass: a day on, a track's credit keeps Ferro Lane, Salt Meridian is kept, and
+    /// Nobody goes, his day counted from when he was made (the pass that waited gave him none), with Old Lane, whose last credit went
+    /// two days before.
+    #[test]
+    fn after_the_build_the_credits_keep_and_the_rest_go() {
+        let dir = data_dir("built-after");
+        let s = shores(&dir, 95_200);
+        assert!(logged_pass(&s.served, NOW).0.artists_wait);
+        build(&s.served);
+        assert!(s.served.library.built());
+        let (done, lines) = logged_pass(&s.served, NOW + DAY);
+        assert!(!done.artists_wait && !lines.iter().any(|l| l == ARTISTS_WAIT), "{lines:#?}");
+        assert_eq!(done.artists, [s.nobody, s.old], "those with nothing");
+        assert_eq!(s.cat.forgotten_at(&ids::artist(s.nobody)).unwrap(), Some(NOW + DAY), "his tombstone");
+        for kept in [s.ferro, s.salt] {
+            assert_eq!(count(&s.cat, &format!("SELECT count(*) FROM artists WHERE id = {kept}")), 1, "{kept} kept");
+        }
+        assert!(s.served.library.artists_credited().unwrap().contains(&s.ferro), "a track's credit");
+        drop(s);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// P2.3 (W2): a restart with the library built before and no file changed builds nothing, and the pass forgets all the same:
+    /// "no build in this start" is not "not built".
+    #[test]
+    fn a_restart_with_the_library_built_lets_the_pass_forget() {
+        let dir = data_dir("restarted");
+        let Shores { served, cat, salt, ferro, nobody, .. } = shores(&dir, 95_300);
+        build(&served);
+        drop(served);
+        let served = Serve::open(Some(&dir), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.attach_catalogue(cat.clone());
+        assert_eq!(served.library.change(&cat, &crate::catalogue::Rules::default()).unwrap().0, crate::serve::library::Change::None, "nothing to build");
+        let (done, _) = logged_pass(&served, NOW);
+        assert!(!done.artists_wait);
+        assert!(done.artists.contains(&nobody), "Nobody forgotten: {done:?}");
+        assert!(!done.artists.contains(&ferro) && !done.artists.contains(&salt), "{done:?}");
+        drop((served, cat));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// P2.4 (W2): built, but crediting nobody (a build that read no rows: every library off at that moment) while the catalogue
+    /// holds live tracks: no artist forgotten, and the pass says so; a new install, no live track and no credit: forgotten as RT01
+    /// says, nothing to keep them.
+    #[test]
+    fn empty_credits_with_live_tracks_forget_no_artist() {
+        let off = served(None, 95_400);
+        let cat = off.catalogue().clone();
+        cat.record_for_tests("Two Rooms", 2);
+        let nobody = cat.artist_for("Nobody").unwrap();
+        born_a_month_before(&cat);
+        build(&off);
+        assert!(off.library.built() && off.library.artists_credited().unwrap().is_empty() && cat.holds_live_tracks().unwrap());
+        let (done, lines) = logged_pass(&off, NOW);
+        assert!(done.artists.is_empty() && done.artists_wait, "{done:?}");
+        assert_eq!(lines.iter().filter(|l| *l == ARTISTS_WAIT).count(), 1, "{lines:#?}");
+        assert!(cat.forgotten_at(&ids::artist(nobody)).unwrap().is_none());
+
+        let new = served(None, 95_500);
+        let cat = new.catalogue().clone();
+        let nobody = cat.artist_for("Nobody").unwrap();
+        born_a_month_before(&cat);
+        build(&new);
+        let (done, lines) = logged_pass(&new, NOW);
+        assert_eq!((done.artists, done.artists_wait), (vec![nobody], false), "nothing to keep them");
+        assert!(!lines.iter().any(|l| l == ARTISTS_WAIT), "{lines:#?}");
     }
 
     /// `count` library artists (`Artist <n>`), each credited first on a had record of their own.
@@ -482,10 +677,11 @@ mod tests {
 
     /// RT01b: an artist whose only record was forgotten goes a day later (Z10: their day counts from when their last credit went,
     /// not from their birth), their tombstone written, and their id answers "no longer known"; one a track credits stays, and so
-    /// does one a kept record credits. Named again, they are a new artist.
+    /// does one a kept record credits. Named again, they are a new artist. The library built first (W2).
     #[tokio::test]
     async fn an_artist_left_with_nothing_is_forgotten() {
         let served = served(None, 85_000);
+        build(&served);
         let cat = served.catalogue().clone();
         let [lonely, featured, listed] = ["Orbit Lane", "Tape Club", "Glass Harbour"].map(|n| cat.artist_for(n).unwrap());
         born_a_month_before(&cat);
@@ -515,7 +711,7 @@ mod tests {
         let [hearted, other] = ["Kite Theory", "Noor Field"].map(|n| cat.artist_for(n).unwrap());
         born_a_month_before(&cat);
         served.userdata.set_starred("ann", crate::userdata::Kind::Artist, &[ids::artist(hearted)], true).unwrap();
-        assert_eq!(cat.forget_quiet_artists(NOW, &protected_artists(&served).unwrap()).unwrap(), [other]);
+        assert_eq!(cat.forget_quiet_artists(NOW, &protected_artists(&served, served.library.artists_credited().unwrap()).unwrap()).unwrap(), [other]);
     }
 
     /// RT01b: an artist a crate is seeded by (Sounds like them), in any account's crates, is never forgotten.
@@ -529,7 +725,7 @@ mod tests {
         let like: crate::crates::Condition =
             serde_json::from_value(serde_json::json!({ "axis": "like", "value": { "kind": "like", "of": [ids::artist(seeded)], "count": 20 } })).unwrap();
         crate::crates::CrateStore::of_account(dir.to_str(), "ann").save(None, "Like Kite Theory", vec![like]).await.unwrap();
-        assert_eq!(cat.forget_quiet_artists(NOW, &protected_artists(&served).unwrap()).unwrap(), [other]);
+        assert_eq!(cat.forget_quiet_artists(NOW, &protected_artists(&served, served.library.artists_credited().unwrap()).unwrap()).unwrap(), [other]);
         drop((cat, served));
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -912,6 +912,13 @@ impl Library {
         self.db().query_row("SELECT value FROM meta WHERE key = ?1", [BUILT_FROM], |r| r.get(0)).optional().ok().flatten()
     }
 
+    /// Whether the library has been built whole at its layout (W2): what it was built from is noted as a build ends, and one of
+    /// another layout (its tables dropped at open) or a new one (library.sqlite deleted, a repair) has none until its first build
+    /// ends. Kept across restarts. One that cannot be read is not. Blocking.
+    pub fn built(&self) -> bool {
+        self.built_from().is_some()
+    }
+
     fn set_built_from(&self, print: &str) -> Result<bool> {
         self.db().execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![BUILT_FROM, print])?;
         Ok(true)
