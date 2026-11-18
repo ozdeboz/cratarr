@@ -4,8 +4,10 @@
 //!
 //! - **No name merge.** A MusicBrainz row and a Discogs row are one only where a record holds both the release group and the
 //!   master; two albums or two artists of one name from the sources stay two.
-//! - **Here by reference alone.** An album row names the record that holds its release group or its master (`record`), as merged
-//!   now, and is had by the one had rule on that record. An artist row names the artist who holds their MusicBrainz id
+//! - **Here by reference, or as the house's.** An album row names the record that holds its release group or its master (`record`),
+//!   as merged now, else the record the house has of its artist and title that it is one album with (F11.2, the owner's word: an
+//!   outside album never shows beside a record the house has; X8 kept), which an open of it joins; and is had by the one had rule
+//!   on that record. An artist row names the artist who holds their MusicBrainz id
 //!   (`artist`), had where the library has albums by them. A name alone names no record.
 //! - **Had through its names, for display alone (Z6).** A row no record holds is had where the had rule's names clause would hold
 //!   it: a live had record of its folded artist and title, holding no reference that contradicts the row's, the name one album's
@@ -1007,5 +1009,38 @@ mod tests {
         assert_eq!(cat.keep_listing(Some(artist), &[listed], "link").unwrap(), [walks], "(c) the artist's own list joins it by its names");
         assert_eq!(masters(&cat, walks), 1, "(c)");
         assert_eq!(sources(&rows(&cat, &mb, &discogs)), [vec!["musicbrainz", "discogs"]], "(c) one row, both sources, by reference");
+    }
+
+    /// F11.2 (the owner's word: an outside album never shows beside a record the house has), Beyond: "Night Walks" the house has,
+    /// untagged, credited to Kite Theory. MusicBrainz's row of it and Discogs' "Night Walks EP" are one row, that record's, had;
+    /// opened, each is that record, its reference added (how `link`), no live record of the name beside it. A name two had records
+    /// share (X8): the row names none, and opened it is a record of its own. Records not had stay as F2.8 has them.
+    #[test]
+    fn an_outside_album_on_beyond_joins_the_record_the_house_has() {
+        use crate::app::labels::{Opened, open_record};
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let credit = |record: i64| {
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", rusqlite::params![record, artist]).unwrap();
+            record
+        };
+        let had = credit(record(&cat, "Night Walks", 2, &[]));
+        let shown = rows(&cat, &[album(GROUP_1, "Night Walks", "Kite Theory")], &[master(3001, "Night Walks EP", "Kite Theory")]);
+        let named: Vec<(Option<String>, bool, Vec<&str>)> = shown.iter().map(|r| (r.record.clone(), r.have, r.sources.clone())).collect();
+        assert_eq!(named, [(Some(ids::record(had)), true, vec!["musicbrainz", "discogs"])], "one row: the record the house has");
+        let opened = |o: Opened| cat.record(open_record(&cat, &o).unwrap().expect("opened")).unwrap().unwrap().id;
+        assert_eq!(opened(Opened { discogs_master: Some(3001), title: "Night Walks EP".into(), artist: "Kite Theory".into(), ..Opened::default() }), had);
+        assert_eq!(opened(Opened { release_group: Some(GROUP_1.into()), title: "Night Walks".into(), artist: "Kite Theory".into(), ..Opened::default() }), had);
+        let held: Vec<(String, String)> = cat.references_of(&ids::record(had)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect();
+        for value in ["3001", GROUP_1] {
+            assert!(held.contains(&(value.to_string(), "link".to_string())), "{value} added: {held:?}");
+        }
+        let live: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM records WHERE merged_into IS NULL AND retired_at IS NULL AND title LIKE 'Night Walks%'", [], |r| r.get(0)).unwrap();
+        assert_eq!(live, 1, "none beside it");
+        let orbital = [credit(record(&cat, "Orbital", 2, &[])), credit(record(&cat, "Orbital", 3, &[]))];
+        let shown = rows(&cat, &[album(GROUP_2, "Orbital", "Kite Theory")], &[]);
+        assert_eq!((shown.len(), shown[0].record.clone()), (1, None), "a name two had records share: a row of its own");
+        let own = opened(Opened { release_group: Some(GROUP_2.into()), title: "Orbital".into(), artist: "Kite Theory".into(), ..Opened::default() });
+        assert!(!orbital.contains(&own), "opened: a record of its own");
     }
 }

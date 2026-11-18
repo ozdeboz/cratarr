@@ -64,7 +64,8 @@ pub struct LabelKept {
     /// order.
     pub tied: Vec<(i64, String)>,
     /// Its sources' kept rows, each with the record its reference names now (`records::found_by_reference`, as a row opened
-    /// finds it); none: no record yet.
+    /// finds it), else the record the house has of its names that an open of it joins (F11.2, `records::had_by_names_in`); none: no
+    /// record yet.
     pub rows: Vec<(LabelListed, Option<i64>)>,
     /// Every record above, read as the lists read records (`Requested`: the one had rule's holder), by id.
     pub records: HashMap<i64, Requested>,
@@ -212,8 +213,17 @@ impl Catalogue {
                 .query_map([label], listed_of)?
                 .collect::<rusqlite::Result<_>>()?;
             let mut rows = Vec::with_capacity(listed.len());
+            let mut named = None;
             for l in listed {
-                let found = super::records::found_by_reference(db, &Listing { refs: vec![l.reference.clone()], ..Default::default() })?;
+                let mut found = super::records::found_by_reference(db, &Listing { refs: vec![l.reference.clone()], ..Default::default() })?;
+                // F11.2: a row no record holds that a record the house has of its artist and title is one album with is that record's
+                // row, as an open of it joins it (`records::had_by_names_in`): never shown beside it.
+                if found.is_none() {
+                    found = super::records::had_by_names_in(db, &[(std::slice::from_ref(&l.reference), l.artist.as_str(), l.title.as_str(), l.kind.as_deref())], &mut named)?
+                        .pop()
+                        .flatten()
+                        .map(|(had, _)| had);
+                }
                 rows.push((l, found));
             }
             let wanted: Vec<i64> = tied.iter().map(|(r, _)| *r).chain(rows.iter().filter_map(|(_, r)| *r)).collect::<BTreeSet<_>>().into_iter().collect();
@@ -433,5 +443,47 @@ mod tests {
         let fresh = Catalogue::open(None, Vec::new()).unwrap();
         assert_eq!(fresh.label_for("New").unwrap(), 1);
         assert_eq!(fresh.top_id(), 1, "a label counts though nothing else was given");
+    }
+
+    /// F11.2 (the owner's word: an outside album never shows beside a record the house has), a label's page: Discogs' row of "Night
+    /// Walks" by Kite Theory, which the house has untagged (credited to them, tied to no label), is that record's row, had; opened
+    /// (`keep_listing(None, …)`, as `labels::open_record` keeps it) it is that record, its master added. A name two had records share
+    /// (X8): the row stays a row of its own, and opened is a record of its own.
+    #[test]
+    fn a_labels_row_joins_the_record_the_house_has() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let had_named = |title: &str| {
+            let record = cat.record_for_tests(title, 2);
+            cat.db().execute("UPDATE records SET artist = 'Kite Theory' WHERE id = ?1", [record]).unwrap();
+            cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", params![record, artist]).unwrap();
+            record
+        };
+        let had = had_named("Night Walks");
+        let orbital = [had_named("Orbital"), had_named("Orbital")];
+        let row = |title: &str, master: &str| LabelListed {
+            reference: Ref::new("discogs", "master", master),
+            title: title.into(),
+            artist: "Kite Theory".into(),
+            year: Some(2020),
+            catno: "LTR-040".into(),
+            kind: Some("ep".into()),
+            cover: None,
+        };
+        let rows = [row("Night Walks", "3001"), row("Orbital", "3002")];
+        cat.keep_label_rows(label, "discogs", &rows, None, true, 1).unwrap();
+        let kept = cat.label_kept(label).unwrap().expect("a label");
+        let named: Vec<(&str, Option<i64>)> = kept.rows.iter().map(|(l, r)| (l.title.as_str(), *r)).collect();
+        assert_eq!(named, [("Night Walks", Some(had)), ("Orbital", None)], "the row of the record the house has is its; a name two share stays its own");
+        assert_eq!(kept.records.get(&had).and_then(|q| q.holder), Some(had), "had");
+        let opened = |l: &LabelListed| {
+            let listing = Listing { title: l.title.clone(), artist: l.artist.clone(), kind: l.kind.clone(), refs: vec![l.reference.clone()], ..Listing::default() };
+            cat.record(cat.keep_listing(None, &[listing], "link").unwrap()[0]).unwrap().unwrap().id
+        };
+        assert_eq!(opened(&rows[0]), had, "opened: the record the house has");
+        assert!(cat.references_of(&ids::record(had)).unwrap().iter().any(|(r, row)| r.value == "3001" && row.how == "link"), "its master added");
+        let own = opened(&rows[1]);
+        assert!(!orbital.contains(&own), "a name two had records share: a record of its own");
     }
 }
