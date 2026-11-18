@@ -1,12 +1,28 @@
 //! A record's references (0.14, the owner, 2026-11-02: one Health item for them): each source that may know the record
 //! (MusicBrainz, Discogs, Bandcamp, AcoustID), as agreeing, differing, found (known, not compared) or missing, with what
-//! it says (its tracks, year, type, page); which one counts ("Use this", or a link pasted by hand); and whether the record
-//! was checked by hand. A record with no source agreeing, none chosen and not checked by hand is Health's item.
+//! it says (its tracks, year, type, page); which one counts; and whether the record was checked by hand. A record no
+//! reference speaks for is Health's item.
+//!
+//! - **Kept in the catalogue** (decision 0100, `catalogue::records`): what each source knows the record by, and the tracklist
+//!   each gives. What 0.14 kept as one JSON an album (`Chosen`, in `record_references`) moved there at 0.17's step
+//!   (`step_017`), which alone reads it now.
+//! - **One measure of agreeing:** a source's list agrees with the files as `identity::agrees` says, row and count alike, and
+//!   the one that counts is `identity::counting`'s, worked out whenever a list arrives (`work_out`) unless chosen by hand: "Use
+//!   this", or a link pasted.
+//! - **A list read once:** one not kept yet is read when the record is opened, and kept: MusicBrainz's release (its own titles,
+//!   which a match keeps none of), Discogs' release. Bandcamp's page is looked up when the record is opened, as before, and read
+//!   then; what it found is kept as a guess.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+
+use crate::catalogue::Catalogue;
+use crate::catalogue::identity::{self, Listed, RefTrack};
+use crate::catalogue::records::{RecordRow, Ref, ReferenceRow};
+use crate::serve::ids;
 
 /// The sources, in the order a record's entry lists them.
 pub const SOURCES: [&str; 4] = ["musicbrainz", "discogs", "bandcamp", "acoustid"];
@@ -17,7 +33,8 @@ pub struct References {
     pub title: String,
     pub artist: String,
     pub sources: Vec<Source>,
-    /// The source that counts, chosen ("Use this") or by its link pasted; none where none was chosen.
+    /// The source that counts: worked out from the lists and the files, or chosen ("Use this", a link pasted); none where
+    /// none fits and none was chosen.
     pub counting: Option<String>,
     pub by_hand: bool,
 }
@@ -47,22 +64,8 @@ pub struct Source {
     pub said: String,
 }
 
-/// A track's length this close to the record's agrees (ms), as matching's likely.
-const NEAR_MS: i64 = 5_000;
-
-/// A source's track list held against the record's: agrees where as many tracks, each this near; else differs, said.
-fn held(lengths: &[Option<i64>], record: &[i64]) -> (&'static str, String) {
-    if lengths.len() != record.len() {
-        return ("differs", format!("{} tracks; the record has {}", lengths.len(), record.len()));
-    }
-    let off = lengths.iter().zip(record).filter(|(l, r)| l.is_some_and(|l| (l - **r).abs() > NEAR_MS)).count();
-    match off {
-        0 => ("agrees", format!("All {} tracks, each within {} s", record.len(), NEAR_MS / 1000)),
-        n => ("differs", format!("{n} of {} lengths differ", record.len())),
-    }
-}
-
-/// What was chosen of a record's references, kept (`record_references`).
+/// What 0.14 kept of a record's references (`record_references`, JSON an album). Read by 0.17's step alone, which moves it
+/// into the catalogue: `counting` a choice by hand, `by_hand` "Checked by hand", the links pasted, the guesses confirmed.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Chosen {
     #[serde(default)]
@@ -77,141 +80,643 @@ pub struct Chosen {
     pub confirmed: std::collections::BTreeSet<String>,
 }
 
-/// The source a pasted link is of: MusicBrainz's release, Discogs' release or master, a Bandcamp album page.
-pub fn source_of_link(url: &str) -> Option<&'static str> {
-    let u = reqwest::Url::parse(url.trim()).ok()?;
+/// What a pasted link names: a MusicBrainz release or release group, a Discogs release or master (a language before it, a
+/// name after its number, or Discogs' older `/master/view/N`, which 0.16 kept as pasted), a Bandcamp album page. None for
+/// anything else.
+pub fn ref_of_link(url: &str) -> Option<Ref> {
+    let url = url.trim();
+    let u = reqwest::Url::parse(url).ok()?;
     if !matches!(u.scheme(), "https" | "http") {
         return None;
     }
     let host = u.host_str()?.to_ascii_lowercase();
-    let path = u.path();
-    match () {
-        _ if (host == "musicbrainz.org" || host.ends_with(".musicbrainz.org")) && (path.starts_with("/release/") || path.starts_with("/release-group/")) => Some("musicbrainz"),
-        _ if (host == "discogs.com" || host.ends_with(".discogs.com")) && (path.contains("/release/") || path.contains("/master/")) => Some("discogs"),
-        _ if host.ends_with(".bandcamp.com") && path.starts_with("/album/") => Some("bandcamp"),
+    let segments: Vec<&str> = u.path_segments()?.filter(|s| !s.is_empty()).collect();
+    if host == "musicbrainz.org" || host.ends_with(".musicbrainz.org") {
+        let [kind @ ("release" | "release-group"), id, ..] = segments.as_slice() else { return None };
+        let id = id.to_ascii_lowercase();
+        return super::discogs::is_mbid(&id).then(|| Ref::new("musicbrainz", kind, &id));
+    }
+    if host == "discogs.com" || host.ends_with(".discogs.com") {
+        let kind = segments.iter().position(|s| *s == "release" || *s == "master")?;
+        let at = if segments.get(kind + 1) == Some(&"view") { kind + 1 } else { kind };
+        let number: u64 = segments.get(at + 1)?.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
+        return Some(Ref::new("discogs", segments[kind], &number.to_string()));
+    }
+    if host.ends_with(".bandcamp.com") && u.path().starts_with("/album/") {
+        return crate::bandcamp::album_page(url).map(|page| Ref::new("bandcamp", "album", &page));
+    }
+    None
+}
+
+/// A reference's page at its source.
+fn url_of(r: &Ref) -> Option<String> {
+    Some(match (r.source.as_str(), r.kind.as_str()) {
+        ("musicbrainz", "release" | "release-group") => format!("https://musicbrainz.org/{}/{}", r.kind, r.value),
+        ("discogs", "release" | "master") => format!("https://www.discogs.com/{}/{}", r.kind, r.value),
+        ("bandcamp", "album") => r.value.clone(),
+        _ => return None,
+    })
+}
+
+/// MusicBrainz's list of a release, as `track_fetch` reads it: its own titles, lengths and recordings.
+pub fn list_of_release(v: &super::track_fetch::ReleaseView) -> Vec<RefTrack> {
+    v.tracks
+        .iter()
+        .map(|t| RefTrack { disc: t.disc, position: t.position, title: t.title.clone(), length_ms: t.length_ms, recording: Some(t.recording.clone()).filter(|r| !r.is_empty()) })
+        .collect()
+}
+
+/// Discogs' list of a release (its JSON), each of its media in turn, as Renumber reads them; no recordings.
+pub fn list_of_discogs(v: &serde_json::Value) -> Vec<RefTrack> {
+    let release = super::renumber::discogs_release(v);
+    release
+        .media
+        .iter()
+        .zip(1..)
+        .flat_map(|(m, disc)| m.tracks.iter().zip(1..).map(move |((title, secs), position)| RefTrack { disc, position, title: title.clone(), length_ms: secs.map(|s| i64::from(s) * 1000), recording: None }))
+        .collect()
+}
+
+/// Bandcamp's list of an album page.
+pub fn list_of_bandcamp(a: &crate::bandcamp::Album) -> Vec<RefTrack> {
+    a.tracks.iter().map(|t| RefTrack { disc: 1, position: t.n, title: t.title.clone(), length_ms: t.duration_secs.map(|s| (s * 1000.0).round() as i64), recording: None }).collect()
+}
+
+/// A source's list where one reference names it alone: a MusicBrainz release, a Discogs release. A release group or a master
+/// has no one list.
+async fn read_list(r: &Ref) -> Result<Option<Vec<RefTrack>>> {
+    Ok(match (r.source.as_str(), r.kind.as_str()) {
+        ("musicbrainz", "release") => Some(list_of_release(&super::track_fetch::release_by_id(&r.value).await?)),
+        ("discogs", "release") => super::discogs::release_raw(r.value.parse()?).await?.map(|v| list_of_discogs(&v)),
         _ => None,
+    })
+}
+
+// ---- A record's counting list (C51a)
+
+/// A source by the name the pages give it.
+fn source_name(source: &str) -> &'static str {
+    match source {
+        "musicbrainz" => "MusicBrainz",
+        "discogs" => "Discogs",
+        "bandcamp" => "Bandcamp",
+        _ => "Its source",
     }
 }
 
-fn chosen_of(served: &crate::serve::Serve, album: &str) -> Result<Chosen> {
-    Ok(served.userdata.record_references(album)?.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default())
+/// The lists a record's Soulseek folders are judged by (R33, N17, as the owner amended it): the first in the design's order whose
+/// every track has its length, folders judged by titles and lengths; and the first without them, read before it, judged by titles
+/// and count only where the first finds no folder (`soulseek::untimed_folders`). One at least.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Judging {
+    pub timed: Option<(String, Vec<RefTrack>)>,
+    pub untimed: Option<(String, Vec<RefTrack>)>,
 }
 
-fn keep(served: &crate::serve::Serve, album: &str, c: &Chosen) -> Result<()> {
-    served.userdata.set_record_references(album, &serde_json::to_string(c)?)
+/// Whether every track of a list has its length: a list a folder can be judged by, by titles and lengths (R33).
+pub fn timed(list: &[RefTrack]) -> bool {
+    list.iter().all(|t| t.length_ms.is_some_and(|ms| ms > 0))
 }
 
-/// A record's references as kept (no source asked now but Bandcamp's page, looked up when the record is opened).
-pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
-    let served = app.served.clone().context("Cratarr's own library is not open")?;
-    let (s, a) = (served.clone(), album.to_string());
-    let (rec, mbid, matched, discogs, heard, chosen, types) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let rec = s.library.album(&a)?.context("No such album in Cratarr's own library")?;
-        let mbid = s.library.album_names(&a)?.and_then(|p| p.0).filter(|m| super::discogs::is_mbid(m));
-        let matched: Option<super::matching::Match> = s.userdata.album_matches(std::slice::from_ref(&a))?.remove(&a).and_then(|(_, j)| serde_json::from_str(&j?).ok());
-        let discogs = super::discogs_facts::album_kept(&s, &a).ok().flatten();
-        let heard: Option<super::intake_card::Heard> = s.userdata.intake_heard(&a, None)?.and_then(|(_, j)| serde_json::from_str(&j).ok());
-        let chosen = chosen_of(&s, &a)?;
-        let types = s.userdata.release_types()?;
-        Ok((rec, mbid, matched, discogs, heard, chosen, types))
+/// A record's lists, the one that counts first (C51a, Q31: what judges a Soulseek folder), each read once through `read` and kept
+/// (`reference_tracks`), with its source (`Judging`):
+/// - **Counted** (by hand, or worked out): that source's list, kept or read now; where it has no lengths, the others in the
+///   design's order, for one with them (R33), the count left as it is.
+/// - **Not had**: no files to hold a list against, so "none until chosen" is not its case: its references count in the
+///   design's order (`identity::COUNTING_ORDER`: MusicBrainz's release, else its release group's; Discogs'; Bandcamp's album),
+///   the first whose list answers, and that source counts from then on, lengths or none. One that answers nothing (no such
+///   release) gives way to the next, and so does one without lengths, for judging (R33).
+/// - **Had, no count**: its files and no list agree, so none counts until an administrator picks one (the owner, 2026-11-16):
+///   nothing is read. One whose files are short of the list they name (W4: "partly there") is judged by that list, counted by
+///   nothing.
+///
+/// `Ok(Err(why))`: no list to judge by, and why in few words. `Err`: a source could not be reached; asked again later.
+pub async fn tracklist<R, F>(cat: &Arc<Catalogue>, record: i64, read: R) -> Result<std::result::Result<Judging, String>>
+where
+    R: Fn(Ref) -> F,
+    F: std::future::Future<Output = Result<Option<Read>>>,
+{
+    let c = cat.clone();
+    let Some((row, refs, kept, short)) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let Some(row) = c.record(record)? else { return Ok(None) };
+        let refs = c.references_of(&ids::record(row.id))?;
+        let kept = c.reference_tracks(row.id)?;
+        // Had, short of the list its files name (W4: "partly there"; Health's "Ask for the full album").
+        let short = row.had && c.requested(&[row.id])?.get(&row.id).is_some_and(|q| q.list.is_some_and(|l| q.present < l));
+        Ok(Some((row, refs, kept, short)))
     })
-    .await??;
-    let n = rec.song_count as usize;
-    let a = album.to_string();
-    let record: Vec<i64> = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a).map(|t| t.0.iter().map(|t| i64::from(t.secs) * 1000).collect::<Vec<_>>()))
+    .await??
+    else {
+        return Ok(Err("No such record".into()));
+    };
+    let kept_of = |source: &str| kept.iter().find(|(s, l)| s == source && !l.is_empty()).map(|(_, l)| l.clone());
+    let keep = |source: &'static str, list: Vec<RefTrack>, release: Option<Ref>, count: bool| {
+        let (c, id) = (cat.clone(), row.id);
+        async move {
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                c.set_reference_tracks(id, source, &list)?;
+                // The release a release group's list was read from (R25, N6): kept, as found, so the record knows which edition
+                // its list is, and a release its files name later is told from it.
+                if let Some(release) = release {
+                    c.set_reference(&ids::record(id), &release, "search")?;
+                }
+                if count {
+                    c.set_counting(id, Some(source), false)?;
+                }
+                Ok(())
+            })
+            .await?
+        }
+    };
+    let sources: Vec<&'static str> = match row.counting.as_deref() {
+        // Its own first; the others in the order where its own has no lengths (R33).
+        Some(counting) => identity::COUNTING_ORDER.iter().copied().filter(|s| *s == counting).chain(identity::COUNTING_ORDER.iter().copied().filter(|s| *s != counting)).collect(),
+        // Had, short of the list its files name: searched by that list (W4), nothing counted by it.
+        None if row.had && short && kept_of("musicbrainz").is_some() => vec!["musicbrainz"],
+        None if row.had => return Ok(Err("No list counts until one is chosen".into())),
+        None => identity::COUNTING_ORDER.to_vec(),
+    };
+    let mut counted = row.counting.is_some() || row.had;
+    let mut judging = Judging::default();
+    let mut why: Vec<String> = Vec::new();
+    let mut off = None;
+    for (n, source) in sources.into_iter().enumerate() {
+        // Its own list alone, the others only where it has no lengths (R33); where its own source is switched off, the next judges
+        // and its count stays (Y12).
+        if n > 0 && row.counting.is_some() && judging.untimed.is_none() && off.is_none() {
+            break;
+        }
+        let list = match kept_of(source) {
+            Some(list) => {
+                if !counted {
+                    keep(source, list.clone(), None, true).await?;
+                    counted = true;
+                }
+                list
+            }
+            None => {
+                let Some((r, _)) = main_ref(&refs, source) else { continue };
+                match read(r.clone()).await {
+                    Ok(Some((list, release))) if !list.is_empty() => {
+                        keep(source, list.clone(), release, !counted).await?;
+                        counted = true;
+                        list
+                    }
+                    Ok(_) => {
+                        why.push(format!("{} has no list of it", source_name(source)));
+                        continue;
+                    }
+                    // Switched off (R23, N16): passed over for the next list; where none answers, out of reach until it is on again.
+                    Err(e) if e.is::<SwitchedOff>() => {
+                        off = Some(e);
+                        continue;
+                    }
+                    // Out of reach, Bandcamp's bot check among them (R23, N3): asked again later, nothing said against the record.
+                    Err(e) => return Err(e),
+                }
+            }
+        };
+        if timed(&list) {
+            judging.timed = Some((source.to_string(), list));
+            break;
+        }
+        // Without its tracks' lengths (R33, N17): no judge of a folder by itself, but the fallback where the next list with them
+        // finds none; kept, and counting where nothing does, as the record page may show it.
+        if judging.untimed.is_none() {
+            judging.untimed = Some((source.to_string(), list));
+        }
+    }
+    if judging.timed.is_some() || judging.untimed.is_some() {
+        return Ok(Ok(judging));
+    }
+    if let Some(e) = off {
+        return Err(e);
+    }
+    Ok(Err(if why.is_empty() { "No list to judge by".to_string() } else { why.join("; ") }))
+}
+
+/// A list read through a reference (`tracklist`'s reader): its tracks, and the release they were read from where the reference was
+/// a release group's (R25: kept as a reference).
+pub type Read = (Vec<RefTrack>, Option<Ref>);
+
+/// How long a record's list its page asked for and could not have is left before a page asks for it again (C54).
+const PAGE_READ_AGAIN_SECS: i64 = 15 * 60;
+
+/// The records whose list a page asked for (C54), by the catalogue and the record: being read (none), or when it could not be.
+type PageReads = std::sync::Mutex<HashMap<(usize, i64), Option<i64>>>;
+
+fn page_reads() -> &'static PageReads {
+    static READS: std::sync::OnceLock<PageReads> = std::sync::OnceLock::new();
+    READS.get_or_init(Default::default)
+}
+
+/// Ends a page's read, whatever becomes of its task: read, else not (a panic, a task dropped), and when.
+struct PageRead((usize, i64), bool);
+
+impl Drop for PageRead {
+    fn drop(&mut self) {
+        let mut reads = page_reads().lock().unwrap_or_else(|p| p.into_inner());
+        if self.1 {
+            reads.remove(&self.0);
+        } else {
+            reads.insert(self.0, Some(super::moment::now_secs()));
+        }
+    }
+}
+
+/// A record not had's list asked for by its page where none is kept (C54): its counting list read in the background through
+/// `tracklist` and its sources (`read_reference`), and kept, so the page lists its rows when asked again. One read a record at a
+/// time; one that came to no list is asked for again after `PAGE_READ_AGAIN_SECS`. Whether it is being read (the page's
+/// `looking`).
+pub fn read_soon(cat: &Arc<Catalogue>, record: i64, now: i64) -> bool {
+    let key = (Arc::as_ptr(cat) as usize, record);
+    {
+        let mut reads = page_reads().lock().unwrap_or_else(|p| p.into_inner());
+        match reads.get(&key) {
+            Some(None) => return true,
+            Some(Some(failed)) if now - failed < PAGE_READ_AGAIN_SECS => return false,
+            _ => {}
+        }
+        reads.insert(key, None);
+    }
+    let cat = cat.clone();
+    tokio::spawn(async move {
+        let mut settles = PageRead(key, false);
+        match tracklist(&cat, record, read_reference).await {
+            Ok(Ok(_)) => settles.1 = true,
+            Ok(Err(why)) => tracing::debug!(target: "library", record, "a page's list not read: {why}"),
+            Err(e) => tracing::debug!(target: "library", record, "a page's list not read: {e:#}"),
+        }
+    });
+    true
+}
+
+/// A source switched off: no answer about any record, and none against it (R23).
+#[derive(Debug)]
+pub struct SwitchedOff(pub &'static str);
+
+impl std::fmt::Display for SwitchedOff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} is switched off", self.0)
+    }
+}
+
+impl std::error::Error for SwitchedOff {}
+
+/// A reference's list, read from its source (C51a, `tracklist`'s reader): a MusicBrainz release's own; a release group's, one
+/// of its releases (the first official one with tracks, else the first with tracks, as 0.16's Soulseek chose); a Discogs
+/// release's, a master's main release's; a Bandcamp album's. None where the source has no such thing (an answer "not found");
+/// Bandcamp's bot check is its `NotRead`. Every MusicBrainz question in its turn (S10).
+pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
+    let not_found = |e: &anyhow::Error| e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status) == Some(reqwest::StatusCode::NOT_FOUND);
+    let release = |id: String| async move {
+        match super::track_fetch::release_by_id(&id).await {
+            Ok(v) => Ok(Some(list_of_release(&v))),
+            Err(e) if not_found(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    };
+    if r.source == "musicbrainz" && !super::switches::is_on(super::switches::MUSICBRAINZ) {
+        return Err(SwitchedOff("MusicBrainz").into());
+    }
+    // Discogs switched off is passed over as MusicBrainz is (X3): out of reach until it is on, nothing said against the record.
+    if r.source == "discogs" && !super::switches::is_on(super::switches::DISCOGS) {
+        return Err(SwitchedOff("Discogs").into());
+    }
+    // Bandcamp too (Y12): its plain "switched off" ended the read, so no other list was tried.
+    if r.source == "bandcamp" && !super::switches::is_on(super::switches::BANDCAMP) {
+        return Err(SwitchedOff("Bandcamp").into());
+    }
+    match (r.source.as_str(), r.kind.as_str()) {
+        ("musicbrainz", "release") => Ok(release(r.value).await?.map(|list| (list, None))),
+        ("musicbrainz", "release-group") => match release_of_group(&r.value).await? {
+            Some(id) => Ok(release(id.clone()).await?.map(|list| (list, Some(Ref::new("musicbrainz", "release", &id))))),
+            None => Ok(None),
+        },
+        ("discogs", "release") => Ok(super::discogs::release_raw(r.value.parse()?).await?.map(|v| (list_of_discogs(&v), None))),
+        ("discogs", "master") => match super::discogs::master(r.value.parse()?).await?.and_then(|m| m.main_release) {
+            Some(main) => Ok(super::discogs::release_raw(main).await?.map(|v| (list_of_discogs(&v), None))),
+            None => Ok(None),
+        },
+        ("bandcamp", "album") => match crate::bandcamp::Bandcamp::get().album(&r.value).await {
+            Ok(a) => Ok(Some((list_of_bandcamp(&a), None))),
+            Err(e) if crate::bandcamp::not_read(&e) => Err(e),
+            // Bandcamp has no such page (`Bandcamp::text` says its status in words).
+            Err(e) if e.to_string().starts_with("Bandcamp answered 404") => Ok(None),
+            Err(e) => Err(e),
+        },
+        _ => Ok(None),
+    }
+}
+
+/// The release a release group is judged by: its first official one with tracks, else its first with tracks (0.16's
+/// Soulseek's `reference`). None where MusicBrainz lists none with tracks.
+async fn release_of_group(group: &str) -> Result<Option<String>> {
+    use super::musicbrainz::Asked as _;
+    #[derive(Deserialize)]
+    struct Browse {
+        #[serde(default)]
+        releases: Vec<serde_json::Value>,
+    }
+    let http = super::discover::http()?;
+    let url = format!("https://musicbrainz.org/ws/2/release?release-group={group}&inc=media&fmt=json&limit=25");
+    let b: Browse = http.get(url).asked().await?.error_for_status()?.json().await?;
+    let tracks = |v: &serde_json::Value| v["media"].as_array().map_or(0, |m| m.iter().map(|x| x["track-count"].as_u64().unwrap_or(0)).sum::<u64>());
+    let one = b.releases.iter().filter(|v| tracks(v) > 0).find(|v| v["status"].as_str() == Some("Official")).or_else(|| b.releases.iter().find(|v| tracks(v) > 0));
+    Ok(one.and_then(|v| v["id"].as_str()).map(str::to_string))
+}
+
+/// The record's tracks as a list is held against them: the copy that plays, in its order, each by its title and length.
+/// Blocking.
+fn files_of(served: &crate::serve::Serve, album: &str) -> Result<Vec<Listed>> {
+    Ok(served.library.album_tracks(album)?.into_iter().map(|(_, _, _, title, ms, _, _)| Listed::of(&title, ms as i64)).collect())
+}
+
+/// The source that counts for a record (`identity::counting`), from the lists kept and its files, and kept, unless chosen by
+/// hand. No list, no count: a certain match from 0.16 counts once its list is read and agrees (`read_lists`). Its counting
+/// now. Blocking.
+pub fn work_out_in(cat: &Catalogue, record: i64, files: &[Listed]) -> Result<Option<String>> {
+    let Some(row) = cat.record(record)? else { return Ok(None) };
+    if row.counted_by_hand {
+        return Ok(row.counting);
+    }
+    // No files to hold its lists against: a had record (not served now) counts nothing new; one not had counts its lists in the
+    // design's order (R7, R19; C51a's rule). The one rule for a list read, a match kept and Discogs' facts.
+    if files.is_empty() && row.had {
+        return Ok(row.counting);
+    }
+    let kept = cat.reference_tracks(record)?;
+    let lists: Vec<(&str, &[RefTrack])> = kept.iter().map(|(s, l)| (s.as_str(), l.as_slice())).filter(|(_, l)| !l.is_empty()).collect();
+    let counting = identity::counting(None, &lists, files);
+    if counting != row.counting {
+        cat.set_counting(record, counting.as_deref(), false)?;
+    }
+    Ok(counting)
+}
+
+/// The lists of records waiting since 0.17's step (`Catalogue::lists_to_read`, 0.16's certain matches), up to `n`, the oldest
+/// first: each release's list read (`read`; none, MusicBrainz has no such release), kept where the record still holds the
+/// release, and held against its files (`files`) by `work_out_in`, so MusicBrainz counts only where the list agrees
+/// (`identity::agrees`). Either way the record waits no more: on Health's references item where nothing speaks for it. A
+/// question that fails stops the pass there; the rest wait for the next. How many were read.
+pub async fn read_lists<R, F>(cat: &Arc<Catalogue>, files: Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync>, read: R, n: usize) -> Result<usize>
+where
+    R: Fn(String) -> F,
+    F: std::future::Future<Output = Result<Option<Vec<RefTrack>>>>,
+{
+    let waiting = {
+        let cat = cat.clone();
+        tokio::task::spawn_blocking(move || cat.lists_to_read(n)).await??
+    };
+    let mut read_n = 0;
+    for (record, release) in waiting {
+        let list = match read(release.clone()).await {
+            Ok(list) => list,
+            // MusicBrainz out of reach: the rest wait for the next pass, nothing counted against them.
+            Err(e) if out_of_reach(&e) => {
+                tracing::info!(target: "library", "the lists 0.17's step left: stopped after {read_n}: {e:#}");
+                break;
+            }
+            // This release's question failed: counted against it, and the rest go on (R7).
+            Err(e) => {
+                let cat = cat.clone();
+                if tokio::task::spawn_blocking(move || cat.list_failed(record, LIST_TRIES)).await?? {
+                    tracing::info!(target: "library", "the lists 0.17's step left: record {record} let go of after {LIST_TRIES} tries: {e:#}");
+                }
+                continue;
+            }
+        };
+        read_n += 1;
+        let (cat, files) = (cat.clone(), files.clone());
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            if let Some(list) = list.filter(|l| !l.is_empty())
+                && cat.subject_of(&Ref::new("musicbrainz", "release", &release))? == [ids::record(record)]
+            {
+                cat.set_reference_tracks(record, "musicbrainz", &list)?;
+                // Held against its files as a match kept and Discogs' facts are (`work_out_in`: with none, a had record counts nothing).
+                work_out_in(&cat, record, &files(record)?)?;
+            }
+            cat.list_read(record)
+        })
         .await??;
-    let mut sources = Vec::new();
-    // MusicBrainz: the release matched (certain: it agrees), else the one the files name.
-    let mb = match (&matched, &mbid) {
-        (Some(m), _) => Source {
-            source: "musicbrainz",
-            state: if m.certain && m.tracks.len() == n { "agrees" } else { "differs" },
-            tracks: Some(m.tracks.len()),
-            year: m.year,
-            kind: types.get(&format!("mb:{}", m.release)).and_then(|t| t.0.clone()),
-            url: Some(format!("https://musicbrainz.org/release/{}", m.release)),
-            lengths: (!m.lengths.is_empty()).then(|| m.lengths.iter().map(|l| l.unwrap_or(0) * 1000).collect()),
-            // Found by its name, not named by the files.
-            guessed: mbid.as_deref() != Some(m.release.as_str()),
-            confirmed: false,
-            said: m.why.clone(),
-        },
-        (None, Some(id)) => Source {
-            source: "musicbrainz",
-            state: "found",
-            tracks: None,
-            year: None,
-            kind: types.get(&format!("mb:{id}")).and_then(|t| t.0.clone()),
-            url: Some(format!("https://musicbrainz.org/release/{id}")),
-            lengths: None,
-            guessed: false,
-            confirmed: false,
-            said: "The files name this release".into(),
-        },
-        (None, None) => missing("musicbrainz", "No release matched yet"),
+    }
+    Ok(read_n)
+}
+
+/// How many failed questions a record's list is asked again after, before the record is let go of to Health's item.
+const LIST_TRIES: i64 = 3;
+
+/// Whether an error is MusicBrainz out of reach, not an answer about one release: no answer at all, busy or down (a 5xx), any
+/// other refusal than "no such release" (its rate limit's 429, a 401 or 403 from it or a proxy: R15, R23), or switched off.
+fn out_of_reach(e: &anyhow::Error) -> bool {
+    let busy = |s: reqwest::StatusCode| s.is_server_error() || (s.is_client_error() && !no_such_status(s));
+    e.downcast_ref::<reqwest::Error>().is_some_and(|r| r.is_connect() || r.is_timeout() || r.status().is_some_and(busy)) || !super::switches::is_on(super::switches::MUSICBRAINZ)
+}
+
+/// Whether MusicBrainz answered that it will not give this release: 404, no such release, or 400, an id it refuses (R23, N13).
+fn no_such(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status).is_some_and(no_such_status)
+}
+
+fn no_such_status(s: reqwest::StatusCode) -> bool {
+    s == reqwest::StatusCode::NOT_FOUND || s == reqwest::StatusCode::BAD_REQUEST
+}
+
+/// How many lists `lists_pass` reads in one pass.
+const LISTS: usize = 200;
+
+/// The background asker's pass over the lists 0.17's step left to read (`read_lists`), each a question to MusicBrainz on its
+/// turn, behind a page's (`musicbrainz::behind`, which the asker sets), every other turn at most. How many were read.
+pub async fn lists_pass() -> Result<usize> {
+    let Some(served) = crate::serve::instance() else { return Ok(0) };
+    let cat = served.catalogue().clone();
+    let files: Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync> = Arc::new(move |record| files_of(&served, &ids::record(record)));
+    let read = |release: String| async move {
+        let read = match super::track_fetch::release_by_id(&release).await {
+            Ok(v) => Ok(Some(list_of_release(&v))),
+            // MusicBrainz will not answer for it (no such release, an id it refuses): no list, let go of at once (R7).
+            Err(e) if no_such(&e) => Ok(None),
+            Err(e) => Err(e),
+        };
+        tokio::time::sleep(std::time::Duration::from_secs(super::musicbrainz::PACE_SECS)).await;
+        read
     };
-    sources.push(mb);
-    // Discogs: its release's track list held against the record's (read now: Discogs is paced), else its year.
-    let discogs_tracks = match discogs.as_ref().and_then(|d| d.release) {
-        Some(r) => super::discogs::release_raw(r).await.ok().flatten().map(|v| super::renumber::discogs_release(&v)),
-        None => None,
+    read_lists(&cat, files, read, LISTS).await
+}
+
+/// `work_out_in` for an album of Cratarr's own library. Blocking.
+pub fn work_out(served: &crate::serve::Serve, album: &str) -> Result<Option<String>> {
+    let Some(record) = ids::record_number(album) else { return Ok(None) };
+    work_out_in(served.catalogue(), record, &files_of(served, album)?)
+}
+
+/// A match matching found (`album_matches` keeps it as before), kept as references too: its release and release group, how
+/// the files say (their own release: `files`, else `search`), and the release's own list; the count worked out with it. A
+/// certain match takes its release from another record that only held it by its files or a guess: MusicBrainz matched this
+/// one's tracks to it (one release's files on two records, G1). Its list is kept only where its release is this record's.
+/// Blocking.
+pub fn keep_match(served: &crate::serve::Serve, album: &str, m: &super::matching::Match, list: &[RefTrack], named: bool) -> Result<()> {
+    let Some(record) = ids::record_number(album) else { return Ok(()) };
+    keep_match_in(served.catalogue(), record, album, m, list, named, &files_of(served, album)?)
+}
+
+/// `keep_match`, `files` the record's.
+fn keep_match_in(cat: &Catalogue, record: i64, album: &str, m: &super::matching::Match, list: &[RefTrack], named: bool, files: &[Listed]) -> Result<()> {
+    let how = if named { "files" } else { "search" };
+    let release = Ref::new("musicbrainz", "release", &m.release);
+    let held = if m.certain { cat.take_reference(album, &release, how)? } else { cat.set_reference(album, &release, how)? };
+    if let Some(group) = &m.release_group {
+        cat.set_reference(album, &Ref::new("musicbrainz", "release-group", group), how)?;
+    }
+    if held && !list.is_empty() {
+        cat.set_reference_tracks(record, "musicbrainz", list)?;
+        work_out_in(cat, record, files)?;
+    }
+    Ok(())
+}
+
+/// What Discogs said of a record (`discogs_facts` keeps it as before), kept as references too: its master and main release,
+/// found by the record's name or MusicBrainz's link (the facts do not say which: `search`, which a link at 0.17's step makes
+/// surer), and the main release's list; the count worked out with it. Blocking.
+pub fn keep_discogs(served: &crate::serve::Serve, album: &str, f: &super::discogs::AlbumFacts) -> Result<()> {
+    let Some(record) = ids::record_number(album) else { return Ok(()) };
+    keep_discogs_in(served.catalogue(), record, album, f, &files_of(served, album)?)
+}
+
+/// `keep_discogs`, `files` the record's.
+fn keep_discogs_in(cat: &Catalogue, record: i64, album: &str, f: &super::discogs::AlbumFacts, files: &[Listed]) -> Result<()> {
+    if let Some(master) = f.master {
+        cat.set_reference(album, &Ref::new("discogs", "master", &master.to_string()), "search")?;
+    }
+    let held = match f.release {
+        Some(release) => cat.set_reference(album, &Ref::new("discogs", "release", &release.to_string()), "search")?,
+        None => false,
     };
-    sources.push(match &discogs {
-        Some(d) => {
-            let lengths: Option<Vec<Option<i64>>> = discogs_tracks.as_ref().map(|r| r.media.iter().flat_map(|m| m.tracks.iter().map(|t| t.1.map(|s| i64::from(s) * 1000))).collect());
-            let (state, said) = match (&lengths, d.year, rec.year) {
-                (Some(l), ..) if !l.is_empty() => held(l, &record),
-                (_, Some(a), Some(b)) if a != b => ("differs", format!("Its year is {a}, the record's {b}")),
-                (_, Some(_), Some(_)) => ("agrees", "Its year is the record's".into()),
-                _ => ("found", "Discogs knows it".into()),
-            };
-            Source {
-                source: "discogs",
-                state,
-                tracks: lengths.as_ref().map(Vec::len),
-                year: d.year,
-                kind: None,
-                url: d.url.clone(),
-                lengths: lengths.map(|l| l.into_iter().map(|x| x.unwrap_or(0)).collect()),
-                // Discogs is found by the record's name.
-                guessed: true,
-                confirmed: false,
-                said,
+    if held && !f.tracks.is_empty() {
+        cat.set_reference_tracks(record, "discogs", &f.tracks)?;
+        work_out_in(cat, record, files)?;
+    }
+    Ok(())
+}
+
+/// A source's list held against the record's files, as `identity::agrees` decides: the one measure, so a row never says it
+/// agrees where the count says it does not. Its state, and what it says.
+fn held(list: &[RefTrack], files: &[Listed]) -> (&'static str, String) {
+    if identity::agrees(list, files) {
+        return ("agrees", format!("All {} tracks, each within 2 s", files.len()));
+    }
+    if list.len() != files.len() {
+        return ("differs", format!("{} tracks; the record has {}", list.len(), files.len()));
+    }
+    let off = list.iter().zip(files).filter(|(t, f)| !Listed::of(&t.title, t.length_ms.unwrap_or(f.duration_ms)).same_track(f)).count();
+    ("differs", format!("{off} of {} tracks differ", files.len()))
+}
+
+/// The one reference of `source` that speaks for the record: a link pasted by hand, else its release (or album page) before
+/// its release group or master, else the surest found.
+fn main_ref<'k>(refs: &'k [(Ref, ReferenceRow)], source: &str) -> Option<&'k (Ref, ReferenceRow)> {
+    let kind = |r: &Ref| match r.kind.as_str() {
+        "release" | "album" => 0,
+        "release-group" | "master" => 1,
+        _ => 2,
+    };
+    let how = |h: &str| match h {
+        "hand" => 0,
+        "files" => 1,
+        "link" => 2,
+        _ => 3,
+    };
+    refs.iter().filter(|(r, _)| r.source == source).min_by_key(|(r, row)| (row.how != "hand", kind(r), how(&row.how)))
+}
+
+/// What is kept of a record, as its references are told.
+struct Kept {
+    title: String,
+    artist: String,
+    refs: Vec<(Ref, ReferenceRow)>,
+    lists: Vec<(String, Vec<RefTrack>)>,
+    row: RecordRow,
+    /// Matching's find (`album_matches`): the year it read and why it matched.
+    matched: Option<super::matching::Match>,
+    /// What Discogs said (`discogs_facts`): its year.
+    discogs: Option<super::discogs::AlbumFacts>,
+    heard: Option<super::intake_card::Heard>,
+    types: HashMap<String, (Option<String>, Vec<String>)>,
+    files: Vec<Listed>,
+}
+
+/// A record not had (D18, C54) is no album of the library: its names are the catalogue's. Blocking.
+fn kept(served: &crate::serve::Serve, album: &str, record: i64) -> Result<Kept> {
+    let cat = served.catalogue();
+    let row = cat.record(record)?.context("No such album in Cratarr's own library")?;
+    let (title, artist) = match served.library.album(album)? {
+        Some(rec) => (rec.name, rec.artist),
+        None if !row.had => (row.title.clone(), row.artist.clone()),
+        None => bail!("No such album in Cratarr's own library"),
+    };
+    let matched = served.userdata.album_matches(&[album.to_string()])?.remove(album).and_then(|(_, j)| serde_json::from_str(&j?).ok());
+    Ok(Kept {
+        title,
+        artist,
+        refs: cat.references_of(album)?,
+        lists: cat.reference_tracks(record)?,
+        row,
+        matched,
+        discogs: super::discogs_facts::album_kept(served, album).ok().flatten(),
+        heard: served.userdata.intake_heard(album, None)?.and_then(|(_, j)| serde_json::from_str(&j).ok()),
+        types: served.userdata.release_types()?,
+        files: files_of(served, album)?,
+    })
+}
+
+/// One source's row, from its reference and its list.
+fn source_of(source: &'static str, k: &Kept, found: &str, missing: &str) -> Source {
+    let main = main_ref(&k.refs, source);
+    let list = k.lists.iter().find(|(s, _)| s == source).map(|(_, l)| l.as_slice()).filter(|l| !l.is_empty());
+    let (state, said) = match (list, main) {
+        // A record not had (D18): no files to hold its list against.
+        (Some(l), _) if !k.row.had => ("found", format!("{} tracks", l.len())),
+        (Some(l), _) => held(l, &k.files),
+        (None, Some((_, row))) if row.how == "hand" => ("agrees", "Pasted by hand".to_string()),
+        (None, Some(_)) => ("found", found.to_string()),
+        (None, None) => ("missing", missing.to_string()),
+    };
+    Source {
+        source,
+        state,
+        tracks: list.map(<[RefTrack]>::len),
+        year: None,
+        kind: None,
+        url: main.and_then(|(r, _)| url_of(r)),
+        lengths: list.map(|l| l.iter().map(|t| t.length_ms.unwrap_or(0)).collect()),
+        guessed: main.is_some_and(|(_, row)| row.how == "search"),
+        confirmed: main.is_some_and(|(_, row)| row.confirmed),
+        said,
+    }
+}
+
+/// Every source's row, `bandcamp_year` as its page said it when read now.
+fn sources(k: &Kept, bandcamp_year: Option<u32>) -> Vec<Source> {
+    let mut mb = source_of("musicbrainz", k, "Found by its name", "No release matched yet");
+    if let Some((r, row)) = main_ref(&k.refs, "musicbrainz") {
+        let matched = k.matched.as_ref().filter(|m| m.release == r.value || m.release_group.as_deref() == Some(r.value.as_str()));
+        let release = matched.map(|m| m.release.as_str()).or((r.kind == "release").then_some(r.value.as_str()));
+        mb.year = matched.and_then(|m| m.year);
+        mb.kind = release.and_then(|rel| k.types.get(&format!("mb:{rel}"))).and_then(|t| t.0.clone());
+        if mb.state == "found" {
+            match (row.how.as_str(), matched) {
+                ("files", _) => mb.said = "The files name this release".into(),
+                (_, Some(m)) => mb.said = m.why.clone(),
+                _ => {}
             }
         }
-        None => missing("discogs", "Discogs has not said"),
-    });
-    // Bandcamp: its page, looked up now where it never was (kept a month), its track list held against the record's.
-    let page = match chosen.links.get("bandcamp") {
-        Some(l) => Some(l.clone()),
-        None => super::discover::find_on_bandcamp(&served, &rec.artist, &rec.name, matched.as_ref().and_then(|m| m.release_group.as_deref())).await.ok().flatten(),
-    };
-    sources.push(match page {
-        Some(url) => {
-            let read = crate::bandcamp::Bandcamp::get().album(&url).await.ok();
-            let lengths: Option<Vec<Option<i64>>> = read.as_ref().map(|a| a.tracks.iter().map(|t| t.duration_secs.map(|s| (s * 1000.0).round() as i64)).collect());
-            let (state, said) = match &lengths {
-                Some(l) if !l.is_empty() => held(l, &record),
-                _ => ("found", "Its page on Bandcamp".into()),
-            };
-            Source {
-                source: "bandcamp",
-                state,
-                tracks: lengths.as_ref().map(Vec::len),
-                year: read.as_ref().and_then(|a| a.released.as_deref()).and_then(|d| d.get(..4)?.parse().ok()),
-                kind: None,
-                url: Some(url),
-                lengths: lengths.map(|l| l.into_iter().map(|x| x.unwrap_or(0)).collect()),
-                // Bandcamp is found through its search box's answers.
-                guessed: true,
-                confirmed: false,
-                said,
-            }
-        }
-        None => missing("bandcamp", "No page found on Bandcamp"),
-    });
-    // AcoustID: its tracks as heard (the intake's hearing).
-    sources.push(match heard.filter(|h| !h.no_acoustid) {
+    }
+    let mut discogs = source_of("discogs", k, "Discogs knows it", "Discogs has not said");
+    discogs.year = main_ref(&k.refs, "discogs").and(k.discogs.as_ref()).and_then(|d| d.year);
+    let mut bandcamp = source_of("bandcamp", k, "Its page on Bandcamp", "No page found on Bandcamp");
+    bandcamp.year = bandcamp_year;
+    // AcoustID: its tracks as heard (the intake's hearing), no reference of its own.
+    let acoustid = match k.heard.as_ref().filter(|h| !h.no_acoustid) {
         Some(h) => {
             let known = h.tracks.iter().filter(|t| !t.recordings.is_empty()).count();
             Source {
@@ -227,27 +732,66 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
                 said: format!("AcoustID knows {known} of {} tracks", h.tracks.len()),
             }
         }
-        None => missing("acoustid", "Not heard yet"),
-    });
-    // A link pasted by hand stands for its source (no guess); a guess confirmed once says so.
-    for s in &mut sources {
-        if let Some(url) = chosen.links.get(s.source) {
-            s.url = Some(url.clone());
-            s.guessed = false;
-            if s.state == "missing" || s.state == "found" {
-                s.state = "agrees";
-                s.said = "Pasted by hand".into();
-            }
-        }
-        if s.guessed && chosen.confirmed.contains(s.source) {
-            s.confirmed = true;
-        }
-    }
-    Ok(References { album: album.to_string(), title: rec.name, artist: rec.artist, sources, counting: chosen.counting, by_hand: chosen.by_hand })
+        None => Source { source: "acoustid", state: "missing", tracks: None, year: None, kind: None, url: None, lengths: None, guessed: false, confirmed: false, said: "Not heard yet".into() },
+    };
+    vec![mb, discogs, bandcamp, acoustid]
 }
 
-fn missing(source: &'static str, said: &str) -> Source {
-    Source { source, state: "missing", tracks: None, year: None, kind: None, url: None, lengths: None, guessed: false, confirmed: false, said: said.into() }
+/// A record's references as kept, a list not kept yet read now (Bandcamp's page looked up when the record is opened).
+pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
+    let served = app.served.clone().context("Cratarr's own library is not open")?;
+    let record = ids::record_number(album).context("No such album in Cratarr's own library")?;
+    let (s, a) = (served.clone(), album.to_string());
+    let k = tokio::task::spawn_blocking(move || kept(&s, &a, record)).await??;
+    let mut read: Vec<(String, Vec<RefTrack>)> = Vec::new();
+    for source in ["musicbrainz", "discogs"] {
+        if k.lists.iter().any(|(s, l)| s == source && !l.is_empty()) {
+            continue;
+        }
+        let Some((r, _)) = main_ref(&k.refs, source) else { continue };
+        match read_list(r).await {
+            Ok(Some(list)) if !list.is_empty() => read.push((source.to_string(), list)),
+            Ok(_) => {}
+            Err(e) => tracing::debug!("references: {source} of {album} not read: {e:#}"),
+        }
+    }
+    // Bandcamp: its page as kept, else looked up now (kept a month, a miss too), and read, as when it was first built.
+    let kept_page = main_ref(&k.refs, "bandcamp").map(|(r, _)| r.value.clone());
+    let page = match &kept_page {
+        Some(p) => Some(p.clone()),
+        None => {
+            let group = k.refs.iter().find(|(r, _)| r.source == "musicbrainz" && r.kind == "release-group").map(|(r, _)| r.value.clone()).or_else(|| k.matched.as_ref().and_then(|m| m.release_group.clone()));
+            super::discover::find_on_bandcamp(&served, &k.artist, &k.title, group.as_deref()).await.ok().flatten().map(|p| crate::bandcamp::album_page(&p).unwrap_or(p))
+        }
+    };
+    let page_read = match &page {
+        Some(p) => crate::bandcamp::Bandcamp::get().album(p).await.ok(),
+        None => None,
+    };
+    let year = page_read.as_ref().and_then(|a| a.released.as_deref()).and_then(|d| d.get(..4)?.parse().ok());
+    if let Some(a) = &page_read {
+        let list = list_of_bandcamp(a);
+        if !k.lists.iter().any(|(s, l)| s == "bandcamp" && *l == list) {
+            read.push(("bandcamp".into(), list));
+        }
+    }
+    let found = page.filter(|_| kept_page.is_none());
+    let (s, a) = (served.clone(), album.to_string());
+    let k = tokio::task::spawn_blocking(move || -> Result<Kept> {
+        let cat = s.catalogue();
+        if let Some(p) = &found {
+            cat.set_reference(&a, &Ref::new("bandcamp", "album", p), "search")?;
+        }
+        for (source, list) in &read {
+            cat.set_reference_tracks(record, source, list)?;
+        }
+        if !read.is_empty() {
+            work_out(&s, &a)?;
+        }
+        kept(&s, &a, record)
+    })
+    .await??;
+    Ok(References { album: album.to_string(), title: k.title.clone(), artist: k.artist.clone(), sources: sources(&k, year), counting: k.row.counting.clone(), by_hand: k.row.checked_by_hand })
 }
 
 /// What the administrator chose of a record's references: the source that counts ("Use this"; none: none chosen), a
@@ -265,82 +809,89 @@ pub struct Choose {
     pub confirm: Option<String>,
 }
 
+/// What `choose` writes, in the catalogue, `files` the record's: a source chosen counts by hand, and taken back the count is
+/// worked out again; a link pasted is a reference by hand, and its source counts. Whether the record became checked by hand
+/// now. Blocking.
+fn chose(cat: &Catalogue, record: i64, album: &str, c: &Choose, files: &[Listed]) -> Result<bool> {
+    if let Some(counting) = &c.counting {
+        if let Some(src) = counting
+            && !SOURCES.contains(&src.as_str())
+        {
+            bail!("No such source: {src}");
+        }
+        cat.set_counting(record, counting.as_deref(), true)?;
+        if counting.is_none() {
+            work_out_in(cat, record, files)?;
+        }
+    }
+    if let Some(link) = c.link.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+        let r = ref_of_link(link).context("Paste a release's page on MusicBrainz or Discogs, or an album's on Bandcamp")?;
+        cat.set_reference(album, &r, "hand")?;
+        cat.set_counting(record, Some(&r.source), true)?;
+        // The list its source kept was another reference's (D18): read by the link from now on, so Search now judges by it.
+        cat.forget_reference_tracks(record, &r.source)?;
+    }
+    if let Some(src) = &c.confirm {
+        if !SOURCES.contains(&src.as_str()) {
+            bail!("No such source: {src}");
+        }
+        cat.confirm_reference(album, src)?;
+    }
+    let was = cat.record(record)?.is_some_and(|r| r.checked_by_hand);
+    if let Some(b) = c.by_hand {
+        cat.set_checked_by_hand(record, b)?;
+    }
+    Ok(c.by_hand == Some(true) && !was)
+}
+
 pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<References> {
     let served = app.served.clone().context("Cratarr's own library is not open")?;
+    let record = ids::record_number(album).context("No such album in Cratarr's own library")?;
     let (s, a) = (served.clone(), album.to_string());
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        s.library.album(&a)?.context("No such album in Cratarr's own library")?;
-        let mut kept = chosen_of(&s, &a)?;
-        if let Some(counting) = c.counting {
-            if let Some(src) = &counting
-                && !SOURCES.contains(&src.as_str())
-            {
-                bail!("No such source: {src}");
-            }
-            kept.counting = counting;
-        }
-        if let Some(link) = c.link.map(|l| l.trim().to_string()).filter(|l| !l.is_empty()) {
-            let src = source_of_link(&link).context("Paste a release's page on MusicBrainz or Discogs, or an album's on Bandcamp")?;
-            kept.links.insert(src.to_string(), link);
-            kept.counting = Some(src.to_string());
-        }
-        if let Some(src) = c.confirm {
-            if !SOURCES.contains(&src.as_str()) {
-                bail!("No such source: {src}");
-            }
-            kept.confirmed.insert(src);
-        }
-        let checked = c.by_hand == Some(true) && !kept.by_hand;
-        if let Some(b) = c.by_hand {
-            kept.by_hand = b;
-        }
-        keep(&s, &a, &kept)?;
-        // Checked by hand: the record is its own reference for its type and year from now on, as it shows them (set as
-        // by hand, so no source's guess changes them after).
-        if checked {
-            let rec = s.library.album(&a)?.context("No such album in Cratarr's own library")?;
-            let mut facts: Vec<(String, Option<serde_json::Value>)> = Vec::new();
-            if let Some(kind) = rec.release.kind.clone() {
-                facts.push(("type".into(), Some(serde_json::Value::String(kind))));
-            }
-            if let Some(y) = rec.year.filter(|y| *y >= 1000) {
-                facts.push(("year".into(), Some(serde_json::json!(y))));
-            }
-            if !facts.is_empty() {
-                s.userdata.set_overrides(std::slice::from_ref(&a), &facts, super::moment::now_secs())?;
-                s.refresh()?;
-            }
-        }
-        Ok(())
-    })
-    .await??;
+    tokio::task::spawn_blocking(move || choose_in(&s, &a, record, &c)).await??;
     app.collection.refresh().await;
     app.collection.tell_changed();
     of(app, album).await
 }
 
-/// The records no reference speaks for (Health's References item): none agreeing as kept (MusicBrainz's release
-/// matched with every track, or named by the files; a link pasted), none chosen, not checked by hand. Blocking.
+/// `choose` in the catalogue and the user data. A record not had (D18, C54) is no album of the library: its choice is the
+/// catalogue's alone, with no files to write its facts to. Blocking.
+fn choose_in(s: &crate::serve::Serve, a: &str, record: i64, c: &Choose) -> Result<()> {
+    let rec = s.library.album(a)?;
+    if rec.is_none() && !s.catalogue().record(record)?.is_some_and(|r| !r.had) {
+        bail!("No such album in Cratarr's own library");
+    }
+    let checked = chose(s.catalogue(), record, a, c, &files_of(s, a)?)?;
+    // Checked by hand: the record is its own reference for its type and year from now on, as it shows them (set as
+    // by hand, so no source's guess changes them after).
+    if checked && let Some(rec) = rec {
+        let mut facts: Vec<(String, Option<serde_json::Value>)> = Vec::new();
+        if let Some(kind) = rec.release.kind.clone() {
+            facts.push(("type".into(), Some(serde_json::Value::String(kind))));
+        }
+        if let Some(y) = rec.year.filter(|y| *y >= 1000) {
+            facts.push(("year".into(), Some(serde_json::json!(y))));
+        }
+        if !facts.is_empty() {
+            s.userdata.set_overrides(&[a.to_string()], &facts, super::moment::now_secs())?;
+            s.refresh()?;
+        }
+    }
+    Ok(())
+}
+
+/// The records no reference speaks for (Health's References item): the catalogue's one query (`Catalogue::unreferenced`),
+/// of those the library lists, each as it is named there. Blocking.
 pub fn unreferenced(served: &crate::serve::Serve) -> Result<Vec<(String, String, String)>> {
+    let listed: std::collections::HashSet<String> = served.library.album_ids()?.into_iter().collect();
     let mut out = Vec::new();
-    let ids = served.library.album_ids()?;
-    let matches = served.userdata.album_matches(&ids)?;
-    let chosen = served.userdata.all_record_references()?;
-    for id in ids {
-        if let Some(c) = chosen.get(&id).and_then(|j| serde_json::from_str::<Chosen>(j).ok())
-            && (c.by_hand || c.counting.is_some() || !c.links.is_empty())
-        {
+    for record in served.catalogue().unreferenced(super::switches::is_on(super::switches::MUSICBRAINZ))? {
+        let album = ids::record(record);
+        if !listed.contains(&album) {
             continue;
         }
-        let Some((mbid, artist, name)) = served.library.album_names(&id)? else { continue };
-        if mbid.as_deref().is_some_and(super::discogs::is_mbid) {
-            continue;
-        }
-        let certain = matches.get(&id).and_then(|(_, j)| serde_json::from_str::<super::matching::Match>(j.as_deref()?).ok()).is_some_and(|m| m.certain);
-        if certain {
-            continue;
-        }
-        out.push((id, name, artist));
+        let Some((_, artist, name)) = served.library.album_names(&album)? else { continue };
+        out.push((album, name, artist));
     }
     Ok(out)
 }
@@ -350,22 +901,517 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_pasted_link_is_known_by_its_source() {
-        assert_eq!(source_of_link("https://musicbrainz.org/release/0b6f4bd4-2f0c-4b7e-9a51-6c1c0d8f7a11"), Some("musicbrainz"));
-        assert_eq!(source_of_link("https://www.discogs.com/release/123-Air-Moon-Safari"), Some("discogs"));
-        assert_eq!(source_of_link("https://www.discogs.com/master/456"), Some("discogs"));
-        assert_eq!(source_of_link("https://air.bandcamp.com/album/moon-safari"), Some("bandcamp"));
-        assert_eq!(source_of_link("https://air.bandcamp.com/track/la-femme"), None, "a track, not an album");
-        assert_eq!(source_of_link("https://example.com/release/1"), None);
-        assert_eq!(source_of_link("not a link"), None);
+    fn a_pasted_link_names_its_source_kind_and_value() {
+        let r = |url: &str| ref_of_link(url).map(|r| (r.source, r.kind, r.value));
+        let named = |s: &str, k: &str, v: &str| Some((s.to_string(), k.to_string(), v.to_string()));
+        let mbid = "0b6f4bd4-2f0c-4b7e-9a51-6c1c0d8f7a11";
+        assert_eq!(r(&format!("https://musicbrainz.org/release/{mbid}")), named("musicbrainz", "release", mbid));
+        assert_eq!(r(&format!("https://beta.musicbrainz.org/release-group/{}/", mbid.to_uppercase())), named("musicbrainz", "release-group", mbid));
+        assert_eq!(r("https://musicbrainz.org/release/not-an-id"), None);
+        assert_eq!(r("https://www.discogs.com/release/123-Air-Moon-Safari"), named("discogs", "release", "123"));
+        assert_eq!(r("https://www.discogs.com/de/master/456"), named("discogs", "master", "456"));
+        assert_eq!(r("https://www.discogs.com/Air-Moon-Safari/master/0456"), named("discogs", "master", "456"));
+        assert_eq!(r("https://www.discogs.com/master/view/456"), named("discogs", "master", "456"), "Discogs' older link, kept by 0.16");
+        assert_eq!(r("  https://air.bandcamp.com/album/moon-safari?from=search  "), named("bandcamp", "album", "https://air.bandcamp.com/album/moon-safari"));
+        assert_eq!(r("https://air.bandcamp.com/track/la-femme"), None, "a track, not an album");
+        assert_eq!(r("https://example.org/release/1"), None);
+        assert_eq!(r("not a link"), None);
     }
 
+    fn list(tracks: &[(&str, Option<i64>)]) -> Vec<RefTrack> {
+        tracks.iter().zip(1..).map(|((title, length_ms), position)| RefTrack { disc: 1, position, title: title.to_string(), length_ms: *length_ms, recording: None }).collect()
+    }
+
+    fn files(tracks: &[(&str, i64)]) -> Vec<Listed> {
+        tracks.iter().map(|(t, ms)| Listed::of(t, *ms)).collect()
+    }
+
+    /// A row agrees exactly where the count would take it: `identity::agrees`, titles and two seconds.
     #[test]
-    fn a_track_list_agrees_where_as_many_tracks_each_near() {
-        let record = [200_000, 180_000];
-        assert_eq!(held(&[Some(201_000), Some(182_000)], &record).0, "agrees");
-        assert_eq!(held(&[Some(201_000), Some(190_000)], &record), ("differs", "1 of 2 lengths differ".to_string()));
-        assert_eq!(held(&[Some(201_000)], &record), ("differs", "1 tracks; the record has 2".to_string()));
-        assert_eq!(held(&[None, Some(180_000)], &record).0, "agrees", "a length it does not give is not held against it");
+    fn a_row_agrees_by_the_one_measure() {
+        let held_files = files(&[("Slack Water", 200_000), ("Neap", 180_000)]);
+        for (l, agrees) in [
+            (list(&[("Slack Water", Some(201_000)), ("Neap", Some(181_000))]), true),
+            (list(&[("Slack Water", None), ("Neap (feat. A Guest)", Some(180_000))]), true),
+            (list(&[("Slack Water", Some(201_000)), ("Neap", Some(184_000))]), false),
+            (list(&[("Slack Water", Some(200_000)), ("Spring Tide", Some(180_000))]), false),
+            (list(&[("Slack Water", Some(200_000))]), false),
+        ] {
+            assert_eq!(held(&l, &held_files).0 == "agrees", agrees, "{l:?}");
+            assert_eq!(identity::agrees(&l, &held_files), agrees);
+        }
+        assert_eq!(held(&list(&[("Slack Water", Some(200_000)), ("Spring Tide", Some(180_000))]), &held_files).1, "1 of 2 tracks differ");
+        assert_eq!(held(&list(&[("Slack Water", Some(200_000))]), &held_files).1, "1 tracks; the record has 2");
+    }
+
+    /// A record had: its tracks on it (no files are read here).
+    fn had(cat: &Catalogue, title: &str, tracks: usize) -> (i64, String) {
+        let record = cat.record_for_tests(title, tracks);
+        (record, ids::record(record))
+    }
+
+    /// 0.14's "Use this" before whatever agrees, a list arriving or not; taken back, the count is worked out again.
+    #[test]
+    fn a_hand_choice_comes_first() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (record, album) = had(&cat, "Tide Tables", 2);
+        let tracks = files(&[("Slack Water", 200_000), ("Neap", 180_000)]);
+        let choose = |counting: Option<&str>| Choose { counting: Some(counting.map(str::to_string)), ..Choose::default() };
+        chose(&cat, record, &album, &choose(Some("discogs")), &tracks).unwrap();
+        cat.set_reference_tracks(record, "musicbrainz", &list(&[("Slack Water", Some(200_000)), ("Neap", Some(180_000))])).unwrap();
+        assert_eq!(work_out_in(&cat, record, &tracks).unwrap().as_deref(), Some("discogs"), "a list that agrees does not take its place");
+        let row = cat.record(record).unwrap().unwrap();
+        assert_eq!((row.counting.as_deref(), row.counted_by_hand), (Some("discogs"), true));
+        chose(&cat, record, &album, &choose(None), &tracks).unwrap();
+        let row = cat.record(record).unwrap().unwrap();
+        assert_eq!((row.counting.as_deref(), row.counted_by_hand), (Some("musicbrainz"), false), "taken back: the one that fits");
+        assert!(chose(&cat, record, &album, &choose(Some("nowhere")), &tracks).is_err());
+    }
+
+    /// A link pasted names what it names: a reference by hand, its source counting, taken from a record that guessed it.
+    #[test]
+    fn a_pasted_link_is_a_hand_reference() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let ((record, album), (_, other)) = (had(&cat, "Two Rooms", 2), had(&cat, "Two Rooms (Other)", 2));
+        let release = Ref::new("discogs", "release", "2000002");
+        assert!(cat.set_reference(&other, &release, "search").unwrap());
+        let paste = Choose { link: Some(" https://www.discogs.com/release/2000002-Noor-Field-Two-Rooms ".into()), ..Choose::default() };
+        chose(&cat, record, &album, &paste, &[]).unwrap();
+        assert_eq!(cat.subject_of(&release).unwrap(), [album.clone()]);
+        let refs = cat.references_of(&album).unwrap();
+        assert_eq!(refs.iter().map(|(r, row)| (r.clone(), row.how.as_str())).collect::<Vec<_>>(), [(release.clone(), "hand")]);
+        let row = cat.record(record).unwrap().unwrap();
+        assert_eq!((row.counting.as_deref(), row.counted_by_hand), (Some("discogs"), true));
+        let k = Kept { title: String::new(), artist: String::new(), refs, lists: Vec::new(), row, matched: None, discogs: None, heard: None, types: HashMap::new(), files: Vec::new() };
+        let discogs = &sources(&k, None)[1];
+        assert_eq!((discogs.state, discogs.said.as_str(), discogs.guessed), ("agrees", "Pasted by hand", false));
+        assert_eq!(discogs.url.as_deref(), Some("https://www.discogs.com/release/2000002"));
+        assert!(chose(&cat, record, &album, &Choose { link: Some("https://example.org/x".into()), ..Choose::default() }, &[]).is_err());
+    }
+
+    fn matched(release: &str, certain: bool) -> crate::app::matching::Match {
+        crate::app::matching::Match {
+            release: release.into(),
+            release_group: Some("00000000-0000-4000-8000-000000000101".into()),
+            title: "Tide Tables".into(),
+            artist: "Glass Harbour".into(),
+            artist_id: None,
+            year: Some(2012),
+            certain,
+            why: String::new(),
+            tracks: Vec::new(),
+            lengths: Vec::new(),
+        }
+    }
+
+    /// A match kept as references, with the release's own list (C43b). A likely one takes nothing another record holds; a
+    /// certain one does, as MusicBrainz matched its tracks to it.
+    #[test]
+    fn a_match_becomes_a_reference_with_its_tracklist() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let ((record, album), (_, other)) = (had(&cat, "Tide Tables", 2), had(&cat, "Tide Tables (Bonus)", 3));
+        let tracks = files(&[("Slack Water", 200_000), ("Neap", 180_000)]);
+        let own = list(&[("Slack Water", Some(200_400)), ("Neap", Some(180_000))]);
+        let release = Ref::new("musicbrainz", "release", "00000000-0000-4000-8000-000000000001");
+        cat.set_reference(&other, &release, "files").unwrap();
+        keep_match_in(&cat, record, &album, &matched(&release.value, false), &own, false, &tracks).unwrap();
+        assert_eq!(cat.subject_of(&release).unwrap(), [other.clone()], "a likely match takes nothing");
+        assert!(cat.reference_tracks(record).unwrap().is_empty(), "nor keeps a list of a release not its own");
+        keep_match_in(&cat, record, &album, &matched(&release.value, true), &own, false, &tracks).unwrap();
+        assert_eq!(cat.subject_of(&release).unwrap(), [album.clone()], "a certain match: its tracks are the release's");
+        let how = || cat.references_of(&album).unwrap().into_iter().map(|(r, row)| (r.kind, row.how)).collect::<Vec<_>>();
+        assert_eq!(how(), [("release".to_string(), "search".to_string()), ("release-group".to_string(), "search".to_string())]);
+        assert_eq!(cat.reference_tracks(record).unwrap(), [("musicbrainz".to_string(), own.clone())], "the release's titles");
+        assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"), "worked out as it arrived");
+        keep_match_in(&cat, record, &album, &matched(&release.value, true), &own, true, &tracks).unwrap();
+        assert!(how().iter().all(|(_, how)| how == "files"), "matched again by its files' own release: surer");
+    }
+
+    /// The count is worked out as each list arrives, and follows the lists (C43b): none fitting, none counting.
+    #[test]
+    fn counting_follows_a_new_list() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (record, album) = had(&cat, "Tide Tables", 2);
+        let tracks = files(&[("Slack Water", 200_000), ("Neap", 180_000)]);
+        let fits = list(&[("Slack Water", Some(200_000)), ("Neap", Some(180_000))]);
+        let bonus = list(&[("Slack Water", Some(200_000)), ("Neap", Some(180_000)), ("Bonus", Some(90_000))]);
+        let counting = || cat.record(record).unwrap().unwrap().counting;
+        assert_eq!(work_out_in(&cat, record, &tracks).unwrap(), None, "no list");
+        let discogs = crate::app::discogs::AlbumFacts { master: Some(1000001), release: Some(2000001), tracks: bonus.clone(), ..Default::default() };
+        keep_discogs_in(&cat, record, &album, &discogs, &tracks).unwrap();
+        assert_eq!(counting(), None, "Discogs' main release has a bonus track");
+        assert_eq!(cat.references_of(&album).unwrap().len(), 2, "its master and release, kept all the same");
+        keep_match_in(&cat, record, &album, &matched("00000000-0000-4000-8000-000000000001", true), &fits, false, &tracks).unwrap();
+        assert_eq!(counting().as_deref(), Some("musicbrainz"));
+        cat.set_reference_tracks(record, "bandcamp", &fits).unwrap();
+        work_out_in(&cat, record, &tracks).unwrap();
+        assert_eq!(counting().as_deref(), Some("musicbrainz"), "of two that fit, the first in order");
+        cat.set_reference_tracks(record, "musicbrainz", &bonus).unwrap();
+        work_out_in(&cat, record, &tracks).unwrap();
+        assert_eq!(counting().as_deref(), Some("bandcamp"), "MusicBrainz's read again with another track");
+        cat.set_reference_tracks(record, "bandcamp", &bonus).unwrap();
+        work_out_in(&cat, record, &tracks).unwrap();
+        assert_eq!(counting(), None, "none fits: none counts");
+        chose(&cat, record, &album, &Choose { counting: Some(Some("discogs".into())), ..Choose::default() }, &tracks).unwrap();
+        cat.set_reference_tracks(record, "musicbrainz", &fits).unwrap();
+        work_out_in(&cat, record, &tracks).unwrap();
+        assert_eq!(counting().as_deref(), Some("discogs"), "chosen by hand, whatever arrives");
+    }
+
+    /// R19 (R7's rest): with no files to hold its lists against, a had record (not served now) counts nothing new, and a record not
+    /// had counts its lists in the design's order (C51a's rule): one rule for a list read, a match kept and Discogs' facts.
+    #[test]
+    fn with_no_files_a_had_record_counts_nothing_and_one_not_had_counts_in_order() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (had, not_had) = (cat.record_for_tests("Signal", 1), cat.record_for_tests("Lamplight", 0));
+        for record in [had, not_had] {
+            cat.set_reference_tracks(record, "bandcamp", &list(&[("Lamplight", Some(200_000))])).unwrap();
+            cat.set_reference_tracks(record, "discogs", &list(&[("Lamplight", Some(200_000))])).unwrap();
+        }
+        assert_eq!(work_out_in(&cat, had, &[]).unwrap(), None);
+        assert_eq!(cat.record(had).unwrap().unwrap().counting, None);
+        assert_eq!(work_out_in(&cat, not_had, &[]).unwrap().as_deref(), Some("discogs"), "Discogs before Bandcamp");
+    }
+
+    /// A record waiting for a list, its release its own, and a list of `titles` for it.
+    fn waiting(cat: &Catalogue, title: &str, release: &str) -> i64 {
+        let record = cat.record_for_tests(title, 1);
+        assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release", release), "search").unwrap());
+        cat.wait_for_list_for_tests(record, release);
+        record
+    }
+
+    fn files_none() -> Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync> {
+        Arc::new(|_| Ok(Vec::new()))
+    }
+
+    /// R7 (N3): a list read for a record with no files to hold it against (not served now) is kept, and nothing counts by it:
+    /// the record waits no more, and is on Health's item.
+    #[tokio::test]
+    async fn a_list_read_with_no_files_counts_nothing() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = waiting(&cat, "Signal", "r7");
+        let read = |_| async { Ok(Some(list(&[("Signal", Some(180_000))]))) };
+        assert_eq!(read_lists(&cat, files_none(), read, 10).await.unwrap(), 1);
+        assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "no files, no count");
+        assert_eq!(cat.reference_tracks(record).unwrap().len(), 1, "the list kept");
+        assert!(cat.lists_to_read(10).unwrap().is_empty());
+        assert_eq!(cat.unreferenced(true).unwrap(), [record]);
+    }
+
+    /// R7 (N4): a release whose question always fails lets the rest through: the others are read in the same pass, and it is
+    /// let go of after its tries, onto Health's item; MusicBrainz refusing it (a 4xx, `lists_pass`) lets it go at once.
+    #[tokio::test]
+    async fn a_release_that_always_fails_lets_the_rest_through() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (broken, fine) = (waiting(&cat, "Broken", "r1"), waiting(&cat, "Signal", "r2"));
+        let files: Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync> = Arc::new(|_| Ok(files(&[("Signal", 180_000)])));
+        let read = |release: String| async move { if release == "r1" { anyhow::bail!("not understood") } else { Ok(Some(list(&[("Signal", Some(180_000))]))) } };
+        assert_eq!(read_lists(&cat, files.clone(), read, 10).await.unwrap(), 1, "the other read in the same pass");
+        assert_eq!(cat.record(fine).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"));
+        assert_eq!(cat.lists_to_read(10).unwrap(), [(broken, "r1".to_string())], "tried again later");
+        for _ in 1..LIST_TRIES {
+            read_lists(&cat, files.clone(), read, 10).await.unwrap();
+        }
+        assert!(cat.lists_to_read(10).unwrap().is_empty(), "let go of after its tries");
+        assert_eq!(cat.unreferenced(true).unwrap(), [broken]);
+    }
+
+    /// A server of the test's own answering every question with `status`: what MusicBrainz busy, down or limiting its rate is to
+    /// a reader, as `error_for_status` gives it.
+    async fn serving(status: u16) -> String {
+        let app = axum::Router::new().fallback(move || async move { axum::http::StatusCode::from_u16(status).unwrap() });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/ws/2/release/r1", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        url
+    }
+
+    /// The error a reader meets asking `url`.
+    async fn asked(url: String) -> anyhow::Error {
+        reqwest::get(url).await.unwrap().error_for_status().unwrap_err().into()
+    }
+
+    /// R15 (F4): MusicBrainz busy or down (a 5xx) or limiting its rate (a 429) is out of reach, never the release's own failure:
+    /// each pass stops at it, and no record waiting for a list is counted against or let go of, however many passes it lasts.
+    #[tokio::test]
+    async fn a_musicbrainz_outage_lets_no_record_go() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let mut waits = vec![waiting(&cat, "Signal", "r1"), waiting(&cat, "Lamplight", "r2")];
+        waits.sort();
+        for status in [503, 502, 429] {
+            let url = serving(status).await;
+            let read = |_| {
+                let url = url.clone();
+                async move { Err(asked(url).await) }
+            };
+            for _ in 0..=LIST_TRIES {
+                assert_eq!(read_lists(&cat, files_none(), read, 10).await.unwrap(), 0);
+            }
+            let mut left: Vec<i64> = cat.lists_to_read(10).unwrap().into_iter().map(|(r, _)| r).collect();
+            left.sort();
+            assert_eq!(left, waits, "{status}: both still wait");
+        }
+        assert!(cat.unreferenced(true).unwrap().is_empty(), "none on Health's item");
+    }
+
+    /// R23 (N13): a 401 or 403 from MusicBrainz, or a proxy in front of it, is out of reach, not "no such release": no record waiting
+    /// for a list is let go of, however many passes it lasts; a 404 or a 400 is that answer.
+    #[tokio::test]
+    async fn a_forbidden_answer_lets_no_record_go() {
+        for status in [403, 401] {
+            assert!(!no_such(&asked(serving(status).await).await), "{status}");
+        }
+        assert!(no_such(&asked(serving(404).await).await) && no_such(&asked(serving(400).await).await));
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let mut waits = vec![waiting(&cat, "Signal", "r1"), waiting(&cat, "Lamplight", "r2")];
+        waits.sort();
+        let url = serving(403).await;
+        let read = |_| {
+            let url = url.clone();
+            async move { Err(asked(url).await) }
+        };
+        for _ in 0..=LIST_TRIES {
+            read_lists(&cat, files_none(), read, 10).await.unwrap();
+        }
+        let mut left: Vec<i64> = cat.lists_to_read(10).unwrap().into_iter().map(|(r, _)| r).collect();
+        left.sort();
+        assert_eq!(left, waits);
+    }
+
+    /// R23 (N16): with MusicBrainz switched off, a record not had is judged by its next list in the order; one MusicBrainz alone
+    /// counts is out of reach until it is on again, nothing said against it.
+    #[tokio::test]
+    async fn with_musicbrainz_off_a_record_is_judged_by_its_next_list() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let both = wanted(&cat, "Night Walks", &[("musicbrainz", "release", "r5"), ("discogs", "release", "2000005")]);
+        let off = |r: Ref| {
+            std::future::ready(if r.source == "musicbrainz" { Err(anyhow::Error::from(SwitchedOff("MusicBrainz"))) } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None))) })
+        };
+        assert_eq!(tracklist(&cat, both, off).await.unwrap().unwrap().timed.unwrap().0, "discogs");
+        let alone = wanted(&cat, "Undated", &[("musicbrainz", "release", "r6")]);
+        assert!(tracklist(&cat, alone, off).await.unwrap_err().is::<SwitchedOff>());
+    }
+
+    /// R33 (N17, the owner's): a list without its tracks' lengths judges no Soulseek folder by itself: kept, and counting where
+    /// nothing counts, it gives way to the next list in the design's order that has them, and stands beside it as the fallback.
+    #[tokio::test]
+    async fn a_list_without_lengths_gives_way_to_the_next_with_them() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Night Walks", &[("discogs", "release", "2000007"), ("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks")]);
+        let read = |r: Ref| std::future::ready(Ok(Some((list(&[("Lamplight", if r.source == "discogs" { None } else { Some(200_000) })]), None))));
+        let first = tracklist(&cat, record, read).await.unwrap().unwrap();
+        assert_eq!((first.timed.map(|(s, _)| s), first.untimed.map(|(s, _)| s)), (Some("bandcamp".to_string()), Some("discogs".to_string())));
+        assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("discogs"), "the first list counts, lengths or none");
+        let nothing = |_| std::future::ready(Err::<Option<Read>, _>(anyhow::anyhow!("nothing is read again")));
+        let again = tracklist(&cat, record, nothing).await.unwrap().unwrap();
+        assert_eq!(again.timed.map(|(s, _)| s).as_deref(), Some("bandcamp"), "both kept: the counted list first, then the next");
+    }
+
+    /// X3: with Discogs switched off, a Discogs reference is passed over as MusicBrainz's is: nothing is asked of Discogs.
+    #[tokio::test]
+    async fn with_discogs_off_a_record_is_judged_by_its_next_list() {
+        let _one = super::super::switches::TEST_STATE.lock().await;
+        let was = super::super::switches::set_for_tests(super::super::switches::DISCOGS, false);
+        let read = read_reference(Ref::new("discogs", "release", "2000009")).await;
+        super::super::switches::set_for_tests(super::super::switches::DISCOGS, was);
+        assert!(read.unwrap_err().is::<SwitchedOff>());
+    }
+
+    /// Y12: with Bandcamp switched off, a record counted by Bandcamp's list (the GROUCH kind) is judged by its next list, its count
+    /// kept: Bandcamp's reference says it is switched off, and nothing is asked of Bandcamp.
+    #[tokio::test]
+    async fn with_bandcamp_off_a_record_is_judged_by_its_next_list() {
+        let _one = super::super::switches::TEST_STATE.lock().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Further", &[("bandcamp", "album", "https://grouch.bandcamp.com/album/further"), ("discogs", "release", "2000011")]);
+        cat.set_counting(record, Some("bandcamp"), false).unwrap();
+        let read = |r: Ref| async move { if r.source == "bandcamp" { read_reference(r).await } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None))) } };
+        let was = super::super::switches::set_for_tests(super::super::switches::BANDCAMP, false);
+        let judged = tracklist(&cat, record, read).await;
+        super::super::switches::set_for_tests(super::super::switches::BANDCAMP, was);
+        assert_eq!(judged.unwrap().unwrap().timed.map(|(s, _)| s).as_deref(), Some("discogs"));
+        assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("bandcamp"), "its count kept");
+    }
+
+    /// R15 (F4): a release MusicBrainz says it will not give (a 404) has no list, at once; its rate limit (a 429) is no such answer.
+    #[tokio::test]
+    async fn a_musicbrainz_rate_limit_is_no_answer_about_a_release() {
+        assert!(no_such(&asked(serving(404).await).await));
+        assert!(!no_such(&asked(serving(429).await).await));
+        assert!(!no_such(&asked(serving(503).await).await));
+    }
+
+    /// R7 (N4): with MusicBrainz switched off no list comes, so a record waiting for one is on Health's item.
+    #[test]
+    fn with_musicbrainz_off_waiting_records_are_on_health() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let record = waiting(&cat, "Signal", "r7");
+        assert!(cat.unreferenced(true).unwrap().is_empty(), "MusicBrainz on: it waits");
+        assert_eq!(cat.unreferenced(false).unwrap(), [record], "off: on the item");
+    }
+
+    /// A record not had, of `title`, holding these references (`link`).
+    fn wanted(cat: &Catalogue, title: &str, refs: &[(&str, &str, &str)]) -> i64 {
+        let record = cat.record_for_tests(title, 0);
+        for (source, kind, value) in refs {
+            assert!(cat.set_reference(&ids::record(record), &Ref::new(source, kind, value), "link").unwrap());
+        }
+        record
+    }
+
+    /// A reader answering each reference by its source: a list of `titles` for those named, the rest as `other` says; it
+    /// counts what it was asked.
+    fn reader(lists: &'static [(&'static str, &'static [&'static str])], asked: Arc<std::sync::Mutex<Vec<String>>>, other: fn() -> Result<Option<Read>>) -> impl Fn(Ref) -> std::future::Ready<Result<Option<Read>>> {
+        move |r: Ref| {
+            asked.lock().unwrap().push(format!("{}:{}", r.source, r.kind));
+            let answer = match lists.iter().find(|(s, _)| *s == r.source) {
+                Some((_, titles)) => Ok(Some((list(&titles.iter().map(|t| (*t, Some(200_000))).collect::<Vec<_>>()), None))),
+                None => other(),
+            };
+            std::future::ready(answer)
+        }
+    }
+
+    /// R25 (N6): the release a release group's list was read from is kept as the record's reference, as found (`search`), so the
+    /// record knows which edition its list is.
+    #[tokio::test]
+    async fn a_groups_release_read_is_kept_as_a_reference() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Signal", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000190")]);
+        let release = "00000000-0000-4000-8000-000000000191";
+        let read = |_| std::future::ready(Ok(Some((list(&[("Signal", Some(200_000))]), Some(Ref::new("musicbrainz", "release", release))))));
+        tracklist(&cat, record, read).await.unwrap().unwrap();
+        let refs = cat.references_of(&ids::record(record)).unwrap();
+        assert!(refs.iter().any(|(r, row)| (r.kind.as_str(), r.value.as_str(), row.how.as_str()) == ("release", release, "search")), "{refs:?}");
+    }
+
+    /// C51a: a record's counting list is read once and kept: asked again, the kept list answers and nothing is read.
+    #[tokio::test]
+    async fn tracklist_reads_once_and_keeps() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Signal", &[("musicbrainz", "release", "r7")]);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let read = reader(&[("musicbrainz", &["Signal"])], asked.clone(), || Ok(None));
+        let (source, first) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
+        let (_, again) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
+        assert_eq!((source.as_str(), first.len(), again), ("musicbrainz", 1, first.clone()));
+        assert_eq!(asked.lock().unwrap().len(), 1, "read once");
+        assert_eq!(cat.reference_tracks(record).unwrap(), [("musicbrainz".to_string(), first)], "kept");
+    }
+
+    /// C51a: the list that counts is the counting source's: a record counted by Discogs reads Discogs', though MusicBrainz is
+    /// first in the order.
+    #[tokio::test]
+    async fn tracklist_follows_counting() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Two Rooms", &[("musicbrainz", "release", "r2"), ("discogs", "release", "2000002")]);
+        cat.set_counting(record, Some("discogs"), true).unwrap();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let read = reader(&[("musicbrainz", &["Hall"]), ("discogs", &["Hall", "Stair"])], asked.clone(), || Ok(None));
+        let (source, list) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
+        assert_eq!((source.as_str(), list.len()), ("discogs", 2));
+        assert_eq!(*asked.lock().unwrap(), ["discogs:release"]);
+    }
+
+    /// D18 (C54): the References panel works on a record not had. It is read with its names from the catalogue, its list as found
+    /// (no files to hold it against). A link pasted on it is its hand reference and counts, the list kept from another reference
+    /// let go of, so Search now (`tracklist`) reads what was pasted; "Use this" the same.
+    #[tokio::test]
+    async fn the_references_panel_works_on_a_record_not_had() {
+        let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.attach_catalogue(Arc::new(Catalogue::open(None, Vec::new()).unwrap()));
+        let cat = served.catalogue().clone();
+        let record = wanted(&cat, "Night Walks", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000192"), ("discogs", "release", "2000010")]);
+        let album = ids::record(record);
+        cat.set_reference_tracks(record, "musicbrainz", &list(&[("Lamplight", Some(200_000)), ("Bonus", Some(90_000))])).unwrap();
+        cat.set_counting(record, Some("musicbrainz"), false).unwrap();
+        let k = kept(&served, &album, record).unwrap();
+        assert_eq!((k.title.as_str(), k.artist.as_str()), ("Night Walks", "Glass Harbour"));
+        let mb = &sources(&k, None)[0];
+        assert_eq!((mb.state, mb.said.as_str(), mb.tracks), ("found", "2 tracks", Some(2)), "no files to hold it against");
+        let release = "00000000-0000-4000-8000-000000000193";
+        choose_in(&served, &album, record, &Choose { link: Some(format!("https://musicbrainz.org/release/{release}")), ..Choose::default() }).unwrap();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let read = {
+            let asked = asked.clone();
+            move |r: Ref| {
+                asked.lock().unwrap().push(format!("{}:{}", r.kind, r.value));
+                std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000))]), None))))
+            }
+        };
+        let (source, pasted) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
+        assert_eq!((source.as_str(), pasted.len()), ("musicbrainz", 1), "the pasted release's list, not the one kept before");
+        assert_eq!(*asked.lock().unwrap(), [format!("release:{release}")]);
+        asked.lock().unwrap().clear();
+        choose_in(&served, &album, record, &Choose { counting: Some(Some("discogs".into())), ..Choose::default() }).unwrap();
+        assert_eq!(tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap().0, "discogs", "Use this");
+        assert_eq!(*asked.lock().unwrap(), ["release:2000010"]);
+    }
+
+    /// C51a: a record not had counts its first reference in the design's order whose list answers: MusicBrainz before Discogs
+    /// before Bandcamp; one answering nothing (no such release) gives way to the next. That source counts from then on.
+    #[tokio::test]
+    async fn a_record_not_had_counts_its_first_reference_in_order() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let all = wanted(&cat, "Night Walks", &[("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks"), ("discogs", "release", "2000003"), ("musicbrainz", "release", "r3")]);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let every = reader(&[("musicbrainz", &["Lamplight"]), ("discogs", &["Lamplight"]), ("bandcamp", &["Lamplight"])], asked.clone(), || Ok(None));
+        assert_eq!(tracklist(&cat, all, &every).await.unwrap().unwrap().timed.unwrap().0, "musicbrainz");
+        assert_eq!(cat.record(all).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"), "it counts from then on");
+        let gone = wanted(&cat, "Undated", &[("bandcamp", "album", "https://kitetheory.bandcamp.com/album/undated"), ("musicbrainz", "release", "r4")]);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mb_gone = reader(&[("bandcamp", &["Morning"])], asked.clone(), || Ok(None));
+        assert_eq!(tracklist(&cat, gone, &mb_gone).await.unwrap().unwrap().timed.unwrap().0, "bandcamp", "MusicBrainz has no such release: the next");
+        assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release", "bandcamp:album"]);
+    }
+
+    /// C51a, the owner's rule: a record with files where no list agrees counts nothing, and nothing is read for it, until an
+    /// administrator picks a list. Its own lists are not tried in order: that is a record not had's way alone.
+    #[tokio::test]
+    async fn a_record_with_files_where_nothing_agrees_counts_nothing() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = cat.record_for_tests("Tide Tables", 2);
+        assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release", "r1"), "files").unwrap());
+        cat.set_reference_tracks(record, "musicbrainz", &list(&[("Other", Some(1_000)), ("Neap", Some(180_000))])).unwrap();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let read = reader(&[("musicbrainz", &["Slack Water", "Neap"])], asked.clone(), || Ok(None));
+        assert_eq!(tracklist(&cat, record, &read).await.unwrap(), Err("No list counts until one is chosen".to_string()));
+        assert!(asked.lock().unwrap().is_empty(), "nothing read");
+        assert_eq!(cat.record(record).unwrap().unwrap().counting, None);
+    }
+
+    /// C51a, R23 (N3): Bandcamp's bot check where Bandcamp is the only reference is Bandcamp out of reach, nothing said against the
+    /// record: asked again later; with no reference at all, no list, and why in few words; nothing counts.
+    #[tokio::test]
+    async fn a_record_with_only_bandcamp_behind_its_check_has_no_list() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "After Hours", &[("bandcamp", "album", "https://paperlantern.bandcamp.com/album/after-hours")]);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let checked = reader(&[], asked, || Err(anyhow::Error::from(crate::bandcamp::NotRead)));
+        assert!(crate::bandcamp::not_read(&tracklist(&cat, record, &checked).await.unwrap_err()));
+        let none = wanted(&cat, "Quiet Lanes", &[]);
+        assert_eq!(tracklist(&cat, none, &checked).await.unwrap(), Err("No list to judge by".to_string()));
+        assert_eq!(cat.record(record).unwrap().unwrap().counting, None);
+    }
+
+    /// Health's item: what 0.16 left off it stays off, in one query. A guess confirmed and checked by hand, the record's.
+    #[test]
+    fn a_record_no_reference_speaks_for_is_healths() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let [(alone, _), (counted, _), (checked, _), (_, named_id), (_, pasted_id), (guessed, guessed_id)] =
+            ["Alone", "Counted", "Checked", "Named", "Pasted", "Guessed"].map(|t| had(&cat, t, 1));
+        cat.set_counting(counted, Some("musicbrainz"), false).unwrap();
+        let none = Choose { by_hand: Some(true), ..Choose::default() };
+        assert!(chose(&cat, checked, &ids::record(checked), &none, &[]).unwrap(), "checked now");
+        assert!(!chose(&cat, checked, &ids::record(checked), &none, &[]).unwrap(), "and not again");
+        cat.set_reference(&named_id, &Ref::new("musicbrainz", "release", "00000000-0000-4000-8000-000000000001"), "files").unwrap();
+        cat.set_reference(&pasted_id, &Ref::new("bandcamp", "album", "https://glassharbour.bandcamp.com/album/x"), "hand").unwrap();
+        cat.set_reference(&guessed_id, &Ref::new("musicbrainz", "release", "00000000-0000-4000-8000-000000000002"), "search").unwrap();
+        cat.set_reference(&guessed_id, &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000102"), "files").unwrap();
+        assert_eq!(cat.confirm_reference(&guessed_id, "musicbrainz").unwrap(), 2);
+        assert!(cat.references_of(&guessed_id).unwrap().iter().all(|(_, row)| row.confirmed));
+        had(&cat, "Not Had", 0);
+        assert_eq!(cat.unreferenced(true).unwrap(), [alone, guessed], "a guess and a group are no reference that speaks");
     }
 }

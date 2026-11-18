@@ -31,11 +31,11 @@
     );
   onMount(() => void read());
   const a = $derived(artists[open]);
-  /** The artist's page, at its About (unfolded) or its Albums. */
-  function openAt(name: string, section: 'about' | 'albums') {
-    pageAsked.name = name;
+  /** The artist's page, by their id (W10), at its About (unfolded) or its Albums. */
+  function openAt(x: { id: string; name: string }, section: 'about' | 'albums') {
+    pageAsked.name = x.name;
     pageAsked.section = section;
-    viewOver(artistSubject('cratarr', name));
+    viewOver(artistSubject('cratarr', x.id));
   }
   // The carousel: which card is in front as it is swiped; a chip brings its card.
   let row = $state<HTMLElement>();
@@ -83,19 +83,19 @@
             <article class="card">
               <div class="wash" aria-hidden="true"><img src={picture(x)} alt="" /></div>
               <div class="top">
-                <button class="who" onclick={() => viewOver(artistSubject('cratarr', x.name))}>
+                <button class="who" onclick={() => viewOver(artistSubject('cratarr', x.id))}>
                   {#if x.photo}<img class="face" src={artistPhotoUrl(x.id)} alt="" />{/if}
                   <span><b>{x.name}</b><small>{x.albums.length === 1 ? '1 album' : `${x.albums.length} albums`}</small></span>
                 </button>
                 <!-- On a phone a fanned stack beside the name (C4); wider, a 2×2 grid beside the text (C). -->
-                <button class="fan" aria-label={`Albums by ${x.name}`} onclick={() => openAt(x.name, 'albums')}>
+                <button class="fan" aria-label={`Albums by ${x.name}`} onclick={() => openAt(x, 'albums')}>
                   {#each x.albums.slice(0, 3).reverse() as id (id)}<img src={albumCoverUrl('cratarr', id)} alt="" />{/each}
                 </button>
               </div>
               {#if x.bio}
                 <button
                   class="bio"
-                  onclick={() => openAt(x.name, 'about')}>{x.bio}</button
+                  onclick={() => openAt(x, 'about')}>{x.bio}</button
                 >
               {/if}
               <ul class="grid">

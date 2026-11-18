@@ -75,7 +75,8 @@ impl Rpc {
     fn new(cfg: &KodiConfig) -> Self {
         let base = cfg.url.trim().trim_end_matches('/').trim_end_matches("/jsonrpc").to_string();
         Self {
-            http: reqwest::Client::builder().timeout(Duration::from_secs(6)).build().expect("a plain client builds"),
+            // Never a redirect (O1).
+            http: crate::app::reach::lan_client().timeout(Duration::from_secs(6)).build().expect("a plain client builds"),
             endpoint: format!("{base}/jsonrpc"),
             user: cfg.user.clone(),
             password: cfg.password.clone(),

@@ -1,12 +1,12 @@
 <script lang="ts">
-  // An Incoming album waiting, Health's third level (the owner, 2026-10-24): side by side with the Music album it
-  // upgrades or duplicates (the Library's list links them: `waiting`), what each is (its tracks, its format; the item's
-  // line says why), and its album menu (lib/AlbumMenu), where Keep, Replace and Delete are, as everywhere; a failed conversion is tried again
+  // An Incoming album waiting, Health's third level (the owner, 2026-10-24): side by side with the copy it stands against,
+  // both copies of one record (C37a: the Incoming copy's `against` names that copy's library), what each is (its tracks, its
+  // format; the item's line says why), and its album menu (lib/AlbumMenu), where Keep, Replace and Delete are, as everywhere; a failed conversion is tried again
   // there.
   import { offers } from './capabilities.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import { library, readLibrary } from './albums.svelte';
-  import { albumCoverUrl, type ListedAlbum } from './api';
+  import { albumCoverUrl, type AlbumCopy } from './api';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
   import { loadHealth } from './healthReport.svelte';
@@ -21,14 +21,17 @@
   });
   const s = $derived(library.view?.sources.find((x) => x.id === source) ?? null);
   const a = $derived(s?.albums.find((x) => x.id === album) ?? null);
-  /** The Music album it stands to. */
-  const m = $derived.by(() => {
-    if (!s) return null;
-    const id = Object.entries(s.waiting).find(([, w]) => w.album === album)?.[0];
-    return id ? (s.albums.find((x) => x.id === id) ?? null) : null;
+  type Side = Pick<AlbumCopy, 'library' | 'tracks' | 'format' | 'kbps'>;
+  /** The copy waiting and the copy it stands against, each one side; else the record as it plays (another server's: as listed). */
+  const sides = $derived.by((): Side[] => {
+    if (!a) return [];
+    const waiting = a.copies?.find((c) => c.against);
+    const kept = waiting && a.copies?.find((c) => c.library === waiting.against!.library);
+    if (waiting && kept) return [waiting, kept];
+    return [a.copies?.find((c) => c.plays) ?? { library: a.library ?? '', tracks: a.tracks, format: a.format, kbps: a.bitrate_kbps }];
   });
-  const libraryName = (x: ListedAlbum) => s?.library_info.find((l) => l.id === x.library)?.name ?? '';
-  const quality = (x: ListedAlbum) => [x.format, x.bitrate_kbps ? `${x.bitrate_kbps} kbps` : null].filter(Boolean).join(' · ');
+  const libraryName = (x: Side) => s?.library_info.find((l) => l.id === x.library)?.name ?? '';
+  const quality = (x: Side) => [x.format, x.kbps ? `${x.kbps} kbps` : null].filter(Boolean).join(' · ');
   let menu = $state(false);
 </script>
 
@@ -38,12 +41,12 @@
   <p class="muted">No longer in the library.</p>
 {:else}
   <div class="pair">
-    {#each m ? [a, m] : [a] as x (x.id)}
+    {#each sides as x (x.library)}
       <div class="side">
-        <span class="cover"><Cover src={albumCoverUrl(source, x.id)} /></span>
+        <span class="cover"><Cover src={albumCoverUrl(source, a.id)} /></span>
         <small class="lib">{libraryName(x)}</small>
-        <b>{x.title}</b>
-        {#if x.artist}<span class="muted">{x.artist}{x.year ? ` · ${x.year}` : ''}</span>{/if}
+        <b>{a.title}</b>
+        {#if a.artist}<span class="muted">{a.artist}{a.year ? ` · ${a.year}` : ''}</span>{/if}
         <span>{x.tracks} {x.tracks === 1 ? 'track' : 'tracks'}{quality(x) ? ` · ${quality(x)}` : ''}</span>
       </div>
     {/each}

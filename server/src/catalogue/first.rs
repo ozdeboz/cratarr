@@ -175,7 +175,7 @@ impl Catalogue {
     pub fn unserved_rows(&self) -> Result<Vec<(i64, i64, Vec<ServedRow>)>> {
         let db = self.db();
         let folders: Vec<(i64, Option<i64>)> = db.prepare("SELECT id, home FROM folders ORDER BY id")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        folders.into_iter().map(|(id, home)| Ok((id, home.unwrap_or(id), rows_in(&db, id, None, UNSERVED)?))).collect()
+        folders.into_iter().map(|(id, home)| Ok((id, home.unwrap_or(id), rows_in(&db, id, None, UNSERVED, true)?))).collect()
     }
 
     /// Whether this catalogue has been through this step: all a start asks once the first start is over. Blocking.

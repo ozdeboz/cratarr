@@ -23,7 +23,8 @@ use store::{IMPORT, LIVE, Store};
 const AGAIN: Duration = Duration::from_secs(6 * 3600);
 /// How often the background looks for lists to read and questions for MusicBrainz.
 const LOOK: Duration = Duration::from_secs(10 * 60);
-/// Between two questions to MusicBrainz (its rule is one a second; others ask too).
+/// Between two questions to MusicBrainz: the turn keeps its one a second (`musicbrainz::Asked`), and the lists' questions in
+/// the background leave turns between for the pages.
 const MB_PACE: Duration = Duration::from_millis(1500);
 /// Matching reads the library again after this long.
 const LIBRARY_FOR: Duration = Duration::from_secs(60);
@@ -138,7 +139,10 @@ pub fn start(data_dir: Option<&str>) {
         // After the catalogue has caught up.
         tokio::time::sleep(Duration::from_secs(120)).await;
         loop {
-            look().await;
+            // None while the background reading is paused (O5).
+            if !crate::app::switches::background_paused() {
+                look().await;
+            }
             tokio::time::sleep(LOOK).await;
         }
     });
@@ -386,8 +390,10 @@ fn with_marks<T>(account: &str, f: impl FnOnce(&Marks, &Lists) -> T) -> Result<O
     let library = library()?;
     let answers = Answers(s.all_mb()?);
     let serve = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let requests = marks::requests_by_key(serve.userdata.requests(Some(account), None, 10_000)?);
-    let m = Marks { library: &library, answers: &answers, requests };
+    let all = serve.userdata.requests(Some(account), None, 10_000)?;
+    let of = crate::app::requests::records_of(serve.catalogue(), &all)?;
+    let requests = marks::requests_by_key(all, &of);
+    let m = Marks { library: &library, answers: &answers, requests, catalogue: Some(serve.catalogue().as_ref()) };
     Ok(Some(f(&m, &lists)))
 }
 
@@ -556,7 +562,7 @@ pub fn take_export(account: &str, file: &str, lists: Lists, preview: bool) -> Re
     let s = store()?;
     let library = library()?;
     let answers = Answers(s.all_mb()?);
-    let m = Marks { library: &library, answers: &answers, requests: Default::default() };
+    let m = Marks { library: &library, answers: &answers, requests: Default::default(), catalogue: None };
     let mut b = Brought { albums: lists.albums.len(), tracks: lists.tracks.len(), playlists: lists.playlists.len(), artists: lists.artists.len(), ..Default::default() };
     let statuses = lists
         .albums

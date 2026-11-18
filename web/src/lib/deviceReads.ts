@@ -40,7 +40,8 @@ export type ListRows = { rev: number; libraries: LibraryRow[]; records: RecordRo
 export type RecordRows = { record: RecordRow; tracks: TrackRow[] };
 /** A track with its record, where it is listed without it. */
 type OfRecord = TrackRow & { record: string; album: string };
-export type ArtistRows = { albums: RecordRow[]; appears_on: RecordRow[]; tracks: OfRecord[] };
+/** An artist's panel as the index answers it: who they are (an index from before W10 says neither), their records and tracks. */
+export type ArtistRows = { id?: string; name?: string; albums: RecordRow[]; appears_on: RecordRow[]; tracks: OfRecord[] };
 /** What found a row: its own name, or what else it goes under. */
 type FoundOn = 'name' | 'artist';
 type FoundArtist = { id: string; name: string; records: number; score: number };
@@ -111,12 +112,6 @@ export function listView(rows: ListRows, account: string | null, at: number): Al
     as_of: Math.floor(at / 1000),
     libraries: libraries.map((l) => l.key),
     library_info: libraries.map((l) => infoOf(l, account)),
-    verdicts: {},
-    lacks: {},
-    waiting: {},
-    deletable: [],
-    keepable: [],
-    keep_to: {},
   };
   return { sources: [source], trash_days: 0, music: libraries.find((l) => l.kind === 'main')?.name ?? null };
 }
@@ -149,9 +144,17 @@ export function recordView({ record, tracks }: RecordRows): AlbumView {
   };
 }
 
-/** An artist as their panel shows them, by the name asked. What is theirs alone (a favourite, a photo's id) is left out, as Cratarr's. */
-export function artistPanel({ albums, appears_on, tracks }: ArtistRows, name: string): ArtistView {
-  return { source: OWN, name, albums: albums.map(listedOf), appears_on: appears_on.map(listedOf), rows: tracks.map((t) => ({ ...rowOf(t.album)(t), album_id: t.record })) };
+/** An artist as their panel shows them, by their id or the name asked, named as the index names them. What is theirs alone (a
+ *  favourite, a photo's id) is left out, as Cratarr's. */
+export function artistPanel({ id, name: theirs, albums, appears_on, tracks }: ArtistRows, name: string): ArtistView {
+  return {
+    source: OWN,
+    name: theirs ?? name,
+    ...(id ? { id } : {}),
+    albums: albums.map(listedOf),
+    appears_on: appears_on.map(listedOf),
+    rows: tracks.map((t) => ({ ...rowOf(t.album)(t), album_id: t.record })),
+  };
 }
 
 /** What an index can be asked to find: the library's own kinds. Everything else search knows lies with Cratarr, and is left out (decision

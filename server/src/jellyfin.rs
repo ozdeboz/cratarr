@@ -356,7 +356,8 @@ impl Jellyfin {
         let mut token = reqwest::header::HeaderValue::from_str(api_key).context("API key has invalid characters")?;
         token.set_sensitive(true);
         headers.insert("X-Emby-Token", token);
-        let http = reqwest::Client::builder()
+        // Never a redirect (O1): its token stays on the host given.
+        let http = crate::app::reach::lan_client()
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(20))
             .build()?;

@@ -299,12 +299,17 @@ by a later record that says so in its header. A new decision takes the next numb
   a master record, artist and label, owned or not, each mapped to MusicBrainz, Discogs and Bandcamp, none required;
   the reference that fits counts; artist pages for anyone, label pages with the whole catalogue, search's "beyond"
   opening Cratarr's own pages; Soulseek judged by any reference, never a MusicBrainz id required.
+  Amended 2026-11-18: built in 0.17's first preview; merging by `same_listing`, records not had forgotten after six
+  quiet months, label pages from MusicBrainz and Discogs, one artist page by id.
 - [0101: 0.16 — each user's own music, one track id, and the library on the device](0101-own-music-one-track-id-library-on-the-device.md):
   accepted, for 0.16; libraries in list order, requests through Incoming into one's own music, the catalogue's track id
   served once switched, downloads with a holder per account and caches hidden at sign-out, the whole index with vectors
   and fits offline, Radio's picker in the rules crate; one migration at first start, rehearsed; two previews. Where it
   met 0084, 0085 and 0091, settled by the owner 2026-11-04.
   Amended 2026-11-03: 0102's tape engine joins 0.16 and the rules crate's move.
+  Amended 2026-11-18: what 0.17's first preview built: no approval per request, room counted from arrivals, the disk's
+  floor, copies (Copy to, a Want's copy, Replace from someone's own music), the backup's list; uploads in its second
+  preview.
 - [0102: The tape engine on the device](0102-the-tape-engine-on-the-device.md): accepted, for 0.16; every wind's sound
   made where it is heard, from the track decoded in memory (the playing track only), the engine's arithmetic in the
   rules crate (0101); a streamed track's file fetched whole as it starts; the app and the page together; the server's

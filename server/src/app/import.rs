@@ -115,17 +115,19 @@ impl Matcher {
                 same.push(id.to_string());
             }
         }
-        self.loose_albums.entry((loose(name), loose(artist))).or_insert_with(|| id.to_string());
+        // As by its own key: the last added (the oldest, where records are added newest first: R28, N11).
+        self.loose_albums.insert((loose(name), loose(artist)), id.to_string());
     }
 
     /// The album a source names: by name and artist, then loosely, then by name alone where only one has it.
     pub fn find_album(&self, name: &str, artist: Option<&str>) -> Option<&str> {
-        let artist = artist.unwrap_or_default();
-        self.albums
-            .get(&(key(name), key(artist)))
-            .or_else(|| self.loose_albums.get(&(loose(name), loose(artist))))
-            .map(String::as_str)
-            .or_else(|| self.album_names.get(&key(name)).filter(|a| a.len() == 1).map(|a| a[0].as_str()))
+        self.find_album_by(name, artist.unwrap_or_default()).or_else(|| self.album_names.get(&key(name)).filter(|a| a.len() == 1).map(|a| a[0].as_str()))
+    }
+
+    /// The album of this name by this artist: by name and artist, then loosely; never by a name alone. What a request's record
+    /// is found by (R14), as it is kept for good: a name alone never joins two records.
+    pub fn find_album_by(&self, name: &str, artist: &str) -> Option<&str> {
+        self.albums.get(&(key(name), key(artist))).or_else(|| self.loose_albums.get(&(loose(name), loose(artist)))).map(String::as_str)
     }
 
     /// The song a source's track is: its recording's, else its artist's and title's, else its album's and title's; of
@@ -311,6 +313,32 @@ mod tests {
 
     fn track<'a>(title: &'a str, artist: &'a str, album: Option<&'a str>, recording: Option<&'a str>, length: Option<f64>) -> Track<'a> {
         Track { recording, artist, title, album, length_secs: length }
+    }
+
+    /// 0.11.1: the library's albums alone (`library_albums`) find each album as the whole library read finds it: by name and
+    /// album artist, loosely, and by a name alone where one album has it, not where two do.
+    #[test]
+    fn the_librarys_albums_alone_find_what_the_whole_library_finds() {
+        let dir = std::env::temp_dir().join(format!("cratarr-albums-alone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("library.sqlite");
+        let _ = std::fs::remove_file(&file);
+        let db = rusqlite::Connection::open(&file).unwrap();
+        db.execute_batch(
+            "CREATE TABLE songs (id TEXT, title TEXT, artist TEXT, album TEXT, mbid TEXT, duration_ms INTEGER, album_id TEXT, album_artist TEXT);
+             INSERT INTO songs VALUES ('tr-1', 'Joga', 'Björk', 'Homogenic', 'm1', 300000, 'al-1', NULL);
+             INSERT INTO songs VALUES ('tr-2', 'Human Behaviour', 'Björk', 'Debut', NULL, 250000, 'al-2', 'Björk');
+             INSERT INTO songs VALUES ('tr-3', 'Intro', 'Guest', 'Hits', NULL, NULL, 'al-3', 'Various Artists');
+             INSERT INTO songs VALUES ('tr-4', 'Intro', 'Other', 'Hits', NULL, NULL, 'al-4', 'Someone');",
+        )
+        .unwrap();
+        drop(db);
+        let (alone, whole) = (Matcher::library_albums(&file, None).unwrap(), Matcher::read(&file).unwrap());
+        let asked = [("Debut", "Björk"), ("Homogenic", "Björk"), ("Homogenic (Remastered)", "Bjork"), ("Homogenic", "Someone Else"), ("Hits", "Nobody"), ("Post", "Björk")];
+        let found = |m: &Matcher| asked.iter().map(|(title, artist)| m.find_album(title, Some(artist)).map(str::to_string)).collect::<Vec<_>>();
+        assert_eq!(found(&*alone), found(&whole));
+        assert_eq!(found(&*alone), [Some("al-2".to_string()), Some("al-1".to_string()), Some("al-1".to_string()), Some("al-1".to_string()), None, None]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The process' peak memory so far (Linux), in MB.

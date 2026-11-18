@@ -99,9 +99,9 @@ pub struct Serve {
     built_at: RwLock<i64>,
     /// Told each time the library is built (its time): views kept from the built-in source can read it again.
     built: tokio::sync::watch::Sender<i64>,
-    /// What the last check was made from: (the catalogue's last pass, the rules and added dates). The same again: no
-    /// need to look at the catalogue.
-    checked: std::sync::Mutex<Option<(Option<i64>, String)>>,
+    /// What the last check was made from: (how many changes the catalogue had told, `Catalogue::told`; the rules and added
+    /// dates). The same again: no need to look at the catalogue.
+    checked: std::sync::Mutex<Option<(u64, String)>>,
     /// Resized covers on disk (`art`).
     art_cache: art::Cache,
     /// One cover resized at a time: a client asks for hundreds at once, and decoding one takes tens of megabytes.
@@ -122,6 +122,8 @@ pub struct Serve {
     covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
     /// One device's index made at a time, and what the library's log was last brought up to (`app::device_index`).
     device: std::sync::Mutex<crate::app::device_index::Settled>,
+    /// Who asked for what, as last read (`app::requests::requesters`, R30).
+    requesters: std::sync::Mutex<crate::app::requests::KeptRequesters>,
 }
 
 /// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
@@ -196,6 +198,7 @@ impl Serve {
             stamps: Default::default(),
             covers: tokio::sync::broadcast::channel(16).0,
             device: Default::default(),
+            requesters: Default::default(),
         }))
     }
 
@@ -271,18 +274,20 @@ impl Serve {
         saved.sources.iter().find_map(|s| s.own_music())
     }
 
-    /// Everyone else's own music switched off for `account`, new here (0101 point 6: others' start off).
+    /// Everyone else's own music switched off for `account`, new here (0101 point 6: others' start off), all of it as one change
+    /// (`UserData::switch_library_off`).
     pub fn others_own_off(&self, account: &str) {
         let Some(own) = self.own_music() else { return };
+        let mut others = Vec::new();
         for folder in std::fs::read_dir(own).map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>()).unwrap_or_default() {
             let Some(name) = folder.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
             if !folder.is_dir() || name.starts_with('.') || name == account {
                 continue;
             }
-            let key = format!("{}/{}", crate::source::cratarr::KIND.id, folder.display());
-            if let Err(e) = self.userdata.switch_library_off(&[account.to_string()], &key) {
-                tracing::warn!("{name}'s music not switched off for {account}: {e:#}");
-            }
+            others.push(format!("{}/{}", crate::source::cratarr::KIND.id, folder.display()));
+        }
+        if let Err(e) = self.userdata.switch_library_off(&[account.to_string()], &others) {
+            tracing::warn!("others' own music not switched off for {account}: {e:#}");
         }
     }
 
@@ -374,6 +379,11 @@ impl Serve {
         *self.built_at.write().unwrap() += 1;
     }
 
+    /// Who asked for what, as last read (`app::requests::requesters`).
+    pub fn requesters_kept(&self) -> std::sync::MutexGuard<'_, crate::app::requests::KeptRequesters> {
+        self.requesters.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// A device's index being made: until this goes, another waits, as two would hold twice what one does. Blocking.
     pub fn device_turn(&self) -> std::sync::MutexGuard<'_, crate::app::device_index::Settled> {
         self.device.lock().unwrap_or_else(|p| p.into_inner())
@@ -407,6 +417,11 @@ impl Serve {
             *self.rules.write().unwrap_or_else(|p| p.into_inner()) = saved.tag_rules;
         }
         let rules = self.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+        // The types the library was last built with, at a start's first check (RF1): a library built before it may not be built
+        // again for a while, and the had rule classes a had record by its album's type.
+        if self.checked.lock().unwrap_or_else(|p| p.into_inner()).is_none() {
+            self.types_built();
+        }
         let added = self.userdata.added()?;
         let originals = self.userdata.original_years()?;
         let extra_genres = self.userdata.discogs_genres()?;
@@ -416,10 +431,11 @@ impl Serve {
         let set = self.userdata.overrides_stamp(None)?;
         let mut incomplete: Vec<(String, String)> = self.userdata.albums_incomplete()?;
         incomplete.sort_unstable();
-        // The catalogue is only looked at after it finished a pass (or the rules, added dates or original years changed):
-        // reading its files' summary every minute kept its 200 MB file in memory for nothing.
+        // The catalogue is only looked at after it finished a pass or told of a change (or the rules, added dates or original
+        // years changed): reading its files' summary every minute kept its 200 MB file in memory for nothing. By how many it
+        // told, never by the second of the last (RF8): one told in the second of a look was taken for one that look had seen.
         let inputs = (
-            self.catalogue().last_pass(),
+            self.catalogue().told(),
             format!(
                 "{:?}|{}|{}|{}|{}|{}|{}|{}",
                 self.library.kinds(),
@@ -454,6 +470,11 @@ impl Serve {
         let (whole, folders) = self.library.build_from(self.catalogue(), &rules, &print)?;
         let why = if change == library::Change::Analyses { "new analyses" } else { "files, tags or rules changed" };
         self.built_now(why, whole, folders, change == library::Change::Songs)?;
+        // The backup's list of shared copies anew (C41): what a Delete, a move or an emptied trash changed of the copies' originals,
+        // the build has read.
+        if let Err(e) = crate::app::backup_list::write_for(self) {
+            tracing::warn!(target: "library", "the backup's list of shared copies was not written: {e:#}");
+        }
         Ok(true)
     }
 
@@ -513,8 +534,78 @@ impl Serve {
             self.catalogue().poke();
             self.covers_built();
         }
+        self.types_built();
         self.built.send_replace(at);
         Ok(())
+    }
+
+    /// The types the library's albums were built with, kept on their records (RF1, `Catalogue::keep_types`): the had rule classes a
+    /// had record by its album's type, set by hand or an incomplete album's whole release among what typed it. A failure is told,
+    /// and the next build hands them again. Blocking.
+    fn types_built(&self) {
+        if let Err(e) = self.library.record_types().and_then(|types| self.catalogue().keep_types(&types)) {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "the albums' types not kept on their records: the next build hands them again");
+        }
+    }
+
+    /// RF2 (RB2): Incoming copies of records kept nowhere else, each another record's copy all the same, split from it only by missing
+    /// tags (production's five: Music's untagged MP3 against Lidarr's FLAC). Of the other live records of a copy's names with a copy in
+    /// one of the main libraries `mains` (`Catalogue::editions_of`), the first such copy whose tracks pair with the copy's files one for
+    /// one, as Replace pairs them (`incoming::pair`, as 0.16's Replace did): every track of each a pair, none left over. By album, the
+    /// other record's album and that copy. A copy none pairs with whole is another edition (OQ1): left out. Blocking.
+    pub fn paired_editions(&self, waiting: &[(String, copies::Copy)], mains: &[i64]) -> Result<std::collections::HashMap<String, (String, copies::Copy)>> {
+        let mut out = std::collections::HashMap::new();
+        let records: Vec<i64> = waiting.iter().filter_map(|(album, _)| ids::record_number(album)).collect();
+        let editions = self.catalogue().editions_of(&records, mains)?;
+        if editions.is_empty() {
+            return Ok(out);
+        }
+        let facts = |folder: i64, dir: &str| -> Result<Vec<crate::incoming::TrackFacts>> {
+            Ok(self.catalogue().copy_read(folder, dir)?.into_iter().map(|(tags, ms)| crate::incoming::TrackFacts::of(&crate::naming::Tags(tags), ms)).collect())
+        };
+        for (album, waiting) in waiting {
+            let Some(others) = ids::record_number(album).and_then(|r| editions.get(&r)) else { continue };
+            let new = facts(waiting.folder, &waiting.dir)?;
+            'others: for &other in others {
+                let id = ids::record(other);
+                for kept in self.library.copies_of(&id)?.into_iter().filter(|c| c.kind == copies::Kind::Main && mains.contains(&c.folder)) {
+                    let old = facts(kept.folder, &kept.dir)?;
+                    let paired = crate::incoming::pair(&old, &new);
+                    if !old.is_empty() && paired.added.is_empty() && paired.retired.is_empty() {
+                        out.insert(album.clone(), (id, kept));
+                        break 'others;
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// How each of these Incoming copies stands (C37a; RF2): against the copy that plays its record for most among its kept ones
+    /// (`copies::against`); else, its record kept nowhere else, against another record's copy in a main library its tracks pair with
+    /// one for one (`paired_editions`), as a copy of one record stands. Whether it is better, and that copy; none where neither: the
+    /// badge, Health's better copies and records in two libraries, the intake card and Replace all read this. Blocking.
+    pub fn stands_of(&self, waiting: &[(String, copies::Copy)], mains: &[i64]) -> Result<Vec<Option<(bool, copies::Copy)>>> {
+        let mut out = Vec::with_capacity(waiting.len());
+        let mut alone = Vec::new();
+        for (album, c) in waiting {
+            let held = self.library.copies_of(album)?;
+            let stand = copies::against(&held, c).map(|(better, kept)| (better, kept.clone()));
+            if stand.is_none() && c.kind == copies::Kind::Incoming && held.iter().all(|h| h.kind == copies::Kind::Incoming) {
+                alone.push((album.clone(), c.clone()));
+            }
+            out.push(stand);
+        }
+        let paired = self.paired_editions(&alone, mains)?;
+        for ((album, c), stand) in waiting.iter().zip(&mut out) {
+            if stand.is_none()
+                && let Some((_, kept)) = paired.get(album)
+            {
+                let both = [kept.clone(), c.clone()];
+                *stand = copies::against(&both, c).map(|(better, kept)| (better, kept.clone()));
+            }
+        }
+        Ok(out)
     }
 
     /// Files Cratarr wrote itself (0.9.7: Renumber, a cover, a tempo), read again now, and the library built from them
@@ -853,7 +944,7 @@ mod tests {
         cat.identify().unwrap();
     }
 
-    /// A check that finds something new: `last_pass` is in whole seconds, and a check at the second of the last sees nothing.
+    /// A check that finds something new, a second after the last: the walk reads a file's time in whole seconds.
     fn checked_again(serve: &Serve) {
         std::thread::sleep(Duration::from_millis(1100));
         serve.catalogue().changed_outside_pass();
@@ -916,6 +1007,139 @@ mod tests {
         serve.refresh().unwrap();
         assert_eq!((plays_of(&serve, &is), plays_of(&serve, &was)), (2, 0), "both plays on the one chosen, none left");
         assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// The record a folder's album is, as the build gave it.
+    fn record_in(serve: &Serve, folder: i64, dir: &str) -> i64 {
+        ids::record_number(&serve.library.album_in(folder, dir).unwrap().expect("built")).unwrap()
+    }
+
+    /// A record not had of `add`'s album's names ("Artist", "Album"), as a list keeps it: of `kind`, holding `refs`.
+    fn listed(cat: &Catalogue, kind: &str, refs: &[(&str, &str, &str)]) -> i64 {
+        use crate::catalogue::records::{Listing, Ref};
+        let artist = cat.artist_for("Artist").unwrap();
+        let l = Listing { title: "Album".into(), artist: "Artist".into(), kind: Some(kind.into()), refs: refs.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect(), ..Listing::default() };
+        cat.keep_listing(Some(artist), &[l], "link").unwrap()[0]
+    }
+
+    /// RF1 (RB5's first scenario): a record's type set by hand is the type it is had by. The owner's untagged eight versions of one
+    /// song, built an album by the rule (eight tracks), set to Single in the Library: the build types it a single, the catalogue keeps
+    /// that type on the record, and the Discogs list's single of its name reads had; MusicBrainz's album of the name, held while it
+    /// was an album, is set apart from a single and reads missing. Never: the record's own files' rule winning over the hand.
+    #[test]
+    fn a_type_set_by_hand_is_the_type_a_record_is_had_by() {
+        let (roots, cat, serve) = on_two_folders("rf1-set");
+        let eight: Vec<(String, String)> = (1..=8).map(|n| (format!("A/0{n} Version {n}.flac"), format!("Version {n}"))).collect();
+        add(&cat, &roots[0], 0, &eight.iter().map(|(rel, title)| (rel.as_str(), title.as_str())).collect::<Vec<_>>());
+        serve.refresh().unwrap();
+        let owned = record_in(&serve, 0, "A");
+        let single = listed(&cat, "single", &[("discogs", "master", "6101")]);
+        let album = listed(&cat, "album", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006102")]);
+        let holders = || {
+            let read = cat.requested(&[single, album]).unwrap();
+            (read[&single].holder, read[&album].holder)
+        };
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("album"), "built an album by the rule");
+        assert_eq!(holders(), (None, Some(owned)), "an album: the album had, the single not");
+        serve.userdata.set_overrides(&[ids::record(owned)], &[("type".to_string(), Some(serde_json::json!("single")))], 100).unwrap();
+        serve.refresh().unwrap();
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "the type set by hand, kept on the record");
+        assert_eq!(holders(), (Some(owned), None), "set to Single: the single had, the album set apart");
+        assert_eq!(library::type_by_files("Album", &[Some(200_000); 8]).as_deref(), Some("album"), "its files say an album still: the hand wins");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// RF1 (RB1's third scenario, RB5's second): a copy of three of an album's eight tracks, untagged, is a single by its own files.
+    /// Found missing tracks (`app::incomplete`: its whole release eight), the build types it as that release, an album, and the
+    /// catalogue keeps that type: the album's record of its name, MusicBrainz's, is held by it, partly there (three of eight), and off
+    /// the artist's missing list. Never: the album read missing beside its own partial copy once it is found short.
+    #[test]
+    fn a_partial_copy_holds_its_album_record_partly_there() {
+        use crate::app::requests::{Holding, holding_of};
+        let (roots, cat, serve) = on_two_folders("rf1-partly");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two"), ("A/03 Three.flac", "Three")]);
+        serve.refresh().unwrap();
+        let owned = record_in(&serve, 0, "A");
+        let album = listed(&cat, "album", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006201")]);
+        let list: Vec<crate::catalogue::identity::RefTrack> =
+            (1..=8).map(|n| crate::catalogue::identity::RefTrack { disc: 1, position: n, title: format!("Track {n}"), length_ms: Some(200_000), recording: None }).collect();
+        cat.set_reference_tracks(album, "musicbrainz", &list).unwrap();
+        cat.set_counting(album, Some("musicbrainz"), false).unwrap();
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "three short tracks: a single, until found short");
+        assert_eq!(cat.requested(&[album]).unwrap()[&album].holder, None);
+        serve.userdata.set_album_complete(&ids::record(owned), Some(r#"{"of":8,"has":3,"release":"Album","missing":[]}"#), Some(1), 100).unwrap();
+        serve.refresh().unwrap();
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("album"), "typed as its whole release");
+        let q = cat.requested(&[album]).unwrap().remove(&album).unwrap();
+        assert_eq!(q.holder, Some(owned), "the album had by its partial copy");
+        assert_eq!(holding_of(&q, |_| crate::settings::LibraryKind::Main), Holding::Partly { has: 3, of: 8 }, "partly there");
+        let artist = cat.artist_for("Artist").unwrap();
+        assert!(cat.missing_of(artist).unwrap().iter().all(|m| m.row.id != album), "off the missing list");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// These files of folder `folder` (path, title) tagged as `add` tags them, each numbered by its place in the list.
+    fn numbered(cat: &Catalogue, folder: i64, files: &[(&str, &str)]) {
+        for (n, (rel, title)) in files.iter().enumerate() {
+            let number = (n + 1).to_string();
+            cat.tag_for_tests(folder, rel, &[("album", "Album"), ("albumartist", "Artist"), ("title", title), ("tracknumber", &number)]);
+        }
+    }
+
+    /// RF2's shape: Music (catalogue folder 0, main) holds an untagged copy of `add`'s "Album" as MP3 at 320 kb/s, three numbered
+    /// tracks; Incoming (folder 1) a copy of its names as FLAC under `B`, of `incoming`'s numbered tracks, each three seconds
+    /// longer than Music's: a record of its own (the lengths tell two records, `identity::same_record`), as production's five
+    /// are two only because Music's copy is untagged. The folders, the catalogue, the server, Music's record and the copy waiting.
+    #[allow(clippy::type_complexity)]
+    fn split_from_music(name: &str, incoming: &[(&str, &str)]) -> ([PathBuf; 2], Arc<Catalogue>, Arc<Serve>, i64, (String, copies::Copy)) {
+        let (roots, cat, serve) = on_two_folders(name);
+        serve.library.set_kinds(vec![(0, Kind::Main), (1, Kind::Incoming)]);
+        let kept = [("A/01 One.mp3", "One"), ("A/02 Two.mp3", "Two"), ("A/03 Three.mp3", "Three")];
+        add(&cat, &roots[0], 0, &kept);
+        numbered(&cat, 0, &kept);
+        cat.execute_for_tests("UPDATE files SET format = 'MP3', bitrate = 320 WHERE folder = 0");
+        serve.refresh().unwrap();
+        let music = record_in(&serve, 0, "A");
+        add(&cat, &roots[1], 1, incoming);
+        numbered(&cat, 1, incoming);
+        cat.execute_for_tests("UPDATE files SET format = 'FLAC', bits = 16, rate = 44100, bitrate = 900, duration_ms = 203000 WHERE folder = 1");
+        checked_again(&serve);
+        let album = serve.library.album_in(1, "B").unwrap().expect("built");
+        let copy = serve.library.copies_of(&album).unwrap().into_iter().find(|c| c.folder == 1).expect("its copy");
+        (roots, cat, serve, music, (album, copy))
+    }
+
+    /// RF2 (RB2's scenario, the census's five): Music's untagged MP3 and Lidarr's FLAC of the same three tracks are two records of one
+    /// name. The copy waiting pairs with Music's track for track (`incoming::pair`, as 0.16's Replace paired them), so it stands against
+    /// it as a copy of one record does: better, and Music's a main library's copy, so Replace's to take (the badge, Health's better
+    /// copies, the card's line), saying why; Replace takes Music's copy's place. Default taken: an untagged Music copy of the same names,
+    /// paired one for one, is an upgrade. Never: "another edition" with no action for one tracklist.
+    #[test]
+    fn a_tracklist_split_from_musics_record_by_missing_tags_is_an_upgrade() {
+        let three = [("B/01 One.flac", "One"), ("B/02 Two.flac", "Two"), ("B/03 Three.flac", "Three")];
+        let (roots, _cat, serve, music, (album, copy)) = split_from_music("rf2-same", &three);
+        assert_ne!(ids::record_number(&album), Some(music), "two records of one name");
+        let stood = serve.stands_of(&[(album.clone(), copy.clone())], &[0]).unwrap();
+        let (better, kept) = stood[0].clone().expect("stands against Music's copy");
+        assert_eq!((better, kept.folder, kept.dir.as_str()), (true, 0, "A"), "better than Music's copy");
+        assert!(copies::replaces(better, kept.kind), "Replace's to take: Health's better copies, the badge");
+        assert_eq!(copies::why(&copy, &kept), "lossless, yours is 320 kbps");
+        let paired = serve.paired_editions(&[(album.clone(), copy)], &[0]).unwrap();
+        assert_eq!(paired.get(&album).map(|(of, c)| (of.clone(), c.folder, c.dir.clone())), Some((ids::record(music), 0, "A".to_string())), "Replace takes Music's copy's place");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// RF2, OQ1 kept (the census's sixth, 10 tracks against 12): Lidarr's copy holds a fourth track Music's has not. Another tracklist
+    /// is another record: the copy stands against nothing, Replace has no copy to take the place of, and Music has another edition,
+    /// said so with no action.
+    #[test]
+    fn another_tracklist_stays_another_edition() {
+        let four = [("B/01 One.flac", "One"), ("B/02 Two.flac", "Two"), ("B/03 Three.flac", "Three"), ("B/04 Four.flac", "Four")];
+        let (roots, cat, serve, _music, (album, copy)) = split_from_music("rf2-other", &four);
+        assert_eq!(serve.stands_of(&[(album.clone(), copy.clone())], &[0]).unwrap(), [None], "no stand");
+        assert!(serve.paired_editions(&[(album.clone(), copy)], &[0]).unwrap().is_empty(), "nothing for Replace");
+        assert_eq!(cat.other_edition_in(ids::record_number(&album).unwrap(), &[0]).unwrap(), Some(0), "Music has another edition");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
@@ -1063,6 +1287,50 @@ mod tests {
         cat.set_folders(vec![roots[0].clone()]).unwrap();
         checked_again(&serve);
         assert_eq!((plays_of(&serve, &away), plays_of(&serve, &here)), (1, 0), "on its own track, and nothing on the other");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// Run 12's close (0101 point 6): an account new here has every other account's own music off, however many there are; never
+    /// its own, nor a hidden folder.
+    #[test]
+    fn a_new_account_has_every_other_accounts_own_music_off() {
+        let d = std::env::temp_dir().join(format!("cratarr-serve-others-own-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let own = d.join("own");
+        for name in ["ann", "bob", "carl", "dee", "root", ".cratarr-trash"] {
+            std::fs::create_dir_all(own.join(name)).unwrap();
+        }
+        let source = serde_json::json!({ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": [], "values": { "folders": [], "own_music": own.to_string_lossy() } });
+        std::fs::write(d.join("settings.json"), serde_json::to_vec(&serde_json::json!({ "version": 4, "sources": [source] })).unwrap()).unwrap();
+        let serve = Serve::open(Some(&d), Rules::default(), &|_| None).unwrap();
+        serve.others_own_off("root");
+        let mut off = serve.userdata.hidden_libraries("root").unwrap();
+        off.sort();
+        let others: Vec<String> = ["ann", "bob", "carl", "dee"].iter().map(|n| format!("cratarr/{}", own.join(n).display())).collect();
+        assert_eq!(off, others);
+        drop(serve);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Run 12's close (RF8, the review of runs 11 and 12, RA5): a change told in the second of the library's last look is built at its
+    /// next look, not at the next pass five minutes on. RY01's Undo told the library at its first `set_tracks`, the library looked at
+    /// once at half of it, and the rest was told within that second: Music's MP3 never came back (`undo_puts_musics_copy_back_end_to_end`).
+    #[test]
+    fn a_change_told_in_the_second_of_the_last_look_is_built_at_the_next() {
+        let (roots, cat, serve) = on_two_folders("same-second");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One")]);
+        checked_again(&serve);
+        // At the start of a second, so the look, the change and its telling all fall in it.
+        let into = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_millis();
+        std::thread::sleep(Duration::from_millis(u64::from(1020 - into)));
+        let second = now();
+        cat.changed_outside_pass();
+        serve.refresh().unwrap();
+        add(&cat, &roots[1], 1, &[("B/01 Two.flac", "Two")]);
+        cat.changed_outside_pass();
+        assert_eq!(now(), second, "all in one second");
+        assert!(serve.refresh().unwrap(), "built at the next look");
+        assert!(serve.library.album_in(1, "B").unwrap().is_some(), "what was told is listed");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 

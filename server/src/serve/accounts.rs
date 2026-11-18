@@ -1,9 +1,11 @@
 //! One's own account and, for the administrators, everyone's (decision 0051, several users): `/api/me` (who one is and
-//! the name one goes by, what one may do, whether one's OpenSubsonic password is set, one's devices and sign-ins) and
-//! `/api/users` (the Users panel).
+//! the name one goes by, what one may do, whether one's OpenSubsonic password is set, one's devices and sign-ins, one's
+//! room) and `/api/users` (the Users panel).
+//! A room (AL01, `app::room`) is `{ size, used, full }` in bytes; none (`null`) for an administrator.
 //! A device is a Play On player of the account's (`{ id, name, kind, online, last_seen }`, its id its name).
 //! With signing in off (one user) there is no one to be: `/api/me` answers 404, and the page takes it for the owner.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Router;
@@ -15,6 +17,7 @@ use serde_json::json;
 
 use super::signin::session_of;
 use super::users::{Permissions, Refusal, User};
+use crate::app::room::Room;
 use super::{Serve, now};
 
 pub fn router(serve: Arc<Serve>) -> Router {
@@ -33,6 +36,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
                 .route("/api/users/{name}/password", put(set_password))
                 .route("/api/users/{name}/active", put(set_active))
                 .route("/api/users/{name}/permissions", put(set_permissions))
+                .route("/api/users/{name}/room", put(set_room))
                 .route("/api/users/{name}/sessions/{id}", delete(end_session))
                 .route("/api/users/{name}/devices/{id}", delete(forget_device))
                 .layer(axum::middleware::from_fn(super::access::admin)),
@@ -77,13 +81,27 @@ fn devices_of(serve: &Serve, user: &str) -> Vec<serde_json::Value> {
 }
 
 /// An account as the Users panel shows it. `display_name`: the name the directory gives it (null: none), which the page
-/// greets one with, else the name.
-fn view(serve: &Serve, u: &User, current: Option<&str>) -> serde_json::Value {
+/// greets one with, else the name. `room`: its room (AL01; `rooms_of`), none for an administrator.
+fn view(serve: &Serve, u: &User, current: Option<&str>, room: Option<&Room>) -> serde_json::Value {
     json!({
         "name": u.name, "display_name": u.display_name, "admin": u.admin, "active": u.active, "directory": u.directory, "permissions": u.permissions,
         "own_library": serve.own_music().map(|o| o.join(&u.name)).filter(|p| p.is_dir()).map(|p| p.display().to_string()),
         "app_password": !u.password.is_empty(), "devices": devices_of(serve, &u.name), "sessions": sessions_of(serve, &u.name, current),
+        "room": room,
     })
+}
+
+/// The rooms of `users` (AL01), every one from one read, off the runtime: none for an administrator, and none where they could
+/// not be read (said in the log).
+async fn rooms_of(serve: &Arc<Serve>, users: &[User]) -> HashMap<String, Room> {
+    let (s, us) = (serve.clone(), users.to_vec());
+    match tokio::task::spawn_blocking(move || crate::app::room::rooms(&s, &us)).await.map_err(anyhow::Error::from).and_then(|r| r) {
+        Ok(rooms) => rooms,
+        Err(e) => {
+            tracing::warn!("the accounts' rooms were not read: {e:#}");
+            HashMap::new()
+        }
+    }
 }
 
 async fn me(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {
@@ -94,7 +112,8 @@ async fn me(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {
     }
     let Some(u) = serve.current_user().and_then(|n| serve.users.get(&n)) else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
     let current = session_of(&serve, &headers).map(|s| s.id);
-    axum::Json(view(&serve, &u, current.as_deref())).into_response()
+    let rooms = rooms_of(&serve, std::slice::from_ref(&u)).await;
+    axum::Json(view(&serve, &u, current.as_deref(), rooms.get(&u.name))).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -254,7 +273,8 @@ async fn create_user(State(serve): State<Arc<Serve>>, axum::Json(b): axum::Json<
         Ok(u) => {
             tracing::info!(target: "signin", user = %u.name, admin = u.admin, "account made");
             serve.others_own_off(&u.name);
-            axum::Json(view(&serve, &u, None)).into_response()
+            let rooms = rooms_of(&serve, std::slice::from_ref(&u)).await;
+            axum::Json(view(&serve, &u, None, rooms.get(&u.name))).into_response()
         }
         Err(r) => refusal(r),
     }
@@ -320,8 +340,21 @@ async fn left(serve: &Serve, name: &str) -> usize {
 
 async fn users(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {
     let current = session_of(&serve, &headers).map(|s| s.id);
-    let list: Vec<_> = serve.users.all().iter().map(|u| view(&serve, u, current.as_deref())).collect();
+    let all = serve.users.all();
+    let rooms = rooms_of(&serve, &all).await;
+    let list: Vec<_> = all.iter().map(|u| view(&serve, u, current.as_deref(), rooms.get(&u.name))).collect();
     axum::Json(json!({ "users": list })).into_response()
+}
+
+/// An account's room, set by an administrator (AL01; 0084: per user, in the Users panel): GB with decimals (OQ-R5), kept in bytes
+/// (1 GB = 10^9). Kept on an administrator too, for when it is a user again (OQ-R3). Anything but a number from 0 is refused with 400
+/// (AL04.4, `room::gb_given`), the old room kept.
+async fn set_room(State(serve): State<Arc<Serve>>, Path(name): Path<String>, axum::Json(b): axum::Json<serde_json::Value>) -> Response {
+    let Some(gb) = crate::app::room::gb_given(&b) else { return refused(StatusCode::BAD_REQUEST, "Give the room in GB, from 0.") };
+    match serve.users.set_room(&name, (gb * crate::app::room::GB as f64).round() as u64) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(r) => refusal(r),
+    }
 }
 
 async fn set_permissions(State(serve): State<Arc<Serve>>, Path(name): Path<String>, axum::Json(p): axum::Json<Permissions>) -> Response {

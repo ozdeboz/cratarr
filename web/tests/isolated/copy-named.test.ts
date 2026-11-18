@@ -53,6 +53,12 @@ test('Replace names both copies beside its cover and its carrying over', async (
   assert.deepEqual(body, { from: 'in', to: 'music', year: '2001', cover: 'new', carry: true });
 });
 
+test("Replace from someone's own music says what its sheet showed, with no cover and nothing carried over", async () => {
+  const sheet = { folder: 'A/Both Shores (2019)', tracks: 10, added: 0, files: 11 };
+  const { body } = await asked(() => replaceIncoming('cratarr', 'al-1', OWN, 'music', undefined, undefined, false, sheet));
+  assert.deepEqual(body, { from: OWN, to: 'music', carry: false, folder: 'A/Both Shores (2019)', tracks: 10, added: 0, files: 11 });
+});
+
 test("a delete from the Users panel names the owner's copy, not the one a record also has in Music", async () => {
   const { path, body } = await asked(() => deleteOwnAlbum('cratarr', 'al-1', OWN));
   assert.equal(path, '/api/albums/cratarr/al-1/delete-own');

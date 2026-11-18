@@ -4328,7 +4328,8 @@ impl PlaylistService {
     /// An artist's Top recommendations (the owner, 2026-10-23: "a list of tracks which follows taste", in place of
     /// their most played): their tracks of the libraries switched on, those that fit the asking account's taste best
     /// first (`taste_in`, `Alike::fit`: as Best match), at most `count`, as song ids.
-    pub async fn artist_picks(&self, name: &str, without: &[String], count: usize) -> Result<Vec<String>, ToggleError> {
+    /// `only`: their tracks by song id where the page knows the artist by id (G6), so a namesake's tracks are not theirs; else by name.
+    pub async fn artist_picks(&self, name: &str, without: &[String], count: usize, only: Option<std::collections::HashSet<String>>) -> Result<Vec<String>, ToggleError> {
         let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::Refused("Recommendations are an account's own: sign in.".into()))?;
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let lib = self.crate_library(None, false, false, without).await?;
@@ -4341,8 +4342,10 @@ impl PlaylistService {
                 .files
                 .iter()
                 .enumerate()
-                .filter(|(i, f)| lib.on(*i) && f.artists.iter().any(|a| a.eq_ignore_ascii_case(&name)))
-                .filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), alike.fit(&taste, i, lib.by())?)))
+                .filter(|(i, f)| lib.on(*i) && (only.is_some() || f.artists.iter().any(|a| a.eq_ignore_ascii_case(&name))))
+                .filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), i)))
+                .filter(|(song, _)| only.as_ref().is_none_or(|o| o.contains(song)))
+                .filter_map(|(song, i)| Some((song, alike.fit(&taste, i, lib.by())?)))
                 .collect();
             fit.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             Ok(fit.into_iter().take(count).map(|(id, _)| id).collect())

@@ -3,17 +3,12 @@
 // what Lidarr is looking for, and the actions on them.
 import { cancelRequest, decideRequests, getRequests, getWatching, type AlbumRequest, type RequestMark, type RequestsView, type Watching } from './api';
 import { toast } from './toast.svelte';
+import { markOfState } from './requestState';
 
-/** A request's mark on its album's cover (lib/CoverStatus), where the server's own is not there: wanted while open,
- *  downloading while Lidarr fetches it or it waits in Incoming; none when answered no, taken back or in the library. */
-export function markOf(r: AlbumRequest | null | undefined): RequestMark | null {
-  if (!r || (r.status !== 'pending' && r.status !== 'approved')) return null;
-  const a = r.album_state;
-  if (a?.state === 'in_library') return null;
-  if (a?.state === 'fetching') return { state: 'downloading', done: a.done };
-  if (a?.state === 'in_incoming' || a?.state === 'partly_there') return { state: 'downloading', done: 1 };
-  return { state: 'wanted' };
-}
+/** A request's mark on its album's cover (lib/CoverStatus), where the server's own is not there, from its state (W5,
+ *  lib/requestState): wanted while open, downloading while it is fetched or arrived; none when answered no, taken back,
+ *  rejected or in the library. */
+export const markOf = (r: AlbumRequest | null | undefined): RequestMark | null => markOfState(r);
 
 /** The page's lists, each opened in the panel (`requests:<id>`). */
 export { listsShown, REQUESTS_LISTS, type RequestsList } from './requestLists';

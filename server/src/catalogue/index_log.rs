@@ -9,6 +9,9 @@
 //!   changed, however often it was written. The counter never goes back (AUTOINCREMENT), not even once rows are pruned.
 //! - **Rows are named by what the index names them by:** a track, a record, an artist by their ids for life, a library by its
 //!   catalogue folder. What a row says is read when it is sent, so all the log says is which.
+//! - **A record nobody holds logs nothing:** a record not had (0100) is no row of the index, and the pages that name them name
+//!   hundreds. The track that moves onto one logs it, as the track's record changes. An artist of such records alone logs
+//!   nothing either.
 //! - **A row can change with no write here at all:** a word of the household's, a mood whose bar moved with AudioMuse's new rows, a
 //!   year set by hand, what a build makes of the tags that were read a minute ago. So what each row last said is kept as a print,
 //!   and `index_settle` logs every row that says something else now, however it came to. A device is told what is logged, so
@@ -56,14 +59,33 @@ fn differ(columns: &[&str]) -> String {
     columns.iter().map(|c| format!("OLD.{c} IS NOT NEW.{c}")).collect::<Vec<_>>().join(" OR ")
 }
 
+/// Whether a track holds the record of the row `at`, retired or not. A record no track holds, a record not had (0100), is no row
+/// of a device's index: logged, each a discography or a label's page names would cost every device a row for nothing. A track
+/// that moves onto one logs it then, as its record changes.
+fn held(at: &str) -> String {
+    format!("EXISTS (SELECT 1 FROM tracks WHERE record = {at}.id)")
+}
+
+/// Whether a record a track holds credits the artist of the row `at` (`record_artists`), as `held` asks of a record: an artist
+/// of records not had only, a discography's or a label's, is no row of a device's index either (C46). An artist credited on
+/// tracks alone has no row here to say so: `index_settle` finds them, as it finds every row whatever moved it.
+fn credited(at: &str) -> String {
+    format!("EXISTS (SELECT 1 FROM record_artists ra JOIN tracks t ON t.record = ra.record WHERE ra.artist = {at}.id)")
+}
+
 /// `name` on `table`, `on` being what fires it.
 fn trigger(name: &str, on: &str, table: &str, body: &str) -> String {
     format!("DROP TRIGGER IF EXISTS index_{name}; CREATE TRIGGER index_{name} AFTER {on} ON {table} BEGIN {body} END;")
 }
 
+/// `name` on `table`, `on` being what fires it, only where `when` holds.
+fn trigger_when(name: &str, on: &str, table: &str, when: &str, body: &str) -> String {
+    format!("DROP TRIGGER IF EXISTS index_{name}; CREATE TRIGGER index_{name} AFTER {on} ON {table} WHEN {when} BEGIN {body} END;")
+}
+
 /// `name` on `table`, for an update that changes one of `columns`.
 fn on_change(name: &str, table: &str, columns: &[&str], body: &str) -> String {
-    format!("DROP TRIGGER IF EXISTS index_{name}; CREATE TRIGGER index_{name} AFTER UPDATE ON {table} WHEN {} BEGIN {body} END;", differ(columns))
+    trigger_when(name, "UPDATE", table, &differ(columns), body)
 }
 
 /// Every trigger, as a batch. Written again at each opening, so what an older one logged cannot stay on.
@@ -95,10 +117,10 @@ fn triggers() -> String {
         trigger("tags_delete", "DELETE", "tags", &file_track("OLD")),
         on_change("tags_update", "tags", &["name", "value"], &file_track("NEW")),
         on_change("tracks_update", "tracks", &TRACK, &format!("{} {}", track("NEW.id"), both("record", "record"))),
-        trigger("records_insert", "INSERT", "records", &record("NEW.id")),
-        on_change("records_update", "records", &RECORD, &record("NEW.id")),
-        trigger("artists_insert", "INSERT", "artists", &artist("NEW.id")),
-        on_change("artists_update", "artists", &ARTIST, &artist("NEW.id")),
+        trigger_when("records_insert", "INSERT", "records", &held("NEW"), &record("NEW.id")),
+        trigger_when("records_update", "UPDATE", "records", &format!("({}) AND {}", differ(&RECORD), held("NEW")), &record("NEW.id")),
+        trigger_when("artists_insert", "INSERT", "artists", &credited("NEW"), &artist("NEW.id")),
+        trigger_when("artists_update", "UPDATE", "artists", &format!("({}) AND {}", differ(&ARTIST), credited("NEW")), &artist("NEW.id")),
         trigger("analysis_insert", "INSERT", "analysis", &file_track("NEW")),
         trigger("analysis_delete", "DELETE", "analysis", &file_track("OLD")),
         on_change("analysis_update", "analysis", &ANALYSIS, &file_track("NEW")),
@@ -407,7 +429,7 @@ mod tests {
         let in_file = just(&[("track", ours)]);
         let muse = just(&[("sound", ours), ("track", ours)]);
         let held = |sql: &str| {
-            cat.db().execute(sql, []).unwrap();
+            cat.db().execute_batch(sql).unwrap();
         };
         let cases: Vec<(String, BTreeMap<String, Vec<i64>>)> = vec![
             ("UPDATE files SET bitrate = 320".into(), in_file.clone()),
@@ -428,7 +450,7 @@ mod tests {
             ("UPDATE audiomuse SET embedding = x'00000000'".into(), muse.clone()),
             ("DELETE FROM audiomuse".into(), muse.clone()),
             (format!("UPDATE records SET title = 'New' WHERE id = {record}"), just(&[("record", &[record])])),
-            ("INSERT INTO artists (born, name, key) VALUES (1, 'A', 'a')".into(), just(&[("artist", &[1])])),
+            (format!("INSERT INTO record_artists (record, artist) VALUES ({record}, 1); INSERT INTO artists (born, name, key) VALUES (1, 'A', 'a')"), just(&[("artist", &[1])])),
             ("UPDATE artists SET name = 'B'".into(), just(&[("artist", &[1])])),
             ("UPDATE folders SET path = '/elsewhere' WHERE id = 1".into(), just(&[("library", &[1])])),
         ];
@@ -437,6 +459,57 @@ mod tests {
             let sorted: BTreeMap<String, Vec<i64>> = logged.into_iter().map(|(k, mut v)| (k, { v.sort_unstable(); v })).collect();
             assert_eq!(sorted, wanted, "{sql}");
         }
+    }
+
+    /// A record nobody holds is no row of a device's index (a record not had, 0100): a discography or a label's page names
+    /// hundreds, and each would cost every device a row. The track that joins one logs it, as it moves onto it.
+    #[test]
+    fn a_record_not_had_logs_nothing_for_devices() {
+        let l = library("not-had", None, 1);
+        let (track, had) = (l.track(0), l.record(0));
+        let mut wanted = 0;
+        let logged = l.logged_by(|cat| {
+            let db = cat.db();
+            db.execute("INSERT INTO records (born, title, artist, year) VALUES (1, 'Wanted', 'Someone', 2001)", []).unwrap();
+            wanted = db.last_insert_rowid();
+            for sql in ["UPDATE records SET title = 'Still Wanted', kind = 'ep' WHERE id = ?1", "UPDATE records SET retired_at = 5 WHERE id = ?1", "UPDATE records SET retired_at = NULL WHERE id = ?1"] {
+                db.execute(sql, [wanted]).unwrap();
+            }
+        });
+        assert_eq!(logged, BTreeMap::new(), "born, named and retired with no track: nothing");
+        let mut logged = l.logged_by(|cat| {
+            cat.db().execute("UPDATE tracks SET record = ?1 WHERE id = ?2", [wanted, track]).unwrap();
+        });
+        logged.values_mut().for_each(|items| items.sort_unstable());
+        assert_eq!(logged, just(&[("record", &[had.min(wanted), had.max(wanted)]), ("track", &[track])]), "a track on it makes it a row");
+        let logged = l.logged_by(|cat| {
+            cat.db().execute("UPDATE records SET title = 'Had' WHERE id = ?1", [wanted]).unwrap();
+        });
+        assert_eq!(logged, just(&[("record", &[wanted])]), "held, it logs as any record does");
+    }
+
+    /// An artist only records not had credit, a discography's or a label's, is no row of a device's index either (C46): named
+    /// and renamed, nothing. A record had crediting them makes them one.
+    #[test]
+    fn an_artist_of_records_not_had_logs_nothing_for_devices() {
+        let l = library("artist-not-had", None, 1);
+        let had = l.record(0);
+        let logged = l.logged_by(|cat| {
+            let db = cat.db();
+            db.execute("INSERT INTO records (born, title) VALUES (1, 'Wanted')", []).unwrap();
+            let wanted = db.last_insert_rowid();
+            db.execute("INSERT INTO artists (born, name, key) VALUES (1, 'Someone', 'someone')", []).unwrap();
+            let artist = db.last_insert_rowid();
+            db.execute("INSERT INTO record_artists (record, artist) VALUES (?1, ?2)", [wanted, artist]).unwrap();
+            db.execute("UPDATE artists SET name = 'Someone Else' WHERE id = ?1", [artist]).unwrap();
+        });
+        assert_eq!(logged, BTreeMap::new(), "an artist of a record not had: nothing");
+        let logged = l.logged_by(|cat| {
+            let db = cat.db();
+            db.execute("INSERT INTO record_artists (record, artist) SELECT ?1, id FROM artists", [had]).unwrap();
+            db.execute("UPDATE artists SET name = 'Someone'", []).unwrap();
+        });
+        assert_eq!(logged.get("artist").map(Vec::len), Some(1), "credited by a record had, it logs as any artist does");
     }
 
     /// AudioMuse is taken in whole, and SQLite would empty a table with no trigger on it in one step, row by row or not.

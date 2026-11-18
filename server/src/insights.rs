@@ -13,8 +13,30 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::Serialize;
 
 use crate::catalogue::{Rules, TrackRow};
-use crate::incoming::{Quality, quality_of};
 use crate::playlists::playlist_stats;
+
+/// How good an album's files are: lossless where every track is; between lossy files the lowest bitrate counts. Here since the
+/// verdicts by name went (C37b), insights being the last to ask it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Quality {
+    #[default]
+    Unknown,
+    Lossy { kbps: u32 },
+    Lossless,
+}
+
+/// The quality of a set of tracks from their formats and lowest bitrate: lossless only when every track is.
+fn quality_of<'a>(formats: impl IntoIterator<Item = &'a str>, min_kbps: Option<u32>) -> Quality {
+    let formats: Vec<String> = formats.into_iter().map(str::to_uppercase).collect();
+    let lossless = |f: &str| matches!(f, "FLAC" | "ALAC" | "WAV" | "AIFF" | "APE" | "WV");
+    if formats.is_empty() {
+        Quality::Unknown
+    } else if formats.iter().all(|f| lossless(f)) {
+        Quality::Lossless
+    } else {
+        min_kbps.map_or(Quality::Unknown, |kbps| Quality::Lossy { kbps })
+    }
+}
 
 /// Genres and artists: every one, so that each way the page ranks them (by tracks, by those in a playlist, A–Z) is
 /// the top of the whole set, not of another ranking's top (the owner, 2026-10-23).

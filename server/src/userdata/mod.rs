@@ -595,6 +595,30 @@ fn snapshot_of(r: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
 
 const SNAPSHOT_COLUMNS: &str = "id, name, settings, created, picture";
 
+/// Where the user data names records and artists by their ids for life, (table, column): what `top_named`, `artists_named` and
+/// `records_named` read.
+const NAMING: [(&str, &str); 19] = [
+    ("annotation", "item"),
+    ("added", "album"),
+    ("imported", "item"),
+    ("album_review", "album"),
+    ("album_tags", "album"),
+    ("record_overrides", "album"),
+    ("album_matches", "album"),
+    ("album_complete", "album"),
+    ("intake_heard", "album"),
+    ("record_references", "album"),
+    ("discogs_genres", "album"),
+    ("renumber_matched", "album"),
+    ("release_types", "key"),
+    ("words", "subject"),
+    ("words_asked", "subject"),
+    ("discogs_facts", "subject"),
+    ("change_at", "item"),
+    ("preference", "value"),
+    ("related_artists", "found"),
+];
+
 /// The `folder` of what was kept by record before a record had copies: it goes for every copy.
 const NO_FOLDER: i64 = -1;
 
@@ -614,6 +638,27 @@ fn add_review_folder(conn: &Connection) -> Result<()> {
              COMMIT;",
         )?;
     }
+    Ok(())
+}
+
+/// Requests from before they named their record (0.17, C49a) get the column, empty, and its index: 0.17's step gives each its
+/// record. Safe to repeat.
+fn add_request_record(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('request') WHERE name = 'record'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE request ADD COLUMN record INTEGER")?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS request_record ON request (record)")?;
+    // One open request of an account's for a record (W6, H): a second one from before the index is closed as asked twice, the
+    // approved kept over the pending, the older over the newer; then the index holds it so.
+    conn.execute(
+        "UPDATE request SET status = 'cancelled', reason = 'Asked twice', decided_at = ?1
+         WHERE record IS NOT NULL AND status IN ('pending', 'approved') AND EXISTS (SELECT 1 FROM request o WHERE o.id != request.id
+           AND o.user = request.user AND o.record = request.record AND o.status IN ('pending', 'approved')
+           AND (o.status = 'approved' AND request.status = 'pending' OR o.status = request.status AND o.id < request.id))",
+        [now()],
+    )?;
+    conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS request_open_once ON request (user, record) WHERE record IS NOT NULL AND status IN ('pending', 'approved')")?;
     Ok(())
 }
 
@@ -720,7 +765,52 @@ pub(crate) fn put_migration_part(conn: &Connection, part: &str, report: &serde_j
     Ok(())
 }
 
+/// What 0.17's step carries (`app::step_017`), each table as 0.16 kept it: (key, when, what it holds, as JSON or a page).
+#[derive(Debug, Default)]
+pub struct KeptFor017 {
+    /// `record_references`: (album, 0.14's choices).
+    pub chosen: Vec<(String, String)>,
+    /// `album_matches`: (album, when, the match; none: looked for in vain).
+    pub matches: Vec<(String, i64, Option<String>)>,
+    /// `discogs_facts` of albums: (`album:<record>`, when, the facts; none: asked in vain).
+    pub discogs: Vec<(String, i64, Option<String>)>,
+    /// `bandcamp_found`: (release group or `key(artist)|key(album)`, when, the page; none: a miss).
+    pub pages: Vec<(String, i64, Option<String>)>,
+    /// `mb_releases` MusicBrainz knew: (release, when, what was read).
+    pub releases: Vec<(String, i64, String)>,
+    /// `request`s with no record yet (C49a): (id, album key, release group, album, artist, year, cover, when asked).
+    #[allow(clippy::type_complexity)]
+    pub requests: Vec<(i64, String, Option<String>, String, String, Option<i32>, Option<String>, i64)>,
+    /// `discography` (C48b): (artist's MusicBrainz id, when read, its release groups as JSON).
+    pub discographies: Vec<(String, i64, String)>,
+    /// `related_artists`' finds (JSON), for the names of the artists in them, by MusicBrainz id.
+    pub related: Vec<String>,
+}
+
 impl UserData {
+    /// What 0.17's step carries, read under one hold of the database, each table in its keys' order. Blocking.
+    pub fn kept_for_017(&self) -> Result<KeptFor017> {
+        let db = self.db();
+        fn rows<T>(db: &Connection, sql: &str, row: impl FnMut(&rusqlite::Row) -> rusqlite::Result<T>) -> Result<Vec<T>> {
+            let mut st = db.prepare(sql)?;
+            let out = st.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
+            Ok(out)
+        }
+        let three = |r: &rusqlite::Row| Ok((r.get(0)?, r.get(1)?, r.get(2)?));
+        Ok(KeptFor017 {
+            chosen: rows(&db, "SELECT album, chosen FROM record_references ORDER BY album", |r| Ok((r.get(0)?, r.get(1)?)))?,
+            matches: rows(&db, "SELECT album, at, found FROM album_matches ORDER BY album", three)?,
+            discogs: rows(&db, "SELECT subject, at, facts FROM discogs_facts WHERE subject GLOB 'album:*' ORDER BY subject", three)?,
+            pages: rows(&db, "SELECT album, at, page FROM bandcamp_found ORDER BY album", three)?,
+            releases: rows(&db, "SELECT release, at, facts FROM mb_releases WHERE found <> 0 ORDER BY release", |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?,
+            discographies: rows(&db, "SELECT artist, at, groups FROM discography ORDER BY artist", |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?,
+            related: rows(&db, "SELECT found FROM related_artists ORDER BY artist", |r| r.get(0))?,
+            requests: rows(&db, "SELECT id, album_key, release_group, album, artist, year, cover, at FROM request WHERE record IS NULL ORDER BY id", |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+            })?,
+        })
+    }
+
     /// A part of the migration report (`put_migration_part`), in a transaction of its own.
     pub fn set_migration_part(&self, part: &str, report: &serde_json::Value) -> Result<()> {
         put_migration_part(&self.db(), part, report)
@@ -775,6 +865,7 @@ impl UserData {
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
+        add_request_record(&conn)?;
         add_review_folder(&conn).context("keeping reviews by the copy that waited")?;
         words::add_heard_folder(&conn).context("keeping what was heard by the copy it was heard of")?;
         conn.execute_batch(scrobbles::SCHEMA).context("keeping the plays devices hand over")?;
@@ -791,6 +882,12 @@ impl UserData {
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Read-only from now on, as a disk gone read-only leaves it: nothing more is written (`PRAGMA query_only`).
+    #[cfg(test)]
+    pub fn read_only_for_tests(&self) {
+        self.db().execute_batch("PRAGMA query_only = ON").unwrap();
     }
 
     /// A value the user data remembers (`set_meta`). Blocking.
@@ -847,36 +944,43 @@ impl UserData {
     /// The highest record or artist id for life the user data names (`ids::highest_named`), 0 for none: with the JSON stores,
     /// what a fresh start of lost ids must number above. Blocking.
     pub fn top_named(&self) -> Result<i64> {
-        const COLUMNS: [(&str, &str); 19] = [
-            ("annotation", "item"),
-            ("added", "album"),
-            ("imported", "item"),
-            ("album_review", "album"),
-            ("album_tags", "album"),
-            ("record_overrides", "album"),
-            ("album_matches", "album"),
-            ("album_complete", "album"),
-            ("intake_heard", "album"),
-            ("record_references", "album"),
-            ("discogs_genres", "album"),
-            ("renumber_matched", "album"),
-            ("release_types", "key"),
-            ("words", "subject"),
-            ("words_asked", "subject"),
-            ("discogs_facts", "subject"),
-            ("change_at", "item"),
-            ("preference", "value"),
-            ("related_artists", "found"),
-        ];
         let db = self.db();
         let mut top = 0;
-        for (table, column) in COLUMNS {
+        for (table, column) in NAMING {
             let mut st = db.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE '%al-%' OR {column} LIKE '%ar-%'"))?;
             for text in st.query_map([], |r| r.get::<_, String>(0))? {
                 top = top.max(crate::serve::ids::highest_named(&text?));
             }
         }
         Ok(top)
+    }
+
+    /// Every artist the user data names by their id for life (`ids::artists_named`), wherever `NAMING` looks: a favourite, plays
+    /// or a rating, what an import brought, their words, a preference, a related artist (RT01b: never forgotten while it does).
+    /// Blocking.
+    pub fn artists_named(&self) -> Result<std::collections::BTreeSet<i64>> {
+        self.named_by("ar-", |text| crate::serve::ids::artists_named(text).collect())
+    }
+
+    /// Every record the user data names by its id for life (`ids::records_named`), wherever `NAMING` looks: a heart, plays or a
+    /// rating, its words and tags, a review, what an import brought (Z5: a record not had is never forgotten while it does, as an
+    /// artist is not). Blocking.
+    pub fn records_named(&self) -> Result<std::collections::BTreeSet<i64>> {
+        self.named_by("al-", |text| crate::serve::ids::records_named(text).collect())
+    }
+
+    /// The ids for life of one kind the user data names wherever `NAMING` looks, `prefix` theirs (`al-`, `ar-`), each value read
+    /// by `read`.
+    fn named_by(&self, prefix: &str, read: fn(&str) -> Vec<i64>) -> Result<std::collections::BTreeSet<i64>> {
+        let db = self.db();
+        let mut named = std::collections::BTreeSet::new();
+        for (table, column) in NAMING {
+            let mut st = db.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE '%{prefix}%'"))?;
+            for text in st.query_map([], |r| r.get::<_, String>(0))? {
+                named.extend(read(&text?));
+            }
+        }
+        Ok(named)
     }
 
     /// The annotations of several items of one kind, by item; items without any are left out.
@@ -1423,6 +1527,14 @@ impl UserData {
         Ok(self.db().query_row("SELECT at, page FROM bandcamp_found WHERE album = ?1", [album], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
     }
 
+    /// The release group an album's page on Bandcamp was found by (W1), where Discover found it by one: what a Want of it sends.
+    pub fn bandcamp_found_group(&self, page: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album FROM bandcamp_found WHERE page = ?1 ORDER BY at DESC")?;
+        let keys: Vec<String> = st.query_map([page], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(keys.into_iter().find(|k| crate::app::discogs::is_mbid(k)))
+    }
+
     /// Every album page found on Bandcamp since `since` (epoch seconds), by the album's key: what lists of albums not in
     /// the library show without looking again (0.9.5).
     pub fn bandcamp_pages(&self, since: i64) -> Result<std::collections::HashMap<String, String>> {
@@ -1584,9 +1696,9 @@ impl UserData {
     pub fn add_request(&self, r: &Request) -> Result<i64> {
         let db = self.db();
         db.execute(
-            "INSERT INTO request (user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![r.user, r.album_key, r.artist_key, r.release_group, r.album, r.artist, r.year, r.cover, r.at, r.status, r.reason, r.decided_by, r.decided_at, r.fetched],
+            "INSERT INTO request (user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched, record)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![r.user, r.album_key, r.artist_key, r.release_group, r.album, r.artist, r.year, r.cover, r.at, r.status, r.reason, r.decided_by, r.decided_at, r.fetched, r.record],
         )?;
         Ok(db.last_insert_rowid())
     }
@@ -1605,13 +1717,38 @@ impl UserData {
         Ok(self.db().query_row(&format!("SELECT {REQUEST_COLUMNS} FROM request WHERE id = ?1"), [id], request_row).optional()?)
     }
 
-    /// A request answered or withdrawn: its status, why, by whom (now).
-    pub fn set_request_status(&self, id: i64, status: &str, reason: Option<&str>, by: Option<&str>) -> Result<()> {
-        self.db().execute(
-            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1",
-            params![id, status, reason, by, now()],
-        )?;
-        Ok(())
+    /// A request answered, withdrawn or closed: its status, why, by whom (now), where it still has the status it was read with
+    /// (`from`, W6): an answer meanwhile wins. Whether it was written.
+    pub fn set_request_status(&self, id: i64, from: &str, status: &str, reason: Option<&str>, by: Option<&str>) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1 AND status = ?6",
+            params![id, status, reason, by, now(), from],
+        )? > 0)
+    }
+
+    /// A request a Delete closed, put back by its Undo as it was (Y4): its status, why, by whom and when, where it still has the
+    /// status the Delete gave it (`from`): an answer since wins, and so does a newer open request of the account's of its record (one
+    /// open request a record, W6), quietly (V9). Whether it was written.
+    pub fn restore_request_status(&self, id: i64, from: &str, status: &str, reason: Option<&str>, by: Option<&str>, at: Option<i64>) -> Result<bool> {
+        Ok(self.db().execute(
+            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1 AND status = ?6
+             AND NOT (?2 IN ('pending', 'approved') AND record IS NOT NULL AND EXISTS (SELECT 1 FROM request o WHERE o.user = request.user
+               AND o.record = request.record AND o.id != request.id AND o.status IN ('pending', 'approved')))",
+            params![id, status, reason, by, at, from],
+        )? > 0)
+    }
+
+    /// The account's open request (pending or approved) of a record, else of an album's key (W6): looked for by these among all its
+    /// requests, not its newest.
+    pub fn open_request(&self, user: &str, record: Option<i64>, key: &str) -> Result<Option<Request>> {
+        Ok(self
+            .db()
+            .query_row(
+                &format!("SELECT {REQUEST_COLUMNS} FROM request WHERE user = ?1 AND status IN ('pending', 'approved') AND (record = ?2 OR album_key = ?3) ORDER BY record = ?2 DESC, id LIMIT 1"),
+                params![user, record, key],
+                request_row,
+            )
+            .optional()?)
     }
 
     /// What the fetcher said of a request it was handed.
@@ -1620,17 +1757,79 @@ impl UserData {
         Ok(())
     }
 
-    /// The release group a fetcher found a request's album by, for one asked for by its names.
-    pub fn set_request_release_group(&self, id: i64, release_group: &str) -> Result<()> {
-        self.db().execute("UPDATE request SET release_group = ?2 WHERE id = ?1", params![id, release_group])?;
+    /// The release group a request was handed to Lidarr by, kept where it was asked with none (X1): what Lidarr is told to stop by.
+    pub fn keep_request_group(&self, id: i64, group: &str) -> Result<()> {
+        self.db().execute("UPDATE request SET release_group = ?2 WHERE id = ?1 AND release_group IS NULL", params![id, group])?;
         Ok(())
     }
 
-    /// How many requests wait for an answer (Health).
-    pub fn requests_waiting(&self) -> Result<usize> {
-        Ok(self.db().query_row("SELECT count(*) FROM request WHERE status = 'pending'", [], |r| r.get::<_, i64>(0))? as usize)
+    /// A request's record (C49a), where it has none yet: 0.17's step's, given once. Whether it was given, and the request it was
+    /// closed beside as asked twice, where it was (W6; X7: the step's report lists it).
+    pub fn give_request_record(&self, id: i64, record: i64) -> Result<(bool, Option<i64>)> {
+        let db = self.db();
+        // A second open request of the account's for that record is closed as asked twice first (W6, as `set_request_record`).
+        let kept = open_beside(&db, id, record)?;
+        let closed = db.execute(
+            "UPDATE request SET status = 'cancelled', reason = 'Asked twice', decided_at = ?3 WHERE id = ?1 AND record IS NULL AND status IN ('pending', 'approved')
+             AND EXISTS (SELECT 1 FROM request o WHERE o.id != ?1 AND o.user = request.user AND o.record = ?2 AND o.status IN ('pending', 'approved'))",
+            params![id, record, now()],
+        )? > 0;
+        let given = db.execute("UPDATE request SET record = ?2 WHERE id = ?1 AND record IS NULL", params![id, record])? > 0;
+        Ok((given, kept.filter(|_| closed)))
     }
 
+    /// Every request's record, as (request, record): none where it has none. Blocking.
+    pub fn request_records(&self) -> Result<Vec<(i64, Option<i64>)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, record FROM request ORDER BY id")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A request given its record again (R19): the one it named is gone from the catalogue. The request it was closed beside as asked
+    /// twice, where it was (W6; X7: the step's report lists it). Blocking.
+    pub fn set_request_record(&self, id: i64, record: i64) -> Result<Option<i64>> {
+        let db = self.db();
+        // A second open request of the account's for that record (the step finding two of one album) is closed as asked twice first
+        // (W6: one open request of an account's for a record).
+        let kept = open_beside(&db, id, record)?;
+        let closed = db.execute(
+            "UPDATE request SET status = 'cancelled', reason = 'Asked twice', decided_at = ?3 WHERE id = ?1 AND status IN ('pending', 'approved')
+             AND EXISTS (SELECT 1 FROM request o WHERE o.id != ?1 AND o.user = request.user AND o.record = ?2 AND o.status IN ('pending', 'approved'))",
+            params![id, record, now()],
+        )? > 0;
+        db.execute("UPDATE request SET record = ?2 WHERE id = ?1", params![id, record])?;
+        Ok(kept.filter(|_| closed))
+    }
+
+    /// The request rows' covers that fail `kept` taken off (0.17's step, Y5: 0.16 kept a Want's cover from any address, and the
+    /// Requests page drew it for every viewer), and the migration report's `part` written in the same transaction, listing each as
+    /// "<request> <address>": its mark, so it is done once and its list is never lost. The lines. Blocking.
+    pub fn drop_request_covers(&self, kept: impl Fn(&str) -> bool, part: &str) -> Result<Vec<String>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let covers: Vec<(i64, String)> =
+            tx.prepare("SELECT id, cover FROM request WHERE cover IS NOT NULL ORDER BY id")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut dropped = Vec::new();
+        for (id, cover) in covers.into_iter().filter(|(_, c)| !kept(c.as_str())) {
+            tx.execute("UPDATE request SET cover = NULL WHERE id = ?1", [id])?;
+            dropped.push(format!("{id} {cover}"));
+        }
+        put_migration_part(&tx, part, &serde_json::json!({ "request_covers_dropped": dropped }))?;
+        tx.commit()?;
+        Ok(dropped)
+    }
+
+    /// A clause a fetcher's word on requests (`fetched`) says no more, taken off wherever it is, with the "; " that joins it to
+    /// another, the word gone where nothing else is left (0.17's step, R29). How many.
+    pub fn clear_fetched_clause(&self, clause: &str) -> Result<usize> {
+        Ok(self.db().execute(
+            "UPDATE request SET fetched = NULLIF(replace(replace(replace(fetched, '; ' || ?1, ''), ?1 || '; ', ''), ?1, ''), '') WHERE instr(fetched, ?1) > 0",
+            [clause],
+        )?)
+    }
+
+    /// How many requests wait for an answer (Health).
     pub fn import_choice(&self, source: &str) -> Result<Option<String>> {
         Ok(self.db().query_row("SELECT choice FROM import_choices WHERE source = ?1", [source], |r| r.get(0)).optional()?)
     }
@@ -2206,10 +2405,25 @@ pub struct Request {
     pub decided_at: Option<i64>,
     /// What the fetcher (Lidarr) said when it was handed the request.
     pub fetched: Option<String>,
+    /// The record asked for (C49a), the catalogue's: what its names and references come from. None only before 0.17's step.
+    pub record: Option<i64>,
 }
 
 const REQUEST_COLUMNS: &str =
-    "id, user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched";
+    "id, user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched, record";
+
+/// The account's other open request of `record` beside request `id`, `id` open too (W6): the one kept where `id` is closed as asked
+/// twice, the oldest where there are several.
+fn open_beside(db: &Connection, id: i64, record: i64) -> Result<Option<i64>> {
+    Ok(db
+        .query_row(
+            "SELECT o.id FROM request r JOIN request o ON o.id != r.id AND o.user = r.user AND o.record = ?2 AND o.status IN ('pending', 'approved')
+             WHERE r.id = ?1 AND r.status IN ('pending', 'approved') ORDER BY o.id LIMIT 1",
+            params![id, record],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
 
 fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
     Ok(Request {
@@ -2228,6 +2442,7 @@ fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
         decided_by: r.get(12)?,
         decided_at: r.get(13)?,
         fetched: r.get(14)?,
+        record: r.get(15)?,
     })
 }
 
@@ -2615,6 +2830,7 @@ mod tests {
     fn requests_keep_who_asked_their_status_and_who_answered() {
         let u = UserData::open(None).unwrap();
         let r = |user: &str, album: &str, at: i64| Request {
+            record: None,
             id: 0,
             user: user.into(),
             album_key: format!("rg-{album}"),
@@ -2633,18 +2849,17 @@ mod tests {
         };
         let a = u.add_request(&r("me", "Moon Safari", 1)).unwrap();
         let b = u.add_request(&r("you", "Talkie Walkie", 2)).unwrap();
-        assert_eq!(u.requests_waiting().unwrap(), 2);
+        assert_eq!(u.requests(None, Some("pending"), 10).unwrap().len(), 2);
         assert_eq!(u.requests(None, None, 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![b, a], "newest first");
         assert_eq!(u.requests(Some("me"), None, 10).unwrap().len(), 1, "each account its own");
-        u.set_request_status(b, "declined", Some("Not on Soulseek"), Some("admin")).unwrap();
+        assert!(u.set_request_status(b, "pending", "declined", Some("Not on Soulseek"), Some("admin")).unwrap());
+        assert!(!u.set_request_status(b, "pending", "approved", None, Some("admin")).unwrap(), "answered meanwhile: the first answer stays");
         let d = u.request(b).unwrap().unwrap();
         assert_eq!((d.status.as_str(), d.reason.as_deref(), d.decided_by.as_deref()), ("declined", Some("Not on Soulseek"), Some("admin")));
         assert!(d.decided_at.is_some());
         assert_eq!(u.requests(None, Some("pending"), 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
         u.set_request_fetched(a, "Lidarr is looking for it").unwrap();
         assert_eq!(u.request(a).unwrap().unwrap().fetched.as_deref(), Some("Lidarr is looking for it"));
-        u.set_request_release_group(a, "rg-found").unwrap();
-        assert_eq!(u.request(a).unwrap().unwrap().release_group.as_deref(), Some("rg-found"));
         assert!(u.request(99).unwrap().is_none());
     }
 

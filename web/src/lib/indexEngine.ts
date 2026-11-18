@@ -125,7 +125,7 @@ export class IndexEngine {
   record = (id: number) => this.json<RecordRows>(this.x.index_record(id));
   /** What the words find, read inside the module: a library's tracks never come over. Null where no index is held. */
   find = (ask: FindAsk) => this.json<FoundRows>(this.over(encoder.encode(JSON.stringify(ask)), this.x.index_find));
-  /** An artist as their panel shows them; null where nobody goes by the name. */
+  /** An artist as their panel shows them, by their id (`ar-<n>`) or a name; null where nobody has it. */
   artist = (name: string, without: string[]) => this.json<ArtistRows>(this.over(encoder.encode(JSON.stringify({ q: name, without })), this.x.index_artist));
 
   loadSounds = (bytes: Uint8Array) => this.refused(this.over(bytes, this.x.sounds_load));

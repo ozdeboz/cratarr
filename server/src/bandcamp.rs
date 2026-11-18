@@ -1,7 +1,10 @@
 //! Bandcamp, read to play from (decision 0071): an album's page, its tracks and each one's stream; an artist's list of
 //! releases; the search box's own answers (Bandcamp's autocomplete, JSON). Played, never downloaded: nothing is kept on
 //! disk. Bandcamp's search page is not read: it answers with a check for browsers (a "Client Challenge"), which Cratarr
-//! does not get around.
+//! does not get around. Nor is an account's `/music` page (O4): one polite request met the check; an account's albums are the
+//! search box's. After the check, or a search answer that is no JSON, Bandcamp is left alone for a day (`held_until`), said once in
+//! the log and on Health; switched off (`switches::BANDCAMP`), it is asked nothing. An album is read from its page alone; a track's
+//! own page only as the track is played.
 //!
 //! The page is read as yt-dlp's Bandcamp extractor reads it (`yt_dlp/extractor/bandcamp.py`, the Unlicense: public
 //! domain): the album's data in the page's `data-tralbum` attribute (HTML-escaped JSON), each track's `file` holding
@@ -19,11 +22,105 @@ use crate::app::reach::Sent as _;
 const KEEP: Duration = Duration::from_secs(5 * 60);
 /// The most album pages kept at once.
 const KEEP_MOST: usize = 64;
+/// The most of a page of Bandcamp's read (O1), and of a search box's answer.
+const PAGE_MOST: usize = 8 << 20;
+const SEARCH_MOST: usize = 1 << 20;
 /// At most one page of Bandcamp's read in this long, server-wide (Discover's look, previews, a track's details): the
 /// owner asked, 2026-10-25, whether Cratarr is polite to it. A stream played is not paced: it is a listener's.
 const PACE: Duration = Duration::from_secs(1);
 /// How long Bandcamp is left alone after it says "too many" (429) or "unavailable" (503) without saying how long.
 const BACK_OFF: Duration = Duration::from_secs(60);
+/// How long Bandcamp is left alone after its bot check (O4): a day, nothing done to get past it.
+const CHECK_HOLD_SECS: i64 = 86_400;
+/// Until when it is left alone so (epoch s; 0: it is not).
+static HELD_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// Where that is kept across a restart (Y8): the user data's server choices, epoch seconds.
+const HELD_CHOICE: &str = "bandcamp:held_until";
+
+/// A Bandcamp album page as a view offers it for its preview (G1): none while Bandcamp is switched off, as its preview would only
+/// fail. Every view that carries one goes through here: a record not had's page, the missing lists and search's rows from them,
+/// Discover's cards and related artists.
+pub fn shown(page: Option<String>) -> Option<String> {
+    shown_if(page, crate::app::switches::is_on(crate::app::switches::BANDCAMP))
+}
+
+/// `shown`, Bandcamp switched `on` or not. Pure.
+fn shown_if(page: Option<String>, on: bool) -> Option<String> {
+    page.filter(|_| on)
+}
+
+/// Until when Cratarr leaves Bandcamp alone after its bot check (O4), where it does at `now`. Never longer than the check's own day
+/// from now (U11, as V8 has it for the kept one): a hold set while the clock ran ahead is cut to that, and held so.
+pub fn held_until(now: i64) -> Option<i64> {
+    let mut until = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+    if until > now + CHECK_HOLD_SECS {
+        let cut = now + CHECK_HOLD_SECS;
+        let _ = HELD_UNTIL.compare_exchange(until, cut, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+        until = cut;
+    }
+    (until > now).then_some(until)
+}
+
+/// Bandcamp left alone for a day after its bot check, or a search answer that is no JSON (O4): said in the log once, a failure for
+/// Health's connections, nothing done to get past it. Kept in the server's user data (Y8).
+fn hold() {
+    hold_in(crate::serve::instance().as_deref().map(|s| &*s.userdata));
+}
+
+/// `hold`, kept in `ud` where there is one (Y8), so a restart the evening of a check still leaves Bandcamp alone until the day is out
+/// (`hold_kept`).
+fn hold_in(ud: Option<&crate::userdata::UserData>) {
+    let now = crate::app::moment::now_secs();
+    let until = now + CHECK_HOLD_SECS;
+    if HELD_UNTIL.swap(until, std::sync::atomic::Ordering::Relaxed) <= now {
+        tracing::warn!(target: "bandcamp", "Bandcamp asked for a browser check: Cratarr stopped asking it for a day");
+    }
+    if let Some(ud) = ud
+        && let Err(e) = ud.set_import_choice(HELD_CHOICE, &until.to_string())
+    {
+        tracing::warn!(target: "bandcamp", "Bandcamp's hold is not kept for a restart: {e:#}");
+    }
+    crate::app::reach::failed("bandcamp", "Bandcamp asked for a browser check".into());
+}
+
+/// The hold kept before a restart taken up again, at start (Y8): nothing is asked of Bandcamp until it is out, and Health says so.
+/// Never longer than the check's own day from now (V8): one kept while the clock ran ahead is cut to that, in the user data too, so
+/// the next start does not take it up again.
+pub fn hold_kept(ud: &crate::userdata::UserData) {
+    let Some(kept) = ud.import_choice(HELD_CHOICE).ok().flatten().and_then(|v| v.trim().parse::<i64>().ok()) else { return };
+    let until = kept.min(crate::app::moment::now_secs() + CHECK_HOLD_SECS);
+    if until < kept
+        && let Err(e) = ud.set_import_choice(HELD_CHOICE, &until.to_string())
+    {
+        tracing::warn!(target: "bandcamp", "Bandcamp's hold, cut to a day, is not kept for a restart: {e:#}");
+    }
+    HELD_UNTIL.fetch_max(until, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Bandcamp switched on or off by an administrator (O4): switched on, its bot check's hold is lifted (V8), in memory and in the user
+/// data `ud` where there is one, so it is asked again at once and a restart takes up nothing. Switched off, the hold stays.
+pub fn switched(ud: Option<&crate::userdata::UserData>, on: bool) {
+    if !on {
+        return;
+    }
+    HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+    if let Some(ud) = ud
+        && let Err(e) = ud.set_import_choice(HELD_CHOICE, "")
+    {
+        tracing::warn!(target: "bandcamp", "Bandcamp's hold, lifted, is still kept for a restart: {e:#}");
+    }
+}
+
+/// Why nothing is asked of Bandcamp now (O4): switched off, or left alone after its bot check (`NotRead`).
+fn refused() -> Result<()> {
+    if !crate::app::switches::is_on(crate::app::switches::BANDCAMP) {
+        bail!("Bandcamp is switched off");
+    }
+    if held_until(crate::app::moment::now_secs()).is_some() {
+        return Err(NotRead.into());
+    }
+    Ok(())
+}
 
 /// The source a preview's tracks carry in a queue (`QueueTrack::source`): their streams and covers are relayed under
 /// Cratarr's own addresses by it (`/api/stream/bandcamp/…`, `/api/file/…`, `/api/cover/…`).
@@ -73,6 +170,10 @@ pub struct Album {
     pub released: Option<String>,
     /// Its label: the page's publisher, where that is not the artist themselves.
     pub label: Option<String>,
+    /// The account whose page it is (its `og:site_name`): a label's, where a label's own account lists its artists' releases (W1,
+    /// `named_by_page`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// What the page says about it, and its credits, as written there.
     pub about: Option<String>,
     pub credits: Option<String>,
@@ -87,7 +188,7 @@ impl Album {
         let album_id = track_id(&self.url, 0);
         self.tracks
             .iter()
-            .filter(|t| t.stream.is_some())
+            .filter(|t| t.plays())
             .map(|t| crate::app::QueueTrack {
                 source: SOURCE.into(),
                 id: track_id(&self.url, t.n),
@@ -119,8 +220,15 @@ pub struct Track {
     pub page: Option<String>,
 }
 
+impl Track {
+    /// Whether it plays: a stream on the album's page, or its own page, read as it is played (O4).
+    pub fn plays(&self) -> bool {
+        self.stream.is_some() || self.page.is_some()
+    }
+}
+
 /// A page on Bandcamp's own domain only (`bandcamp.com` and its artists' subdomains): no other address is read. Its
-/// address made plain (https, no query, no fragment).
+/// address made plain (https, no port (Y11), no query, no fragment).
 pub fn page(url: &str) -> Option<String> {
     let mut u = reqwest::Url::parse(url).ok()?;
     let host = u.host_str()?.to_ascii_lowercase();
@@ -128,6 +236,7 @@ pub fn page(url: &str) -> Option<String> {
         return None;
     }
     u.set_scheme("https").ok()?;
+    u.set_port(None).ok()?;
     u.set_query(None);
     u.set_fragment(None);
     Some(u.to_string())
@@ -140,9 +249,21 @@ pub fn album_page(url: &str) -> Option<String> {
     (path.starts_with("/album/") || path.starts_with("/track/")).then_some(p)
 }
 
+/// Tests: the stream addresses of fake media servers at home (`fake_media_at`), reached plainly.
+#[cfg(test)]
+static FAKE_MEDIA: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Tests: a fake media server's stream address, reached plainly as if it were on Bandcamp's media hosts.
+#[cfg(test)]
+pub fn fake_media_at(stream: &str) {
+    FAKE_MEDIA.lock().unwrap_or_else(|p| p.into_inner()).push(stream.to_string());
+}
+
 /// Reads Bandcamp: one client, the album pages kept a few minutes.
 pub struct Bandcamp {
     http: reqwest::Client,
+    /// Its streams' client: Bandcamp's media hosts only (O1).
+    media: reqwest::Client,
     kept: Mutex<HashMap<String, (Instant, Album)>>,
     /// When the next page may be read (PACE apart; later after a back-off).
     next: tokio::sync::Mutex<Instant>,
@@ -150,11 +271,11 @@ pub struct Bandcamp {
 
 impl Bandcamp {
     pub fn new() -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION")))
-            .build()?;
-        Ok(Self { http, kept: Mutex::new(HashMap::new()), next: tokio::sync::Mutex::new(Instant::now()) })
+        use crate::app::reach::{Purpose, client};
+        // Its pages on Bandcamp's own hosts, its streams on its media hosts (O1): a redirect off them is not followed.
+        let http = client(Purpose::BandcampPages).timeout(Duration::from_secs(20)).build()?;
+        let media = client(Purpose::BandcampMedia).build()?;
+        Ok(Self { http, media, kept: Mutex::new(HashMap::new()), next: tokio::sync::Mutex::new(Instant::now()) })
     }
 
     /// The one reader, for the server's life.
@@ -166,8 +287,12 @@ impl Bandcamp {
     /// A request of Bandcamp's (a page, a search), in turn: PACE after the one before, none while it asked to be left
     /// alone.
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        // Switched off, or left alone after its bot check (O4): nothing asked.
+        refused()?;
         let mut next = self.next.lock().await;
         tokio::time::sleep_until((*next).into()).await;
+        // Looked at again in its turn (Y8): a read that waited in line, or out a back-off, while the check came is not sent after it.
+        refused()?;
         let resp = req.sent().await;
         *next = Instant::now() + PACE;
         let resp = resp.context("cannot reach Bandcamp")?;
@@ -186,13 +311,22 @@ impl Bandcamp {
 
     async fn text(&self, url: &str) -> Result<String> {
         let resp = self.send(self.http.get(url)).await?;
-        if !resp.status().is_success() {
-            bail!("Bandcamp answered {}", resp.status());
+        let status = resp.status();
+        let body = String::from_utf8_lossy(&crate::app::reach::read_capped(resp, PAGE_MOST).await?).into_owned();
+        // Its bot check in place of the page, whatever the status: not read, nothing is done to get past it, and Bandcamp is left
+        // alone for a day (O4).
+        if is_check(&body) {
+            hold();
+            return Err(NotRead.into());
         }
-        Ok(resp.text().await?)
+        if !status.is_success() {
+            bail!("Bandcamp answered {status}");
+        }
+        Ok(body)
     }
 
-    /// An album's page read (kept a few minutes); a track without a stream on it read from its own page.
+    /// An album's page read (kept a few minutes), its page alone (O4): a track without a stream on it is read from its own page only
+    /// as it is played (`stream`).
     pub async fn album(&self, url: &str) -> Result<Album> {
         let url = album_page(url).context("Not an album's page on Bandcamp")?;
         if let Some((at, a)) = self.kept.lock().unwrap_or_else(|p| p.into_inner()).get(&url)
@@ -200,13 +334,7 @@ impl Bandcamp {
         {
             return Ok(a.clone());
         }
-        let mut album = parse_album(&self.text(&url).await?, &url)?;
-        for t in album.tracks.iter_mut().filter(|t| t.stream.is_none()) {
-            let Some(p) = t.page.clone() else { continue };
-            if let Ok(one) = self.text(&p).await.and_then(|html| parse_album(&html, &p)) {
-                t.stream = one.tracks.into_iter().next().and_then(|x| x.stream);
-            }
-        }
+        let album = parse_album(&self.text(&url).await?, &url)?;
         let mut kept = self.kept.lock().unwrap_or_else(|p| p.into_inner());
         if kept.len() >= KEEP_MOST {
             kept.retain(|_, (at, _)| at.elapsed() < KEEP);
@@ -233,10 +361,20 @@ impl Bandcamp {
     /// A track's stream, asked for as it is played: the response, its status and headers as Bandcamp sends them
     /// (`range` passed on, so a player can seek), and the track's length as its page gives it.
     pub async fn stream(&self, url: &str, n: u32, range: Option<&str>) -> Result<(reqwest::Response, Option<f64>)> {
+        // Switched off, its streams stop too, as the switch says (Y12): an album kept in memory's as well.
+        if !crate::app::switches::is_on(crate::app::switches::BANDCAMP) {
+            bail!("Bandcamp is switched off");
+        }
         let a = self.album(url).await?;
         let t = a.tracks.iter().find(|t| t.n == n).context("No such track on that album")?;
-        let s = t.stream.as_deref().context("That track does not stream on Bandcamp")?;
-        let mut req = self.http.get(s).timeout(Duration::from_secs(60 * 60));
+        // A track the album's page gives no stream for: its own page read now, as it is played (O4).
+        let s = match (&t.stream, &t.page) {
+            (Some(s), _) => s.clone(),
+            (None, Some(p)) => self.track_stream(&a.url, n, p).await?.context("That track does not stream on Bandcamp")?,
+            (None, None) => bail!("That track does not stream on Bandcamp"),
+        };
+        let media = self.media_for(&s).context("That track's stream is not on Bandcamp's own servers")?;
+        let mut req = media.get(&s).timeout(Duration::from_secs(60 * 60));
         if let Some(r) = range {
             req = req.header(reqwest::header::RANGE, r);
         }
@@ -249,6 +387,29 @@ impl Bandcamp {
         Ok((resp, t.duration_secs))
     }
 
+    /// The client a stream is fetched with: Bandcamp's own media hosts only (O1), as a page's data could name any address and a stream
+    /// goes back to the listener whole, or a first hop on Bandcamp's own stream hosts, followed on to its media hosts only (Y10,
+    /// `Purpose::starts_at`); none for any other address. Tests: a fake media server at home (`fake_media_at`), plainly.
+    fn media_for(&self, stream: &str) -> Option<reqwest::Client> {
+        #[cfg(test)]
+        if FAKE_MEDIA.lock().unwrap_or_else(|p| p.into_inner()).iter().any(|f| f == stream) {
+            return Some(reqwest::Client::new());
+        }
+        reqwest::Url::parse(stream).is_ok_and(|u| crate::app::reach::Purpose::BandcampMedia.starts_at(&u)).then(|| self.media.clone())
+    }
+
+    /// A track's stream from its own page (O4: read as it is played), kept on its album while the album is kept.
+    async fn track_stream(&self, album: &str, n: u32, page: &str) -> Result<Option<String>> {
+        let stream = parse_album(&self.text(page).await?, page)?.tracks.into_iter().next().and_then(|t| t.stream);
+        if let Some(s) = &stream
+            && let Some((_, a)) = self.kept.lock().unwrap_or_else(|p| p.into_inner()).get_mut(album)
+            && let Some(t) = a.tracks.iter_mut().find(|t| t.n == n)
+        {
+            t.stream = Some(s.clone());
+        }
+        Ok(stream)
+    }
+
     /// An album taken as read, as if its page had just been read (a fake Bandcamp's, in tests).
     #[cfg(test)]
     pub fn keep(&self, album: Album) {
@@ -258,31 +419,37 @@ impl Bandcamp {
 
     /// Bandcamp's search box asked for albums: (title, artist, album page), its first answers.
     pub async fn search(&self, artist: &str, album: &str) -> Result<Vec<(String, String, String)>> {
-        let body = serde_json::json!({ "search_text": format!("{artist} {album}"), "search_filter": "a", "full_page": false, "fan_id": null });
-        let resp = self.send(self.http.post("https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic").json(&body)).await?;
-        if !resp.status().is_success() {
-            bail!("Bandcamp answered {}", resp.status());
-        }
-        Ok(parse_autocomplete(&resp.text().await?))
+        let body = serde_json::json!({ "search_text": format!("{artist} {album}").trim(), "search_filter": "a", "full_page": false, "fan_id": null });
+        Ok(parse_autocomplete(&self.answered(self.http.post("https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic").json(&body)).await?))
     }
 
     /// Bandcamp's search box asked for artists: (name, their page), its first answers.
     pub async fn search_artist(&self, name: &str) -> Result<Vec<(String, String)>> {
         let body = serde_json::json!({ "search_text": name, "search_filter": "b", "full_page": false, "fan_id": null });
-        let resp = self.send(self.http.post("https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic").json(&body)).await?;
+        Ok(parse_artists(&self.answered(self.http.post("https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic").json(&body)).await?))
+    }
+
+    /// The search box's answer: JSON, else its bot check or something in its place (O4), which is not read and leaves Bandcamp
+    /// alone for a day, never "nothing found".
+    async fn answered(&self, req: reqwest::RequestBuilder) -> Result<String> {
+        let resp = self.send(req).await?;
         if !resp.status().is_success() {
             bail!("Bandcamp answered {}", resp.status());
         }
-        Ok(parse_artists(&resp.text().await?))
+        let body = String::from_utf8_lossy(&crate::app::reach::read_capped(resp, SEARCH_MOST).await?).into_owned();
+        if is_check(&body) || serde_json::from_str::<serde_json::Value>(&body).is_err() {
+            hold();
+            return Err(NotRead.into());
+        }
+        Ok(body)
     }
 
-    /// An artist's releases on their own page (`/music`): (title, album page).
-    pub async fn releases(&self, artist_page: &str) -> Result<Vec<(String, String)>> {
-        let base = page(artist_page).context("Not a page on Bandcamp")?;
-        let mut u = reqwest::Url::parse(&base)?;
-        u.set_path("/music");
-        let html = self.text(u.as_str()).await?;
-        Ok(parse_releases(&html, u.as_str()))
+    /// An account's albums as Bandcamp's search box lists them (O4: its `/music` page is not read): its name asked for, the albums
+    /// whose page is on the account's own address; (title, album page). The search box gives its first answers only.
+    pub async fn albums_on(&self, account_page: &str, name: &str) -> Result<Vec<(String, String)>> {
+        let host = |u: &str| reqwest::Url::parse(u).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase));
+        let own = host(&page(account_page).context("Not a page on Bandcamp")?);
+        Ok(self.search(name, "").await?.into_iter().filter(|(_, _, album)| own.is_some() && host(album) == own).map(|(title, _, album)| (title, album)).collect())
     }
 
 }
@@ -456,6 +623,7 @@ pub fn parse_album(html: &str, url: &str) -> Result<Album> {
         tracks,
         released,
         label,
+        account: meta(html, "og:site_name").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()),
         about: text(current.about),
         credits: text(current.credits),
         tags,
@@ -498,40 +666,88 @@ fn sized(cover: &str, n: u32) -> String {
     }
 }
 
-/// An artist's `/music` page: each release's title and page, from its grid (and the rest of it, which the page keeps in
-/// `data-client-items`).
-pub fn parse_releases(html: &str, url: &str) -> Vec<(String, String)> {
-    let base = reqwest::Url::parse(url).ok();
-    let full = |href: &str| base.as_ref().and_then(|b| b.join(href).ok()).and_then(|u| album_page(u.as_str()));
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut add = |title: String, href: &str| {
-        if let Some(u) = full(href)
-            && !title.is_empty()
-            && !out.iter().any(|(_, x)| *x == u)
-        {
-            out.push((title, u));
-        }
+/// A release as a label names it, sorted out (`label_release`): its artist, its title, and the label where it is a label's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    pub artist: String,
+    pub title: String,
+    pub label: Option<String>,
+}
+
+/// A release named the way a label's own account names its artists' on Bandcamp, sorted out (S12; C49a's rule too). The
+/// owner's 0.16.2 case: "GROUCH - further (Up Records)" by "Up Records". Where the album's artist is the label's own (the
+/// `label` the caller knows, an account or a publisher; or the name an "Artist - Title" closes on in brackets, the label
+/// crediting itself, R18), the artist is the title's before " - ", the title what follows, a closing "(Label)" goes, and the label is that
+/// account. The label's own release with no artist before a dash (its compilation) keeps the label as its artist. Any other
+/// release is as named: a real artist's title with a dash in it, and a closing "(Remastered)" that names no label, stay.
+/// Pure.
+pub fn label_release(artist: &str, title: &str, label: Option<&str>) -> Named {
+    let same = |a: &str, b: &str| {
+        let (a, b) = (cratarr_rules::names::key(a), cratarr_rules::names::key(b));
+        !a.is_empty() && a == b
     };
-    for item in html.split("<li data-item-id=").skip(1) {
-        let item = item.split("</li>").next().unwrap_or(item);
-        let (Some(href), Some(title)) = (between(item, "href=\"", "\""), between(item, "class=\"title\">", "<")) else { continue };
-        add(text(&title), &href);
+    let (artist, title) = (artist.trim(), title.trim());
+    // The title's closing brackets: what comes before, and what they say.
+    let closing = title.strip_suffix(')').and_then(|t| t.rfind('(').map(|at| (t[..at].trim_end(), &t[at + 1..])));
+    let dash_at = |t: &str| [" - ", " \u{2013} ", " \u{2014} "].iter().filter_map(|d| t.find(d).map(|at| (at, d.len()))).min();
+    let artist_title = |t: &str| dash_at(t).is_some_and(|(at, len)| !t[..at].trim().is_empty() && !t[at + len..].trim().is_empty());
+    // Brackets naming the account say it is a label's only of an "Artist - Title" (R18, F10): a band's "Live (Orbit Lane)" by
+    // Orbit Lane is its title.
+    let credits_itself = closing.is_some_and(|(before, inside)| same(inside, artist) && artist_title(before));
+    let labels = label.is_some_and(|l| same(l, artist)) || credits_itself;
+    if !labels {
+        return Named { artist: artist.to_string(), title: title.to_string(), label: None };
     }
-    #[derive(Deserialize)]
-    struct Client {
-        #[serde(default)]
-        title: String,
-        #[serde(default)]
-        page_url: String,
+    let title = match closing {
+        Some((before, inside)) if same(inside, artist) && !before.is_empty() => before,
+        _ => title,
+    };
+    match dash_at(title).map(|(at, len)| (title[..at].trim(), title[at + len..].trim())) {
+        Some((who, what)) if !who.is_empty() && !what.is_empty() => Named { artist: who.to_string(), title: what.to_string(), label: Some(artist.to_string()) },
+        _ => Named { artist: artist.to_string(), title: title.to_string(), label: Some(artist.to_string()) },
     }
-    if let Some(more) = attribute(html, "data-client-items")
-        && let Ok(items) = serde_json::from_str::<Vec<Client>>(&unescape(&more))
-    {
-        for c in items {
-            add(c.title, &c.page_url);
+}
+
+/// The names a Want with a Bandcamp page names its record by (W1): the album as Bandcamp lists it, its own artist (not a track's,
+/// which a track's menu sends), a label's release sorted out with the page's account as the label (`label_release`), its publisher
+/// credited where that names none. The page not read (Bandcamp's bot check among the reasons) leaves the names sent, sorted out as
+/// names alone are: nothing is done to get past the check. Pure.
+pub fn named_by_page(read: Option<&Album>, artist: &str, title: &str) -> Named {
+    match read.filter(|a| !a.artist.trim().is_empty() && !a.title.trim().is_empty()) {
+        Some(a) => {
+            let mut named = label_release(&a.artist, &a.title, a.account.as_deref());
+            if named.label.is_none() {
+                named.label = a.label.clone();
+            }
+            named
         }
+        None => label_release(artist, title, None),
     }
-    out
+}
+
+/// Bandcamp answered with its bot check (a "Client Challenge" page) in place of the page asked for: the page is not read, and
+/// says so. Nothing is done to get past it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotRead;
+
+impl std::fmt::Display for NotRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("not read: Bandcamp answered with its bot check")
+    }
+}
+
+impl std::error::Error for NotRead {}
+
+/// Whether a read failed for Bandcamp's bot check (`NotRead`), to show as "not read".
+#[cfg_attr(not(test), allow(dead_code))] // a label's page (C56)
+pub fn not_read(e: &anyhow::Error) -> bool {
+    e.is::<NotRead>()
+}
+
+/// Whether a page Bandcamp sent is its bot check, not the page asked for: its title, or the check's own assets, near its top.
+/// Pure.
+pub fn is_check(html: &str) -> bool {
+    ["<title>Client Challenge</title>", "/_fs-ch-"].iter().any(|mark| html.find(mark).is_some_and(|at| at < 4096))
 }
 
 /// An attribute's value (`name="…"` or `name='…'`), as it is written (still escaped).
@@ -555,24 +771,6 @@ fn between(s: &str, from: &str, to: &str) -> Option<String> {
     let a = s.find(from)? + from.len();
     let b = s[a..].find(to)?;
     Some(s[a..a + b].to_string())
-}
-
-/// Text in a page: its tags left out, its entities read, its spaces made one.
-fn text(html: &str) -> String {
-    let mut out = String::new();
-    let mut tag = false;
-    for c in html.chars() {
-        match c {
-            '<' => tag = true,
-            '>' if tag => {
-                tag = false;
-                out.push(' ');
-            }
-            _ if !tag => out.push(c),
-            _ => {}
-        }
-    }
-    unescape(&out).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// HTML's entities read: the named few a page escapes with, and numbered ones.
@@ -637,6 +835,14 @@ mod tests {
         assert!(page("https://air.bandcamp.com").is_some());
     }
 
+    /// Y11: a Bandcamp page written with a port is made plain without it: its own page at Bandcamp's usual address.
+    #[test]
+    fn a_bandcamp_page_loses_its_port() {
+        assert_eq!(album_page("https://air.bandcamp.com:8443/album/moon-safari").as_deref(), Some("https://air.bandcamp.com/album/moon-safari"));
+        assert_eq!(page("http://air.bandcamp.com:8080/").as_deref(), Some("https://air.bandcamp.com/"));
+        assert_eq!(page("http://air.bandcamp.com:443/music").as_deref(), Some("https://air.bandcamp.com/music"));
+    }
+
     #[test]
     fn an_albums_page_gives_its_tracks_and_their_streams() {
         let data = r#"{"artist":"Air","current":{"title":"Moon Safari","artist":"Air"},"trackinfo":[
@@ -680,23 +886,223 @@ mod tests {
         assert_eq!(parse_album(&own, "https://air.bandcamp.com/album/x").unwrap().label, None, "the artist's own page is no label");
     }
 
+    /// S12: a release named the way a label's own account names its artists' is sorted out by one rule. The owner's case and
+    /// its counter-cases: a real artist whose title has a dash, a closing "(Remastered)" that names no label, a compilation
+    /// of the label's own.
     #[test]
-    fn an_artists_releases_are_read() {
-        let more = r#"[{"title":"Talkie Walkie","page_url":"/album/talkie-walkie"}]"#.replace('"', "&quot;");
-        let html = format!(
-            r#"<ol id="music-grid" data-client-items="{more}"><li data-item-id="album-1" class="music-grid-item"><a href="/album/moon-safari"><div class="art"></div><p class="title">
-                Moon Safari &amp; More
-            </p></a></li><li data-item-id="track-2"><a href="/track/kelly"><p class="title">Kelly</p></a></li></ol>"#
-        );
-        let r = parse_releases(&html, "https://air.bandcamp.com/music");
-        assert_eq!(
-            r,
-            vec![
-                ("Moon Safari & More".to_string(), "https://air.bandcamp.com/album/moon-safari".to_string()),
-                ("Kelly".to_string(), "https://air.bandcamp.com/track/kelly".to_string()),
-                ("Talkie Walkie".to_string(), "https://air.bandcamp.com/album/talkie-walkie".to_string()),
-            ]
-        );
+    fn a_labels_release_is_named_by_one_rule() {
+        let named = |artist: &str, title: &str, label: Option<&str>| {
+            let n = label_release(artist, title, label);
+            (n.artist, n.title, n.label)
+        };
+        let up = Some("Up Records".to_string());
+        assert_eq!(named("Up Records", "GROUCH - further (Up Records)", None), ("GROUCH".into(), "further".into(), up.clone()), "the label credits itself");
+        assert_eq!(named("Up Records", "GROUCH - further (Up Records)", Some("Up Records")), ("GROUCH".into(), "further".into(), up.clone()));
+        assert_eq!(named("Up Records", "GROUCH \u{2013} further", Some("up records")), ("GROUCH".into(), "further".into(), up.clone()), "the account known as the label");
+        assert_eq!(named("Kite Theory", "Night Walks - Part One", Some("Up Records")), ("Kite Theory".into(), "Night Walks - Part One".into(), None), "a real artist's dash");
+        assert_eq!(named("Kite Theory", "Night Walks - Part One", None), ("Kite Theory".into(), "Night Walks - Part One".into(), None));
+        assert_eq!(named("Up Records", "GROUCH - further (Remastered)", Some("Up Records")), ("GROUCH".into(), "further (Remastered)".into(), up.clone()), "brackets that name no label stay");
+        assert_eq!(named("Up Records", "GROUCH - further (Remastered)", None), ("Up Records".into(), "GROUCH - further (Remastered)".into(), None), "nothing says it is a label's");
+        assert_eq!(named("Up Records", "Summer Sampler 2019", Some("Up Records")), ("Up Records".into(), "Summer Sampler 2019".into(), up.clone()), "the label's own compilation");
+        assert_eq!(named("Up Records", "Summer Sampler (Up Records)", Some("Up Records")), ("Up Records".into(), "Summer Sampler".into(), up), "its compilation, the label known");
+    }
+
+    /// R18 (F10): a title closing on its own artist's name in brackets is no label's release unless it is "Artist - Title": a
+    /// band's "Live (Orbit Lane)" stays as named, and so does a compilation crediting itself with no label known; the owner's
+    /// case is still sorted out.
+    #[test]
+    fn a_title_closing_on_its_own_artist_is_no_labels_release() {
+        let named = |artist: &str, title: &str| {
+            let n = label_release(artist, title, None);
+            (n.artist, n.title, n.label)
+        };
+        assert_eq!(named("Orbit Lane", "Live (Orbit Lane)"), ("Orbit Lane".into(), "Live (Orbit Lane)".into(), None));
+        assert_eq!(named("ORBIT LANE", "Live - Encore (Orbit Lane)"), ("Live".into(), "Encore".into(), Some("ORBIT LANE".to_string())), "an \"Artist - Title\" closing on it");
+        assert_eq!(named("Up Records", "Summer Sampler (Up Records)"), ("Up Records".into(), "Summer Sampler (Up Records)".into(), None));
+        assert_eq!(named("Up Records", "GROUCH - further (Up Records)"), ("GROUCH".into(), "further".into(), Some("Up Records".to_string())));
+    }
+
+    /// S12: Bandcamp's bot check in place of a page (a stand-in written here, not a captured one) is not read: told apart from
+    /// a page, and said as such; a page that merely mentions a challenge further down is a page.
+    /// O4: Bandcamp switched off is asked nothing: a search, an album not kept, a stream. Its switch and its hold, which every read of
+    /// Bandcamp's checks, are changed under the one test lock (`switches::TEST_STATE`, Y12).
+    #[tokio::test]
+    async fn bandcamp_switched_off_is_asked_nothing() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, false);
+        let bc = Bandcamp::new().unwrap();
+        let said = bc.search("Glass Harbour", "Two Rooms").await.unwrap_err().to_string();
+        crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, was);
+        assert_eq!(said, "Bandcamp is switched off");
+    }
+
+    /// Y12: Bandcamp switched off, its streams stop too, as the switch says: an album kept in memory plays nothing.
+    #[tokio::test]
+    async fn with_bandcamp_off_its_streams_stop() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let (page, stream) = ("https://glassharbour.bandcamp.com/album/low-tide", "http://127.0.0.1:9/low-tide/1");
+        fake_media_at(stream);
+        let bc = Bandcamp::new().unwrap();
+        let track = Track { n: 1, title: "Ebb".into(), artist: None, duration_secs: None, stream: Some(stream.into()), page: None };
+        bc.keep(Album { url: page.into(), title: "Low Tide".into(), artist: "Glass Harbour".into(), cover: None, tracks: vec![track], released: None, label: None, account: None, about: None, credits: None, tags: Vec::new() });
+        let was = crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, false);
+        let played = bc.stream(page, 1, None).await.map(|_| ());
+        crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, was);
+        assert_eq!(played.unwrap_err().to_string(), "Bandcamp is switched off");
+    }
+
+    /// O4: after its bot check Bandcamp is left alone for a day, said on Health as a connection failing; a search is not read then,
+    /// never "nothing found". An album's page is read alone: a track with no stream on it is read from its own page only as it is
+    /// played.
+    #[tokio::test]
+    async fn a_bot_check_holds_bandcamp_for_a_day() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let now = crate::app::moment::now_secs();
+        hold();
+        let until = held_until(now);
+        let bc = Bandcamp::new().unwrap();
+        let searched = bc.search("Glass Harbour", "Two Rooms").await;
+        let page = "https://glassharbour.bandcamp.com/album/two-rooms";
+        let track = |n: u32, stream: bool| Track { n, title: format!("Room {n}"), artist: None, duration_secs: None, stream: stream.then(|| format!("https://t4.bcbits.com/stream/{n}")), page: (!stream).then(|| format!("https://glassharbour.bandcamp.com/track/room-{n}")) };
+        bc.keep(Album { url: page.into(), title: "Two Rooms".into(), artist: "Glass Harbour".into(), cover: None, tracks: vec![track(1, true), track(2, false)], released: None, label: None, account: None, about: None, credits: None, tags: Vec::new() });
+        let listed = bc.album(page).await.unwrap().queue_tracks().len();
+        let played = bc.stream(page, 2, None).await;
+        let found: Vec<crate::app::health::Finding> = crate::app::health::check_connections(now).into_iter().filter(|f| f.key == "connections:bandcamp-check").collect();
+        let said: Vec<String> = found.iter().map(|f| f.title.clone()).collect();
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        let opens = found.iter().map(|f| f.open.as_ref().map(|o| (o.page, o.thing))).collect::<Vec<_>>();
+        assert_eq!(opens, [Some(("settings", Some("bandcamp")))], "G9: opens Bandcamp's page in Settings");
+        assert!(said.len() == 1 && said[0].starts_with("Bandcamp asked for a browser check; Cratarr stopped asking until "), "{said:?}");
+        assert!(until.is_some_and(|u| u >= now + CHECK_HOLD_SECS), "{until:?}");
+        assert!(searched.is_err_and(|e| not_read(&e)), "not read, not nothing found");
+        assert!(crate::app::reach::state("bandcamp").failures > 0, "a failure for Health's connections");
+        assert_eq!(listed, 2, "the track with its own page plays too");
+        assert!(played.is_err_and(|e| not_read(&e)), "its own page asked for only now, as it is played");
+    }
+
+    /// Y8: the day's hold after the check survives a restart: kept in the user data as it is set, taken up again at start.
+    #[tokio::test]
+    async fn the_bandcamp_hold_survives_a_restart() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        let now = crate::app::moment::now_secs();
+        hold_in(Some(&ud));
+        HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+        hold_kept(&ud);
+        let until = held_until(now);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        assert!(until.is_some_and(|u| u >= now + CHECK_HOLD_SECS), "taken up again at start: {until:?}");
+    }
+
+    /// V8 (the review of run 8b, finding 8): a kept hold is taken up for a day from now at most: one kept while the clock ran a month
+    /// ahead is cut to a day, in the user data too.
+    #[tokio::test]
+    async fn a_kept_hold_beyond_a_day_is_cut_to_a_day() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        let now = crate::app::moment::now_secs();
+        ud.set_import_choice(HELD_CHOICE, &(now + 30 * 86_400).to_string()).unwrap();
+        HELD_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+        hold_kept(&ud);
+        let until = held_until(now);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        let kept = ud.import_choice(HELD_CHOICE).unwrap().and_then(|v| v.parse::<i64>().ok());
+        let a_day = now + CHECK_HOLD_SECS..=now + CHECK_HOLD_SECS + 60;
+        assert!(until.is_some_and(|u| a_day.contains(&u)), "a day from now: {until:?}");
+        assert!(kept.is_some_and(|k| a_day.contains(&k)), "kept cut too: {kept:?}");
+    }
+
+    /// U11 (the review of 8c/8d's nits): a hold set in memory while the clock ran ahead is cut to a day from now as it is read, and
+    /// held so: a day on, it is over.
+    #[tokio::test]
+    async fn a_hold_set_while_the_clock_ran_ahead_is_a_day_at_most() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let now = crate::app::moment::now_secs();
+        HELD_UNTIL.store(now + 200 * 86_400, std::sync::atomic::Ordering::Relaxed);
+        let until = held_until(now);
+        let after = held_until(now + CHECK_HOLD_SECS + 1);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(until, Some(now + CHECK_HOLD_SECS), "a day from now");
+        assert_eq!(after, None, "a day on: over");
+    }
+
+    /// G1: a view offers Bandcamp's preview only while Bandcamp is switched on.
+    #[test]
+    fn a_view_offers_no_preview_while_bandcamp_is_off() {
+        let page = Some("https://glassharbour.bandcamp.com/album/two-rooms".to_string());
+        assert_eq!(shown_if(page.clone(), true), page);
+        assert_eq!(shown_if(page, false), None);
+        assert_eq!(shown_if(None, true), None);
+    }
+
+    /// V8: an administrator switching Bandcamp on again lifts its hold, in memory and in the user data: it is asked again at once,
+    /// and a restart takes up nothing. Switched off, the hold stays.
+    #[tokio::test]
+    async fn switching_bandcamp_on_again_lifts_its_hold() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        let now = crate::app::moment::now_secs();
+        hold_in(Some(&ud));
+        switched(Some(&ud), false);
+        let off = held_until(now);
+        switched(Some(&ud), true);
+        let on = held_until(now);
+        hold_kept(&ud);
+        let restarted = held_until(now);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        assert!(off.is_some(), "switched off: held still");
+        assert_eq!((on, restarted), (None, None), "switched on: asked again, and a restart takes up nothing");
+    }
+
+    /// Y8: a read waiting in line when the check comes is not sent: it looks at the hold again in its turn.
+    #[tokio::test]
+    async fn a_read_waiting_when_the_check_comes_is_not_sent() {
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+        let bc = Bandcamp::new().unwrap();
+        *bc.next.lock().await = Instant::now() + Duration::from_millis(400);
+        let waiting = bc.send(reqwest::Client::new().get("http://127.0.0.1:9/"));
+        let check = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            hold_in(None);
+        };
+        let (sent, ()) = tokio::join!(waiting, check);
+        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
+        assert!(sent.is_err_and(|e| not_read(&e)), "not sent after the check");
+    }
+
+    /// O1: a track whose stream the page names anywhere but Bandcamp's media hosts is not fetched: an address at home, plain http,
+    /// another site.
+    #[tokio::test]
+    async fn a_stream_address_outside_bcbits_is_refused() {
+        // A stream reads Bandcamp's switch (Y12).
+        let _one = crate::app::switches::TEST_STATE.lock().await;
+        let bc = Bandcamp::new().unwrap();
+        let page = "https://glassharbour.bandcamp.com/album/tide-tables";
+        let track = |n: u32, stream: &str| Track { n, title: format!("Tide {n}"), artist: None, duration_secs: None, stream: Some(stream.into()), page: None };
+        let tracks = vec![track(1, "http://192.168.1.20/admin"), track(2, "https://lidarr.example.org/initialize.json"), track(3, "http://t4.bcbits.com/stream/3")];
+        bc.keep(Album { url: page.into(), title: "Tide Tables".into(), artist: "Glass Harbour".into(), cover: None, tracks, released: None, label: None, account: None, about: None, credits: None, tags: Vec::new() });
+        for n in 1..=3 {
+            let said = bc.stream(page, n, None).await.unwrap_err().to_string();
+            assert_eq!(said, "That track's stream is not on Bandcamp's own servers", "track {n}");
+        }
+    }
+
+    #[test]
+    fn a_check_page_is_not_read() {
+        let check = r#"<!DOCTYPE html><html lang="en"><head><link href="/_fs-ch-stand-in/assets/styles.css" rel="stylesheet" /><title>Client Challenge</title></head>
+            <body><noscript>JavaScript is needed to go on.</noscript><div id="loading-error">There was a problem.</div><script src="/_fs-ch-stand-in/script.js"></script></body></html>"#;
+        assert!(is_check(check));
+        let page = format!(r#"<html><head><meta property="og:site_name" content="Up Records"></head><body>{}<p>Client Challenge EP</p></body></html>"#, "<div></div>".repeat(500));
+        assert!(!is_check(&page));
+        let e = anyhow::Error::from(NotRead);
+        assert!(not_read(&e) && !not_read(&anyhow::anyhow!("Bandcamp answered 503")));
+        assert_eq!(e.to_string(), "not read: Bandcamp answered with its bot check");
     }
 
     #[test]

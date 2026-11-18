@@ -8,9 +8,10 @@
 // downloads play (decision 0033, step 4).
 // Every cache here carries a number, raised when what is kept stops being true (0.16: a record's id replaced an album's and
 // `copies` the one `library`, so the first paint would read the old shape, and a read Cratarr is slow to answer an album
-// view under an id gone). Activation lets go of every other name, as devices start fresh (decision 0101 point 23).
+// view under an id gone; 0.17: the page's own files, as records not had, artists by id and labels came, W12). Activation lets
+// go of every other name, as devices start fresh (decision 0101 point 23).
 // lib/offline.svelte.ts names three of them too.
-const CACHE = 'cratarr-v5';
+const CACHE = 'cratarr-v6';
 const COVERS = 'cratarr-covers-2';
 // The last copy of what the pages read (the owner, 2026-10-26: with the server down, playlists and the rest showed
 // nothing): kept per account (the page names it, `account`), each read tried on the network first; one that does not

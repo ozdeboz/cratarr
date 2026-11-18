@@ -1,0 +1,185 @@
+{
+ "release-group-count": 41,
+ "release-group-offset": 0,
+ "release-groups": [
+  {
+   "id": "120c67b4-c2a9-3b76-b67f-ba25940479f2",
+   "title": "Trans Canada Highway",
+   "primary-type": "EP",
+   "secondary-types": [],
+   "first-release-date": "2006-05-19",
+   "relations": [
+    {
+     "type": "allmusic",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.allmusic.com/album/mw0000442575"
+     }
+    },
+    {
+     "type": "discogs",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.discogs.com/master/2182"
+     }
+    },
+    {
+     "type": "wikidata",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.wikidata.org/wiki/Q3019745"
+     }
+    }
+   ]
+  },
+  {
+   "id": "17d74d52-c92b-3b8d-9f87-218ab2d1c4a0",
+   "title": "Music Has the Right to Children",
+   "primary-type": "Album",
+   "secondary-types": [],
+   "first-release-date": "1998-04-20",
+   "relations": [
+    {
+     "type": "allmusic",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.allmusic.com/album/mw0000042674"
+     }
+    },
+    {
+     "type": "discogs",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.discogs.com/master/1893"
+     }
+    },
+    {
+     "type": "wikidata",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.wikidata.org/wiki/Q224539"
+     }
+    }
+   ]
+  },
+  {
+   "id": "1b066b55-5144-3302-aa37-3bbd289729e0",
+   "title": "Boc Maxima",
+   "primary-type": "Album",
+   "secondary-types": [
+    "Demo"
+   ],
+   "first-release-date": "1996",
+   "relations": [
+    {
+     "type": "discogs",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.discogs.com/master/1875"
+     }
+    },
+    {
+     "type": "wikidata",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.wikidata.org/wiki/Q1952154"
+     }
+    }
+   ]
+  },
+  {
+   "id": "236d4fe1-8fed-3300-99fe-498af048e36e",
+   "title": "Unreleased Tracks",
+   "primary-type": "EP",
+   "secondary-types": [
+    "Compilation"
+   ],
+   "first-release-date": "2007",
+   "relations": [
+    {
+     "type": "discogs",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.discogs.com/master/2785"
+     }
+    }
+   ]
+  },
+  {
+   "id": "2f7d5de3-8b7d-3ed6-b80c-2cc4e4001f04",
+   "title": "Telephasic Workshop / Roygbiv",
+   "primary-type": "Single",
+   "secondary-types": [],
+   "first-release-date": "1998-08-23",
+   "relations": [
+    {
+     "type": "wikidata",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.wikidata.org/wiki/Q4050804"
+     }
+    }
+   ]
+  },
+  {
+   "id": "aca9719d-c640-41fc-a3a2-f3c52101e0ff",
+   "title": "Inferno",
+   "primary-type": "Album",
+   "secondary-types": [],
+   "first-release-date": "2026-05-28",
+   "relations": [
+    {
+     "type": "allmusic",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.allmusic.com/album/mw0004800877"
+     }
+    },
+    {
+     "type": "discogs",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.discogs.com/master/4239108"
+     }
+    },
+    {
+     "type": "wikidata",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.wikidata.org/wiki/Q139504922"
+     }
+    }
+   ]
+  },
+  {
+   "id": "7600e51e-065c-39d2-bd0e-556a968cce02",
+   "title": "Hi Scores",
+   "primary-type": "EP",
+   "secondary-types": [],
+   "first-release-date": "1996-12-01",
+   "relations": [
+    {
+     "type": "allmusic",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.allmusic.com/album/mw0000458326"
+     }
+    },
+    {
+     "type": "discogs",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.discogs.com/master/2004"
+     }
+    },
+    {
+     "type": "wikidata",
+     "target-type": "url",
+     "url": {
+      "resource": "https://www.wikidata.org/wiki/Q5750440"
+     }
+    }
+   ]
+  }
+ ]
+}

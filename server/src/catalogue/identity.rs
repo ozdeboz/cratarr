@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 /// What is compared, already folded (lower case, letters and digits only).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileFacts {
@@ -289,9 +291,231 @@ pub fn same_record(a: &RecordFacts, b: &RecordFacts) -> bool {
     }
 }
 
+/// A subject's id at a source: `kind` is `release-group`, `release`, `master`, `album`, `artist` or `label`, `value` the source's
+/// id (a MusicBrainz id, a Discogs number, a page as `bandcamp::page` makes it). Kept in `references` (`catalogue::records`);
+/// here, as what links two listings (`same_listing`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Ref {
+    pub source: String,
+    pub kind: String,
+    pub value: String,
+}
+
+impl Ref {
+    pub fn new(source: &str, kind: &str, value: &str) -> Self {
+        Self { source: source.to_string(), kind: kind.to_string(), value: value.to_string() }
+    }
+}
+
+/// A record as a listing knows it (`same_listing`): what it is at its sources, what those sources say it is at others
+/// (MusicBrainz's Discogs and Bandcamp links), its artist and title folded, and its tracks where a list gives every length.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Known {
+    pub refs: Vec<Ref>,
+    pub says: Vec<Ref>,
+    pub artist: String,
+    pub title: String,
+    pub tracks: Vec<Listed>,
+}
+
+/// Whether two listings are one record (decision 0100 point 4; the map's `same_release`, named apart from [`same_release`], the
+/// very same MusicBrainz release). A link from either side to the other's decides, both ways: a release or an album page names
+/// one record, so the same value is one record and another is two; two release groups or masters that differ are two, and the
+/// same one says nothing, as a deluxe edition and the standard one share theirs (G1). Without a link, the artist, the title and
+/// the tracks, by [`same_tracks`]. Else two: a name alone never merges, nor a list with no lengths (OQ8 (a)).
+pub fn same_listing(a: &Known, b: &Known) -> bool {
+    let links = |k: &Known| k.refs.iter().chain(&k.says).cloned().collect::<Vec<Ref>>();
+    let (left, right) = (links(a), links(b));
+    let pairs = || left.iter().flat_map(|x| right.iter().filter(move |y| x.source == y.source && x.kind == y.kind).map(move |y| (x, y)));
+    if pairs().any(|(x, y)| matches!(x.kind.as_str(), "release" | "album") && x.value == y.value) {
+        return true;
+    }
+    if pairs().any(|(x, y)| x.value != y.value) {
+        return false;
+    }
+    !a.title.is_empty() && a.artist == b.artist && a.title == b.title && same_tracks(&a.tracks, &b.tracks)
+}
+
+/// A track of a source's tracklist (0100, `reference_tracks`): its place, its title as the source writes it, and its length and
+/// MusicBrainz recording where the source gives them. Discogs may give no length, and only MusicBrainz gives a recording.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefTrack {
+    pub disc: u32,
+    pub position: u32,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<String>,
+}
+
+/// The sources in the order one counts where nothing else decides (decision 0100: MusicBrainz, then Discogs, then Bandcamp).
+pub const COUNTING_ORDER: [&str; 3] = ["musicbrainz", "discogs", "bandcamp"];
+
+/// Whether a source's tracklist agrees with a record's files, both in order (0100: "the source whose tracklist agrees with the
+/// files"): as many tracks, each one track by [`Listed::same_track`], its name, its guests and its length. A length the list does
+/// not give passes on the title, so a list with none agrees where every title does (OQ8 (a)). It may count, and no more: two
+/// folders are one record by [`same_tracks`] alone, which reads no source's list. An empty list says nothing.
+pub fn agrees(list: &[RefTrack], files: &[Listed]) -> bool {
+    !list.is_empty() && list.len() == files.len() && list.iter().zip(files).all(|(t, f)| Listed::of(&t.title, t.length_ms.unwrap_or(f.duration_ms)).same_track(f))
+}
+
+/// Which source's tracklist counts for a record (decision 0100, the owner's rule): one chosen by hand first (0.14); else the source
+/// whose list agrees with the files ([`agrees`]), the first in [`COUNTING_ORDER`] where several do; with no files to hold a list
+/// against, the first in that order with a list. Where the files have every list against them, none counts until one is chosen:
+/// the one that counts is the one that fits, and Health's references item asks for the choice. None with no list at all.
+pub fn counting(chosen: Option<&str>, lists: &[(&str, &[RefTrack])], files: &[Listed]) -> Option<String> {
+    if let Some(chosen) = chosen {
+        return Some(chosen.to_string());
+    }
+    let mut listed = COUNTING_ORDER.iter().filter(|source| lists.iter().any(|(s, list)| s == *source && !list.is_empty()));
+    let found = if files.is_empty() { listed.next() } else { listed.find(|source| lists.iter().any(|(s, list)| s == *source && agrees(list, files))) };
+    found.map(|s| s.to_string())
+}
+
+/// A file's numbers as its tags give them (S.1): its disc, its track number, and the track count its tags say (`totaltracks`, or
+/// the "5/8" of its track number).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FileNumbers {
+    pub disc: Option<u32>,
+    pub number: Option<u32>,
+    pub total: Option<u32>,
+}
+
+impl FileNumbers {
+    /// Read from a file's `tracknumber`, `totaltracks` and `discnumber` tags: the number before a slash, the total after it
+    /// before `totaltracks`'.
+    pub fn of(tracknumber: Option<&str>, totaltracks: Option<&str>, discnumber: Option<&str>) -> Self {
+        let lead = |v: &str| -> Option<u32> {
+            let digits: String = v.trim().chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok().filter(|n| *n > 0)
+        };
+        let (number, of) = match tracknumber.map(|t| t.split_once('/')) {
+            Some(Some((n, of))) => (lead(n), lead(of)),
+            Some(None) => (tracknumber.and_then(lead), None),
+            None => (None, None),
+        };
+        Self { disc: discnumber.and_then(lead), number, total: of.or_else(|| totaltracks.and_then(lead)) }
+    }
+}
+
+/// What MusicBrainz's check of a record found (`app::incomplete`, user data `album_complete`): how many of its release's tracks a
+/// copy holds, of how many. `has` at least `of`: the check found nothing missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Missing {
+    pub has: u32,
+    pub of: u32,
+}
+
+/// A copy as judged for copying (S.1): what can say it lacks tracks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Judged {
+    /// It holds fewer of its record's tracks than its copies together (`copies.short`, which what plays reads).
+    pub fewer_than_its_copies: bool,
+    /// Where a counting list counts: whether the copy lacks a track of it. None: no list counts.
+    pub short_of_list: Option<bool>,
+    /// MusicBrainz's check, where it looked.
+    pub checked: Option<Missing>,
+    /// Its audio files' numbers.
+    pub files: Vec<FileNumbers>,
+}
+
+/// Whether a copy lacks tracks, for copying (S.1): short, whole, or not to be told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lacks {
+    Short,
+    Whole,
+    Unknown,
+}
+
+impl Lacks {
+    /// Whether a copy of it is copied (OQ-Q (b)): all but a short one, so untidy tags never refuse a copy.
+    pub fn copies(self) -> bool {
+        self != Lacks::Short
+    }
+}
+
+/// Whether a copy lacks tracks, for copying (S.1, OQ-Q (b)): fewer of its record's tracks than its copies together; else a track of
+/// the counting list; else what MusicBrainz's check found missing. Where a list or the check says it is all there, it is whole.
+/// Else its files' tags, only where they are clean (`tags_say`): fewer files than their total is short, all of it whole; tags
+/// that cannot say, or no files, are Unknown. Pure: `copies.short`, and what plays, are not this.
+pub fn lacks(c: &Judged) -> Lacks {
+    if c.fewer_than_its_copies || c.short_of_list == Some(true) || c.checked.is_some_and(|m| m.has < m.of) {
+        return Lacks::Short;
+    }
+    if c.short_of_list == Some(false) || c.checked.is_some() {
+        return Lacks::Whole;
+    }
+    match tags_say(&c.files) {
+        Some(true) => Lacks::Short,
+        Some(false) => Lacks::Whole,
+        None => Lacks::Unknown,
+    }
+}
+
+/// Whether a copy's files say it lacks tracks, where they can: every file numbered and carrying a total; numbered discs on all or
+/// none; on each disc one total, its numbers distinct and none beyond it. Then short where a disc holds fewer files than its
+/// total. None where they cannot say (a file with no total, two numbered alike, more numbers than the total, totals that
+/// disagree), or there are no files.
+fn tags_say(files: &[FileNumbers]) -> Option<bool> {
+    if files.is_empty() || files.iter().any(|f| f.number.is_none() || f.total.is_none()) {
+        return None;
+    }
+    if files.iter().any(|f| f.disc.is_some()) && files.iter().any(|f| f.disc.is_none()) {
+        return None;
+    }
+    let mut discs: std::collections::BTreeMap<Option<u32>, Vec<&FileNumbers>> = std::collections::BTreeMap::new();
+    for f in files {
+        discs.entry(f.disc).or_default().push(f);
+    }
+    let mut short = false;
+    for on in discs.values() {
+        let total = on[0].total?;
+        let numbers: std::collections::BTreeSet<u32> = on.iter().filter_map(|f| f.number).collect();
+        if on.iter().any(|f| f.total != Some(total)) || numbers.len() != on.len() || numbers.iter().any(|n| *n > total) {
+            return None;
+        }
+        short |= (on.len() as u32) < total;
+    }
+    Some(short)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S.1: a copy lacks tracks by its copies, its counting list, MusicBrainz's check, or its clean tags, in that order; tags that
+    /// cannot say are Unknown, which copies.
+    #[test]
+    fn a_copy_lacks_tracks_by_its_copies_its_list_its_check_or_its_clean_tags() {
+        let lone = Judged::default;
+        let tagged = |n: u32, total: u32| (1..=n).map(|t| FileNumbers { disc: Some(1), number: Some(t), total: Some(total) }).collect::<Vec<_>>();
+        assert_eq!(lacks(&Judged { files: tagged(3, 8), ..lone() }), Lacks::Short, "3 of 8, every file agreeing");
+        assert_eq!(lacks(&Judged { files: tagged(8, 8), ..lone() }), Lacks::Whole);
+        let mut twice = tagged(8, 8);
+        twice[1].number = Some(1);
+        assert_eq!(lacks(&Judged { files: twice, ..lone() }), Lacks::Unknown, "two files numbered 1: the tags cannot say");
+        assert_eq!(lacks(&Judged { files: vec![FileNumbers { total: None, ..tagged(1, 8)[0] }], ..lone() }), Lacks::Unknown);
+        assert_eq!(lacks(&Judged { checked: Some(Missing { has: 14, of: 15 }), files: tagged(14, 14), ..lone() }), Lacks::Short, "the check wins over tags");
+        assert_eq!(lacks(&Judged { fewer_than_its_copies: true, files: tagged(10, 10), ..lone() }), Lacks::Short, "relative first");
+        // The list: a listed track lacking is short; a list held whole is whole, whatever the tags say.
+        assert_eq!(lacks(&Judged { short_of_list: Some(true), files: tagged(10, 10), ..lone() }), Lacks::Short);
+        assert_eq!(lacks(&Judged { short_of_list: Some(false), files: tagged(3, 8), ..lone() }), Lacks::Whole);
+        assert_eq!(lacks(&Judged { checked: Some(Missing { has: 15, of: 15 }), ..lone() }), Lacks::Whole, "the check found nothing missing");
+        // Totals that disagree, more numbers than the total, a number past it: Unknown, never short.
+        let mut disagree = tagged(3, 8);
+        disagree[2].total = Some(9);
+        assert_eq!(lacks(&Judged { files: disagree, ..lone() }), Lacks::Unknown);
+        assert_eq!(lacks(&Judged { files: tagged(9, 8), ..lone() }), Lacks::Unknown);
+        // Two discs, each whole by its own total; one short of its own.
+        let disc = |d: u32, n: u32, total: u32| (1..=n).map(move |t| FileNumbers { disc: Some(d), number: Some(t), total: Some(total) });
+        assert_eq!(lacks(&Judged { files: disc(1, 5, 5).chain(disc(2, 4, 4)).collect(), ..lone() }), Lacks::Whole);
+        assert_eq!(lacks(&Judged { files: disc(1, 5, 5).chain(disc(2, 3, 4)).collect(), ..lone() }), Lacks::Short);
+        assert_eq!(lacks(&lone()), Lacks::Unknown, "nothing to go by");
+        assert!(Lacks::Unknown.copies() && Lacks::Whole.copies() && !Lacks::Short.copies(), "Unknown counts as whole for copying");
+        assert_eq!(FileNumbers::of(Some("05/08"), None, Some("1/2")), FileNumbers { disc: Some(1), number: Some(5), total: Some(8) });
+        assert_eq!(FileNumbers::of(Some("5"), Some("8"), None), FileNumbers { disc: None, number: Some(5), total: Some(8) });
+    }
 
     fn rec(release: Option<&str>, artist: &str, title: &str, tracks: &[(&str, i64)]) -> RecordFacts {
         RecordFacts {
@@ -594,5 +818,116 @@ mod tests {
         let new = vec![f("n/01 A.flac", 100_000, Some("r1"), Some("A"), None), f("n/02 B.flac", 100_000, None, Some("B"), None)];
         let gone = vec![f("o/01 A.flac", 100_000, Some("r1"), Some("A"), None), f("o/02 B.flac", 100_000, None, Some("B"), None)];
         assert_eq!(match_moves(&new, &gone), vec![(0, 0), (1, 1)]);
+    }
+
+    fn known(refs: &[(&str, &str, &str)], says: &[(&str, &str, &str)], title: &str, tracks: &[(&str, i64)]) -> Known {
+        let links = |l: &[(&str, &str, &str)]| l.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect();
+        Known { refs: links(refs), says: links(says), artist: fold("Glass Harbour"), title: fold(title), tracks: tracks.iter().map(|(t, ms)| Listed::of(t, *ms)).collect() }
+    }
+
+    const TWO: [(&str, i64); 2] = [("Slack Water", 200_000), ("Neap", 180_000)];
+
+    /// 0100 point 4: a link from one side to the other's names the very record, whatever either calls it.
+    #[test]
+    fn a_link_decides_yes() {
+        let mb = known(&[("musicbrainz", "release", "r1"), ("musicbrainz", "release-group", "g1")], &[("discogs", "release", "2000001")], "Tide Tables", &[]);
+        let discogs = known(&[("discogs", "release", "2000001"), ("discogs", "master", "1000001")], &[], "Tide Tables (Remastered)", &[]);
+        assert!(same_listing(&mb, &discogs) && same_listing(&discogs, &mb), "MusicBrainz's link to Discogs' release, either way round");
+        let page = known(&[("bandcamp", "album", "https://glassharbour.bandcamp.com/album/tide-tables")], &[], "Tide Tables", &[]);
+        let linked = known(&[("musicbrainz", "release", "r1")], &[("bandcamp", "album", "https://glassharbour.bandcamp.com/album/tide-tables")], "Another Name", &[]);
+        assert!(same_listing(&page, &linked), "MusicBrainz's link to a Bandcamp album");
+        let pressing = known(&[("musicbrainz", "release", "r1")], &[("discogs", "release", "2000009")], "Tide Tables", &[]);
+        assert!(same_listing(&mb, &pressing), "the same release, whatever another source's pressing");
+    }
+
+    #[test]
+    fn a_link_decides_no() {
+        let a = known(&[("musicbrainz", "release", "r1")], &[("discogs", "release", "2000001")], "Tide Tables", &TWO);
+        assert!(!same_listing(&a, &known(&[("discogs", "release", "2000002")], &[], "Tide Tables", &TWO)), "another release: two, though name and tracks are one");
+        let group = |g: &str| known(&[("musicbrainz", "release-group", g)], &[], "Tide Tables", &TWO);
+        assert!(!same_listing(&group("g1"), &group("g2")), "another release group");
+        let deluxe = known(&[("musicbrainz", "release-group", "g1")], &[], "Tide Tables", &[("Slack Water", 200_000), ("Neap", 180_000), ("Bonus", 90_000)]);
+        assert!(!same_listing(&group("g1"), &deluxe), "one group says nothing (a deluxe edition shares it, G1), and the tracks are others");
+    }
+
+    #[test]
+    fn a_tracklist_merges() {
+        let bandcamp = known(&[("bandcamp", "album", "https://glassharbour.bandcamp.com/album/tide-tables")], &[], "Tide Tables", &[("Slack Water", 201_000), ("Neap (feat. A Guest)", 180_000)]);
+        assert!(same_listing(&known(&[("musicbrainz", "release-group", "g1")], &[], "Tide Tables", &TWO), &bandcamp), "no link between them: artist, title and tracks");
+        let group = known(&[("musicbrainz", "release-group", "g1")], &[], "Tide Tables", &TWO);
+        assert!(same_listing(&group, &group.clone()), "one group says nothing, and the tracks do");
+    }
+
+    #[test]
+    fn a_name_alone_never_merges() {
+        let (mb, discogs) = (known(&[("musicbrainz", "release-group", "g1")], &[], "Tide Tables", &[]), known(&[("discogs", "master", "1000001")], &[], "Tide Tables", &[]));
+        assert!(!same_listing(&mb, &discogs), "no link, no tracks: two");
+        assert!(!same_listing(&known(&[], &[], "Tide Tables", &[]), &known(&[], &[], "Tide Tables", &[])));
+        assert!(!same_listing(&known(&[], &[], "", &TWO), &known(&[], &[], "", &TWO)), "nor tracks with no name");
+    }
+
+    /// A source's list, each (title, length) in order.
+    fn list(tracks: &[(&str, Option<i64>)]) -> Vec<RefTrack> {
+        tracks.iter().zip(1..).map(|((title, length_ms), position)| RefTrack { disc: 1, position, title: title.to_string(), length_ms: *length_ms, recording: None }).collect()
+    }
+
+    fn files(tracks: &[(&str, i64)]) -> Vec<Listed> {
+        tracks.iter().map(|(t, ms)| Listed::of(t, *ms)).collect()
+    }
+
+    /// A record's files, and three sources' lists of it: MusicBrainz's with a bonus track, Discogs' and Bandcamp's as the files are.
+    fn tide() -> (Vec<Listed>, Vec<RefTrack>, Vec<RefTrack>, Vec<RefTrack>) {
+        let held = files(&[("Slack Water", 181_000), ("Neap", 203_000)]);
+        let mb = list(&[("Slack Water", Some(181_000)), ("Neap", Some(203_000)), ("Bonus", Some(90_000))]);
+        let discogs = list(&[("Slack Water", Some(182_000)), ("Neap", Some(204_000))]);
+        let bandcamp = list(&[("Slack Water", Some(181_000)), ("Neap (feat. Noor Field)", Some(203_000))]);
+        (held, mb, discogs, bandcamp)
+    }
+
+    /// 0.14's "Use this", or a link pasted by hand: before whatever agrees, and with no list of its own yet.
+    #[test]
+    fn counting_hand_first() {
+        let (held, mb, discogs, _) = tide();
+        let lists = [("musicbrainz", &mb[..]), ("discogs", &discogs[..])];
+        assert_eq!(counting(Some("musicbrainz"), &lists, &held).as_deref(), Some("musicbrainz"), "chosen, though it does not agree");
+        assert_eq!(counting(Some("bandcamp"), &lists, &[]).as_deref(), Some("bandcamp"), "chosen, its list not read yet");
+        assert_eq!(counting(Some("acoustid"), &[], &held).as_deref(), Some("acoustid"), "0.14 could choose a source with no list");
+    }
+
+    #[test]
+    fn counting_the_source_that_agrees() {
+        let (held, mb, discogs, bandcamp) = tide();
+        assert!(!agrees(&mb, &held) && agrees(&discogs, &held) && agrees(&bandcamp, &held), "a guest named on one side is the same track");
+        let all = [("bandcamp", &bandcamp[..]), ("discogs", &discogs[..]), ("musicbrainz", &mb[..])];
+        assert_eq!(counting(None, &all, &held).as_deref(), Some("discogs"), "of two that agree, the first in order");
+        assert_eq!(counting(None, &all[..1], &held).as_deref(), Some("bandcamp"));
+        assert_eq!(counting(None, &[("musicbrainz", &mb[..])], &held), None, "none fits: none counts until one is chosen");
+        assert!(!agrees(&list(&[("Slack Water", Some(184_000)), ("Neap", Some(203_000))]), &held), "more than two seconds apart");
+        assert!(!agrees(&list(&[("Neap", Some(203_000)), ("Slack Water", Some(181_000))]), &held), "in order");
+        assert!(!agrees(&[], &[]), "an empty list says nothing");
+    }
+
+    /// A record not had: nothing to hold a list against, so the first source in the order with a list (decision 0100).
+    #[test]
+    fn counting_with_no_files_goes_by_order() {
+        let (_, mb, discogs, bandcamp) = tide();
+        assert_eq!(counting(None, &[("bandcamp", &bandcamp[..]), ("musicbrainz", &mb[..])], &[]).as_deref(), Some("musicbrainz"));
+        assert_eq!(counting(None, &[("bandcamp", &bandcamp[..]), ("discogs", &discogs[..])], &[]).as_deref(), Some("discogs"));
+        assert_eq!(counting(None, &[("bandcamp", &bandcamp[..])], &[]).as_deref(), Some("bandcamp"));
+        assert_eq!(counting(None, &[("musicbrainz", &[][..]), ("bandcamp", &bandcamp[..])], &[]).as_deref(), Some("bandcamp"), "an empty list is no list");
+        assert_eq!(counting(None, &[], &[]), None);
+    }
+
+    /// OQ8 (a): a list with no lengths, Discogs' often, counts where every title agrees; a length it lacks is not held against it.
+    #[test]
+    fn a_list_with_no_lengths_counts_where_every_title_agrees() {
+        let (held, mb, _, _) = tide();
+        let titles = list(&[("Slack Water", None), ("Neap", None)]);
+        assert!(agrees(&titles, &held));
+        assert_eq!(counting(None, &[("musicbrainz", &mb[..]), ("discogs", &titles[..])], &held).as_deref(), Some("discogs"));
+        assert!(!agrees(&list(&[("Slack Water", None), ("Spring Tide", None)]), &held), "every title");
+        assert!(!agrees(&list(&[("Slack Water", None)]), &held), "and as many");
+        assert!(agrees(&list(&[("Slack Water", None), ("Neap", Some(203_500))]), &held), "a length given still decides, within two seconds");
+        assert!(!agrees(&list(&[("Slack Water", None), ("Neap", Some(240_000))]), &held));
     }
 }

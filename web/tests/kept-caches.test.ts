@@ -9,8 +9,8 @@ const SW = read('../public/sw.js');
 const OFFLINE = read('../src/lib/offline.svelte.ts');
 const name = (src: string, key: string) => src.match(new RegExp(`^const ${key} = '([^']+)';`, 'm'))?.[1];
 
-/** The names 0.15 kept under. */
-const BEFORE = ['cratarr-v4', 'cratarr-covers', 'cratarr-data', 'cratarr-offline'];
+/** The names kept under before: 0.15's, and 0.16's shell (raised for 0.17, W12). */
+const BEFORE = ['cratarr-v4', 'cratarr-covers', 'cratarr-data', 'cratarr-offline', 'cratarr-v5'];
 
 /** What activation leaves of `keys`: the real worker's own code, on stand-ins. */
 async function activate(keys: string[]) {

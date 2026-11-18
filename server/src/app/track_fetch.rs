@@ -566,9 +566,22 @@ pub fn track_for(disc: u32, position: u32, title: &str, artist: &str, length_ms:
     }
 }
 
-/// The gate for a release's track (a record fetched whole, 0.15): as [`gate`].
+/// The gate for a release's track (a record fetched whole, 0.15): as [`gate`], but AcoustID is not asked while background reading
+/// is paused (Y7): the file is not judged (`NotAsked`), and its record holds at its check.
 pub async fn gate_track(file: &Path, track: &ReleaseTrack) -> Result<f32> {
-    gate(file, track).await
+    gate_with(file, track, |print| unless_paused(looked_up, print)).await
+}
+
+/// AcoustID asked through `lookup`, unless background reading is paused (Y7): then asked nothing, saying so.
+async fn unless_paused<F, Fut>(lookup: F, print: crate::acoustid::Print) -> Result<Vec<crate::acoustid::Found>>
+where
+    F: FnOnce(crate::acoustid::Print) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
+{
+    if super::switches::background_paused() {
+        bail!(super::switches::PAUSED);
+    }
+    lookup(print).await
 }
 
 /// slskd as set, switched on: its client and its completed-downloads folder (as Cratarr sees it).
@@ -606,7 +619,17 @@ where
     let f = file.to_path_buf();
     let print = tokio::task::spawn_blocking(move || crate::acoustid::print(&f)).await??;
     refused_for(&print, track.length_ms)?;
+    // A list with no recordings (Discogs', Bandcamp's, C51b): no recording to hold the file against, so AcoustID's check is
+    // skipped and the file passes on its sound and length, as its folder was judged by titles and lengths (OQ9 (a), Q29).
+    if track.recording.is_empty() {
+        return Ok(1.0);
+    }
     let found = lookup(print).await.map_err(|e| NotAsked(format!("{e:#}")))?;
+    // AcoustID knowing nothing of the file (X3: a small release with no fingerprints) is judged as with no recording, by its titles
+    // and lengths, which its folder was found by; knowing it as another recording refuses it.
+    if !found.iter().any(|f| !f.recordings.is_empty()) {
+        return Ok(1.0);
+    }
     crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
 }
 
@@ -1460,6 +1483,21 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// X3: AcoustID knowing nothing of a file (no print, or a print it holds no recording for) is judged by titles and lengths, as
+    /// with no recording: a small release with no fingerprints is no wrong file.
+    #[tokio::test]
+    async fn acoustid_knowing_nothing_is_judged_by_titles_and_lengths() {
+        let d = dir("trackfile-unknown");
+        let from = d.join("cratarr/Old drive/06 Bloom.flac");
+        old_flac(&from, "trackfile-unknown");
+        let track = track_of(delight(), "r7", false).unwrap();
+        let nothing = |_| std::future::ready(Ok::<Vec<crate::acoustid::Found>, anyhow::Error>(Vec::new()));
+        assert_eq!(take(&from, &d.join("staging/f1/06 Bloom.flac"), &track, nothing).await.unwrap(), 1.0);
+        let unlinked = |_| std::future::ready(Ok::<Vec<crate::acoustid::Found>, anyhow::Error>(vec![crate::acoustid::Found { score: 0.9, recordings: Vec::new() }]));
+        assert_eq!(take(&from, &d.join("staging/f2/06 Bloom.flac"), &track, unlinked).await.unwrap(), 1.0, "a print it holds no recording for");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[tokio::test]
     async fn a_file_on_the_server_is_copied_and_gated_its_original_left() {
         let d = dir("trackfile-take");
@@ -1483,6 +1521,21 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// C51b, OQ9 (a), Q29: a track whose list gives no recording (Discogs', Bandcamp's) passes the gate on its sound and length,
+    /// AcoustID not asked; off its length it is still refused.
+    #[tokio::test]
+    async fn the_gate_with_no_recording_judges_by_sound_and_length() {
+        let d = dir("trackfile-norecording");
+        let from = d.join("cratarr/Old drive/06 Bloom.flac");
+        old_flac(&from, "trackfile-norecording");
+        let track = ReleaseTrack { recording: String::new(), ..track_of(delight(), "r7", false).unwrap() };
+        assert_eq!(take(&from, &d.join("staging/f1/06 Bloom.flac"), &track, never_asked).await.unwrap(), 1.0, "AcoustID never asked");
+        let longer = ReleaseTrack { length_ms: Some(30_000), ..track.clone() };
+        let err = take(&from, &d.join("staging/f2/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
+        assert_eq!(err.to_string(), "It is 20 s shorter than the recording");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[tokio::test]
     async fn acoustid_that_could_not_be_asked_is_no_refusal_of_the_file() {
         let d = dir("trackfile-notasked");
@@ -1499,6 +1552,29 @@ mod tests {
         let longer = ReleaseTrack { length_ms: Some(30_000), ..track.clone() };
         let err = take(&from, &d.join("staging/f3/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
         assert!(!err.is::<NotAsked>());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Y7: while background reading is paused, Soulseek's gate asks AcoustID nothing: the file is not judged (`NotAsked`), so its
+    /// record holds at its check. Unpaused, AcoustID is asked again.
+    #[tokio::test]
+    async fn acoustid_is_not_asked_while_background_reading_is_paused() {
+        use super::super::switches::{BACKGROUND, PAUSED, TEST_STATE, set_for_tests};
+        let _one = TEST_STATE.lock().await;
+        let d = dir("trackfile-paused");
+        let from = d.join("cratarr/Old drive/06 Bloom.flac");
+        old_flac(&from, "trackfile-paused");
+        let track = track_of(delight(), "r7", false).unwrap();
+        let was = set_for_tests(BACKGROUND, false);
+        let paused = take(&from, &d.join("staging/f1/06 Bloom.flac"), &track, |p| unless_paused(never_asked, p)).await;
+        set_for_tests(BACKGROUND, true);
+        let says = acoustid_says(0.97, "r7");
+        let unpaused = take(&from, &d.join("staging/f2/06 Bloom.flac"), &track, |p| unless_paused(says, p)).await;
+        set_for_tests(BACKGROUND, was);
+        let err = paused.unwrap_err();
+        assert!(err.is::<NotAsked>(), "{err:#}");
+        assert_eq!(format!("{err:#}"), PAUSED);
+        assert_eq!(unpaused.unwrap(), 0.97);
         std::fs::remove_dir_all(&d).ok();
     }
 

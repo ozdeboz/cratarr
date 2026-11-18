@@ -282,6 +282,26 @@ pub fn type_by_rule(album: &mut crate::source::Album) {
     album.release.secondary = secondary;
 }
 
+/// A had record's release type by the owner's rule (`release_type_of`), nothing said of it, until a build types its album (RF1:
+/// from then on the had rule reads the type its album was built with, `Catalogue::keep_types`): its name, and each of its tracks'
+/// length where its files' was read (T10). None where the rule cannot say whether it is a single: its answer hangs on a length not
+/// read yet (a short record whose files the walker has not read), or it has no tracks. Else its type as a build reads it, a length
+/// not read as none.
+pub fn type_by_files(name: &str, lengths: &[Option<u64>]) -> Option<String> {
+    if lengths.is_empty() {
+        return None;
+    }
+    // The rule with each length not read the shortest it could be, and the longest: placed where the two agree it is a single or not.
+    let typed = |unread: u64| {
+        let ms = || lengths.iter().map(|l| l.unwrap_or(unread));
+        let shape = Shape { tracks: lengths.len(), duration_ms: ms().fold(0, u64::saturating_add), longest_ms: ms().max().unwrap_or(0), name, various: false };
+        release_type_of(None, None, &shape).0
+    };
+    let (shortest, longest) = (typed(0), typed(u64::MAX));
+    let single = |t: &Option<String>| t.as_deref() == Some("single");
+    if single(&shortest) == single(&longest) { shortest } else { None }
+}
+
 /// The type an album's name gives: its last word "EP" an EP, "LP" an album (any case).
 fn named(name: &str) -> Option<&'static str> {
     name.split(|c: char| !c.is_alphanumeric()).rev().find_map(|w| match w.to_ascii_lowercase().as_str() {
@@ -707,6 +727,11 @@ impl Library {
     }
 
     /// The albums found missing tracks, with their whole release (by album id, 0.13); a change builds the library again.
+    /// The whole release of an album the check found missing tracks (`set_incomplete`); none for one not found so (T5, S.1).
+    pub fn whole_of(&self, album: &str) -> Option<Whole> {
+        self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).get(album).copied()
+    }
+
     pub fn set_incomplete(&self, albums: HashMap<String, Whole>) {
         *self.incomplete.lock().unwrap_or_else(|p| p.into_inner()) = albums;
     }
@@ -855,6 +880,9 @@ impl Library {
             if given > 0 {
                 folders = read()?;
             }
+        } else {
+            // Every record settled: what the files name and credit is still kept, so a retag shows (R4).
+            cat.keep_files_names(&copies).context("keeping what the albums' files name")?;
         }
         drop(copies);
         // As for records: a new name has its id before anything written names it.
@@ -885,6 +913,13 @@ impl Library {
 
     fn built_from(&self) -> Option<String> {
         self.db().query_row("SELECT value FROM meta WHERE key = ?1", [BUILT_FROM], |r| r.get(0)).optional().ok().flatten()
+    }
+
+    /// Whether the library has been built whole at its layout (W2): what it was built from is noted as a build ends, and one of
+    /// another layout (its tables dropped at open) or a new one (library.sqlite deleted, a repair) has none until its first build
+    /// ends. Kept across restarts. One that cannot be read is not. Blocking.
+    pub fn built(&self) -> bool {
+        self.built_from().is_some()
     }
 
     fn set_built_from(&self, print: &str) -> Result<bool> {
@@ -1454,7 +1489,7 @@ struct BuiltAlbum {
 
 /// What a folder's library is, and its place in the libraries' order. With no word from the app (a test without one;
 /// `main` sets them before anything is served): the first folder is the Music folder, the others wait in Incoming.
-fn kind_in(kinds: &[(i64, Kind)], folder: i64) -> (Kind, usize) {
+pub(crate) fn kind_in(kinds: &[(i64, Kind)], folder: i64) -> (Kind, usize) {
     match kinds.iter().position(|(f, _)| *f == folder) {
         Some(i) => (kinds[i].1, i),
         None if folder == 0 && kinds.is_empty() => (Kind::Main, 0),
@@ -1629,6 +1664,20 @@ fn artist_number_in_tests(name: &str) -> i64 {
     (u64::from_le_bytes(hash[..8].try_into().unwrap_or_default()) >> 2) as i64
 }
 
+/// An album's labels as its first file that names any names them (Vorbis LABEL, MP4's, ID3v2 TPUB read as "label"), several
+/// in one value split as the crates split them, the catalogue number going with the first.
+fn labels_of_album(list: &[&Song]) -> Vec<(String, String)> {
+    let Some(s) = list.iter().find(|s| s.row.first("label").is_some()) else { return Vec::new() };
+    let mut names: Vec<String> = Vec::new();
+    for l in s.row.all("label").flat_map(crate::crates::labels_of) {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(&l)) {
+            names.push(l);
+        }
+    }
+    let catno = s.row.first("catalognumber").unwrap_or_default().to_string();
+    names.into_iter().enumerate().map(|(i, name)| (name, if i == 0 { catno.clone() } else { String::new() })).collect()
+}
+
 /// Stands in for `assign_records` in tests with no catalogue: each group a record of its own, from a stable hash of it,
 /// unless the test named one. So hand-made rows mean what they meant, and production has no fallback.
 #[cfg(test)]
@@ -1673,11 +1722,15 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
             let named = list.iter().copied().find(|s| ids::album(s.row, &s.album_artist, s.folder) == s.group).unwrap_or(first);
             crate::catalogue::AlbumCopy {
                 facts: RecordFacts {
-                    release: list.iter().find_map(|s| s.row.first("musicbrainz_albumid")).map(str::to_lowercase),
+                    release: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_albumid"))),
                     artist: fold(&first.album_artist),
                     title: fold(&first.album),
                     tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
+                group: crate::catalogue::records::most_named(list.iter().filter_map(|s| s.row.first("musicbrainz_releasegroupid"))),
+                artists: first.album_artists.clone(),
+                artist_ids: first.row.all("musicbrainz_albumartistid").flat_map(|v| v.split([';', '/', ','])).map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty()).collect(),
+                labels: labels_of_album(&list),
                 title: first.album.clone(),
                 artist: first.album_artist.clone(),
                 year: list.iter().filter_map(|s| s.row.first("date").and_then(year_of)).max(),
@@ -2727,6 +2780,29 @@ mod tests {
         tagged(&cat, 1, &[("date", "1999"), ("genre", "Own Word"), ("musicbrainz_albumid", "own-release")]);
         build_now(&lib, &cat);
         assert_eq!(says(&lib, &album), before);
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// R4: a retag shows in the record's references at the next build, its tracks settled as they were (no album needs a
+    /// record, so `assign_records` does not run): the release its files name now is its `files` reference, and the one they
+    /// named before is let go of.
+    #[test]
+    fn a_retagged_album_lets_go_of_its_old_release() {
+        let (roots, cat, lib, album, _) = a_record_in("retagged", Kind::Incoming);
+        let (old, new) = ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002");
+        let refs = || -> Vec<(String, String, String)> { cat.references_of(&album).unwrap().into_iter().map(|(r, row)| (r.kind, r.value, row.how)).collect() };
+        let release = |id: &str| vec![("release".to_string(), id.to_string(), "files".to_string())];
+        for folder in [0, 1] {
+            tagged(&cat, folder, &[("musicbrainz_albumid", old)]);
+        }
+        build_now(&lib, &cat);
+        assert!(!cat.records_unsettled() && albums_now(&cat).iter().all(|a| !a.split), "no album needs a record");
+        assert_eq!(refs(), release(old), "tagged after its record was given");
+        for folder in [0, 1] {
+            tagged(&cat, folder, &[("musicbrainz_albumid", new)]);
+        }
+        build_now(&lib, &cat);
+        assert_eq!(refs(), release(new), "the release named before let go of");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 

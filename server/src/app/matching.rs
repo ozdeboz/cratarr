@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::fixes::Fix;
+use crate::catalogue::identity::RefTrack;
 use super::musicbrainz::Asked as _;
 
 /// The task's kind (`app::tasks`).
@@ -57,6 +58,9 @@ struct Release {
     format: String,
     /// Each track: title, length (s), recording id, first artist's id.
     tracks: Vec<(String, Option<i64>, String, Option<String>)>,
+    /// Its list as a reference keeps it (`reference_tracks`): MusicBrainz's own titles, lengths to the ms, recordings, each
+    /// at its medium and place. A match keeps none of it, only its files' names.
+    list: Vec<RefTrack>,
 }
 
 fn credit(v: &Value) -> (String, Option<String>) {
@@ -68,7 +72,22 @@ fn credit(v: &Value) -> (String, Option<String>) {
 fn release_of(v: &Value) -> Release {
     let (artist, artist_id) = credit(&v["artist-credit"]);
     let media = v["media"].as_array().cloned().unwrap_or_default();
+    let list = media
+        .iter()
+        .zip(1..)
+        .flat_map(|(m, disc)| {
+            let disc = m["position"].as_u64().map_or(disc, |p| p as u32);
+            m["tracks"].as_array().cloned().unwrap_or_default().into_iter().zip(1..).map(move |(t, at)| RefTrack {
+                disc,
+                position: t["position"].as_u64().map_or(at, |p| p as u32),
+                title: t["title"].as_str().unwrap_or_default().to_string(),
+                length_ms: t["length"].as_i64(),
+                recording: t["recording"]["id"].as_str().map(str::to_string),
+            })
+        })
+        .collect();
     Release {
+        list,
         id: v["id"].as_str().unwrap_or_default().to_string(),
         group: v["release-group"]["id"].as_str().map(str::to_string),
         title: v["title"].as_str().unwrap_or_default().to_string(),
@@ -158,24 +177,26 @@ async fn lookup(http: &reqwest::Client, release: &str) -> Result<Release> {
         .error_for_status()?
         .json()
         .await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(release_of(&v))
 }
 
+/// What `find` found: the match, the release's own list, and whether the files name that release.
+type Found = (Match, Vec<RefTrack>, bool);
+
 /// An album's best match: its own release where its files name one, else the best of what a search by its name and
 /// artist finds (certain before likely, the first found among equals).
-async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Match>> {
+async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Found>> {
     let a = album.to_string();
     let (tracks, release, artist, name) = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a)).await??;
     let files: Vec<(String, String, i64)> = tracks.iter().map(|t| (t.file.clone(), t.title.clone(), i64::from(t.secs))).collect();
     if let Some(r) = release {
-        return Ok(score(&files, &lookup(http, &r).await?));
+        let read = lookup(http, &r).await?;
+        return Ok(score(&files, &read).map(|m| (m, read.list, true)));
     }
     let query = format!("release:{} AND artist:{}", phrase(&name), phrase(&artist));
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release")?;
     url.query_pairs_mut().append_pair("query", &query).append_pair("limit", "10").append_pair("fmt", "json");
     let v: Value = http.get(url).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     let ids: Vec<String> = v["releases"]
         .as_array()
         .into_iter()
@@ -184,13 +205,14 @@ async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Match>> {
         .filter_map(|r| r["id"].as_str().map(str::to_string))
         .take(CANDIDATES)
         .collect();
-    let mut best: Option<Match> = None;
+    let mut best: Option<Found> = None;
     for id in ids {
-        if let Some(m) = score(&files, &lookup(http, &id).await?)
-            && best.as_ref().is_none_or(|b| m.certain && !b.certain)
+        let read = lookup(http, &id).await?;
+        if let Some(m) = score(&files, &read)
+            && best.as_ref().is_none_or(|(b, ..)| m.certain && !b.certain)
         {
             let certain = m.certain;
-            best = Some(m);
+            best = Some((m, read.list, false));
             if certain {
                 break;
             }
@@ -199,9 +221,18 @@ async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Match>> {
     Ok(best)
 }
 
+/// How the matching task finds an album's match (`find`; the tests' stand in for it, V6).
+type Finder = fn(reqwest::Client, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>>;
+
 /// The matches of these albums as kept; those never matched, or matched long ago, matched in a task (one at a time for
-/// the account), each kept as it is found. Blocking parts apart.
+/// the account), each kept as it is found. One album (an intake card, a one-album fix) is a page's question (V6); a whole finding's
+/// list goes behind the pages, as the background reads do, and stops at "Pause background reading" (U8). Blocking parts apart.
 pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: Vec<String>) -> Result<Vec<(String, Match)>> {
+    kept_or_find_by(served, albums, |http, album| Box::pin(async move { find(&http, &album).await })).await
+}
+
+/// `kept_or_find`, each album's match found by `finder`.
+async fn kept_or_find_by(served: &std::sync::Arc<crate::serve::Serve>, albums: Vec<String>, finder: Finder) -> Result<Vec<(String, Match)>> {
     let ud = served.userdata.clone();
     let wanted = albums.clone();
     let kept = tokio::task::spawn_blocking(move || ud.album_matches(&wanted)).await??;
@@ -210,27 +241,47 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
     if !due.is_empty()
         && let Some(account) = served.current_user()
     {
-        let ud = served.userdata.clone();
+        let (ud, served) = (served.userdata.clone(), served.clone());
         // One running for the account already: it is left to finish (asked again later, it takes the rest).
+        // A page started it: one album's questions (an intake card, a one-album fix) are a page's, never the background asker's (V6),
+        // so "Pause background reading" does not refuse them (Y7). A whole finding's list (Health's "library:musicbrainz", every album
+        // lacking ids) asks behind the pages, as the background reads do, and the pause holds it (U8). One album asked, not one left
+        // of many by the matches kept (T13.4): a finding whose other albums are matched already is still the background's.
+        let page = albums.len() == 1;
         let _ = super::tasks::spawn(KIND, &account, false, move |h| async move {
-            let http = super::discover::http()?;
-            let total = due.len() as u64;
-            for (i, album) in due.into_iter().enumerate() {
-                h.step("Matching albums with MusicBrainz", i as u64, Some(total));
-                let found = match find(&http, &album).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::debug!("matching: {album}: {e:#}");
-                        continue;
-                    }
-                };
-                let (ud, json) = (ud.clone(), found.as_ref().map(serde_json::to_string).transpose()?);
-                tokio::task::spawn_blocking(move || ud.set_album_match(&album, json.as_deref(), super::moment::now_secs())).await??;
-            }
-            anyhow::Ok(())
+            let matching = match_each(h, due, ud, served, finder);
+            if page { matching.await } else { super::musicbrainz::behind(matching).await }
         });
     }
     Ok(kept.into_iter().filter_map(|(a, (_, json))| Some((a, serde_json::from_str(&json?).ok()?))).collect())
+}
+
+/// The matching task's work (`kept_or_find_by`): each album's match found by `finder` and kept, with the release's own list in its
+/// references, as the task's steps say.
+async fn match_each(h: std::sync::Arc<super::tasks::Handle>, due: Vec<String>, ud: std::sync::Arc<crate::userdata::UserData>, served: std::sync::Arc<crate::serve::Serve>, finder: Finder) -> Result<()> {
+    let http = super::discover::http()?;
+    let total = due.len() as u64;
+    for (i, album) in due.into_iter().enumerate() {
+        h.step("Matching albums with MusicBrainz", i as u64, Some(total));
+        let found = match finder(http.clone(), album.clone()).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::debug!("matching: {album}: {e:#}");
+                continue;
+            }
+        };
+        let (ud, s, json) = (ud.clone(), served.clone(), found.as_ref().map(|(m, ..)| serde_json::to_string(m)).transpose()?);
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            ud.set_album_match(&album, json.as_deref(), super::moment::now_secs())?;
+            // In the references too (C43b), with the release's own list.
+            if let Some((m, list, named)) = &found {
+                super::references::keep_match(&s, &album, m, list, *named)?;
+            }
+            Ok(())
+        })
+        .await??;
+    }
+    Ok(())
 }
 
 /// The fixes a match gives a finding's albums (`library:album-artist`: the album artist; `library:musicbrainz`: the
@@ -325,6 +376,145 @@ mod tests {
             tracks: tracks.iter().enumerate().map(|(i, (t, s))| (t.to_string(), Some(*s), format!("rec{i}"), Some("a1".into()))).collect(),
             ..Release::default()
         }
+    }
+
+    /// V6 (the review of run 8b, finding 6): the matching an intake card or Health's fixes start is a page's: while background reading
+    /// is paused its questions to MusicBrainz still go, and what it found is kept.
+    #[tokio::test]
+    async fn an_intake_cards_match_goes_while_paused() {
+        use crate::app::switches::{BACKGROUND, MUSICBRAINZ, TEST_STATE, set_for_tests};
+        static AT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        static WENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn asking(_: reqwest::Client, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
+            use crate::app::musicbrainz::Asked as _;
+            Box::pin(async {
+                let at = AT.lock().unwrap().clone();
+                reqwest::Client::new().get(at).asked().await?.error_for_status()?;
+                WENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                anyhow::Ok(None::<Found>)
+            })
+        }
+        let _one = TEST_STATE.lock().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        const ACCOUNT: &str = "matching-while-paused";
+        let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
+        let (musicbrainz, background) = (set_for_tests(MUSICBRAINZ, true), set_for_tests(BACKGROUND, false));
+        let kept = crate::serve::who::acting_as(who, kept_or_find_by(&serve, vec!["al-1".to_string()], asking)).await;
+        for _ in 0..500 {
+            if !running(ACCOUNT) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let matched = serve.userdata.album_matches(&["al-1".to_string()]).unwrap();
+        set_for_tests(BACKGROUND, background);
+        set_for_tests(MUSICBRAINZ, musicbrainz);
+        assert!(kept.unwrap().is_empty(), "none kept before");
+        assert_eq!(WENT.load(std::sync::atomic::Ordering::SeqCst), 1, "its question went while paused");
+        assert!(matched.contains_key("al-1"), "what it found kept");
+    }
+
+    /// U8 (the review of 8c/8d, finding 8): a whole finding's matching (Health's "library:musicbrainz", every album lacking ids) asks
+    /// behind the pages: while background reading is paused none of its questions go, and nothing is kept. One album alone goes (V6).
+    #[tokio::test]
+    async fn a_whole_findings_matching_waits_while_paused() {
+        use crate::app::switches::{BACKGROUND, MUSICBRAINZ, TEST_STATE, set_for_tests};
+        static AT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        static WENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn asking(_: reqwest::Client, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
+            use crate::app::musicbrainz::Asked as _;
+            Box::pin(async {
+                let at = AT.lock().unwrap().clone();
+                reqwest::Client::new().get(at).asked().await?.error_for_status()?;
+                WENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                anyhow::Ok(None::<Found>)
+            })
+        }
+        let _one = TEST_STATE.lock().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        const ACCOUNT: &str = "a-findings-matching-while-paused";
+        let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
+        let (musicbrainz, background) = (set_for_tests(MUSICBRAINZ, true), set_for_tests(BACKGROUND, false));
+        let albums = vec!["al-1".to_string(), "al-2".to_string(), "al-3".to_string()];
+        let kept = crate::serve::who::acting_as(who, kept_or_find_by(&serve, albums.clone(), asking)).await;
+        for _ in 0..500 {
+            if !running(ACCOUNT) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let matched = serve.userdata.album_matches(&albums).unwrap();
+        set_for_tests(BACKGROUND, background);
+        set_for_tests(MUSICBRAINZ, musicbrainz);
+        assert!(kept.unwrap().is_empty());
+        assert_eq!(WENT.load(std::sync::atomic::Ordering::SeqCst), 0, "no question went while paused");
+        assert!(matched.is_empty(), "nothing kept");
+    }
+
+    /// T13.4 (run 10's review, the nits, U8): a whole finding asks behind the pages however many of its albums are matched already:
+    /// three asked, two matched a moment ago, one left to ask; while background reading is paused its question does not go, and
+    /// nothing is kept of it.
+    #[tokio::test]
+    async fn a_finding_with_one_album_left_to_match_still_waits_while_paused() {
+        use crate::app::switches::{BACKGROUND, MUSICBRAINZ, TEST_STATE, set_for_tests};
+        static AT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        static WENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn asking(_: reqwest::Client, _: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Found>>> + Send>> {
+            use crate::app::musicbrainz::Asked as _;
+            Box::pin(async {
+                let at = AT.lock().unwrap().clone();
+                reqwest::Client::new().get(at).asked().await?.error_for_status()?;
+                WENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                anyhow::Ok(None::<Found>)
+            })
+        }
+        let _one = TEST_STATE.lock().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        const ACCOUNT: &str = "a-findings-last-album-while-paused";
+        let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
+        let albums = vec!["al-1".to_string(), "al-2".to_string(), "al-3".to_string()];
+        for a in &albums[..2] {
+            serve.userdata.set_album_match(a, None, crate::app::moment::now_secs()).unwrap();
+        }
+        let (musicbrainz, background) = (set_for_tests(MUSICBRAINZ, true), set_for_tests(BACKGROUND, false));
+        let kept = crate::serve::who::acting_as(who, kept_or_find_by(&serve, albums.clone(), asking)).await;
+        for _ in 0..500 {
+            if !running(ACCOUNT) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let matched = serve.userdata.album_matches(&albums).unwrap();
+        set_for_tests(BACKGROUND, background);
+        set_for_tests(MUSICBRAINZ, musicbrainz);
+        assert!(kept.unwrap().is_empty(), "none kept with a release");
+        assert_eq!(WENT.load(std::sync::atomic::Ordering::SeqCst), 0, "the last album's question did not go while paused");
+        assert!(!matched.contains_key("al-3"), "nothing kept of it");
+    }
+
+    /// A match keeps its files' names; the release's list keeps MusicBrainz's own titles, to the ms, at their medium and place
+    /// (a track with no place says its order), each with its recording.
+    #[test]
+    fn a_releases_list_is_its_own_titles() {
+        let v = serde_json::json!({ "id": "r1", "media": [
+            { "position": 1, "tracks": [{ "position": 1, "title": "Slack Water", "length": 181_234, "recording": { "id": "rec1" } }] },
+            { "position": 2, "tracks": [{ "position": 1, "title": "Neap", "recording": { "id": "rec2" } }, { "title": "Ebb", "length": 90_000 }] }
+        ]});
+        let list = release_of(&v).list;
+        let rec = |disc: u32, position: u32, title: &str, length_ms: Option<i64>, recording: Option<&str>| RefTrack { disc, position, title: title.into(), length_ms, recording: recording.map(str::to_string) };
+        assert_eq!(list, [rec(1, 1, "Slack Water", Some(181_234), Some("rec1")), rec(2, 1, "Neap", None, Some("rec2")), rec(2, 2, "Ebb", Some(90_000), None)]);
     }
 
     #[test]

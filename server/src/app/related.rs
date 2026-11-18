@@ -40,6 +40,9 @@ pub struct Related {
     /// Their id in the library, whose page they open; none: new to the library.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Their number for their name (C55, G5), as they are sent: "Name (n)" where the list holds two of a name. Never kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<i64>,
     /// An album of theirs that plays on Bandcamp (a new artist's way in), and its title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
@@ -55,6 +58,47 @@ pub struct Related {
 pub struct Found {
     pub at: i64,
     pub artists: Vec<Related>,
+}
+
+/// An artist an artist page asks about (C55): who they are, and their MusicBrainz id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Asked {
+    /// Their id for life, as served (`ar-<n>`).
+    pub id: String,
+    pub name: String,
+    /// Their number among the artists of their name, and whether another artist has it (`Catalogue::artist_named`).
+    pub number: Option<i64>,
+    pub namesakes: bool,
+    pub mbid: Option<String>,
+}
+
+/// The artist an artist page asks about (C55: its view, About, related artists, the photo), Cratarr's own:
+/// - by their id for life, that artist, named as the catalogue names them, though another artist has the name;
+/// - by name, the first artist of it (a bare name from outside opens the lowest number), named as asked.
+///
+/// Their MusicBrainz id is their own references' first (`Catalogue::artist_known`), else the library's row of them. None: a name
+/// no artist has, or an id no artist has (forgotten, or never given). Blocking.
+pub fn asked(serve: &crate::serve::Serve, id: Option<&str>, name: &str) -> Result<Option<Asked>> {
+    let cat = serve.catalogue();
+    let artist = match id {
+        Some(id) => crate::serve::ids::artist_number(id),
+        None if name.trim().is_empty() => None,
+        None => cat.artist_of(name.trim())?,
+    };
+    let Some(named) = artist.map(|a| cat.artist_named(a)).transpose()?.flatten() else { return Ok(None) };
+    let served = crate::serve::ids::artist(named.id);
+    let own = cat.artist_known(named.id)?.and_then(|(_, refs)| refs.into_iter().find(|(r, _)| r.source == "musicbrainz" && r.kind == "artist").map(|(r, _)| r.value));
+    let mbid = match own {
+        Some(mbid) => Some(mbid),
+        None => serve.library.artist(&served)?.and_then(|a| a.music_brainz_id),
+    };
+    Ok(Some(Asked {
+        id: served,
+        name: if id.is_some() { named.name } else { name.trim().to_string() },
+        number: named.number,
+        namesakes: named.namesakes,
+        mbid: mbid.filter(|m| !m.is_empty()),
+    }))
 }
 
 /// The artists being looked up now (by MusicBrainz id): one look each at a time.
@@ -189,14 +233,15 @@ async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<(MbRelated, Ve
     Ok((related, persons))
 }
 
-/// An album of the artist that plays on Bandcamp, and its title: their own Bandcamp page as MusicBrainz keeps it, its
-/// newest release.
-async fn on_bandcamp(http: &reqwest::Client, mbid: &str) -> Option<(String, String)> {
+/// An album of the artist that plays on Bandcamp, and its title: their own Bandcamp page only as MusicBrainz links it (O5), an
+/// album the search box lists on it (O4: its `/music` page is not read). None with Bandcamp switched off.
+async fn on_bandcamp(http: &reqwest::Client, mbid: &str, name: &str) -> Option<(String, String)> {
+    if !super::switches::is_on(super::switches::BANDCAMP) {
+        return None;
+    }
     let urls = super::discover::mb_artist_urls(http, mbid).await.ok()?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     let own = urls.iter().filter_map(|u| crate::bandcamp::page(u)).find(|p| reqwest::Url::parse(p).ok().and_then(|u| u.host_str().map(|h| h != "bandcamp.com")).unwrap_or(false))?;
-    let releases = crate::bandcamp::Bandcamp::get().releases(&own).await.ok()?;
-    releases.into_iter().find_map(|(title, url)| Some((title, crate::bandcamp::album_page(&url)?)))
+    crate::bandcamp::Bandcamp::get().albums_on(&own, name).await.ok()?.into_iter().next()
 }
 
 /// Looks up the artists related to one (`name`, `mbid`): ListenBrainz's and MusicBrainz's, the library's marked, the new
@@ -205,7 +250,7 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
     let http = super::discover::http()?;
     let mut by: HashMap<String, Related> = HashMap::new();
     let mut add = |id: String, name: String, why: &str, score: f64| {
-        let r = by.entry(id.clone()).or_insert_with(|| Related { name, mbid: Some(id), why: Vec::new(), id: None, bandcamp: None, album: None, score: 0.0 });
+        let r = by.entry(id.clone()).or_insert_with(|| Related { name, mbid: Some(id), why: Vec::new(), id: None, number: None, bandcamp: None, album: None, score: 0.0 });
         if !r.why.iter().any(|w| w == why) {
             r.why.push(why.to_string());
         }
@@ -235,7 +280,6 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
         }
         Err(e) => tracing::info!("related artists of {name}: MusicBrainz: {e:#}"),
     }
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     let mut artists: Vec<Related> = by.into_values().filter(|r| loose(&r.name) != loose(name)).collect();
     // The library's: by name, as the artist page names them.
     let (lib, names) = (serve.library.clone(), artists.iter().map(|r| r.name.clone()).collect::<Vec<_>>());
@@ -253,7 +297,7 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
         }
         looked += 1;
         if let Some(id) = r.mbid.clone()
-            && let Some((title, page)) = on_bandcamp(&http, &id).await
+            && let Some((title, page)) = on_bandcamp(&http, &id, &r.name).await
         {
             (r.album, r.bandcamp) = (Some(title), Some(page));
         }
@@ -280,6 +324,7 @@ mod tests {
                 mbid: Some("m1".into()),
                 why: vec!["Listened alongside".into()],
                 id: None,
+                number: None,
                 bandcamp: Some("https://extrawelt.bandcamp.com/album/x".into()),
                 album: Some("Fernweh".into()),
                 score: 0.75,
@@ -290,5 +335,25 @@ mod tests {
         assert_eq!(back.artists[0].bandcamp.as_deref(), Some("https://extrawelt.bandcamp.com/album/x"));
         assert_eq!((back.artists[0].album.as_deref(), back.artists[0].score), (Some("Fernweh"), 0.75), "kept with its rank, for Discover");
         assert!(super::super::moment::now_secs() - back.at <= FRESH_SECS, "fresh");
+    }
+
+    /// C55: About, related artists and the photo go by the artist asked for (`asked`): by id, that one, named as the catalogue
+    /// names them, with their own MusicBrainz id, though another has the name; by name, the first of it. An id no artist has is
+    /// no one's.
+    #[test]
+    fn about_and_related_go_by_id() {
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        let cat = serve.catalogue();
+        let (first, second) = (cat.artist_for("Rone").unwrap(), cat.artist_apart("Rone").unwrap());
+        let (french, other) = ("00000000-0000-4000-8000-000000000301", "00000000-0000-4000-8000-000000000302");
+        for (artist, mbid) in [(first, french), (second, other)] {
+            assert!(cat.set_reference(&crate::serve::ids::artist(artist), &crate::catalogue::records::Ref::new("musicbrainz", "artist", mbid), "files").unwrap());
+        }
+        let id = crate::serve::ids::artist;
+        let by = |asked_id: Option<&str>, name: &str| asked(&serve, asked_id, name).unwrap().map(|a| (a.id, a.name, a.mbid));
+        assert_eq!(by(Some(id(second).as_str()), ""), Some((id(second), "Rone".to_string(), Some(other.to_string()))), "by id: that one");
+        assert_eq!(by(None, "RONE"), Some((id(first), "RONE".to_string(), Some(french.to_string()))), "a bare name: the first");
+        assert_eq!(by(Some("ar-999999"), "Rone"), None, "an id no artist has");
     }
 }

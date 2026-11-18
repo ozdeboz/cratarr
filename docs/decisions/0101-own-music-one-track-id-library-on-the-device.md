@@ -375,3 +375,44 @@ that lost its network too: what was skipped there as gone, in the app, now holds
 Point 27's Radio pick under 0.05 s becomes under **0.1 s**, measured the same way on the slowest device. A Sounds like of 12
 seeds becomes one pass over the library, under 0.3 s, as a crate is. The numbers it rests on are D03's on the tablet
 (`rehearsal/spike-tablet.txt` in the build plan's folder); D22 measures them again on the real library.
+
+## Amended 2026-11-18: what 0.17's first preview built (the owner's answers of 2026-11-15 to 2026-11-18)
+
+Copies, room and the floor came in 0.17's first preview, not in 0.16 (26). Uploads (5) come in 0.17's second preview.
+[records-and-copies.md](../records-and-copies.md) has them in full. Where this changes the record above:
+
+- **No approval per request** (the owner, 2026-11-17). "Request albums" is the gate: an account that has it Wants freely,
+  and Lidarr and Soulseek fetch with no administrator's yes. The "approve requests automatically" permission is gone.
+  This replaces the settled "Approval" above: over room a Want waits, saying so, and goes by itself once the account is
+  under. No one's yes lets it through. 0.16's pending requests go ahead at the upgrade.
+- **Room (4).** 100 GB per user unless an administrator sets another; administrators have none.
+  - Only arrived music counts: a request counts against its asker's room from its arrival in Incoming, not before.
+  - Over room nothing is removed ("130 of 100 GB"). A delete gives room back at once.
+  - Adding to a library is never refused for room. This changes 4's "a Keep over the allocation refused".
+  - A copy is free while another present copy holds the same bytes, in a main library or anyone's own music. Once that
+    twin changes or leaves, it counts in full.
+- **The floor (4).** 200 GB unless set, held against the disks users' music lands on. Below it users' new Wants wait and
+  Soulseek starts no transfer of theirs; administrators' fetches go on. Cratarr says it in its health answer and on
+  Health. Home Assistant reads it there (the owner: "HA reads it"): Cratarr holds no token and calls no one.
+- **Already stored (3).** A Want of a record held whole copies it into the asker's own music: from a main library, else
+  their own, else anyone's own music (the owner, 2026-11-17: "Yes, from anyone's"). Only a whole copy. The other
+  person's copy is never moved or changed. No fetcher is asked.
+- **Copy to.** An administrator's move of a kept record into or out of someone's own music is a copy. It is an album
+  action like Keep (the owner, 2026-11-17: "Like Keep, gate in 0.18"): one journal entry and one Undo, nothing written
+  that its sheet does not show. It is copied as it is, whatever the target's quality limit. Its Undo is refused whole
+  while a copied file was rewritten since.
+- **Replace from someone's own music** ("Copy in, admins"). An administrator replaces a main library's copy from a
+  better copy in someone's own music. It is copied in as it is, with no cover choice and nothing carried over, and the
+  own copy stays. The menu says whose copy it is: "from Your music", or "from Bob's music". A request met this way just
+  reads "Arrived".
+- **When a request is done.** Only a whole copy does it: one holding every track of the record's counting list (with no
+  list, any copy). Short of that it reads "Partly there", and the fetchers go on. Once done in a library the request is
+  delivered: it stays in the history, and pulls no more copies, room or searches.
+- **Own music per account.** Settings › Libraries has a switch for each account, on until switched off. Off, the account
+  has no own music: nothing is added to it, its requests go where the Incoming library's setting sends them, and only an
+  administrator adds them.
+- **A user may undo their own** Add to and Delete in Incoming. A requester has a say only over the Incoming copies that
+  came after their request.
+- **The backup (settled above).** Cratarr's list for the off-site backup holds the copies outside Music whose bytes an
+  original holds in a kept library: a main library or anyone's own music, never Incoming or a trash. The backup is to
+  take Music and every own music folder, less that list; the NAS's side comes with the release.

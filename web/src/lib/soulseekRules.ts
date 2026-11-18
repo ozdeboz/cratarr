@@ -1,14 +1,14 @@
 // Soulseek in Cratarr (decision 0099 and its amendment), the page's rules, pure: what a record's row says where it
 // stands, which can be ticked, how the list groups, and what Fetch sends. The server searches the requests approved in
-// Cratarr by their release, finds folders that hold every track, and fetches only what is ticked.
+// Cratarr by their record's list, finds folders that hold every track, and fetches only what is ticked.
 
 export type SoulseekState = 'waiting' | 'searching' | 'found' | 'approved' | 'fetching' | 'checking' | 'placed' | 'stuck';
-export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number };
+export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number; unchecked?: string | null };
 export type SoulseekItem = {
   id: string;
-  record: { artist: string; album: string; release_group: string; year?: number | null };
-  /** The approved Request it fetches (every one is one: decision 0099's amendment). */
-  request: number;
+  /** The catalogue's record it fetches (`record`: its number, 0 for an item 0.16 kept), named as the record is, and the approved
+   *  Request it fetches (every one is one: decision 0099's amendment), as the server keeps them. */
+  record: { record: number; artist: string; album: string; year?: number | null; request: number };
   state: SoulseekState;
   folders: SoulseekFolder[];
   /** The folder to be fetched (its place in `folders`). */
@@ -28,10 +28,11 @@ export type SoulseekItem = {
 };
 export type SoulseekView = { items: SoulseekItem[]; library?: string | null };
 
-/** A folder as a line: its format, how soon (a free slot, else its queue), its extra files, whose. */
+/** A folder as a line: what could not be checked (found by titles alone, R33), its format, how soon (a free slot, else its
+ * queue), its extra files, whose. */
 export function folderLine(f: SoulseekFolder): string {
   const mb = f.speed > 0 ? `${(f.speed / 1_000_000).toFixed(1)} MB/s` : null;
-  return [f.format.toUpperCase(), f.free_slot ? 'free slot' : `queue ${f.queue}`, mb, f.extra ? `${f.extra} extra file${f.extra === 1 ? '' : 's'}` : null, f.user]
+  return [f.unchecked, f.format.toUpperCase(), f.free_slot ? 'free slot' : `queue ${f.queue}`, mb, f.extra ? `${f.extra} extra file${f.extra === 1 ? '' : 's'}` : null, f.user]
     .filter(Boolean)
     .join(' · ');
 }
@@ -77,6 +78,10 @@ export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): 
   const aside = i.set_aside.length ? `${i.set_aside.length} folder${i.set_aside.length === 1 ? '' : 's'} set aside` : null;
   return [...head, ...where, aside].filter(Boolean).join(' · ');
 }
+
+/** The record an item fetches, as lists serve it (`al-<n>`, W12): its row's cover and its page. None for an item 0.16 kept,
+ *  which named its release group instead. */
+export const recordOf = (i: Pick<SoulseekItem, 'record'>): string | null => (i.record.record > 0 ? `al-${i.record.record}` : null);
 
 /** Only a found record with a folder can be ticked; nothing is fetched without a tick. */
 export const tickable = (i: SoulseekItem) => i.state === 'found' && i.folders.length > 0;

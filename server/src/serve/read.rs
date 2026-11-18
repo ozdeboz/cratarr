@@ -501,6 +501,15 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Every artist a song or an album credits, by their number for life: a track's credit is held here, not in the catalogue
+    /// (RT01b: never forgotten while credited). Blocking.
+    pub fn artists_credited(&self) -> Result<std::collections::BTreeSet<i64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT artist_id FROM song_artists UNION SELECT artist_id FROM album_artists")?;
+        let credited: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(credited.iter().filter_map(|id| crate::serve::ids::artist_number(id)).collect())
+    }
+
     /// An artist with their albums, newest release last.
     pub fn artist(&self, id: &str) -> Result<Option<Artist>> {
         let db = self.db();
@@ -912,6 +921,15 @@ impl Library {
             (c.kind, c.order) = self.kind_of(c.folder);
         }
         Ok(copies)
+    }
+
+    /// Each record's album as the last build typed it (RF1): its record and its release type, set by hand or an incomplete album's
+    /// whole release among what typed it (`release_type_of`), for the had rule to class it by (`Catalogue::keep_types`). Blocking.
+    pub fn record_types(&self) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT record, release_type FROM albums WHERE release_type IS NOT NULL ORDER BY record")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The copy that plays for most people: `copy_for` with no viewer. What acts on a record as a whole and has no one's

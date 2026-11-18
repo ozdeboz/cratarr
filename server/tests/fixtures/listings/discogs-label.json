@@ -1,0 +1,15 @@
+{
+ "id": 23528,
+ "name": "Warp Records",
+ "uri": "https://www.discogs.com/label/23528-Warp-Records",
+ "profile": "British electronic label. [b]Since 1989.[/b]",
+ "parent_label": {
+  "id": 264514,
+  "name": "Warp Records Limited"
+ },
+ "urls": [
+  "http://warp.net",
+  "http://warppublishing.net",
+  "http://warprecords.bandcamp.com/music"
+ ]
+}

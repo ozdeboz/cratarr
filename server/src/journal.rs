@@ -68,6 +68,42 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         converted: Vec<Converted>,
     },
+    /// Copy to (C40): an album copied into another library, someone's own music above all, its original staying where it is: one
+    /// album, two copies on the same tracks (`Catalogue::copy_rows`). An album action like Keep (the owner, 2026-11-17: "Like
+    /// Keep"), on its own path: the copied files are all it writes, nothing into or beside them or the original (files.md CP2). Its
+    /// Undo takes the copy into its library's trash.
+    AlbumCopied {
+        source: String,
+        album_id: String,
+        title: String,
+        /// The original's folder and the copy's: (catalogue folder, relative path).
+        from_dir: (i64, String),
+        to_dir: (i64, String),
+        /// Every file, audio and others, from the original to the copy.
+        copies: Vec<TrackMove>,
+    },
+    /// Replace in a main library from someone's own music (RY01; OQ2, the owner: "Copy in, admins"): the own copy copied into the
+    /// place of the main library's, as Copy to copies (shared blocks, byte for byte, OQ-B), the own copy staying as it was; the
+    /// main library's old files into its own trash. One album, its copy there made anew on the same tracks. An album action like
+    /// Keep (the owner, 2026-11-17: "Like Keep"): the copies are all it writes, nothing into or beside either copy, Lidarr not
+    /// told. Its Undo takes the copies, file by file, into that library's trash and its old files back.
+    AlbumReplacedFromCopy {
+        source: String,
+        album_id: String,
+        title: String,
+        /// The own copy's folder and the main library's new one: (catalogue folder, relative path).
+        from_dir: (i64, String),
+        to_dir: (i64, String),
+        /// Every file of the own copy, audio and others, copied into the main library; `track` the one it is on, its old file's.
+        copies: Vec<TrackMove>,
+        /// Each own file's size and time in milliseconds as the intent was written, in `copies`' order: what a copy of it is told by
+        /// (RF6), whatever the own copy has become since (deleted, retagged).
+        stamps: Vec<Option<(u64, i64)>>,
+        /// The main library's old files, into its trash; `track` the one each let go of.
+        replaced: Vec<TrackMove>,
+        /// Where the old files lie in that trash.
+        token: String,
+    },
 }
 
 impl Event {
@@ -77,6 +113,7 @@ impl Event {
             Event::AlbumRejected { title, release_group, .. }
             | Event::AlbumAdopted { title, release_group, .. }
             | Event::AlbumReplaced { title, release_group, .. } => (title, release_group.as_deref()),
+            Event::AlbumCopied { title, .. } | Event::AlbumReplacedFromCopy { title, .. } => (title, None),
         }
     }
 }
@@ -280,7 +317,12 @@ pub struct Journal {
     tell_undone: tokio::sync::broadcast::Sender<EventId>,
     /// Runs still writing, by id (`run_writing`).
     writing: Mutex<Vec<EventId>>,
+    /// Which journal this is in the process (`key`).
+    key: u64,
 }
+
+/// The next journal's key: one a journal opened, never twice in a process.
+static NEXT_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Journal {
     /// `file`: the journal; `None` keeps it in memory (no data folder).
@@ -297,7 +339,14 @@ impl Journal {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
             }
         }
-        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default() })
+        let key = NEXT_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default(), key })
+    }
+
+    /// Which journal this is among those open in the process: what keeps one journal's runs from another's where both
+    /// number them from 1 (`file_runs`' live runs). A server opens one; its tests open many.
+    pub fn key(&self) -> u64 {
+        self.key
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -356,6 +405,12 @@ impl Journal {
         self.tell.subscribe()
     }
 
+    /// Who did an event (decision 0051: the journal says who changed the library): its account; none for Cratarr itself, or an
+    /// event not known.
+    pub fn account(&self, id: EventId) -> Result<Option<String>> {
+        Ok(self.db().query_row("SELECT account FROM events WHERE id = ?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+
     pub fn get(&self, id: EventId) -> Result<Option<Entry>> {
         let row = self
             .db()
@@ -385,6 +440,28 @@ impl Journal {
             .query_row("SELECT result FROM handled WHERE event = ?1 AND handler = ?2", params![id, handler], |r| r.get(0))
             .optional()?;
         Ok(text.map(|t| serde_json::from_str(&t)).transpose()?)
+    }
+
+    /// Events that happened and were not undone that `handler` has a result for, oldest first: an Undo begun (its mark written
+    /// before its files move, RF9) and not finished.
+    pub fn begun(&self, handler: &str) -> Result<Vec<Entry>> {
+        let db = self.db();
+        let mut st = db.prepare(
+            "SELECT id, at, event FROM events e WHERE applied = 1 AND undone_at IS NULL
+             AND EXISTS (SELECT 1 FROM handled h WHERE h.event = e.id AND h.handler = ?1) ORDER BY id",
+        )?;
+        let rows = st.query_map([handler], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        rows.map(|r| {
+            let (id, at, event) = r?;
+            Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: false, applied: true })
+        })
+        .collect()
+    }
+
+    /// What `handler` returned for an event, forgotten: it never happened after all (an Undo put back whole, RF9).
+    pub fn forget_result(&self, id: EventId, handler: &str) -> Result<()> {
+        self.db().execute("DELETE FROM handled WHERE event = ?1 AND handler = ?2", params![id, handler])?;
+        Ok(())
     }
 
     /// Events since `since` (epoch seconds) that happened, that `handler` has not handled and that were not undone,
@@ -425,7 +502,7 @@ impl Journal {
         let db = self.db();
         let event: Option<String> = db
             .query_row(
-                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL
+                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL AND json_extract(event, '$.kind') NOT IN ('album_copied', 'album_replaced_from_copy')
                  AND json_extract(event, '$.source') = ?1 AND json_extract(event, '$.album_id') = ?2 ORDER BY id DESC LIMIT 1",
                 params![source, album_id],
                 |r| r.get(0),

@@ -120,7 +120,10 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 }
             }
         };
-        if let Some(m) = Message::of("jobs", &app.incoming.jobs())
+        // The jobs this page is sent (G8): an administrator's every one, a user's their own.
+        let admin = crate::serve::access::administering();
+        let shown = |jobs: Vec<super::JobView>| super::incoming::shown_jobs(jobs, account.as_deref(), admin);
+        if let Some(m) = Message::of("jobs", &shown(app.incoming.jobs()))
             && out.send(m).await.is_err()
         {
             return;
@@ -149,11 +152,11 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 },
                 _ = resend.tick() => send_state(&mut sent).await,
                 r = jobs.recv() => match r {
-                    Ok(list) => match Message::of("jobs", &list) {
+                    Ok(list) => match Message::of("jobs", &shown(list)) {
                         Some(m) => out.send(m).await.is_ok(),
                         None => true,
                     },
-                    Err(broadcast::error::RecvError::Lagged(_)) => match Message::of("jobs", &app.incoming.jobs()) {
+                    Err(broadcast::error::RecvError::Lagged(_)) => match Message::of("jobs", &shown(app.incoming.jobs())) {
                         Some(m) => out.send(m).await.is_ok(),
                         None => true,
                     },

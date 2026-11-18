@@ -1402,6 +1402,37 @@ fn armed(settings: &serde_json::Value) -> Option<(super::radio::AutoMode, bool)>
     Some((mode, a["albums"].as_bool().unwrap_or(false)))
 }
 
+/// The id a name means among playlists, each (id, name, the asker's own) (X6): an id as it is; else the one of that very name, the
+/// asker's own first, another's where it is the one alone of that name (Y12: two others' of one name are alike); else the one alone
+/// of it regardless of capitals. None where none is, or several are alike: then no playlist is meant. Pure.
+fn named_in(list: &[(String, String, bool)], asked: &str) -> Option<String> {
+    if list.iter().any(|(id, ..)| id == asked) {
+        return Some(asked.to_string());
+    }
+    let exact = |mine: bool| list.iter().filter(move |(_, name, own)| name == asked && *own == mine);
+    if let Some((id, ..)) = exact(true).next() {
+        return Some(id.clone());
+    }
+    let mut theirs = exact(false);
+    match (theirs.next(), theirs.next()) {
+        (Some((id, ..)), None) => return Some(id.clone()),
+        (Some(_), Some(_)) => return None,
+        _ => {}
+    }
+    let want = asked.to_lowercase();
+    let mut like = list.iter().filter(|(_, name, _)| name.to_lowercase() == want);
+    match (like.next(), like.next()) {
+        (Some((id, ..)), None) => Some(id.clone()),
+        _ => None,
+    }
+}
+
+/// Whether the running request may announce (O2): an administrator, signed in or by a key that controls (Home Assistant's); Cratarr's
+/// own work as `access::administering` has it.
+fn may_announce() -> bool {
+    crate::serve::access::administering() || crate::serve::who::current().is_some_and(|w| w.admin && w.scope == crate::serve::who::Scope::Control)
+}
+
 /// Whether `e` is `user`'s (`first`: the first administrator's name).
 fn belongs_to(e: &Entry, user: &str, first: Option<&str>) -> bool {
     e.owner.as_deref().or(first) == Some(user)
@@ -2564,8 +2595,13 @@ impl PlayOn {
             }
             Command::Seek { position_ms: None, percent: None, by_ms: None, .. } => return Err(ToggleError::Refused("Seek where?".into())),
             Command::Announce { url, id } => {
-                if url.trim().is_empty() {
-                    return Err(ToggleError::Refused("Announce what? Give the clip's url.".into()));
+                // Administrators and Home Assistant's key only (O2): any other account at home could have a shared player say
+                // anything aloud, or open any address the player reaches.
+                if !may_announce() {
+                    return Err(ToggleError::Forbidden("Announcing is for administrators and Home Assistant.".into()));
+                }
+                if !reqwest::Url::parse(url.trim()).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
+                    return Err(ToggleError::Refused("Announce what? Give the clip's web address (http or https).".into()));
                 }
                 if self.entries().get(name).is_some_and(|e| matches!(e.kind, PlayerKind::Kodi)) {
                     return Err(ToggleError::Refused(format!("{name} cannot announce: a Kodi plays no clip over its music.")));
@@ -3203,19 +3239,12 @@ impl PlayOn {
         named.unwrap_or(sent)
     }
 
-    /// The playlist a name means: the very name, else the one that has it regardless of capitals ("Restaurant de Lift" for
-    /// "Restaurant De Lift"), as the spoken names are found.
+    /// The playlist a name means, as its id, which Play On then asks for (X6: ids are `pl-<hex>` since 0.16, and Home Assistant
+    /// plays playlists by their spoken names): among the asking account's own playlists and those others share (`reach`'s), as
+    /// `named_in` finds it ("Restaurant de Lift" for "Restaurant De Lift").
     async fn playlist_named(&self, playlist: &str) -> Result<String, ToggleError> {
-        let list = self.playlists.view(None).await?;
-        if list.iter().any(|p| p.id == playlist) {
-            return Ok(playlist.to_string());
-        }
-        let want = playlist.to_lowercase();
-        let mut like = list.iter().filter(|p| p.id.to_lowercase() == want);
-        Ok(match (like.next(), like.next()) {
-            (Some(p), None) => p.id.clone(),
-            _ => playlist.to_string(),
-        })
+        let list: Vec<(String, String, bool)> = self.playlists.view(None).await?.into_iter().map(|p| (p.id, p.name, p.mine)).collect();
+        named_in(&list, playlist).ok_or(ToggleError::UnknownPlaylist)
     }
 
     pub fn settings(&self) -> PlayOnSettings {
@@ -3356,7 +3385,8 @@ impl PlayOn {
         let me = Arc::downgrade(&self);
         drop(self);
         tokio::spawn(async move {
-            let http = reqwest::Client::builder().timeout(WEBHOOK_TIMEOUT).build().expect("a plain client builds");
+            // Never a redirect (O1).
+            let http = super::reach::lan_client().timeout(WEBHOOK_TIMEOUT).build().expect("a plain client builds");
             // Each webhook's failures in a row, so the log shows when a bad spell began, why, and when it ended.
             let mut failing: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
             loop {
@@ -3799,6 +3829,53 @@ mod tests {
         PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal, None)), None)
     }
 
+    /// X6: Home Assistant names a playlist as it is spoken: Play On finds it by its name, whatever its capitals, and asks for it by
+    /// its id. A name no playlist has is said to be none.
+    #[tokio::test]
+    async fn play_on_plays_a_playlist_by_its_name_regardless_of_capitals() {
+        let app = super::super::every_copy::app("playon-named").await;
+        app.playlists.create("Restaurant de Lift").await.unwrap();
+        let id = app.playlists.view(None).await.unwrap().into_iter().find(|p| p.name == "Restaurant de Lift").unwrap().id;
+        assert!(id.starts_with("pl-"), "{id}");
+        let p = &app.play_on;
+        let _page = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
+        let play = |name: &str| Command::Play { from: PlayFrom { playlist: Some(name.into()), ..PlayFrom::default() }, tracks: None, index: 0, position_ms: 0, shuffle: false, paused: false, queue_id: None, queue_name: None };
+        // Found and read, by its id: it holds nothing that plays (no library here), which is all it can say.
+        for asked in ["Restaurant de Lift", "restaurant DE lift"] {
+            let r = p.command("ThinkPad", play(asked)).await;
+            assert!(matches!(&r, Err(ToggleError::Refused(_))), "{asked}: {r:?}");
+        }
+        assert!(matches!(p.command("ThinkPad", play("Restaurant de Gare")).await, Err(ToggleError::UnknownPlaylist)));
+        assert_eq!(p.playlist_named("restaurant DE lift").await.unwrap(), id);
+    }
+
+    /// X6: two playlists alike but for their capitals (one's own and another's shared) need the exact name; of two of one name, the
+    /// asker's own.
+    #[test]
+    fn two_playlists_differing_only_in_capitals_need_the_exact_name() {
+        let pl = |id: &str, name: &str, mine: bool| (id.to_string(), name.to_string(), mine);
+        let list = [pl("pl-1", "Chill", true), pl("pl-2", "CHILL", false), pl("pl-3", "Road", false)];
+        assert_eq!(named_in(&list, "chill"), None, "two alike: the exact name is needed");
+        assert_eq!(named_in(&list, "CHILL").as_deref(), Some("pl-2"));
+        assert_eq!(named_in(&list, "Chill").as_deref(), Some("pl-1"));
+        assert_eq!(named_in(&list, "road").as_deref(), Some("pl-3"), "one alone: whatever its capitals");
+        assert_eq!(named_in(&list, "pl-3").as_deref(), Some("pl-3"), "an id as it is");
+        assert_eq!(named_in(&[pl("pl-4", "Road", false), pl("pl-5", "Road", true)], "Road").as_deref(), Some("pl-5"), "of one name, the asker's own");
+    }
+
+    /// Y12 (X6): two shared playlists of one exact name, neither the asker's own, are no such playlist, not the first in the list; one
+    /// of the asker's own of that name is still meant first, and another's alone of it is meant.
+    #[test]
+    fn two_shared_playlists_of_one_name_are_no_such_playlist() {
+        let pl = |id: &str, name: &str, mine: bool| (id.to_string(), name.to_string(), mine);
+        let theirs = [pl("pl-1", "Chill", false), pl("pl-2", "Chill", false)];
+        assert_eq!(named_in(&theirs, "Chill"), None, "two alike: neither is meant");
+        assert_eq!(named_in(&theirs, "chill"), None);
+        let with_mine = [pl("pl-1", "Chill", false), pl("pl-2", "Chill", false), pl("pl-3", "Chill", true)];
+        assert_eq!(named_in(&with_mine, "Chill").as_deref(), Some("pl-3"), "the asker's own first");
+        assert_eq!(named_in(&[pl("pl-1", "Chill", false), pl("pl-2", "CHILL", false)], "Chill").as_deref(), Some("pl-1"), "one alone of that very name");
+    }
+
     #[tokio::test]
     async fn a_page_quiet_past_a_heartbeat_gives_its_name_to_the_next() {
         let p = play_on().await;
@@ -3850,6 +3927,31 @@ mod tests {
         assert_eq!(listed("bob", true).await, ["Phone", "Tablet"]);
         assert_eq!(listed("bob", false).await, ["Phone"], "away, another's shared device is left out");
         assert_eq!(listed("ann", false).await, ["Tablet"], "one's own from anywhere");
+    }
+
+    /// O2: announcing is for administrators and Home Assistant's key (an administrator's that controls), and of an http(s) clip
+    /// only: any other account may not, not even on its own player, and no one sends a file's address.
+    #[tokio::test]
+    async fn a_user_may_not_announce() {
+        use crate::serve::who::{Scope, Who, acting_as};
+        let p = play_on().await;
+        let mut tablet = p.connect("Tablet").unwrap();
+        let _phone = p.connect("Phone").unwrap();
+        p.entries().get_mut("Tablet").unwrap().owner = Some("me".into());
+        p.entries().get_mut("Phone").unwrap().owner = Some("bob".into());
+        said(&mut tablet);
+        let clip = |url: &str| Command::Announce { url: url.into(), id: "ha-1".into() };
+        let who = |user: &str, admin: bool, scope: Scope| Who { user: user.into(), admin, scope, home: true };
+        for scope in [Scope::Full, Scope::Control] {
+            let r = acting_as(who("bob", false, scope), p.command("Phone", clip("http://ha/tts.mp3"))).await;
+            assert!(matches!(r, Err(ToggleError::Forbidden(_))), "{scope:?}: {r:?}");
+        }
+        acting_as(who("me", true, Scope::Control), p.command("Tablet", clip("http://ha/tts.mp3"))).await.unwrap();
+        assert_eq!(said(&mut tablet), vec!["announce"], "Home Assistant's key");
+        let r = acting_as(who("me", true, Scope::Full), p.command("Tablet", clip("file:///sdcard/Music/a.mp3"))).await;
+        assert!(matches!(r, Err(ToggleError::Refused(_))), "{r:?}");
+        let r = acting_as(who("me", true, Scope::Read), p.command("Tablet", clip("http://ha/tts.mp3"))).await;
+        assert!(r.is_err(), "a key that only reads");
     }
 
     #[tokio::test]
@@ -4269,6 +4371,7 @@ mod tests {
             tracks: vec![track(1, "One"), track(2, "Two"), track(3, "Three")],
             released: None,
             label: None,
+            account: None,
             about: None,
             credits: None,
             tags: Vec::new(),

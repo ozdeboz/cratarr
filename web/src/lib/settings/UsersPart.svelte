@@ -7,7 +7,8 @@
   //     Restore switches them on again), never one's own and never the last active administrator's;
   //   - a directory's accounts: their name and role set there, read-only here; one who left its music group is
   //     deactivated, their data kept.
-  // Both: what they may do beyond listening, and their devices and sign-ins, each to end. Its administrators' only.
+  // Both: what they may do beyond listening, a user's room (AL01, decision 0084: GB per user, set here; what counts against
+  // it is the server's), and their devices and sign-ins, each to end. Its administrators' only.
   // Their own music is here too: the one place an administrator deletes in it (the owner, 2026-11-04: "not anywhere else
   // than in a control panel"); once removed, it moves into a main library or goes altogether (decision 0101 point 7).
   // Acts at once; the server says why it refuses, in a line.
@@ -25,6 +26,7 @@
     setUserActive,
     setUserPassword,
     setUserRole,
+    setUserRoom,
     type LibraryInfo,
     type ListedAlbum,
     type OwnDevice,
@@ -36,6 +38,7 @@
   import { fewAtATime } from '../many.svelte';
   import { me } from '../me.svelte';
   import Notice from '../Notice.svelte';
+  import { gbOfRoom, lineOfRoom } from '../room';
   import { backFromThing, openThing } from '../panel.svelte';
   import PageLoading from '../PageLoading.svelte';
   import Switch from '../Switch.svelte';
@@ -59,7 +62,6 @@
     { key: 'playlists', label: 'Change playlists in apps' },
     { key: 'share', label: 'Share playlists' },
     { key: 'request', label: 'Request albums' },
-    { key: 'auto_approve', label: 'Approve requests automatically' },
     { key: 'manage_requests', label: 'Answer requests' },
   ];
   let users = $state<User[] | null>(null);
@@ -146,7 +148,19 @@
       toast.fail(e, active ? 'Could not restore it' : 'Could not remove it');
     }
   }
+  /** A user's room set in GB: the list read again once the server took it, so its line is the server's; refused, it stays as
+   *  it was and the sheet stays, saying why. */
+  async function sizeRoom(u: User, gb: number) {
+    try {
+      await setUserRoom(u.name, gb);
+      await load();
+    } catch (e) {
+      toast.fail(e, 'Could not set the room');
+      throw e;
+    }
+  }
   let passwording = $state<User | null>(null);
+  let sizing = $state<User | null>(null);
   let removing = $state<User | null>(null);
 
   // Their own music, as the Library lists it.
@@ -211,6 +225,11 @@
   }
 </script>
 
+<!-- A user's room, beside the account's other rows: its line, and its GB in the value sheet. None for an administrator. -->
+{#snippet roomRow(u: User)}
+  {#if !u.admin && u.room}<Item name="Room" value={lineOfRoom(u.room)} onclick={() => (sizing = u)} />{/if}
+{/snippet}
+
 {#if loadError}<Notice text={loadError} onretry={load} away="Accounts need Cratarr." />{/if}
 {#if users === null}
   {#if !loadError}<PageLoading />{/if}
@@ -219,6 +238,7 @@
   {#if u.directory}
     <Group>
       <Item name={u.admin ? 'Administrator' : 'User'} line={u.active ? 'Managed in the directory' : 'Inactive: no longer in the music group'} tone={u.active ? null : 'warn'} />
+      {@render roomRow(u)}
     </Group>
   {:else}
     <Group>
@@ -229,6 +249,7 @@
         <Item name="Administrator" toggle={{ checked: u.admin, onchange: (on) => role(u, on) }} />
       {/if}
       {#if u.active}<Item name="Password" value="Set a new one" onclick={() => (passwording = u)} />{/if}
+      {@render roomRow(u)}
     </Group>
   {/if}
   {#if !u.admin}
@@ -310,6 +331,10 @@
 {#if passwording}
   {@const u = passwording}
   <ValueSheet title={`Password of ${u.name}`} type="password" value="" placeholder="New password" allowEmpty={false} saveLabel="Save" onsave={(p) => password(u, p)} onclose={() => (passwording = null)} />
+{/if}
+{#if sizing?.room}
+  {@const u = sizing}
+  <ValueSheet title={`Room of ${u.name}`} type="number" value={gbOfRoom(sizing.room)} suffix="GB" min={0} allowEmpty={false} saveLabel="Save" onsave={(v) => sizeRoom(u, Number(v))} onclose={() => (sizing = null)} />
 {/if}
 {#if removing}
   {@const u = removing}

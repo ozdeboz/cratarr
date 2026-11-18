@@ -205,7 +205,7 @@ pub async fn plan(app: &super::App, kind: &str, from: Option<&str>) -> Result<Pl
 /// each record set aside where it is no longer what the sheet showed (its stamp). A run on the one path.
 pub async fn apply(app: &Arc<super::App>, kind: &str, from: Option<&str>, albums: Vec<String>, stamps: Option<HashMap<String, String>>, chosen: Chosen) -> Result<file_runs::Status> {
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
-    anyhow::ensure!(!file_runs::busy(kind), "Already writing");
+    anyhow::ensure!(!file_runs::busy(&app.journal, kind), "Already writing");
     let at = copy_of(app, kind, from).await?;
     let (fixes, _) = fixes_of(app, kind, at.clone()).await?;
     // A genre's words, each among those its fix offered.

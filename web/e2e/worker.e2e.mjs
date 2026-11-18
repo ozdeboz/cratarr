@@ -36,7 +36,7 @@ test('an account’s reads are kept as its own, the album list among them', asyn
   assert.ok((await cacheNames(d.page)).includes('cratarr-data-2@ann'));
   assert.equal(await keptName(d.page, 'cratarr-data-2@ann'), 'ann');
   assert.ok(await d.page.evaluate(async () => !!(await caches.match('/api/albums', { cacheName: 'cratarr-data-2@ann' }))));
-  assert.ok(await d.page.evaluate(async () => !(await caches.match('/api/albums', { cacheName: 'cratarr-v5' }))), 'not the app’s own cache');
+  assert.ok(await d.page.evaluate(async () => !(await caches.match('/api/albums', { cacheName: 'cratarr-v6' }))), 'not the app’s own cache');
 });
 
 test('signed out, the worker keeps for nobody', async () => {

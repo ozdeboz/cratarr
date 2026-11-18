@@ -15,6 +15,9 @@ import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
 import type { PlaylistOp } from './playlistOps';
 import type { ChangesAnswer } from './changeLog';
+import type { RequestState } from './requestState';
+import type { Floor, Room } from './room';
+import { artistAsk } from './artistIds';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -421,7 +424,7 @@ export type Collection =
   | { kind: 'crate'; id: string; without?: string[] } // genres are crates: id 'genre:<name>'
   | { kind: 'playlist'; id: string }
   | { kind: 'album'; source: string; id: string }
-  | { kind: 'artist'; source: string; name: string; without?: string[] }
+  | { kind: 'artist'; source: string; name: string; id?: string; without?: string[] }
   | { kind: 'tracks'; source: string; ids: string[] };
 /** play: in its order (from a track, or its first 500) · shuffle: 500 from all of it, mixed · next: after the playing
  *  track · last: at the end of the queue. */
@@ -1378,9 +1381,8 @@ export type Permissions = {
   playlists: boolean;
   share: boolean;
   links: boolean;
-  /** Requests (decision 0070): ask for albums, have that approved at once, answer everyone's. */
+  /** Requests (decision 0070): ask for albums (a Want goes ahead with no one's yes since 0.17), answer everyone's. */
   request: boolean;
-  auto_approve: boolean;
   manage_requests: boolean;
 };
 /** A device that belongs to an account (it plays only on its own, decision 0051): `id` is its player's name. One that is
@@ -1405,6 +1407,8 @@ export type Me = {
   app_password?: boolean;
   devices?: OwnDevice[];
   sessions?: UserSession[];
+  /** Their room (AL01): none for an administrator, or where it could not be read. */
+  room?: Room | null;
 };
 export const getMe = () => quietly<Me>('/api/me');
 /** A preference kept on the account (decision 0101 point 14, lib/accountPrefs): its value, and when it was changed
@@ -1458,7 +1462,8 @@ export const setAppPassword = (current: string, password: string) =>
   request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current, password }) });
 /** Every user, for the administrators' Users panel: their profile, permissions, devices, sign-ins. `directory`: an
  *  account from the directory (its name and role set there); else Cratarr's own (decision 0051, amended 2026-10-19). */
-export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[]; own_library?: string | null };
+/** `room`: theirs (AL01), none for an administrator or where it could not be read. */
+export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[]; own_library?: string | null; room?: Room | null };
 export const getUsers = () => request<{ users: User[] }>('/api/users').then((r) => r.users);
 const putJson = (url: string, body: unknown) => request<void>(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const userUrl = (name: string, what: string) => `/api/users/${encodeURIComponent(name)}/${what}`;
@@ -1468,6 +1473,8 @@ export const createUser = (name: string, password: string, admin: boolean) => po
 export const setUserRole = (name: string, admin: boolean) => putJson(userUrl(name, 'role'), { admin });
 /** A Cratarr account's new password, set by an administrator; its other sign-ins end. */
 export const setUserPassword = (name: string, password: string) => putJson(userUrl(name, 'password'), { password });
+/** A user's room in GB (AL01, OQ-R5: decimals taken, kept in bytes), set by an administrator. */
+export const setUserRoom = (name: string, gb: number) => putJson(userUrl(name, 'room'), { gb });
 /** A Cratarr account switched off (its data kept, its sign-ins ended) or on again. */
 export const setUserActive = (name: string, active: boolean) => putJson(userUrl(name, 'active'), { active });
 /** One's own password, for a Cratarr account (it is its OpenSubsonic one too). */
@@ -1583,6 +1590,11 @@ export const setSlskd = (s: { url: string; key?: string; folder: string }) =>
 /** Switched on or off, the key kept (0.9.8: off, slskd is asked nothing). */
 export const setSlskdEnabled = (enabled: boolean) =>
   request<SlskdSetting>('/api/settings/slskd', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+/** The disk floor (AL03; administrators'), as just read against the disks users' music lands on. */
+export const getFloor = () => request<Floor>('/api/settings/floor');
+/** The floor set, in GB from 0: the answer is the floor read again. */
+export const setFloor = (gb: number) =>
+  request<Floor>('/api/settings/floor', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gb }) });
 /** The server's AcoustID key (0.9.8: single-track replacement fingerprints what it fetched): set or not, never sent
  *  back; an empty one takes it away. */
 export type AcoustidSetting = { set: boolean };
@@ -1604,6 +1616,16 @@ export const getMusicBrainz = () => quietly<MusicBrainzStatus>('/api/settings/mu
 /** Switched on or off (off: no background passes, and Find more music, Renumber and artist lookups say so). */
 export const setMusicBrainzEnabled = (enabled: boolean) =>
   request<MusicBrainzStatus>('/api/settings/musicbrainz', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+
+/** Bandcamp switched on or off, and until when it is left alone after its browser check (O4; on again lifts that, V8): an
+ *  administrator's (lib/serverSwitches). */
+export const getBandcamp = () => quietly<import('./serverSwitches').BandcampSetting>('/api/settings/bandcamp');
+export const setBandcampEnabled = (enabled: boolean) =>
+  request<import('./serverSwitches').BandcampSetting>('/api/settings/bandcamp', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+/** Whether Cratarr reads outside services in the background (O5): off is "Pause background reading". An administrator's. */
+export const getBackground = () => quietly<import('./serverSwitches').BackgroundSetting>('/api/settings/background');
+export const setBackground = (s: import('./serverSwitches').BackgroundSetting) =>
+  request<import('./serverSwitches').BackgroundSetting>('/api/settings/background', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
 
 /** Check a Lidarr as filled in; nothing is saved. Null for a blank address. */
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
@@ -1769,7 +1791,8 @@ export const setReferences = (album: string, choice: { counting?: ReferenceSourc
 
 /** One copy of a record: one folder's files of it (docs/records-and-copies.md). `format` and `kbps` are as `ListedAlbum`'s,
  *  `bits` and `rate` a lossless copy's, null where one of its files is not read. `deletable`, `keepable`, `keep_to` and
- *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `plays`: the
+ *  `lacks` are what the viewer may do with this copy and what it lacks: said on the copy alone (C36; another server's album
+ *  comes with its one copy). `plays`: the
  *  one the server would play them. `size`: its files' bytes, null where not known. `tracks`: how many of the record's it
  *  holds. `job`: the conversion at work on this copy, `Job.id`. */
 export type AlbumCopy = {
@@ -1787,7 +1810,17 @@ export type AlbumCopy = {
   size: number | null;
   tracks: number;
   job: number | null;
+  /** An Incoming copy of a record kept elsewhere: how it stands against the copy that plays the record for most (C37a). */
+  against?: Against;
+  /** Someone's own copy Replace in a main library takes from (RY01): one stand per main library whose copy it beats (OQ-N).
+   *  Whose copy it is is its own `library`. None on any other copy. */
+  replace_into?: Against[];
 };
+
+/** A copy against another of its record (C37a): `better` where it ranks above it, `replaces` where that copy lies in a main
+ *  library (Replace's), that copy's `library` and folder there (`dir`), and `why` in words. An Incoming copy's is against the
+ *  copy that plays its record for most; someone's own copy's against each main library's copy it beats (RY01). */
+export type Against = { better: boolean; replaces: boolean; library: string; dir: string; why: string };
 
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {
@@ -1871,24 +1904,9 @@ export type LibraryInfo = {
   naming?: string;
 };
 
-/** An album as it stands to the other used libraries (decision 0034): an upgrade of an album there, or a duplicate.
- *  `library` is that album's folder, `library_id` the library it is in; `replaceable_into` the main libraries it can
- *  replace the other copy in (decision 0101 point 2). */
-export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable_into: string[] };
-
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
   library_info: LibraryInfo[];
-  verdicts: Record<string, Verdict>;
-  /** Per album id of an Incoming library: what it lacks of what the library requires (cover, year, genre, …). */
-  lacks?: Record<string, string[]>;
-  /** Per album a verdict pairs with (Music's or another library's): an album of another library that upgrades or
-   *  duplicates it. */
-  waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
-  deletable: string[];
-  /** The Incoming albums the viewer may Keep, and where each goes by default (decision 0101 point 2). */
-  keepable: string[];
-  keep_to: Record<string, string>;
 };
 export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: string | null };
 
@@ -2154,14 +2172,15 @@ export const findTracks = (q: string, line?: string) =>
   request<FoundTrack[]>(`/api/library/find?${new URLSearchParams(line ? { line } : { q })}`);
 /** Whose a photo is and under which licence, where it is free to use with credit (Wikimedia Commons', 0.9.3). */
 export type PhotoCredit = { author: string; licence: string; url: string };
-export const getArtistAbout = (name: string) =>
-  quietly<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null }>(`/api/artists/about?name=${encodeURIComponent(name)}`);
+/** By their id for life where it is one (`ar-<n>`, W10), else by name. */
+export const getArtistAbout = (nameOrId: string) =>
+  quietly<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null }>(`/api/artists/about?${new URLSearchParams(artistAsk(nameOrId))}`);
 export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** An artist's Top recommendations (the owner, 2026-10-23: "a list of tracks which follows taste"): their tracks
  *  that fit the account's taste best, best first (Cratarr's song ids). */
-export const artistPicks = (name: string, without?: string[]) =>
-  quietly<{ ids: string[] }>(`/api/artists/picks?${new URLSearchParams({ name, ...(without?.length ? { without: without.join(',') } : {}) })}`);
+export const artistPicks = (name: string, without?: string[], id?: string | null) =>
+  quietly<{ ids: string[] }>(`/api/artists/picks?${new URLSearchParams({ name, ...(id ? { id } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** Home's moment (the owner, 2026-10-23): named after the weather Home Assistant tells and the time of day ("Music for a Rainy
  *  Evening"), a few albums near it (Cratarr's ids); its radio plays inside the crate `like:now`. */
 /** `sky`: the canvas Home paints (sunny, clear, fewclouds, cloudy, foggy, rainy, stormy, snowy, windy, hot, plain); `dark`
@@ -2254,6 +2273,8 @@ export type DiscoverAlbum = {
   key: string;
   album: string;
   artist: string;
+  /** Its artist's MusicBrainz id, where its source says: "Go to artist" opens them by it. */
+  artist_mbid?: string | null;
   artist_key: string;
   year: number | null;
   release_group: string | null;
@@ -2337,7 +2358,8 @@ export type AlbumRequest = {
   year: number | null;
   cover: string | null;
   at: number;
-  status: 'pending' | 'approved' | 'declined' | 'cancelled';
+  /** `rejected`: its arrival was deleted (W4); `delivered`: done for its asker, and closed (AL02.8). */
+  status: 'pending' | 'approved' | 'declined' | 'cancelled' | 'rejected' | 'delivered';
   reason: string | null;
   decided_by: string | null;
   decided_at: number | null;
@@ -2345,6 +2367,12 @@ export type AlbumRequest = {
   fetched: string | null;
   /** Absent on a request just made (Want's answer). */
   album_state?: RequestedAlbum;
+  /** Its state as the server works it out, the one every view reads (W5, lib/requestState); absent on a request just made. */
+  state?: RequestState;
+  /** Hand over again is open for it: no fetcher has spoken of it (W5, G2). */
+  hand_over_again?: boolean;
+  /** The record it asks for, the catalogue's number (`al-<n>` as lists serve it, C49a). */
+  record?: number | null;
 };
 /** The Requests page: the account's own, everyone's waiting ones for those who answer them (else null). */
 /** `fetchers`: those connected, configured and answering (decision 0099's amendment: Lidarr and Soulseek siblings,
@@ -2375,9 +2403,14 @@ export const getDiscoverArtist = (name: string) =>
  *  asked (0.9.3). */
 export const getDiscoverArtistAlbums = (name: string) =>
   quietly<{ albums: number | null }>(`/api/discover/artist/albums?name=${encodeURIComponent(name)}`);
-/** An album missing from an artist the library has (their discography as MusicBrainz lists it, 0.9.3). */
+/** A record of an artist's the library has none of (0.9.3; a record not had, C53a: MusicBrainz's, Discogs' or Bandcamp's list). */
 export type MissingAlbum = {
-  release_group: string;
+  /** The record's id (`al-<n>`). */
+  record: string;
+  /** Its MusicBrainz release group, where it has one. */
+  release_group?: string | null;
+  /** A retired record's (OQ16): when it went from Music. */
+  was_until?: number | null;
   title: string;
   artist: string;
   year: number | null;
@@ -2389,15 +2422,9 @@ export type MissingAlbum = {
 };
 /** Every album missing from the library's artists read so far (`artists`: how many), newest first. */
 export const getDiscoverMissing = () => quietly<{ albums: MissingAlbum[]; artists: number }>('/api/discover/missing');
-/** One artist's missing albums (their page). */
-/** `release_group`: one of theirs, so an artist the library lacks is found by it on MusicBrainz (0.9.6); `mbid`
- *  the artist's own. */
-export const getArtistMissing = (name: string, hint: { release_group?: string | null; mbid?: string | null } = {}) => {
-  const q = new URLSearchParams({ name });
-  if (hint.mbid) q.set('mbid', hint.mbid);
-  if (hint.release_group) q.set('release_group', hint.release_group);
-  return quietly<{ albums: MissingAlbum[]; looking: boolean }>(`/api/artists/missing?${q}`);
-};
+/** One artist's missing albums (their page), by their id for life where it is one (W10), else by name (the first of it). */
+export const getArtistMissing = (nameOrId: string) =>
+  quietly<{ albums: MissingAlbum[]; looking: boolean }>(`/api/artists/missing?${new URLSearchParams(artistAsk(nameOrId))}`);
 /** What Discover leaves out for the account: its answers (Not interested: `no`, Hide: `hidden`), the artists left out. */
 export type DiscoverExcluded = { key: string; album: string; artist: string; year?: number | null; cover?: string | null; how: 'no' | 'hidden'; at: number };
 export const getDiscoverExcluded = () => quietly<{ albums: DiscoverExcluded[]; artists: { artist: string; key: string; at: number }[] }>('/api/discover/excluded');
@@ -2407,8 +2434,15 @@ export const takeBackExcluded = (what: { key: string } | { artist: string }) =>
 /** An album's page on Bandcamp, looked for when it is opened (MusicBrainz's link first, the artist's page, the search). */
 export const findOnBandcamp = (artist: string, album: string, release_group?: string) =>
   request<{ page: string | null }>(`/api/bandcamp/find?${new URLSearchParams({ artist, album, ...(release_group ? { release_group } : {}) })}`);
+/** A label's page (C56, lib/labelPage): its records by year, had or not, `looking` while its lists are read (asked again
+ *  until it is false); `more` reads the next hundred of that source's list. */
+export const getLabel = (id: string, more?: import('./labelPage').LabelSource) =>
+  quietly<import('./labelPage').LabelPageOf>(`/api/labels/${encodeURIComponent(id)}${more ? `?${new URLSearchParams({ more })}` : ''}`);
+/** A row no record holds yet opened (C56, C57; Q33: kept at open): the record made of what its sources know it by, or the one
+ *  that already holds it (lib/openRecord). */
+export const openRecord = (b: import('./openRecord').RecordOpenBody) => post<{ record: string }>('/api/records/open', b);
 /** Want for any album (a missing one): the same request and rights as Discover's Want. */
-export const wantAlbum = (a: { release_group?: string; artist: string; album: string; year?: number | null; cover?: string | null }) =>
+export const wantAlbum = (a: import('./wantPath').WantBody) =>
   post<{ request: AlbumRequest }>('/api/requests/want', a);
 /** The words looked up on MusicBrainz (Find more music, 0.9.3): its albums and artists, the surest first, `have` where
  *  the library has them. */
@@ -2421,10 +2455,13 @@ export const musicBrainzSearch = (q: string, limit = 20) =>
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 /** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
  *  Bandcamp. */
-export type RelatedArtist = { name: string; mbid?: string; why: string[]; id?: string; bandcamp?: string };
+export type RelatedArtist = { name: string; mbid?: string; why: string[]; id?: string; number?: number | null; bandcamp?: string };
 /** An artist's related artists to explore (0.9.2) as last looked up; `looking`: a look runs now. */
-export const getRelatedArtists = (name: string) =>
-  quietly<{ artists: RelatedArtist[]; looking: boolean }>(`/api/artists/related?name=${encodeURIComponent(name)}`);
+export const getRelatedArtists = (nameOrId: string) =>
+  quietly<{ artists: RelatedArtist[]; looking: boolean }>(`/api/artists/related?${new URLSearchParams(artistAsk(nameOrId))}`);
+/** An artist Beyond listed opened (C57, Z8): Cratarr's artist who holds their MusicBrainz id, made now where none does. Refused
+ *  (403) to one who is no administrator for an artist Beyond did not list within the day. */
+export const openArtist = (mbid: string, name: string) => post<{ artist: string }>('/api/artists/open', { mbid, name });
 export const previewBandcamp = (url: string) =>
   request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);
 /** Everything an artist has on Bandcamp to hear as previews (New to you's Listen; the owner, 2026-10-27): their own
@@ -2539,17 +2576,39 @@ export type AlbumView = {
   listeners?: number;
   /** Its words by kind with their sources, and its tracks' own (decision 0097): Cratarr's own library's records. */
   words?: RecordWords;
+  /** A record not had (C54, lib/recordNotHad): its page from the catalogue, its rows its list's, none of them playable. */
+  not_had?: boolean;
+  /** Its list is being read: none kept yet, its rows come when the page asks again. */
+  looking?: boolean;
+  /** The record that has it by the one had rule, where it is another (`al-<n>`). */
+  have?: string;
+  /** The account's newest request of it, whatever its status, as the Requests page shows it. */
+  request?: AlbumRequest;
+  /** Its labels, each by its id for life. */
+  labels?: LabelOf[];
+  /** Its cover's address: its own, else its release group's, else its Bandcamp page's. */
+  cover?: string;
+  /** A retired record's: when it went from Music (epoch seconds, OQ16). */
+  was_until?: number;
+  /** Its album page on Bandcamp: its preview plays from there (OQ14). */
+  bandcamp?: string;
+  /** What a Want of it sends: the record that holds it (`al-<n>`), else the release group it was found by. */
+  record?: string;
+  release_group?: string;
 };
+/** A record's label as its page names it (C54): its id for life (`la-<n>`), its name, its catalogue number there. */
+export type LabelOf = { id: string; name: string; catno?: string };
 /** One search's answer from the server (decision 0072, 0.9.3): per kind, and the kinds merged for Top results. Each
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
  *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
 export type SearchKind = 'album' | 'artist' | 'track' | 'work' | 'genre' | 'style' | 'mood' | 'tag' | 'label' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
-/** An item found: a track's own id in `track`; an artist's library id in `id` (`ar-…`, 0.11: a Sounds like's seed). */
+/** An item found: a track's own id in `track`; an artist's library id in `id` (`ar-…`, 0.11: a Sounds like's seed; W10: their
+ *  page), and their number among those of their name, where the server gives it. */
 export type ServerSearch = {
   q: string;
-  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string; id?: string })[] }>>;
-  top: (SearchResult & { track?: string; id?: string })[];
+  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string; id?: string; number?: number })[] }>>;
+  top: (SearchResult & { track?: string; id?: string; number?: number })[];
 };
 /** Searches the server: `kinds` only (all where none), `limit` a kind (20; 100 at most), from `offset` on (a Show all's
  *  next page, decision 0076; a server before 0.9.13 answers from the start again). */
@@ -2572,20 +2631,25 @@ export type BeyondAlbum = {
   year: number | null;
   cover: string | null;
   release_group?: string | null;
-  discogs?: string | null;
+  /** Its master at Discogs. */
+  discogs?: number | null;
   /** Its page on Discogs, where Discogs found it: Discogs' data is shown with its attribution (its terms). */
   discogs_url?: string | null;
   sources: ('musicbrainz' | 'discogs')[];
+  /** The record that holds its reference (`al-<n>`, C57); none until it is opened. */
+  record?: string | null;
   bandcamp?: string | null;
   request?: RequestMark | null;
   have?: boolean;
 };
 /** Beyond's albums for the words (decision 0076): the server's own merged search where it has it (0.9.13), else
  *  MusicBrainz's alone, as Find more music asks it. */
-export type BeyondFound = { albums: BeyondAlbum[]; artists: MusicBrainzFound['artists'] };
+/** An artist Beyond lists (C57): by their MusicBrainz id; `artist`, Cratarr's who holds it (`ar-<n>`), none until opened. */
+export type BeyondArtist = { mbid: string; name: string; disambiguation?: string | null; artist?: string | null; number?: number | null; have: boolean };
+export type BeyondFound = { albums: BeyondAlbum[]; artists: BeyondArtist[] };
 export async function searchBeyond(q: string, limit = 20, offset = 0): Promise<BeyondFound> {
   try {
-    const r = await request<{ albums: BeyondAlbum[]; artists?: MusicBrainzFound['artists'] }>(
+    const r = await request<{ albums: BeyondAlbum[]; artists?: BeyondArtist[] }>(
       `/api/search/beyond?${new URLSearchParams({ q, limit: String(limit), ...(offset ? { offset: String(offset) } : {}) })}`,
     );
     return { albums: r.albums, artists: r.artists ?? [] };
@@ -2620,21 +2684,27 @@ export type ArtistView = {
   rows: PlaylistRow[];
   /** Null where the server keeps no favourite artists. */
   favorite?: boolean;
+  /** Cratarr's own artist's id for life (C55), the one asked for, else the first of the name; none for a name nobody has. */
+  id?: string;
+  /** Their number among the artists of their name, and whether another has it: shown only where a view shows two of it. */
+  number?: number;
+  namesakes?: boolean;
 };
-/** `without`: the libraries switched off; theirs left out of its records, appearances and tracks. */
-export const artistView = (source: string, name: string, without?: string[]) => {
-  const u = new URLSearchParams({ name });
+/** `without`: the libraries switched off; theirs left out of its records, appearances and tracks. By their id for life where it is
+ *  one (W10), else by name. */
+export const artistView = (source: string, nameOrId: string, without?: string[]) => {
+  const u = new URLSearchParams(artistAsk(nameOrId));
   for (const w of without ?? []) u.append('without', w);
   return read(
     () => quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?${u}`),
-    () => deviceArtist(source, name, without),
+    () => deviceArtist(source, nameOrId, without),
   );
 };
 /** Whether an artist is a favourite (the heart on an album's artist chip); null where the server keeps none. */
-export const artistFavorite = (source: string, name: string) =>
-  quietly<{ favorite: boolean | null }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}`);
-export const setArtistFavorite = (source: string, name: string, on: boolean) =>
-  later<{ favorite: boolean }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}&on=${on}`, { method: 'POST' }, () => ({ favorite: on }));
+export const artistFavorite = (source: string, nameOrId: string) =>
+  quietly<{ favorite: boolean | null }>(`/api/artists/${encodeURIComponent(source)}/favorite?${new URLSearchParams(artistAsk(nameOrId))}`);
+export const setArtistFavorite = (source: string, nameOrId: string, on: boolean) =>
+  later<{ favorite: boolean }>(`/api/artists/${encodeURIComponent(source)}/favorite?${new URLSearchParams({ ...artistAsk(nameOrId), on: String(on) })}`, { method: 'POST' }, () => ({ favorite: on }));
 /** Where an album of Cratarr's own library was left (Resume): a track and a position, from the bookmarks apps keep
  *  (decision 0030); `track` null when there is none. */
 export const albumResume = (album: string) =>
@@ -2657,7 +2727,14 @@ export type KeepPreview = {
   convert: number;
   /** Whether a Lidarr is set to be told to stop fetching it; without one it may fetch the album again. */
   acquisition: boolean;
+  /** A copy (C40): the album stays where it is, and its copied files are all that is written. */
+  copy?: boolean;
+  /** The copy's own folder in its library, as this preview read it (RF10): the tap carries it back, so it takes the copy shown. */
+  from_dir?: string | null;
 };
+/** What a move's or Copy to's sheet showed (RF10, the owner's "writes nothing the sheet doesn't show"): sent with the tap, which is
+ *  refused where the copy would now be another, or written elsewhere or with other files. A copy needs it. */
+export type MoveSheet = { folder: string; files: number; from_dir: string };
 /** What a move or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
 export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
 const albumPath = (source: string, album: string) => `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
@@ -2673,8 +2750,8 @@ export const movePreview = (source: string, album: string, from: string | undefi
   request<KeepPreview>(`${albumPath(source, album)}/move?${copyQuery({ from, to, year })}`);
 /** Move a copy into another used library of its server, named and converted that library's way (Undo brings it back);
  *  with lossless files above that library's quality limit it is queued. */
-export const moveAlbum = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
-  request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year }));
+export const moveAlbum = (source: string, album: string, from: string | undefined, to: string, year?: string, sheet?: MoveSheet) =>
+  request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year, ...sheet }));
 /** Delete a copy, into its library's trash (Undo brings it back). The record stays while another copy does. */
 export const deleteAlbum = (source: string, album: string, from: string | undefined) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, asJson({ from }));
 /** Delete a record's copy in someone's own music from the Users panel: an administrator's, only there. */
@@ -2701,21 +2778,33 @@ export type ReplacePreview = {
   lost?: string[];
   /** What Replace and carry over brings into the new copy ("MusicBrainz ids", "Track numbers", "Cover"…). */
   carry?: string[];
+  /** How many files it writes: every file of the new copy. */
+  files: number;
+  /** The new copy's library: someone's own music for a Replace from it (RY01), else its Incoming library. */
+  from: string | null;
+  /** Someone's own copy's folder in its library, as this preview read it (RY01; RF10): the tap carries it back. */
+  from_dir?: string | null;
 };
+/** What Replace's sheet showed of a Replace from someone's own music (RY01, OQ-G): sent with the tap, which is refused where the
+ *  copy or what it would do changed since. */
+export type ReplaceSheet = { folder: string; tracks: number; added: number; files: number; from_dir?: string };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 /** `to`: the main library whose copy it takes the place of. */
 export const replacePreview = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
   request<ReplacePreview>(`${replacePath(source, album)}?${copyQuery({ from, to, year })}`);
-/** Replace a main library's copy with an upgrade: the old files go to the trash (Undo brings them back). */
-export const replaceIncoming = (source: string, album: string, from: string | undefined, to: string, year?: string, cover?: 'keep' | 'new', carry = false) =>
-  request<AlbumMoved>(replacePath(source, album), asJson({ from, to, year, cover, carry }));
+/** Replace a main library's copy with an upgrade: the old files go to the trash (Undo brings them back). From someone's own
+ *  music (RY01) the copy is copied in and stays, and `sheet` says what its sheet showed. */
+export const replaceIncoming = (source: string, album: string, from: string | undefined, to: string, year?: string, cover?: 'keep' | 'new', carry = false, sheet?: ReplaceSheet) =>
+  request<AlbumMoved>(replacePath(source, album), asJson({ from, to, year, cover, carry, ...sheet }));
 
 /** An album in the conversion queue: waiting, converting (`done` of `total` files), or just finished. */
 export type Job = {
   id: number;
   source: string;
   album_id: string;
+  /** Who queued it: a user is sent their own jobs alone. */
+  by?: string | null;
   title: string;
   action: 'keep' | 'replace';
   state: 'waiting' | 'converting' | 'done' | 'failed';
@@ -3057,6 +3146,8 @@ export type SpotifyAlbum = {
   /** The library's album, where it has it (or some of it). */
   album: { source: string; id: string } | null;
   release_group: string | null;
+  /** Its record (`al-<n>`): its request's, else its release group's. */
+  record?: string | null;
   request: AlbumRequest | null;
   preview: { source: 'bandcamp'; id: string } | null;
 };

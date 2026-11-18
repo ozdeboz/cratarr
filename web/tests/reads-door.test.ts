@@ -43,6 +43,7 @@ const ALLOWED: Record<string, [number, string]> = {
   'lib/MenuSheet.svelte': [2, 'which of a menu\'s entries are offered'],
   'lib/MenuTable.svelte': [2, 'which of a menu\'s entries are offered, and the word for the rest'],
   'lib/PlaylistView.svelte': [4, 'which edits can wait in the outbox'],
+  'lib/RequestsPanel.svelte': [1, "one's room line: none out of reach, where the last copy may say less than is used by now (AL04.5)"],
   'lib/away.svelte.ts': [1, 'what plays goes by the first failed request, as a hold does: the marks go by the door'],
   'lib/capabilities.svelte.ts': [2, 'a poller: asked again on the way back'],
   'lib/changes.svelte.ts': [1, 'a poller: not asked while away'],
@@ -55,6 +56,7 @@ const ALLOWED: Record<string, [number, string]> = {
   'lib/outputNow.svelte.ts': [1, 'where music plays: here while Cratarr is away with another player chosen (0.16.1, the owner: "Play here instead")'],
   'lib/play.svelte.ts': [1, 'what plays: picked from what is on the device'],
   'lib/queueHistory.svelte.ts': [1, 'whose list a queue is in'],
+  'lib/settings/LibrariesPart.svelte': [2, "the disk floor's row and its refusal: none out of reach (AL04.5)"],
   'lib/shelfStore.svelte.ts': [1, 'a poller: not asked while away'],
   'lib/snippetPlayer.svelte.ts': [1, 'Snippets offered'],
 };

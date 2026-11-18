@@ -145,6 +145,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums", get(albums))
         // Asked of everyone: who may is the record's own (0101 point 2).
         .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
+        // The conversion queue (G8): an administrator's every job, a user's their own.
+        .route("/api/incoming/jobs", get(incoming_jobs))
         .route("/api/albums/{source}/{album}/delete", post(delete_album))
         // A record's facts set by hand (0.13): one record or a selection. The administrators', and a record only in one person's
         // own music theirs (`may_change`).
@@ -224,6 +226,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/want", post(discover_want))
         .route("/api/requests/want", post(want_album))
         .route("/api/artists/missing", get(artist_missing))
+        // A label's page (C56), and a list's row opened: its record, made at open (Q33).
+        .route("/api/labels/{id}", get(label_page))
+        .route("/api/records/open", post(open_record))
+        .route("/api/artists/open", post(open_artist))
         .route("/api/discover/missing", get(discover_missing))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
         .route("/api/discover/excluded", get(discover_excluded).delete(discover_take_back))
@@ -279,7 +285,6 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
             .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
             .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
-            .route("/api/incoming/jobs", get(incoming_jobs))
             .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
             .route("/api/settings", get(get_settings).put(save_settings))
             // Types, years and Classical into the files (0.13, decision 0092): the switch and Health's Write; a run's
@@ -305,6 +310,10 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/lastfm", get(get_lastfm_key).put(put_lastfm_key))
             .route("/api/settings/discogs", get(get_discogs_keys).put(put_discogs_keys))
             .route("/api/settings/musicbrainz", get(musicbrainz_status).put(musicbrainz_switch))
+            // Bandcamp's switch, and until when it is left alone after its bot check (O4).
+            .route("/api/settings/bandcamp", get(bandcamp_status).put(bandcamp_switch))
+            // "Pause background reading" (O5).
+            .route("/api/settings/background", get(background_status).put(background_switch))
             .route("/api/server/restart", post(restart_server))
             .route("/api/settings/connections/state", get(connections_state))
             .route(
@@ -342,6 +351,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/track-files/fetch", post(start_file_fetch))
             .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
             .route("/api/settings/server-runtime", get(get_runtime).put(put_runtime))
+            // The disk floor (AL03, 0084): below it users' new Wants wait.
+            .route("/api/settings/floor", get(get_floor).put(put_floor))
             .route("/api/settings/acoustid", get(get_acoustid).put(put_acoustid))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
@@ -547,12 +558,18 @@ fn new_request_id() -> String {
 
 /// Open to anyone: that Cratarr answers, and which install it is (the app checks its local address is the same
 /// Cratarr as its public one before the page there may talk to it), and its page's build (`web`, decision 0085: an app
-/// with its own copy of the page serves the newer).
+/// with its own copy of the page serves the newer). And whether the server is short of space (`short_of_space`, AL03, the owner's
+/// Q6: cratarr-ha reads it, and Home Assistant tells the owner): a flag alone, never a size, a path or an account, and never a reason
+/// to answer other than 200, or Docker's health check would mark Cratarr unhealthy.
 async fn health(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let n = app.playlists.count().await.map_err(ToggleError::from)?;
     let instance = ctx.served.as_ref().and_then(|s| s.sessions.instance_id().ok());
-    Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance, "web": crate::web::page_build() })))
+    let short = match ctx.served.clone() {
+        Some(s) => tokio::task::spawn_blocking(move || crate::app::room::short_on(&s, &crate::app::room::TheDisks)).await.unwrap_or(false),
+        None => false,
+    };
+    Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance, "web": crate::web::page_build(), "short_of_space": short })))
 }
 
 /// `?source=<id>`: follow that source; absent (or unknown): whichever started playing most recently.
@@ -1259,7 +1276,7 @@ async fn track_versions(ctx: Ctx, Path((source, id)): Path<(String, String)>) ->
 
 /// The Library page's one list (decision 0034): every album of the used libraries, with its library and facts.
 async fn albums(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::AlbumsView> {
-    Json(app.albums(f.source.as_deref()).await)
+    Json(app.albums(f.source.as_deref()).await.as_sent())
 }
 
 /// A track's file as it is (the track menu's Details): where it lies, its audio, size and dates, and every tag, in the
@@ -1636,6 +1653,22 @@ async fn album_view(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> 
         Ok(v) => Ok(v),
         Err(e) => Err(e),
     };
+    // A record not had (C54): its own page from the catalogue, with the asking account's request of it; one merged into a record
+    // the library holds answers that one's view.
+    if source == crate::source::cratarr::KIND.id
+        && failed.is_err()
+        && let Some(mut v) = app.playing.record_view(&album).await?
+    {
+        if v.more.not_had
+            && let (Some(serve), Some(account), Some(record)) = (ctx.served.clone(), ctx.account(), crate::serve::ids::record_number(&v.id))
+        {
+            v.more.request = crate::app::requests::request_of_record(&app, &serve, &account, record).await.unwrap_or_else(|e| {
+                tracing::debug!("the request of {album}: {e:#}");
+                None
+            });
+        }
+        return Ok(Json(v));
+    }
     // A link from before 0.16 opens its record, which the answer's id says. A record nothing plays of now is no answer: that
     // album's fate is what its old id finds.
     if source == crate::source::cratarr::KIND.id
@@ -1663,7 +1696,7 @@ async fn moved_to(app: &Arc<App>, old: &str) -> Option<String> {
 /// gives them, each played through the relay as a preview's; the ones Bandcamp does not stream shown, not playable.
 async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::AlbumView, ToggleError> {
     let (url, _) = crate::bandcamp::read_id(album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
-    let a = crate::bandcamp::Bandcamp::get().album(&url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let a = crate::bandcamp::Bandcamp::get().album(&url).await.map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
     // What Discover knows of it, where it suggested it (the owner, 2026-10-25: "as much as our own panel").
     let known = match ctx.served.clone().and_then(|s| ctx.account().map(|a| (s, a))) {
         Some((s, account)) => {
@@ -1682,6 +1715,31 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
     let tags: Vec<String> = a.tags.iter().filter(|t| !genres.iter().any(|g| g.eq_ignore_ascii_case(t))).cloned().collect();
     let mut links = vec![crate::app::discover::Link { name: "Bandcamp".into(), url: a.url.clone() }];
     links.extend(known.as_ref().map(|k| k.links.clone()).unwrap_or_default().into_iter().filter(|l| l.name != "Bandcamp"));
+    // What a Want of it sends (W1): the record that holds its page, else the release group Discover found its page by.
+    let (record, release_group) = match ctx.served.clone() {
+        Some(s) => {
+            let page = a.url.clone();
+            tokio::task::spawn_blocking(move || {
+                let record = s.catalogue().record_named_by(None, Some(&page)).ok().flatten();
+                let group = if record.is_none() { s.userdata.bandcamp_found_group(&page).ok().flatten() } else { None };
+                (record.map(crate::serve::ids::record), group)
+            })
+            .await
+            .unwrap_or_default()
+        }
+        None => (None, None),
+    };
+    // Where the viewer's request of it stands (G3), as a record not had's page says: by its record, else its group's.
+    let request = match (ctx.served.clone(), ctx.account()) {
+        (Some(serve), Some(account)) => {
+            let by = record.as_deref().and_then(crate::serve::ids::record_number);
+            crate::app::requests::request_of(&ctx.app, &serve, &account, by, release_group.as_deref()).await.unwrap_or_else(|e| {
+                tracing::debug!("the request of {}: {e:#}", a.url);
+                None
+            })
+        }
+        _ => None,
+    };
     let more = crate::app::AlbumMore {
         released: a.released.clone(),
         label: a.label.clone(),
@@ -1691,6 +1749,10 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
         links,
         listeners: known.as_ref().and_then(|k| k.listeners),
         words: None,
+        record,
+        release_group,
+        request,
+        ..crate::app::AlbumMore::default()
     };
     let rows = a
         .tracks
@@ -1700,14 +1762,14 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
             crate::app::PlaylistRow {
                 entry: id.clone(),
                 file: t.title.clone(),
-                id: t.stream.is_some().then_some(id),
+                id: t.plays().then_some(id),
                 name: Some(t.title.clone()),
                 artist: Some(t.artist.clone().unwrap_or_else(|| a.artist.clone())),
                 album: Some(a.title.clone()),
                 duration_secs: t.duration_secs,
                 track: Some(t.n),
                 album_id: Some(album.to_string()),
-                missing: t.stream.is_none(),
+                missing: !t.plays(),
                 ..Default::default()
             }
         })
@@ -1761,45 +1823,50 @@ async fn track_favorite(
     Ok(applied(json_of(view)?, at, true))
 }
 
+/// An artist asked for by name, or Cratarr's own by their id for life (`id=ar-<n>`, C55), which goes first.
 #[derive(Deserialize)]
 struct ArtistName {
+    #[serde(default)]
     name: String,
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     on: bool,
 }
 
-/// An artist for the panel (decided 2026-10-16): by name, as the albums credit them (`?name=`).
-/// The libraries switched off come as `without` (`without_of`): their albums and tracks left out.
+/// An artist for the panel (decided 2026-10-16): by name, as the albums credit them (`?name=`), or Cratarr's own by their id
+/// (`?id=ar-<n>`, C55), who need have no album here. The libraries switched off come as `without` (`without_of`): their albums
+/// and tracks left out.
 async fn artist_view(
     State(app): State<Arc<App>>,
     Path(source): Path<String>,
     Query(q): Query<ArtistName>,
     RawQuery(raw): RawQuery,
 ) -> Result<Json<crate::app::ArtistView>, ApiError> {
-    Ok(Json(app.playing.artist_view(&source, &q.name, &without_of(raw.as_deref())).await?))
+    Ok(Json(app.playing.artist_view(&source, &q.name, q.id.as_deref(), &without_of(raw.as_deref())).await?))
 }
 
-/// Whether an artist is a favourite (`?name=`): the heart on an album's artist chip; null where the server keeps none.
+/// Whether an artist is a favourite (`?name=`, or `?id=`): the heart on an album's artist chip; null where the server keeps none.
 async fn artist_is_favorite(
     State(app): State<Arc<App>>,
     Path(source): Path<String>,
     Query(q): Query<ArtistName>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "favorite": app.playing.artist_is_favorite(&source, &q.name).await? })))
+    Ok(Json(json!({ "favorite": app.playing.artist_is_favorite(&source, &q.name, q.id.as_deref()).await? })))
 }
 
-/// The artist panel's heart (`?name=&on=`), the last change winning (decision 0087).
+/// The artist panel's heart (`?name=&on=`, or `?id=&on=`), the last change winning (decision 0087).
 async fn artist_favorite(
     ctx: Ctx,
     at: ChangeAt,
     Path(source): Path<String>,
     Query(q): Query<ArtistName>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = LastWins::of(&ctx, at, ChangeKind::Favourite, item_id("artist", &source, q.name.trim()));
+    let w = LastWins::of(&ctx, at, ChangeKind::Favourite, item_id("artist", &source, q.id.as_deref().unwrap_or(q.name.trim())));
     if is_older(&w) {
-        return Ok(applied(json!({ "favorite": ctx.app.playing.artist_is_favorite(&source, &q.name).await? }), at, false));
+        return Ok(applied(json!({ "favorite": ctx.app.playing.artist_is_favorite(&source, &q.name, q.id.as_deref()).await? }), at, false));
     }
-    let favorite = ctx.app.playing.artist_favorite(&source, &q.name, q.on).await?;
+    let favorite = ctx.app.playing.artist_favorite(&source, &q.name, q.id.as_deref(), q.on).await?;
     if let Some(w) = &w {
         w.made(Op::of(q.on));
     }
@@ -3967,7 +4034,8 @@ struct KeepInto {
     year: Option<String>,
 }
 
-/// Which copy moves (`from`), where it goes (decision 0034): a library's id, and the year when the album's tags lack it.
+/// Which copy moves (`from`), where it goes (decision 0034): a library's id, and the year when the album's tags lack it. A tap
+/// carries what its sheet showed (RF10): the folder where it goes, how many files, and the copy's own folder; a copy needs them.
 #[derive(Deserialize)]
 struct MoveTo {
     #[serde(default)]
@@ -3975,6 +4043,12 @@ struct MoveTo {
     to: String,
     #[serde(default)]
     year: Option<String>,
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    files: Option<usize>,
+    #[serde(default)]
+    from_dir: Option<String>,
 }
 
 async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
@@ -3993,7 +4067,11 @@ async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(
 }
 
 async fn move_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<MoveTo>) -> Result<Json<crate::app::KeepResult>, ApiError> {
-    Ok(Json(app.move_album(&source, &album, b.from.as_deref(), &b.to, b.year.as_deref()).await?))
+    let sheet = match (b.folder, b.files, b.from_dir) {
+        (Some(folder), Some(files), Some(from_dir)) => Some(crate::app::CopySheet { folder, files, from_dir }),
+        _ => None,
+    };
+    Ok(Json(app.move_album(&source, &album, b.from.as_deref(), &b.to, b.year.as_deref(), sheet).await?))
 }
 
 async fn keep_preview(
@@ -4018,7 +4096,7 @@ async fn replace_preview(
     Path((source, album)): Path<(String, String)>,
     Query(q): Query<ReplaceWhat>,
 ) -> Result<Json<crate::app::ReplacePreview>, ApiError> {
-    Ok(Json(app.incoming.replace_preview(&source, &album, q.from.as_deref(), q.to.as_deref(), q.year.as_deref()).await?))
+    Ok(Json(app.replace_preview(&source, &album, q.from.as_deref(), q.to.as_deref(), q.year.as_deref()).await?))
 }
 
 /// Replace's ask (0.9.5): the copies as `ReplaceWhat` names them, the year where the tags lack it, and the cover: `keep`
@@ -4036,6 +4114,18 @@ struct ReplaceBody {
     /// Replace and carry over (0.9.7): the album's MusicBrainz ids and numbers written into the new copy first.
     #[serde(default)]
     carry: bool,
+    /// From someone's own music (RY01, OQ-G): what its sheet showed, its folder and counts, met again or refused.
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    tracks: Option<usize>,
+    #[serde(default)]
+    added: Option<usize>,
+    #[serde(default)]
+    files: Option<usize>,
+    /// Which own copy its sheet showed, by its folder (RF10).
+    #[serde(default)]
+    from_dir: Option<String>,
 }
 
 async fn replace_incoming(
@@ -4044,17 +4134,21 @@ async fn replace_incoming(
     body: Option<Json<ReplaceBody>>,
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    let keep = match b.cover.as_deref() {
-        None | Some("keep") => true,
-        Some("new") => false,
-        Some(_) => return Err(ToggleError::Refused("cover is keep or new".into()).into()),
+    if !matches!(b.cover.as_deref(), None | Some("keep" | "new")) {
+        return Err(ToggleError::Refused("cover is keep or new".into()).into());
+    }
+    let sheet = match (b.folder, b.tracks, b.added, b.files) {
+        (Some(folder), Some(tracks), Some(added), Some(files)) => Some(crate::app::ReplaceSheet { folder, tracks, added, files }),
+        _ => None,
     };
-    Ok(Json(app.incoming.replace(&source, &album, b.from.as_deref(), b.to.as_deref(), b.year.as_deref(), keep, b.carry).await?))
+    let ask = crate::app::ReplaceAsk { from: b.from.as_deref(), to: b.to.as_deref(), year: b.year.as_deref(), cover: b.cover.as_deref(), carry: b.carry, sheet, from_dir: b.from_dir.as_deref() };
+    Ok(Json(app.replace_album(&source, &album, ask).await?))
 }
 
 /// Albums waiting for their hi-res files to be converted before Keep or Replace, and those just finished.
 async fn incoming_jobs(State(app): State<Arc<App>>) -> Json<Vec<crate::app::JobView>> {
-    Json(app.incoming.jobs())
+    let account = app.served.as_ref().and_then(|s| s.current_user());
+    Json(crate::app::incoming_jobs_shown(app.incoming.jobs(), account.as_deref(), crate::serve::access::administering()))
 }
 
 async fn cancel_job(State(app): State<Arc<App>>, Path(id): Path<u64>) -> Result<Json<()>, ApiError> {
@@ -4084,6 +4178,11 @@ async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Qu
         }),
         (None, Some(size), Some(served)) if own => crate::app::device_covers::for_list(served, &album, size).await,
         _ => ctx.app.playing.album_cover(&source, &album).await,
+    };
+    // A record not had (C54): from the cover cache, by the address its page shows.
+    let found = match found {
+        None if own => crate::app::cover_cache::of_record(ctx.app.library.catalogue(), &album).await.map(|(bytes, mime)| (mime.to_string(), bytes)),
+        found => found,
     };
     match found {
         Some((content_type, bytes)) => {
@@ -4354,13 +4453,16 @@ struct UndoRequest {
 /// The one undo (decision 0026): every token an action returned, undone newest first. Playlist and crate changes
 /// answer with their redo tokens, in the order they were made: undone newest first in turn, the redo does the action
 /// again in its own order (an edit before the rename that followed it). Incoming's tokens (its event ids) answer with
-/// the albums' titles, and are the administrators' to undo, as their changes are (decision 0051).
+/// the albums' titles, and are the administrators' to undo, as their changes are (decision 0051), and each account's own (X5).
 async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
-    // Playlists' and crates' (`c…`) and Discover's (`d…`, the signed-in account's own) are anyone's; Incoming's are an
-    // administrator's.
-    if req.tokens.iter().any(|t| !t.starts_with('c') && !t.starts_with('d')) && !crate::serve::access::administering() {
-        return Err(ToggleError::Forbidden("This is for administrators.".into()).into());
+    // Playlists' and crates' (`c…`) and Discover's (`d…`, the signed-in account's own) are anyone's; Incoming's an administrator's,
+    // or the account's own (X5: a user's Add to or Delete of their request, by the account the journal names).
+    if !crate::serve::access::administering() {
+        let me = crate::serve::who::current().map(|w| w.user);
+        if req.tokens.iter().filter(|t| !t.starts_with('c') && !t.starts_with('d')).any(|t| me.is_none() || app.incoming.done_by(t) != me) {
+            return Err(ToggleError::Forbidden("That isn't yours to undo.".into()).into());
+        }
     }
     let (mut redo, mut restored) = (Vec::new(), Vec::new());
     for token in req.tokens.iter().rev() {
@@ -4828,7 +4930,7 @@ fn bring_listenbrainz(ctx: &Ctx, b: ListenBrainzImport, preview: bool) -> Result
 
 /// Every open request's mark (0.9.5), for lists of albums not in the library; none when they cannot be read (the list
 /// is shown without them).
-async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<std::collections::HashMap<String, crate::app::requests::Mark>>> {
+async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<crate::app::requests::Marks>> {
     crate::app::requests::marks(app, serve).await.inspect_err(|e| tracing::debug!("the requests' marks not read: {e:#}")).ok()
 }
 
@@ -4947,6 +5049,15 @@ async fn discover_refresh(ctx: Ctx) -> Result<(StatusCode, Json<serde_json::Valu
 
 /// Each card's mark (0.9.5): any account's open request for its album, wanted or coming.
 async fn mark_cards(app: &App, serve: &crate::serve::Serve, cards: &mut [serde_json::Value]) {
+    // Their artists opened by id from "Go to artist" by anyone, as Beyond's (G7).
+    let carded: Vec<(String, String)> = cards.iter().filter_map(|c| Some((c["artist_mbid"].as_str()?.to_string(), c["artist"].as_str()?.to_string()))).collect();
+    crate::app::beyond::keep_carded(&carded, crate::app::moment::now_secs());
+    // No Bandcamp preview offered while Bandcamp is switched off (G1).
+    for c in cards.iter_mut().filter_map(|c| c.as_object_mut()) {
+        if crate::bandcamp::shown(c.get("bandcamp").and_then(|b| b.as_str()).map(str::to_string)).is_none() {
+            c.remove("bandcamp");
+        }
+    }
     let Some(marks) = request_marks(app, serve).await else { return };
     for c in cards {
         let mark = crate::app::requests::mark_of(
@@ -4995,19 +5106,29 @@ async fn discover_want(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serd
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
     let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "request": r })))
+    // Where it stands with it (G11), as every view reads it.
+    Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await })))
 }
 
 #[derive(Deserialize)]
 struct WantAlbum {
+    /// The record wanted (C49b), a record not had a page shows: its id as the lists serve it (`al-<n>`, W1), any other refused.
+    /// Else by its release group, its Bandcamp page, then its names below.
+    #[serde(default)]
+    record: Option<String>,
     #[serde(default)]
     release_group: Option<String>,
+    #[serde(default)]
     artist: String,
+    #[serde(default)]
     album: String,
     #[serde(default)]
     year: Option<i32>,
     #[serde(default)]
     cover: Option<String>,
+    /// Its Bandcamp album page, where the card knows it (R22, N2): a record Bandcamp alone lists is judged by Bandcamp's list.
+    #[serde(default)]
+    page: Option<String>,
 }
 
 /// Any album wanted (0.9.3: an artist's missing album), as Discover's Want: a request, handed to Lidarr where the
@@ -5015,24 +5136,106 @@ struct WantAlbum {
 async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
-    let r = crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover)
-        .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "request": r })))
+    let r = match b.record.as_deref() {
+        Some(id) => {
+            let record = crate::serve::ids::record_number(id).ok_or_else(|| ToggleError::Refused("That is not a record's id.".into()))?;
+            crate::app::requests::ask_record(&app, &serve, &account, record).await
+        }
+        None => {
+            // Its page made plain (W1): an album's page on Bandcamp, else refused.
+            let page = match b.page.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+                Some(p) => Some(crate::bandcamp::album_page(p).ok_or_else(|| ToggleError::Refused("That is not an album's page on Bandcamp.".into()))?),
+                None => None,
+            };
+            crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover, page).await
+        }
+    }
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    // Where it stands with it (G11), as every view reads it.
+    Ok(Json(json!({ "request": crate::app::requests::as_viewed(&app, &serve, &account, r).await })))
 }
 
 /// An artist's missing albums (0.9.3): their albums and EPs the library has none of, newest first; read when asked
 /// (a MusicBrainz call or two the first time, kept for every account).
-async fn artist_missing(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+/// An artist asked for by id (`ar-<n>`), else by name: the first artist of it (C55).
+#[derive(Deserialize)]
+struct ArtistQuery {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: String,
+}
+
+/// An artist's records the library has none of (C53a): `{ albums, looking }`, the kept rows at once and `looking` while their
+/// lists are read in the background, so the page asks again until it is false.
+async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
-    let mut albums = crate::app::discover::missing_albums(&serve, app.library.catalogue(), q.name.trim(), q.mbid.as_deref(), q.release_group.as_deref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    if let Some(marks) = request_marks(&app, &serve).await {
-        for a in &mut albums {
-            a.request = crate::app::requests::mark_of(&marks, Some(&a.release_group), q.name.trim(), &a.title);
+    let cat = app.library.catalogue();
+    let artist = match q.id.as_deref().and_then(crate::serve::ids::artist_number) {
+        Some(id) => Some(id),
+        None => {
+            let (c, name) = (cat.clone(), q.name.trim().to_string());
+            tokio::task::spawn_blocking(move || c.artist_of(&name)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?.map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        }
+    };
+    let Some(artist) = artist else { return Ok(Json(json!({ "albums": [], "looking": false }))) };
+    let (mut albums, looking) = crate::app::discover::missing_albums(cat, artist, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    // An artist forgotten (RT01b) says so, by their tombstone: asked where nothing is listed nor looked for, as for one unknown.
+    if albums.is_empty() && !looking {
+        let (c, id) = (app.library.catalogue(), crate::serve::ids::artist(artist));
+        if let Ok(Some(gone)) = tokio::task::spawn_blocking(move || crate::app::retention::unknown_artist(&c, &id)).await {
+            return Err(gone.into());
         }
     }
-    Ok(Json(json!({ "albums": albums, "looking": false })))
+    if let Some(marks) = request_marks(&app, &serve).await {
+        for a in &mut albums {
+            a.request = crate::serve::ids::record_number(&a.record).and_then(|r| marks.of_record(r));
+        }
+    }
+    Ok(Json(json!({ "albums": albums, "looking": looking })))
+}
+
+/// What a label's page asks for: the next hundred of one source's list (OQ10 (a)), `musicbrainz` or `discogs`.
+#[derive(Deserialize)]
+struct LabelQuery {
+    #[serde(default)]
+    more: Option<String>,
+}
+
+/// A label's page (C56): `{ id, name, rows, looking, more: { musicbrainz, discogs }, musicbrainz?, discogs? }`. The kept rows at
+/// once, by year, newest first, each with its open request's mark; `looking` while its lists are read in the background, so the
+/// page asks again until it is false; `?more=<source>` reads the next hundred of that source's list. An id that is no label is
+/// refused; a label that never held anything is still a page.
+async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery>) -> Result<Json<crate::app::labels::LabelPage>, ApiError> {
+    let app = ctx.app.clone();
+    let serve = ctx.serve()?;
+    let not_a_label = || ToggleError::Refused("That is not a label.".into());
+    let label = crate::serve::ids::label_number(&id).ok_or_else(not_a_label)?;
+    let more = match q.more.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => Some(crate::app::labels::source_named(m).ok_or_else(|| ToggleError::Refused("A label's list reads on at MusicBrainz or Discogs.".into()))?),
+        None => None,
+    };
+    let page = crate::app::labels::page(app.library.catalogue(), label, more, &crate::app::labels::sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let mut page = page.ok_or_else(not_a_label)?;
+    if let Some(marks) = request_marks(&app, &serve).await {
+        for row in &mut page.rows {
+            row.request = row.record.as_deref().and_then(crate::serve::ids::record_number).and_then(|r| marks.of_record(r));
+        }
+    }
+    Ok(Json(page))
+}
+
+/// A list's row opened (C56, Q33: "kept at open"; C57's Beyond too): `{ record: "al-<n>" }`, the record that holds its reference,
+/// as merged now, else one made now with it. Never by its names alone: a row with no reference is refused.
+async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Result<Json<serde_json::Value>, ApiError> {
+    let cat = ctx.app.library.catalogue();
+    let record = tokio::task::spawn_blocking(move || crate::app::labels::open_record(&cat, &b))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .ok_or_else(|| ToggleError::Refused("An album is opened by what MusicBrainz or Discogs knows it by, and its title.".into()))?;
+    Ok(Json(json!({ "record": crate::serve::ids::record(record) })))
 }
 
 #[derive(Deserialize)]
@@ -5058,7 +5261,7 @@ async fn musicbrainz_search(ctx: Ctx, Query(q): Query<MbSearch>) -> Result<Json<
 async fn discover_missing(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
-    let (mut albums, artists) = crate::app::discover::all_missing(&serve, app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let (mut albums, artists) = crate::app::discover::all_missing(app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     // None by an artist the account excluded everywhere (decision 0083).
     if let Some(account) = ctx.account() {
         let s = serve.clone();
@@ -5070,7 +5273,7 @@ async fn discover_missing(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError>
     }
     if let Some(marks) = request_marks(&app, &serve).await {
         for a in &mut albums {
-            a.request = crate::app::requests::mark_of(&marks, Some(&a.release_group), &a.artist, &a.title);
+            a.request = crate::serve::ids::record_number(&a.record).and_then(|r| marks.of_record(r));
         }
     }
     Ok(Json(json!({ "albums": albums, "artists": artists })))
@@ -5117,7 +5320,7 @@ async fn bandcamp_find(ctx: Ctx, Query(q): Query<FindOnBandcamp>) -> Result<Json
     let serve = ctx.serve()?;
     let page = crate::app::discover::find_on_bandcamp(&serve, q.artist.trim(), q.album.trim(), q.release_group.as_deref())
         .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        .map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
     Ok(Json(json!({ "page": page })))
 }
 
@@ -5126,10 +5329,22 @@ struct BandcampOf {
     url: String,
 }
 
+/// What a Bandcamp read that failed says to the asker (O1): an administrator its cause; anyone else a plain word, never an address or a
+/// connection's details (they told which addresses at home answer).
+fn bandcamp_failed(e: &anyhow::Error) -> String {
+    if crate::serve::access::administering() {
+        format!("{e:#}")
+    } else if crate::bandcamp::not_read(e) {
+        e.to_string()
+    } else {
+        "Bandcamp could not be read".into()
+    }
+}
+
 /// A Bandcamp album to play as a preview (decision 0071): its tracks as players hold them (`QueueTrack`), each
 /// streamed and its cover shown through Cratarr's own addresses.
 async fn preview_bandcamp(Query(q): Query<BandcampOf>) -> Result<Json<serde_json::Value>, ApiError> {
-    let a = crate::bandcamp::Bandcamp::get().album(&q.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let a = crate::bandcamp::Bandcamp::get().album(&q.url).await.map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
     let tracks = a.queue_tracks();
     if tracks.is_empty() {
         return Err(ToggleError::Refused("None of its tracks can be heard on Bandcamp.".into()).into());
@@ -5168,7 +5383,7 @@ async fn preview_bandcamp_artist(Query(q): Query<BandcampArtistOf>) -> Result<Js
     }
     let (page, releases) = crate::app::discover::bandcamp_artist(q.name.trim(), q.mbid.as_deref(), q.page.as_deref())
         .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        .map_err(|e| ToggleError::Refused(bandcamp_failed(&e)))?;
     let bc = crate::bandcamp::Bandcamp::get();
     let mut albums = Vec::new();
     for (_, url) in releases.into_iter().take(BANDCAMP_ARTIST_RELEASES) {
@@ -5202,7 +5417,7 @@ async fn bandcamp_relay(id: &str, range: Option<&str>, from_ms: u64) -> Response
     let at = (from_ms > 0).then(|| format!("bytes={}-", from_ms * crate::bandcamp::BYTES_PER_SEC / 1000));
     let (mut resp, duration) = match crate::bandcamp::Bandcamp::get().stream(&url, n, at.as_deref().or(range)).await {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": bandcamp_failed(&e) }))).into_response(),
     };
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
@@ -5272,7 +5487,8 @@ async fn kept_cover(of: crate::app::cover_cache::Of) -> Response {
         Ok(Some((bytes, mime))) => {
             ([(header::CONTENT_TYPE, HeaderValue::from_static(mime)), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=604800"))], bytes).into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+        // A short while (O6): a page showing many records with no cover does not ask again at each view.
+        Ok(None) => (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=900"))], Json(json!({ "error": "no cover" }))).into_response(),
         Err(e) => {
             tracing::debug!("cover of {of:?}: {e:#}");
             (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response()
@@ -5291,6 +5507,10 @@ async fn requests(ctx: Ctx) -> Result<Json<crate::app::requests::Listing>, ApiEr
 async fn requests_watching(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     discoverer(&ctx)?;
+    // Lidarr's queue is an administrator's to read (W6): others read their requests' states.
+    if !crate::serve::access::administering() {
+        return Ok(Json(serde_json::Value::Null));
+    }
     let w = crate::app::requests::watching(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!(w)))
 }
@@ -5685,7 +5905,8 @@ async fn spotify_cover(ctx: Ctx, Path((kind, id)): Path<(String, String)>) -> Re
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     let kind = r.headers().get(header::CONTENT_TYPE).cloned().unwrap_or(HeaderValue::from_static("image/jpeg"));
-    let Ok(bytes) = r.bytes().await else { return Ok(StatusCode::BAD_GATEWAY.into_response()) };
+    // An image, read in pieces and cut at the covers' cap (O1, Y11): a longer one is refused, never held whole.
+    let Ok(bytes) = crate::app::reach::read_image(r, crate::app::cover_cache::MOST_BYTES).await else { return Ok(StatusCode::BAD_GATEWAY.into_response()) };
     Ok(([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"))], bytes).into_response())
 }
 
@@ -5881,6 +6102,8 @@ async fn undo_listenbrainz(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError
 #[derive(Deserialize)]
 struct PicksQuery {
     name: String,
+    /// Their id (`ar-<n>`, G6) where the page knows it: their own tracks, not a namesake's.
+    id: Option<String>,
     without: Option<String>,
 }
 
@@ -5890,7 +6113,12 @@ const PICKS: usize = 5;
 /// An artist's Top recommendations: their tracks that fit the asking account's taste best (song ids, best first).
 async fn artist_picks(State(app): State<Arc<App>>, Query(q): Query<PicksQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(json!({ "ids": app.playlists.artist_picks(&q.name, &without, PICKS).await? })))
+    // By their id (G6): their own tracks, as their page lists them.
+    let only = match q.id.as_deref().filter(|i| crate::serve::ids::artist_number(i).is_some()) {
+        Some(id) => Some(app.playing.artist_view(crate::source::cratarr::KIND.id, &q.name, Some(id), &without).await?.rows.into_iter().filter_map(|r| r.id).collect()),
+        None => None,
+    };
+    Ok(Json(json!({ "ids": app.playlists.artist_picks(&q.name, &without, PICKS, only).await? })))
 }
 
 /// The weather as Home Assistant tells it (the cratarr-ha integration, on each change): Home's moment.
@@ -6125,28 +6353,41 @@ async fn library_find(ctx: Ctx, Query(q): Query<FindQuery>) -> Result<Json<serde
     Ok(Json(json!(found)))
 }
 
+/// An artist by name; on an artist page's own routes, Cratarr's own by their id for life (`id=ar-<n>`, C55), which goes first.
 #[derive(Deserialize)]
 struct AboutQuery {
+    #[serde(default)]
     name: String,
-    /// The artist's MusicBrainz id, or a release group of theirs, where known (0.9.6: an artist not in the library).
     #[serde(default)]
-    mbid: Option<String>,
-    #[serde(default)]
-    release_group: Option<String>,
+    id: Option<String>,
+}
+
+/// The artist an artist page asks about (C55, `related::asked`): by id, that one, though another has the name; by name, the first.
+async fn artist_asked(served: &Arc<crate::serve::Serve>, id: Option<&str>, name: &str) -> Option<crate::app::related::Asked> {
+    let (s, id, name) = (served.clone(), id.map(str::to_string), name.to_string());
+    match tokio::task::spawn_blocking(move || crate::app::related::asked(&s, id.as_deref(), &name)).await {
+        Ok(Ok(asked)) => asked,
+        Ok(Err(e)) => {
+            tracing::debug!("an artist asked about: {e:#}");
+            None
+        }
+        Err(e) => {
+            tracing::debug!("an artist asked about: {e}");
+            None
+        }
+    }
 }
 
 /// About an artist, for their page (the owner, 2026-10-23): TheAudioDB's description and whether there is a photo
-/// (`/api/artists/{id}/photo`), read now when it never was. Nothing known: nulls.
+/// (`/api/artists/{id}/photo`), read now when it never was; by `name`, or `id` (C55). Nothing known: nulls.
 async fn artist_about(ctx: Ctx, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
     let app = ctx.app.clone();
     let found = async {
         let served = ctx.served.clone()?;
         let store = app.artists.clone()?;
-        let lib = served.library.clone();
-        let name = q.name.clone();
-        let (id, mbid) = tokio::task::spawn_blocking(move || lib.artist_by_name(&name)).await.ok()?.ok()??;
-        let info = store.get_or_read(&q.name, mbid.as_deref()).await?;
-        Some(json!({ "id": id, "bio": info.bio, "photo": info.photo.is_some(), "photo_credit": info.credit }))
+        let a = artist_asked(&served, q.id.as_deref(), &q.name).await?;
+        let info = store.get_or_read(&a.name, a.mbid.as_deref()).await?;
+        Some(json!({ "id": a.id, "bio": info.bio, "photo": info.photo.is_some(), "photo_credit": info.credit }))
     }
     .await;
     Json(found.unwrap_or_else(|| json!({ "id": null, "bio": null, "photo": false })))
@@ -6183,9 +6424,10 @@ async fn genre_aliases(State(app): State<Arc<App>>) -> Result<Json<std::collecti
     Ok(Json(crate::app::search::genre_aliases(&app).await.map_err(ToggleError::from)?))
 }
 
-/// Beyond the library (0076, the unindexed universe): MusicBrainz's albums and Discogs' masters for the words, together,
-/// one album once (by its artist and title), each with where it was found; what the library has marked `have`, what
-/// is asked for its request. MusicBrainz's artists beside. A page of `limit` from `offset`; kept per query.
+/// Beyond the library (0076, the unindexed universe; C57): MusicBrainz's albums and Discogs' masters for the words, each album
+/// once by reference alone (`beyond::albums`: never by a name), each with where it was found, the record that holds it where one
+/// does, `have` by the one had rule on that record, and its request. MusicBrainz's artists beside, each with the artist who holds
+/// their MusicBrainz id. A page of `limit` from `offset`; kept per query in memory, a cache: nothing is made when it answers.
 async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
@@ -6194,79 +6436,86 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
     if crate::search::words(&q).is_empty() {
         return Ok(Json(json!({ "q": q, "albums": [], "artists": [] })));
     }
-    let (mb, discogs) = tokio::join!(
-        crate::app::discover::musicbrainz_search(&serve, app.library.catalogue(), &q, (offset + limit).min(100)),
-        crate::app::discogs::search_masters(&q, limit, offset)
-    );
+    let (mb, discogs) = tokio::join!(crate::app::discover::musicbrainz_found(&q, (offset + limit).min(100)), crate::app::discogs::search_masters(&q, limit, offset));
     let (mb_albums, artists) = mb.unwrap_or_default();
+    let mb_albums: Vec<crate::app::discover::FoundAlbum> = mb_albums.into_iter().skip(offset).take(limit).collect();
+    let artists = if offset == 0 { artists } else { Vec::new() };
     let discogs = discogs.unwrap_or_default();
-    let library = crate::app::requests::library(&serve).await;
+    let (cat, a, d, p) = (app.library.catalogue(), mb_albums.clone(), discogs.clone(), artists.clone());
+    // What is here, by reference: where it cannot be read, nothing is marked.
+    let known = match tokio::task::spawn_blocking(move || crate::app::beyond::known(&cat, &a, &d, &p)).await {
+        Ok(Ok(known)) => known,
+        Ok(Err(e)) => {
+            tracing::info!("beyond: what is here not read: {e:#}");
+            crate::app::beyond::Known::default()
+        }
+        Err(e) => {
+            tracing::info!("beyond: what is here not read: {e:#}");
+            crate::app::beyond::Known::default()
+        }
+    };
     let marks = request_marks(&app, &serve).await;
-    let albums = beyond_albums(mb_albums.into_iter().skip(offset).take(limit), discogs, library.as_deref(), marks.as_deref());
-    Ok(Json(json!({ "q": q, "albums": albums, "artists": if offset == 0 { json!(artists) } else { json!([]) } })))
+    let albums = crate::app::beyond::albums(&mb_albums, &discogs, &known, marks.as_deref());
+    crate::app::beyond::keep_listed(&artists, crate::app::moment::now_secs());
+    let artists = crate::app::beyond::artists(&artists, &known);
+    Ok(Json(json!({ "q": q, "albums": albums, "artists": artists })))
 }
 
-/// What Beyond lists of what was found, MusicBrainz's first: a master of an album it found goes on that album, and of the
-/// rest the library says what it has. Its albums alone answer that (`Matcher::library_albums`): the whole library read
-/// for it stayed in memory, 60 MB of the NAS's 768, to answer this one question.
-fn beyond_albums(
-    mb_albums: impl Iterator<Item = crate::app::discover::FoundAlbum>,
-    discogs: Vec<crate::app::discogs::FoundMaster>,
-    library: Option<&crate::app::import::Matcher>,
-    marks: Option<&std::collections::HashMap<String, crate::app::requests::Mark>>,
-) -> Vec<serde_json::Value> {
-    let key = |artist: &str, title: &str| format!("{}|{}", crate::app::import::key(artist), crate::app::import::key(title));
-    let mut order: Vec<String> = Vec::new();
-    let mut by: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
-    for a in mb_albums {
-        let k = key(&a.artist, &a.title);
-        if by.contains_key(&k) {
-            continue;
-        }
-        order.push(k.clone());
-        by.insert(
-            k,
-            json!({ "title": a.title, "artist": a.artist, "year": a.year, "cover": a.cover, "release_group": a.release_group, "discogs": null,
-                "discogs_url": null, "sources": ["musicbrainz"], "have": a.have, "request": marks.and_then(|m| crate::app::requests::mark_of(m, Some(&a.release_group), &a.artist, &a.title)) }),
-        );
-    }
-    for d in discogs {
-        let k = key(&d.artist, &d.title);
-        if let Some(found) = by.get_mut(&k) {
-            found["sources"] = json!(["musicbrainz", "discogs"]);
-            found["discogs"] = json!(d.id);
-            found["discogs_url"] = json!(d.url);
-            continue;
-        }
-        let have = library.is_some_and(|l| l.find_album(&d.title, Some(&d.artist)).is_some());
-        order.push(k.clone());
-        by.insert(
-            k,
-            json!({ "title": d.title, "artist": d.artist, "year": d.year, "cover": d.cover, "release_group": null, "discogs": d.id,
-                "discogs_url": d.url, "sources": ["discogs"], "have": have, "request": marks.and_then(|m| crate::app::requests::mark_of(m, None, &d.artist, &d.title)) }),
-        );
-    }
-    order.into_iter().filter_map(|k| by.remove(&k)).collect()
+/// An artist of Beyond's (C57) opened: their MusicBrainz id and name.
+#[derive(Deserialize)]
+struct ArtistOpened {
+    #[serde(default)]
+    mbid: String,
+    #[serde(default)]
+    name: String,
 }
 
-/// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name: as last looked up, and
-/// whether a look runs now (started here when none was kept or it is old). An artist without a MusicBrainz id has none.
+/// An artist of Beyond's opened (C57, OQ12 (a)): `{ artist: "ar-<n>" }`, the artist who holds their MusicBrainz id, else the one
+/// live artist of the name who holds none where the id is MusicBrainz's first sure match for the name, asked now (Z2, T6:
+/// `beyond::open_asking`), else one of their own made now, though another has the name. Never by the name alone: one with no
+/// MusicBrainz id is refused. By anyone only as Beyond or a card listed them within the day, by the name it listed (U6: another
+/// name refused); by an administrator, any (Z8).
+async fn open_artist(ctx: Ctx, Json(b): Json<ArtistOpened>) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(name) = crate::app::beyond::may_open(&b.mbid, &b.name, crate::serve::access::administering(), crate::app::moment::now_secs()) else {
+        return Err(ToggleError::Forbidden("Only an artist Beyond found is opened here, by the name it found; an administrator may open any.".into()).into());
+    };
+    let artist = crate::app::beyond::open_asking(ctx.app.library.catalogue(), &b.mbid, &name)
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .ok_or_else(|| ToggleError::Refused("An artist is opened by their MusicBrainz id, and their name.".into()))?;
+    Ok(Json(json!({ "artist": crate::serve::ids::artist(artist) })))
+}
+
+/// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name or their id (C55): as last
+/// looked up, and whether a look runs now (started here when none was kept or it is old). An artist without a MusicBrainz id
+/// has none.
 async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
-    let (s, name) = (serve.clone(), q.name.trim().to_string());
-    let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(String, Option<crate::app::related::Found>, bool)>> {
-        let Some((_, Some(mbid))) = s.library.artist_by_name(&name)? else { return Ok(None) };
-        let (kept, due) = crate::app::related::kept(&s, &mbid)?;
-        Ok(Some((mbid, kept, due)))
-    })
-    .await
-    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
-    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    let Some((mbid, kept, due)) = found else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
+    let Some(asked) = artist_asked(&serve, q.id.as_deref(), &q.name).await else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
+    let Some(mbid) = asked.mbid else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
+    let (s, key) = (serve.clone(), mbid.clone());
+    let (kept, due) = tokio::task::spawn_blocking(move || crate::app::related::kept(&s, &key))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     if due {
-        crate::app::related::start(serve, q.name.trim().to_string(), mbid.clone());
+        crate::app::related::start(serve, asked.name, mbid.clone());
     }
-    let artists = kept.map(|f| f.artists).unwrap_or_default();
+    let mut artists = kept.map(|f| f.artists).unwrap_or_default();
+    // No Bandcamp preview offered while Bandcamp is switched off (G1).
+    for a in &mut artists {
+        a.bandcamp = crate::bandcamp::shown(a.bandcamp.take());
+    }
+    // Their numbers for their names (G5), read once for those the library has.
+    let ids: Vec<i64> = artists.iter().filter_map(|a| a.id.as_deref().and_then(crate::serve::ids::artist_number)).collect();
+    let cat = ctx.app.library.catalogue();
+    if !ids.is_empty()
+        && let Ok(Ok(numbers)) = tokio::task::spawn_blocking(move || cat.artist_numbers(&ids)).await
+    {
+        for a in &mut artists {
+            a.number = a.id.as_deref().and_then(crate::serve::ids::artist_number).and_then(|n| numbers.get(&n).copied());
+        }
+    }
     Ok(Json(json!({ "artists": artists, "looking": crate::app::related::is_looking(&mbid) })))
 }
 
@@ -6312,15 +6561,15 @@ async fn discover_artist_photo(State(app): State<Arc<App>>, Query(q): Query<Abou
     }
 }
 
-/// An artist's photo, as the artist store kept it.
+/// An artist's photo, as the artist store kept it: by their id for life, as About reads them (C55, `related::asked`), so one with
+/// no album here has theirs too.
 async fn artist_photo(ctx: Ctx, Path(id): Path<String>) -> Response {
     let app = ctx.app.clone();
     let found = async {
         let served = ctx.served.clone()?;
         let store = app.artists.clone()?;
-        let lib = served.library.clone();
-        let artist = tokio::task::spawn_blocking(move || lib.artist(&id)).await.ok()?.ok()??;
-        let file = store.get(&crate::app::artists::key(&artist.name, artist.music_brainz_id.as_deref()))?.photo?;
+        let artist = artist_asked(&served, Some(id.as_str()), "").await?;
+        let file = store.get(&crate::app::artists::key(&artist.name, artist.mbid.as_deref()))?.photo?;
         tokio::fs::read(store.photo_path(&file)).await.ok()
     }
     .await;
@@ -6623,6 +6872,29 @@ async fn put_runtime(ctx: Ctx, Json(c): Json<crate::app::runtime::Change>) -> Re
         app.play_on.set_lan_base(crate::app::runtime::lan_base(&r));
     }
     get_runtime(ctx).await
+}
+
+// ---- The disk floor (AL03)
+
+/// The disk floor (AL03, 0084), as just read against the disks users' music lands on: the floor in GB, the lowest free space there in
+/// bytes (none where it cannot be read), and whether the server is short of space.
+async fn get_floor(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let space = tokio::task::spawn_blocking(move || crate::app::room::space_on(&serve, &crate::app::room::TheDisks)).await.map_err(|e| ToggleError::Refused(format!("{e}")))?;
+    Ok(Json(json!({ "gb": space.floor as f64 / crate::app::room::GB as f64, "free": space.free, "short": space.short })))
+}
+
+/// The disk floor set by an administrator: GB with decimals, kept in bytes (1 GB = 10^9), and read against the disks at once. Anything
+/// but a number from 0 is refused with 400 (AL04.4, `room::gb_given`), the old floor kept.
+async fn put_floor(ctx: Ctx, Json(b): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(gb) = crate::app::room::gb_given(&b) else { return Err(ToggleError::BadSettings("Give the floor in GB, from 0.".into()).into()) };
+    let serve = ctx.serve()?;
+    let bytes = (gb * crate::app::room::GB as f64).round() as u64;
+    tokio::task::spawn_blocking(move || crate::app::room::set_floor(&serve.userdata, bytes))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    get_floor(ctx).await
 }
 
 // ---- Discogs' facts (0.9.8)
@@ -7005,12 +7277,12 @@ async fn intake_card(State(app): State<Arc<App>>, Path((source, album)): Path<(S
     own_album(&source)?;
     let view = app.incoming.list(Some(&source)).await;
     let waiting = |a: &&crate::source::Album| a.id == album && q.from.as_ref().is_none_or(|f| a.library.as_ref() == Some(f));
-    let (at, library, verdict) = view
+    let (at, library) = view
         .sources
         .iter()
-        .find_map(|s| s.albums.iter().find(waiting).map(|a| (a.copies.first().map(|c| (c.folder, c.dir.clone())), a.library.clone(), s.verdicts.get(&album).cloned())))
-        .unwrap_or((None, None, None));
-    Ok(Json(crate::app::intake_card::card(&app, &album, at, library, verdict.as_ref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+        .find_map(|s| s.albums.iter().find(waiting).map(|a| (a.copies.first().map(|c| (c.folder, c.dir.clone())), a.library.clone())))
+        .unwrap_or((None, None));
+    Ok(Json(crate::app::intake_card::card(&app, &album, at, library).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// The findings Health has of one record, each with only its items, and its tracks' file problems (0.14).
@@ -7080,6 +7352,38 @@ async fn musicbrainz_switch(Json(b): Json<Switched>) -> Result<Json<crate::app::
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     musicbrainz_status().await
+}
+
+/// Bandcamp's switch (O4: off, Cratarr asks it nothing), and until when it is left alone after its bot check (epoch s), where it is.
+async fn bandcamp_status() -> Json<serde_json::Value> {
+    Json(json!({ "enabled": crate::app::switches::is_on(crate::app::switches::BANDCAMP), "held_until": crate::bandcamp::held_until(crate::app::moment::now_secs()) }))
+}
+
+/// Whether Cratarr reads outside services in the background (O5): off is "Pause background reading".
+async fn background_status() -> Json<serde_json::Value> {
+    Json(json!({ "enabled": !crate::app::switches::background_paused() }))
+}
+
+/// The background reading paused or let go on (O5).
+async fn background_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
+    tokio::task::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::BACKGROUND, b.enabled))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(background_status().await)
+}
+
+/// Bandcamp switched on or off (O4); switched on again, its bot check's hold lifted (V8).
+async fn bandcamp_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        crate::app::switches::set_on(crate::app::switches::BANDCAMP, b.enabled)?;
+        crate::bandcamp::switched(crate::serve::instance().as_deref().map(|s| &*s.userdata), b.enabled);
+        Ok(())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(bandcamp_status().await)
 }
 
 /// A release group's cover for albums not in the library (0.9.5): to the Cover Art Archive's, else Discogs' master's;
@@ -7330,6 +7634,7 @@ impl IntoResponse for ApiError {
                 StatusCode::CONFLICT
             }
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
+            ToggleError::Gone(_) => StatusCode::GONE,
             ToggleError::Forbidden(_) | ToggleError::Fenced => StatusCode::FORBIDDEN,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };
@@ -7408,6 +7713,30 @@ mod tests {
             }
         }
         assert!(seen.len() > 100, "the table was not read: {}", seen.len());
+    }
+
+    /// Y11 (O1): a Bandcamp read that failed tells anyone but an administrator a plain word (its bot check in its own words), an
+    /// administrator its cause, on every route that reads Bandcamp. No test builds those routes, so each read of Bandcamp's in this
+    /// file is looked at here: its failure goes through `bandcamp_failed`.
+    #[tokio::test]
+    async fn a_users_bandcamp_failure_is_plain_on_every_route() {
+        use crate::serve::who::{Scope, Who, acting_as};
+        let cause = || anyhow::anyhow!("192.168.1.20 refused the connection").context("cannot reach Bandcamp");
+        let user = || Who { user: "bob".into(), admin: false, scope: Scope::Full, home: true };
+        let admin = Who { user: "ann".into(), admin: true, scope: Scope::Full, home: true };
+        assert_eq!(acting_as(user(), async { super::bandcamp_failed(&cause()) }).await, "Bandcamp could not be read");
+        let check = anyhow::Error::from(crate::bandcamp::NotRead);
+        assert_eq!(acting_as(user(), async { super::bandcamp_failed(&check) }).await, check.to_string(), "its bot check in its own words");
+        assert!(acting_as(admin, async { super::bandcamp_failed(&cause()) }).await.contains("192.168.1.20"), "an administrator its cause");
+        let code: Vec<&str> = include_str!("api.rs").split("#[cfg(test)]").next().unwrap().lines().collect();
+        let reads = ["::get().album(", "::get().stream(", "discover::find_on_bandcamp(", "discover::bandcamp_artist("];
+        let mut seen = 0;
+        for (i, line) in code.iter().enumerate().filter(|(_, l)| reads.iter().any(|r| l.contains(r))) {
+            let read = code[i..(i + 3).min(code.len())].concat();
+            assert!(read.contains("bandcamp_failed") || read.contains(".ok()"), "line {}: its failure is not made plain: {line}", i + 1);
+            seen += 1;
+        }
+        assert!(seen >= 5, "the reads were not found: {seen}");
     }
 
     #[tokio::test]
@@ -7542,6 +7871,7 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let stream = format!("http://{}/s", listener.local_addr().unwrap());
+        crate::bandcamp::fake_media_at(&stream);
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         crate::bandcamp::Bandcamp::get().keep(crate::bandcamp::Album {
             url: page.into(),
@@ -7551,6 +7881,7 @@ mod tests {
             tracks: vec![crate::bandcamp::Track { n: 1, title: "One".into(), artist: None, duration_secs: Some(12.5), stream: Some(stream), page: None }],
             released: None,
             label: None,
+            account: None,
             about: None,
             credits: None,
             tags: Vec::new(),
@@ -7567,6 +7898,8 @@ mod tests {
     #[tokio::test]
     async fn a_preview_streams_through_cratarr_as_it_is_with_its_ranges() {
         use axum::http::StatusCode;
+        // A stream reads Bandcamp's switch (Y12).
+        let _one = crate::app::switches::TEST_STATE.lock().await;
         let page = "https://relay.bandcamp.com/album/fake";
         let (id, mp3) = fake_bandcamp(page, 60).await;
         // From its start: its MP3, its length from its page, Bandcamp's own length and ranges.
@@ -7600,69 +7933,6 @@ mod tests {
         let refused = super::never_offline(&t(crate::bandcamp::SOURCE)).unwrap();
         assert_eq!((refused["offline"].as_bool(), refused["error"].as_str()), (Some(false), Some(crate::bandcamp::NOT_KEPT)));
         assert!(super::never_offline(&t("cratarr")).is_none(), "a library track goes on to its file or copy");
-    }
-
-    #[test]
-    fn beyond_marks_from_the_librarys_albums_alone_what_the_whole_library_marked() {
-        use crate::app::discogs::FoundMaster;
-        use crate::app::discover::FoundAlbum;
-        use crate::app::import::{Matcher, key};
-        use crate::app::requests::Mark;
-        let dir = std::env::temp_dir().join(format!("cratarr-beyond-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("library.sqlite");
-        let _ = std::fs::remove_file(&file);
-        let db = rusqlite::Connection::open(&file).unwrap();
-        db.execute_batch(
-            "CREATE TABLE songs (id TEXT, title TEXT, artist TEXT, album TEXT, mbid TEXT, duration_ms INTEGER, album_id TEXT, album_artist TEXT);
-             INSERT INTO songs VALUES ('tr-1', 'Joga', 'Björk', 'Homogenic', 'm1', 300000, 'al-1', NULL);
-             INSERT INTO songs VALUES ('tr-2', 'Human Behaviour', 'Björk', 'Debut', NULL, 250000, 'al-2', 'Björk');
-             INSERT INTO songs VALUES ('tr-3', 'Intro', 'Guest', 'Hits', NULL, NULL, 'al-3', 'Various Artists');
-             INSERT INTO songs VALUES ('tr-4', 'Intro', 'Other', 'Hits', NULL, NULL, 'al-4', 'Someone');",
-        )
-        .unwrap();
-        drop(db);
-        let found = || {
-            let debut = FoundAlbum { release_group: "rg-1".into(), title: "Debut".into(), artist: "Björk".into(), year: Some(1993), kind: None, cover: "/c".into(), have: true };
-            std::iter::once(debut)
-        };
-        let master = |id: u64, title: &str, artist: &str| FoundMaster { id, title: title.into(), artist: artist.into(), year: None, cover: None, url: format!("/master/{id}") };
-        let masters = || {
-            vec![
-                master(1, "Debut", "Björk"),
-                master(2, "Homogenic", "Björk"),
-                // Loosely, and by the name alone where one album has it, not where two do.
-                master(3, "Homogenic (Remastered)", "Bjork"),
-                master(4, "Homogenic", "Someone Else"),
-                master(5, "Hits", "Nobody"),
-                master(6, "Post", "Björk"),
-            ]
-        };
-        let marks: std::collections::HashMap<String, Mark> = [
-            ("rg-1".to_string(), Mark { state: "wanted", done: None }),
-            (format!("{}|{}", key("Björk"), key("Post")), Mark { state: "downloading", done: Some(0.5) }),
-        ]
-        .into();
-
-        let albums = Matcher::library_albums(&file, None).unwrap();
-        let answer = super::beyond_albums(found(), masters(), Some(&albums), Some(&marks));
-        assert_eq!(answer, super::beyond_albums(found(), masters(), Some(&Matcher::read(&file).unwrap()), Some(&marks)));
-        let have: Vec<(&str, &str, bool)> = answer.iter().map(|a| (a["title"].as_str().unwrap(), a["artist"].as_str().unwrap(), a["have"].as_bool().unwrap())).collect();
-        assert_eq!(
-            have,
-            [
-                ("Debut", "Björk", true),
-                ("Homogenic", "Björk", true),
-                ("Homogenic (Remastered)", "Bjork", true),
-                ("Homogenic", "Someone Else", true),
-                ("Hits", "Nobody", false),
-                ("Post", "Björk", false),
-            ]
-        );
-        assert_eq!((&answer[0]["sources"], &answer[0]["discogs"]), (&serde_json::json!(["musicbrainz", "discogs"]), &serde_json::json!(1)), "a master of an album found goes on it");
-        assert_eq!((&answer[0]["request"]["state"], &answer[5]["request"]["state"]), (&serde_json::json!("wanted"), &serde_json::json!("downloading")));
-        assert!(super::beyond_albums(std::iter::empty(), masters(), None, None).iter().all(|a| a["have"] == false && a["request"].is_null()), "no library to ask: nothing marked");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

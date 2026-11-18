@@ -1,6 +1,6 @@
 // The panel's subject (decisions 0023, 0025): the player, or what is viewed lying under it: a selection of one or more
 // playlists in tabs (Tracks, Export, Repair, Sync; Info is a step of their menu since 2026-11-02), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
-// or an album (`album:<server>/<id>`).
+// an album (`album:<server>/<id>`), or a label (`label:la-<n>`, lib/labelPage).
 // It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (a reload brings
 // it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
 // The panel keeps its own history (its trail, below; the owner, 2026-11-02): beside the page, changing what it shows
@@ -10,6 +10,7 @@
 import { leaveOnArrival } from './navStep.svelte';
 import { addressOf, HOME, hrefOf, ownWordsHere, pageHere, wordsIn, type PageId } from './addresses';
 import { prefs } from './prefs.svelte';
+import { LABEL } from './labelPage';
 
 export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
@@ -30,8 +31,9 @@ export function albumOf(viewed: string | null): { source: string; id: string } |
   return at > 0 && at < rest.length - 1 ? { source: rest.slice(0, at), id: rest.slice(at + 1) } : null;
 }
 
-/** An artist in the address (`artist:<server>/<name>`, decided 2026-10-16), by name as the albums credit them; and all
- *  their tracks, most played first (`artist-tracks:`, their Top recommendations' ›). */
+/** An artist in the address (`artist:<server>/<name>`, decided 2026-10-16), Cratarr's own by their id for life
+ *  (`artist:cratarr/ar-<n>`, W10), else by name as the albums credit them; and all their tracks, most played first
+ *  (`artist-tracks:`, their Top recommendations' ›). */
 const ARTIST = 'artist:';
 const ARTIST_TRACKS = 'artist-tracks:';
 export const artistSubject = (source: string, name: string, tracks = false) => `${tracks ? ARTIST_TRACKS : ARTIST}${source}/${name}`;
@@ -117,7 +119,7 @@ export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
   (viewed.startsWith(INSIGHTS) ||
     viewed.startsWith(REQUESTS) ||
-    viewed.startsWith(DOWNLOADS) || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
+    viewed.startsWith(DOWNLOADS) || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || viewed.startsWith(LABEL) || artistOf(viewed) !== null);
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */
@@ -430,6 +432,15 @@ export function albumMoved(source: string, from: string, to: string) {
   if (panel.viewed !== albumSubject(source, from)) return;
   const [was, now] = [albumSubject(source, from), albumSubject(source, to)];
   trail = trail.map((t) => ({ ...t, names: t.names.map((x) => (x === was ? now : x)) }));
+  show();
+}
+
+/** An artist opened by name whom the server named (W10, lib/artistIds `movedTo`): their page and their tracks' stay viewed as
+ *  them, by their id, in every level of the panel's history, so a namesake added later never takes their place. */
+export function artistMoved(source: string, from: string, to: string) {
+  const moved = new Map([false, true].map((tracks) => [artistSubject(source, from, tracks), artistSubject(source, to, tracks)]));
+  if (!panel.viewed || !moved.has(panel.viewed)) return;
+  trail = trail.map((t) => ({ ...t, names: t.names.map((x) => moved.get(x) ?? x) }));
   show();
 }
 

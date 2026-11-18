@@ -384,3 +384,30 @@ test("where lines show, the details say no copy's quality and carry no dots, and
   assert.match(view, /const headDots = \$derived\(albumCopies\.length \? \[\] : albumDots\);/);
   assert.match(view, /\{#each headDots as dot \(dot\.id\)\}/);
 });
+
+// RF10 (the review of runs 11 and 12, RA9, RA10; the owner's "writes nothing the sheet doesn't show"): a tap carries what its sheet
+// showed, the copy named by its folder.
+const { moveSheet, replaceShown } = await import('../src/lib/copiesRule.ts');
+
+test("a move's and Copy to's tap carries its sheet: where it goes, how many files, and the copy's own folder", () => {
+  const preview = { folder: 'A/Two Rooms', files: 12, from_dir: 'A/Two Rooms (FLAC)' };
+  assert.deepEqual(moveSheet(preview), { folder: 'A/Two Rooms', files: 12, from_dir: 'A/Two Rooms (FLAC)' });
+  assert.equal(moveSheet({ ...preview, folder: null }), undefined, 'refused: nothing to carry');
+  assert.equal(moveSheet({ ...preview, from_dir: null }), undefined, 'no copy named');
+  assert.equal(moveSheet(null), undefined);
+});
+
+test("Replace from someone's own music carries its sheet and the own copy's folder", () => {
+  const swap = { folder: 'A - Album (2019)', tracks: 3, added: 0, files: 4, from_dir: 'A/Album (FLAC)' };
+  assert.deepEqual(replaceShown(swap), { folder: 'A - Album (2019)', tracks: 3, added: 0, files: 4, from_dir: 'A/Album (FLAC)' });
+  assert.deepEqual(replaceShown({ ...swap, from_dir: null }), { folder: 'A - Album (2019)', tracks: 3, added: 0, files: 4 }, 'the server says which copy is missing');
+  assert.equal(replaceShown({ ...swap, folder: null }), undefined);
+});
+
+test('every move, copy and Replace tap sends its sheet', () => {
+  const menu = readFileSync(new URL('../src/lib/AlbumMenu.svelte', import.meta.url), 'utf8');
+  const several = readFileSync(new URL('../src/lib/SeveralAlbums.svelte', import.meta.url), 'utf8');
+  assert.match(menu, /await moveAlbum\(source, a\.id, from, into\.id, year\.trim\(\) \|\| undefined, moveSheet\(keep\)\)/, "the menu's");
+  assert.match(menu, /const shown = asks\.shown \? replaceShown\(swap\) : undefined;/, "Replace's");
+  assert.match(several, /await moveAlbum\(x\.s\.id, x\.a\.id, x\.from, x\.to\.id, undefined, moveSheet\(p\)\)/, "a group's, each its own preview's");
+});

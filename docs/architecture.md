@@ -71,7 +71,7 @@ The platform is three things, and each door belongs to one of them.
 |---|---|---|
 | Sources | What music is there? | `source::Source`: Cratarr, Jellyfin, Subsonic |
 | Fetching | Get me this record | `ports::Fetcher`, `ports::Acquisition`: Lidarr, Soulseek |
-| References | What is this? | `Asked` for MusicBrainz so far: Discogs, Bandcamp and AcoustID are called one by one |
+| References | What is this? | A record's list: `references::read_reference`. An artist's and a label's lists: `discover::ArtistList` (MusicBrainz, Discogs, Bandcamp) and `labels::LabelList` (MusicBrainz, Discogs). Every outside client is `reach::client`'s, for one purpose and its hosts; MusicBrainz asks in one turn server-wide (`musicbrainz.rs`), Last.fm and AcoustID through `reach::Pacer` |
 | Files | Change what is on disk | `ports::Files`, `playlists::Store` |
 | Players | Play it over there | Play On, Kodi, Snapcast's `Groups` |
 | Scrobbling | Tell others what played | ListenBrainz, Last.fm |

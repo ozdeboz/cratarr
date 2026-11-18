@@ -25,6 +25,13 @@ pub trait Files: Send + Sync {
     fn move_back(&self, plan: &[crate::moves::Step]) -> Result<()>;
     /// Take away what a `move_all` stopped before any file arrived left at its targets.
     fn clear_parts(&self, plan: &[crate::moves::Step]);
+    /// Copy files between Cratarr's folders, all or none, nothing overwritten, safe to repeat (Copy to, C38): which copies share
+    /// the original's blocks, in the plan's order.
+    #[allow(dead_code)] // Copy to's action (C40) is its first caller.
+    fn copy_all(&self, plan: &[crate::moves::Step]) -> Result<Vec<bool>>;
+    /// Whether a copy from folder `from` into folder `to` shares its blocks: tried once, and kept. Read below the disk floor, where a
+    /// Want's copy is made only if it takes no new space (AL03.1).
+    fn shares(&self, from: &Path, to: &Path) -> bool;
 }
 
 /// The disk itself.
@@ -58,6 +65,14 @@ impl Files for Disk {
     fn clear_parts(&self, plan: &[crate::moves::Step]) {
         crate::moves::clear_parts(plan)
     }
+
+    fn copy_all(&self, plan: &[crate::moves::Step]) -> Result<Vec<bool>> {
+        crate::moves::copy(plan)
+    }
+
+    fn shares(&self, from: &Path, to: &Path) -> bool {
+        crate::moves::shares(from, to)
+    }
 }
 
 /// Where new music comes from (Lidarr). Best effort: an action Cratarr takes stands when this fails. A read and a
@@ -89,6 +104,10 @@ pub trait Fetcher: Send + Sync {
     fn statuses<'a>(&'a self, release_groups: &'a [String]) -> Fut<'a, std::collections::HashMap<String, crate::lidarr::Progress>>;
     /// Stop fetching it (what is there already stays).
     fn cancel<'a>(&'a self, release_group: &'a str) -> Fut<'a, ()>;
+    /// A deleted copy lying in `folder` (`Artist/Album (Year)`), as its history has it (U5, T9): whether it imported there, and the
+    /// grab of the album's newest import marked failed where that import went there, so that release is not taken again and another
+    /// is looked for.
+    fn fail_grab<'a>(&'a self, release_group: &'a str, folder: &'a str) -> Fut<'a, crate::lidarr::Imported>;
 }
 
 /// Lidarr as the fetcher: Want with the profiles and root folder chosen on its page in Connections.
@@ -108,6 +127,10 @@ impl Fetcher for LidarrFetcher {
 
     fn cancel<'a>(&'a self, release_group: &'a str) -> Fut<'a, ()> {
         Box::pin(self.lidarr.unwant(release_group))
+    }
+
+    fn fail_grab<'a>(&'a self, release_group: &'a str, folder: &'a str) -> Fut<'a, crate::lidarr::Imported> {
+        Box::pin(self.lidarr.fail_grab(release_group, folder))
     }
 }
 

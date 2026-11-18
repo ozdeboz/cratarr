@@ -154,23 +154,12 @@ impl UserData {
         Ok(out)
     }
 
-    /// What was chosen of a record's references (`app::references`; JSON).
+    /// What 0.14 chose of a record's references (`app::references::Chosen`; JSON). Kept one version after 0.17's step moved it
+    /// into the catalogue, written by nothing.
+    #[cfg(test)]
     pub fn record_references(&self, album: &str) -> Result<Option<String>> {
         use rusqlite::OptionalExtension;
         Ok(self.db().query_row("SELECT chosen FROM record_references WHERE album = ?1", [album], |r| r.get(0)).optional()?)
-    }
-
-    pub fn set_record_references(&self, album: &str, chosen: &str) -> Result<()> {
-        self.db().execute("INSERT OR REPLACE INTO record_references (album, chosen) VALUES (?1, ?2)", params![album, chosen])?;
-        Ok(())
-    }
-
-    /// Every record's chosen references, by album.
-    pub fn all_record_references(&self) -> Result<std::collections::HashMap<String, String>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT album, chosen FROM record_references")?;
-        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// What hearing a record's copy in catalogue folder `folder` found (`app::intake_card`), and when; with none named, the

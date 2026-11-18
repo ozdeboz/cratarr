@@ -1,0 +1,144 @@
+{
+  "next": 6,
+  "items": [
+    {
+      "id": "ss-1",
+      "record": { "artist": "Glass Harbour", "album": "Deep Water", "release_group": "00000000-0000-4000-8000-000000000112", "year": 2016, "request": 1 },
+      "state": "waiting",
+      "tracks": [],
+      "folders": [],
+      "failed": [],
+      "misses": 2,
+      "due": 1794600000,
+      "percent": 0.0,
+      "set_aside": []
+    },
+    {
+      "id": "ss-2",
+      "record": { "artist": "Glass Harbour", "album": "Harbour Lights", "release_group": "00000000-0000-4000-8000-000000000111", "release": "00000000-0000-4000-8000-000000000011", "year": 2014, "request": 2 },
+      "state": "placed",
+      "tracks": [
+        { "disc": 1, "position": 1, "title": "Pier", "length_ms": 201000, "recording": "00000000-0000-4000-8000-000000000331" },
+        { "disc": 1, "position": 2, "title": "Lighthouse", "length_ms": 245000, "recording": "00000000-0000-4000-8000-000000000332" },
+        { "disc": 1, "position": 3, "title": "Harbour Lights", "recording": "00000000-0000-4000-8000-000000000333" }
+      ],
+      "folders": [
+        {
+          "user": "user-one",
+          "dir": "@@user-one\\Music\\Glass Harbour\\Harbour Lights",
+          "format": "FLAC",
+          "lossless": true,
+          "free_slot": true,
+          "queue": 0,
+          "speed": 1500000,
+          "extra": 0,
+          "files": [
+            { "filename": "@@user-one\\Music\\Glass Harbour\\Harbour Lights\\01 Pier.flac", "size": 24100000, "extension": "flac", "bitRate": null, "bitDepth": 16, "sampleRate": 44100, "length": 201, "isLocked": false },
+            { "filename": "@@user-one\\Music\\Glass Harbour\\Harbour Lights\\02 Lighthouse.flac", "size": 29300000, "extension": "flac", "bitRate": null, "bitDepth": 16, "sampleRate": 44100, "length": 245, "isLocked": false },
+            { "filename": "@@user-one\\Music\\Glass Harbour\\Harbour Lights\\03 Harbour Lights.flac", "size": 31800000, "extension": "flac", "bitRate": null, "bitDepth": 16, "sampleRate": 44100, "length": 266, "isLocked": false }
+          ]
+        }
+      ],
+      "chosen": 0,
+      "failed": ["user-two"],
+      "misses": 0,
+      "due": 0,
+      "batch": "00000000-0000-4000-8000-00000000b002",
+      "percent": 100.0,
+      "placed": "/music/soulseek/Glass Harbour/Harbour Lights (2014)",
+      "set_aside": [
+        { "user": "user-two", "path": "/data/soulseek-set-aside/ss-2 user-two", "why": { "01 Pier.mp3": "AcoustID names another recording" } }
+      ]
+    },
+    {
+      "id": "ss-3",
+      "record": { "artist": "Kite Theory", "album": "Paper Kites", "release_group": "00000000-0000-4000-8000-000000000113", "year": 2018, "request": 3 },
+      "state": "fetching",
+      "tracks": [
+        { "disc": 1, "position": 1, "title": "Paper", "length_ms": 190000, "recording": "00000000-0000-4000-8000-000000000351" },
+        { "disc": 1, "position": 2, "title": "Kites", "length_ms": 212000, "recording": "00000000-0000-4000-8000-000000000352" }
+      ],
+      "folders": [
+        {
+          "user": "user-three",
+          "dir": "@@user-three\\Shared\\Kite Theory - Paper Kites (2018)",
+          "format": "MP3",
+          "lossless": false,
+          "free_slot": false,
+          "queue": 3,
+          "speed": 400000,
+          "extra": 1,
+          "files": [
+            { "filename": "@@user-three\\Shared\\Kite Theory - Paper Kites (2018)\\01 - Paper.mp3", "size": 7600000, "extension": "mp3", "bitRate": 320, "length": 190, "isLocked": false },
+            { "filename": "@@user-three\\Shared\\Kite Theory - Paper Kites (2018)\\02 - Kites.mp3", "size": 8500000, "extension": "mp3", "bitRate": 320, "length": 212, "isLocked": false }
+          ]
+        }
+      ],
+      "chosen": 0,
+      "failed": [],
+      "misses": 0,
+      "due": 0,
+      "batch": "00000000-0000-4000-8000-00000000b003",
+      "percent": 40.0,
+      "set_aside": []
+    },
+    {
+      "id": "ss-4",
+      "record": { "artist": "Noor Field", "album": "Open Plan", "release_group": "00000000-0000-4000-8000-000000000114", "year": 2023, "request": 4 },
+      "state": "found",
+      "tracks": [
+        { "disc": 1, "position": 1, "title": "Open", "length_ms": 230000, "recording": "00000000-0000-4000-8000-000000000361" },
+        { "disc": 1, "position": 2, "title": "Plan", "length_ms": 260000, "recording": "00000000-0000-4000-8000-000000000362" }
+      ],
+      "folders": [
+        {
+          "user": "user-four",
+          "dir": "@@user-four\\Music\\Noor Field\\2023 - Open Plan",
+          "format": "FLAC",
+          "lossless": true,
+          "free_slot": true,
+          "queue": 0,
+          "speed": 2000000,
+          "extra": 0,
+          "files": [
+            { "filename": "@@user-four\\Music\\Noor Field\\2023 - Open Plan\\01 Open.flac", "size": 27000000, "extension": "flac", "bitDepth": 24, "sampleRate": 48000, "length": 230, "isLocked": false },
+            { "filename": "@@user-four\\Music\\Noor Field\\2023 - Open Plan\\02 Plan.flac", "size": 30500000, "extension": "flac", "bitDepth": 24, "sampleRate": 48000, "length": 260, "isLocked": false }
+          ]
+        },
+        {
+          "user": "user-five",
+          "dir": "@@user-five\\mp3\\Noor Field - Open Plan",
+          "format": "MP3",
+          "lossless": false,
+          "free_slot": true,
+          "queue": 0,
+          "speed": 900000,
+          "extra": 0,
+          "files": [
+            { "filename": "@@user-five\\mp3\\Noor Field - Open Plan\\Open.mp3", "size": 9200000, "extension": "mp3", "bitRate": 320, "length": 230, "isLocked": false },
+            { "filename": "@@user-five\\mp3\\Noor Field - Open Plan\\Plan.mp3", "size": 10400000, "extension": "mp3", "bitRate": 320, "length": 261, "isLocked": false }
+          ]
+        }
+      ],
+      "failed": [],
+      "misses": 0,
+      "due": 0,
+      "percent": 0.0,
+      "set_aside": []
+    },
+    {
+      "id": "ss-5",
+      "record": { "artist": "Tape Club", "album": "Lost Tapes", "release_group": "00000000-0000-4000-8000-000000000115", "year": 1999, "request": 5 },
+      "state": "stuck",
+      "tracks": [],
+      "folders": [],
+      "failed": [],
+      "misses": 0,
+      "due": 0,
+      "why": "MusicBrainz lists no release of it with tracks",
+      "percent": 0.0,
+      "set_aside": []
+    }
+  ],
+  "dropped": [10]
+}

@@ -5,8 +5,10 @@
   // rating (decided 2026-10-16) as five stars, the same as its menu's: a tap rates, where its server keeps ratings.
   // A library album's Discogs (0.9.8, the owner: "Yes to all"): its labels with their catalogue numbers, its credits
   // by role, its styles beside its genres, and its page among Elsewhere; asked once (Discogs keeps a pace: they come
-  // in a moment the first time).
+  // in a moment the first time). Its labels by their ids (a record not had's, C54) are chips that open each label's page (W11).
   import { albumRatings, loadAlbumRating, rateAlbum } from './albums.svelte';
+  import { labelChip, labelSubject, type LabelChip } from './labelPage';
+  import { viewOver } from './panel.svelte';
   import { CRATE, GENRE, viewGenre } from './crates.svelte';
   import { longpress } from './longpress';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -25,6 +27,7 @@
     plays,
     provider,
     more = null,
+    labels = [],
   }: {
     source: string;
     album: string;
@@ -37,6 +40,8 @@
     provider: { server: string; libraries: Pick<import('./api').LibraryInfo, 'id' | 'name' | 'colour'>[] };
     /** What a page elsewhere says of it (a Bandcamp album's, 0.9.2): no rating then, which only a server keeps. */
     more?: Pick<import('./api').AlbumView, 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> | null;
+    /** Its labels by their ids for life, where the server names them (C54): chips opening each label's page. */
+    labels?: LabelChip[];
   } = $props();
 
   $effect(() => {
@@ -102,7 +107,10 @@
     <h3>Year</h3>
     <p class="chips"><span class="chip">{year}</span></p>
   {/if}
-  {#if more?.label}
+  {#if labels.length}
+    <h3>{labels.length === 1 ? 'Label' : 'Labels'}</h3>
+    <p class="chips">{#each labels as l (l.id)}<button class="chip" onclick={() => viewOver(labelSubject(l.id))}>{labelChip(l)}</button>{/each}</p>
+  {:else if more?.label}
     <h3>Label</h3>
     <p>{more.label}</p>
   {:else if discogs?.labels?.length}

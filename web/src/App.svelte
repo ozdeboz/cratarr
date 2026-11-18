@@ -827,9 +827,9 @@
   loadMe();
   loadMine().then((c) => c && !inApp && startWith(c));
 
-  // The conversion queue, followed on every page (an administrator's): its count on the Incoming tab, a toast when an
-  // album is done.
-  $effect(() => (me.admin ? jobs.start() : undefined));
+  // The conversion queue, followed on every page: its count on the Incoming tab, a toast when an album is done (an
+  // administrator's of every one; a user's of their own, W13).
+  $effect(() => (me.known ? jobs.start(me.admin) : undefined));
   // Of the libraries switched on only (the owner, 2026-11-02: "Only what's switched on"); a job from before says none.
   const waiting = $derived(jobs.open.filter((j) => !j.library || prefs.hiddenLibraries.indexOf(j.library) < 0).length);
 

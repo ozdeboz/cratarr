@@ -79,9 +79,10 @@ export function loadArtistFavorites(source: string): Promise<boolean> {
   return artistAsks[source];
 }
 
-/** An artist's heart set: on the server, then in the list here (a Favourites only filter follows it at once). */
-export async function setArtistHeart(source: string, name: string, on: boolean) {
-  const r = await setArtistFavorite(source, name, on);
+/** An artist's heart set: on the server (by their id where it is known, W10), then in the list here (a Favourites only filter
+ *  follows it at once). */
+export async function setArtistHeart(source: string, name: string, on: boolean, id?: string | null) {
+  const r = await setArtistFavorite(source, id ?? name, on);
   const l = artistLists[source];
   if (l) {
     const now = new Set(l);

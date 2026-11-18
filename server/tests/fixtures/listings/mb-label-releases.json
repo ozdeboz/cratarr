@@ -1,0 +1,182 @@
+{
+ "release-count": 2551,
+ "release-offset": 0,
+ "releases": [
+  {
+   "id": "04372bd3-c811-45b4-8aef-bcb2369da885",
+   "title": "Surfing on Sine Waves",
+   "date": "1993-01-11",
+   "status": "Official",
+   "artist-credit": [
+    {
+     "name": "Polygon Window",
+     "joinphrase": "",
+     "artist": {
+      "id": "aaa78ce4-e4fe-43b6-abe1-733dc83f8eb1",
+      "name": "Polygon Window",
+      "sort-name": "Polygon Window"
+     }
+    }
+   ],
+   "release-group": {
+    "id": "0afb7bd6-33a9-3a01-8765-f1de0a1f0972",
+    "title": "Surfing on Sine Waves",
+    "primary-type": "Album",
+    "secondary-types": [],
+    "first-release-date": "1992",
+    "artist-credit": [
+     {
+      "name": "Polygon Window",
+      "joinphrase": "",
+      "artist": {
+       "id": "aaa78ce4-e4fe-43b6-abe1-733dc83f8eb1",
+       "name": "Polygon Window",
+       "sort-name": "Polygon Window"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "1c232cae-2945-4e3d-a94a-99b4fb165b88",
+   "title": "Surfing on Sine Waves",
+   "date": "1993-01-11",
+   "status": "Official",
+   "artist-credit": [
+    {
+     "name": "Polygon Window",
+     "joinphrase": "",
+     "artist": {
+      "id": "aaa78ce4-e4fe-43b6-abe1-733dc83f8eb1",
+      "name": "Polygon Window",
+      "sort-name": "Polygon Window"
+     }
+    }
+   ],
+   "release-group": {
+    "id": "0afb7bd6-33a9-3a01-8765-f1de0a1f0972",
+    "title": "Surfing on Sine Waves",
+    "primary-type": "Album",
+    "secondary-types": [],
+    "first-release-date": "1992",
+    "artist-credit": [
+     {
+      "name": "Polygon Window",
+      "joinphrase": "",
+      "artist": {
+       "id": "aaa78ce4-e4fe-43b6-abe1-733dc83f8eb1",
+       "name": "Polygon Window",
+       "sort-name": "Polygon Window"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "0c61ca70-9487-4bf2-a28e-acff92305686",
+   "title": "Hothead",
+   "date": "1993-02-22",
+   "status": "Official",
+   "artist-credit": [
+    {
+     "name": "DIY",
+     "joinphrase": "",
+     "artist": {
+      "id": "5aea6ce9-9744-4345-967f-5504209af2a2",
+      "name": "DiY",
+      "sort-name": "DIY"
+     }
+    }
+   ],
+   "release-group": {
+    "id": "6f2d6d6e-270c-366a-99e9-789c1b5861b7",
+    "title": "Hothead EP",
+    "primary-type": "Single",
+    "secondary-types": [],
+    "first-release-date": "1993-02-22",
+    "artist-credit": [
+     {
+      "name": "DiY",
+      "joinphrase": "",
+      "artist": {
+       "id": "5aea6ce9-9744-4345-967f-5504209af2a2",
+       "name": "DiY",
+       "sort-name": "DIY"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "2df493e2-916b-4528-8776-87456b669b93",
+   "title": "Hey! Hey! Can U Relate",
+   "date": "1990-04-23",
+   "status": "Official",
+   "artist-credit": [
+    {
+     "name": "DJ Mink",
+     "joinphrase": " featuring ",
+     "artist": {
+      "id": "3e15bba1-5c9d-47e5-a9b4-b667afb5d614",
+      "name": "DJ Mink",
+      "sort-name": "Mink, DJ"
+     }
+    },
+    {
+     "name": "The K.I.D",
+     "joinphrase": " & ",
+     "artist": {
+      "id": "abef5561-0e62-43b2-a0cf-fcb3c0268eba",
+      "name": "The K.I.D.",
+      "sort-name": "K.I.D., The"
+     }
+    },
+    {
+     "name": "Carruthers",
+     "joinphrase": "",
+     "artist": {
+      "id": "02112501-d209-42a1-aa8e-ae50b415ab80",
+      "name": "Carruthers",
+      "sort-name": "Carruthers"
+     }
+    }
+   ],
+   "release-group": {
+    "id": "40e494a3-0394-3438-98d3-4569b5b6f11c",
+    "title": "Hey! Hey! Can U Relate",
+    "primary-type": "Single",
+    "secondary-types": [],
+    "first-release-date": "1990-04-23",
+    "artist-credit": [
+     {
+      "name": "DJ Mink",
+      "joinphrase": " feat. ",
+      "artist": {
+       "id": "3e15bba1-5c9d-47e5-a9b4-b667afb5d614",
+       "name": "DJ Mink",
+       "sort-name": "Mink, DJ"
+      }
+     },
+     {
+      "name": "The K.I.D",
+      "joinphrase": " & ",
+      "artist": {
+       "id": "abef5561-0e62-43b2-a0cf-fcb3c0268eba",
+       "name": "The K.I.D.",
+       "sort-name": "K.I.D., The"
+      }
+     },
+     {
+      "name": "Carruthers",
+      "joinphrase": "",
+      "artist": {
+       "id": "02112501-d209-42a1-aa8e-ae50b415ab80",
+       "name": "Carruthers",
+       "sort-name": "Carruthers"
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

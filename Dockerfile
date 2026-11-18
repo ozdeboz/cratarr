@@ -43,7 +43,11 @@ RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registr
 # examples the web is held to too are read from ../web/tests/fixtures.
 FROM source AS test
 COPY web/tests/fixtures /app/web/tests/fixtures
+# The page's sources: a server test checks that a setting gone from the server is read nowhere on the page either (AL02.6).
+COPY web/src /app/web/src
 COPY shared /app/shared
+# The Dockerfile itself: the server's test of the image's entrypoint and health check reads it (W4).
+COPY Dockerfile /app/Dockerfile
 # Unoptimised (the owner, 2026-10-26): the tests are their own compile whatever is done, and this one is the quicker.
 # The end-to-end suite runs after them on the same compile (0.14, faster previews: as a stage of its own after the
 # tests it compiled the server's own crates a second time). The rules crate for the page goes first (`cargo check-wasm`):
@@ -56,6 +60,8 @@ RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registr
 FROM source AS e2e
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
+# The Dockerfile itself: the server's test of the image's entrypoint and health check reads it (W4).
+COPY Dockerfile /app/Dockerfile
 # Unoptimised and on the test stage's cache, as the tests are; its sources freshly timed as theirs are, so run after
 # the tests it compiles the server's own crates again (a preview build runs it alone, before the image).
 RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace -- --ignored fixtures:: end_to_end --nocapture

@@ -209,7 +209,7 @@ pub async fn plan(albums: Option<Vec<String>>) -> Result<file_runs::PlanView> {
 pub async fn apply(app: &Arc<super::App>, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs::Status> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
-    anyhow::ensure!(!file_runs::busy(KIND), "Already writing");
+    anyhow::ensure!(!file_runs::busy(&app.journal, KIND), "Already writing");
     let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
         anyhow::ensure!(is_on(&served), "Writing into files is switched off");
         Ok(file_runs::ticked(proposal(&served, Some(&albums))?, &albums, stamps.as_ref()))

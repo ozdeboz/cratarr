@@ -30,6 +30,9 @@ pub enum ToggleError {
     /// Not this account's to do (decision 0051): an administrator's, or another user's.
     #[error("{0}")]
     Forbidden(String),
+    /// What was there and is no more, said as is (RT01: a record not had that was forgotten, its id never given again).
+    #[error("{0}")]
+    Gone(String),
     /// Another user's shared device, from away from home (the owner, 2026-10-29: others use one's shared devices from
     /// home only).
     #[error("Works at home only.")]

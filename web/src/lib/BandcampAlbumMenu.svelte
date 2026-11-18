@@ -1,17 +1,16 @@
 <script lang="ts">
   // A Bandcamp album's menu in the panel (decision 0071, the owner 2026-10-25: "Bandcamp albums also deserve their own
-  // context menu ... Want ... Go to artist"): Go to the artist (their page where the library has them, else theirs from
-  // Discover, lib/discoverArtist; theirs on Bandcamp beside Open on Bandcamp), Discover's group (Want, and Not
+  // context menu ... Want ... Go to artist"): Go to the artist (Cratarr's page of them, W10: the server says who that is;
+  // theirs on Bandcamp beside Open on Bandcamp), Discover's group (Want, and Not
   // interested where it is a suggestion), Open on Bandcamp, Share, in the table's order (lib/menuTable). Its previews
   // play and queue as any album's (0.10; the owner, 2026-10-30: "Bandcamp files cannot be queued, very annoying!"),
   // on any player: the server streams them. Never downloaded, kept or in a playlist (decision 0071): bought there. The
   // menu's pieces as every menu's; what the server keeps of its own albums (heart, rating, playlists) it has none of.
-  import { goToArtist, library, readLibrary } from './albums.svelte';
+  import { goToArtist } from './albums.svelte';
   import { port } from './player/port.svelte';
   import { albumCoverUrl } from './api';
   import { BANDCAMP, previewPage } from './bandcampPreview';
   import DiscoverEntries from './DiscoverEntries.svelte';
-  import { DISCOVER } from './discoverArtist';
   import LinkSheet from './LinkSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -64,10 +63,6 @@
       return null;
     }
   });
-  if (!library.view) readLibrary(false).catch(() => {});
-  const inLibrary = $derived(
-    !!album.artist && (library.view?.sources ?? []).some((s) => s.albums.some((a) => a.artist?.toLowerCase() === album.artist!.toLowerCase())),
-  );
   let link = $state<{ url: string; name: string } | null>(null);
   const act = (what: () => unknown) => () => {
     what();
@@ -77,18 +72,15 @@
 
 {#snippet entry(e: EntryId)}
   {#if e === 'goArtist'}
-    {#if album.artist && inLibrary}
+    {#if album.artist}
       <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist('cratarr', album.artist!))} />
-    {:else if album.artist}
-      <!-- Their page from Discover (lib/discoverArtist); Bandcamp's own, its site, in Take away. -->
-      <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist(DISCOVER, album.artist!, album))} />
     {/if}
   {:else if e === 'discover'}
     <DiscoverEntries {page} artist={album.artist} album={album.title} {onclose} />
   {:else if e === 'openOnBandcamp'}
     {#if page}<MenuEntry icon="externalLink" label="Open on Bandcamp" onclick={act(() => (link = { url: page, name: 'Bandcamp' }))} />{/if}
   {:else if e === 'artistOnBandcamp'}
-    {#if page && album.artist && artistPage && !inLibrary}<MenuEntry icon="externalLink" label="{album.artist} on Bandcamp" onclick={act(() => (link = { url: artistPage, name: `${album.artist} on Bandcamp` }))} />{/if}
+    {#if page && album.artist && artistPage}<MenuEntry icon="externalLink" label="{album.artist} on Bandcamp" onclick={act(() => (link = { url: artistPage, name: `${album.artist} on Bandcamp` }))} />{/if}
   {:else if e === 'share'}
     {#if page}<MenuEntry icon="share" label="Share" onclick={act(() => share(album.title, [album.artist, album.title].filter(Boolean).join(' – '), page))} />{/if}
   {/if}

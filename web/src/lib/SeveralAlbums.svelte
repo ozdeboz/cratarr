@@ -15,8 +15,8 @@
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo. Of records with several
   // copies Delete is an entry per library, as Move's. No Play from: it starts one record's queue.
   import { offersIn } from './AlbumMenu.svelte';
-  import { deleteGroups, moveGroups, type AlbumOffer } from './copiesRule';
-  import { albumOfDownload, albumRatings, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
+  import { deleteGroups, moveGroups, moveSheet, moveWords, type AlbumOffer } from './copiesRule';
+  import { albumOfDownload, albumRatings, copiesAdded, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
   import { cancelJob, deleteAlbum, moveAlbum, movePreview, type AlbumsSource, type KeepPreview, type LibraryInfo, type ListedAlbum, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { DEVICE } from './deviceMusic.svelte';
@@ -108,9 +108,10 @@
   type Moving = Ticked & { from: string | undefined; to: LibraryInfo; primary: boolean; add: boolean };
   /** Each library they can move into, with the copies that would go. */
   const moves = $derived(
-    moveGroups(offers).map(({ name, adding, them }) => ({
+    moveGroups(offers).map(({ name, adding, copying, them }) => ({
       name,
       adding,
+      copying,
       them: them.map(({ item, offer, to, add }): Moving => ({ s: item.s, a: item.a, from: offer.library, to, primary: offer.from?.kind === 'main', add })),
     })),
   );
@@ -166,7 +167,8 @@
 
   // Move: what each would become asked first, then one question for them all (those refused named, left out).
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch these ${word}s again.`);
-  async function askMove(name: string, them: Moving[], adding: boolean) {
+  async function askMove(name: string, them: Moving[], adding: boolean, copying = false) {
+    let w = moveWords(copying, adding);
     // Read before closing: the menu (and this) is gone by the time the previews are in.
     const ask = onask;
     close();
@@ -174,12 +176,14 @@
     const unread = await fewAtATime(them, async (x) => void seen.push({ x, p: await movePreview(x.s.id, x.a.id, x.from, x.to.id) }));
     const go = them.flatMap((x) => seen.filter((y) => y.x === x && !y.p.refused));
     const refused = seen.filter((y) => y.p.refused);
-    if (!go.length) return toast.fail(null, adding ? `None of them can be added to ${name}` : `None of them can move to ${name}`);
+    if (!go.length) return toast.fail(null, `None of them can be ${w.none} ${name}`);
+    // The words as the previews say (T3: the server's `copy`, so a departed user's music moves).
+    w = moveWords(go.every((y) => !!y.p.copy), adding);
     const convert = go.reduce((k, y) => k + y.p.convert, 0);
     const why = (p: KeepPreview) => (p.refused?.kind === 'needs_year' ? 'no year in the tags' : p.refused?.kind === 'other' ? p.refused.detail : '');
     const text = [
       `${named(go.map((y) => y.x.a.title))}.`,
-      refused.length ? `${adding ? 'Not added' : 'Not moved'}: ${refused.slice(0, 8).map((y) => `${y.x.a.title} (${why(y.p)})`).join(', ')}${refused.length > 8 ? ` and ${refused.length - 8} more` : ''}.` : '',
+      refused.length ? `${w.not}: ${refused.slice(0, 8).map((y) => `${y.x.a.title} (${why(y.p)})`).join(', ')}${refused.length > 8 ? ` and ${refused.length - 8} more` : ''}.` : '',
       unread.length ? `${plural(unread.length, word)} couldn't be looked at.` : '',
       convert ? `${plural(convert, 'lossless file')} above ${name}'s quality limit ${convert === 1 ? 'is' : 'are'} converted to FLAC first.` : '',
       go.some((y) => !y.p.acquisition && !y.x.primary) ? NO_LIDARR : '',
@@ -188,28 +192,35 @@
       .join(' ');
     const m = plural(go.length, word);
     ask({
-      title: `${adding ? 'Add' : 'Move'} ${m} to ${name}?`,
+      title: `${w.verb} ${m} to ${name}?`,
       text,
-      label: `${adding ? 'Add' : 'Move'} to ${name}`,
+      label: `${w.verb} to ${name}`,
       icon: 'intoBox',
       go: async () => {
         const tokens: (string | null)[] = [];
         const gone: { source: string; id: string; from?: string; to: string }[] = [];
+        const added: typeof gone = [];
         let queued = false;
         await fewAtATime(
           go,
-          async ({ x }) => {
-            const r = await moveAlbum(x.s.id, x.a.id, x.from, x.to.id);
+          async ({ x, p }) => {
+            const r = await moveAlbum(x.s.id, x.a.id, x.from, x.to.id, undefined, moveSheet(p));
             // Queued (lossless files above the quality limit to convert first): its row shows the progress instead.
-            if (r.queued) queued = true;
-            else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id, from: x.from, to: x.to.id }));
+            // Its end is told to whoever asked, with its Undo (W13).
+            if (r.queued) {
+              queued = true;
+              jobs.queued({ source: x.s.id, album_id: x.a.id, from: x.from });
+            } else (tokens.push(r.undo), (p.copy ? added : gone).push({ source: x.s.id, id: x.a.id, from: x.from, to: x.to.id }));
           },
           1,
         );
         if (queued) jobs.poke();
+        // A copy leaves its record's copy where it was and adds the new one (T3); a move moves it.
         copiesMoved(gone);
-        if (gone.length) withUndo(`${adding ? 'Added' : 'Moved'} ${doneOf(gone.length, go.length)} to ${name}.`, tokens, { after: reread });
-        else if (!queued) toast.fail(null, `Could not ${adding ? 'add' : 'move'} the ${word}s`);
+        copiesAdded(added);
+        const done = gone.length + added.length;
+        if (done) withUndo(`${w.past} ${doneOf(done, go.length)} to ${name}.`, tokens, { after: reread });
+        else if (!queued) toast.fail(null, `Could not ${w.act} the ${word}s`);
       },
     });
   }
@@ -250,7 +261,7 @@
 </MenuGroup>
 <MenuGroup label="Library">
   {#if converting.length}<MenuEntry icon="close" label="Cancel conversion" onclick={cancelAll} />{/if}
-  {#each moves as mv (mv.name)}<MenuEntry icon="intoBox" label={`${mv.adding ? 'Add' : 'Move'} to ${mv.name}`} onclick={() => askMove(mv.name, mv.them, mv.adding)} />{/each}
+  {#each moves as mv (mv.name)}<MenuEntry icon="intoBox" label={`${mv.copying ? 'Copy' : mv.adding ? 'Add' : 'Move'} to ${mv.name}`} onclick={() => askMove(mv.name, mv.them, mv.adding, mv.copying)} />{/each}
 </MenuGroup>
 <!-- Remove, last. -->
 <MenuGroup>

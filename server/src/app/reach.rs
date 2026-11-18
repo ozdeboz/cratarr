@@ -44,6 +44,8 @@ pub fn name_of(url: &reqwest::Url) -> Option<&'static str> {
         "theaudiodb"
     } else if is("wikidata.org") || is("wikimedia.org") || is("wikipedia.org") {
         "wikimedia"
+    } else if is("acoustid.org") {
+        "acoustid"
     } else if is("spotify.com") || is("scdn.co") || is("spotifycdn.com") {
         "spotify"
     } else {
@@ -63,13 +65,13 @@ pub fn label(name: &str) -> &'static str {
         "theaudiodb" => "TheAudioDB",
         "wikimedia" => "Wikimedia",
         "spotify" => "Spotify",
+        "acoustid" => "AcoustID",
         _ => "A connection",
     }
 }
 
 /// A request's answer noted for its connection.
 pub fn note(name: &'static str, r: &reqwest::Result<reqwest::Response>) {
-    let now = super::moment::now_secs();
     let failed = match r {
         Ok(r) => {
             let s = r.status();
@@ -77,6 +79,16 @@ pub fn note(name: &'static str, r: &reqwest::Result<reqwest::Response>) {
         }
         Err(e) => Some(plain(name, e)),
     };
+    noted(name, failed);
+}
+
+/// A connection's answer that came, but was no answer (O4: Bandcamp's bot check), noted as a failure.
+pub fn failed(name: &'static str, why: String) {
+    noted(name, Some(why));
+}
+
+fn noted(name: &'static str, failed: Option<String>) {
+    let now = super::moment::now_secs();
     let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
     let s = states.get_or_insert_with(HashMap::new).entry(name).or_default();
     match failed {
@@ -126,6 +138,257 @@ pub fn failing(now: i64) -> Vec<(&'static str, State)> {
     out
 }
 
+// ---- One outbound guard (O1)
+
+/// Cratarr's name to the services it asks, with its project's address (as Discogs and MusicBrainz ask a client to give).
+pub const USER_AGENT: &str = concat!("Cratarr/", env!("CARGO_PKG_VERSION"), " +https://github.com/ozdeboz/cratarr");
+
+/// What a client of Cratarr's reads, and so where it may go (O1): each purpose its hosts, exactly or as their subdomains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    /// Bandcamp's pages and its search box.
+    BandcampPages,
+    /// Bandcamp's media: the streams a preview plays. A stream may start on Bandcamp's own stream hosts (`starts_at`, Y10); every
+    /// redirect stays on its media hosts.
+    BandcampMedia,
+    /// Covers: the Cover Art Archive's, Discogs', Spotify's, Bandcamp's pictures.
+    Covers,
+    /// Artists' photos: TheAudioDB's, Wikimedia's, Discogs'.
+    ArtistPhotos,
+    /// The metadata services, at their fixed hosts.
+    Metadata,
+}
+
+impl Purpose {
+    fn hosts(self) -> &'static [&'static str] {
+        match self {
+            Purpose::BandcampPages => &["bandcamp.com"],
+            Purpose::BandcampMedia => &["bcbits.com"],
+            Purpose::Covers => &["coverartarchive.org", "archive.org", "discogs.com", "scdn.co", "spotifycdn.com", "bcbits.com"],
+            Purpose::ArtistPhotos => &["theaudiodb.com", "wikimedia.org", "discogs.com"],
+            Purpose::Metadata => &[
+                "musicbrainz.org",
+                "listenbrainz.org",
+                "discogs.com",
+                "audioscrobbler.com",
+                "last.fm",
+                "theaudiodb.com",
+                "wikidata.org",
+                "wikimedia.org",
+                "wikipedia.org",
+                "coverartarchive.org",
+                "archive.org",
+                "acoustid.org",
+                "spotify.com",
+                "scdn.co",
+                "spotifycdn.com",
+            ],
+        }
+    }
+
+    /// Whether an address is this purpose's: https, on one of its hosts by name (never by a number).
+    pub fn allows(self, url: &reqwest::Url) -> bool {
+        url.scheme() == "https" && self.has_host(url)
+    }
+
+    /// Whether an address may be a request's first hop (Y10): the purpose's own, and for Bandcamp's media also Bandcamp's own stream
+    /// addresses on its domain (`bandcamp_stream`). A redirect from there is followed only onto the purpose's hosts (`client`), so a
+    /// stream there goes on to `*.bcbits.com` or nowhere.
+    pub fn starts_at(self, url: &reqwest::Url) -> bool {
+        self.allows(url) || (self == Purpose::BandcampMedia && bandcamp_stream(url))
+    }
+
+    /// An address on one of the purpose's hosts given as plain http (older TheAudioDB entries name their photos so), made https
+    /// before it is checked (Y11); any other as it is.
+    pub fn upgraded(self, mut url: reqwest::Url) -> reqwest::Url {
+        if url.scheme() == "http" && url.port().is_none() && self.has_host(&url) {
+            let _ = url.set_scheme("https");
+        }
+        url
+    }
+
+    /// Whether its host is one of the purpose's by name: an address by its number never ends as a name does.
+    fn has_host(self, url: &reqwest::Url) -> bool {
+        let Some(host) = url.host_str().map(str::to_ascii_lowercase) else { return false };
+        self.hosts().iter().any(|h| host == *h || host.ends_with(&format!(".{h}")))
+    }
+}
+
+/// Bandcamp's own stream addresses on its own domain (Y10, allowed without a live look, the owner's default): `bandcamp.com`'s
+/// `/stream_redirect` and the `popplers<n>.bandcamp.com` hosts older pages name, https on its usual port. Never an artist's page.
+fn bandcamp_stream(url: &reqwest::Url) -> bool {
+    let host = url.host_str().map(str::to_ascii_lowercase).unwrap_or_default();
+    // Its number there (V9): `popplers.bandcamp.com` is none of Bandcamp's stream hosts.
+    let popplers = host.strip_suffix(".bandcamp.com").and_then(|h| h.strip_prefix("popplers")).is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    url.scheme() == "https" && url.port().is_none() && (popplers || (host == "bandcamp.com" && url.path() == "/stream_redirect"))
+}
+
+/// A client for a purpose (O1): https only; a redirect followed only while every hop stays on the purpose's hosts (one off them is
+/// answered as it came, unfollowed); loopback, private, link-local and shared addresses refused on the address connected to
+/// (`Public`), so a name pointing home is refused too; Cratarr's User-Agent. No proxy from the environment (Y11): a proxy would look
+/// the names up, not `Public`.
+pub fn client(purpose: Purpose) -> reqwest::ClientBuilder {
+    reqwest::Client::builder().https_only(true).no_proxy().redirect(staying(purpose, true)).dns_resolver(std::sync::Arc::new(Public)).user_agent(USER_AGENT)
+}
+
+/// The redirect rule of `client`, plain http let through where `https` is false (the tests' fake servers).
+fn staying(purpose: Purpose, https: bool) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |a| {
+        let stays = if https { purpose.allows(a.url()) } else { purpose.has_host(a.url()) };
+        if a.previous().len() >= 10 {
+            a.error("too many redirects")
+        } else if stays {
+            a.follow()
+        } else {
+            a.stop()
+        }
+    })
+}
+
+/// A client for a service an administrator set up, on the LAN (O1: Lidarr, Jellyfin, slskd, Subsonic, Kodi, webhooks): never a
+/// redirect, so a key it carries stays on the host given; no proxy from the environment (Y11).
+pub fn lan_client() -> reqwest::ClientBuilder {
+    reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
+}
+
+/// Whether an address is out in the world: not loopback, private, link-local, shared (CGNAT), unique-local, unspecified, broadcast
+/// or documentation's (O1); nor multicast, the benchmark range (198.18/15), the reserved 240/4 or the old site-local fec0::/10 (Y11).
+/// An IPv4 address carried in an IPv6 one (mapped, the old compatible `::a.b.c.d`, NAT64's 64:ff9b::/96, 6to4's 2002::/16) is judged
+/// as itself; nor Teredo's 2001::/32 nor the IETF's protocol range 192.0.0.0/24 (V9).
+pub fn is_public(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let [a, b, c, _] = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_multicast()
+                || a == 0
+                || a >= 240
+                || (a == 100 && (64..128).contains(&b))
+                || (a == 198 && (b & 0xfe) == 18)
+                || (a == 192 && b == 0 && c == 0))
+        }
+        std::net::IpAddr::V6(v6) => {
+            let s = v6.segments();
+            let nat64 = (s[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| std::net::Ipv4Addr::from(u128::from(v6) as u32));
+            let six_to_four = (s[0] == 0x2002).then(|| std::net::Ipv4Addr::from((u32::from(s[1]) << 16) | u32::from(s[2])));
+            match v6.to_ipv4().or(nat64).or(six_to_four) {
+                Some(v4) => is_public(std::net::IpAddr::V4(v4)),
+                None => !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80 || (s[0] & 0xffc0) == 0xfec0 || (s[0] == 0x2001 && s[1] == 0)),
+            }
+        }
+    }
+}
+
+/// Names resolved as the system resolves them, every address `is_public` refuses left out (O1): judged on the address connected
+/// to, so a public name pointing home, or rebound there, is refused.
+struct Public;
+
+impl reqwest::dns::Resolve for Public {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let found: Vec<std::net::SocketAddr> = match tokio::net::lookup_host((name.as_str(), 0)).await {
+                Ok(found) => found.collect(),
+                Err(e) => return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+            };
+            let public: Vec<std::net::SocketAddr> = found.into_iter().filter(|a| is_public(a.ip())).collect();
+            if public.is_empty() {
+                return Err(format!("{} is not a public address", name.as_str()).into());
+            }
+            Ok(Box::new(public.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// An image's answer (Y11: the Spotify picture relay, an administrator's chosen cover): its type an image's, its body read as
+/// `read_capped` reads it; an empty one is no image.
+pub async fn read_image(resp: reqwest::Response, cap: usize) -> anyhow::Result<Vec<u8>> {
+    if !resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("image/")) {
+        anyhow::bail!("the answer is not an image");
+    }
+    let bytes = read_capped(resp, cap).await?;
+    if bytes.is_empty() {
+        anyhow::bail!("the image is empty");
+    }
+    Ok(bytes)
+}
+
+/// An answer's body read in pieces and stopped at `cap` bytes (O1): a longer one is refused, never held whole.
+pub async fn read_capped(mut resp: reqwest::Response, cap: usize) -> anyhow::Result<Vec<u8>> {
+    let over = || anyhow::anyhow!("the answer was longer than {} KB: cut there", cap / 1024);
+    if resp.content_length().is_some_and(|n| n > cap as u64) {
+        return Err(over());
+    }
+    let mut out = Vec::new();
+    while let Some(piece) = resp.chunk().await? {
+        if out.len() + piece.len() > cap {
+            return Err(over());
+        }
+        out.extend_from_slice(&piece);
+    }
+    Ok(out)
+}
+
+/// The instant a hold ends, before which no question goes (Y8): set at once, never behind the questions waiting for their turn's
+/// lock, and honoured by each of those in its turn, so a hold holds the questions already waiting too, not only the next.
+#[derive(Default)]
+pub struct NotBefore(std::sync::Mutex<Option<tokio::time::Instant>>);
+
+impl NotBefore {
+    pub const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    /// No question before `at`; a later instant set already stays.
+    pub fn hold(&self, at: tokio::time::Instant) {
+        let mut held = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if held.is_none_or(|h| h < at) {
+            *held = Some(at);
+        }
+    }
+
+    /// The instant, where one was set.
+    pub fn get(&self) -> Option<tokio::time::Instant> {
+        *self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Waits out a turn's own instant (`next`) and the hold's, looked at again on waking: a hold set meanwhile holds on.
+    pub async fn wait(&self, next: Option<tokio::time::Instant>) {
+        while let Some(at) = next.max(self.get()).filter(|at| *at > tokio::time::Instant::now()) {
+            tokio::time::sleep_until(at).await;
+        }
+    }
+}
+
+/// One turn for a service's questions, whoever asks (O6: Last.fm, AcoustID): `apart` between two, none while it is held.
+pub struct Pacer {
+    apart: std::time::Duration,
+    next: tokio::sync::Mutex<Option<tokio::time::Instant>>,
+    held: NotBefore,
+}
+
+impl Pacer {
+    pub const fn new(apart: std::time::Duration) -> Self {
+        Self { apart, next: tokio::sync::Mutex::const_new(None), held: NotBefore::new() }
+    }
+
+    /// Waits for a question's turn, and takes it: a hold set while it waited in line holds it too (Y8).
+    pub async fn turn(&self) {
+        let mut next = self.next.lock().await;
+        self.held.wait(*next).await;
+        *next = Some(tokio::time::Instant::now() + self.apart);
+    }
+
+    /// No question for `wait`, whoever asks, those already waiting for their turn too (Y8): set at once, not behind them.
+    pub async fn hold(&self, wait: std::time::Duration) {
+        self.held.hold(tokio::time::Instant::now() + wait);
+    }
+}
+
 /// A request sent, its answer noted for its connection (by its host).
 pub trait Sent {
     fn sent(self) -> impl std::future::Future<Output = reqwest::Result<reqwest::Response>> + Send;
@@ -151,6 +414,227 @@ impl Sent for reqwest::RequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server of the tests' own on this machine, answering as `app` does: its port.
+    async fn fake(app: axum::Router) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        port
+    }
+
+    /// `client`'s rules but plain http, its names pointing at the fake server (`resolve` stands in for the world's DNS).
+    fn at_fake(purpose: Purpose, names: &[&str], port: u16) -> reqwest::Client {
+        let mut b = reqwest::Client::builder().redirect(staying(purpose, false));
+        for n in names {
+            b = b.resolve(n, std::net::SocketAddr::from(([127, 0, 0, 1], port)));
+        }
+        b.build().unwrap()
+    }
+
+    /// O1: a Bandcamp page that redirects off Bandcamp (a custom domain, an address at home) is answered as it came, not followed;
+    /// one that stays on Bandcamp is.
+    #[tokio::test]
+    async fn a_bandcamp_page_redirecting_off_bandcamp_is_not_followed() {
+        use axum::{response::Redirect, routing::get};
+        let port = std::sync::Arc::new(std::sync::OnceLock::<u16>::new());
+        let p = port.clone();
+        let app = axum::Router::new()
+            .route("/album/away", get(|| async { Redirect::temporary("http://router.example.org/admin") }))
+            .route("/album/moved", get(move || std::future::ready(Redirect::temporary(&format!("http://other.bandcamp.com:{}/album/here", p.get().unwrap())))))
+            .route("/album/here", get(|| async { "the page" }))
+            .route("/admin", get(|| async { "the router's own page" }));
+        let at = fake(app).await;
+        port.set(at).unwrap();
+        let c = at_fake(Purpose::BandcampPages, &["glassharbour.bandcamp.com", "other.bandcamp.com", "router.example.org"], at);
+        let away = c.get(format!("http://glassharbour.bandcamp.com:{at}/album/away")).send().await.unwrap();
+        assert!(away.status().is_redirection(), "not followed off Bandcamp: {}", away.status());
+        let moved = c.get(format!("http://glassharbour.bandcamp.com:{at}/album/moved")).send().await.unwrap();
+        assert_eq!(moved.text().await.unwrap(), "the page", "followed while it stays on Bandcamp");
+        let url = |u: &str| reqwest::Url::parse(u).unwrap();
+        assert!(Purpose::BandcampPages.allows(&url("https://glassharbour.bandcamp.com/album/x")));
+        assert!(!Purpose::BandcampPages.allows(&url("http://glassharbour.bandcamp.com/album/x")), "https only");
+        assert!(!Purpose::BandcampPages.allows(&url("https://bandcamp.com.example.org/album/x")) && !Purpose::BandcampPages.allows(&url("https://notbandcamp.com/x")));
+        assert!(!Purpose::Covers.allows(&url("https://192.168.1.20/cover.jpg")), "never an address by its number");
+    }
+
+    /// Y10: a preview's stream may start on Bandcamp's own stream hosts and is followed from there onto its media hosts only: a
+    /// redirect anywhere else, a Bandcamp page too, is answered as it came. No other Bandcamp address starts a stream.
+    #[tokio::test]
+    async fn a_stream_on_bandcamps_own_host_is_followed_to_bcbits_only() {
+        use axum::{response::Redirect, routing::get};
+        let port = std::sync::Arc::new(std::sync::OnceLock::<u16>::new());
+        let (p, q) = (port.clone(), port.clone());
+        let app = axum::Router::new()
+            .route("/download/track", get(move || std::future::ready(Redirect::temporary(&format!("http://t4.bcbits.com:{}/stream/1", p.get().unwrap())))))
+            .route("/stream_redirect", get(move || std::future::ready(Redirect::temporary(&format!("http://air.bandcamp.com:{}/album/x", q.get().unwrap())))))
+            .route("/stream/1", get(|| async { "the stream" }))
+            .route("/album/x", get(|| async { "a page" }));
+        let at = fake(app).await;
+        port.set(at).unwrap();
+        let c = at_fake(Purpose::BandcampMedia, &["popplers5.bandcamp.com", "bandcamp.com", "t4.bcbits.com", "air.bandcamp.com"], at);
+        let followed = c.get(format!("http://popplers5.bandcamp.com:{at}/download/track")).send().await.unwrap();
+        assert_eq!(followed.text().await.unwrap(), "the stream", "followed onto bcbits.com");
+        let off = c.get(format!("http://bandcamp.com:{at}/stream_redirect")).send().await.unwrap();
+        assert!(off.status().is_redirection(), "not followed onto a Bandcamp page: {}", off.status());
+        let url = |u: &str| reqwest::Url::parse(u).unwrap();
+        let media = Purpose::BandcampMedia;
+        assert!(media.starts_at(&url("https://popplers5.bandcamp.com/download/track?enc=mp3-128&id=1")));
+        assert!(media.starts_at(&url("https://bandcamp.com/stream_redirect?enc=mp3-128&track_id=1")));
+        assert!(media.starts_at(&url("https://t4.bcbits.com/stream/1")), "its media hosts, as ever");
+        assert!(!media.starts_at(&url("https://air.bandcamp.com/album/x")) && !media.starts_at(&url("https://bandcamp.com/album/x")), "no other Bandcamp page");
+        assert!(!media.starts_at(&url("http://popplers5.bandcamp.com/download/track")), "https only");
+        assert!(!media.starts_at(&url("https://popplers5.bandcamp.com:8443/download/track")), "its usual port only");
+        assert!(!media.allows(&url("https://popplers5.bandcamp.com/download/track")), "a first hop, never a redirect's");
+        assert!(!Purpose::Covers.starts_at(&url("https://popplers5.bandcamp.com/download/track")), "Bandcamp's media alone");
+    }
+
+    /// V9 (the review of run 8b's nits): a `popplers` host is one of Bandcamp's stream hosts only with its number.
+    #[test]
+    fn a_popplers_host_without_its_number_starts_no_stream() {
+        let url = |u: &str| reqwest::Url::parse(u).unwrap();
+        assert!(Purpose::BandcampMedia.starts_at(&url("https://popplers5.bandcamp.com/download/track")));
+        assert!(!Purpose::BandcampMedia.starts_at(&url("https://popplers.bandcamp.com/download/track")));
+    }
+
+    /// V9: a 6to4 address is judged by the IPv4 address it carries; Teredo's and the IETF's protocol range (192.0.0.0/24) are not
+    /// out in the world.
+    #[test]
+    fn six_to_four_teredo_and_the_ietf_range_are_judged() {
+        for ip in ["2002:c0a8:0114::1", "2002:7f00:0001::", "2002:0a00:0005:1::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2", "192.0.0.1", "192.0.0.170"] {
+            assert!(!is_public(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["2002:5db8:d822::1", "2001:4860:4860::8888", "192.0.1.1", "192.1.0.1"] {
+            assert!(is_public(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    /// O1: an address at home is refused on the address a name resolves to, whatever the name: loopback, private, link-local, shared.
+    #[tokio::test]
+    async fn a_private_address_is_refused_after_dns() {
+        for ip in ["127.0.0.1", "10.0.0.5", "172.17.0.2", "192.168.1.20", "169.254.1.1", "100.64.0.1", "0.0.0.0", "::1", "fe80::1", "fd00::1", "::ffff:192.168.1.20"] {
+            assert!(!is_public(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["93.184.216.34", "2606:2800:220:1::1"] {
+            assert!(is_public(ip.parse().unwrap()), "{ip}");
+        }
+        let e = client(Purpose::Metadata).build().unwrap().get("https://localhost/ws/2/").send().await.unwrap_err();
+        assert!(format!("{e:?}").contains("is not a public address"), "{e:?}");
+    }
+
+    /// Y11: the special ranges are not out in the world either: multicast, 198.18/15, 240/4, fec0::/10; an IPv4 address carried in
+    /// an IPv6 one (the old compatible form, NAT64's) is judged as itself.
+    #[test]
+    fn special_ranges_and_carried_addresses_are_judged() {
+        let refused = ["224.0.0.1", "239.255.255.250", "198.18.0.1", "198.19.255.255", "240.0.0.1", "255.255.255.255", "ff02::1", "fec0::1", "::192.168.1.20", "::127.0.0.1", "64:ff9b::192.168.1.20", "64:ff9b::10.0.0.5"];
+        for ip in refused {
+            assert!(!is_public(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["198.17.255.255", "198.20.0.1", "223.255.255.1", "64:ff9b::93.184.216.34", "::93.184.216.34"] {
+            assert!(is_public(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    /// Y11: a photo host's address given as plain http is read over https; any other address stays as it is, and is not the photos'.
+    #[test]
+    fn a_photo_hosts_http_address_is_read_over_https() {
+        let up = |u: &str| Purpose::ArtistPhotos.upgraded(reqwest::Url::parse(u).unwrap());
+        let thumb = up("http://www.theaudiodb.com/images/media/artist/thumb/x.jpg");
+        assert_eq!(thumb.as_str(), "https://www.theaudiodb.com/images/media/artist/thumb/x.jpg");
+        assert!(Purpose::ArtistPhotos.allows(&thumb));
+        assert_eq!(up("http://upload.wikimedia.org/a.jpg").scheme(), "https");
+        let away = up("http://photos.example.org/x.jpg");
+        assert!(away.scheme() == "http" && !Purpose::ArtistPhotos.allows(&away), "not one of its hosts");
+        assert_eq!(up("http://www.theaudiodb.com:8080/x.jpg").scheme(), "http", "an odd port left as it is");
+    }
+
+    /// O1: an answer longer than its cap is cut there and refused, never read whole.
+    #[tokio::test]
+    async fn an_answer_over_the_cap_is_cut() {
+        use axum::routing::get;
+        let app = axum::Router::new().route("/long", get(|| async { "x".repeat(300_000) })).route("/short", get(|| async { "x".repeat(1_000) }));
+        let at = fake(app).await;
+        let c = reqwest::Client::new();
+        let long = c.get(format!("http://127.0.0.1:{at}/long")).send().await.unwrap();
+        assert!(read_capped(long, 100_000).await.unwrap_err().to_string().contains("cut there"));
+        let short = c.get(format!("http://127.0.0.1:{at}/short")).send().await.unwrap();
+        assert_eq!(read_capped(short, 100_000).await.unwrap().len(), 1_000);
+    }
+
+    /// Y11: a picture relayed or chosen is an image, read in pieces and cut at its cap: a page in its place is refused, a longer one
+    /// cut there.
+    #[tokio::test]
+    async fn a_picture_read_is_an_image_cut_at_its_cap() {
+        use axum::{http::header::CONTENT_TYPE, routing::get};
+        let app = axum::Router::new()
+            .route("/page", get(|| async { ([(CONTENT_TYPE, "text/html")], "<html>".repeat(10)) }))
+            .route("/big", get(|| async { ([(CONTENT_TYPE, "image/jpeg")], vec![0xFFu8; 300_000]) }))
+            .route("/small", get(|| async { ([(CONTENT_TYPE, "image/jpeg")], vec![0xFFu8; 1_000]) }));
+        let at = fake(app).await;
+        let c = reqwest::Client::new();
+        let ask = |p: &str| c.get(format!("http://127.0.0.1:{at}{p}")).send();
+        assert!(read_image(ask("/page").await.unwrap(), 100_000).await.unwrap_err().to_string().contains("not an image"));
+        assert!(read_image(ask("/big").await.unwrap(), 100_000).await.unwrap_err().to_string().contains("cut there"));
+        assert_eq!(read_image(ask("/small").await.unwrap(), 100_000).await.unwrap().len(), 1_000);
+    }
+
+    /// O1: a service an administrator set up (slskd here) never follows a redirect: its key stays on the host given.
+    #[tokio::test]
+    async fn an_admin_service_never_follows_a_redirect() {
+        use axum::{response::Redirect, routing::get};
+        let done = serde_json::json!({ "transfers": [{ "id": "t1", "filename": "x", "state": "Completed, Succeeded", "percentComplete": 100.0 }] });
+        let app = axum::Router::new()
+            .route("/api/v0/transfers/downloads/batches/{id}", get(|| async { Redirect::temporary("/elsewhere") }))
+            .route("/elsewhere", get(move || std::future::ready(axum::Json(done.clone()))));
+        let at = fake(app).await;
+        let slskd = crate::slskd::Slskd::new(&format!("http://127.0.0.1:{at}"), "key").unwrap();
+        assert!(slskd.transfers("b1").await.is_err(), "the redirect not followed, its answer not read");
+        let r = lan_client().build().unwrap().get(format!("http://127.0.0.1:{at}/api/v0/transfers/downloads/batches/b1")).send().await.unwrap();
+        assert!(r.status().is_redirection());
+    }
+
+    /// O6: one pacer a service: every asker's questions `apart` apart, and none while it is held, whoever asks.
+    #[tokio::test(start_paused = true)]
+    async fn a_pacer_spaces_every_askers_questions_and_holds_them_all() {
+        let gap = std::time::Duration::from_millis(250);
+        let p = std::sync::Arc::new(Pacer::new(gap));
+        let askers: Vec<_> = (0..5)
+            .map(|_| {
+                let p = p.clone();
+                tokio::spawn(async move {
+                    p.turn().await;
+                    tokio::time::Instant::now()
+                })
+            })
+            .collect();
+        let mut at = Vec::new();
+        for a in askers {
+            at.push(a.await.unwrap());
+        }
+        at.sort();
+        assert!(at.windows(2).all(|w| w[1] - w[0] >= gap), "{at:?}");
+        p.hold(std::time::Duration::from_secs(60)).await;
+        let before = tokio::time::Instant::now();
+        p.turn().await;
+        assert!(tokio::time::Instant::now() - before >= std::time::Duration::from_secs(59), "held for everyone");
+    }
+
+    /// Y8: a pacer's hold holds the askers already waiting for their turn too, not only the next to come.
+    #[tokio::test(start_paused = true)]
+    async fn a_pacer_hold_holds_the_askers_already_waiting() {
+        async fn went(p: &Pacer, start: tokio::time::Instant) -> std::time::Duration {
+            p.turn().await;
+            tokio::time::Instant::now() - start
+        }
+        let (p, start) = (Pacer::new(std::time::Duration::from_millis(250)), tokio::time::Instant::now());
+        p.turn().await;
+        let held = async {
+            tokio::task::yield_now().await;
+            p.hold(std::time::Duration::from_secs(60)).await;
+        };
+        let (a, b, ()) = tokio::join!(went(&p, start), went(&p, start), held);
+        assert!(a.min(b) >= std::time::Duration::from_secs(60), "{a:?} {b:?}");
+    }
 
     #[tokio::test]
     async fn an_error_never_carries_the_address_and_its_keys() {

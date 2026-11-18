@@ -17,8 +17,8 @@ const FOLDER: &str = "cover-cache";
 const KEEP: Duration = Duration::from_secs(30 * 86_400);
 /// A kept cover not asked for in this long is taken away.
 const FORGET: Duration = Duration::from_secs(60 * 86_400);
-/// The most of a cover's bytes read.
-const MOST_BYTES: usize = 5 * 1024 * 1024;
+/// The most of a cover's bytes read (the Spotify picture relay's too, Y11).
+pub(crate) const MOST_BYTES: usize = 5 * 1024 * 1024;
 /// Covers fetched at once (each one's bytes held meanwhile).
 static FETCHING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 /// A look's covers fetched ahead by one task at a time.
@@ -47,6 +47,48 @@ impl Of {
         match self {
             Of::ReleaseGroup(rg) => format!("rg:{}", rg.to_ascii_lowercase()),
             Of::Bandcamp(page) => format!("bc:{page}"),
+        }
+    }
+}
+
+/// A record not had's cover addresses (C54), in the order its page takes them: its own (`records.cover`), else its release
+/// group's, as the missing lists choose (`discover::Missing::of`), else its Bandcamp page's.
+pub fn addresses_of(own: Option<&str>, group: Option<&str>, bandcamp: Option<&str>) -> Vec<String> {
+    own.map(str::to_string)
+        .into_iter()
+        .chain(group.map(|g| format!("/api/covers/release-group/{g}")))
+        .chain(bandcamp.map(|page| format!("/api/cover/{}/{}", crate::bandcamp::SOURCE, crate::bandcamp::track_id(page, 0))))
+        .collect()
+}
+
+/// The cover of Cratarr's record `album` where it is not had (C54: `/api/albums/cratarr/al-<n>/cover`), merges followed: kept,
+/// else fetched, by the first of its addresses that is Cratarr's own (`addresses_of`). None: no such record, one had (its files
+/// hold its cover), or no cover.
+pub async fn of_record(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str) -> Option<(Vec<u8>, &'static str)> {
+    let record = crate::serve::ids::record_number(album)?;
+    let addresses = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        let Some(row) = cat.record(record)?.filter(|r| !r.had) else { return Ok(Vec::new()) };
+        let refs = cat.references_of(&crate::serve::ids::record(row.id))?;
+        let of = |source: &str, kind: &str| refs.iter().find(|(r, _)| r.source == source && r.kind == kind).map(|(r, _)| r.value.clone());
+        Ok(addresses_of(row.cover.as_deref(), of("musicbrainz", "release-group").as_deref(), of("bandcamp", "album").as_deref()))
+    });
+    let addresses = match addresses.await {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => {
+            tracing::debug!("covers: {album} not read: {e:#}");
+            return None;
+        }
+        Err(e) => {
+            tracing::debug!("covers: {album} not read: {e}");
+            return None;
+        }
+    };
+    let of = addresses.iter().find_map(|a| Of::of_address(a))?;
+    match cover(&of).await {
+        Ok(found) => found,
+        Err(e) => {
+            tracing::debug!("covers: {of:?} of {album}: {e:#}");
+            None
         }
     }
 }
@@ -107,30 +149,39 @@ fn sniffed(b: Vec<u8>) -> (Vec<u8>, &'static str) {
 /// The cover's bytes from where it is: a release group's from the Cover Art Archive (else as
 /// `discogs::release_group_cover` finds it, which remembers none for a while), a Bandcamp album's from its page's.
 async fn fetch(of: &Of) -> Result<Option<Vec<u8>>> {
-    let http = super::discover::http()?;
+    // The covers' hosts only, a redirect followed while it stays on them (O1).
+    let http = super::reach::client(super::reach::Purpose::Covers).timeout(Duration::from_secs(30)).build()?;
     match of {
         Of::ReleaseGroup(rg) => {
+            // Kept as having none anywhere (O6): the Cover Art Archive is not asked again on every view.
+            if super::discogs::kept_without_cover(rg).await {
+                return Ok(None);
+            }
             let caa = format!("https://coverartarchive.org/release-group/{rg}/front-250");
-            if let Some(b) = image(&http, &caa).await? {
+            if let Some(b) = image(&http, &caa, MOST_BYTES).await? {
                 return Ok(Some(b));
             }
             match super::discogs::release_group_cover(rg).await? {
-                Some(url) if url != caa => image(&http, &url).await,
+                Some(url) if url != caa => image(&http, &url, MOST_BYTES).await,
                 _ => Ok(None),
             }
         }
         Of::Bandcamp(page) => match crate::bandcamp::Bandcamp::get().cover(page).await? {
             // Bandcamp's own pictures only (its image servers).
             Some(url) if reqwest::Url::parse(&url).ok().and_then(|u| u.host_str().map(|h| h.ends_with(".bcbits.com"))).unwrap_or(false) => {
-                image(&http, &url).await
+                image(&http, &url, MOST_BYTES).await
             }
             _ => Ok(None),
         },
     }
 }
 
-/// An image's bytes; `None` where there is none (404).
-async fn image(http: &reqwest::Client, url: &str) -> Result<Option<Vec<u8>>> {
+/// An image's bytes, `most` of them at most (`MOST_BYTES` for the covers kept; Soulseek's placed cover reads larger ones, Y3);
+/// `None` where there is none (404), or where the address is none of the covers' hosts (O1: Discogs names it).
+pub(super) async fn image(http: &reqwest::Client, url: &str, most: usize) -> Result<Option<Vec<u8>>> {
+    if !reqwest::Url::parse(url).is_ok_and(|u| super::reach::Purpose::Covers.allows(&u)) {
+        return Ok(None);
+    }
     let r = http.get(url).timeout(Duration::from_secs(30)).sent().await?;
     if r.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
@@ -139,14 +190,12 @@ async fn image(http: &reqwest::Client, url: &str) -> Result<Option<Vec<u8>>> {
     if !r.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("image/")) {
         bail!("{url} is not an image");
     }
-    if r.content_length().is_some_and(|n| n as usize > MOST_BYTES) {
-        bail!("{url} is too large");
-    }
-    let b = r.bytes().await?;
-    if b.is_empty() || b.len() > MOST_BYTES {
+    // Read in pieces, cut at its cap (O1).
+    let b = super::reach::read_capped(r, most).await?;
+    if b.is_empty() {
         bail!("{url} could not be read");
     }
-    Ok(Some(b.to_vec()))
+    Ok(Some(b))
 }
 
 /// A look's covers fetched ahead, one at a time, in the background (one such task at a time; the next look's does the

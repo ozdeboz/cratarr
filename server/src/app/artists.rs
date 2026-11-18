@@ -22,6 +22,8 @@ use super::reach::Sent as _;
 /// TheAudioDB's public key (its documented free one; Jellyfin's plugin carries a key of its own).
 const KEY: &str = "123";
 const BASE: &str = "https://www.theaudiodb.com/api/v1/json";
+/// The most of an artist's photo read (O1).
+const PHOTO_MOST: usize = 5 << 20;
 /// The builder's pace while nobody asks: ten a minute (the owner, 2026-10-23); TheAudioDB allows thirty.
 const EVERY: Duration = Duration::from_secs(6);
 /// Read again after this long; one TheAudioDB did not know sooner.
@@ -31,9 +33,8 @@ const MISSING_KEEP: i64 = 30 * 86_400;
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS artist_info (
   key TEXT PRIMARY KEY, name TEXT NOT NULL, mbid TEXT, adb TEXT, bio TEXT, photo TEXT, read_at INTEGER NOT NULL);";
-/// Wikimedia Commons' photo, a 600 px copy, and MusicBrainz asked at most once a second.
+/// Wikimedia Commons' photo, a 600 px copy (MusicBrainz, asked on the way, keeps its own turn: `musicbrainz::Asked`).
 const COMMONS_WIDTH: u32 = 600;
-const MB_PAUSE: Duration = Duration::from_millis(1100);
 
 /// Who made a freely licensed photo and under which licence, and its page: shown beside it, as its licence asks.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -82,7 +83,7 @@ impl ArtistInfo {
             let photos = dir.join("artist-photos");
             std::fs::create_dir_all(&photos)?;
             // A name as MusicBrainz and Wikimedia ask of every caller.
-            let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION"))).build()?;
+            let http = super::reach::client(super::reach::Purpose::Metadata).timeout(Duration::from_secs(20)).build()?;
             Ok(Self { db: Mutex::new(db), photos, http, turn: Default::default() })
         };
         match open() {
@@ -152,11 +153,7 @@ impl ArtistInfo {
             // A smaller copy where TheAudioDB has one, else the original.
             let file = format!("{id}.jpg");
             for u in [format!("{thumb}/medium"), thumb.clone()] {
-                if let Ok(r) = self.http.get(&u).sent().await
-                    && r.status().is_success()
-                    && let Ok(bytes) = r.bytes().await
-                    && !bytes.is_empty()
-                {
+                if let Ok(Some(bytes)) = self.photo(&u).await {
                     std::fs::write(self.photos.join(&file), &bytes)?;
                     photo = Some(file);
                     break;
@@ -200,7 +197,6 @@ impl ArtistInfo {
     async fn mbid_by_name(&self, name: &str) -> Result<Option<String>> {
         let url = format!("https://musicbrainz.org/ws/2/artist?query=artist:%22{}%22&fmt=json&limit=3", urlencode(name));
         let answer: serde_json::Value = self.http.get(&url).asked().await?.error_for_status()?.json().await?;
-        tokio::time::sleep(MB_PAUSE).await;
         Ok(answer["artists"]
             .as_array()
             .into_iter()
@@ -215,7 +211,6 @@ impl ArtistInfo {
     async fn commons_photo(&self, mbid: &str) -> Result<Option<(String, Credit)>> {
         let rels: serde_json::Value =
             self.http.get(format!("https://musicbrainz.org/ws/2/artist/{}?inc=url-rels&fmt=json", urlencode(mbid))).asked().await?.error_for_status()?.json().await?;
-        tokio::time::sleep(MB_PAUSE).await;
         let Some(item) = rels["relations"]
             .as_array()
             .into_iter()
@@ -254,22 +249,29 @@ impl ArtistInfo {
         };
         let author = meta["Artist"]["value"].as_str().map(plain).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown".to_string());
         let url = ii["descriptionurl"].as_str().unwrap_or("https://commons.wikimedia.org").to_string();
-        let bytes = self.http.get(thumb).sent().await?.error_for_status()?.bytes().await?;
-        if bytes.is_empty() {
-            return Ok(None);
-        }
+        let Some(bytes) = self.photo(thumb).await? else { return Ok(None) };
         let file = format!("wm-{mbid}.jpg");
         std::fs::write(self.photos.join(&file), &bytes)?;
         Ok(Some((file, Credit { author, licence, url })))
     }
 
+    /// A photo's bytes (O1): from the photo hosts only (TheAudioDB's, Wikimedia's, Discogs'), an image, at most `PHOTO_MOST`; none
+    /// otherwise. Their plain http made https first (Y11).
+    async fn photo(&self, url: &str) -> Result<Option<Vec<u8>>> {
+        let photos = super::reach::Purpose::ArtistPhotos;
+        let Some(u) = reqwest::Url::parse(url).ok().map(|u| photos.upgraded(u)).filter(|u| photos.allows(u)) else { return Ok(None) };
+        let r = self.http.get(u).sent().await?.error_for_status()?;
+        if !r.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("image/")) {
+            return Ok(None);
+        }
+        let bytes = super::reach::read_capped(r, PHOTO_MOST).await?;
+        Ok((!bytes.is_empty()).then_some(bytes))
+    }
+
     /// The artist's primary image on Discogs, kept as a file, credited to Discogs with their page there (0.9.5).
     async fn discogs_photo(&self, mbid: &str) -> Result<Option<(String, Credit)>> {
         let Some((image, page)) = super::discogs::artist_image(mbid).await? else { return Ok(None) };
-        let bytes = self.http.get(&image.url).sent().await?.error_for_status()?.bytes().await?;
-        if bytes.is_empty() {
-            return Ok(None);
-        }
+        let Some(bytes) = self.photo(&image.url).await? else { return Ok(None) };
         let file = format!("dc-{mbid}.jpg");
         std::fs::write(self.photos.join(&file), &bytes)?;
         Ok(Some((file, Credit { author: "Discogs".into(), licence: String::new(), url: page })))
@@ -296,6 +298,10 @@ impl ArtistInfo {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(EVERY).await;
+                // The background reading paused (O5).
+                if super::switches::background_paused() {
+                    continue;
+                }
                 let Some(served) = crate::serve::instance() else { continue };
                 let lib = served.library.clone();
                 let Ok(Ok(artists)) = tokio::task::spawn_blocking(move || lib.artist_names()).await else { continue };

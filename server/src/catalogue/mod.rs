@@ -13,9 +13,13 @@ mod first;
 mod id3;
 pub mod identity;
 mod index_log;
+pub mod labels;
 pub mod normalise;
+pub mod records;
 pub mod tags;
 pub mod walk;
+
+pub use artists::Opening;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -118,11 +122,20 @@ CREATE TABLE IF NOT EXISTS beat_this (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
   beats BLOB NOT NULL, downbeats BLOB NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
+-- The waveform in three bands (`analysis::band_wave`), apart from the shape since 0.17 (M1): in `analysis_shape` it lay
+-- behind each row's signals for the visuals (`bands`, about 250 KB), so the pass's question of which files have none read
+-- 1.3 GB every ten minutes. `form` says what `band_wave` holds (`BandWave::form`), and the index holds it too, so that
+-- question reads the index alone. A rowid table: a row of 1.5 KB stays on its page, where WITHOUT ROWID would put most of
+-- each on an overflow page of its own. `analysis_shape.band_wave` stays as 0.16 left it, never written; read a row at a time, by
+-- its key, where the part `band_wave` was marked by hand and left a file none here (P6, `copy_kept_band_wave`).
+CREATE TABLE IF NOT EXISTS analysis_band_wave (
+  folder INTEGER NOT NULL, rel TEXT NOT NULL, form INTEGER NOT NULL, band_wave BLOB NOT NULL,
+  PRIMARY KEY (folder, rel));
+CREATE INDEX IF NOT EXISTS analysis_band_wave_form ON analysis_band_wave (folder, rel, form);
 ";
 
-/// The tables whose ids are for life and held in user data: what a fresh start of lost ids lifts. Labels join when they have
-/// ids of their own.
-const IDS_FOR_LIFE: [&str; 3] = ["tracks", "records", "artists"];
+/// The tables whose ids are for life and held in user data: what a fresh start of lost ids lifts.
+const IDS_FOR_LIFE: [&str; 4] = ["tracks", "records", "artists", "labels"];
 
 /// A file's beats and downbeats by Beat this! (decision 0049, amended), as heard: milliseconds from the start.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -161,6 +174,52 @@ const PRESENT: &str = "folder >= 0 AND gone_at IS NULL AND trashed IS NULL";
 /// The same, with the files table named `f` (in a join with `source_ids`, which has a folder too).
 const PRESENT_F: &str = "f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL";
 
+/// T2's test of "the same bytes", one test read by two rules of their own (the backup's `SHARED_WITH`, room's `FREE_OF_ROOM`):
+/// file `$o` lies on file `$f`'s track with its size and time, as a copy keeps its original's (C38 keeps both), and is present
+/// (in a folder in use, neither gone nor in a trash). Text, so that each rule's SQL holds it whole.
+macro_rules! same_bytes {
+    ($o:literal, $f:literal) => {
+        concat!($o, ".track = ", $f, ".track AND ", $o, ".size = ", $f, ".size AND ", $o, ".mtime = ", $f, ".mtime AND ", $o, ".folder >= 0 AND ", $o, ".gone_at IS NULL AND ", $o, ".trashed IS NULL")
+    };
+}
+
+/// Whether copy `f` (`files.shared`) is covered on the backup's list (C41; T2, T2b): another file holds the same bytes
+/// (`same_bytes!`) and is an original itself (`shared = 0`: two copies never cover each other), in a kept library (`:kept`, a
+/// JSON list of catalogue folders: the main libraries and anyone's own music, never Incoming). An original in a trash covers
+/// nothing (T2b: the backup errs on the safe side); a copy whose original was replaced, rewritten, deleted or moved out since is
+/// its own, and is backed up. The backup's rule alone: room has its own (`FREE_OF_ROOM`), on the same test of the same bytes.
+pub const SHARED_WITH: &str = concat!(
+    "f.shared = 1 AND f.track IS NOT NULL AND EXISTS (SELECT 1 FROM files o WHERE ",
+    same_bytes!("o", "f"),
+    " AND o.shared = 0 AND o.folder IN (SELECT value FROM json_each(:kept)))"
+);
+
+/// Whether copy `f`'s bytes are still an original's (RF5, the review of runs 11 and 12, RA1): another file holds the same bytes
+/// (`same_bytes!`) and is an original itself (`shared = 0`), in a kept library (`:kept`): the backup's test (`SHARED_WITH`) asked
+/// of the original, whatever the copy's own mark says. Where none does, the copy is the album's only copy of those bytes.
+const HELD_BY_ORIGINAL: &str = concat!(
+    "EXISTS (SELECT 1 FROM files o WHERE ",
+    same_bytes!("o", "f"),
+    " AND (o.folder, o.rel) <> (f.folder, f.rel) AND o.shared = 0 AND o.folder IN (SELECT value FROM json_each(:kept)))"
+);
+
+/// Whether own-music file `f` is free of room (AL01; R.0, the owner's Q5, Q9 and (d) "Free anywhere", OQ-R1): another file holds
+/// the same bytes (`same_bytes!`), the two share their blocks as their copy said (either marked `shared`), and that file lies in
+/// a main library (`:main`), or in someone's own music (`:own`) and is the one there that pays for those bytes: the original
+/// (`shared = 0`), else the copy that came first, then the lowest folder. So an own copy is free while Music holds its bytes,
+/// whichever came first (Q9: an original too, once Music holds a copy of it), and of own-music files holding one set of bytes
+/// with no main library's among them exactly one pays. Once that other file changes or leaves (rewritten, replaced, gone, in a
+/// trash, parked) the copy counts in full, whoever changed it (Q5), and is free again when it is back. A copy made on a disk
+/// that could not share (`shared = 0` on both) costs its size. Room's rule alone: the backup's list reads `SHARED_WITH`.
+pub const FREE_OF_ROOM: &str = concat!(
+    "f.track IS NOT NULL AND EXISTS (SELECT 1 FROM files g WHERE ",
+    same_bytes!("g", "f"),
+    " AND (g.folder, g.rel) <> (f.folder, f.rel) AND (f.shared = 1 OR g.shared = 1)",
+    " AND (g.folder IN (SELECT value FROM json_each(:main)) OR (g.folder IN (SELECT value FROM json_each(:own)) AND NOT EXISTS (SELECT 1 FROM files h WHERE ",
+    same_bytes!("h", "g"),
+    " AND h.folder IN (SELECT value FROM json_each(:own)) AND (h.shared, ifnull(h.came, 0), h.folder, h.rel) < (g.shared, ifnull(g.came, 0), g.folder, g.rel)))))"
+);
+
 /// How many of a folder's files `set_folders` looks for at a path, to tell whether those rows are that folder's.
 const SAMPLE: i64 = 20;
 
@@ -172,7 +231,7 @@ const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along. A table with
 /// both goes here or says why not (`every_table_by_folder_and_path_goes_with_its_file`), or it stays at a place its file left.
-const FILE_TABLES: [&str; 7] = ["files", "cover_files", "tags", "source_ids", "analysis", "analysis_shape", "beat_this"];
+const FILE_TABLES: [&str; 8] = ["files", "cover_files", "tags", "source_ids", "analysis", "analysis_shape", "analysis_band_wave", "beat_this"];
 
 /// What a retiring track was, from its file and tags while they are still there (`tracks`' kept columns).
 const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id LIMIT 1),
@@ -180,7 +239,29 @@ const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id
   was_title = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'title' ORDER BY t.n LIMIT 1),
   was_artist = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'artist' ORDER BY t.n LIMIT 1),
   was_album = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'album' ORDER BY t.n LIMIT 1),
-  was_recording = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'musicbrainz_trackid' ORDER BY t.n LIMIT 1)";
+  was_recording = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'musicbrainz_trackid' ORDER BY t.n LIMIT 1),
+  was_folder = (SELECT folder FROM files WHERE track = tracks.id LIMIT 1),
+  was_gone = (SELECT COALESCE(gone_at, CAST(substr(trashed, 1, instr(trashed, '/') - 1) AS INTEGER)) FROM files WHERE track = tracks.id LIMIT 1)";
+
+/// A table's rows of one file made again as another file's (C39, `copy_rows`): every column as it is but its place (`folder`,
+/// `rel`) and those `set` gives. The columns are the table's own (`PRAGMA table_info`), so a column added later is copied too. How
+/// many rows. Blocking.
+fn copy_row(tx: &Connection, table: &str, from: (i64, &str), to: (i64, &str), set: &[(&str, rusqlite::types::Value)]) -> Result<usize> {
+    let columns: Vec<String> = tx.prepare(&format!("PRAGMA table_info({table})"))?.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<_>>()?;
+    let picked: Vec<String> = columns
+        .iter()
+        .map(|c| match c.as_str() {
+            "folder" => "?1".to_string(),
+            "rel" => "?2".to_string(),
+            c => set.iter().position(|(name, _)| *name == c).map_or_else(|| format!("\"{c}\""), |i| format!("?{}", i + 5)),
+        })
+        .collect();
+    let named: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
+    let sql = format!("INSERT INTO {table} ({}) SELECT {} FROM {table} WHERE folder = ?3 AND rel = ?4", named.join(", "), picked.join(", "));
+    let mut values: Vec<rusqlite::types::Value> = vec![to.0.into(), to.1.to_string().into(), from.0.into(), from.1.to_string().into()];
+    values.extend(set.iter().map(|(_, v)| v.clone()));
+    Ok(tx.execute(&sql, rusqlite::params_from_iter(values))?)
+}
 
 /// Whether a folder shows nothing, or is not there: how a mount that is not up looks, and no sign its files are gone.
 fn holds_nothing(path: &str) -> bool {
@@ -191,6 +272,16 @@ fn holds_nothing(path: &str) -> bool {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AlbumCopy {
     pub facts: identity::RecordFacts,
+    /// The MusicBrainz release group most of its files name (`records::most_named`): with `facts.release`, its record's `files`
+    /// references where it is the record's first-ranked copy.
+    pub group: Option<String>,
+    /// Its album artists in the order its files credit them, split as the library splits them (the first is the album's
+    /// artist), and the MusicBrainz artist ids the files give them, in the same order: its record's `record_artists`, and
+    /// each artist's `files` reference where there is one id for each.
+    pub artists: Vec<String>,
+    pub artist_ids: Vec<String>,
+    /// Its labels as its files name them, each with its catalogue number ('' none): its record's `record_labels`.
+    pub labels: Vec<(String, String)>,
     /// As shown, for the record's own facts.
     pub title: String,
     pub artist: String,
@@ -477,7 +568,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 30] = [
+const ADDED_COLUMNS: [(&str, &str); 46] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -498,6 +589,10 @@ const ADDED_COLUMNS: [(&str, &str); 30] = [
     ("tracks", "was_artist TEXT"),
     ("tracks", "was_album TEXT"),
     ("tracks", "was_recording TEXT"),
+    // T8: where a retiring track's last file lay, and when it went (its `gone_at`, else its trash token's time): where a record's
+    // last copy went, read once its files gone a while have retired (`Catalogue::went_of`).
+    ("tracks", "was_folder INTEGER"),
+    ("tracks", "was_gone INTEGER"),
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
@@ -531,6 +626,39 @@ const ADDED_COLUMNS: [(&str, &str); 30] = [
     ("files", "rate INTEGER"),
     // When the file first came (docs/records-and-copies.md): a copy keeps its own date, where `tracks.born` is the track's.
     ("files", "came INTEGER"),
+    // 0100 (`records`): what a record not had shows with no file to read it from, its first release date, its genres (joined by
+    // U+001F) and a picture where no reference makes one; whether `counting` was chosen by hand (0.14's "Use this", a link
+    // pasted) or worked out; 0.14's "Checked by hand"; and the record it became where two proved one (G3), so its id stays good.
+    ("records", "released TEXT"),
+    ("records", "genres TEXT"),
+    ("records", "cover TEXT"),
+    ("records", "counted_by_hand INTEGER NOT NULL DEFAULT 0"),
+    ("records", "checked_by_hand INTEGER NOT NULL DEFAULT 0"),
+    ("records", "merged_into INTEGER"),
+    // The rank of the copy that named a record last (R28): a copy ranked lower does not name it again.
+    ("records", "named_rank INTEGER"),
+    // RT01: when a list read last showed a record not had (but Bandcamp's), and when it was last opened. One neither for six
+    // months, that nothing points at, is forgotten (`Catalogue::forget_quiet`); its kept lists go after thirty days unopened
+    // (RT01b). NULL: not since 0.17, or never.
+    ("records", "seen_at INTEGER"),
+    ("records", "opened_at INTEGER"),
+    // Y12: its names as the clash of names compares them (`records::names_of`: artist|title, each folded), kept so a Want finds the
+    // records of its names by an index. NULL until folded (`records::live_named_in`), and again once either is renamed (a trigger).
+    ("records", "names TEXT"),
+    // C39 (Copy to, files.md CP5): a copy whose blocks are its original's, as the file system said when it was made: read by the
+    // backup's list (`SHARED_WITH`) and by room (`FREE_OF_ROOM`), each by its own rule. Let go of where the file's size or time
+    // changes (a tag write makes it a file of its own); kept as it moves.
+    ("files", "shared INTEGER NOT NULL DEFAULT 0"),
+    // RF1 (one class for "had"): the release type the record's album was built with, as the last build typed it (the Library's:
+    // set by hand, an incomplete album's whole release, else the services' word and the owner's rule), kept by
+    // `Catalogue::keep_types`: what classes a had record for the had rule's names clause (`records::classes_of`). NULL until a
+    // build typed it.
+    ("records", "typed TEXT"),
+    // RF4 (the review of runs 11 and 12, RB4): a record retired as every track of it moved on to other records (its files retagged, or
+    // found to be another record's: the same rows, their tracks another record's now), where those tracks' files lay (a JSON list of
+    // catalogue folders) and when they moved on: what `Catalogue::went_of` reads for it. Written at that retirement only.
+    ("records", "was_folders TEXT"),
+    ("records", "was_gone INTEGER"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -808,7 +936,7 @@ pub struct RowAnalysis {
 }
 
 impl ServedRow {
-    pub const TAGS: [&'static str; 27] = [
+    pub const TAGS: [&'static str; 29] = [
         "title",
         "artist",
         "artists",
@@ -831,6 +959,9 @@ impl ServedRow {
         "musicbrainz_artistid",
         "musicbrainz_albumartistid",
         "musicbrainz_releasegroupid",
+        // Its record's labels and catalogue number (0100, `record_labels`).
+        "label",
+        "catalognumber",
         "replaygain_track_gain",
         "replaygain_track_peak",
         "replaygain_album_gain",
@@ -895,11 +1026,31 @@ impl FromIterator<(i64, PathBuf)> for InUse {
     }
 }
 
+/// What room reads of the catalogue (`Catalogue::room_rows`, AL01): each own-music folder's bytes not free of room, and each copy in
+/// Incoming of a record asked for.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoomRows {
+    /// (catalogue folder, bytes): a folder all of whose files are free is not here.
+    pub own: Vec<(i64, u64)>,
+    pub copies: Vec<RoomCopy>,
+}
+
+/// A copy in Incoming of a record asked for, as room reads it: its record, when its first file came (none: not known), its bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomCopy {
+    pub record: i64,
+    pub came: Option<i64>,
+    pub bytes: u64,
+}
+
 /// The meta key of the highest folder id ever given (`set_folders`).
 const FOLDER_TOP: &str = "folder_top";
 
 pub struct Catalogue {
     db: Mutex<Connection>,
+    /// How many readers it opened (`reader`): what a test counts.
+    #[cfg(test)]
+    readers: std::sync::atomic::AtomicUsize,
     /// The folders in use, by their ids for life.
     folders: RwLock<InUse>,
     progress: Mutex<Progress>,
@@ -907,6 +1058,11 @@ pub struct Catalogue {
     poke: tokio::sync::Notify,
     /// Told when files were read again outside a pass (`reread`): the library is built from them at once.
     reread: tokio::sync::Notify,
+    /// How many times the rows were told changed, at each pass's end and each change outside one (`told`): what the library looks
+    /// again by (RF8). A count, as a second is not one: a change told in the second of the library's last look went unseen until the
+    /// next pass (run 12's close: RY01's Undo told at its first `set_tracks`, was looked at half done, and the rest was told in that
+    /// second).
+    told: AtomicU64,
     /// How much the passes have done since the server started (files read, folders walked, links made): what shows a
     /// long pass moving (0.9.7: a reader's reread of every file takes hours on the NAS, and Cratarr's own library
     /// looked stopped to the watch on the servers' scans).
@@ -963,6 +1119,11 @@ impl Catalogue {
             }
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track); CREATE INDEX IF NOT EXISTS tracks_by_record ON tracks (record);")?;
+        conn.execute_batch(records::SCHEMA).context("creating the records' references")?;
+        conn.execute_batch(artists::SCHEMA).context("creating the artists' numbers")?;
+        conn.execute_batch(labels::SCHEMA).context("creating the labels' kept rows")?;
+        // C55: the artists from before the numbers given theirs, in the order they were made.
+        artists::number_all(&conn).context("numbering the artists of one name")?;
         // A folder in use before ids for life: its place is its id from now on.
         conn.execute_batch("UPDATE folders SET home = id WHERE id >= 0 AND home IS NULL;")?;
         // Once, before any copy takes another's track: a file came when its track was born, the one date there was. After
@@ -991,6 +1152,7 @@ impl Catalogue {
             progress: Mutex::default(),
             poke: Default::default(),
             reread: Default::default(),
+            told: Default::default(),
             worked: Default::default(),
             facts: Mutex::default(),
             facts_written,
@@ -998,6 +1160,8 @@ impl Catalogue {
             moving: Default::default(),
             read_half_way: Default::default(),
             file: file.map(Path::to_path_buf),
+            #[cfg(test)]
+            readers: Default::default(),
         };
         // A better reader may read what an older one could not.
         if cat.meta("reader").as_deref() != Some(&tags::READER_VERSION.to_string()) {
@@ -1275,8 +1439,15 @@ impl Catalogue {
 
     /// Ask for a pass now.
     /// When the last background pass finished, epoch seconds.
+    #[cfg(test)]
     pub fn last_pass(&self) -> Option<i64> {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass
+    }
+
+    /// How many times the rows were told changed (a pass ended, or `changed_outside_pass`): a look that read a lower count has not
+    /// seen the change since (RF8).
+    pub fn told(&self) -> u64 {
+        self.told.load(Ordering::SeqCst)
     }
 
     /// What the background pass is doing now, if anything (see `Progress::doing`).
@@ -1347,7 +1518,7 @@ impl Catalogue {
         {
             let mut upsert = tx.prepare(
                 "INSERT INTO files (folder, rel, size, mtime, state, came) VALUES (?1, ?2, ?3, ?4, 0, ?5)
-                 ON CONFLICT (folder, rel) DO UPDATE SET size = ?3, mtime = ?4, state = 0, error = NULL, gone_at = NULL",
+                 ON CONFLICT (folder, rel) DO UPDATE SET size = ?3, mtime = ?4, state = 0, error = NULL, gone_at = NULL, shared = 0",
             )?;
             let mut back = tx.prepare("UPDATE files SET gone_at = NULL WHERE folder = ?1 AND rel = ?2")?;
             for f in found {
@@ -1458,6 +1629,7 @@ impl Catalogue {
     /// one by one: after the last), so the library never shows half of one.
     pub fn changed_outside_pass(&self) {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass = Some(now());
+        self.told.fetch_add(1, Ordering::SeqCst);
         self.reread.notify_one();
     }
 
@@ -2099,32 +2271,21 @@ impl Catalogue {
     /// The audio files of one album folder (`dir`, relative to `folder`) with all their named tags, in path order:
     /// what Keep names the files from (decision 0013). Read-only; blocking.
     pub fn album_tags(&self, folder: i64, dir: &str) -> Result<Vec<(String, Vec<(String, String)>)>> {
-        let db = self.db();
-        let prefix = format!("{}/", dir.trim_end_matches('/'));
-        let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
-        let mut st = db.prepare(&format!(
-            "SELECT rel FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND {PRESENT} ORDER BY rel"
-        ))?;
-        let rels = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| r.get::<_, String>(0))?;
-        let mut index = std::collections::HashMap::new();
-        for rel in rels {
-            let rel = rel?;
-            index.insert(rel.clone(), out.len());
-            out.push((rel, Vec::new()));
+        album_tags_in(&self.db(), folder, dir)
+    }
+
+    /// One copy's audio files as Replace pairs them (RF2): each present file under `dir` of catalogue folder `folder`, in path order,
+    /// with its named tags (`album_tags`) and its length where read (`album_lengths`). On a reader, never the writer's lock: the
+    /// Library and Health ask it of copies waiting while a build runs. Blocking.
+    pub fn copy_read(&self, folder: i64, dir: &str) -> Result<Vec<(Vec<(String, String)>, Option<u64>)>> {
+        let read = |db: &Connection| -> Result<Vec<(Vec<(String, String)>, Option<u64>)>> {
+            let lengths = album_lengths_in(db, folder, dir)?;
+            Ok(album_tags_in(db, folder, dir)?.into_iter().map(|(rel, tags)| (tags, lengths.get(&rel).copied())).collect())
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
         }
-        let mut st = db.prepare(
-            "SELECT rel, name, value FROM tags WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND name IS NOT NULL ORDER BY rel, n",
-        )?;
-        let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-        })?;
-        for row in rows {
-            let (rel, name, value) = row?;
-            if let Some(&i) = index.get(&rel) {
-                out[i].1.push((name, value));
-            }
-        }
-        Ok(out)
     }
 
     /// Every present file's values of the tags named in `names`, by (folder, path): what the files hold of what Cratarr
@@ -2215,14 +2376,34 @@ impl Catalogue {
         served_rows_in(&self.db(), folder, Some(dir))
     }
 
+    /// `served_rows` as a record pass reads them (0.17's step's part `credits`, P3): all but the albums' gains, which the shape's
+    /// loudness blocks give (`album_gains_in`), so no statement here reads `analysis_shape` (M1). Blocking.
+    pub fn rows_to_credit(&self, folder: i64) -> Result<Vec<ServedRow>> {
+        rows_in(&self.db(), folder, None, PRESENT, false)
+    }
+
     /// Each folder's cover files as a print (`cover_prints`).
     pub fn cover_prints(&self) -> Result<HashMap<(i64, String), String>> {
         cover_prints(&self.db())
     }
 
+    /// How many readers it has opened (`reader`).
+    #[cfg(test)]
+    pub fn readers_for_tests(&self) -> usize {
+        self.readers.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The writer's lock, held by a test as a build holds it for its record pass.
+    #[cfg(test)]
+    pub fn writer_for_tests(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.db()
+    }
+
     /// A read-only connection of its own to the catalogue's file, for long reads that must not hold up the catalogue
     /// (WAL lets it read beside the writer). `None` for a catalogue in memory.
     pub fn reader(&self) -> Option<Connection> {
+        #[cfg(test)]
+        self.readers.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let file = self.file.as_ref()?;
         let conn = crate::db::open_read_only(file).ok()?;
         conn.busy_timeout(Duration::from_secs(10)).ok()?;
@@ -2289,6 +2470,14 @@ impl Catalogue {
     #[cfg(test)]
     pub fn came_for_tests(&self, folder: i64, at: i64) {
         self.db().execute("UPDATE files SET came = ?2 WHERE folder = ?1", [folder, at]).unwrap();
+    }
+
+    /// Tests elsewhere: a file rewritten in place, as a tag write's row update leaves it (`carry_over`, C39): its new size and time,
+    /// and a copy that shared its original's blocks shares them no more.
+    #[cfg(test)]
+    pub fn rewrite_for_tests(&self, folder: i64, rel: &str, size: u64, mtime: i64) {
+        let (was, at): (i64, i64) = self.db().query_row("SELECT size, mtime FROM files WHERE folder = ?1 AND rel = ?2", params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        self.carry_over(folder, rel, (was as u64, at), (size, mtime)).unwrap();
     }
 
     /// Tests elsewhere: every gone file gone longer than a gone file waits, for `identify` to retire it.
@@ -2420,7 +2609,7 @@ impl Catalogue {
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
                 carry_came(&tx, (*nf, nr), (*gf, gr))?;
                 // The same sound under another name: what was worked out of it goes along, and is read while the file is as it was then.
-                for table in ["analysis", "analysis_shape", "beat_this"] {
+                for table in ["analysis", "analysis_shape", "analysis_band_wave", "beat_this"] {
                     tx.execute(&format!("UPDATE OR IGNORE {table} SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2"), params![gf, gr, nf, nr])?;
                 }
                 for table in FILE_TABLES {
@@ -2509,6 +2698,44 @@ impl Catalogue {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The artist tags of each file a live track keeps out of sight (RF16, the review of run 13, SA1): in a trash, in a parked
+    /// library, or gone a while, each file's `artist`, `artists`, `albumartist` and `albumartists` values in their order. What retention
+    /// keeps an artist by beside the library's credits, which leave those files out, so an Undo or a library brought back finds its
+    /// guests as themselves. On a reader where there is one. Blocking.
+    pub fn artist_tags_set_aside(&self) -> Result<Vec<Vec<(String, String)>>> {
+        let read = |db: &Connection| -> Result<Vec<Vec<(String, String)>>> {
+            let mut st = db.prepare(
+                "SELECT t.folder, t.rel, t.name, t.value FROM files f JOIN tracks k ON k.id = f.track AND k.retired_at IS NULL
+                 JOIN tags t ON t.folder = f.folder AND t.rel = f.rel
+                 WHERE NOT (f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) AND t.name IN ('artist', 'artists', 'albumartist', 'albumartists')
+                 ORDER BY t.folder, t.rel, t.n",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+            let mut out: Vec<Vec<(String, String)>> = Vec::new();
+            let mut at: Option<(i64, String)> = None;
+            for row in rows {
+                let (folder, rel, name, value) = row?;
+                if at.as_ref() != Some(&(folder, rel.clone())) {
+                    out.push(Vec::new());
+                    at = Some((folder, rel));
+                }
+                if let Some(file) = out.last_mut() {
+                    file.push((name, value));
+                }
+            }
+            Ok(out)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// Whether any track is not retired (W2): a library that credits nobody while there is one read no rows. Blocking.
+    pub fn holds_live_tracks(&self) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM tracks WHERE retired_at IS NULL LIMIT 1")?.exists([])?)
+    }
+
     /// Whether a track in use has no record yet, or is back from retirement and not yet held against its album: only then,
     /// or with a stray in an album (`AlbumCopy::split`), is [`Self::assign_records`] worth its reading. Blocking.
     pub fn records_unsettled(&self) -> bool {
@@ -2528,15 +2755,63 @@ impl Catalogue {
     /// A copy takes the record's tracks (0101), place by place: its files go to the record's track, and the id they held
     /// retires for good, with what it became in `track_moved`, for what names it to follow (`Serve::built_now`). Copies of
     /// one record always hold the same tracks (Q8, the owner): one that no longer can leaves the record to the first by kind,
-    /// then the largest (CR18), and takes tracks of its own, as what points at them stays with the record. The tracks given a
+    /// then the largest (CR18), and takes tracks of its own, as what points at them stays with the record. What each album's
+    /// files name at MusicBrainz becomes its record's `files` references (`records::files_references`), and whom and which labels
+    /// they credit its `record_artists` and `record_labels` (`records::record_credits`). The tracks given a
     /// record, taken or let go of. Blocking.
     pub fn assign_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
         let read_half_way = self.read_half_way.swap(false, Ordering::SeqCst);
-        let (given, _) = Self::assign(&tx, albums, now(), read_half_way || self.copies_are_moving())?;
+        let (given, records) = Self::assign(&tx, albums, now(), read_half_way || self.copies_are_moving())?;
+        records::files_references(&tx, albums, &records, now())?;
+        records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
         Ok(given)
+    }
+
+    /// What these albums' files name and credit, kept for the records their tracks hold (`records::files_references`,
+    /// `records::record_credits`), where no album needed a record (`assign_records` did not run): a retag shows at the next
+    /// build. A library as it was writes nothing. Blocking.
+    pub fn keep_files_names(&self, albums: &[AlbumCopy]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let records = {
+            let mut st = tx.prepare_cached("SELECT record FROM tracks WHERE id = ?1")?;
+            let mut records = Vec::with_capacity(albums.len());
+            for a in albums {
+                let mut of = None;
+                for (track, ..) in &a.tracks {
+                    if let Some(record) = st.query_row([track], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten() {
+                        of = Some(record);
+                        break;
+                    }
+                }
+                records.push(of);
+            }
+            records
+        };
+        records::files_references(&tx, albums, &records, now())?;
+        records::record_credits(&tx, albums, &records, now())?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The type each record's album was built with (RF1, `Library::record_types`), kept on its record (`records.typed`): what the had
+    /// rule classes a had record by (`records::classes_of`), its type set by hand and an incomplete album's whole release with it.
+    /// Only a type that changed is written. How many changed. Blocking.
+    pub fn keep_types(&self, types: &[(i64, String)]) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut changed = 0;
+        {
+            let mut st = tx.prepare_cached("UPDATE records SET typed = ?2 WHERE id = ?1 AND typed IS NOT ?2")?;
+            for (record, kind) in types {
+                changed += st.execute(params![record, kind])?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
     }
 
     /// An album action is moving a copy's files, until this goes. Passes do not stop for one, and `identify` pairs what has
@@ -2657,6 +2932,9 @@ impl Catalogue {
             let Some(record) = record else { continue };
             home.extend(list.iter().map(|t| take.now(*t)).filter(|t| held.record.get(t) == Some(record)).map(|t| (t, *record)));
         }
+        // Folders a fetcher placed for a record not had (C50): their albums are those records.
+        let expected = records::expected_in(tx, now)?;
+        let mut not_had = None;
         let mut given = 0;
         // The records a track moved out of.
         let mut left = std::collections::HashSet::new();
@@ -2732,9 +3010,25 @@ impl Catalogue {
                                 take.by_name(&held, r, (&tracks[i], &a.facts.tracks), (&tracks[j], &albums[j].facts.tracks));
                                 r
                             }
+                            // A record not had that this album is (C50: expected here, else by its references, else by its
+                            // list), else a new record.
                             None => {
-                                born.execute(params![now, a.title, a.artist, a.year])?;
-                                tx.last_insert_rowid()
+                                let at = records::expected_of(&expected, &a.files);
+                                match records::wanted_record(tx, a, at.as_ref().map(|(_, record)| *record), &mut not_had)? {
+                                    Some(r) => {
+                                        if let Some(((folder, dir), _)) = &at {
+                                            tx.execute("DELETE FROM expected WHERE folder = ?1 AND dir = ?2", params![folder, dir])?;
+                                        }
+                                        // Its count against the files that came (R25, N6): a list that counted before them keeps
+                                        // counting only where it agrees.
+                                        records::recount_in(tx, r, &a.facts.tracks)?;
+                                        r
+                                    }
+                                    None => {
+                                        born.execute(params![now, a.title, a.artist, a.year])?;
+                                        tx.last_insert_rowid()
+                                    }
+                                }
                             }
                         };
                         // Those it lists are given it below, with their places.
@@ -2784,11 +3078,19 @@ impl Catalogue {
             [now],
         )?;
         // Every track moved on, none retired: nothing in the rows now tells this record from one not had, so it goes here,
-        // while the pass still knows it had them.
+        // while the pass still knows it had them. Where their files lay goes with it (RF4): those rows are another record's now, and
+        // a request of it reads where its copy went from this (`went_of`).
+        let mut lay_in: HashMap<i64, std::collections::BTreeSet<i64>> = HashMap::new();
+        for ((track, ..), (folder, _)) in albums.iter().flat_map(|a| a.tracks.iter().zip(&a.files)) {
+            if let Some(record) = held.record.get(track).filter(|r| left.contains(*r)) {
+                lay_in.entry(*record).or_default().insert(*folder);
+            }
+        }
         for record in &left {
+            let lay = lay_in.get(record).map(serde_json::to_string).transpose()?;
             tx.execute(
-                "UPDATE records SET retired_at = ?2 WHERE id = ?1 AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)",
-                params![record, now],
+                "UPDATE records SET retired_at = ?2, was_folders = ?3, was_gone = ?2 WHERE id = ?1 AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)",
+                params![record, now, lay],
             )?;
         }
         Ok((given, records))
@@ -2858,12 +3160,154 @@ impl Catalogue {
                 "UPDATE files SET folder = ?3, rel = ?4, trashed = ?5, gone_at = NULL WHERE folder = ?1 AND rel = ?2",
                 params![from_folder, rel, to_folder, new_rel, trashed],
             )?;
-            for table in ["tags", "analysis", "analysis_shape", "beat_this"] {
+            for table in ["tags", "analysis", "analysis_shape", "analysis_band_wave", "beat_this"] {
                 tx.execute(&format!("UPDATE {table} SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2"), params![from_folder, rel, to_folder, new_rel])?;
             }
         }
         tx.commit()?;
         Ok(rels.len())
+    }
+
+    /// The catalogue's copy of files Cratarr copied (C39, Copy to): each copy's rows made from its original's (`files`, `tags`,
+    /// `analysis`, `analysis_shape`, `analysis_band_wave`, `beat_this`; no `source_ids`, which name the original's place at another server), so the walk
+    /// finds it known, read and analysed, on the same tracks: one album, two copies. A copy shares its original's blocks
+    /// (`files.shared`) as `moves::copy` said; it came now. Rows a walk made there first give way, as `rekey`'s do. Each copy as
+    /// (its original, the copy, shared); all in one transaction. How many were copied. Blocking.
+    pub fn copy_rows(&self, copies: &[((i64, String), (i64, String), bool)]) -> Result<usize> {
+        use rusqlite::types::Value;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let now = now();
+        let mut done = 0;
+        for ((from_folder, from), (to_folder, to), shared) in copies {
+            if (from_folder, from) == (to_folder, to) {
+                continue;
+            }
+            for table in FILE_TABLES {
+                tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![to_folder, to])?;
+            }
+            let set = [("trashed", Value::Null), ("gone_at", Value::Null), ("shared", Value::Integer(i64::from(*shared))), ("came", Value::Integer(now))];
+            if copy_row(&tx, "files", (*from_folder, from), (*to_folder, to), &set)? == 0 {
+                continue;
+            }
+            for table in ["tags", "analysis", "analysis_shape", "analysis_band_wave", "beat_this"] {
+                copy_row(&tx, table, (*from_folder, from), (*to_folder, to), &[])?;
+            }
+            done += 1;
+        }
+        tx.commit()?;
+        drop(db);
+        if done > 0 {
+            self.changed_outside_pass();
+        }
+        Ok(done)
+    }
+
+    /// The copies outside catalogue folder `main` sharing their blocks with an original kept in one of the folders `kept` (C41,
+    /// the backup's list; T2b): present, and `SHARED_WITH` it. A copy whose original left, or was replaced or rewritten since
+    /// (T2), is its own, and is not listed. `main` none of the folders (-1): every copy the backup's rule covers, Music's too. In
+    /// folder and path order. Blocking.
+    pub fn shared_copies(&self, main: i64, kept: &[i64]) -> Result<Vec<(i64, String)>> {
+        let kept = serde_json::to_string(kept)?;
+        let db = self.db();
+        let mut st = db.prepare_cached(&format!("SELECT f.folder, f.rel FROM files f WHERE {PRESENT_F} AND f.folder <> :main AND {SHARED_WITH} ORDER BY f.folder, f.rel"))?;
+        let rows = st.query_map(rusqlite::named_params! { ":main": main, ":kept": kept }, |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Of the files `rels` in catalogue folder `folder` (copies), those that are their album's only copy of their bytes (RF5): a
+    /// track's file whose bytes no original in one of the folders `kept` holds any more (`HELD_BY_ORIGINAL`: deleted, emptied from
+    /// its trash, rewritten, replaced, moved out of the kept libraries, or its library out of use). A file with no row or no track
+    /// (a cover) is none. In `rels`' order. Blocking.
+    pub fn only_copies(&self, folder: i64, rels: &[String], kept: &[i64]) -> Result<Vec<String>> {
+        let kept = serde_json::to_string(kept)?;
+        let db = self.db();
+        let mut st = db.prepare_cached(&format!("SELECT 1 FROM files f WHERE f.folder = :folder AND f.rel = :rel AND f.track IS NOT NULL AND NOT {HELD_BY_ORIGINAL}"))?;
+        let mut only = Vec::new();
+        for rel in rels {
+            if st.exists(rusqlite::named_params! { ":folder": folder, ":rel": rel, ":kept": kept })? {
+                only.push(rel.clone());
+            }
+        }
+        Ok(only)
+    }
+
+    /// Room's rows (AL01, R.0), every account's at once (AL01.11): one statement, on a reader of its own where there is one (never
+    /// the writer's lock), naming no `analysis_shape`. The bytes of the present files in each own-music folder of `own` that are
+    /// not free of room (`FREE_OF_ROOM`, with the main libraries `main`), by folder; and each copy of the records `asked` in the
+    /// Incoming folders `incoming` (a record's present files in one folder of one library), with when its first file came and its
+    /// bytes. Blocking.
+    pub fn room_rows(&self, own: &[i64], main: &[i64], incoming: &[i64], asked: &[i64]) -> Result<RoomRows> {
+        let sql = format!(
+            "SELECT f.folder, NULL, NULL, sum(f.size) FROM files f
+               WHERE f.folder IN (SELECT value FROM json_each(:own)) AND {PRESENT_F} AND NOT ({FREE_OF_ROOM}) GROUP BY f.folder
+             UNION ALL
+             SELECT f.folder, t.record, min(f.came), sum(f.size) FROM files f JOIN tracks t ON t.id = f.track
+               WHERE f.folder IN (SELECT value FROM json_each(:incoming)) AND {PRESENT_F} AND t.record IN (SELECT value FROM json_each(:asked))
+               GROUP BY f.folder, t.record, rtrim(f.rel, replace(f.rel, '/', ''))"
+        );
+        let json = |ids: &[i64]| serde_json::to_string(ids);
+        let (own, main, incoming, asked) = (json(own)?, json(main)?, json(incoming)?, json(asked)?);
+        let read = |db: &Connection| -> Result<RoomRows> {
+            let mut st = db.prepare(&sql)?;
+            let params = rusqlite::named_params! { ":own": own, ":main": main, ":incoming": incoming, ":asked": asked };
+            let rows = st.query_map(params, |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?)))?;
+            let mut out = RoomRows::default();
+            for row in rows {
+                let (folder, record, came, bytes) = row?;
+                let bytes = bytes.max(0) as u64;
+                match record {
+                    None => out.own.push((folder, bytes)),
+                    Some(record) => out.copies.push(RoomCopy { record, came, bytes }),
+                }
+            }
+            Ok(out)
+        };
+        let apart = self.reader();
+        match &apart {
+            Some(c) => read(c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// The bytes in the trashes of these catalogue folders (AL03.3): every file Cratarr moved into one, not emptied yet. One statement,
+    /// on a reader where there is one. Blocking.
+    pub fn trash_bytes(&self, folders: &[i64]) -> Result<u64> {
+        let ids = serde_json::to_string(folders)?;
+        let read = |db: &Connection| -> Result<u64> {
+            let sql = "SELECT ifnull(sum(size), 0) FROM files WHERE trashed IS NOT NULL AND folder IN (SELECT value FROM json_each(?1))";
+            let bytes: i64 = db.query_row(sql, [&ids], |r| r.get(0))?;
+            Ok(bytes.max(0) as u64)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// A copy's audio files (catalogue folder `folder`, under `dir`; all of it where `dir` is empty), present, each with its track
+    /// and its numbers as its tags give them (S.1, T5). On a reader where there is one. Blocking.
+    pub fn numbers_under(&self, folder: i64, dir: &str) -> Result<Vec<(Option<i64>, identity::FileNumbers)>> {
+        let prefix = if dir.is_empty() { String::new() } else { format!("{}/", dir.trim_end_matches('/')) };
+        let read = |db: &Connection| -> Result<Vec<(Option<i64>, identity::FileNumbers)>> {
+            let tag = |name: &str| format!("(SELECT t.value FROM tags t WHERE t.folder = f.folder AND t.rel = f.rel AND t.name = '{name}' ORDER BY t.n LIMIT 1)");
+            let sql = format!(
+                "SELECT f.track, {}, {}, {} FROM files f WHERE {PRESENT_F} AND f.folder = ?1 AND f.track IS NOT NULL AND substr(f.rel, 1, ?2) = ?3 ORDER BY f.rel",
+                tag("tracknumber"),
+                tag("totaltracks"),
+                tag("discnumber")
+            );
+            let mut st = db.prepare_cached(&sql)?;
+            let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| {
+                let (n, t, d): (Option<String>, Option<String>, Option<String>) = (r.get(1)?, r.get(2)?, r.get(3)?);
+                Ok((r.get(0)?, identity::FileNumbers::of(n.as_deref(), t.as_deref(), d.as_deref())))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
     }
 
     /// Rows Cratarr moved into a trash (Replace: the old files into Music's trash; before 2026-10-16, Incoming's):
@@ -2979,13 +3423,7 @@ impl Catalogue {
 
     /// The length of each audio file in an album folder (`dir`, relative to `folder`), by path. Read-only; blocking.
     pub fn album_lengths(&self, folder: i64, dir: &str) -> Result<std::collections::HashMap<String, u64>> {
-        let db = self.db();
-        let prefix = format!("{}/", dir.trim_end_matches('/'));
-        let mut st = db.prepare(&format!(
-            "SELECT rel, duration_ms FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND duration_ms > 0 AND {PRESENT}"
-        ))?;
-        let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        album_lengths_in(&self.db(), folder, dir)
     }
 
     /// The track id of a file, once it has one. Blocking.
@@ -3218,7 +3656,8 @@ impl Catalogue {
     // folder and the trash, as the tags do.
 
     /// A file's analysis and beats carried over to its new size and time (its audio as it was), and the file noted as
-    /// changed, its tags to read again. Blocking.
+    /// changed, its tags to read again; a copy that shared its original's blocks shares them no more (C39: a tag write makes a
+    /// file of its own). Blocking.
     fn carry_over(&self, folder: i64, rel: &str, before: (u64, i64), after: (u64, i64)) -> Result<()> {
         let db = self.db();
         for table in ["analysis", "beat_this"] {
@@ -3227,7 +3666,7 @@ impl Catalogue {
                 params![folder, rel, after.0 as i64, after.1, before.0 as i64, before.1],
             )?;
         }
-        db.execute("UPDATE files SET size = ?3, mtime = ?4, state = 0 WHERE folder = ?1 AND rel = ?2", params![folder, rel, after.0 as i64, after.1])?;
+        db.execute("UPDATE files SET size = ?3, mtime = ?4, state = 0, shared = 0 WHERE folder = ?1 AND rel = ?2", params![folder, rel, after.0 as i64, after.1])?;
         Ok(())
     }
 
@@ -3424,15 +3863,32 @@ impl Catalogue {
         self.store_shape_blob(folder, rel, size, mtime, "bands", &signals.0)
     }
 
-    /// One of the shape's blobs worked out apart (`beats`, `bands`), while the file is as it was analysed.
-    /// A file's waveform in three bands, as `signals_of`: `Some(None)` until it is first worked out.
+    /// A file's waveform in three bands, as `signals_of`: `Some(None)` until it is first worked out. Apart from the shape (M1).
     pub fn band_wave_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::band_wave::BandWave>> {
-        self.shape_blob(folder, rel, "band_wave").map(|b| b.map(crate::analysis::band_wave::BandWave))
+        self.db()
+            .query_row(
+                "SELECT w.band_wave FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+                   LEFT JOIN analysis_band_wave w ON w.folder = a.folder AND w.rel = a.rel
+                 WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime",
+                params![folder, rel],
+                |r| r.get::<_, Option<Vec<u8>>>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .map(|w| w.map(crate::analysis::band_wave::BandWave))
     }
 
-    /// Keeps a file's waveform in three bands beside its analysis (false: the file has no analysis as it is now).
+    /// Keeps a file's waveform in three bands, or the mark of one that failed, apart from the shape with its form (M1), where
+    /// the file has an analysis as it is now (`size`, `mtime`): false where it has none.
     pub fn store_band_wave(&self, folder: i64, rel: &str, size: u64, mtime: i64, wave: &crate::analysis::band_wave::BandWave) -> Result<bool> {
-        self.store_shape_blob(folder, rel, size, mtime, "band_wave", &wave.0)
+        let n = self.db().execute(
+            "INSERT INTO analysis_band_wave (folder, rel, form, band_wave)
+               SELECT ?1, ?2, ?5, ?6 WHERE EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)
+             ON CONFLICT (folder, rel) DO UPDATE SET form = excluded.form, band_wave = excluded.band_wave",
+            params![folder, rel, size as i64, mtime, wave.form(), wave.0],
+        )?;
+        Ok(n > 0)
     }
 
     /// A file's spectrum (`analysis::spectrum`): None without an analysis as the file is now; Some(None) not worked
@@ -3449,26 +3905,44 @@ impl Catalogue {
 
     /// Marks a file its waveform in three bands could not be worked out of (`band_wave::FAILED`), as it is now.
     pub fn store_band_wave_failed(&self, folder: i64, rel: &str, size: u64, mtime: i64) -> Result<bool> {
-        self.store_shape_blob(folder, rel, size, mtime, "band_wave", &[crate::analysis::band_wave::FAILED])
+        self.store_band_wave(folder, rel, size, mtime, &crate::analysis::band_wave::BandWave(vec![crate::analysis::band_wave::FAILED]))
+    }
+
+    /// P6 (W6): the waveform in three bands 0.16 kept in a file's shape row, copied apart where the file has none apart, is as it
+    /// was analysed and as the pass took it (`size`, `mtime`), and that wave is of the current form or the mark of one that
+    /// failed: what the part `band_wave` would have copied, had its mark not been set by hand (the runbook's escape). So the pass
+    /// copies a kept wave and decodes none. One shape row read by its key (`KEPT_BAND_WAVE`: the signals behind it the one file's
+    /// alone), never written. False: none to copy. Blocking.
+    pub fn copy_kept_band_wave(&self, folder: i64, rel: &str, size: u64, mtime: i64) -> Result<bool> {
+        use crate::analysis::band_wave::BandWave;
+        if self.file_to_analyse(folder, rel).is_none_or(|(_, s, m)| (s, m) != (size, mtime)) {
+            return Ok(false);
+        }
+        let db = self.db();
+        if db.query_row("SELECT 1 FROM analysis_band_wave WHERE folder = ?1 AND rel = ?2", params![folder, rel], |_| Ok(())).optional()?.is_some() {
+            return Ok(false);
+        }
+        let kept: Option<Vec<u8>> = db.query_row(KEPT_BAND_WAVE, params![folder, rel], |r| r.get(0)).optional()?.flatten();
+        // An older form is worked out again, as the pass's question asks it to be.
+        let Some(wave) = kept.map(BandWave).filter(|w| w.form() != 0) else { return Ok(false) };
+        let n = db.execute(
+            "INSERT INTO analysis_band_wave (folder, rel, form, band_wave)
+               SELECT ?1, ?2, ?5, ?6 WHERE EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)
+             ON CONFLICT (folder, rel) DO NOTHING",
+            params![folder, rel, size as i64, mtime, wave.form(), wave.0],
+        )?;
+        Ok(n > 0)
     }
 
     /// Present files with an analysis as they are now but no waveform in three bands (or one of an older form), and not
-    /// marked as failed: the analysis pass's work when it has nothing else to do, newest music first. Blocking.
+    /// marked as failed: the analysis pass's work when it has nothing else to do, newest music first. Asked through the
+    /// index of forms alone (M1, `without_band_wave_sql`). Blocking.
     pub fn without_band_wave(&self, limit: usize) -> Result<Vec<(i64, String, PathBuf, u64, i64)>> {
+        use crate::analysis::band_wave::{FAILED, FORMAT};
         let folders = self.folders();
         let db = self.db();
-        let mut st = db.prepare(&format!(
-            "SELECT f.folder, f.rel, f.size, f.mtime FROM files f
-               JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
-               LEFT JOIN analysis_shape s ON s.folder = a.folder AND s.rel = a.rel
-               LEFT JOIN tracks t ON t.id = f.track
-             WHERE {PRESENT_F} AND f.state = ?1 AND (a.complete IS NULL OR a.complete != 0)
-               AND (s.band_wave IS NULL OR (s.band_wave != ?5 AND (length(s.band_wave) != ?2 OR substr(s.band_wave, 1, 1) != ?3)))
-             ORDER BY t.born DESC, f.mtime DESC LIMIT ?4"
-        ))?;
-        let format = vec![crate::analysis::band_wave::FORMAT];
-        let failed = vec![crate::analysis::band_wave::FAILED];
-        let rows = st.query_map(params![READ, crate::analysis::band_wave::LEN as i64, format, limit as i64, failed], |r| {
+        let mut st = db.prepare(&without_band_wave_sql())?;
+        let rows = st.query_map(params![READ, FORMAT, FAILED, limit as i64], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?.max(0) as u64, r.get::<_, i64>(3)?))
         })?;
         let mut out = Vec::new();
@@ -3480,6 +3954,87 @@ impl Catalogue {
         Ok(out)
     }
 
+    /// Another live record of a record's names (folded as the had rule folds them, `identity::fold`) with a present file in one of
+    /// `folders`: another edition of it there (OQ1, the owner: two records by their tracks, said by name, with no action). Its
+    /// folder, the lowest. Blocking.
+    pub fn other_edition_in(&self, record: i64, folders: &[i64]) -> Result<Option<i64>> {
+        if folders.is_empty() {
+            return Ok(None);
+        }
+        let db = self.db();
+        let named: Option<(String, String)> =
+            db.query_row("SELECT COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id = ?1", [record], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let Some((artist, title)) = named.map(|(a, t)| (identity::fold(&a), identity::fold(&t))).filter(|(a, t)| !a.is_empty() && !t.is_empty()) else {
+            return Ok(None);
+        };
+        let within = folders.iter().map(i64::to_string).collect::<Vec<_>>().join(", ");
+        let mut st = db.prepare(&format!(
+            "SELECT COALESCE(r.artist, ''), COALESCE(r.title, ''), min(f.folder) FROM records r JOIN tracks t ON t.record = r.id JOIN files f ON f.track = t.id
+             WHERE r.id != ?1 AND r.merged_into IS NULL AND {PRESENT_F} AND f.folder IN ({within}) GROUP BY r.id ORDER BY 3"
+        ))?;
+        let rows = st.query_map([record], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?;
+        for row in rows {
+            let (a, t, folder) = row?;
+            if identity::fold(&a) == artist && identity::fold(&t) == title {
+                return Ok(Some(folder));
+            }
+        }
+        Ok(None)
+    }
+
+    /// 0.17's step's part `band_wave` (M1): the waveforms in three bands 0.16 kept in `analysis_shape`, copied into
+    /// `analysis_band_wave` once, `batch` of the shape's rows at a time in key order, each batch a transaction of its own and
+    /// the last one's last write the part's mark (`BAND_WAVE_MARK`). A start cut off goes on at the next from the last one
+    /// copied: nothing else writes there before the mark, as the step runs before the pass and the pages. The shape is read and
+    /// never written: a row rewritten is rewritten whole, its signals with it. It says it begins, and how many waves are apart
+    /// at the first batch past every `BAND_WAVES_SAID` (W1), those of a start cut off counted. `after` hears each batch done but
+    /// the last (what the tests cut it by). None: done before; else how many waves are apart now. Blocking.
+    pub fn band_waves_apart(&self, batch: usize, after: &dyn Fn() -> Result<()>) -> Result<Option<u64>> {
+        use crate::analysis::band_wave::BandWave;
+        let mut db = self.db();
+        if db.query_row("SELECT 1 FROM meta WHERE key = ?1", [BAND_WAVE_MARK], |_| Ok(())).optional()?.is_some() {
+            return Ok(None);
+        }
+        tracing::info!(target: "library", "0.17's step, part band_wave");
+        let mut from: (i64, String) = db
+            .query_row("SELECT folder, rel FROM analysis_band_wave ORDER BY folder DESC, rel DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+            .unwrap_or((i64::MIN, String::new()));
+        let mut apart = db.query_row("SELECT count(*) FROM analysis_band_wave", [], |r| r.get::<_, i64>(0))?.max(0) as u64;
+        let mut said = apart / BAND_WAVES_SAID;
+        loop {
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let rows: Vec<(i64, String, Option<Vec<u8>>)> = tx
+                .prepare("SELECT folder, rel, band_wave FROM analysis_shape WHERE (folder, rel) > (?1, ?2) ORDER BY folder, rel LIMIT ?3")?
+                .query_map(params![from.0, from.1, batch as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            let last = rows.len() < batch;
+            if let Some((folder, rel, _)) = rows.last() {
+                from = (*folder, rel.clone());
+            }
+            {
+                let mut put = tx.prepare("INSERT OR IGNORE INTO analysis_band_wave (folder, rel, form, band_wave) VALUES (?1, ?2, ?3, ?4)")?;
+                for (folder, rel, wave) in rows {
+                    let Some(wave) = wave.map(BandWave) else { continue };
+                    apart += put.execute(params![folder, rel, wave.form(), wave.0])? as u64;
+                }
+            }
+            if last {
+                let apart: i64 = tx.query_row("SELECT count(*) FROM analysis_band_wave", [], |r| r.get(0))?;
+                tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![BAND_WAVE_MARK, serde_json::json!({ "band_waves": apart }).to_string()])?;
+                tx.commit()?;
+                return Ok(Some(apart.max(0) as u64));
+            }
+            tx.commit()?;
+            if apart / BAND_WAVES_SAID > said {
+                said = apart / BAND_WAVES_SAID;
+                tracing::info!(target: "library", band_waves = apart, "0.17's step: waveforms in three bands apart so far");
+            }
+            after()?;
+        }
+    }
+
+    /// One of the shape's blobs worked out apart (`beats`, `bands`, `spectrum`), while the file is as it was analysed.
     fn shape_blob(&self, folder: i64, rel: &str, column: &'static str) -> Option<Option<Vec<u8>>> {
         self.db()
             .query_row(
@@ -3801,6 +4356,7 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
             p.last_pass = Some(now());
             p.problems = problems;
         }
+        cat.told.fetch_add(1, Ordering::SeqCst);
         tokio::select! {
             _ = tokio::time::sleep(PASS_EVERY) => {}
             _ = cat.poke.notified() => {}
@@ -3814,6 +4370,45 @@ const LENGTH_SLACK_MS: u64 = 1_500;
 
 pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     served_rows_in(db, folder, None)
+}
+
+/// `Catalogue::album_tags` on the caller's connection.
+fn album_tags_in(db: &Connection, folder: i64, dir: &str) -> Result<Vec<(String, Vec<(String, String)>)>> {
+    let prefix = format!("{}/", dir.trim_end_matches('/'));
+    let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut st = db.prepare(&format!(
+        "SELECT rel FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND {PRESENT} ORDER BY rel"
+    ))?;
+    let rels = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| r.get::<_, String>(0))?;
+    let mut index = std::collections::HashMap::new();
+    for rel in rels {
+        let rel = rel?;
+        index.insert(rel.clone(), out.len());
+        out.push((rel, Vec::new()));
+    }
+    let mut st = db.prepare(
+        "SELECT rel, name, value FROM tags WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND name IS NOT NULL ORDER BY rel, n",
+    )?;
+    let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+    })?;
+    for row in rows {
+        let (rel, name, value) = row?;
+        if let Some(&i) = index.get(&rel) {
+            out[i].1.push((name, value));
+        }
+    }
+    Ok(out)
+}
+
+/// `Catalogue::album_lengths` on the caller's connection.
+fn album_lengths_in(db: &Connection, folder: i64, dir: &str) -> Result<std::collections::HashMap<String, u64>> {
+    let prefix = format!("{}/", dir.trim_end_matches('/'));
+    let mut st = db.prepare(&format!(
+        "SELECT rel, duration_ms FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND duration_ms > 0 AND {PRESENT}"
+    ))?;
+    let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// A file's folder within its library folder ("" at its top).
@@ -3830,11 +4425,12 @@ fn rel_range(dir: Option<&str>) -> Option<(String, String)> {
 /// `served_rows`, of the files right in `dir` only where given (0.9.8: the library builds again just the albums
 /// Cratarr wrote to, `Library::update_dirs`).
 pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Vec<ServedRow>> {
-    rows_in(db, folder, dir, PRESENT)
+    rows_in(db, folder, dir, PRESENT, true)
 }
 
-/// `served_rows_in`, of the files `which` says, a condition on `files` as `f`.
-fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str) -> Result<Vec<ServedRow>> {
+/// `served_rows_in`, of the files `which` says, a condition on `files` as `f`; the albums' gains with their analyses where
+/// `gains` (the shape's loudness blocks: `album_gains_in`).
+fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str, gains: bool) -> Result<Vec<ServedRow>> {
     let range = rel_range(dir);
     let (lo, hi) = range.clone().unzip();
     let within = |col: &str| if range.is_some() { format!(" AND {col} >= ?2 AND {col} < ?3") } else { " AND ?2 IS NULL AND ?3 IS NULL".to_string() };
@@ -3876,7 +4472,7 @@ fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str) -> Resu
         rows.push(f);
     }
     // Their analyses, while the files are as they were then, and their albums' gains (decision 0035).
-    let albums = album_gains_in(db, folder, dir)?;
+    let albums = if gains { album_gains_in(db, folder, dir)? } else { HashMap::new() };
     let mut st = db.prepare(&format!(
         "SELECT a.rel, a.track_gain_db, a.track_peak, a.bpm, a.duration_secs, a.complete FROM analysis a
          JOIN files f ON f.folder = a.folder AND f.rel = a.rel WHERE a.folder = ?1 AND a.size = f.size AND a.mtime = f.mtime{}",
@@ -3933,6 +4529,30 @@ const ANALYSIS_COLS: &str =
     "a.version, a.duration_secs, a.loudness_lufs, a.track_gain_db, a.track_peak, s.blocks, a.bpm, a.bpm_confidence, s.waveform, a.complete, a.four";
 /// The join `ANALYSIS_COLS` needs, after `analysis a`.
 const SHAPE_JOIN: &str = "LEFT JOIN analysis_shape s ON s.folder = a.folder AND s.rel = a.rel";
+
+/// 0.17's step's part `band_wave` done (M1, `Catalogue::band_waves_apart`), its report the waves apart.
+const BAND_WAVE_MARK: &str = "017:band_wave";
+/// The part `band_wave` says how many waves are apart once past each this many (W1): a few lines on production's 5,000.
+const BAND_WAVES_SAID: u64 = 5_000;
+/// The one read of the shape where the part `band_wave` was marked by hand (P6, `Catalogue::copy_kept_band_wave`): one row by its
+/// key, the file being worked on.
+const KEPT_BAND_WAVE: &str = "SELECT band_wave FROM analysis_shape WHERE folder = ?1 AND rel = ?2";
+
+/// The analysis pass's question (M1): present files with an analysis as they are now and no waveform in three bands of this
+/// form (`?2`) nor the mark of one that failed (`?3`), newest music first. `analysis_band_wave` is read through its index of
+/// forms (`INDEXED BY`, whatever the planner would guess), so no wave is read, and `analysis_shape`, whose rows hold the
+/// visuals' signals behind which 0.16.2 kept the wave, not at all.
+fn without_band_wave_sql() -> String {
+    format!(
+        "SELECT f.folder, f.rel, f.size, f.mtime FROM files f
+           JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
+           LEFT JOIN analysis_band_wave w INDEXED BY analysis_band_wave_form ON w.folder = a.folder AND w.rel = a.rel
+           LEFT JOIN tracks t ON t.id = f.track
+         WHERE {PRESENT_F} AND f.state = ?1 AND (a.complete IS NULL OR a.complete != 0)
+           AND (w.form IS NULL OR w.form NOT IN (?2, ?3))
+         ORDER BY t.born DESC, f.mtime DESC LIMIT ?4"
+    )
+}
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -3991,6 +4611,8 @@ fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64
     ])?;
     db.prepare_cached("INSERT OR REPLACE INTO analysis_shape (folder, rel, waveform, blocks, beats) VALUES (?1, ?2, ?3, ?4, ?5)")?
         .execute(params![folder, rel, a.waveform, blocks_bytes(&a.blocks), a.beats.as_ref().map(|b| b.0.as_slice())])?;
+    // The old analysis' waveform in three bands goes with it, as what the shape's row held goes as it is replaced (M1).
+    db.prepare_cached("DELETE FROM analysis_band_wave WHERE folder = ?1 AND rel = ?2")?.execute(params![folder, rel])?;
     Ok(())
 }
 
@@ -4271,6 +4893,264 @@ pub fn served_fingerprint(db: &Connection) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// A file of track 7 in catalogue folder 0, read, its tags and analysis kept (C39).
+    fn read_file_in(cat: &Catalogue) {
+        let db = cat.db();
+        db.execute("INSERT INTO files (folder, rel, size, mtime, track, state, format) VALUES (0, 'A/1.flac', 10, 5, 7, ?1, 'FLAC')", [READ]).unwrap();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'A/1.flac', 0, 'TITLE', 'title', 'One')", []).unwrap();
+        db.execute("INSERT INTO analysis (folder, rel, size, mtime, version, analysed_at) VALUES (0, 'A/1.flac', 10, 5, ?1, 1)", [crate::analysis::VERSION]).unwrap();
+        db.execute("INSERT INTO source_ids (source, track_id, library, folder, rel, seen) VALUES ('jf', 'x1', 'Music', 0, 'A/1.flac', 1)", []).unwrap();
+    }
+
+    /// C39: a copy's rows are its original's: on the same track, read, its tags and analysis kept, so no pass reads or analyses it
+    /// again; it came now, shares as it was copied, and names no other server's item. A walk's row there first gives way.
+    #[test]
+    fn a_copy_is_not_analysed_again() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/own")]).unwrap();
+        read_file_in(&cat);
+        assert!(cat.store_band_wave(0, "A/1.flac", 10, 5, &a_band_wave()).unwrap());
+        cat.db().execute("INSERT INTO files (folder, rel, size, mtime, state) VALUES (1, 'A/1.flac', 10, 5, 0)", []).unwrap();
+        assert_eq!(cat.copy_rows(&[((0, "A/1.flac".into()), (1, "A/1.flac".into()), true)]).unwrap(), 1);
+        let db = cat.db();
+        let (track, state, shared, came): (Option<i64>, i64, i64, Option<i64>) =
+            db.query_row("SELECT track, state, shared, came FROM files WHERE folder = 1 AND rel = 'A/1.flac'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
+        assert_eq!((track, state, shared), (Some(7), READ, 1), "the same track, read, shared");
+        assert!(came.is_some_and(|c| c > 5), "come now");
+        let title: String = db.query_row("SELECT value FROM tags WHERE folder = 1 AND rel = 'A/1.flac' AND name = 'title'", [], |r| r.get(0)).unwrap();
+        assert_eq!(title, "One");
+        let named: i64 = db.query_row("SELECT count(*) FROM source_ids WHERE folder = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(named, 0, "no other server's item");
+        drop(db);
+        let waiting = cat.unanalysed(10).unwrap();
+        assert!(!waiting.iter().any(|(f, rel, ..)| (*f, rel.as_str()) == (1, "A/1.flac")), "not analysed again: {waiting:?}");
+        assert_eq!(cat.without_band_wave(10).unwrap(), Vec::new(), "nor its waveform in three bands worked out again");
+    }
+
+    /// OQ1: a record waiting whose names another record in a main library has is another edition there, by its names alone; one
+    /// only elsewhere, itself, or another name is none.
+    #[test]
+    fn another_edition_is_found_by_its_names_in_the_main_libraries() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/incoming")]).unwrap();
+        let kept = cat.record_for_tests("Night Ferry", 10);
+        let waiting = cat.record_for_tests("Night Ferry", 12);
+        let other = cat.record_for_tests("Day Ferry", 10);
+        cat.copy_for_tests(kept, 0);
+        cat.copy_for_tests(other, 0);
+        cat.copy_for_tests(waiting, 1);
+        assert_eq!(cat.other_edition_in(waiting, &[0]).unwrap(), Some(0), "Music has another edition");
+        assert_eq!(cat.other_edition_in(waiting, &[1]).unwrap(), None, "only itself there");
+        assert_eq!(cat.other_edition_in(other, &[0]).unwrap(), None, "another name");
+        assert_eq!(cat.other_edition_in(waiting, &[]).unwrap(), None);
+    }
+
+    /// T2.4: one rule says whether the backup's list covers a copy: it asks the original's size and time (`same_bytes!`, the one
+    /// test of the same bytes, which room's rule of its own reads too), and the backup's list reads it. T2b: the original is one
+    /// (not a copy), present, outside any trash, in a kept library.
+    #[test]
+    fn the_shared_rule_is_one() {
+        assert!(SHARED_WITH.contains("o.size = f.size") && SHARED_WITH.contains("o.mtime = f.mtime"), "{SHARED_WITH}");
+        assert!(SHARED_WITH.contains("o.shared = 0") && SHARED_WITH.contains("o.trashed IS NULL") && SHARED_WITH.contains("json_each(:kept)"), "{SHARED_WITH}");
+        let source = include_str!("mod.rs");
+        let at = source.find("pub fn shared_copies").unwrap();
+        let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
+        assert!(body.contains("{SHARED_WITH}") && !body.contains("f.shared ="), "shared_copies reads the backup's one rule: {body}");
+    }
+
+    /// RF5: a copy is its album's only copy of its bytes once no original in a kept library holds them: Music's original holds
+    /// them, and so does one moved into someone's own music; one moved into Incoming (not kept), rewritten, or in a trash does not,
+    /// nor does another copy sharing their blocks (two copies never hold each other, as T2b). A file on no track (a cover) is never
+    /// one.
+    #[test]
+    fn a_copys_bytes_are_held_while_an_original_in_a_kept_library_has_them() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/incoming"), PathBuf::from("/own/ann"), PathBuf::from("/own/bob")]).unwrap();
+        let record = cat.record_for_tests("Tide Tables", 2);
+        cat.copy_for_tests(record, 0);
+        let original = |n: i64| format!("copy-{record}/{n}.flac");
+        cat.copy_rows(&[1, 2].map(|n| ((0, original(n)), (2, format!("Own/{n}.flac")), true))).unwrap();
+        let copies = ["Own/1.flac", "Own/2.flac", "Own/cover.jpg"].map(String::from);
+        let only = || cat.only_copies(2, &copies, &[0, 2, 3]).unwrap();
+        assert!(only().is_empty(), "Music's originals hold them");
+        cat.move_files(0, &format!("copy-{record}"), 3, "Moved").unwrap();
+        assert!(only().is_empty(), "moved into Bob's own music: kept, and holding them still");
+        cat.move_files(3, "Moved", 1, "Moved").unwrap();
+        assert_eq!(only(), ["Own/1.flac", "Own/2.flac"], "moved into Incoming: no kept library holds them");
+        cat.move_files(1, "Moved", 0, &format!("copy-{record}")).unwrap();
+        assert!(only().is_empty(), "back in Music");
+        cat.rewrite_for_tests(0, &original(2), 2, 2);
+        assert_eq!(only(), ["Own/2.flac"], "its original rewritten: other bytes");
+        cat.copy_rows(&[((0, original(1)), (3, "Bob/1.flac".to_string()), true)]).unwrap();
+        cat.mark_trashed(0, &original(1), &format!("100/{}", original(1))).unwrap();
+        assert_eq!(only(), ["Own/1.flac", "Own/2.flac"], "its original in the trash; Bob's copy sharing its blocks holds nothing");
+    }
+
+    /// M1: the pass's question of which files have no waveform in three bands reads `analysis_band_wave`'s index of forms
+    /// alone: no wave, and nothing of `analysis_shape`, whose rows hold the visuals' signals (250 KB each: 0.16.2's question read
+    /// 1.3 GB behind them every ten minutes). With the shape's table away, it answers as before.
+    #[test]
+    fn the_band_wave_question_reads_the_index_alone() {
+        use crate::analysis::band_wave::{FAILED, FORMAT};
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let todo = cat.unanalysed(10).unwrap();
+        for (folder, rel, _, size, mtime) in &todo {
+            cat.store_analysis(*folder, rel, *size, *mtime, &an_analysis(-3.0, 500)).unwrap();
+        }
+        let (folder, one, _, size, mtime) = todo.iter().find(|t| t.1.ends_with("One.mp3")).unwrap().clone();
+        assert!(cat.store_band_wave(folder, &one, size, mtime, &a_band_wave()).unwrap());
+        let plan: Vec<String> = {
+            let db = cat.db();
+            let mut st = db.prepare(&format!("EXPLAIN QUERY PLAN {}", without_band_wave_sql())).unwrap();
+            st.query_map(params![READ, FORMAT, FAILED, 10], |r| r.get::<_, String>(3)).unwrap().map(Result::unwrap).collect()
+        };
+        assert!(plan.iter().any(|p| p.contains("USING COVERING INDEX analysis_band_wave_form")), "{plan:?}");
+        assert!(!plan.iter().any(|p| p.contains("analysis_shape")), "{plan:?}");
+        let wanted = |cat: &Catalogue| cat.without_band_wave(10).unwrap().into_iter().map(|t| t.1).collect::<Vec<_>>();
+        let before = wanted(&cat);
+        assert_eq!(before.len(), 1, "{before:?}");
+        assert!(!before.contains(&one));
+        cat.db().execute_batch("ALTER TABLE analysis_shape RENAME TO analysis_shape_away").unwrap();
+        assert_eq!(wanted(&cat), before, "the shape's table away, the same answer");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// P6.3 (W6): with the part `band_wave` marked by hand, the pass's question still reads no shape, and the copy of a file's
+    /// kept wave reads one shape row by its key (folder, rel), the file being worked on alone, and nothing else of the shape.
+    #[test]
+    fn the_wave_copy_reads_one_row_by_its_key() {
+        assert!(!without_band_wave_sql().contains("analysis_shape"));
+        assert!(KEPT_BAND_WAVE.ends_with("FROM analysis_shape WHERE folder = ?1 AND rel = ?2"), "{KEPT_BAND_WAVE}");
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let plan: Vec<String> = {
+            let db = cat.db();
+            let mut st = db.prepare(&format!("EXPLAIN QUERY PLAN {KEPT_BAND_WAVE}")).unwrap();
+            st.query_map(params![0, "A/1.flac"], |r| r.get::<_, String>(3)).unwrap().map(Result::unwrap).collect()
+        };
+        assert!(!plan.is_empty() && plan.iter().all(|p| p.starts_with("SEARCH analysis_shape USING") && p.ends_with("(folder=? AND rel=?)")), "{plan:?}");
+        let source = include_str!("mod.rs");
+        let at = source.find("pub fn copy_kept_band_wave").unwrap();
+        let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
+        assert!(body.contains("db.query_row(KEPT_BAND_WAVE, params![folder, rel]") && !body.contains("analysis_shape"), "the shape read once, by its key: {body}");
+    }
+
+    /// M1, 0.17's step's part `band_wave`: the waves 0.16 kept in `analysis_shape` copied apart once, a batch at a time, each
+    /// with its form (current, the mark of a failure, an older form); a start cut off after a batch goes on at the next and
+    /// copies each once; the shape's rows, signals and all, are read and never written; done, the part does not run again.
+    #[test]
+    fn the_band_waves_move_apart_once_a_batch_at_a_time() {
+        use crate::analysis::band_wave::{FAILED, FORMAT};
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let current = a_band_wave().0;
+        {
+            let db = cat.db();
+            let mut put = db.prepare("INSERT INTO analysis_shape (folder, rel, bands, band_wave, spectrum) VALUES (?1, ?2, zeroblob(300000), ?3, x'0102')").unwrap();
+            let waves = [Some(current.clone()), Some(vec![FAILED]), None, Some(vec![FORMAT, 1, 2]), Some(current.clone()), Some(current.clone()), Some(current.clone())];
+            for (n, wave) in waves.into_iter().enumerate() {
+                put.execute(params![if n == 6 { -2 } else { 0 }, format!("A/{n}.flac"), wave]).unwrap();
+            }
+        }
+        let shapes = |cat: &Catalogue| -> Vec<(i64, i64, String, i64, Option<Vec<u8>>, Option<Vec<u8>>)> {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT rowid, folder, rel, length(bands), band_wave, spectrum FROM analysis_shape ORDER BY rowid").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let apart = |cat: &Catalogue| -> Vec<(i64, String, u8)> {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT folder, rel, form FROM analysis_band_wave ORDER BY folder, rel").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let marked = |cat: &Catalogue| cat.meta(BAND_WAVE_MARK);
+        let before = shapes(&cat);
+        let cut = cat.band_waves_apart(2, &|| anyhow::bail!("stopped")).unwrap_err();
+        assert_eq!(cut.to_string(), "stopped");
+        assert_eq!(apart(&cat), [(-2, "A/6.flac".to_string(), FORMAT), (0, "A/0.flac".to_string(), FORMAT)], "the first batch, kept");
+        assert_eq!(marked(&cat), None, "not done");
+        assert_eq!(cat.band_waves_apart(2, &|| Ok(())).unwrap(), Some(6));
+        let each = |rel: &str, form: u8| (0, rel.to_string(), form);
+        assert_eq!(
+            apart(&cat),
+            [(-2, "A/6.flac".to_string(), FORMAT), each("A/0.flac", FORMAT), each("A/1.flac", FAILED), each("A/3.flac", 0), each("A/4.flac", FORMAT), each("A/5.flac", FORMAT)],
+            "each once, by its form; none where there was none"
+        );
+        let same: i64 = cat.db().query_row("SELECT count(*) FROM analysis_band_wave w JOIN analysis_shape s USING (folder, rel) WHERE w.band_wave = s.band_wave", [], |r| r.get(0)).unwrap();
+        assert_eq!(same, 6, "the waves as they were");
+        assert_eq!(shapes(&cat), before, "the shape's rows read, never written");
+        assert_eq!(marked(&cat).as_deref(), Some(r#"{"band_waves":6}"#));
+        cat.db().execute("DELETE FROM analysis_band_wave WHERE rel = 'A/4.flac'", []).unwrap();
+        assert_eq!(cat.band_waves_apart(2, &|| Ok(())).unwrap(), None, "done: not again");
+        assert_eq!(apart(&cat).len(), 5);
+    }
+
+    /// P1.3 (W1): the part `band_wave` says how far it is at the first batch past every 5,000 waves, never more often and never
+    /// once its mark is set, then its closing line; cut off at 6,000, the next start counts the waves already apart and says
+    /// no count again.
+    #[test]
+    fn band_wave_says_how_far_it_is_every_five_thousand() {
+        const ROWS: u64 = 12_001;
+        let made = || {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let wave = a_band_wave().0;
+            let mut db = cat.db();
+            let tx = db.transaction().unwrap();
+            {
+                let mut put = tx.prepare("INSERT INTO analysis_shape (folder, rel, band_wave) VALUES (0, ?1, ?2)").unwrap();
+                for n in 0..ROWS {
+                    put.execute(params![format!("A/{n:05}.flac"), wave]).unwrap();
+                }
+            }
+            tx.commit().unwrap();
+            drop(db);
+            cat
+        };
+        let so_far = |lines: &[String]| -> Vec<u64> {
+            lines.iter().filter_map(|l| l.strip_prefix("library: 0.17's step: waveforms in three bands apart so far band_waves=")?.parse().ok()).collect()
+        };
+        let cat = made();
+        let lines = crate::diagnostics::logged_lines(|| crate::app::step_017::band_waves(&cat).unwrap());
+        assert_eq!(so_far(&lines), [5_000, 10_000], "at the first batch past 5,000 and 10,000: {lines:#?}");
+        assert!(so_far(&lines).iter().all(|n| *n < ROWS), "none once the mark is set");
+        assert_eq!(lines.first().map(String::as_str), Some("library: 0.17's step, part band_wave"), "{lines:#?}");
+        assert!(lines.last().is_some_and(|l| l.starts_with("library: 0.17's step: the waveforms in three bands apart from the visuals' signals band_waves=12001")), "{lines:#?}");
+        assert_eq!(cat.meta(BAND_WAVE_MARK).as_deref(), Some(r#"{"band_waves":12001}"#));
+
+        let cut = made();
+        let batches = std::cell::Cell::new(0);
+        let first = crate::diagnostics::logged_lines(|| {
+            cut.band_waves_apart(500, &|| {
+                batches.set(batches.get() + 1);
+                if batches.get() == 12 { anyhow::bail!("stopped") } else { Ok(()) }
+            })
+            .unwrap_err();
+        });
+        let copied: i64 = cut.db().query_row("SELECT count(*) FROM analysis_band_wave", [], |r| r.get(0)).unwrap();
+        assert_eq!(copied, 6_000, "cut off inside the part");
+        let again = crate::diagnostics::logged_lines(|| crate::app::step_017::band_waves(&cut).unwrap());
+        let said = so_far(&again);
+        assert!(said.first().is_some_and(|n| *n >= 6_000), "the waves apart before counted: {again:#?}");
+        assert!(said.len() <= 3, "{again:#?}");
+        let all: Vec<u64> = so_far(&first).into_iter().chain(said).collect();
+        assert!(all.windows(2).all(|w| w[0] / 5_000 < w[1] / 5_000), "one line per 5,000, no count again: {all:?}");
+        assert!(all.iter().all(|n| *n < ROWS), "none once the mark is set: {all:?}");
+    }
+
+    /// C39: a copy shares no more once its file is written (a tag write: a new size or time, read again or walked); it keeps its
+    /// mark as it moves.
+    #[test]
+    fn a_written_file_stops_being_shared() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/own")]).unwrap();
+        read_file_in(&cat);
+        cat.copy_rows(&[((0, "A/1.flac".into()), (1, "A/1.flac".into()), true)]).unwrap();
+        let shared = |rel: &str| cat.db().query_row("SELECT shared FROM files WHERE folder = 1 AND rel = ?1", [rel], |r| r.get::<_, i64>(0)).unwrap();
+        cat.move_files(1, "A", 1, "B").unwrap();
+        assert_eq!(shared("B/1.flac"), 1, "kept as it moves");
+        cat.carry_over(1, "B/1.flac", (10, 5), (12, 9)).unwrap();
+        assert_eq!(shared("B/1.flac"), 0, "written: its own file");
+        cat.copy_rows(&[((0, "A/1.flac".into()), (1, "C/1.flac".into()), true)]).unwrap();
+        cat.record_walk(1, &[walk::Found { rel: "C/1.flac".into(), size: 11, mtime: 6 }]).unwrap();
+        assert_eq!(shared("C/1.flac"), 0, "walked with another size: its own file");
+    }
+
     fn music() -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -4436,9 +5316,12 @@ mod tests {
         assert!(cat.store_band_wave(two.0, &two.1, two.3, two.4, &BandWave(w)).unwrap());
         assert!(wanted(&cat).is_empty());
         // An older form's mark is not this one's: asked for again.
-        cat.store_band_wave_failed(folder, &one, size, mtime).unwrap();
-        cat.db().execute("UPDATE analysis_shape SET band_wave = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, one, vec![FAILED - 1]]).unwrap();
+        assert!(cat.store_band_wave(folder, &one, size, mtime, &BandWave(vec![FAILED - 1])).unwrap());
         assert_eq!(wanted(&cat), vec![one.clone()]);
+        // A new analysis of a file lets go of the waveform worked out of it before (M1, as the shape's row did): asked for again.
+        cat.store_analysis(two.0, &two.1, two.3, two.4, &an_analysis(-5.0, 480)).unwrap();
+        assert_eq!(cat.band_wave_of(two.0, &two.1), Some(None));
+        assert_eq!(wanted(&cat).len(), 2);
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -4493,13 +5376,21 @@ mod tests {
         cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
         let row = BeatThisRow { folder, rel: one.clone(), size, mtime, beats: vec![500, 1_000], downbeats: vec![500] };
         cat.store_beat_this(std::slice::from_ref(&row)).unwrap();
+        assert!(cat.store_band_wave(folder, &one, size, mtime, &a_band_wave()).unwrap());
         (one, row)
     }
 
-    /// How many rows of a file's shape and beats are kept at a place.
-    fn parts_at(cat: &Catalogue, folder: i64, rel: &str) -> (i64, i64) {
+    /// A waveform in three bands of the form this Cratarr makes.
+    fn a_band_wave() -> crate::analysis::band_wave::BandWave {
+        let mut w = vec![crate::analysis::band_wave::FORMAT];
+        w.resize(crate::analysis::band_wave::LEN, 9);
+        crate::analysis::band_wave::BandWave(w)
+    }
+
+    /// How many rows of a file's shape, beats and waveform in three bands are kept at a place.
+    fn parts_at(cat: &Catalogue, folder: i64, rel: &str) -> (i64, i64, i64) {
         let count = |table: &str| cat.db().query_row(&format!("SELECT COUNT(*) FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel], |r| r.get(0)).unwrap();
-        (count("analysis_shape"), count("beat_this"))
+        (count("analysis_shape"), count("beat_this"), count("analysis_band_wave"))
     }
 
     /// Beats left behind would list the file for hearing again, and a row a walk left in the way would break the shape's key.
@@ -4516,7 +5407,8 @@ mod tests {
         cat.move_files(0, "A - B (2020)", 0, "A - B (2020) moved").unwrap();
         assert_eq!(cat.beat_this_of(0, &moved).map(|(beats, _)| beats), Some(vec![0.5, 1.0]), "its own beats, not what stood there");
         assert_eq!(cat.analysis_of(0, &moved).unwrap().waveform.len(), 512, "its shape came along");
-        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "nothing left behind");
+        assert_eq!(cat.band_wave_of(0, &moved), Some(Some(a_band_wave())), "its waveform in three bands too");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0, 0), "nothing left behind");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -4528,15 +5420,18 @@ mod tests {
         read_as_audio(&cat);
         let (one, _) = heard(&cat, 0);
         cat.set_folders(vec![b.clone()]).unwrap();
-        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "parked, with its files");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0, 0), "parked, with its files");
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
-        assert_eq!(parts_at(&cat, 0, &one), (1, 1), "back, with them");
+        assert_eq!(parts_at(&cat, 0, &one), (1, 1, 1), "back, with them");
         assert!(cat.beat_this_of(0, &one).is_some());
         cat.set_folders(vec![b.clone()]).unwrap();
         std::fs::remove_dir_all(a.join("A - B (2020)")).unwrap();
         std::fs::write(a.join("other.mp3"), "x").unwrap();
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
-        let left: i64 = cat.db().query_row("SELECT (SELECT COUNT(*) FROM analysis_shape) + (SELECT COUNT(*) FROM beat_this)", [], |r| r.get(0)).unwrap();
+        let left: i64 = cat
+            .db()
+            .query_row("SELECT (SELECT COUNT(*) FROM analysis_shape) + (SELECT COUNT(*) FROM beat_this) + (SELECT COUNT(*) FROM analysis_band_wave)", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(left, 0, "its files gone from its path: forgotten, and all of theirs with them");
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
@@ -5251,6 +6146,274 @@ mod tests {
         assert!(record_retired(&cat, lone), "its one track went to a record already there");
     }
 
+    /// What an album's files name at MusicBrainz is their record's `files` reference (C43b), as its copy's files say (R8). One
+    /// release's files on two records (G1, a bonus track): the older keeps the release, the newer its group, until a certain
+    /// match or a hand says otherwise.
+    #[test]
+    fn a_files_release_is_a_files_reference() {
+        let cat = tracks(6);
+        let (release, group) = ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000101");
+        let tagged = |title: &str, ids: &[i64], release: &str| {
+            let a = album(title, ids);
+            AlbumCopy { facts: identity::RecordFacts { release: Some(release.into()), ..a.facts.clone() }, group: Some(group.into()), ..a }
+        };
+        let refs = |record: i64| -> Vec<(String, String, String)> {
+            cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().map(|(r, row)| (r.kind, r.value, row.how)).collect()
+        };
+        let by_files = |kind: &str, value: &str| (kind.to_string(), value.to_string(), "files".to_string());
+        cat.assign_records(&[tagged("Tide Tables", &[1, 2], release)]).unwrap();
+        let first = record_of(&cat, 1).unwrap();
+        assert_eq!(refs(first), [by_files("release", release), by_files("release-group", group)]);
+        let (bonus, junk) = (tagged("Tide Tables", &[3, 4, 5], release), AlbumCopy { group: None, ..tagged("Junk", &[6], "not a release") });
+        cat.assign_records(&[tagged("Tide Tables", &[1, 2], release), bonus, junk]).unwrap();
+        let (second, third) = (record_of(&cat, 3).unwrap(), record_of(&cat, 6).unwrap());
+        assert_ne!(first, second, "a bonus track: two records");
+        assert_eq!(refs(first), [by_files("release", release), by_files("release-group", group)]);
+        assert_eq!(refs(second), [by_files("release-group", group)], "the older keeps the release");
+        assert!(refs(third).is_empty(), "a tag that is no MusicBrainz id names nothing");
+    }
+
+    /// A copy of `title` over `ids` whose files name `release`, ranked `rank`.
+    fn naming(title: &str, ids: &[i64], release: &str, rank: u8) -> AlbumCopy {
+        let a = album(title, ids);
+        AlbumCopy { facts: identity::RecordFacts { release: Some(release.into()), ..a.facts.clone() }, rank, ..a }
+    }
+
+    /// R8 (N7): a retag that lets go of a release takes the MusicBrainz list read for it, and the count is worked out again
+    /// from what is left; a count chosen by hand from that list keeps it.
+    #[test]
+    fn a_retag_drops_the_old_releases_list_and_count() {
+        let cat = tracks(4);
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        cat.assign_records(&[naming("Tide Tables", &[1, 2], &mbid(1), 0), naming("Two Rooms", &[3, 4], &mbid(3), 0)]).unwrap();
+        let (worked, chosen) = (record_of(&cat, 1).unwrap(), record_of(&cat, 3).unwrap());
+        for (record, ids, by_hand) in [(worked, [1, 2], false), (chosen, [3, 4], true)] {
+            let list: Vec<identity::RefTrack> = ids.iter().zip(1..).map(|(t, position)| identity::RefTrack { disc: 1, position, title: format!("Track {t}"), length_ms: Some(200_000), recording: None }).collect();
+            cat.set_reference_tracks(record, "musicbrainz", &list).unwrap();
+            cat.set_counting(record, Some("musicbrainz"), by_hand).unwrap();
+        }
+        cat.keep_files_names(&[naming("Tide Tables", &[1, 2], &mbid(2), 0), naming("Two Rooms", &[3, 4], &mbid(4), 0)]).unwrap();
+        let state = |record: i64| (cat.reference_tracks(record).unwrap().len(), cat.record(record).unwrap().unwrap().counting);
+        assert_eq!(state(worked), (0, None), "the old release's list gone, and its count");
+        assert_eq!(state(chosen), (1, Some("musicbrainz".to_string())), "chosen by hand: kept");
+        assert_eq!(cat.references_of(&crate::serve::ids::record(worked)).unwrap().into_iter().map(|(r, _)| r.value).collect::<Vec<_>>(), [mbid(2)]);
+    }
+
+    /// R8 (N9): a record's `files` release is what its first-ranked copy names (CR18): Music's over an Incoming copy of its
+    /// tracks naming another, at a build with every record settled, wherever each comes in the list.
+    #[test]
+    fn the_main_librarys_copy_names_the_records_release() {
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        for (incoming_first, label) in [(true, "Incoming listed first"), (false, "Music listed first")] {
+            let cat = tracks(2);
+            let (main, incoming) = (naming("Tide Tables", &[1, 2], &mbid(1), 2), AlbumCopy { folder: 1, ..naming("Tide Tables", &[1, 2], &mbid(9), 0) });
+            cat.assign_records(std::slice::from_ref(&main)).unwrap();
+            let record = record_of(&cat, 1).unwrap();
+            let albums = if incoming_first { [incoming, main] } else { [main, incoming] };
+            cat.keep_files_names(&albums).unwrap();
+            assert_eq!(record_of(&cat, 2), Some(record), "{label}: one record");
+            let releases: Vec<String> = cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().filter(|(r, _)| r.kind == "release").map(|(r, _)| r.value).collect();
+            assert_eq!(releases, [mbid(1)], "{label}");
+        }
+    }
+
+    /// A copy of `title` lying in `dir` of folder 0, its tracks `ids` named "Track <id>".
+    fn arriving(title: &str, ids: &[i64], dir: &str) -> AlbumCopy {
+        AlbumCopy { files: ids.iter().map(|t| (0, format!("{dir}/{t:02}.flac"))).collect(), ..album(title, ids) }
+    }
+
+    /// A record not had, of `title` by "A" (as `album` names its albums), holding `refs`.
+    fn not_had(cat: &Catalogue, title: &str, refs: &[(&str, &str)]) -> i64 {
+        cat.db().execute("INSERT INTO records (born, title, artist) VALUES (1, ?1, 'A')", [title]).unwrap();
+        let record = cat.db().last_insert_rowid();
+        for (kind, value) in refs {
+            assert!(cat.set_reference(&crate::serve::ids::record(record), &records::Ref::new("musicbrainz", kind, value), "link").unwrap());
+        }
+        record
+    }
+
+    /// C50: an album that arrives in a folder a fetcher placed for a record not had is that record, whatever it is named: its
+    /// tracks given to it; the expectation used up.
+    #[test]
+    fn a_wanted_record_gets_its_tracks_by_expectation() {
+        let cat = tracks(2);
+        let wanted = not_had(&cat, "Quiet Lanes", &[]);
+        cat.expect_record(0, "Orbit Lane/Quiet Lanes", wanted).unwrap();
+        cat.assign_records(&[arriving("Silent Roads", &[1, 2], "Orbit Lane/Quiet Lanes")]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 2)), (Some(wanted), Some(wanted)));
+        assert!(cat.record(wanted).unwrap().unwrap().had);
+        assert_eq!(cat.db().query_row("SELECT count(*) FROM expected", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "used up");
+    }
+
+    /// R17 (F7): a record not had, credited as a listing named it, goes by its files once an album joins it: the artist they credit
+    /// in place of the listing's, and their own row of a label the listing named too; a label they do not name stays (R9).
+    #[test]
+    fn a_joined_record_is_credited_as_its_files_say() {
+        let cat = tracks(2);
+        let group = "00000000-0000-4000-8000-000000000107";
+        let wanted = not_had(&cat, "Two Rooms", &[("release-group", group)]);
+        let (listed, kite, lantern) = (cat.artist_for("No\u{f6}r Field").unwrap(), cat.label_for("Kite Records").unwrap(), cat.label_for("Paper Lantern").unwrap());
+        cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", params![wanted, listed]).unwrap();
+        for label in [kite, lantern] {
+            cat.db().execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, '', 'listing')", params![wanted, label]).unwrap();
+        }
+        let arrival = AlbumCopy { group: Some(group.into()), artists: vec!["Noor Field".into()], labels: vec![("Kite Records".into(), "KR-7".into())], ..arriving("Two Rooms", &[1, 2], "Noor Field/Two Rooms") };
+        cat.assign_records(&[arrival]).unwrap();
+        assert_eq!(record_of(&cat, 1), Some(wanted));
+        assert_eq!(cat.record_artists(wanted).unwrap(), [cat.artist_of("Noor Field").unwrap().unwrap()]);
+        assert_eq!(cat.label_records(kite).unwrap(), [(wanted, "KR-7".to_string())], "the files' row of it in place of the listing's");
+        assert_eq!(cat.label_records(lantern).unwrap(), [(wanted, String::new())], "a label the files do not name stays");
+    }
+
+    /// R17 (F8): a build without the copy that names the record's release (its library not read this time, its files gone for a
+    /// pass) keeps the release, its list and its count: they are let go of only when the first-ranked copy names another release.
+    #[test]
+    fn a_copy_missing_for_one_build_keeps_the_records_list() {
+        let cat = tracks(2);
+        let mbid = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        let (main, incoming) = (naming("Tide Tables", &[1, 2], &mbid(1), 2), AlbumCopy { folder: 1, ..album("Tide Tables", &[1, 2]) });
+        cat.assign_records(&[main, incoming.clone()]).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        let list: Vec<identity::RefTrack> = [1, 2].iter().zip(1..).map(|(t, position)| identity::RefTrack { disc: 1, position, title: format!("Track {t}"), length_ms: Some(200_000), recording: None }).collect();
+        cat.set_reference_tracks(record, "musicbrainz", &list).unwrap();
+        cat.set_counting(record, Some("musicbrainz"), false).unwrap();
+        let state = || {
+            let refs: Vec<String> = cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().map(|(r, _)| r.value).collect();
+            (refs, cat.reference_tracks(record).unwrap().len(), cat.record(record).unwrap().unwrap().counting)
+        };
+        cat.keep_files_names(&[incoming.clone()]).unwrap();
+        assert_eq!(state(), (vec![mbid(1)], 1, Some("musicbrainz".to_string())), "kept: its release, its list and its count");
+        cat.keep_files_names(&[naming("Tide Tables", &[1, 2], &mbid(2), 2), incoming]).unwrap();
+        assert_eq!(state(), (vec![mbid(2)], 0, None), "a retag lets them go");
+    }
+
+    /// R25 (N6): a record not had that a list counted before its album came (Soulseek's search) works its count out against the
+    /// files that came: where the list disagrees, none counts until one is chosen; where it agrees, it still counts.
+    #[test]
+    fn a_count_given_before_the_album_came_goes_where_the_files_disagree() {
+        let cat = tracks(4);
+        let list = |ids: &[i64]| -> Vec<identity::RefTrack> { ids.iter().zip(1..).map(|(t, position)| identity::RefTrack { disc: 1, position, title: format!("Track {t}"), length_ms: Some(200_000), recording: None }).collect() };
+        let (odd_group, fits_group) = ("00000000-0000-4000-8000-000000000180", "00000000-0000-4000-8000-000000000181");
+        let (odd, fits) = (not_had(&cat, "Lost Tapes", &[("release-group", odd_group)]), not_had(&cat, "Night Walks", &[("release-group", fits_group)]));
+        for (record, ids) in [(odd, &[1, 2, 9][..]), (fits, &[3, 4][..])] {
+            cat.set_reference_tracks(record, "musicbrainz", &list(ids)).unwrap();
+            cat.set_counting(record, Some("musicbrainz"), false).unwrap();
+        }
+        let first = AlbumCopy { group: Some(odd_group.into()), ..arriving("Lost Tapes", &[1, 2], "Lost Tapes") };
+        let second = AlbumCopy { group: Some(fits_group.into()), ..arriving("Night Walks", &[3, 4], "Night Walks") };
+        cat.assign_records(&[first, second]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 3)), (Some(odd), Some(fits)));
+        assert_eq!(cat.record(odd).unwrap().unwrap().counting, None, "a list of three against two files");
+        assert_eq!(cat.record(fits).unwrap().unwrap().counting.as_deref(), Some("musicbrainz"));
+    }
+
+    /// R28 (N11): a record's names change on a real retag only: a build without the copy that named it (its library parked, an
+    /// Incoming copy ranked first meanwhile) leaves them; a retag of that copy shows.
+    #[test]
+    fn a_copy_missing_for_one_build_keeps_the_records_names() {
+        let cat = tracks(2);
+        let tracks_of = [(1, "Track 1", 200_000), (2, "Track 2", 200_000)];
+        let main = AlbumCopy { rank: 2, ..copy(None, "Glass Harbour", "Tide Tables", &tracks_of) };
+        cat.assign_records(std::slice::from_ref(&main)).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        let title = || cat.record(record).unwrap().unwrap().title;
+        assert_eq!(title(), "Tide Tables");
+        let incoming = AlbumCopy { folder: 1, rank: 0, ..copy(None, "Glass Harbour", "Tide Tables (WEB)", &tracks_of) };
+        cat.keep_files_names(&[incoming]).unwrap();
+        assert_eq!(title(), "Tide Tables", "kept through a build without it");
+        cat.keep_files_names(&[AlbumCopy { title: "Tide Tables (Remastered)".into(), ..main }]).unwrap();
+        assert_eq!(title(), "Tide Tables (Remastered)", "a retag of the copy that counts");
+    }
+
+    /// R14 (F6): a had record's title and artist follow its first-ranked copy at each build: a retag shows.
+    #[test]
+    fn a_records_names_follow_a_retag() {
+        let cat = tracks(2);
+        cat.assign_records(&[album("Tide Tables", &[1, 2])]).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        cat.keep_files_names(&[copy(None, "Glass Harbour", "Tide Tables (Remastered)", &[(1, "Track 1", 200_000), (2, "Track 2", 200_000)])]).unwrap();
+        let row = cat.record(record).unwrap().unwrap();
+        assert_eq!((row.artist.as_str(), row.title.as_str()), ("Glass Harbour", "Tide Tables (Remastered)"));
+    }
+
+    /// C51b (F9): a download placed with its discs in folders of their own (`CD1`, `CD2`) joins the record expected for the
+    /// download's folder.
+    #[test]
+    fn a_multi_disc_download_joins_its_expected_record() {
+        let cat = tracks(2);
+        let wanted = not_had(&cat, "Quiet Lanes", &[]);
+        assert!(cat.expect_record(0, "Orbit Lane/Quiet Lanes (2017)", wanted).unwrap());
+        let discs = AlbumCopy { files: vec![(0, "Orbit Lane/Quiet Lanes (2017)/CD1/01.flac".into()), (0, "Orbit Lane/Quiet Lanes (2017)/CD2/01.flac".into())], ..album("Silent Roads", &[1, 2]) };
+        cat.assign_records(&[discs]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 2)), (Some(wanted), Some(wanted)));
+        assert_eq!(cat.db().query_row("SELECT count(*) FROM expected", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "used up");
+    }
+
+    /// C51b (F9): one record is expected in a folder: another's expectation there is refused while the first waits, and the album
+    /// that arrives is the first's; the first said again (its last file landed) waits a week from then; one a week unclaimed
+    /// waits no more.
+    #[test]
+    fn two_records_expected_in_one_folder_do_not_swap() {
+        let cat = tracks(2);
+        let (first, second) = (not_had(&cat, "Quiet Lanes", &[]), not_had(&cat, "Quiet Lanes (Deluxe)", &[]));
+        let at = || cat.db().query_row("SELECT at FROM expected", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert!(cat.expect_record(0, "Orbit Lane/Quiet Lanes", first).unwrap());
+        assert!(!cat.expect_record(0, "Orbit Lane/Quiet Lanes", second).unwrap(), "refused");
+        cat.db().execute("UPDATE expected SET at = at - 3 * 86400", []).unwrap();
+        let before = at();
+        assert!(cat.expect_record(0, "/Orbit Lane/Quiet Lanes/", first).unwrap(), "its own, said again");
+        assert!(at() > before);
+        cat.assign_records(&[arriving("Silent Roads", &[1, 2], "Orbit Lane/Quiet Lanes")]).unwrap();
+        assert_eq!((record_of(&cat, 1), cat.record(second).unwrap().unwrap().had), (Some(first), false));
+        assert!(cat.expect_record(0, "Orbit Lane/Undertow", first).unwrap());
+        cat.db().execute("UPDATE expected SET at = 0", []).unwrap();
+        assert!(cat.expect_record(0, "Orbit Lane/Undertow", second).unwrap(), "one a week unclaimed");
+    }
+
+    /// C50: an album whose files name a release a record not had holds is that record; one naming its release group too.
+    #[test]
+    fn a_wanted_record_gets_its_tracks_by_reference() {
+        let cat = tracks(4);
+        let (release, group) = ("00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000105");
+        let (by_release, by_group) = (not_had(&cat, "Late Train OST", &[("release", release)]), not_had(&cat, "Lost Tapes", &[("release-group", group)]));
+        let first = AlbumCopy { facts: identity::RecordFacts { release: Some(release.into()), ..album("Late Train", &[1, 2]).facts }, ..arriving("Late Train", &[1, 2], "Late Train") };
+        let second = AlbumCopy { group: Some(group.into()), ..arriving("Lost Tapes (Remaster)", &[3, 4], "Lost Tapes") };
+        cat.assign_records(&[first, second]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 3)), (Some(by_release), Some(by_group)));
+    }
+
+    /// C50: an album named as a record not had, whose kept tracklist agrees with its files, is that record; of the same names
+    /// with a list that does not agree, a record of its own.
+    #[test]
+    fn a_wanted_record_gets_its_tracks_by_tracklist() {
+        let cat = tracks(4);
+        let list = |titles: &[&str]| -> Vec<identity::RefTrack> { titles.iter().zip(1..).map(|(t, position)| identity::RefTrack { disc: 1, position, title: t.to_string(), length_ms: Some(200_000), recording: None }).collect() };
+        let agreeing = not_had(&cat, "Tide Tables", &[]);
+        cat.set_reference_tracks(agreeing, "discogs", &list(&["Track 1", "Track 2"])).unwrap();
+        let other = not_had(&cat, "Ferry Lights", &[]);
+        cat.set_reference_tracks(other, "musicbrainz", &list(&["Track 3", "Track 4 (Remastered)"])).unwrap();
+        cat.assign_records(&[arriving("Tide Tables", &[1, 2], "Tide Tables"), arriving("Ferry Lights", &[3, 4], "Ferry Lights")]).unwrap();
+        assert_eq!(record_of(&cat, 1), Some(agreeing));
+        assert_ne!(record_of(&cat, 3), Some(other), "its list does not agree: a name alone joins nothing");
+        assert!(record_of(&cat, 3).is_some());
+    }
+
+    /// C50: a retired record is never joined: expected in a folder and holding the release the album names, still the album
+    /// that arrives makes a record of its own (under OQ16 the retired record stays its group's record not had).
+    #[test]
+    fn a_retired_record_is_not_joined() {
+        let cat = tracks(2);
+        let release = "00000000-0000-4000-8000-000000000006";
+        let gone = not_had(&cat, "Partial Shore", &[("release-group", "00000000-0000-4000-8000-000000000106")]);
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [gone]).unwrap();
+        cat.expect_record(0, "Partial Shore", gone).unwrap();
+        let back = AlbumCopy { group: Some("00000000-0000-4000-8000-000000000106".into()), facts: identity::RecordFacts { release: Some(release.into()), ..album("Partial Shore", &[1, 2]).facts }, ..arriving("Partial Shore", &[1, 2], "Partial Shore") };
+        cat.assign_records(&[back]).unwrap();
+        let record = record_of(&cat, 1).unwrap();
+        assert_ne!(record, gone);
+        assert!(cat.record(gone).unwrap().unwrap().retired_at.is_some(), "still retired");
+    }
+
     /// Only a record tracks left retires for having none: one that never had any is one not had, whatever else a pass moves.
     #[test]
     fn a_record_that_never_had_tracks_is_not_retired() {
@@ -5276,6 +6439,27 @@ mod tests {
         assert_ne!(record_of(&cat, 1), Some(old));
         let at: i64 = cat.db().query_row("SELECT retired_at FROM records WHERE id = ?1", [old], |r| r.get(0)).unwrap();
         assert_eq!(at, 5);
+    }
+
+    /// RF4 (the review of runs 11 and 12, RB4): a record every track of which moves on to another record's album (the same file rows,
+    /// retagged) retires keeping where their files lay, gone when they moved on: what `went_of` reads for it. A record living on
+    /// keeps nothing of the kind.
+    #[test]
+    fn a_record_whose_tracks_moved_on_keeps_where_they_lay() {
+        let cat = tracks(5);
+        let lying = |title: &str, dir: &str, ids: &[i64]| AlbumCopy { files: ids.iter().map(|t| (1, format!("{dir}/{t:02}.flac"))).collect(), folder: 1, ..album(title, ids) };
+        cat.assign_records(&[lying("First", "First", &[1, 2]), lying("Second", "Second", &[3, 4, 5])]).unwrap();
+        let (first, second) = (record_of(&cat, 1).unwrap(), record_of(&cat, 3).unwrap());
+        // Retagged: First's files, where they lie, are of Second's album now.
+        let mut retagged = lying("Second", "Second", &[3, 4, 5, 1, 2]);
+        retagged.files[3..].clone_from_slice(&[(1, "First/01.flac".to_string()), (1, "First/02.flac".to_string())]);
+        cat.assign_records(&[retagged]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 2)), (Some(second), Some(second)), "its tracks moved on");
+        assert!(record_retired(&cat, first) && !record_retired(&cat, second));
+        let at: i64 = cat.db().query_row("SELECT retired_at FROM records WHERE id = ?1", [first], |r| r.get(0)).unwrap();
+        let went = cat.went_of(&[first, second]).unwrap();
+        assert_eq!(went.get(&first).cloned(), Some(vec![records::Went { folder: 1, came: None, gone: Some(at), trashed: None }]), "where they lay, gone as they moved on");
+        assert!(!went.contains_key(&second), "a record living on: nothing kept");
     }
 
     /// `tracks.record` is for life but for this: a track whose only file went to another record's album.
@@ -6198,12 +7382,12 @@ mod tests {
         read_as_audio(&cat);
         cat.identify().unwrap();
         let (one, _) = heard(&cat, 0);
-        assert_eq!(parts_at(&cat, 0, &one), (1, 1));
+        assert_eq!(parts_at(&cat, 0, &one), (1, 1, 1));
         std::fs::remove_file(d.join(&one)).unwrap();
         cat.walk_all();
         cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
         cat.identify().unwrap();
-        assert_eq!(parts_at(&cat, 0, &one), (0, 0));
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0, 0));
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -7317,8 +8501,8 @@ mod tests {
         assert_eq!(cat.identify().unwrap(), (2, 0), "recognised");
         let moved = one.replace("A - B (2020)", "A - B (2020) moved");
         assert_eq!(cat.analysis_of(0, &moved).map(|a| a.waveform.len()), Some(crate::analysis::WAVEFORM_BINS), "its analysis, as it is the file it was");
-        assert_eq!(parts_at(&cat, 0, &moved), (1, 1), "its shape and beats");
-        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "nothing left behind");
+        assert_eq!(parts_at(&cat, 0, &moved), (1, 1, 1), "its shape, beats and waveform in three bands");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0, 0), "nothing left behind");
         let left: i64 = cat.db().query_row("SELECT count(*) FROM analysis WHERE rel = ?1", [&one], |r| r.get(0)).unwrap();
         assert_eq!(left, 0);
         std::fs::remove_dir_all(&d).ok();

@@ -2,7 +2,7 @@
   import ChoiceMark from './ChoiceMark.svelte';
   import PlayingDots from './PlayingDots.svelte';
   import { rowRoot, rowPiece } from './glassRow.svelte';
-  import { pageHere } from './addresses';
+  import { hrefOf, pageHere } from './addresses';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { untrack } from 'svelte';
   import { holdUntil } from './holdPlace.svelte';
@@ -24,6 +24,8 @@
   // tracks in play order, with all four actions: an album, like a crate, is a list of tracks but no playlist file.
   import {
     albumResume,
+    wantAlbum,
+    getLabel,
     albumView,
     type AlbumView,
     artistFavorite,
@@ -58,9 +60,6 @@
     setAlbumFavorite,
     getArtistAbout,
     artistPhotoUrl,
-    getDiscoverArtist,
-    getDiscoverArtistAlbums,
-    discoverArtistPhotoUrl,
     type ListedAlbum,
     type ListBlocked,
     type ListReason,
@@ -106,8 +105,13 @@
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import { deleteServerPlaylist, isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
-  import { BANDCAMP } from './bandcampPreview';
-  import { DISCOVER, discoverArtistView } from './discoverArtist';
+  import { albumIdOf, BANDCAMP } from './bandcampPreview';
+  import { albumRowSub, notHadPage, type NotHadAction } from './recordNotHad';
+  import Notice from './Notice.svelte';
+  import { artistTitle, movedTo } from './artistIds';
+  import { labelCovers, labelOf, type LabelPageOf } from './labelPage';
+  import { wantOf } from './wantPath';
+  import LabelBody from './LabelBody.svelte';
   import RowHeart from './RowHeart.svelte';
   import type { ExcludeEntry } from './crates.svelte';
   import CrateEditor from './CrateEditor.svelte';
@@ -137,7 +141,7 @@
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
   import { away, rowsAway } from './away.svelte';
-  import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, playListedAlbum, readLibrary } from './albums.svelte';
+  import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, playListedAlbum, readLibrary, sayWantFailed } from './albums.svelte';
   import { copyLines, librariesOf, type CopyLine } from './copiesRule';
   import { shownIn } from './sources.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
@@ -167,7 +171,7 @@
   import { shuffled } from './shuffle';
   import { serverPlaylistOf } from './panel.svelte';
   import { whenChanged } from './dataChanged';
-  import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
+  import { albumMoved, albumOf, albumSubject, artistMoved, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
   import { wordRows } from './wordRows';
   import { openRadio } from './radioAsk.svelte';
@@ -259,13 +263,22 @@
   let serverListMenu = $state(false);
   let serverListDeleting = $state(false);
   /** A crate, an album or an artist: tracks without a playlist's file (no tabs, no editing, no statistics). */
-  const plain = $derived(!!crate || !!album || !!artist || !!serverList || crateEditing || creating);
+  /** The viewed label (W11, lib/labelPage): its records by year, its name the title. */
+  const label = $derived(labelOf(panel.viewed));
+  let labelHead = $state<LabelPageOf | null>(null);
+  const plain = $derived(!!crate || !!album || !!artist || !!label || !!serverList || crateEditing || creating);
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
-  let artistHead = $state<(Pick<ArtistView, 'albums' | 'appears_on' | 'favorite' | 'mbid'> & { studio?: number | null }) | null>(null);
+  let artistHead = $state<Pick<ArtistView, 'albums' | 'appears_on' | 'favorite' | 'mbid' | 'id' | 'name' | 'namesakes'> | null>(null);
+  /** The artist's name as the server says it (they may be asked for by their id, W10), plain even with namesakes. */
+  const artistName = $derived(artist ? artistTitle(artist.name, artistHead?.name) : '');
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   // The record's libraries, as dots before its details (0.9.3): where it lies, beside its year.
   const albumDots = $derived(album ? libraryDots(album.source, { id: album.id }) : []);
-  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words'> & { kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'was_until' | 'bandcamp'> & { kbps: number | null } | null>(null);
+  /** A record not had (C54, lib/recordNotHad): its page from the catalogue, of an album the library has no copy of. */
+  const notHad = $derived(!!album && !!albumHead?.not_had);
+  /** What its page shows of it: no heart or Resume, its header's Want or Requested and its preview's play, its lines. */
+  const notHadShown = $derived(notHad && albumHead ? notHadPage(albumHead) : null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
   let listGenres = $state<string[] | null>(null);
   /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
@@ -283,12 +296,14 @@
           ? (crateNameKnown(crate) ?? '')
           : album
             ? (albumHead?.title ?? '')
+            : label
+              ? (labelHead?.name ?? '')
             : serverList
               ? (serverListName ?? '')
               : artist
               ? artist.tracks
                 ? 'All tracks'
-                : artist.name
+                : artistName
               : multi
               ? `${ids.length} playlists`
               : (shownPlaylists().find((x) => x.id === id)?.name ?? id),
@@ -410,9 +425,7 @@
   const onDevice = $derived((album?.source ?? artist?.source) === DEVICE || isServerSource(album?.source ?? artist?.source) || !!serverList);
   // Played here and kept by none of Cratarr's: the device's own music, or a Bandcamp album (a Discover suggestion's,
   // decision 0071, the owner 2026-10-25): its tracks, no heart, rating, Resume or similar albums of the server's.
-  // An artist from Discover, or one asked for on Bandcamp (no server of that name): Discover's page of them.
-  const fromDiscover = (source: string | undefined) => source === DISCOVER || source === BANDCAMP;
-  const offServer = $derived(onDevice || album?.source === BANDCAMP || fromDiscover(artist?.source));
+  const offServer = $derived(onDevice || album?.source === BANDCAMP);
   async function toggleAlbumFavorite() {
     if (!album) return;
     const { source: s, id: a } = album;
@@ -427,6 +440,16 @@
       setFavorite(s, a, !on);
       toast.fail(e, "The favourite didn't change");
     }
+  }
+
+  /** A record not had asked again while its list is read: this often, at most this many times for one opening. */
+  const LOOK_MS = 4000;
+  const LOOK_TRIES = 8;
+  let lookedFor = { subject: '', n: 0 };
+  function lookAgain(subject: string) {
+    if (lookedFor.subject !== subject) lookedFor = { subject, n: 0 };
+    if (lookedFor.n++ >= LOOK_TRIES) return;
+    setTimeout(() => id === subject && saved++, LOOK_MS);
   }
 
   // The rows: asked for when the playlist is viewed and again when it changes (its counts, from the shell's state).
@@ -456,12 +479,14 @@
       albumHead = null;
       filesState = null;
       artistHead = null;
+      labelHead = null;
       listGenres = null;
     }
     if (!want || multi || builderOf(want) || want === NEW_PLAYLIST) return;
     const c = crateOf(want);
     const a = albumOf(want);
     const ar = artistOf(want);
+    const lb = labelOf(want);
     // A crate's rows wait for the crates (read on opening, above): asked before, they were asked again with its
     // favourites setting, the list showing, then loading, then again (the owner, 2026-10-23).
     if (c && !crates.list && !crates.error) return;
@@ -482,6 +507,7 @@
       albumHead = null;
       filesState = null;
       artistHead = null;
+      labelHead = null;
       listGenres = null;
     }
     // A crate keeps the pages it has (at least the first) when it is asked for again.
@@ -492,19 +518,30 @@
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
-              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words };
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, was_until: r.was_until, bandcamp: r.bandcamp };
+            // A record not had whose list is being read (C54): asked again a little later, a few times, until its rows are in.
+            if (want === id && r.not_had && r.looking) lookAgain(want);
             return { ...r, total: r.rows.length };
           })
-        : ar
-          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : isServerSource(ar.source) ? serverArtistView(ar.source, ar.name) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name, hiddenLibraries())).then((r) => {
+        : lb
+          ? // A label's page (W11): its records are its own list (lib/LabelBody), no tracks; its picture its records' covers.
+            getLabel(lb).then((p) => {
               if (want === id) {
-                artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite, mbid: (r as { mbid?: string }).mbid, studio: (r as { studio?: number | null }).studio };
-                // Their picture: their newest album's cover (Symfonium's, without an artist's photo); one from Discover's
-                // albums are Bandcamp's.
-                const first = r.albums[0] ?? r.appears_on[0];
-                covers = first ? [albumCoverUrl(r.source === DISCOVER ? BANDCAMP : r.source, first.id)] : [];
+                labelHead = p;
+                covers = labelCovers(p.rows);
               }
-              return { ...r, total: r.rows.length, genres: null };
+              return { source: 'cratarr', rows: [] as PlaylistRow[], total: 0, genres: null };
+            })
+        : ar
+          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : isServerSource(ar.source) ? serverArtistView(ar.source, ar.name) : artistView(ar.source, ar.name, hiddenLibraries())).then((r) => {
+              if (want === id) {
+                artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite, mbid: r.mbid, id: r.id, name: r.name, namesakes: r.namesakes };
+                // Their picture: their newest album's cover (Symfonium's, without an artist's photo).
+                const first = r.albums[0] ?? r.appears_on[0];
+                covers = first ? [albumCoverUrl(r.source, first.id)] : [];
+              }
+              // Opened by name, the server says who that is (W10): the page moves to their id once its rows are in.
+              return { ...r, total: r.rows.length, genres: null, movedTo: movedTo(ar.source, ar.name, r) };
             })
           : serverPlaylistOf(want)
             ? serverPlaylistView(serverPlaylistOf(want)!.source, serverPlaylistOf(want)!.id).then((r) => {
@@ -535,7 +572,15 @@
         source = r.source;
         total = r.total;
         listGenres = r.genres;
-        if (r.source !== DEVICE && !isServerSource(r.source) && r.source !== BANDCAMP && r.source !== DISCOVER) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+        if (r.source !== DEVICE && !isServerSource(r.source) && r.source !== BANDCAMP) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+        // An artist opened by name, by their id from now on (W10): the rows shown are theirs, so the page asked again stays as it is.
+        const to = (r as { movedTo?: string | null }).movedTo;
+        if (ar && to) {
+          const now = artistSubject(ar.source, to, ar.tracks);
+          shownFor = `${now}\n${fav}\n${alb}\n`;
+          rowsFor = now;
+          artistMoved(ar.source, ar.name, to);
+        }
       },
       (e) => {
         if (want !== id) return;
@@ -623,7 +668,7 @@
       multi ||
       crateEditing ||
       creating ||
-      (rowsFor === id && (error !== null || (!heroPending && (!album || albumHead !== null) && (!artist || artistHead !== null)))),
+      (rowsFor === id && (error !== null || (!heroPending && (!album || albumHead !== null) && (!artist || artistHead !== null) && (!label || labelHead !== null)))),
   );
 
   // The covers: the playlist's first albums, four as a mosaic (decision 0021).
@@ -635,7 +680,8 @@
     covers = [];
     coversKnown = true;
     // An artist's comes with their albums (above).
-    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST || artistOf(want) || serverPlaylistOf(want)) return;
+    // An artist's and a label's come with their page (above).
+    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST || artistOf(want) || labelOf(want) || serverPlaylistOf(want)) return;
     const a = albumOf(want);
     if (a) {
       covers = [albumCoverUrl(a.source, a.id)];
@@ -675,20 +721,6 @@
     artistPhoto = null;
     artistPhotoKnown = true;
     if (!ar || ar.tracks) return;
-    // One from Discover (lib/discoverArtist): their picture as New to you has it.
-    if (fromDiscover(ar.source)) {
-      artistPhotoKnown = false;
-      let gone = false;
-      getDiscoverArtist(ar.name).then(
-        (a) => {
-          if (gone) return;
-          if (a.photo) artistPhoto = discoverArtistPhotoUrl(ar.name);
-          artistPhotoKnown = true;
-        },
-        () => !gone && (artistPhotoKnown = true),
-      );
-      return () => (gone = true);
-    }
     if (ar.source !== 'cratarr') return;
     artistPhotoKnown = false;
     let gone = false;
@@ -703,22 +735,6 @@
     return () => (gone = true);
   });
 
-  // An artist from Discover without the look's count of their studio albums: the server's, counted when first asked (a
-  // few seconds the first time), filled in when it comes (the owner, 2026-10-25).
-  $effect(() => {
-    const ar = artist;
-    const h = artistHead;
-    if (!ar || !fromDiscover(ar.source) || !h || h.studio) return;
-    let gone = false;
-    getDiscoverArtistAlbums(ar.name).then(
-      (r) => {
-        if (!gone && r.albums && artistHead === h) artistHead = { ...h, studio: r.albums };
-      },
-      () => {},
-    );
-    return () => (gone = true);
-  });
-
   // The cover's place: a crate's picture (its own, else its albums' covers; in edit mode as Save will leave it).
   const heroArt = $derived.by(() => {
     if (crateEditing) {
@@ -726,7 +742,7 @@
       return builder?.id ? crateArt(builder.id, crateImage !== 'remove') : [];
     }
     if (artist) {
-      const own = localCovers[coverKey(artist.source, artistPictureId(artist.name))];
+      const own = localCovers[coverKey(artist.source, artistPictureId(artistName))];
       return own ? [own] : artistPhoto ? [artistPhoto] : covers;
     }
     if (crate && seeded(crate)) return rowCovers;
@@ -1143,9 +1159,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
    *  crates and artists with it (the owner, 2026-11-02: "Profile everywhere"); Settings › Display says how much shows. */
   const profileList = $derived.by((): { list: FilterList; source?: string } | null => {
     if (crate) return { list: { kind: 'crate', id: crate }, source: prefs.source || undefined };
-    const ours = (source: string) => source !== DEVICE && !isServerSource(source) && !fromDiscover(source);
+    const ours = (source: string) => source !== DEVICE && !isServerSource(source) && source !== BANDCAMP;
     if (album) return ours(album.source) ? { list: { kind: 'album', source: album.source, id: album.id } } : null;
-    if (artist) return ours(artist.source) ? { list: { kind: 'artist', source: artist.source, name: artist.name } } : null;
+    if (artist) return ours(artist.source) && artistName ? { list: { kind: 'artist', source: artist.source, name: artistName } } : null;
     return p ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined } : null;
   });
   let profile = $state<ListProfileData | null>(null);
@@ -1325,8 +1341,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
   type BarAction = { key: string; icon: IconName; label: string; run: () => void; disabled: boolean };
   const canPlay = $derived(multi ? chosenCount > 0 : playable.length > 0);
   const barActions = $derived.by((): BarAction[] => {
-    // An artist from Discover: nothing of theirs to play from here (their albums play on their own panels).
-    if (artist && fromDiscover(artist.source)) return [];
+    // A label: nothing of its own to play; its records play on their own pages.
+    if (label) return [];
+    // A record not had: its Bandcamp preview's play where it has one (OQ14), and Want or Requested (W9).
+    if (notHadShown) return notHadShown.actions.map((k) => ({ key: k, ...NOT_HAD_ACTIONS[k], run: () => void notHadAct(k), disabled: k === 'want' && wanting }));
     const play = (key: PlayMode, icon: IconName, label: string): BarAction => ({ key, icon, label, run: () => act(key), disabled: !canPlay });
     const list = [play('play', 'play', 'Play')];
     // Resume only where there is somewhere to resume from (the owner, 2026-11-02), not a dead button.
@@ -1341,6 +1359,52 @@ ${r.album_artist ?? r.artist ?? ''}`;
     else if (crate && port().radio) list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: crateRadio, disabled: !canPlay });
     return list;
   });
+  const NOT_HAD_ACTIONS: Record<NotHadAction, { icon: IconName; label: string }> = {
+    play: { icon: 'play', label: 'Play' },
+    shuffle: { icon: 'shuffle', label: 'Shuffle' },
+    next: { icon: 'playNext', label: 'Play next' },
+    last: { icon: 'listAdd', label: 'Add to queue' },
+    want: { icon: 'circlePlus', label: 'Want' },
+    requested: { icon: 'inbox', label: 'Requested' },
+  };
+  let wanting = $state(false);
+  async function notHadAct(k: NotHadAction) {
+    if (k === 'requested') return void (location.hash = hrefOf('requests'));
+    if (k === 'want') return wantNotHad();
+    await playPreview(k);
+  }
+  /** Want for a record not had: by its record (C49b); its request's state then read with the record again. */
+  async function wantNotHad() {
+    const a = album;
+    if (!a || !albumHead || wanting) return;
+    wanting = true;
+    try {
+      const { request } = await wantAlbum(wantOf({ record: a.id, artist: albumHead.artist ?? '', album: albumHead.title }));
+      if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
+      saved++;
+    } catch (e) {
+      sayWantFailed(e);
+    } finally {
+      wanting = false;
+    }
+  }
+  /** Its Bandcamp preview (OQ14, decision 0071): its album there, played through the Bandcamp source as that album's panel plays it. */
+  async function playPreview(how: 'play' | 'shuffle' | 'next' | 'last') {
+    const page = albumHead?.bandcamp;
+    if (!page) return;
+    navigator.vibrate?.(8);
+    try {
+      const v = await albumView(BANDCAMP, albumIdOf(page));
+      const list: LocalTrack[] = v.rows
+        .filter((x) => x.id && !x.missing)
+        .map((x) => ({ source: BANDCAMP, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: x.album_id ?? null, duration_secs: x.duration_secs, addable: false }));
+      if (!list.length) throw new Error('none plays');
+      await port().playTracks(list, how, title, BANDCAMP);
+      if (how === 'next' || how === 'last') toast.show({ text: how === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
   // A genre shows all its tracks: no favourites toggles.
   // Not before the crates are known: it showed No favourites first.
   const favState = $derived(crate && !seeded(crate) && crates.list ? FAVOURITES[favouritesOf(crate)] : null);
@@ -1355,20 +1419,24 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const menu = (label: string, open: () => void): EndAction => ({ key: 'menu', label, run: open });
     const heart = (on: boolean, run: () => void): EndAction => ({ key: 'heart', label: 'Favourite', run, on });
     if (crate) return [menu(`Menu of ${title}`, () => (crateMenuOpen = true))];
+    // A label: no heart, no menu.
+    if (label) return [];
     // A Bandcamp album (decision 0071): no heart, its own menu (lib/BandcampAlbumMenu).
     if (album?.source === BANDCAMP) return [menu(`Menu of ${title}`, () => (bandcampMenuOpen = true))];
     // A server's album in its mode (decision 0098): its heart, its star there; no Cratarr menu. Its playlist: a menu
     // of what that server does with one (Delete).
     if (album && isServerSource(album.source)) return [heart(albumFav, toggleAlbumFavorite)];
+    // A record not had: no heart (nothing of it is the library's), its menu.
+    if (notHadShown) return [...(notHadShown.heart ? [heart(albumFav, toggleAlbumFavorite)] : []), menu(`Menu of ${title}`, () => (albumMenuOpen = true))];
     if (serverList) return [menu(`Menu of ${title}`, () => (serverListMenu = true))];
     // The device's own music (local mode, decision 0052), an artist from Discover: no heart, no Cratarr menu.
     if (offServer) return [];
-    if (artist) return [...(artistHead?.favorite !== undefined ? [heart(artistHead.favorite, toggleArtistFavorite)] : []), menu(`Menu of ${artist.name}`, () => (artistMenuOpen = true))];
+    if (artist) return [...(artistHead?.favorite !== undefined ? [heart(artistHead.favorite, toggleArtistFavorite)] : []), menu(`Menu of ${artistName}`, () => (artistMenuOpen = true))];
     if (album) return [heart(albumFav, toggleAlbumFavorite), menu(`Menu of ${title}`, () => (albumMenuOpen = true))];
     return [heart(allFav, () => setPlaylistFavorites([...ids], !allFav)), menu(`Menu of ${title}`, () => (menuOpen = true))];
   });
   const closeLabel = $derived(
-    crate ? 'Close the crate' : album ? 'Close the album' : artist ? 'Close the artist' : multi ? 'Close the playlists' : 'Close the playlist',
+    crate ? 'Close the crate' : album ? 'Close the album' : artist ? 'Close the artist' : label ? 'Close the label' : multi ? 'Close the playlists' : 'Close the playlist',
   );
 
   // Under the cover, as Symfonium's: the name large, then one line of what it is (an album: its length, year, format
@@ -1380,9 +1448,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return rows ? plural(total, 'track') : '';
     if (multi) return playlistsKnown() ? plural(chosenCount, 'track') : '';
     if (!rows) return '';
-    // An artist from Discover: how many studio albums they have made (the owner, 2026-10-25: "the golden standard"); no
-    // tracks of a server's.
-    if (artist && fromDiscover(artist.source)) return artistHead?.studio ? plural(artistHead.studio, 'studio album') : '';
+    if (label) return labelHead?.rows.length ? plural(labelHead.rows.length, 'record') : '';
     if (artist) {
       const albums = artist.tracks ? null : plural(artistHead?.albums.length ?? 0, 'album');
       return [albums, plural(rows.length, 'track'), length ? clockText(length) : null].filter(Boolean).join(' • ');
@@ -1514,6 +1580,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
   }
 
+  // The artist the page shows, by their id where the server said it (G6): their play, radio and picks are theirs, never a
+  // namesake's.
+  const byId = (): { id?: string } => (artistHead?.id ? { id: artistHead.id } : {});
+
   function artistRadio() {
     navigator.vibrate?.(8);
     const a = artist;
@@ -1521,9 +1591,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     openRadio({
       name: title,
       kind: 'artist',
-      within: a ? { kind: 'artist', source: a.source, name: a.name, ...(hiddenLibraries() ? { without: hiddenLibraries() } : {}) } : null,
+      within: a ? { kind: 'artist', source: a.source, name: artistName, ...byId(), ...(hiddenLibraries() ? { without: hiddenLibraries() } : {}) } : null,
       // The seed: 300 of all their tracks, the server's fair draw (decision 0059), not the rows shown.
-      seed: async () => (a ? (await pickOf({ kind: 'artist', source: a.source, name: a.name }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id) : shown),
+      seed: async () => (a ? (await pickOf({ kind: 'artist', source: a.source, name: artistName, ...byId() }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id) : shown),
     });
   }
 
@@ -1534,7 +1604,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const on = !h.favorite;
     h.favorite = on;
     try {
-      await setArtistHeart(artist.source, artist.name, on);
+      await setArtistHeart(artist.source, artistName, on, h.id);
     } catch (e) {
       h.favorite = !on;
       toast.fail(e, "The favourite didn't change");
@@ -1545,17 +1615,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let picks = $state<{ name: string; ids: string[] } | null>(null);
   $effect(() => {
     const a = artist;
+    const name = artistName;
     picks = null;
-    if (!a || a.tracks || a.source !== 'cratarr') return;
-    artistPicks(a.name, hiddenLibraries()).then(
+    if (!a || a.tracks || a.source !== 'cratarr' || !name) return;
+    artistPicks(name, hiddenLibraries(), artistHead?.id).then(
       (r) => {
-        if (artist?.name === a.name) picks = { name: a.name, ids: r.ids };
+        if (artistName === name) picks = { name, ids: r.ids };
       },
       () => {},
     );
   });
   const topRows = $derived(
-    (artist && !artist.tracks && rows && picks?.name === artist.name ? picks.ids.flatMap((x) => playable.find((r) => r.id === x) ?? []) : []).filter(
+    (artist && !artist.tracks && rows && picks?.name === artistName ? picks.ids.flatMap((x) => playable.find((r) => r.id === x) ?? []) : []).filter(
       (r) => !own || matchesSearch(r.name ?? r.file, r.artist, r.album),
     ),
   );
@@ -1581,7 +1652,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     // The server's library (decision 0059): an album or an artist whole, in its order; a sorted view what shows.
     if (!offServer) {
       if (album && !reshaped) return playCollection({ kind: 'album', source: album.source, id: album.id }, mode, title);
-      if (artist && !reshaped) return playCollection({ kind: 'artist', source: artist.source, name: artist.name }, mode, title);
+      // Played by the server, by their id (G6); one it has not said yet who shares their name plays their own rows (W10).
+      if (artist && !reshaped && (artistHead?.id || !artistHead?.namesakes)) return playCollection({ kind: 'artist', source: artist.source, name: artistName, ...byId() }, mode, title);
       return playCollection({ kind: 'tracks', source, ids: shownPlayable.map((r) => r.id!) }, mode, title);
     }
     const tracks = tracksOf(shownPlayable);
@@ -1646,7 +1718,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       const c = crate;
       if (c && !crateEditing) return await playCollection({ kind: 'crate', id: c }, 'play', name, r.id, crateLook);
       if (album && !reshaped) return await playCollection({ kind: 'album', source: album.source, id: album.id }, 'play', name, r.id);
-      if (artist && !reshaped) return await playCollection({ kind: 'artist', source: artist.source, name: artist.name }, 'play', name, r.id);
+      if (artist && !reshaped && (artistHead?.id || !artistHead?.namesakes)) return await playCollection({ kind: 'artist', source: artist.source, name: artistName, ...byId() }, 'play', name, r.id);
       if (p && !multi && !reshaped) return await playCollection({ kind: 'playlist', id: p.id }, 'play', name, r.id);
       await playCollection({ kind: 'tracks', source: src, ids: ok.map((x) => x.id!) }, 'play', name, r.id);
     } catch (e) {
@@ -2495,9 +2567,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
               >{#if l.progress !== null}<span class="files-meter"><i style:width={`${l.progress * 100}%`}></i></span>{/if}</button
             >
           {/if}
+          <!-- A record not had (W9): the record the library has it as, which a tap opens; where its request stands (the server's
+               state, W12), a tap to Requests; until when it was in Music (OQ16). -->
+          {#if notHadShown}
+            {#each notHadShown.lines as l (l.kind)}
+              {#if l.kind === 'have'}{@const to = l.record}<button class="details left-out" onclick={() => viewOver(albumSubject('cratarr', to))}><Icon name="disc" size={14} /><span>{l.text}</span></button>
+              {:else if l.kind === 'request'}<button class="details left-out" onclick={() => (location.hash = hrefOf('requests'))}><Icon name="inbox" size={14} /><span>{l.text}</span></button>
+              {:else}<span class="details left-out"><Icon name="clock" size={14} /><span>{l.text}</span></span>{/if}
+            {/each}
+          {/if}
           <!-- Its missing tracks over it, to look for (the owner, 2026-11-01: it opened Health's whole list, a U-turn);
                where they can't be looked for here, only said. -->
-          {#if album && me.admin && !offServer}
+          {#if album && me.admin && !offServer && !notHad}
             {#each healthLines as l (l.key)}
               {@const whole = l.key === 'library:incomplete' ? listedHere?.a.whole_tracks : null}
               <button class="details left-out" class:warn={l.urgent} onclick={() => openRecordProblem(l.key)}
@@ -2508,14 +2589,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
             {/each}
           {:else if album && listedHere?.a.whole_tracks}<span class="details left-out"><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></span>{/if}
           {#if album && albumHead?.artist}
-            <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy, album.source === BANDCAMP ? { id: album.id, title } : null)}
+            <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
               >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
                   ><Icon name="heart" size={16} /></i
                 >{/if}</button
             >
           {:else if artist?.tracks}
             <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
-              >{#if heroArt[0]}<span class="chip-art"><Cover src={heroArt[0]} /></span>{/if}<span>{artist.name}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
+              >{#if heroArt[0]}<span class="chip-art"><Cover src={heroArt[0]} /></span>{/if}<span>{artistName}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
                   ><Icon name="heart" size={16} /></i
                 >{/if}</button
             >
@@ -2637,14 +2718,20 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
     {#if tab !== 'tracks' || multi || editing || crateEditing}
       <!-- another tab, the sections, or the edit list: above -->
+    {:else if error && (album || label)}
+      <!-- Out of reach, a record this device holds nothing of (a record not had among them, PR01), or a label: it needs Cratarr. -->
+      <Notice text={error} onretry={() => saved++} away={label ? 'This label needs Cratarr.' : 'This record needs Cratarr.'} />
     {:else if error}
       <p class="error" role="alert">{error}</p>
+    {:else if label && labelHead}
+      <!-- A label's page (W11): its records by year, each opening its record. -->
+      <LabelBody page={labelHead} onpage={(p) => (labelHead = p)} searching={own} />
     {:else if artist && !artist.tracks && rows && artistHead}
       <!-- An artist's page (Symfonium's): their albums, what they appear on, their most played. -->
       <ArtistBody
-        source={fromDiscover(artist.source) ? DISCOVER : artist.source}
-        albumSource={fromDiscover(artist.source) ? BANDCAMP : artist.source}
-        name={artist.name}
+        source={artist.source}
+        name={artistName}
+        id={artistHead.id ?? null}
         mbid={artistHead.mbid ?? null}
         searching={own}
         albums={artistHead.albums}
@@ -2721,9 +2808,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {#if !own}
           {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
           {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
-          <SimilarAlbums source={album.source} album={album.id} />
+          {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
         {/if}
-        <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
+        {#if notHad}
+          <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} labels={albumHead.labels ?? []} />
+        {:else}
+          <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} />
+        {/if}
       {/if}
       {#if album && albumHead && album.source === BANDCAMP}
         <!-- A Bandcamp album's About (the owner, 2026-10-25: "as much as our own panel"): what its page says. -->
@@ -2874,7 +2965,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       size="large"
       title={movement ?? r.name ?? r.file}
       active={ok && !selecting && marked === r.id}
-      sub={r.missing ? 'Missing file' : r.artist && r.artist !== albumHead?.artist ? r.artist : undefined}
+      sub={albumRowSub(r, notHad, albumHead?.artist)}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       off={!ok}
       disabled={!ok}
@@ -3004,7 +3095,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {#if artistMenuOpen && artist}
   <ArtistMenu
     source={artist.source}
-    name={artist.name}
+    name={artistName}
+    id={artistHead?.id ?? null}
     cover={heroArt[0] ?? null}
     albums={artistHead?.albums.length ?? 0}
     tracks={tracksOf(playable)}
@@ -3030,6 +3122,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     tracks={rows ? tracksOf(playable) : null}
     genres={listGenres}
     viewable={false}
+    {notHad}
     onresumegone={() => (resumeAt = null)}
     onclose={() => (albumMenuOpen = false)}
   />

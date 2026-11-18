@@ -83,7 +83,8 @@ fn token(password: &str, salt: &str) -> String {
 
 impl Subsonic {
     fn new(base: &str, user: &str, password: &str) -> Result<Self> {
-        let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build()?;
+        // Never a redirect (O1): its sign-in stays on the host given.
+        let http = crate::app::reach::lan_client().timeout(std::time::Duration::from_secs(20)).build()?;
         Ok(Self { http, base: base.trim_end_matches('/').to_string(), user: user.to_string(), password: password.to_string() })
     }
 

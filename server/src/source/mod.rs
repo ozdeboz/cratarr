@@ -295,6 +295,14 @@ pub struct AlbumCopy {
     pub tracks: u32,
     /// The conversion at work on it, `JobView.id`.
     pub job: Option<u64>,
+    /// An Incoming copy of a record kept elsewhere: how it stands against the copy that plays the record for most (C37a).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub against: Option<Against>,
+    /// Someone's own copy Replace in a main library may take the place of that library's copy from (RY01, `copies::replace_offers`):
+    /// one stand per main library whose copy it beats (OQ-N), that copy's library and folder, and why. Whose copy it is is this
+    /// copy's own library. Empty on any other copy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replace_into: Vec<Against>,
     /// Its catalogue folder and its folder in it: what tells it from the record's other copies here, not the page's.
     #[serde(skip)]
     pub folder: i64,
@@ -302,8 +310,22 @@ pub struct AlbumCopy {
     pub dir: String,
 }
 
+/// An Incoming copy of a record kept elsewhere, against the copy that plays the record for most (C37a, `serve::copies::against`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
+pub struct Against {
+    /// It ranks above that copy, in the order copies are chosen in.
+    pub better: bool,
+    /// Better, and that copy lies in a main library: Replace's to take (`copies::replaces`).
+    pub replaces: bool,
+    /// That copy's library, as `AlbumCopy.library`, and its folder there.
+    pub library: String,
+    pub dir: String,
+    /// Why, in words: its quality against that copy's.
+    pub why: String,
+}
+
 /// An album as a source sees it. Paths are the source's own (see `placement`).
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
 pub struct Album {
     pub id: String,
     pub title: String,

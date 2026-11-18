@@ -50,8 +50,8 @@
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumOfDownload, albumPlay, albumRatings, copiesGone, copiesMoved, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
-  import { adds, deleteEntries, moveEntries, playFromEntries, replaceEntries } from './copiesRule';
+  import { albumOfDownload, albumPlay, albumRatings, copiesAdded, copiesGone, copiesMoved, copiesReplaced, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
+  import { adds, deleteEntries, moveEntries, moveSentences, moveSheet, moveWords, playFromEntries, replacedWords, replaceEntries, replaceSheet, replaceShown } from './copiesRule';
   import { shownIn } from './sources.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -65,6 +65,7 @@
   import DownloadStep from './DownloadStep.svelte';
   import MenuTable from './MenuTable.svelte';
   import { inOrder, type EntryId } from './menuTable';
+  import { offeredNotHad } from './recordNotHad';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
   import Asking from './Asking.svelte';
@@ -99,6 +100,7 @@
     tracks: givenTracks = null,
     genres: givenGenres = null,
     viewable = true,
+    notHad = false,
     start = 'menu',
     onresumegone,
     ongone,
@@ -114,6 +116,8 @@
     genres?: string[] | null;
     /** View in the panel (not from the panel showing it). */
     viewable?: boolean;
+    /** A record not had (W9, lib/recordNotHad): only what needs no copy of it; no heart, no large actions. */
+    notHad?: boolean;
     /** The step it opens on: the entries, or straight at the playlists. */
     /** 'cover': straight on Change cover (Health's albums without one). */
     start?: 'menu' | 'lists' | 'cover';
@@ -174,7 +178,7 @@
 
   // The heart, on the card: the one the panel's top bar shows (lib/favourites.svelte.ts), so both change together.
   $effect(() => {
-    loadAlbumFavorites(source, [a.id]);
+    if (!notHad) loadAlbumFavorites(source, [a.id]);
   });
   const fav = $derived(isFavorite(source, a.id));
   async function toggleFavourite() {
@@ -193,7 +197,7 @@
   let resumeAt = $state<{ track: string; position: number } | null>(null);
   $effect(() => {
     const id = a.id;
-    if (!id.startsWith('al-')) return;
+    if (notHad || !id.startsWith('al-')) return;
     albumResume(id).then((r) => r.track && (resumeAt = { track: r.track, position: r.position_secs ?? 0 }), () => {});
   });
   async function forgetResume() {
@@ -226,7 +230,7 @@
   // and classical set by hand (lib/RecordEdit), in the menu's place; the 0.10 Classical… sheet is its Classical row now.
   let editOpen = $state(false);
   const actions = $derived.by<SheetAction[]>(() => {
-    if (ask || exporting || step !== 'menu') return [];
+    if (notHad || ask || exporting || step !== 'menu') return [];
     const t = tracks;
     // Following someone (0.10): its tracks asked of them, next or at the end of their queue.
     if (followingNow()) {
@@ -395,7 +399,14 @@
   let to = $state<LibraryInfo | null>(null);
   const adding = $derived(!!to && adds(copy?.from ?? null, to));
   let keep = $state<KeepPreview | null>(null);
+  /** A copy, as the preview says (T3: the server's word, so a departed user's music moves). */
+  const copying = $derived(!!keep?.copy);
+  /** The move's sentences, as its preview says it (T3). */
+  const sentences = (k: KeepPreview) => moveSentences({ title: a.title, from: fromName, to: to?.name ?? '', folder: k.folder ?? '', files: k.files, copy: !!k.copy, adding });
   let swap = $state<ReplacePreview | null>(null);
+  /** What Replace's sheet offers for the copy asked of (OQ-A): from someone's own music no cover to choose, nothing carried over,
+   *  nothing said of Lidarr, and the tap says what the sheet showed. */
+  const swapAsks = $derived(replaceSheet(copy?.from?.kind));
   /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
   let coverWay = $state<'keep' | 'new'>('keep');
   /** Change cover: the album's own and those to choose from (null while asked). */
@@ -528,16 +539,17 @@
     }
   }
   // Done: the copy leaves its library, shown at once as `left` says. Queued (lossless files above the target's quality
-  // limit to convert first): its row shows the progress instead, and the queue says when it is done.
-  function moved(r: AlbumMoved, words: string, left: () => void) {
+  // limit to convert first): its row shows the progress instead, and the queue says when it is done, to whoever asked (W13).
+  function moved(r: AlbumMoved, words: string, left: () => void, from: string | undefined, undone = `${r.title} is back in ${fromName}.`) {
     if (r.queued) {
+      jobs.queued({ source, album_id: a.id, from });
       jobs.poke();
       return;
     }
     // It stays open where it is (the owner, 2026-11-01: no U-turns): its panel follows it to its new place.
     left();
     ongone?.();
-    withUndo(words, [r.undo], { undone: `${r.title} is back in ${fromName}.`, after: onundone });
+    withUndo(words, [r.undo], { undone, after: onundone });
   }
   /** Deleted: the record stays while one copy does; with its last its panel closes. */
   function gone() {
@@ -548,18 +560,24 @@
     act(async () => {
       if (!to) return;
       const [into, from] = [to, copy?.library];
-      const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined);
-      moved(r, `${adding ? 'Added' : 'Moved'} ${a.title} to ${into.name}.`, () => copiesMoved([{ source, id: a.id, from, to: into.id }]));
-    }, `Could not ${adding ? 'add' : 'move'} the ${word}`);
+      // The tap carries what its sheet showed (RF10): the server refuses it where the copy changed since.
+      const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined, moveSheet(keep));
+      // A copy leaves the record's copy where it was and adds the new one (T3); a move moves it.
+      const said = keep ? sentences(keep) : null;
+      const went = [{ source, id: a.id, from, to: into.id }];
+      moved(r, said?.done ?? `Moved ${a.title} to ${into.name}.`, () => (copying ? copiesAdded(went) : copiesMoved(went)), from, said?.undone);
+    }, `Could not ${moveWords(copying, adding).act} the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
     act(async () => {
       if (!to) return;
-      const name = to.name;
-      const from = copy?.library;
-      const r = await replaceIncoming(source, a.id, from, to.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
-      // The copy that took the other's place is now that one: what is listed of it comes with the next read.
-      moved(r, `Replaced ${r.title} in ${name}.`, () => void copiesGone([{ source, id: a.id, from }]));
+      const [into, from, kind, asks] = [to, copy?.library, copy?.from?.kind, swapAsks];
+      const shown = asks.shown ? replaceShown(swap) : undefined;
+      const r = await replaceIncoming(source, a.id, from, into.id, year.trim() || undefined, asks.cover && swap?.covers ? coverWay : undefined, asks.carry && carry, shown);
+      // The copy that took the other's place is now that one: what is listed of it comes with the next read. From Incoming the copy
+      // leaves; from someone's own music it was copied and stays (RY02.4).
+      const said = replacedWords(r.title, into.name, fromName, kind);
+      moved(r, said.done, () => copiesReplaced([{ source, id: a.id, from, kind }]), from, said.undone);
     }, `Could not replace the ${word}`);
   /** The tag differences shown at first (the rest behind "And N more"). */
   const DIFF_SHOWN = 12;
@@ -587,7 +605,9 @@
 
 <!-- Missing tracks (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
 {#snippet entry(e: EntryId)}
-  {#if e === 'view'}
+  {#if notHad && !offeredNotHad(e)}
+    <!-- A record not had: nothing of a copy's (lib/recordNotHad). -->
+  {:else if e === 'view'}
     {#if viewable && panel.viewed !== albumSubject(source, a.id)}
       <MenuEntry
         icon="squareArrowOutUpRight"
@@ -699,7 +719,7 @@
   images={[cover ?? albumCoverUrl(source, a.id)]}
   title={a.title}
   chips={[a.artist ?? 'Unknown artist']}
-  heart={ask || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
+  heart={notHad || ask || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
   {actions}
   beside={ask === 'cover' && coverProgress ? lookProgress : null}
   end={ask === 'cover'
@@ -722,17 +742,17 @@
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
       {:else if keep.refused}
-        <p class="ask">Can't {adding ? 'add' : 'move'} {a.title}: {keep.refused.detail}</p>
+        <p class="ask">Can't {moveWords(copying, adding).act} {a.title}: {keep.refused.detail}</p>
       {:else}
         <p class="ask">
-          {adding ? 'Add' : 'Move'} {a.title} {adding ? 'to' : 'into'} {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
+          {sentences(keep).lead}<strong>{keep.folder}</strong>{sentences(keep).tail}{#if keep.convert}
             {` ${converted(keep.convert, to?.name ?? '')}`}{/if}{#if !keep.acquisition && !primary}
             {` ${NO_LIDARR}`}{/if}
         </p>
       {/if}
       <div class="actions">
         {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
-          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>{adding ? 'Add' : 'Move'} to {to?.name}</button>
+          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>{sentences(keep).button}</button>
         {/if}
         <button onclick={onclose}>Cancel</button>
       </div>
@@ -754,11 +774,11 @@
             ? `, ${swap.added} new`
             : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
           {trashDays === 1 ? 'day' : 'days'}.{#if swap.convert}
-            {` ${converted(swap.convert, to?.name ?? '')}`}{/if}{#if !swap.acquisition}
+            {` ${converted(swap.convert, to?.name ?? '')}`}{/if}{#if !swap.acquisition && swapAsks.lidarr}
             {` ${NO_LIDARR}`}{/if}
         </p>
         <!-- Its cover (the owner, 2026-10-25): the one it has, or the new copy's; both shown. -->
-        {#if swap.covers && (swap.covers.current || swap.covers.new)}
+        {#if swapAsks.cover && swap.covers && (swap.covers.current || swap.covers.new)}
           {@const c = swap.covers}
           <div class="covers">
             <figure class:on={coverWay === 'keep'}><span class="thumb"><Cover src={c.current} /></span><figcaption>Current</figcaption></figure>
@@ -780,11 +800,11 @@
           </ul>
           {#if !diffAll && swap.diff.length > DIFF_SHOWN}<button class="more" onclick={() => (diffAll = true)}>And {swap.diff.length - DIFF_SHOWN} more</button>{/if}
         {/if}
-        {#if swap.carry?.length}<p class="ask carried">Carried over: {swap.carry.join(', ')}.</p>{/if}
+        {#if swapAsks.carry && swap.carry?.length}<p class="ask carried">Carried over: {swap.carry.join(', ')}.</p>{/if}
       {/if}
       <div class="actions">
         {#if swap && (!swap.refused || swap.refused.kind === 'needs_year')}
-          {#if swap.carry?.length}
+          {#if swapAsks.carry && swap.carry?.length}
             <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={() => replaceIt(true)}>Replace and carry over</button>
             <button disabled={working || !!swap.refused} onclick={() => replaceIt()}>Replace only</button>
           {:else}

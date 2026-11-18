@@ -24,6 +24,9 @@ struct Server {
     child: Child,
     base: String,
     http: reqwest::Client,
+    /// Whom the server's own calls (`get`, `send`, `ok` and the helpers on them) are made as, once accounts exist (`act_as`);
+    /// none: as nobody, who may call only while there is no account.
+    acting: std::sync::Mutex<Option<String>>,
 }
 
 impl Server {
@@ -44,7 +47,7 @@ impl Server {
             .stderr(Stdio::inherit())
             .spawn()
             .expect("the server starts");
-        let s = Server { child, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new() };
+        let s = Server { child, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new(), acting: std::sync::Mutex::new(None) };
         let answered = |r: reqwest::Response| r.status().is_success() || r.status() == reqwest::StatusCode::UNAUTHORIZED;
         s.until("the server answers", Duration::from_secs(60), || async { s.http.get(format!("{}/api/albums", s.base)).send().await.is_ok_and(answered) }).await;
         s
@@ -53,6 +56,18 @@ impl Server {
     /// Calls as nobody.
     fn anyone(&self) -> Caller<'_> {
         Caller { server: self, session: None }
+    }
+
+    /// The server's own calls from now on made as this account (signed in as `sign_in` does): a test that makes several
+    /// accounts reads through the helpers as one of them, as nobody may call only while there is none.
+    async fn act_as(&self, name: &str, password: &str) {
+        let session = self.sign_in(name, password).await.session;
+        *self.acting.lock().unwrap() = session;
+    }
+
+    /// Whom the server's own calls are made as: the account `act_as` named, else nobody.
+    fn acting(&self) -> Caller<'_> {
+        Caller { server: self, session: self.acting.lock().unwrap().clone() }
     }
 
     /// Signs in as the page's form does: the answer sends a browser on, with the session in its cookie.
@@ -65,16 +80,16 @@ impl Server {
     }
 
     async fn get(&self, path: &str) -> Value {
-        self.anyone().get(path).await
+        self.acting().get(path).await
     }
 
     /// A call that may be refused: (status, answer).
     async fn send(&self, method: reqwest::Method, path: &str, body: Value) -> (u16, Value) {
-        self.anyone().send(method, path, body).await
+        self.acting().send(method, path, body).await
     }
 
     async fn ok(&self, method: reqwest::Method, path: &str, body: Value) -> Value {
-        self.anyone().ok(method, path, body).await
+        self.acting().ok(method, path, body).await
     }
 
     async fn until<F, Fut>(&self, what: &str, within: Duration, mut f: F)
@@ -91,7 +106,7 @@ impl Server {
 
     /// The fixture library's albums as the Library lists them.
     async fn albums(&self) -> Vec<Value> {
-        self.anyone().albums().await
+        self.acting().albums().await
     }
 
     /// The newest run once it is done and kept, other than `not`.
@@ -171,8 +186,8 @@ impl Server {
         found.unwrap_or_else(|| panic!("no {what} on the list: {runs}")).clone()
     }
 
-    /// An album action's Undo as a person gives it, a moment after the action: within the second of the library's last look,
-    /// the catalogue's change goes unseen until the next pass (`an_undo_in_the_second_of_its_keep_is_seen_before_the_next_pass`).
+    /// An album action's Undo as a person gives it, a moment after the action (one tapped at once, in the second of the library's
+    /// last look: `an_undo_in_the_second_of_its_keep_is_seen_before_the_next_pass_end_to_end`).
     async fn undo_a_moment_later(&self, id: &str) -> (u16, Value) {
         tokio::time::sleep(Duration::from_secs(2)).await;
         self.undo(id).await
@@ -180,7 +195,7 @@ impl Server {
 
     /// A file as it is served for a song.
     async fn served(&self, song: &str) -> Vec<u8> {
-        let (status, bytes) = self.anyone().bytes(&format!("/api/file/cratarr/{song}")).await;
+        let (status, bytes) = self.acting().bytes(&format!("/api/file/cratarr/{song}")).await;
         assert_eq!(status, 200, "{song}");
         bytes
     }
@@ -848,6 +863,94 @@ async fn an_artist_is_one_id_by_name_and_by_number_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// C56: a label's page from what the catalogue keeps, with MusicBrainz, Discogs and Bandcamp switched off, so nothing is read
+/// elsewhere: the label Tide Tables' files name, its records by year, newest first, each had or not with its catalogue number, a
+/// record not had among them, and nothing being read. An id that is no label is refused, and "More" reads on at MusicBrainz or
+/// Discogs alone. A row opened by its reference is the record that holds it, else one made once, and never one by its names
+/// alone; opened from the label's page, it is one of its rows.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_labels_page_from_kept_rows_end_to_end() {
+    let root = temp("label-page");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_fixtures(&music);
+    settings_0_15(&data, &music.to_string_lossy());
+    let s = Server::start(&data).await;
+    for service in ["musicbrainz", "discogs", "bandcamp"] {
+        s.ok(reqwest::Method::PUT, &format!("/api/settings/{service}"), json!({ "enabled": false })).await;
+    }
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    let albums = s.albums().await;
+    let id_of = |title: &str| albums.iter().find(|a| a["title"] == title).unwrap()["id"].as_str().unwrap().to_string();
+    let (tide, signal) = (id_of("Tide Tables"), id_of("Signal"));
+    let number = |id: &str| id.strip_prefix("al-").unwrap().parse::<i64>().unwrap();
+    let catalogue = || {
+        let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        db
+    };
+    // The label Tide Tables' files name (LABEL), once the record pass has tied it.
+    let tied = || -> Option<i64> {
+        let db = catalogue();
+        db.query_row("SELECT r.label FROM record_labels r JOIN labels l ON l.id = r.label WHERE l.name = 'Fixture Records' AND r.record = ?1", [number(&tide)], |r| r.get(0)).ok()
+    };
+    s.until("Tide Tables tied to its label", Duration::from_secs(120), || async { tied().is_some() }).await;
+    let label = tied().unwrap();
+    // A record the library has and a record not had, tied to it as a label's list ties them.
+    let dub = {
+        let db = catalogue();
+        db.execute("INSERT INTO records (born, title, artist, year, kind) VALUES (1, 'Low Water Dub', 'Glass Harbour', 2016, 'album')", []).unwrap();
+        let dub = db.last_insert_rowid();
+        for (record, catno) in [(dub, "FR-016"), (number(&signal), "FR-021")] {
+            db.execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, ?3, 'listing')", rusqlite::params![record, label, catno]).unwrap();
+        }
+        format!("al-{dub}")
+    };
+
+    let page = s.get(&format!("/api/labels/la-{label}")).await;
+    assert_eq!((page["id"].as_str(), page["name"].as_str()), (Some(&*format!("la-{label}")), Some("Fixture Records")), "{page}");
+    let rows: Vec<(&str, Option<i64>, Option<&str>, bool, Option<&str>)> = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["title"].as_str().unwrap(), r["year"].as_i64(), r["catno"].as_str(), r["had"].as_bool().unwrap(), r["record"].as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Signal", Some(2021), Some("FR-021"), true, Some(&*signal)),
+            ("Low Water Dub", Some(2016), Some("FR-016"), false, Some(&*dub)),
+            ("Tide Tables", Some(2012), None, true, Some(&*tide)),
+        ],
+        "by year, newest first: {page}"
+    );
+    assert_eq!((&page["looking"], &page["more"]), (&json!(false), &json!({ "musicbrainz": false, "discogs": false })), "nothing read elsewhere: {page}");
+    for asked in ["/api/labels/la-999999", "/api/labels/al-1", "/api/labels/la-x"] {
+        let (status, answer) = s.send(reqwest::Method::GET, asked, Value::Null).await;
+        assert_eq!((status, answer["error"].as_str()), (409, Some("That is not a label.")), "{asked}");
+    }
+    assert_eq!(s.send(reqwest::Method::GET, &format!("/api/labels/la-{label}?more=bandcamp"), Value::Null).await.0, 409, "Bandcamp's label pages are not read");
+
+    // A row opened: by its reference, the record that holds it (Tide Tables' files name its release group); one no record holds
+    // made once; by names alone, none.
+    let opened = |answer: Value| answer["record"].as_str().unwrap().to_string();
+    let by_group = json!({ "release_group": "00000000-0000-4000-8000-000000000101", "title": "Tide Tables", "artist": "Glass Harbour" });
+    assert_eq!(opened(s.ok(reqwest::Method::POST, "/api/records/open", by_group).await), tide, "the record its files name it by");
+    let lights = json!({ "discogs_master": 4401, "title": "Harbour Lights", "artist": "Glass Harbour", "year": 2014, "label": format!("la-{label}") });
+    let first = opened(s.ok(reqwest::Method::POST, "/api/records/open", lights.clone()).await);
+    assert!(![&tide, &signal, &dub].contains(&&first), "a record of its own: {first}");
+    assert_eq!(opened(s.ok(reqwest::Method::POST, "/api/records/open", lights).await), first, "opened again: the same record");
+    let by_name = json!({ "title": "Tide Tables", "artist": "Glass Harbour" });
+    assert_eq!(s.send(reqwest::Method::POST, "/api/records/open", by_name).await.0, 409, "never by its names alone");
+    let page = s.get(&format!("/api/labels/la-{label}")).await;
+    // U10: a row the label never listed, opened with it, is made (above) but tied to no label: not one of its page's rows.
+    let row = page["rows"].as_array().unwrap().iter().find(|r| r["title"] == "Harbour Lights").cloned().unwrap_or(Value::Null);
+    assert_eq!(row, Value::Null, "a made-up row ties nothing: {page}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A word of `text` that is an id from before 0.16: `al-` or `ar-` and 22 letters and digits, all of them. A record's or an
 /// artist's id for life is a number, and a track's has no hash to look for.
 fn hashes_in(text: &str) -> Vec<String> {
@@ -887,10 +990,10 @@ fn held(data: &Path) -> Held {
     st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?, r.get(2)?), (r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))).unwrap().map(Result::unwrap).collect()
 }
 
-/// Every play there is: (who, when, its event, its song).
-fn plays(data: &Path) -> Vec<(String, i64, String, String)> {
+/// Every play there is: (who, when, its event, its song). A play a player gave no id of its own has no event.
+fn plays(data: &Path) -> Vec<(String, i64, Option<String>, String)> {
     let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
-    let mut st = db.prepare("SELECT user, at, event, song FROM plays ORDER BY event").unwrap();
+    let mut st = db.prepare("SELECT user, at, event, song FROM plays ORDER BY event, rowid").unwrap();
     st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect()
 }
 
@@ -984,7 +1087,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
         *row = (row.0 + played, row.1 + own, row.2.max(*rating), row.3 || *star);
     }
     assert_eq!(held(&data), told, "each account's, told over");
-    let expected: Vec<(String, i64, String, String)> = plays_before.iter().map(|(who, at, event, song)| (who.clone(), *at, event.clone(), now(song))).collect();
+    let expected: Vec<(String, i64, Option<String>, String)> = plays_before.iter().map(|(who, at, event, song)| (who.clone(), *at, event.clone(), now(song))).collect();
     assert_eq!(plays(&data), expected, "every play once, on the track it is now");
 
     // One album's two ids, from before its library changed place and after, either way round: one row of each, with what both held.
@@ -1332,7 +1435,7 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     assert!([path(&music), path(&second)].contains(&in_order[0]), "a FLAC first, her own MP3 being worse: {in_order:?}");
     assert_eq!(in_order[2], path(&own.join("ann")), "her own music by its quality");
     assert_eq!(in_order[3], path(&incoming), "Incoming last");
-    assert_eq!((copies(&shores[0])[0]["plays"].as_bool(), shores[0]["format"].as_str(), shores[0]["library"].as_str()), (Some(true), Some("FLAC"), Some(&*in_order[0])), "the card is what plays");
+    assert_eq!((copies(&shores[0])[0]["plays"].as_bool(), shores[0]["format"].as_str(), shores[0].get("library")), (Some(true), Some("FLAC"), None), "the card is what plays, its copies saying where (C36)");
     assert_eq!(copies(&shores[0]).iter().filter(|c| c["plays"] == true).count(), 1);
     let of = |list: &[Value], p: &Path| list.iter().find(|c| c["library"].as_str() == Some(&*path(p))).cloned().unwrap();
     assert_eq!(of(&copies(&shores[0]), &music)["deletable"], true, "an administrator deletes in a main library");
@@ -1578,7 +1681,8 @@ async fn a_device_on_the_feed_holds_what_a_fresh_index_holds_end_to_end() {
     let was = listed(&device, "Just Arrived").unwrap();
     who.ok(reqwest::Method::POST, &format!("/api/incoming/keep/cratarr/{album}"), json!({})).await;
     let in_music = music.to_string_lossy().to_string();
-    s.until("the Keep listed", Duration::from_secs(60), || async { who.albums().await.iter().any(|a| a["title"] == "Just Arrived" && a["library"].as_str() == Some(&*in_music)) }).await;
+    let in_music_now = |a: &Value| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"].as_str() == Some(&*in_music)));
+    s.until("the Keep listed", Duration::from_secs(60), || async { who.albums().await.iter().any(|a| a["title"] == "Just Arrived" && in_music_now(a)) }).await;
     in_step(&who, &mut device, "a Keep", |d| listed(d, "Just Arrived").is_some_and(|t| t.facts.folders != was.facts.folders)).await;
     assert_eq!(listed(&device, "Just Arrived").unwrap().id, was.id, "the same track, in the library it was added to");
 
@@ -2248,19 +2352,25 @@ async fn keep_moves_an_album_with_its_ids_and_its_undo_puts_it_back_end_to_end()
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// A real bug, not in the gate: its name has no end_to_end in it, which is what the gate runs. `Serve::refresh` knows the catalogue
-/// changed by `last_pass`, in whole seconds: an Undo within the second of its last look moves the rows back unseen, and if the pass
-/// that follows ends in that second too, the library lists the album in Music until the next pass, five minutes on.
+/// RF8 (the review of runs 11 and 12, RA5): an Undo tapped at once, with no wait, as RY01's toast offers it. `Serve::refresh` knew the
+/// catalogue changed by `last_pass`, in whole seconds: an Undo within the second of the library's last look moved the rows back
+/// unseen, and where the pass that followed ended in that second too, the library listed the album in Music until the next pass,
+/// five minutes on. It now looks again by how many changes were told (`Catalogue::told`). The Keep starts at the start of a second,
+/// and its Undo follows the library's listing at once, so both fall in one second where they can.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "a real bug: an Undo within a second of the library's last look stays unseen until the next pass (Serve::refresh's last_pass)"]
-async fn an_undo_in_the_second_of_its_keep_is_seen_before_the_next_pass() {
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_undo_in_the_second_of_its_keep_is_seen_before_the_next_pass_end_to_end() {
     let (s, root, music, incoming) = on_music_and_incoming("keep-at-once").await;
     let album = s.incoming_album("Just Arrived").await;
+    let into = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_millis();
+    tokio::time::sleep(Duration::from_millis(u64::from(1000 - into))).await;
     s.ok(reqwest::Method::POST, &format!("/api/incoming/keep/cratarr/{}", album["id"].as_str().unwrap()), json!({})).await;
     s.read_in("Just Arrived", &music).await;
     let run = s.album_run("keep").await;
-    s.undo(run["id"].as_str().unwrap()).await;
+    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
     s.read_in("Just Arrived", &incoming).await;
+    s.until("Music to let it go", Duration::from_secs(120), || async { s.album_in("Just Arrived", &music).await.is_none() }).await;
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
@@ -2323,7 +2433,8 @@ async fn the_copy_named_is_the_copy_touched_end_to_end() {
     s.read_in("Both Shores", &music).await;
     let album = s.read_in("Both Shores", &incoming).await;
     let id = album["id"].as_str().unwrap();
-    assert_eq!(album["library"].as_str(), Some(&*path(&music)), "the entry is the copy that plays");
+    let playing = album["copies"].as_array().unwrap().iter().find(|c| c["plays"] == true).map(|c| c["library"].clone());
+    assert_eq!(playing.as_ref().and_then(Value::as_str), Some(&*path(&music)), "the entry is the copy that plays");
     let (kept, waiting) = (as_it_lies(&music.join(dir)), as_it_lies(&incoming.join(dir)));
     let (deleting, moving) = (format!("/api/albums/cratarr/{id}/delete"), format!("/api/albums/cratarr/{id}/move"));
 
@@ -2434,7 +2545,9 @@ async fn the_card_hears_the_incoming_copy_end_to_end() {
 }
 
 /// A request of bob's waits in Incoming, and Music holds the same record, so the record's id is on his list of what he may delete.
-/// The right is his copy's: naming Music's is refused and leaves it there, and his own goes.
+/// The right is his copy's: naming Music's is refused and leaves it there, and his own goes. His request names a record not had,
+/// made when he asked, before the album came; the album came as a record of its own (C50 did not join it), which holds his
+/// record's files by its artist and title (R13), so he is its requester.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
@@ -2450,19 +2563,30 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     let ann = s.sign_in("ann", "ann's password").await;
     ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
     let bob = s.sign_in("bob", "bob's password").await;
-    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
-    user.busy_timeout(Duration::from_secs(10)).unwrap();
-    user.execute("INSERT INTO request (user, album_key, artist_key, album, artist, at, status) VALUES ('bob', 'k', 'k', 'Both Shores', 'Salt Meridian', 1, 'approved')", []).unwrap();
-    drop(user);
     let path = |p: &Path| p.to_string_lossy().to_string();
     let copies = |a: &Value| a["copies"].as_array().cloned().unwrap_or_default();
     let holds = |a: &Value, p: &Path| copies(a).iter().any(|c| c["library"].as_str() == Some(&*path(p)));
     s.until("both copies read", Duration::from_secs(120), || async { bob.albums().await.iter().any(|a| a["title"] == "Both Shores" && holds(a, &music) && holds(a, &incoming)) }).await;
+    let catalogue = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    catalogue.busy_timeout(Duration::from_secs(10)).unwrap();
+    catalogue.execute("INSERT INTO records (born, title, artist) VALUES (1, 'Both Shores', 'Salt Meridian')", []).unwrap();
+    let record = catalogue.last_insert_rowid();
+    drop(catalogue);
+    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    user.busy_timeout(Duration::from_secs(10)).unwrap();
+    user.execute("INSERT INTO request (user, album_key, artist_key, album, artist, at, status, record) VALUES ('bob', 'k', 'k', 'Both Shores', 'Salt Meridian', 1, 'approved', ?1)", [record]).unwrap();
+    drop(user);
+    // Who asked for what is kept 30 s (R30), and it was read while both copies were waited for: his request shows once that has
+    // passed.
+    let his = |a: &Value| a["title"] == "Both Shores" && copies(a).iter().any(|c| c["library"].as_str() == Some(&*path(&incoming)) && c["deletable"] == true);
+    s.until("his request read", Duration::from_secs(90), || async { bob.albums().await.iter().any(his) }).await;
+    let id = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap()["id"].as_str().unwrap().to_string();
+    assert_ne!(id, format!("al-{record}"), "the album a record of its own");
     let album = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap();
     let of = |p: &Path| copies(&album).into_iter().find(|c| c["library"].as_str() == Some(&*path(p))).unwrap();
     assert_eq!((of(&incoming)["deletable"].as_bool(), of(&music)["deletable"].as_bool()), (Some(true), Some(false)), "{album}");
     let view = bob.get("/api/albums").await;
-    assert!(view["sources"][0]["deletable"].as_array().unwrap().contains(&album["id"]), "by id, the record is on his list: what must not count");
+    assert!(view["sources"][0].get("deletable").is_none(), "by id, the record's list stays the server's: each copy says it (C36)");
 
     let (dir, deleting) = ("Salt Meridian/Both Shores (2018)", format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()));
     let kept = as_it_lies(&music.join(dir));
@@ -2954,6 +3078,87 @@ async fn replace_takes_the_old_tracks_ids_and_its_undo_gives_both_back_end_to_en
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// RF2 (RB2, the census's five): the layout's Long Cut from Second waits in Incoming. Its two tracks are Music's by name and number,
+/// but its last is three seconds longer, which makes it a record of its own, as an untagged copy in Music made production's five two.
+/// It stands against Music's copy all the same, as a copy of one record does: the Library says so on it, Health lists it among the
+/// copies waiting, and the card names Music's copy. Replace takes Music's copy's place: Music holds the copy's files on Music's tracks,
+/// their play, heart and playlist lines with them, and Music's old files in its trash. Bonus Round's copy waiting holds a track
+/// Music's has not (OQ1): another edition, said so with no action, and Replace refused, nothing moved.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_split_from_musics_record_stands_against_it_and_replaces_it_end_to_end() {
+    let root = temp("rf2-split");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
+    for dir in [CUT, BONUS] {
+        std::fs::create_dir_all(incoming.join(dir).parent().unwrap()).unwrap();
+        std::fs::rename(second.join(dir), incoming.join(dir)).unwrap();
+    }
+    let arriving = as_it_lies(&incoming.join(CUT));
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    s.act_as(ANN.0, ANN.1).await;
+    let kept = s.read_in("Long Cut", &music).await;
+    let waiting = s.read_in("Long Cut", &incoming).await;
+    let other = s.read_in("Bonus Round", &incoming).await;
+    assert_ne!(kept["id"], waiting["id"], "two records of one name");
+    let from = incoming.to_string_lossy().replace('/', "%2F");
+    let copy_in = |a: &Value, library: &Path| a["copies"].as_array().unwrap().iter().find(|c| c["library"].as_str() == Some(&*library.to_string_lossy())).cloned().unwrap();
+
+    // What Music's tracks hold: a play, a heart, a playlist's lines.
+    let songs = tracks_at(&data, &music, CUT);
+    assert_eq!(songs.len(), 2);
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{}/favorite?on=true", songs[0]), json!({})).await;
+    ask(&ann, "scrobble", &format!("id={}&time=1700000000000", songs[0])).await;
+    let list = ask(&ann, "createPlaylist", &format!("name=Cut&songId={}&songId={}", songs[0], songs[1])).await["playlist"]["id"].as_str().unwrap().to_string();
+
+    // The copy waiting stands against Music's: on the Library's list, among Health's copies waiting, on the card.
+    let stand = copy_in(&waiting, &incoming)["against"].clone();
+    assert_eq!((stand["library"].as_str(), stand["dir"].as_str()), (Some(&*id_of(&music)), Some(CUT)), "against Music's copy: {stand}");
+    assert!(stand["why"].as_str().is_some_and(|w| w.starts_with("lossless")), "{stand}");
+    let listed = |f: &Value| f["items"].as_array().unwrap().iter().any(|i| i["title"] == "Long Cut");
+    let report = ann.get("/api/health/report").await;
+    let found = report["findings"].as_array().unwrap().iter().filter(|f| f["key"] == "incoming:upgrades" || f["key"] == "incoming:duplicates").filter(|f| listed(f)).count();
+    assert_eq!(found, 1, "one of Health's copies waiting: {report}");
+    let line = |card: &Value| card["checks"].as_array().unwrap().iter().find(|c| c["key"] == "in_library").unwrap()["said"].as_str().unwrap().to_string();
+    let said = line(&ann.get(&format!("/api/albums/cratarr/{}/card?from={from}", waiting["id"].as_str().unwrap())).await);
+    assert!(said.starts_with("Better than the copy in ") || said.starts_with("Already in "), "{said}");
+
+    // Another tracklist: another edition, no stand, no Replace.
+    assert!(copy_in(&other, &incoming)["against"].is_null(), "{other}");
+    let said = line(&ann.get(&format!("/api/albums/cratarr/{}/card?from={from}", other["id"].as_str().unwrap())).await);
+    assert!(said.ends_with("has another edition"), "{said}");
+    let (old, new) = (as_it_lies(&music.join(BONUS)), as_it_lies(&incoming.join(BONUS)));
+    assert_eq!(ann.send(reqwest::Method::POST, &format!("/api/incoming/replace/cratarr/{}", other["id"].as_str().unwrap()), json!({})).await.0, 409);
+    assert!(as_it_lies(&music.join(BONUS)) == old && as_it_lies(&incoming.join(BONUS)) == new, "a refusal moves nothing");
+
+    // Replace takes Music's copy's place, as 0.16's did: the copy's files on Music's tracks, what they held with them.
+    let replacing = format!("/api/incoming/replace/cratarr/{}", waiting["id"].as_str().unwrap());
+    let preview = ann.get(&replacing).await;
+    assert_eq!((preview["tracks"].as_u64(), preview["added"].as_u64(), &preview["refused"]), (Some(2), Some(0), &Value::Null), "{preview}");
+    let done = ann.ok(reqwest::Method::POST, &replacing, json!({})).await;
+    assert_eq!(done["queued"], false, "{done}");
+    let folder = done["folder"].as_str().unwrap().to_string();
+    assert!(contents(&as_it_lies(&music.join(&folder))) == contents(&arriving), "the copy's files in Music");
+    assert!(!incoming.join(CUT).exists(), "none left in Incoming");
+    assert_eq!(in_the_trash(&music), 2, "Music's old files in its trash");
+    let last = contents(&arriving)[1].clone();
+    s.until("Music to serve the copy's files on its tracks", Duration::from_secs(120), || async { ann.bytes(&format!("/api/file/cratarr/{}", songs[1])).await.1 == last }).await;
+    assert_eq!(tracks_at(&data, &music, &folder), songs, "Music's tracks, taken over");
+    let song = ask(&ann, "getSong", &format!("id={}", songs[0])).await["song"].clone();
+    assert_eq!(song["playCount"], 1, "its play: {song}");
+    assert!(song["starred"].is_string(), "its heart: {song}");
+    let lines: Vec<String> = ask(&ann, "getPlaylist", &format!("id={list}")).await["playlist"]["entry"].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(lines, songs, "its playlist's lines");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A length's fix, on a FLAC that a whole decode heard end early: the file written whole, its header saying what was heard. Its Undo
 /// gives back the file itself, byte for byte, which is what its copy beside the journal is for.
 #[tokio::test(flavor = "multi_thread")]
@@ -3257,6 +3462,259 @@ async fn a_moved_copy_stays_on_the_records_tracks_and_plays_from_where_it_went_e
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// C40: Copy to, end to end. An administrator copies Music's album into their own music through Move's own door: its preview says
+/// it is a copy, the album stays in Music, and its copy holds the same files on the same tracks: one album, listed once, with
+/// his copy beside Music's (and Ann's, which the layout gives her).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_is_one_album_two_copies_end_to_end() {
+    let root = temp("copy-to");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let album = s.read_in("Both Shores", &music).await;
+    let (id, songs) = (album["id"].as_str().unwrap().to_string(), s.songs_of(&album).await);
+    let original = as_it_lies(&music.join(SHORES));
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password", "admin": true })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let mine = own.join("bob");
+    let at = |p: &Path| id_of(p).replace('/', "%2F");
+    let path = format!("/api/albums/cratarr/{id}/move");
+    let preview = bob.get(&format!("{path}?from={}&to={}", at(&music), at(&mine))).await;
+    assert_eq!((&preview["copy"], &preview["refused"], preview["from_dir"].as_str()), (&json!(true), &Value::Null, Some(SHORES)), "{preview}");
+    // RF10: the tap carries what its sheet showed; without it, or with another, it is refused and nothing is written.
+    let (status, answer) = bob.send(reqwest::Method::POST, &path, json!({ "from": id_of(&music), "to": id_of(&mine) })).await;
+    assert_eq!(status, 409, "a tap with no sheet: {answer}");
+    let mut other = copy_tap(&preview, &music, &mine);
+    other["files"] = json!(preview["files"].as_u64().unwrap() + 1);
+    let (status, answer) = bob.send(reqwest::Method::POST, &path, other).await;
+    assert_eq!(status, 409, "a tap whose sheet differs: {answer}");
+    assert!(answer.to_string().contains("Changed since you looked"), "{answer}");
+    assert!(!mine.join(SHORES).exists(), "nothing written");
+    let copied = bob.ok(reqwest::Method::POST, &path, copy_tap(&preview, &music, &mine)).await;
+    let folder = copied["folder"].as_str().unwrap().to_string();
+    assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
+    assert!(contents(&as_it_lies(&mine.join(&folder))) == contents(&original), "the copy is the original's files alone");
+    let copies = || async { bob.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect::<Vec<_>>() };
+    let libraries = || async { copies().await.iter().flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).filter_map(|c| c["library"].as_str().map(str::to_string)).collect::<Vec<_>>() };
+    s.until("its copy read in own music", Duration::from_secs(120), || async { libraries().await.contains(&id_of(&mine)) }).await;
+    assert_eq!(copies().await.len(), 1, "one album, listed once");
+    assert!(libraries().await.contains(&id_of(&music)), "Music's copy beside it");
+    assert_eq!(tracks_at(&data, &mine, &folder), songs, "the copy on the record's tracks");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// T13.3: an administrator's Copy from someone's own music into an Incoming library is refused (`move_refused`), its preview and
+/// its tap alike, and nothing is written: Ann's own music and Incoming lie as they did.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_into_incoming_is_refused_end_to_end() {
+    let root = temp("copy-into-incoming");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, incoming, own) = (library.join("music"), library.join("incoming"), library.join("own"));
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let hers = own.join("ann");
+    let album = s.read_in("Own Room", &hers).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "carl", "password": "carl's password", "admin": true })).await;
+    let carl = s.sign_in("carl", "carl's password").await;
+    let (theirs, waiting) = (as_it_lies(&hers), as_it_lies(&incoming));
+    let path = format!("/api/albums/cratarr/{id}/move");
+    let at = |p: &Path| id_of(p).replace('/', "%2F");
+    let (status, preview) = carl.send(reqwest::Method::GET, &format!("{path}?from={}&to={}", at(&hers), at(&incoming)), Value::Null).await;
+    assert_eq!(status, 409, "the preview refused: {preview}");
+    let (status, answer) = carl.send(reqwest::Method::POST, &path, json!({ "from": id_of(&hers), "to": id_of(&incoming) })).await;
+    assert_eq!(status, 409, "the copy refused: {answer}");
+    assert!(answer.to_string().contains("can't be copied into Incoming"), "move_refused's words: {answer}");
+    assert!(as_it_lies(&hers) == theirs && as_it_lies(&incoming) == waiting, "nothing written");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// T1.5: a Copy to's Undo, as Health's list of changes gives it, takes the copied files into Bob's library's trash and leaves a
+/// picture set in the copy's folder since; the record is listed once after, with no copy in Bob's music: the copies it had before
+/// (Music's, and Ann's, which the layout gives her).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copys_undo_leaves_what_came_after_end_to_end() {
+    let root = temp("copy-undo-after");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let album = s.read_in("Both Shores", &music).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    let original = as_it_lies(&music.join(SHORES));
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password", "admin": true })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    s.act_as("bob", "bob's password").await;
+    let mine = own.join("bob");
+    // The record's copies, by library, as Bob's Library lists them.
+    let libraries = || async {
+        let mut at: Vec<String> = bob.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").flat_map(|a| a["copies"].as_array().cloned().unwrap_or_default()).filter_map(|c| c["library"].as_str().map(str::to_string)).collect();
+        at.sort();
+        at
+    };
+    let before = libraries().await;
+    assert!(before.contains(&id_of(&music)) && !before.contains(&id_of(&mine)), "Music's copy, none in Bob's music: {before:?}");
+    let path = format!("/api/albums/cratarr/{id}/move");
+    let at = |p: &Path| id_of(p).replace('/', "%2F");
+    let preview = bob.get(&format!("{path}?from={}&to={}", at(&music), at(&mine))).await;
+    let copied = bob.ok(reqwest::Method::POST, &path, copy_tap(&preview, &music, &mine)).await;
+    let folder = copied["folder"].as_str().unwrap().to_string();
+    s.until("its copy read in own music", Duration::from_secs(120), || async { libraries().await.contains(&id_of(&mine)) }).await;
+    std::fs::write(mine.join(&folder).join("folder.jpg"), b"a picture set since").unwrap();
+    let run = s.album_run("copy").await;
+    let (status, answer) = s.undo_a_moment_later(run["id"].as_str().unwrap()).await;
+    assert_eq!(status, 200, "{answer}");
+    let left = as_it_lies(&mine.join(&folder));
+    assert_eq!(left.keys().cloned().collect::<Vec<_>>(), ["folder.jpg"], "what came after stays");
+    assert_eq!(in_the_trash(&mine), audio_under(&music.join(SHORES)).len(), "the copied files in Bob's library's trash");
+    assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
+    s.until("the record listed with the copies it had before, none in Bob's music", Duration::from_secs(120), || async { libraries().await == before }).await;
+    assert_eq!(bob.albums().await.iter().filter(|a| a["title"] == "Both Shores").count(), 1, "listed once");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// C52, OQ3: Want of a record the library has makes the asker's own copy of it in their own music, as Copy to makes one: Music's
+/// album as it was, the copy on the record's tracks, and the request says so.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_request_for_a_stored_album_makes_a_copy_end_to_end() {
+    let root = temp("want-stored");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let album = s.read_in("Both Shores", &music).await;
+    let (id, songs) = (album["id"].as_str().unwrap().to_string(), s.songs_of(&album).await);
+    let original = as_it_lies(&music.join(SHORES));
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password", "admin": true })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    bob.ok(reqwest::Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Both Shores" })).await;
+    // His own music holds other records of the artist (the layout's No Papers, Other Room): his copy is Both Shores', named as own
+    // music names a folder (as it is), whole once every file of it is there under its own name.
+    let mine = own.join("bob");
+    let copied = mine.join(SHORES);
+    s.until("his copy made, every file of it", Duration::from_secs(60), || async { copied.is_dir() && contents(&as_it_lies(&copied)) == contents(&original) }).await;
+    assert!(as_it_lies(&music.join(SHORES)) == original, "Music's album as it was");
+    s.until("his copy read", Duration::from_secs(120), || async { tracks_at(&data, &mine, SHORES) == songs }).await;
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// T5.1 (the owner's "Yes, from anyone's"): Ann, a user, Wants "Other Room", which only Bob's own music holds, and an
+/// administrator approves it. Bob's copy is copied into Ann's own music byte for byte, under its own folder's name, on the record's
+/// tracks; her request reads done, its state alone as an account other than an administrator reads one (W6; OQ-I: "just
+/// Arrived"), and the line it keeps, the administrators' words, says it was copied, naming no one's music; no fetcher is asked; Bob's
+/// music is as it was, and nothing is written into it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_want_of_a_record_only_in_bobs_music_copies_his_end_to_end() {
+    let root = temp("want-bobs");
+    let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(&completed).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    // RF11 (T5.1's "Never: Lidarr or Soulseek asked"): both fetchers there, each a fake that records every request it is sent.
+    let (lidarr, lidarr_asked) = recording(json!({ "version": "2.0.0" })).await;
+    let (slskd, slskd_asked) = recording(json!({})).await;
+    let s = Server::start_with(&data, &[("LIDARR_URL", lidarr.as_str()), ("LIDARR_API_KEY", "key")]).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    s.ok(reqwest::Method::PUT, "/api/settings/slskd", json!({ "url": slskd, "key": "k", "folder": completed, "enabled": true })).await;
+    let (theirs, mine) = (own.join("bob"), own.join("ann"));
+    let album = s.read_in("Other Room", &theirs).await;
+    let (id, songs) = (album["id"].as_str().unwrap().to_string(), s.songs_of(&album).await);
+    // Bob's copy: his one folder of it, under its artist's.
+    let dirs = |at: &Path| std::fs::read_dir(at).unwrap().flatten().filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.')).collect::<Vec<_>>();
+    let folder = dirs(&theirs)
+        .iter()
+        .flat_map(|a| dirs(&a.path()).into_iter().map(move |b| format!("{}/{}", a.file_name().to_string_lossy(), b.file_name().to_string_lossy())))
+        .find(|f| f.rsplit('/').next().unwrap().starts_with("Other Room"))
+        .expect("Bob's Other Room");
+    let bobs = as_it_lies(&theirs);
+    let ann = s.sign_in("ann", "ann pw").await;
+    let asked = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Other Room" })).await;
+    let request = asked["request"]["id"].as_i64().unwrap();
+    if asked["request"]["status"] == "pending" {
+        let admin = s.sign_in("root", "root pw").await;
+        admin.ok(reqwest::Method::POST, "/api/requests/decide", json!({ "ids": [request], "approve": true })).await;
+    }
+    let copied = mine.join(&folder);
+    s.until("Ann's copy made, every file of it", Duration::from_secs(60), || async { copied.is_dir() && as_it_lies(&copied) == as_it_lies(&theirs.join(&folder)) }).await;
+    s.until("Ann's copy read on the record's tracks", Duration::from_secs(120), || async { tracks_at(&data, &mine, &folder) == songs }).await;
+    let listed = ann.get("/api/requests").await;
+    let r = listed["mine"].as_array().unwrap().iter().find(|r| r["id"] == request).cloned().expect("her request");
+    // Done, then delivered at the requests' round (AL02.8): either, its state alone.
+    assert!(matches!(r["state"]["state"].as_str(), Some("done" | "delivered")) && r["fetched"].is_null(), "done, its state alone (W6): {r}");
+    let line = request_line(&data, request);
+    assert_eq!(line.as_deref(), Some("Copied into your music"), "the line it keeps: {r}");
+    assert!(!r.to_string().to_lowercase().contains("bob") && !line.unwrap_or_default().to_lowercase().contains("bob"), "whose music it came from is not said (OQ-I): {r}");
+    assert!(as_it_lies(&theirs) == bobs, "Bob's music as it was, nothing written into it");
+    // A round on (it is delivered there), no fetcher was asked for it: Lidarr not asked to look it up or add it, slskd neither searched
+    // nor asked to fetch.
+    s.until("her request delivered at the round", Duration::from_secs(150), || async {
+        ann.get("/api/requests").await["mine"].as_array().unwrap().iter().any(|r| r["id"] == request && r["state"]["state"] == "delivered")
+    })
+    .await;
+    let asked = |seen: &std::sync::Mutex<Vec<String>>, gets: &[&str]| -> Vec<String> {
+        seen.lock().unwrap().iter().filter(|r| !r.starts_with("GET ") || gets.iter().any(|g| r.contains(g))).cloned().collect()
+    };
+    assert!(asked(&lidarr_asked, &["/api/v1/album/lookup"]).is_empty(), "Lidarr asked: {:?}", lidarr_asked.lock().unwrap());
+    assert!(asked(&slskd_asked, &["/api/v0/searches"]).is_empty(), "slskd asked: {:?}", slskd_asked.lock().unwrap());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A fetcher's stand-in that answers anything, `status` for a status question and an empty list else, and records each request as
+/// "METHOD path" (RF11: T5.1 reads that nothing was asked of Lidarr or slskd). Its address, and what it was sent.
+async fn recording(status: Value) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = seen.clone();
+    let answer = move |method: axum::http::Method, uri: axum::http::Uri| {
+        let (kept, status) = (kept.clone(), status.clone());
+        async move {
+            kept.lock().unwrap().push(format!("{method} {}", uri.path()));
+            if uri.path().ends_with("/system/status") || uri.path().ends_with("/application") { axum::Json(status) } else { axum::Json(json!([])) }
+        }
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
+    (url, seen)
+}
+
+/// The line a request keeps (`fetched`): what was done with it, in the words an administrator reads (W6).
+fn request_line(data: &Path, id: i64) -> Option<String> {
+    let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    db.query_row("SELECT fetched FROM request WHERE id = ?1", [id], |r| r.get(0)).unwrap()
+}
+
 /// A track's own word goes into its file in every copy, by the track and not the file's name, and into no other track's. One
 /// Undo takes it out of them all.
 #[tokio::test(flavor = "multi_thread")]
@@ -3398,7 +3856,8 @@ async fn a_length_fix_stays_in_its_file_end_to_end() {
     // Three seconds in both copies: a track of two is no shorter than it says at a second heard, within Health's slack.
     let rel = format!("{SHORES}/02 Crossing.flac");
     // By quality either can play, and on the copy that plays a fix by the track would find the same file.
-    let plays = s.read_in("Both Shores", &music).await["library"].as_str().unwrap().to_string();
+    let shores = s.read_in("Both Shores", &music).await;
+    let plays = shores["copies"].as_array().unwrap().iter().find(|c| c["plays"] == true).unwrap()["library"].as_str().unwrap().to_string();
     let (fixed, playing) = if plays == music.to_string_lossy() { (&second, &music) } else { (&music, &second) };
     let (track, other) = (fixed.join(&rel), playing.join(&rel));
     let (before, kept) = (std::fs::read(&track).unwrap(), std::fs::read(&other).unwrap());
@@ -4141,4 +4600,1148 @@ async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
     assert!(findings.is_empty(), "{} found:\n{}", findings.len(), findings.join("\n"));
     s.stop();
     std::fs::remove_dir_all(&shelves.root).ok();
+}
+
+// ---- RY01: Replace in Music from someone's own music (SCENARIOS-RUN-12.md, RY01.1-RY01.14) ----
+
+/// RY01's places: Music, Ann's and Bob's own music, and the data folder.
+struct Places {
+    music: PathBuf,
+    ann: PathBuf,
+    bob: PathBuf,
+    data: PathBuf,
+}
+
+/// RY01's shape from the layout, its audio as `make_layout` makes it: Music's copy MP3 (the layout's Incoming one moved there),
+/// Bob's FLAC (Music's moved into his own music), Ann's MP3 as the layout has it. One record, three copies. A cover beside Music's
+/// copy and Bob's, each its own, as staging's copies have one. `before` changes the files before the server first reads them.
+/// The accounts root and carl (administrators), ann and bob (users), each with "<name> pw".
+async fn ry01_shape(name: &str, before: impl FnOnce(&Places)) -> (Server, PathBuf, Places, String) {
+    let root = temp(name);
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let p = Places { music: library.join("music"), ann: library.join("own/ann"), bob: library.join("own/bob"), data: data.clone() };
+    std::fs::create_dir_all(p.bob.join("Salt Meridian")).unwrap();
+    std::fs::rename(p.music.join(SHORES), p.bob.join(SHORES)).unwrap();
+    std::fs::rename(library.join("incoming").join(SHORES), p.music.join(SHORES)).unwrap();
+    std::fs::write(p.music.join(SHORES).join("cover.jpg"), b"Music's cover").unwrap();
+    std::fs::write(p.bob.join(SHORES).join("cover.jpg"), b"Bob's cover").unwrap();
+    before(&p);
+    settings(&data, &[(&p.music, "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    // Read as nobody while there are no accounts: nobody is the administrator until one is made.
+    let album = s.read_in("Both Shores", &p.bob).await;
+    s.read_in("Both Shores", &p.music).await;
+    s.read_in("Both Shores", &p.ann).await;
+    for (name, admin) in [("root", true), ("carl", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    (s, root, p, album["id"].as_str().unwrap().to_string())
+}
+
+async fn bobs_flac_beside_musics_mp3(name: &str) -> (Server, PathBuf, Places, String) {
+    ry01_shape(name, |_| {}).await
+}
+
+/// A library's path as a query names it.
+fn enc(library: &Path) -> String {
+    id_of(library).replace('/', "%2F")
+}
+
+/// Replace's address for a record, and its sheet's for Bob's copy into Music.
+fn ry01_paths(id: &str, p: &Places) -> (String, String) {
+    let path = format!("/api/incoming/replace/cratarr/{id}");
+    let preview = format!("{path}?from={}&to={}", enc(&p.bob), enc(&p.music));
+    (path, preview)
+}
+
+/// The tap as the page sends it: the copies, and what its sheet showed (OQ-G), Bob's copy named by its folder (RF10).
+fn tap_of(preview: &Value, p: &Places) -> Value {
+    json!({ "from": id_of(&p.bob), "to": id_of(&p.music), "folder": preview["folder"], "tracks": preview["tracks"], "added": preview["added"], "files": preview["files"], "from_dir": preview["from_dir"] })
+}
+
+/// Copy to's tap as the page sends it (RF10): the copies, and what its sheet showed, the copy named by its folder.
+fn copy_tap(preview: &Value, from: &Path, to: &Path) -> Value {
+    json!({ "from": id_of(from), "to": id_of(to), "folder": preview["folder"], "files": preview["files"], "from_dir": preview["from_dir"] })
+}
+
+/// Every file's time under `dir`, hidden ones too, by its place.
+fn times_under(dir: &Path) -> std::collections::BTreeMap<String, std::time::SystemTime> {
+    fn walk(root: &Path, at: &Path, out: &mut std::collections::BTreeMap<String, std::time::SystemTime>) {
+        for e in std::fs::read_dir(at).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else {
+                out.insert(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), std::fs::metadata(&p).unwrap().modified().unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// A folder's files as (bytes, time), whatever they are called: what a copy keeps of its original.
+fn kept_as(dir: &Path) -> Vec<(Vec<u8>, std::time::SystemTime)> {
+    let mut all: Vec<(Vec<u8>, std::time::SystemTime)> = as_it_lies(dir).into_iter().map(|(name, bytes)| (bytes, std::fs::metadata(dir.join(name)).unwrap().modified().unwrap())).collect();
+    all.sort();
+    all
+}
+
+/// An account's view of a record's copy in `library`, if the Library lists one.
+async fn copy_in(who: &Caller<'_>, id: &str, library: &Path) -> Option<Value> {
+    let at = id_of(library);
+    let record = who.albums().await.into_iter().find(|a| a["id"] == id)?;
+    record["copies"].as_array()?.iter().find(|c| c["library"].as_str() == Some(at.as_str())).cloned()
+}
+
+/// A record's songs as an account reads them, their ids its tracks'.
+async fn songs_for(who: &Caller<'_>, id: &str) -> Vec<String> {
+    let album = who.get(&format!("/api/albums/cratarr/{id}")).await;
+    album["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect()
+}
+
+/// A song's file as it is served to an account.
+async fn served_to(who: &Caller<'_>, song: &str) -> Vec<u8> {
+    let (status, bytes) = who.bytes(&format!("/api/file/cratarr/{song}")).await;
+    assert_eq!(status, 200, "{song}");
+    bytes
+}
+
+/// The album actions in the journal, intended or applied: (kind, applied).
+fn album_events(data: &Path) -> Vec<(String, bool)> {
+    let db = rusqlite::Connection::open(data.join("journal.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT json_extract(event, '$.kind'), applied FROM events ORDER BY id").unwrap();
+    st.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1))).unwrap().map(Result::unwrap).collect()
+}
+
+/// What a handler kept on the newest album action, if it did.
+fn handled(data: &Path, handler: &str) -> Option<Value> {
+    use rusqlite::OptionalExtension;
+    let db = rusqlite::Connection::open(data.join("journal.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let text: Option<String> = db
+        .query_row("SELECT h.result FROM handled h WHERE h.handler = ?1 AND h.event = (SELECT max(id) FROM events)", [handler], |r| r.get(0))
+        .optional()
+        .unwrap();
+    text.map(|t| serde_json::from_str(&t).unwrap())
+}
+
+/// A library's rows in the catalogue: (path, size, time, shared, gone, trashed), by path.
+fn own_rows(data: &Path, library: &Path) -> Vec<(String, i64, i64, i64, Option<i64>, Option<String>)> {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db
+        .prepare("SELECT f.rel, f.size, f.mtime, f.shared, f.gone_at, f.trashed FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 ORDER BY f.rel")
+        .unwrap();
+    let rows = st.query_map([library.to_string_lossy().to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// The rows a library keeps in its trash: (track, trash token), each.
+fn trashed_rows(data: &Path, library: &Path) -> Vec<(Option<i64>, Option<String>)> {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT f.track, f.trashed FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE '.cratarr-trash/%'").unwrap();
+    let rows = st.query_map([library.to_string_lossy().to_string()], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// The `shared` flags of a copy's rows, as the catalogue keeps them.
+fn shared_at(data: &Path, library: &Path, dir: &str) -> Vec<i64> {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT f.shared FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE ?2 AND f.trashed IS NULL ORDER BY f.rel").unwrap();
+    let rows = st.query_map([library.to_string_lossy().to_string(), format!("{dir}/%")], |r| r.get(0)).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// An album action on the list of runs as an administrator reads it, by the journal's id (`m…`).
+async fn album_run_as(who: &Caller<'_>, what: &str) -> Value {
+    let runs = who.get("/api/file-changes/runs").await;
+    let found = runs.as_array().unwrap().iter().find(|r| r["what"] == what && r["id"].as_str().unwrap().starts_with('m'));
+    found.unwrap_or_else(|| panic!("no {what} on the list: {runs}")).clone()
+}
+
+/// A run's Undo as an administrator gives it, a moment after the action (`Server::undo_a_moment_later`), waited for.
+async fn undo_as(who: &Caller<'_>, id: &str) -> (u16, Value) {
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (status, first) = who.send(reqwest::Method::POST, &format!("/api/file-changes/runs/{id}/undo"), json!({})).await;
+    if status != 200 {
+        return (status, first);
+    }
+    let start = Instant::now();
+    loop {
+        let runs = who.get("/api/file-changes/runs").await;
+        let mine: Vec<&Value> = runs.as_array().unwrap().iter().filter(|r| r["id"] == id).collect();
+        if !mine.iter().any(|r| r["state"] != "done")
+            && let Some(run) = mine.first()
+        {
+            return (status, (*run).clone());
+        }
+        assert!(start.elapsed() < Duration::from_secs(120), "waited for {id}'s Undo: {runs}");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// The requests the user data holds, each (id, status): what RY01 must leave as it was.
+fn requests_kept(data: &Path) -> Vec<(i64, String)> {
+    let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT id, status FROM request ORDER BY id").unwrap();
+    st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+}
+
+/// RY01.1 (and RY01.6 case 1): root replaces Music's MP3 copy of Both Shores from Bob's FLAC. The sheet names Music's old folder and
+/// its new one, 3 tracks taken over, none added, the 4 files it writes (Bob's 3 tracks and his cover) and whose copy it is; the tap
+/// writes there exactly Bob's files, bytes and times, a cover included; Music's old files, its cover too, lie in Music's trash, their
+/// rows trashed holding no track; the new rows are on the record's tracks, shared as the copy said (ext4 here: not); one journal
+/// entry, applied, holding each copy's size and time; a run on Health's list naming the record, Music and Bob's music; the record
+/// listed once with its three copies, its songs streaming FLAC. Never: a byte, time or file of Bob's music changed, added or taken
+/// away (no cover, part, conversion or trash there); anything of Ann's changed; a file of Music outside the two folders written; a
+/// cover set aside in the data folder; Lidarr asked anything; a request changed.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn replace_in_music_from_bobs_music_copies_his_and_keeps_it_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-main").await;
+    let admin = s.sign_in("root", "root pw").await;
+    let (bobs, anns, musics) = (as_it_lies(&p.bob.join(SHORES)), as_it_lies(&p.ann.join(SHORES)), as_it_lies(&p.music.join(SHORES)));
+    let (bob_times, ann_times, bobs_kept) = (times_under(&p.bob), times_under(&p.ann), kept_as(&p.bob.join(SHORES)));
+    let elsewhere = |at: &Path| as_it_lies(at).into_iter().filter(|(rel, _)| !rel.starts_with("Salt Meridian/Both Shores")).collect::<Files>();
+    let (music_else, asked) = (elsewhere(&p.music), requests_kept(&p.data));
+    let songs = songs_for(&admin, &id).await;
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    assert_eq!((&preview["refused"], preview["tracks"].as_u64(), preview["added"].as_u64(), preview["files"].as_u64()), (&Value::Null, Some(3), Some(0), Some(4)), "{preview}");
+    assert_eq!((preview["old"].as_str(), preview["from"].as_str()), (Some(SHORES), Some(id_of(&p.bob).as_str())), "Music's old folder, and whose copy: {preview}");
+    assert!(preview["folder"].is_string() && preview["carry"].as_array().is_some_and(Vec::is_empty) && preview["covers"]["current"].is_null(), "no cover to choose, nothing carried: {preview}");
+    // RF10: the sheet names Bob's copy by its folder, and the tap carries it: none, or another folder, is refused with nothing written.
+    assert_eq!(preview["from_dir"].as_str(), Some(SHORES), "Bob's copy, by its folder: {preview}");
+    let mut bare = tap_of(&preview, &p);
+    bare.as_object_mut().unwrap().remove("from_dir");
+    let mut elsewhere_named = tap_of(&preview, &p);
+    elsewhere_named["from_dir"] = json!("Salt Meridian/Both Shores (1999)");
+    for (tap, what) in [(bare, "no folder"), (elsewhere_named, "another folder")] {
+        let (status, answer) = admin.send(reqwest::Method::POST, &path, tap).await;
+        assert_eq!(status, 409, "{what}: {answer}");
+    }
+    assert!(as_it_lies(&p.music.join(SHORES)) == musics && album_events(&p.data).is_empty(), "nothing written");
+    let done = admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    assert_eq!(done["folder"], preview["folder"], "written where the sheet said");
+    let folder = done["folder"].as_str().unwrap().to_string();
+    let new = p.music.join(&folder);
+    assert_eq!(as_it_lies(&new).len() as u64, preview["files"].as_u64().unwrap(), "as many files as the sheet said");
+    assert!(contents(&as_it_lies(&new)) == contents(&bobs), "Bob's files alone, a cover included, whatever Music's template calls them");
+    assert_eq!(kept_as(&new), bobs_kept, "with their times");
+    assert!(as_it_lies(&p.bob.join(SHORES)) == bobs && times_under(&p.bob) == bob_times, "Bob's copy untouched, nothing beside it");
+    assert!(!p.bob.join(".cratarr-trash").exists() && !p.bob.join(".cratarr-convert").exists(), "no trash, no conversion in his music");
+    assert!(as_it_lies(&p.ann.join(SHORES)) == anns && times_under(&p.ann) == ann_times, "Ann's as it was");
+    assert!(contents(&as_it_lies(&p.music.join(".cratarr-trash"))) == contents(&musics), "Music's old files, the cover too, in Music's trash");
+    assert!(elsewhere(&p.music) == music_else, "nothing of Music's outside the two folders written");
+    assert!(!p.data.join("cover-undo").exists(), "nothing set aside in the data folder");
+    assert_eq!(tracks_at(&p.data, &p.music, &folder), songs, "the new files on the record's tracks");
+    assert_eq!(tracks_at(&p.data, &p.bob, SHORES), songs, "Bob's still on the record's tracks");
+    assert!(shared_at(&p.data, &p.music, &folder).iter().all(|s| *s == 0), "shared as the copy said: on ext4, not");
+    let trashed = trashed_rows(&p.data, &p.music);
+    assert!(trashed.len() == 3 && trashed.iter().all(|(track, token)| track.is_none() && token.is_some()), "the old rows trashed, holding no track: {trashed:?}");
+    assert_eq!(album_events(&p.data), [("album_replaced_from_copy".to_string(), true)], "one journal entry, applied");
+    let copied = handled(&p.data, "copied").expect("the copies' sizes and times on the entry");
+    assert!(copied.as_array().is_some_and(|c| c.len() == 4 && c.iter().all(|x| !x.is_null())), "{copied}");
+    let run = album_run_as(&admin, "replace").await;
+    let title = run["title"].as_str().unwrap_or_default().to_string();
+    assert!(title.contains("Both Shores") && title.contains("music") && title.contains("bob's music"), "the run names the record, Music and Bob's music: {run}");
+    s.until("Lidarr's handler done, asking nothing", Duration::from_secs(60), || async { handled(&p.data, "acquisition").is_some() }).await;
+    assert_eq!(handled(&p.data, "acquisition"), Some(json!([])), "no Lidarr asked: an empty plan");
+    assert_eq!(requests_kept(&p.data), asked, "no request changed");
+    s.until("FLAC served on the old ids", Duration::from_secs(120), || async { !is_mp3(&served_to(&admin, &songs[0]).await) }).await;
+    let listed: Vec<Value> = admin.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect();
+    assert_eq!(listed.len(), 1, "one record");
+    assert_eq!(listed[0]["copies"].as_array().map(Vec::len), Some(3), "Music's, Bob's and Ann's: {}", listed[0]);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.3: Bob's copy short (a track's file deleted by hand, read so): the Library's list says nothing on it replaces Music's; the
+/// preview is refused; a tap asked anyway answers 409. Never a file written in Music, one of Music's in the trash, a journal entry
+/// left, or a task begun.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_short_own_copy_is_never_offered_and_refused_if_asked_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-short").await;
+    let admin = s.sign_in("root", "root pw").await;
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let offered = |c: &Value| c["replace_into"].as_array().is_some_and(|r| r.iter().any(|a| a["replaces"] == true));
+    s.until("Bob's copy offered while whole", Duration::from_secs(120), || async { copy_in(&admin, &id, &p.bob).await.is_some_and(|c| offered(&c)) }).await;
+    let last = audio_under(&p.bob.join(SHORES)).last().cloned().unwrap();
+    std::fs::remove_file(p.bob.join(SHORES).join(last)).unwrap();
+    s.until("Bob's copy read short", Duration::from_secs(120), || async { copy_in(&admin, &id, &p.bob).await.is_some_and(|c| c["tracks"] == 2) }).await;
+    assert!(!offered(&copy_in(&admin, &id, &p.bob).await.unwrap()), "no line offers it");
+    let before = (as_it_lies(&p.music), times_under(&p.music));
+    let preview = admin.get(&preview_path).await;
+    assert!(!preview["refused"].is_null(), "{preview}");
+    let tap = json!({ "from": id_of(&p.bob), "to": id_of(&p.music), "folder": SHORES, "tracks": 3, "added": 0, "files": 4, "from_dir": SHORES });
+    let (status, answer) = admin.send(reqwest::Method::POST, &path, tap).await;
+    assert_eq!(status, 409, "{answer}");
+    assert!(answer.to_string().contains("lacks tracks"), "refused as the short copy it is: {answer}");
+    assert!(as_it_lies(&p.music) == before.0 && times_under(&p.music) == before.1 && in_the_trash(&p.music) == 0, "nothing written or trashed in Music");
+    assert!(album_events(&p.data).is_empty(), "no entry, intended or applied");
+    let tasks = admin.get("/api/tasks").await;
+    assert!(!tasks.to_string().contains("\"replace\""), "no task begun: {tasks}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.4: with the sheet open, Bob's copy changes before the tap: (1) Bob deletes it; (2) a FLAC of his is swapped by hand for an
+/// MP3, read so (no longer better); (3) it is renamed on disk, not read yet; (4) a fourth file is put in it by hand. Each tap carries
+/// what its sheet showed and is refused (409), Music as it was, Bob's trash and folder untouched by the refusal; a fresh preview
+/// says what is true now. Each on a fresh shape.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_replace_from_a_copy_that_changed_since_the_sheet_is_refused_end_to_end() {
+    for case in 1..=4 {
+        let (s, root, p, id) = bobs_flac_beside_musics_mp3(&format!("ry01-changed{case}")).await;
+        let (admin, bob) = (s.sign_in("root", "root pw").await, s.sign_in("bob", "bob pw").await);
+        let (path, preview_path) = ry01_paths(&id, &p);
+        let preview = admin.get(&preview_path).await;
+        assert!(preview["refused"].is_null(), "case {case}: {preview}");
+        let mine = p.bob.join(SHORES);
+        match case {
+            1 => {
+                bob.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/delete"), json!({ "from": id_of(&p.bob) })).await;
+            }
+            2 => {
+                let first = audio_under(&mine)[0].clone();
+                let mp3 = p.ann.join(SHORES).join(&audio_under(&p.ann.join(SHORES))[0]);
+                std::fs::remove_file(mine.join(&first)).unwrap();
+                std::fs::copy(&mp3, mine.join(first.replace(".flac", ".mp3"))).unwrap();
+                let better = |c: &Value| c["replace_into"].as_array().is_some_and(|r| !r.is_empty());
+                s.until("the swap read: no longer better", Duration::from_secs(120), || async { copy_in(&admin, &id, &p.bob).await.is_some_and(|c| !better(&c) && c["format"] != "FLAC") }).await;
+            }
+            3 => std::fs::rename(&mine, p.bob.join("Salt Meridian/Both Shores (moved)")).unwrap(),
+            _ => {
+                let other = p.ann.join("Salt Meridian").join(std::fs::read_dir(p.ann.join("Salt Meridian")).unwrap().flatten().map(|e| e.file_name()).find(|n| n.to_string_lossy().starts_with("Own Room")).unwrap());
+                std::fs::copy(other.join(&audio_under(&other)[0]), mine.join("04 Own Room.mp3")).unwrap();
+            }
+        }
+        let (music, bobs) = (as_it_lies(&p.music), times_under(&p.bob));
+        let (status, answer) = admin.send(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+        assert_eq!(status, 409, "case {case}: {answer}");
+        assert!(as_it_lies(&p.music) == music && in_the_trash(&p.music) == 0, "case {case}: Music as it was");
+        assert!(times_under(&p.bob) == bobs, "case {case}: Bob's trash and folder untouched by the refusal");
+        assert!(album_events(&p.data).iter().all(|(kind, _)| kind != "album_replaced_from_copy"), "case {case}: no entry");
+        let (status, fresh) = admin.send(reqwest::Method::GET, &preview_path, Value::Null).await;
+        assert!(status == 409 || !fresh["refused"].is_null() || fresh["files"] != preview["files"], "case {case}: a fresh preview says what is true now: {status} {fresh}");
+        s.stop();
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+/// RY01.8, cases 1 and 2: after RY01, a booklet dropped into Music's new folder; RY01's Undo from Health's list of changes puts
+/// Music's MP3 copy back as it was, the booklet staying beside it, the copies in Music's trash, never deleted; Bob's copy untouched;
+/// the record's songs stream MP3 again on their ids.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn undo_puts_musics_copy_back_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-undo").await;
+    let admin = s.sign_in("root", "root pw").await;
+    let (bobs, musics) = (as_it_lies(&p.bob.join(SHORES)), as_it_lies(&p.music.join(SHORES)));
+    let songs = songs_for(&admin, &id).await;
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    let done = admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    let new = p.music.join(done["folder"].as_str().unwrap());
+    std::fs::write(new.join("booklet.pdf"), b"pdf").unwrap();
+    let run = album_run_as(&admin, "replace").await;
+    let (status, undone) = undo_as(&admin, run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert_eq!(std::fs::read(new.join("booklet.pdf")).unwrap(), b"pdf", "what came after stays");
+    let mut back = as_it_lies(&p.music.join(SHORES));
+    back.remove("booklet.pdf");
+    assert!(back == musics, "Music's old copy back as it was");
+    assert!(as_it_lies(&p.bob.join(SHORES)) == bobs, "Bob's untouched by the Undo too");
+    assert_eq!(in_the_trash(&p.music), 3, "the copies now in Music's trash, never deleted");
+    s.until("MP3 served again", Duration::from_secs(120), || async { is_mp3(&served_to(&admin, &songs[0]).await) }).await;
+    assert_eq!(tracks_at(&p.data, &p.music, SHORES), songs);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.9: after RY01 Bob deletes his own copy (into his trash). RY01's Undo still puts Music's MP3 back and takes the copies into
+/// Music's trash, never reaching into Bob's trash; then Bob's own Undo brings his FLACs back on the record's tracks, byte for byte.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn undo_after_bob_deleted_his_copy_leaves_his_trash_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-bob-deleted").await;
+    let (admin, bob) = (s.sign_in("root", "root pw").await, s.sign_in("bob", "bob pw").await);
+    let (bobs, musics) = (as_it_lies(&p.bob.join(SHORES)), as_it_lies(&p.music.join(SHORES)));
+    let songs = songs_for(&admin, &id).await;
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    let gone = bob.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/delete"), json!({ "from": id_of(&p.bob) })).await;
+    assert!(!p.bob.join(SHORES).exists(), "his copy in his trash");
+    let his_trash = as_it_lies(&p.bob.join(".cratarr-trash"));
+    let run = album_run_as(&admin, "replace").await;
+    let (status, undone) = undo_as(&admin, run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert!(as_it_lies(&p.music.join(SHORES)) == musics, "Music's MP3 back");
+    assert_eq!(in_the_trash(&p.music), 3, "Music's FLAC copies in Music's trash");
+    assert!(as_it_lies(&p.bob.join(".cratarr-trash")) == his_trash && !p.bob.join(SHORES).exists(), "Bob's trash untouched, his copy not restored by it");
+    bob.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
+    assert!(as_it_lies(&p.bob.join(SHORES)) == bobs, "his FLACs back, byte for byte");
+    s.until("his copy on the record's tracks again", Duration::from_secs(120), || async { tracks_at(&p.data, &p.bob, SHORES) == songs }).await;
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.10: Bob's FLAC spells a title otherwise than Music's MP3 ("Return (Original Mix)", written once his copy is on the record's
+/// tracks, and read again), so tags alone would not pair them. Before
+/// RY01 Ann played track 1 four times and starred it, and rated track 2; root starred the album; root's shared playlist "Evening" holds
+/// tracks 2 and 3 and Bob's own holds track 3. Replace paired the tracks by `files.track` (3 taken over, none added) and its sheet shows
+/// the title's difference. After RY01 and after its Undo: the same song ids; the annotations and plays as they were; each list the same
+/// ids, each streaming (FLAC after RY01, MP3 after the Undo); the album's star kept.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn plays_hearts_ratings_and_playlists_stay_on_their_tracks_through_a_replace_from_a_copy_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-plays").await;
+    let (admin, ann, bob) = (s.sign_in("root", "root pw").await, s.sign_in("ann", "ann pw").await, s.sign_in("bob", "bob pw").await);
+    let third = format!("{SHORES}/{}", audio_under(&p.bob.join(SHORES))[2]);
+    set_vorbis(&p.bob.join(&third), "TITLE", "Return (Original Mix)");
+    s.anyone().get("/rest/startScan?u=root&p=root%20pw&v=1.16.1&c=e2e").await;
+    let retitled = || {
+        let db = rusqlite::Connection::open(p.data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        let sql = "SELECT count(*) FROM tags t JOIN folders d ON d.id = t.folder WHERE d.path = ?1 AND t.rel = ?2 AND t.name = 'title' AND t.value = 'Return (Original Mix)'";
+        db.query_row(sql, rusqlite::params![id_of(&p.bob), third], |r| r.get::<_, i64>(0)).unwrap() == 1
+    };
+    s.until("Bob's retitled track read again", Duration::from_secs(120), || async { retitled() }).await;
+    let songs = songs_for(&admin, &id).await;
+    assert_eq!(songs.len(), 3, "the retitled track still the record's");
+    for _ in 0..4 {
+        ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{}/played", songs[0]), json!({})).await;
+    }
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{}/favorite?on=true", songs[0]), json!({})).await;
+    let rated = s.anyone().get(&format!("/rest/setRating?u=ann&p=ann%20pw&v=1.16.1&c=e2e&id={}&rating=4", songs[1])).await;
+    assert_eq!(rated["subsonic-response"]["status"], "ok", "{rated}");
+    admin.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/favorite?on=true"), json!({})).await;
+    let evening = admin.ok(reqwest::Method::POST, "/api/playlists", json!({ "name": "Evening" })).await["playlist"].as_str().unwrap().to_string();
+    admin.ok(reqwest::Method::POST, &format!("/api/playlists/{evening}/append"), json!({ "source": "cratarr", "ids": [songs[1], songs[2]] })).await;
+    admin.send(reqwest::Method::PUT, &format!("/api/playlists/{evening}/shared"), json!({ "shared": true })).await;
+    let his = bob.ok(reqwest::Method::POST, "/api/playlists", json!({ "name": "Bob's" })).await["playlist"].as_str().unwrap().to_string();
+    bob.ok(reqwest::Method::POST, &format!("/api/playlists/{his}/append"), json!({ "source": "cratarr", "ids": [songs[2]] })).await;
+    let ids = |rows: Value| -> Vec<(String, bool)> { rows["rows"].as_array().unwrap().iter().map(|r| (r["id"].as_str().unwrap_or_default().to_string(), r["missing"].as_bool().unwrap_or(false))).collect() };
+    let lists = || async { (ids(admin.get(&format!("/api/playlists/{evening}/rows")).await), ids(bob.get(&format!("/api/playlists/{his}/rows")).await)) };
+    let kept = || (held(&p.data), plays(&p.data));
+    let (lists_before, kept_before) = (lists().await, kept());
+    assert_eq!(lists_before.0.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), [songs[1].clone(), songs[2].clone()]);
+    assert!(starred(&admin, &id).await, "root starred the album");
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    assert_eq!((preview["tracks"].as_u64(), preview["added"].as_u64(), &preview["refused"]), (Some(3), Some(0), &Value::Null), "paired by track despite the title: {preview}");
+    assert!(preview["diff"].as_array().unwrap().iter().any(|d| d["field"] == "title" && d["new"] == "Return (Original Mix)"), "the sheet shows the title's difference: {preview}");
+    admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    assert_eq!(songs_for(&admin, &id).await, songs, "no new id for a song of the record");
+    s.until("FLAC served", Duration::from_secs(120), || async { !is_mp3(&served_to(&admin, &songs[1]).await) }).await;
+    assert_eq!((lists().await, kept()), (lists_before.clone(), kept_before.clone()), "after RY01: lists, plays, stars and ratings as they were");
+    for song in &songs {
+        served_to(&admin, song).await;
+    }
+    assert!(starred(&admin, &id).await, "the album's star stays");
+    let run = album_run_as(&admin, "replace").await;
+    let (status, _) = undo_as(&admin, run["id"].as_str().unwrap()).await;
+    assert_eq!(status, 200);
+    s.until("MP3 served again", Duration::from_secs(120), || async { is_mp3(&served_to(&admin, &songs[1]).await) }).await;
+    assert_eq!(songs_for(&admin, &id).await, songs);
+    assert_eq!((lists().await, kept()), (lists_before, kept_before), "after its Undo: as they were");
+    assert!(starred(&admin, &id).await);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Whether an account has starred an album.
+async fn starred(who: &Caller<'_>, id: &str) -> bool {
+    who.get("/api/favorites/cratarr/albums").await.to_string().contains(id)
+}
+
+/// RY01.12: own music's rows (present files, sizes, times, `shared`, gone and trashed marks) under Bob's and Ann's music are as they
+/// were after RY01 and after its Undo, and no file is added under own music. (AL01's room, run 13, reads these same rows.)
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_replace_from_a_copy_changes_no_row_of_own_music_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-room").await;
+    let admin = s.sign_in("root", "root pw").await;
+    let rows = || (own_rows(&p.data, &p.bob), own_rows(&p.data, &p.ann));
+    let files = || (times_under(&p.bob), times_under(&p.ann));
+    let (rows_before, files_before) = (rows(), files());
+    assert!(!rows_before.0.is_empty() && !rows_before.1.is_empty());
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    assert_eq!(rows(), rows_before, "after RY01");
+    assert_eq!(files(), files_before, "no file added under own music");
+    let run = album_run_as(&admin, "replace").await;
+    assert_eq!(undo_as(&admin, run["id"].as_str().unwrap()).await.0, 200);
+    assert_eq!(rows(), rows_before, "after its Undo");
+    assert_eq!(files(), files_before);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RY01.13, cases 1 and 2 (4, a conversion job on Music's copy, is `a_replace_from_a_copy_being_converted_or_replaced_is_refused`:
+/// the layout holds no copy a job could work on): Bob, a user and the copy's owner, and Ann are refused its preview and its tap,
+/// nothing written; root and carl tap the same Replace at once, twice each: one goes, the others are refused, Music holds one copy,
+/// its trash the old files once, the journal one entry. No task for bob or ann. RF11 (the review of runs 11 and 12, RA18): a tap
+/// that comes after the first ended is refused by the offer as well, so the test asks that one of the taps at once was refused by
+/// the one-at-a-time guard itself ("is being replaced"): with no guard, the second tap goes wrong.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn only_an_administrator_replaces_from_a_copy_and_one_at_a_time_end_to_end() {
+    let (s, root, p, id) = bobs_flac_beside_musics_mp3("ry01-who").await;
+    let (admin, carl, ann, bob) = (s.sign_in("root", "root pw").await, s.sign_in("carl", "carl pw").await, s.sign_in("ann", "ann pw").await, s.sign_in("bob", "bob pw").await);
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    let tap = tap_of(&preview, &p);
+    let music = as_it_lies(&p.music);
+    for (who, name) in [(&bob, "bob"), (&ann, "ann")] {
+        let (seen, _) = who.send(reqwest::Method::GET, &preview_path, Value::Null).await;
+        let (tapped, answer) = who.send(reqwest::Method::POST, &path, tap.clone()).await;
+        assert!([403, 409].contains(&seen) && [403, 409].contains(&tapped), "{name}: {seen} {tapped} {answer}");
+        assert!(!who.get("/api/tasks").await.to_string().contains("\"replace\""), "no task for {name}");
+    }
+    assert!(as_it_lies(&p.music) == music && album_events(&p.data).is_empty(), "nothing written");
+    let (a, b, c, d) = tokio::join!(
+        admin.send(reqwest::Method::POST, &path, tap.clone()),
+        carl.send(reqwest::Method::POST, &path, tap.clone()),
+        admin.send(reqwest::Method::POST, &path, tap.clone()),
+        carl.send(reqwest::Method::POST, &path, tap.clone())
+    );
+    let taps = [a, b, c, d];
+    assert_eq!(taps.iter().filter(|t| t.0 == 200).count(), 1, "one of them: {taps:?}");
+    assert!(taps.iter().all(|t| t.0 == 200 || t.0 == 409), "the others refused: {taps:?}");
+    assert!(taps.iter().any(|t| t.0 == 409 && t.1.to_string().contains("is being replaced")), "one at a time, by the guard: {taps:?}");
+    let folder = taps.iter().find(|t| t.0 == 200).map(|t| t.1["folder"].clone()).unwrap();
+    assert!(contents(&as_it_lies(&p.music.join(folder.as_str().unwrap()))) == contents(&as_it_lies(&p.bob.join(SHORES))), "Music holds one copy");
+    assert_eq!(in_the_trash(&p.music), 3, "the old files once");
+    assert_eq!(album_events(&p.data), [("album_replaced_from_copy".to_string(), true)], "one journal entry");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The rooms an answer holds: every `room` in it that is one (`{ size, used, full }`).
+fn rooms_in(answer: &Value, out: &mut Vec<Value>) {
+    match answer {
+        Value::Object(o) => {
+            if let Some(room) = o.get("room").filter(|r| r.is_object()) {
+                out.push(room.clone());
+            }
+            o.values().for_each(|v| rooms_in(v, out));
+        }
+        Value::Array(a) => a.iter().for_each(|v| rooms_in(v, out)),
+        _ => {}
+    }
+}
+
+/// AL04.2 (the review of run 13, RM8): each room is its account's and the administrators'. Ann and Bob, users, each a room of a number
+/// no other answer holds, each with own music the layout gives them. Ann's `/api/me` holds her room; the Users panel's list refuses
+/// her (403); root's lists each user's room and none for an administrator; and no answer Ann reads (`/api/me`, `/api/requests`,
+/// `/api/albums`) holds Bob's room.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn each_room_is_its_accounts_and_the_administrators_end_to_end() {
+    let root = temp("al04-rooms");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, own) = (library.join("music"), library.join("own"));
+    settings(&data, &[(&music, "main")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    s.ok(reqwest::Method::PUT, "/api/users/ann/room", json!({ "gb": 61.234567 })).await;
+    s.ok(reqwest::Method::PUT, "/api/users/bob/room", json!({ "gb": 72.345678 })).await;
+    let (ann_size, bob_size) = (61_234_567_000_u64, 72_345_678_000_u64);
+    s.read_in("Other Room", &own.join("bob")).await;
+    s.read_in("Own Room", &own.join("ann")).await;
+    let admin = s.sign_in("root", "root pw").await;
+    let users = admin.get("/api/users").await;
+    let room_of = |name: &str| users["users"].as_array().unwrap().iter().find(|u| u["name"] == name).map(|u| u["room"].clone()).unwrap_or_else(|| panic!("{name}: {users}"));
+    assert_eq!(room_of("root"), Value::Null, "none for an administrator: {users}");
+    let (anns, bobs) = (room_of("ann"), room_of("bob"));
+    assert_eq!((anns["size"].as_u64(), bobs["size"].as_u64()), (Some(ann_size), Some(bob_size)), "each user's room: {users}");
+    assert!(bobs["used"].as_u64().is_some_and(|u| u > 0) && anns["used"].as_u64().is_some_and(|u| u > 0), "their music counted: {users}");
+    let ann = s.sign_in("ann", "ann pw").await;
+    let me = ann.get("/api/me").await;
+    assert_eq!(me["room"], anns, "her own room: {me}");
+    let (status, refused) = ann.send(reqwest::Method::GET, "/api/users", Value::Null).await;
+    assert_eq!(status, 403, "the Users panel's list is the administrators': {refused}");
+    for path in ["/api/me", "/api/requests", "/api/albums"] {
+        let answer = ann.get(path).await;
+        assert!(!answer.to_string().contains(&bob_size.to_string()), "{path} holds Bob's room: {answer}");
+        let mut rooms = Vec::new();
+        rooms_in(&answer, &mut rooms);
+        assert!(rooms.iter().all(|r| *r == anns), "{path}: a room not hers: {rooms:?}");
+    }
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// MusicBrainz's ids gone from an MP3's tags, as a person's tagger leaves an untagged album.
+fn strip_musicbrainz(path: &Path) {
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+    let mut file = lofty::read_from_path(path).unwrap();
+    if let Some(tag) = file.primary_tag_mut() {
+        for key in [ItemKey::MusicBrainzReleaseId, ItemKey::MusicBrainzReleaseGroupId, ItemKey::MusicBrainzTrackId, ItemKey::MusicBrainzRecordingId, ItemKey::MusicBrainzReleaseArtistId, ItemKey::MusicBrainzArtistId] {
+            tag.remove_key(key);
+        }
+    }
+    file.save_to_path(path, lofty::config::WriteOptions::default()).unwrap();
+}
+
+/// What a file's tags say of MusicBrainz, any of its ids.
+fn musicbrainz_of(path: &Path) -> Vec<String> {
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+    let file = lofty::read_from_path(path).unwrap();
+    let keys = [ItemKey::MusicBrainzReleaseId, ItemKey::MusicBrainzReleaseGroupId, ItemKey::MusicBrainzRecordingId];
+    file.tags().iter().flat_map(|t| keys.iter().filter_map(|k| t.get_string(*k).map(str::to_string)).collect::<Vec<_>>()).collect()
+}
+
+/// RY01.14: Music's MP3 stripped of every MusicBrainz id (as 522 of Music's copies are), Bob's FLAC carrying a release and a release
+/// group. Replace pairs by `files.track` (3 taken over, nothing unmatched); its sheet's `diff` lists the ids Music's copy gains and
+/// `lost` is empty. After it the record keeps its id and song ids, is listed once, and is merged into no other; after its Undo it is
+/// as before, untagged in Music. (The not-had record of the release group from a discography needs MusicBrainz, off here.)
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_replace_from_a_tagged_copy_over_an_untagged_one_keeps_the_record_end_to_end() {
+    let (s, root, p, id) = ry01_shape("ry01-untagged", |p| {
+        let musics = p.music.join(SHORES);
+        for f in audio_under(&musics) {
+            strip_musicbrainz(&musics.join(f));
+        }
+        let mine = p.bob.join(SHORES);
+        for f in audio_under(&mine) {
+            set_vorbis(&mine.join(f), "MUSICBRAINZ_RELEASEGROUPID", "00000000-0000-4000-8000-000000000214");
+        }
+    })
+    .await;
+    let admin = s.sign_in("root", "root pw").await;
+    let songs = songs_for(&admin, &id).await;
+    let musics = p.music.join(SHORES);
+    assert!(audio_under(&musics).iter().all(|f| musicbrainz_of(&musics.join(f)).is_empty()), "Music's copy untagged");
+    let merged = || -> Vec<Option<i64>> {
+        let db = rusqlite::Connection::open(p.data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        let n: i64 = id.trim_start_matches("al-").parse().unwrap();
+        db.prepare("SELECT merged_into FROM records WHERE id = ?1").unwrap().query_map([n], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    };
+    let (path, preview_path) = ry01_paths(&id, &p);
+    let preview = admin.get(&preview_path).await;
+    assert_eq!((preview["tracks"].as_u64(), preview["added"].as_u64(), &preview["refused"]), (Some(3), Some(0), &Value::Null), "{preview}");
+    let diff = preview["diff"].as_array().unwrap();
+    assert!(diff.iter().any(|d| d["field"].as_str().is_some_and(|f| f.starts_with("musicbrainz_")) && d["old"].is_null() && !d["new"].is_null()), "the ids Music's copy gains: {preview}");
+    assert_eq!(preview["lost"], json!([]), "nothing lost: {preview}");
+    admin.ok(reqwest::Method::POST, &path, tap_of(&preview, &p)).await;
+    s.until("the record read again", Duration::from_secs(120), || async { !is_mp3(&served_to(&admin, &songs[0]).await) }).await;
+    assert_eq!(songs_for(&admin, &id).await, songs, "the record's id and its song ids");
+    assert_eq!(admin.albums().await.iter().filter(|a| a["title"] == "Both Shores").count(), 1, "listed once");
+    assert_eq!(merged(), [None], "merged into no other");
+    let run = album_run_as(&admin, "replace").await;
+    assert_eq!(undo_as(&admin, run["id"].as_str().unwrap()).await.0, 200);
+    s.until("MP3 again", Duration::from_secs(120), || async { is_mp3(&served_to(&admin, &songs[0]).await) }).await;
+    assert_eq!(songs_for(&admin, &id).await, songs);
+    assert!(audio_under(&musics).iter().all(|f| musicbrainz_of(&musics.join(f)).is_empty()), "untagged in Music again");
+    assert_eq!(merged(), [None]);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A data folder as 0.16.2 left it (FX01, `tests/fixtures/0.16`), as the server's own tests make it (`fixtures::data_0_16`).
+fn data_0_16(data: &Path) {
+    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/0.16");
+    std::fs::create_dir_all(data).unwrap();
+    for name in ["catalogue", "userdata"] {
+        let sql = std::fs::read_to_string(here.join(format!("{name}.sql"))).unwrap();
+        rusqlite::Connection::open(data.join(format!("{name}.sqlite"))).unwrap().execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;")).unwrap();
+    }
+    std::fs::copy(here.join("soulseek.json"), data.join("soulseek.json")).unwrap();
+}
+
+/// Every file under `dir`, hidden ones too, by its place in it: a database's `-wal` and `-shm` beside it as well.
+fn every_file(dir: &Path) -> Files {
+    fn walk(root: &Path, at: &Path, out: &mut Files) {
+        for e in std::fs::read_dir(at).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else {
+                out.insert(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read(&p).unwrap());
+            }
+        }
+    }
+    let mut out = Files::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// A free address on this machine, as the harness gives a server.
+fn free_bind() -> String {
+    format!("127.0.0.1:{}", std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port())
+}
+
+/// The binary with `args`, its data folder and address set as the harness sets them, given 5 seconds to end by itself: its
+/// exit code, what it printed and what it said. Still running then, it started a server: it is killed, and the test fails.
+fn briefly(args: &[&str], data: &Path, bind: &str) -> (Option<i32>, String, String) {
+    let mut child = Command::new(BIN)
+        .args(args)
+        .env("CRATARR_DATA_DIR", data)
+        .env("CRATARR_BIND", bind)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(5) {
+            child.kill().ok();
+            child.wait().ok();
+            panic!("{args:?} still running after 5 s: it started a server");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let (mut out, mut said) = (String::new(), String::new());
+    std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut said).unwrap();
+    (status.code(), out, said)
+}
+
+/// P4.1 (W4): `--version` prints "cratarr-server <version>", one line, and leaves at once: on a data folder 0.16.2 left, nothing
+/// opened, written or added there (no `-wal`, no `-shm`, no diagnostics), and the port never taken. Until 0.17 it started a
+/// second server on the data folder.
+#[test]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+fn the_version_flag_prints_and_starts_nothing_end_to_end() {
+    let root = temp("version-flag");
+    let data = root.join("data");
+    data_0_16(&data);
+    let (before, whole) = (as_it_lies(&data), every_file(&data));
+    let bind = free_bind();
+    let (code, out, said) = briefly(&["--version"], &data, &bind);
+    assert_eq!(code, Some(0), "{said}");
+    assert_eq!(out.lines().collect::<Vec<_>>(), [format!("cratarr-server {}", env!("CARGO_PKG_VERSION"))], "one line: {out}");
+    assert!(as_it_lies(&data) == before, "nothing in the data folder");
+    assert_eq!(every_file(&data).keys().collect::<Vec<_>>(), whole.keys().collect::<Vec<_>>(), "no file added: no -wal, -shm or diagnostics.sqlite");
+    assert!(every_file(&data) == whole, "every byte as it was");
+    std::net::TcpListener::bind(&bind).expect("the port was never taken");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// P4.2 (W4): an argument the server does not know starts nothing: it leaves with 2, naming it and the known flags, the data
+/// folder as it was and the port free. No argument at all starts the server, as the harness starts every server here.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_unknown_argument_starts_nothing_end_to_end() {
+    let root = temp("unknown-argument");
+    let data = root.join("data");
+    data_0_16(&data);
+    let (before, whole) = (as_it_lies(&data), every_file(&data));
+    for args in [&["--versoin"][..], &["-v"], &["version"], &["--version", "extra"], &["--version extra"]] {
+        let bind = free_bind();
+        let (code, _, said) = briefly(args, &data, &bind);
+        assert_eq!(code, Some(2), "{args:?}: {said}");
+        assert!(said.contains(&args.join(" ")), "{args:?} named: {said}");
+        for known in ["--version", "--healthcheck", "--new-api-key", "--make-fixtures", "--make-layout", "--analyse", "--signals", "--beats"] {
+            assert!(said.contains(known), "{args:?}: {known} among the known flags: {said}");
+        }
+        assert!(as_it_lies(&data) == before, "{args:?}: nothing in the data folder");
+        assert!(every_file(&data) == whole, "{args:?}: no file added, every byte as it was");
+        std::net::TcpListener::bind(&bind).unwrap_or_else(|e| panic!("{args:?}: the port was taken: {e}"));
+    }
+    let (music, fresh) = (root.join("music"), root.join("fresh"));
+    std::fs::create_dir_all(&music).unwrap();
+    std::fs::create_dir_all(&fresh).unwrap();
+    settings_0_15(&fresh, music.to_str().unwrap());
+    let s = Server::start(&fresh).await;
+    assert_eq!(s.send(reqwest::Method::GET, "/api/health", json!({})).await.0, 200, "no argument: the server");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// AL01.5, its room half (Q4: the trash gives room back at once; OQ-R5: a room in decimal GB): ann's room set by root just below
+/// what her own music holds, `/api/me` says it full; `/api/users` lists her room and none for the administrator, whose own
+/// `/api/me` has none. Her delete of "Both Shores" from her own music: the very next `/api/me` has her room down by the album's
+/// bytes and not full, its files in her own music's trash. Her Undo: full again. AL02 adds the Wants' half (one waiting for room
+/// while full, handed within a round once under, a new one waiting after the Undo).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn deleting_gives_room_back_at_once_and_its_undo_takes_it_end_to_end() {
+    let root = temp("al01-room");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, incoming, own) = (library.join("music"), library.join("incoming"), library.join("own"));
+    let mine = own.join("ann");
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    // Read as nobody while there are no accounts.
+    let album = s.read_in("Both Shores", &mine).await;
+    s.read_in("Own Room", &mine).await;
+    for (name, admin) in [("root", true), ("ann", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let ann = s.sign_in("ann", "ann pw").await;
+    let bytes = |dir: &Path| audio_under(dir).iter().map(|f| std::fs::metadata(dir.join(f)).unwrap().len()).sum::<u64>();
+    let (held, shores, tracks) = (bytes(&mine), bytes(&mine.join(SHORES)), audio_under(&mine.join(SHORES)).len());
+    assert!(shores > 0 && held > shores, "her two albums");
+    s.until("her own music counted", Duration::from_secs(120), || async { ann.get("/api/me").await["room"]["used"].as_u64() == Some(held) }).await;
+    s.ok(reqwest::Method::PUT, "/api/users/ann/room", json!({ "gb": (held - 1) as f64 / 1e9 })).await;
+    let room = ann.get("/api/me").await["room"].clone();
+    assert_eq!((room["size"].as_u64(), room["used"].as_u64(), room["full"].as_bool()), (Some(held - 1), Some(held), Some(true)), "full: {room}");
+    let users = s.get("/api/users").await;
+    let listed = |name: &str| users["users"].as_array().unwrap().iter().find(|u| u["name"] == name).map(|u| u["room"].clone()).unwrap();
+    assert!(listed("root").is_null(), "an administrator has no room");
+    assert_eq!(listed("ann")["size"].as_u64(), Some(held - 1), "hers, as set");
+    assert!(s.get("/api/me").await["room"].is_null(), "root's own: none, never full");
+    // AL01.5's Want part (AL02): full, her Want of a record not had waits for room.
+    let asked = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Nowhere Fast" })).await;
+    let first = asked["request"]["id"].as_i64().unwrap();
+    assert_eq!(asked["request"]["state"]["state"], "waiting_for_room", "{asked}");
+    assert_eq!(request_line(&data, first).as_deref(), Some("Waits for room"));
+
+    let gone = ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()), json!({ "from": id_of(&mine) })).await;
+    let room = ann.get("/api/me").await["room"].clone();
+    assert_eq!((room["used"].as_u64(), room["full"].as_bool()), (Some(held - shores), Some(false)), "at once, not when the trash is emptied: {room}");
+    assert!(!mine.join(SHORES).exists() && in_the_trash(&mine) == tracks, "its files in her own music's trash");
+    // Within a round her waiting Want is handed: no fetcher here, so its line says it was not handed over, no longer the room's.
+    s.until("her waiting Want handed at the requests' round", Duration::from_secs(150), || async {
+        request_line(&data, first).is_some_and(|l| l.starts_with("Not handed over: no fetcher"))
+    })
+    .await;
+
+    ann.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
+    assert_eq!(bytes(&mine.join(SHORES)), shores, "back");
+    s.until("full again", Duration::from_secs(60), || async {
+        let room = ann.get("/api/me").await["room"].clone();
+        room["used"].as_u64() == Some(held) && room["full"].as_bool() == Some(true)
+    })
+    .await;
+    assert!(request_line(&data, first).is_some_and(|l| l.starts_with("Not handed over: no fetcher")), "the handed Want stays handed");
+    let again = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Lost Tapes" })).await;
+    assert_eq!(again["request"]["state"]["state"], "waiting_for_room", "full again: a new Want waits: {again}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A request's state as `who` reads it on the Requests page; empty where it is not theirs.
+async fn state_of(who: &Caller<'_>, id: i64) -> String {
+    let listed = who.get("/api/requests").await;
+    listed["mine"].as_array().into_iter().flatten().find(|r| r["id"] == id).and_then(|r| r["state"]["state"].as_str()).unwrap_or_default().to_string()
+}
+
+/// The folder under `root` whose name holds `name`, as a path under it; none where there is none.
+fn folder_named(root: &Path, name: &str) -> Option<String> {
+    fn walk(root: &Path, at: &Path, name: &str) -> Option<String> {
+        for e in std::fs::read_dir(at).ok()?.flatten() {
+            let p = e.path();
+            if !p.is_dir() || e.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if e.file_name().to_string_lossy().contains(name) {
+                return Some(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+            if let Some(found) = walk(root, &p, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(root, root, name)
+}
+
+/// Whether every file of a copy in catalogue folder `library`, under `dir`, shares its blocks (`files.shared`, as the copy found
+/// them): its bytes then counted for no one but the original's payer (R.0).
+fn shares(data: &Path, library: &Path, dir: &str) -> bool {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    db.query_row(
+        "SELECT min(f.shared) FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE ?2",
+        [library.to_string_lossy().to_string(), format!("{dir}/%")],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .unwrap()
+        == Some(1)
+}
+
+/// AL02.9 (INTERACTIONS top 4, I05; OQ-S: the second asker's copy, built in AL02). Ann, then bob, Want "Night Walks EP", a record not
+/// had (its folder taken out of Music); its files are dropped into Incoming (naming no fetcher, as Lidarr's), and both requests read
+/// Arrived. Ann adds it to her own music. Bob's own music then holds a copy of it, made through C52's path and named by its folder
+/// (T5), byte for byte, on the record's tracks (his player plays it), counted as R.0 has it (ann's pays; bob's free where it shares,
+/// else his); his request reads done only once that copy is there. A second run with bob over his room: his request reads
+/// `waiting_for_room` and no copy is made, through rounds, until he is under; then his copy is made and his request done. Never "In
+/// the library" while nothing in his view holds it; never a copy into a full account's music.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn the_second_asker_gets_a_copy_when_the_first_adds_end_to_end() {
+    for bob_over in [false, true] {
+        the_second_asker(bob_over).await;
+    }
+}
+
+/// [`the_second_asker_gets_a_copy_when_the_first_adds_end_to_end`]'s one run, bob over his room or not.
+async fn the_second_asker(bob_over: bool) {
+    let root = temp(if bob_over { "al02-second-over" } else { "al02-second" });
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, incoming, own) = (library.join("music"), library.join("incoming"), library.join("own"));
+    let (anns, bobs) = (own.join("ann"), own.join("bob"));
+    // Night Walks EP, not had: its folder out of Music, to arrive later.
+    const WALKS: &str = "Kite Theory/Night Walks EP (2020)";
+    let held = root.join("held");
+    std::fs::create_dir_all(held.join("Kite Theory")).unwrap();
+    std::fs::rename(music.join(WALKS), held.join(WALKS)).unwrap();
+    let arriving = as_it_lies(&held.join(WALKS));
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.read_in("Other Room", &bobs).await;
+    for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let (ann, bob) = (s.sign_in("ann", "ann pw").await, s.sign_in("bob", "bob pw").await);
+    let want = json!({ "artist": "Kite Theory", "album": "Night Walks EP" });
+    let hers = ann.ok(reqwest::Method::POST, "/api/requests/want", want.clone()).await["request"]["id"].as_i64().unwrap();
+    let his = bob.ok(reqwest::Method::POST, "/api/requests/want", want).await["request"]["id"].as_i64().unwrap();
+    s.until("bob's room counted", Duration::from_secs(120), || async { bob.get("/api/me").await["room"]["used"].as_u64().is_some_and(|u| u > 0) }).await;
+    let his_before = bob.get("/api/me").await["room"]["used"].as_u64().unwrap();
+    if bob_over {
+        s.ok(reqwest::Method::PUT, "/api/users/bob/room", json!({ "gb": 1e-9 })).await;
+        assert_eq!(bob.get("/api/me").await["room"]["full"], true, "bob over his room");
+    }
+    std::fs::create_dir_all(incoming.join("Kite Theory")).unwrap();
+    std::fs::rename(held.join(WALKS), incoming.join(WALKS)).unwrap();
+    s.until("both requests read Arrived", Duration::from_secs(180), || async { state_of(&ann, hers).await == "arrived" && state_of(&bob, his).await == "arrived" }).await;
+    let album = s.incoming_album("Night Walks EP").await;
+    let songs = s.songs_of(&album).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/move"), json!({ "from": id_of(&incoming), "to": id_of(&anns) })).await;
+    let added = folder_named(&anns, "Night Walks").expect("in her own music");
+    assert_eq!(contents(&as_it_lies(&anns.join(&added))), contents(&arriving), "her copy, every file");
+    if bob_over {
+        s.until("bob's request waits for room", Duration::from_secs(150), || async { state_of(&bob, his).await == "waiting_for_room" }).await;
+        tokio::time::sleep(Duration::from_secs(70)).await;
+        assert_eq!(state_of(&bob, his).await, "waiting_for_room", "still waiting, a round on");
+        assert!(folder_named(&bobs, "Night Walks").is_none(), "no copy into his full music");
+        s.ok(reqwest::Method::PUT, "/api/users/bob/room", json!({ "gb": 1000.0 })).await;
+    }
+    // His copy, at a round: done only once it is there, whole.
+    s.until("bob's request done", Duration::from_secs(180), || async {
+        let state = state_of(&bob, his).await;
+        let done = state == "done" || state == "delivered";
+        if done {
+            let copied = folder_named(&bobs, "Night Walks").expect("done only once his copy is there");
+            assert_eq!(contents(&as_it_lies(&bobs.join(&copied))), contents(&arriving), "his copy whole once done");
+        }
+        done
+    })
+    .await;
+    let copied = folder_named(&bobs, "Night Walks").unwrap();
+    s.until("his copy read on the record's tracks", Duration::from_secs(120), || async { tracks_at(&data, &bobs, &copied) == songs }).await;
+    let copy: u64 = as_it_lies(&bobs.join(&copied)).values().map(|b| b.len() as u64).sum();
+    let free = shares(&data, &bobs, &copied);
+    s.until("his room as R.0 counts it", Duration::from_secs(60), || async {
+        bob.get("/api/me").await["room"]["used"].as_u64() == Some(his_before + if free { 0 } else { copy })
+    })
+    .await;
+    assert_eq!(request_line(&data, his).as_deref(), Some("Copied into your music"), "made through C52's path");
+    let hers_now = state_of(&ann, hers).await;
+    assert!(hers_now == "done" || hers_now == "delivered", "hers done in her own music: {hers_now}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// What a user's Soulseek fetch says while the disk floor holds it (AL03.2).
+const SHORT_OF_SPACE: &str = "The server is short of space";
+
+/// AL03.3 (the owner's Q6, "HA reads it"; OQ-F5). The floor raised above the disk (10^9 GB), the Incoming trash holding an album:
+/// `/api/health`, asked by no one signed in, answers 200 and "ok" with `short_of_space` true and nothing else new; the image's
+/// `--healthcheck` passes; root's Health report holds one finding, a warning, "Short of space", its detail the free space, the floor
+/// and what the trash holds ("emptying it frees that"), opening Settings. The floor back at 0: the flag false, the finding gone. Never
+/// an answer other than 200 and "ok" for space, a size, a path or an account in the open answer, one finding per user, nor a Home
+/// Assistant address, token or outbound purpose in Cratarr: it calls no one, cratarr-ha reads the flag.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn short_of_space_is_a_flag_and_a_health_item_end_to_end() {
+    let (s, root, _music, incoming) = on_music_and_incoming("al03-health").await;
+    let arriving = s.incoming_album("Just Arrived").await;
+    s.ok(reqwest::Method::POST, &format!("/api/incoming/delete/cratarr/{}", arriving["id"].as_str().unwrap()), json!({})).await;
+    assert!(in_the_trash(&incoming) > 0, "the Incoming trash holds an album");
+    for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let floor = s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 1e9 })).await;
+    assert_eq!((&floor["gb"], &floor["short"]), (&json!(1e9), &json!(true)), "{floor}");
+    let open = s.anyone().get("/api/health").await;
+    let keys: std::collections::BTreeSet<&str> = open.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["instance", "playlists", "short_of_space", "status", "web"].into_iter().collect(), "nothing else new: {open}");
+    assert_eq!((&open["status"], &open["short_of_space"]), (&json!("ok"), &json!(true)), "{open}");
+    // The image's health check: 200 whatever the space, so Docker never marks Cratarr unhealthy for it.
+    let bind = s.base.trim_start_matches("http://").to_string();
+    let checked = Command::new(BIN).arg("--healthcheck").env("CRATARR_BIND", &bind).stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap();
+    assert!(checked.success(), "--healthcheck exits 0 while short of space");
+    let report = s.get("/api/health/report").await;
+    let found: Vec<&Value> = report["findings"].as_array().unwrap().iter().filter(|f| f["key"] == "server:short-of-space").collect();
+    assert_eq!(found.len(), 1, "one finding for the server, never one per user: {report}");
+    let f = found[0];
+    assert_eq!((&f["level"], &f["name"], &f["open"]["page"]), (&json!("warning"), &json!("Short of space"), &json!("settings")), "{f}");
+    let detail = f["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains(" free, below the floor of 1000000000 GB") && detail.contains("The trash holds ") && detail.contains(": emptying it frees that."), "{detail}");
+    // The floor back at 0.
+    let floor = s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    assert_eq!(floor["short"], false, "{floor}");
+    assert_eq!(s.anyone().get("/api/health").await["short_of_space"], false);
+    let report = s.get("/api/health/report").await;
+    assert!(!report["findings"].as_array().unwrap().iter().any(|f| f["key"] == "server:short-of-space"), "the finding gone: {report}");
+    // Cratarr calls no one for it (Q6): no Home Assistant address, token or outbound purpose where the floor and the outbound guard are.
+    for (file, text) in [("app/reach.rs", include_str!("../src/app/reach.rs")), ("settings.rs", include_str!("../src/settings.rs")), ("app/room.rs", include_str!("../src/app/room.rs"))] {
+        let text = text.to_lowercase();
+        for word in ["home assistant", "homeassistant", "hass", ":8123", "long-lived"] {
+            assert!(!text.contains(word), "{file} names {word}");
+        }
+    }
+    let room = include_str!("../src/app/room.rs");
+    assert!(!room.contains("reqwest") && !room.contains("reach::"), "the floor asks nothing outside");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A slskd for the floor's fetches to meet (AL03.2): each batch asked for recorded by the user it is asked of, taken and complete at
+/// once, `file` in the folder its batch names under `completed`; while refusing is on, a batch asked of `refused` is a violation,
+/// answered 409, and fetches nothing. Its address, the users asked in order, the refusing switch, and the violations.
+#[allow(clippy::type_complexity)]
+async fn slskd_watching(completed: PathBuf, file: PathBuf, refused: &'static str) -> (String, Arc<std::sync::Mutex<Vec<String>>>, Arc<std::sync::atomic::AtomicBool>, Arc<std::sync::Mutex<Vec<String>>>) {
+    use axum::routing::{get, post};
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let refusing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let violations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (a, r, v) = (asked.clone(), refusing.clone(), violations.clone());
+    let take = move |axum::Json(b): axum::Json<Value>| {
+        let (completed, file, a, r, v) = (completed.clone(), file.clone(), a.clone(), r.clone(), v.clone());
+        async move {
+            let user = b["username"].as_str().unwrap_or_default().to_string();
+            if user == refused && r.load(Ordering::SeqCst) {
+                v.lock().unwrap().push(format!("a batch asked of {user} below the floor"));
+                return (axum::http::StatusCode::CONFLICT, axum::Json(json!({ "error": "not expected" })));
+            }
+            a.lock().unwrap().push(user);
+            let dir = completed.join("cratarr").join(b["id"].as_str().unwrap());
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::copy(&file, dir.join(file.file_name().unwrap())).unwrap();
+            (axum::http::StatusCode::OK, axum::Json(json!({ "batch": { "transfers": [] } })))
+        }
+    };
+    let done = || async { axum::Json(json!({ "transfers": [{ "id": "t1", "filename": "x", "state": "Completed, Succeeded", "percentComplete": 100.0 }] })) };
+    let app = axum::Router::new().route("/api/v0/transfers/downloads/batches", post(take)).route("/api/v0/transfers/downloads/batches/{id}", get(done));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, asked, refusing, violations)
+}
+
+/// AL03.2, slskd's side (INTERACTIONS top 13, I14; OQ-F1 (a)). Ann's Wants R3 and R4 and root's S2 asked; the floor raised above the
+/// disk (10^9 GB); the server restarts with Soulseek's list holding R3's item ticked (its transfer not begun), R4's under way and root's
+/// S2 ticked. Below the floor: R3 starts no transfer (slskd refuses one asked of its user, and none comes), its item saying the server
+/// is short of space and its request reading wanted and waiting, never fetching; R4's transfer is followed to its end, never asked
+/// again; root's S2 transfers. The floor set to 0: R3's transfer starts. Never a user's transfer begun below the floor, nor an
+/// administrator's held.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn below_the_floor_soulseek_starts_no_users_transfer_end_to_end() {
+    let root = temp("al03-soulseek");
+    let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let file = library.join("music/Glass Harbour/Tide Tables (2012)/01 Slack Water.flac");
+    let name = file.file_name().unwrap().to_string_lossy().to_string();
+    let (url, asked, refusing, violations) = slskd_watching(completed.clone(), file.clone(), "peer-r3").await;
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/slskd", json!({ "url": url, "key": "k", "folder": completed, "enabled": true })).await;
+    for (who, admin) in [("root", true), ("ann", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": who, "password": format!("{who} pw"), "admin": admin })).await;
+        if who == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let ann = s.sign_in("ann", "ann pw").await;
+    let r3 = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Nowhere Fast" })).await["request"].clone();
+    let r4 = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Lost Tapes" })).await["request"].clone();
+    let s2 = s.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Late Shift" })).await["request"].clone();
+    let floor = s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 1e9 })).await;
+    assert_eq!(floor["short"], true, "{floor}");
+    s.stop();
+    // Soulseek's list as the next start reads it: R3's item ticked, R4's under way, root's S2 ticked.
+    let folder = |user: &str| json!({ "user": user, "dir": "d", "format": "flac", "lossless": true, "free_slot": true, "queue": 0, "speed": 1, "extra": 0, "files": [{ "filename": format!("d\\{name}"), "size": 1 }] });
+    let item = |id: &str, r: &Value, user: &str, state: &str, batch: Option<&str>| {
+        json!({ "id": id, "record": { "record": r["record"], "artist": "Tape Club", "album": r["album"], "request": r["id"] }, "state": state,
+                "tracks": [{ "disc": 1, "position": 1, "title": "Slack Water", "recording": "r1" }], "folders": [folder(user)], "chosen": 0, "batch": batch })
+    };
+    let items = [item("ss-1", &r3, "peer-r3", "approved", None), item("ss-2", &r4, "peer-r4", "fetching", Some("b-r4")), item("ss-3", &s2, "peer-s2", "approved", None)];
+    std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&json!({ "next": 3, "items": items })).unwrap()).unwrap();
+
+    let s = Server::start(&data).await;
+    s.act_as("root", "root pw").await;
+    let item_now = |id: &'static str| {
+        let s = &s;
+        async move { s.get("/api/soulseek").await["items"].as_array().into_iter().flatten().find(|i| i["id"] == id).cloned().unwrap_or(Value::Null) }
+    };
+    s.until("below the floor: S2 fetched, R3 held, R4 followed to its end", Duration::from_secs(120), || async {
+        asked.lock().unwrap().contains(&"peer-s2".to_string()) && item_now("ss-1").await["why"] == SHORT_OF_SPACE && item_now("ss-2").await["state"] == "checking"
+    })
+    .await;
+    let held = item_now("ss-1").await;
+    assert_eq!((held["state"].as_str(), held["why"].as_str(), &held["batch"]), (Some("approved"), Some(SHORT_OF_SPACE), &Value::Null), "R3 starts no transfer, saying so: {held}");
+    assert_eq!(*asked.lock().unwrap(), ["peer-s2"], "root's batch alone: none for R3, and R4's own followed, never asked again");
+    assert!(violations.lock().unwrap().is_empty(), "{:?}", violations.lock().unwrap());
+    let ann = s.sign_in("ann", "ann pw").await;
+    let listed = ann.get("/api/requests").await;
+    let hers = listed["mine"].as_array().unwrap().iter().find(|r| r["id"] == r3["id"]).cloned().unwrap();
+    let state = &hers["state"];
+    assert_eq!((state["state"].as_str(), state["soulseek"]["state"].as_str(), state["soulseek"]["why"].as_str()), (Some("wanted"), Some("waiting"), Some(SHORT_OF_SPACE)), "{hers}");
+    assert_ne!(hers["album_state"]["state"], "fetching", "never fetching while paused: {hers}");
+
+    // The floor at 0: R3's transfer starts.
+    refusing.store(false, Ordering::SeqCst);
+    let floor = s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    assert_eq!(floor["short"], false, "{floor}");
+    s.until("R3's transfer once there is space", Duration::from_secs(150), || async { asked.lock().unwrap().contains(&"peer-r3".to_string()) }).await;
+    assert!(violations.lock().unwrap().is_empty(), "{:?}", violations.lock().unwrap());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
 }

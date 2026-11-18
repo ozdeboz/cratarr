@@ -14,6 +14,52 @@ use serde_json::json;
 /// How much of Lidarr's queue is read: more than it ever holds here.
 const QUEUE_READ: usize = 200;
 
+/// How many of one album's history events of one type a read takes: more than an album's imports ever are (T9's fake refuses a
+/// page of over 1000).
+const HISTORY_PAGE: &str = "500";
+/// Lidarr's history event types, as its `eventType` filter takes them: a grab, a track's file imported.
+const GRABBED: &str = "1";
+const IMPORTED: &str = "3";
+
+/// What Lidarr's history says of a deleted copy's folder (U5, T9: `Lidarr::fail_grab`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Imported {
+    /// No import of the album went into it: not Lidarr's copy, as far as its history says.
+    Not,
+    /// Imports went into it, but no grab was marked: the album's newest import went elsewhere, or no grab of that download is in
+    /// the history.
+    Unmarked,
+    /// The album's newest import went into it, and that download's grab is marked failed.
+    Failed,
+}
+
+/// A copy's folder as Lidarr's history is matched by (OQ-J): its album folder and that folder's parent (`Artist/Album (Year)`),
+/// whatever root either side sees them under; none where it has no parent. Pure.
+fn album_place(folder: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = folder.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    match parts.as_slice() {
+        [.., artist, album] => Some((artist.to_string(), album.to_string())),
+        _ => None,
+    }
+}
+
+/// Whether an import's `importedPath` (a file) went into `place`: its album folder and parent, in that order, among the folders of
+/// its path (a disc's folder below them too). Pure.
+fn imported_into(path: &str, place: &(String, String)) -> bool {
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    parts[..parts.len().saturating_sub(1)].windows(2).any(|w| w[0] == place.0 && w[1] == place.1)
+}
+
+/// A history read of one album's events of one type, newest first, one page.
+fn history_query<'a>(event: &'a str, album: &'a str) -> [(&'a str, &'a str); 6] {
+    [("page", "1"), ("pageSize", HISTORY_PAGE), ("sortKey", "date"), ("sortDirection", "descending"), ("eventType", event), ("albumId", album)]
+}
+
+/// A history page's events of one album and one kind, as Lidarr names them (`grabbed`, `trackFileImported`), whatever its filters did.
+fn events<'a>(page: &'a serde_json::Value, album: i64, kind: &'a str) -> impl Iterator<Item = &'a serde_json::Value> + 'a {
+    page["records"].as_array().into_iter().flatten().filter(move |r| r["albumId"].as_i64() == Some(album) && r["eventType"].as_str() == Some(kind))
+}
+
 #[derive(Clone)]
 pub struct Lidarr {
     http: reqwest::Client,
@@ -60,6 +106,8 @@ pub enum Progress {
     Looking,
     Fetching { done: f32 },
     Fetched { tracks: u32, of: u32 },
+    /// Its grab failed, or stalls (its queue row says a warning or an error, or failed): the next fetcher's turn (X1).
+    Stuck,
 }
 
 /// One album Lidarr is looking for or fetching (the Requests page's "Lidarr is looking for these", decision 0070).
@@ -121,6 +169,12 @@ struct StatusMessage {
 }
 
 impl QueueRow {
+    /// Whether its grab failed or stalls (X1): a warning or an error on it, or a state that says it failed.
+    fn stuck(&self) -> bool {
+        let said = |s: &Option<String>, what: &[&str]| s.as_deref().is_some_and(|s| what.iter().any(|w| s.to_ascii_lowercase().starts_with(w)));
+        said(&self.status, &["warning", "error"]) || said(&self.state, &["failed", "importfailed"])
+    }
+
     fn done(&self) -> f32 {
         if self.size > 0.0 { ((self.size - self.sizeleft) / self.size).clamp(0.0, 1.0) as f32 } else { 0.0 }
     }
@@ -200,11 +254,17 @@ pub struct Options {
 
 impl Lidarr {
     pub fn new(url: &str, api_key: &str) -> Result<Self> {
+        Self::waiting(url, api_key, std::time::Duration::from_secs(20))
+    }
+
+    /// `new`, each call given up after `wait` (a test's Lidarr that does not answer in time, T9.4).
+    pub(crate) fn waiting(url: &str, api_key: &str, wait: std::time::Duration) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         let mut v = reqwest::header::HeaderValue::from_str(api_key).context("the API key has characters a header cannot hold")?;
         v.set_sensitive(true);
         headers.insert("X-Api-Key", v);
-        let http = reqwest::Client::builder().default_headers(headers).timeout(std::time::Duration::from_secs(20)).build()?;
+        // Never a redirect (O1): its key stays on the host given.
+        let http = crate::app::reach::lan_client().default_headers(headers).timeout(wait).build()?;
         Ok(Self { http, base: url.trim_end_matches('/').to_string() })
     }
 
@@ -403,6 +463,7 @@ impl Lidarr {
                 }
                 let ids: Vec<i64> = known.iter().map(|a| a.id).collect();
                 match queue.iter().flatten().find(|q| q.album_id.is_some_and(|id| ids.contains(&id))) {
+                    Some(q) if q.stuck() => Progress::Stuck,
                     Some(q) => Progress::Fetching { done: q.done() },
                     None if known.iter().any(|a| a.monitored) => Progress::Looking,
                     None => Progress::NotWanted,
@@ -486,6 +547,45 @@ impl Lidarr {
         Ok(out)
     }
 
+    /// A deleted copy lying in `folder` as Lidarr's history has it (U5, T9): its album folder and parent (`Artist/Album (Year)`)
+    /// matched to each import's `importedPath`, whatever root either side sees them under (OQ-J). The imports (event type 3) of the
+    /// release group's albums are read, one read an album, each kept to its album whatever the server did; where the newest of them
+    /// all went into that folder, the grab (event type 1) of that import's download (`downloadId`) is marked failed: Lidarr
+    /// blocklists that release and, with "Redownload failed" on (its default), looks for another. Never a grab whose import is not
+    /// this copy, nor another download of the album (one under way for someone else).
+    pub async fn fail_grab(&self, release_group: &str, folder: &str) -> Result<Imported> {
+        let Some(place) = album_place(folder) else { return Ok(Imported::Not) };
+        // The newest import of them all: its date, album and download, and whether it went into the folder.
+        let mut newest: Option<(String, i64, Option<String>, bool)> = None;
+        let mut there = false;
+        for a in self.albums(release_group).await? {
+            let album = a.id.to_string();
+            let page: serde_json::Value = self.get("/api/v1/history", &history_query(IMPORTED, &album)).await?;
+            for r in events(&page, a.id, "trackFileImported") {
+                let (Some(date), Some(path)) = (r["date"].as_str(), r["data"]["importedPath"].as_str()) else { continue };
+                let into = imported_into(path, &place);
+                there |= into;
+                if newest.as_ref().is_none_or(|(d, ..)| date > d.as_str()) {
+                    newest = Some((date.to_string(), a.id, r["downloadId"].as_str().map(str::to_string), into));
+                }
+            }
+        }
+        if !there {
+            return Ok(Imported::Not);
+        }
+        let Some((_, album, Some(download), true)) = newest else { return Ok(Imported::Unmarked) };
+        let id = album.to_string();
+        let page: serde_json::Value = self.get("/api/v1/history", &history_query(GRABBED, &id)).await?;
+        let grab = events(&page, album, "grabbed").filter(|r| r["downloadId"].as_str() == Some(download.as_str())).filter_map(|r| Some((r["date"].as_str()?, r["id"].as_i64()?))).max();
+        let Some((_, grab)) = grab else { return Ok(Imported::Unmarked) };
+        let url = format!("{}/api/v1/history/failed/{grab}", self.base);
+        let status = self.http.post(&url).send().await.context("telling Lidarr")?.status();
+        if !status.is_success() {
+            bail!("Lidarr answered {status}");
+        }
+        Ok(Imported::Failed)
+    }
+
     /// Lidarr looks for these albums now.
     async fn search(&self, ids: &[i64]) -> Result<()> {
         let url = format!("{}/api/v1/command", self.base);
@@ -494,6 +594,165 @@ impl Lidarr {
             bail!("Lidarr answered {status}");
         }
         Ok(())
+    }
+}
+
+/// A strict Lidarr for the tests (T9's): the API key checked on every call (401 without it); release group `GROUP`'s one album, 7
+/// (404 for any other group); that album's history alone (400 for another album or none, or a page of over 1000), each event type
+/// as asked (1 its grabs, 3 its track imports, each with its `downloadId` and `data.importedPath`); a grab marked failed answered
+/// only for one of its grabs (404 else); an album monitored and a search taken; 404 for anything else. Every write is written down,
+/// whatever is answered (`Seen::writes`), and every call it did not expect (`Seen::refused`), for the test to fail on.
+#[cfg(test)]
+pub(crate) mod fake {
+    use axum::Json;
+    use axum::body::Bytes;
+    use axum::http::{HeaderMap, Method, StatusCode, Uri};
+    use axum::response::{IntoResponse, Response};
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    /// The release group Lidarr is told by.
+    pub const GROUP: &str = "rg-1";
+    /// Its one album of the group.
+    const ALBUM: i64 = 7;
+    /// Its grabs of it (T9): 52, D2's, on 12 November, still downloading for another asker; 50, D1's, on the 10th. Newest first.
+    const GRABS: [(i64, &str, &str); 2] = [(52, "D2", "2026-11-12T10:00:00Z"), (50, "D1", "2026-11-10T10:00:00Z")];
+    const FAILED: &str = "/api/v1/history/failed/";
+
+    /// How it answers: as Lidarr does; 503 to everything (away); or not in time.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Mode {
+        Answers,
+        Away,
+        Slow,
+    }
+
+    /// What it was asked, for the test to read after, and how it answers now (`answers`).
+    #[derive(Clone, Default)]
+    pub struct Seen {
+        writes: Arc<Mutex<Vec<String>>>,
+        reads: Arc<Mutex<Vec<String>>>,
+        refused: Arc<Mutex<Vec<String>>>,
+        mode: Arc<Mutex<Option<Mode>>>,
+    }
+
+    impl Seen {
+        /// From now on it answers as `mode` says (RF3: away at a Delete, back at a later round).
+        pub fn answers(&self, mode: Mode) {
+            *self.mode.lock().unwrap() = Some(mode);
+        }
+
+        /// Each write, in order: "failed 50", "monitor [7] true", "search [7]", else its method and path.
+        pub fn writes(&self) -> Vec<String> {
+            self.writes.lock().unwrap().clone()
+        }
+
+        /// Each history read, by the event type it asked for: "history 3".
+        pub fn reads(&self) -> Vec<String> {
+            self.reads.lock().unwrap().clone()
+        }
+
+        /// Each call it did not expect: no key, another group or album, a page too long, an id not a grab, another path.
+        pub fn refused(&self) -> Vec<String> {
+            self.refused.lock().unwrap().clone()
+        }
+    }
+
+    /// Three track imports of download `download` into `folder`, as Lidarr's own container names it, on `day`.
+    pub fn imports(download: &str, folder: &str, day: &str) -> Vec<Value> {
+        (1..=3)
+            .map(|n| {
+                json!({ "id": 600 + n, "albumId": ALBUM, "trackId": 100 + n, "eventType": "trackFileImported", "downloadId": download,
+                    "date": format!("{day}T12:00:0{n}Z"),
+                    "data": { "importedPath": format!("{folder}/0{n} Track {n}.flac"), "droppedPath": format!("/downloads/{download}/0{n} Track {n}.flac") } })
+            })
+            .collect()
+    }
+
+    /// The fake at a local address, answering as `mode` says, `imports` in its history: its address, and what it is asked.
+    pub async fn lidarr(mode: Mode, imports: Vec<Value>) -> (String, Seen) {
+        let seen = Seen::default();
+        seen.answers(mode);
+        let (s, imports) = (seen.clone(), Arc::new(imports));
+        let app = axum::Router::new().fallback(move |method: Method, uri: Uri, headers: HeaderMap, body: Bytes| {
+            let (s, imports) = (s.clone(), imports.clone());
+            async move { answer(&s, &imports, &method, &uri, &headers, &body).await }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, seen)
+    }
+
+    async fn answer(seen: &Seen, imports: &[Value], method: &Method, uri: &Uri, headers: &HeaderMap, body: &[u8]) -> Response {
+        let path = uri.path();
+        let q: HashMap<String, String> = serde_urlencoded::from_str(uri.query().unwrap_or_default()).unwrap_or_default();
+        let sent: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+        let ids = |v: &Value| v["albumIds"].as_array().map(|a| a.iter().filter_map(Value::as_i64).collect::<Vec<_>>()).unwrap_or_default();
+        if *method != Method::GET {
+            let what = match (method.as_str(), path) {
+                ("POST", p) if p.starts_with(FAILED) => format!("failed {}", &p[FAILED.len()..]),
+                ("PUT", "/api/v1/album/monitor") => format!("monitor {:?} {}", ids(&sent), sent["monitored"]),
+                ("POST", "/api/v1/command") if sent["name"] == "AlbumSearch" => format!("search {:?}", ids(&sent)),
+                _ => format!("{method} {path}"),
+            };
+            seen.writes.lock().unwrap().push(what);
+        }
+        let mode = (*seen.mode.lock().unwrap()).unwrap_or(Mode::Answers);
+        match mode {
+            Mode::Answers => {}
+            Mode::Away => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            Mode::Slow => {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+        }
+        let refuse = |status: StatusCode, why: String| {
+            seen.refused.lock().unwrap().push(why);
+            status.into_response()
+        };
+        if headers.get("X-Api-Key").and_then(|v| v.to_str().ok()) != Some("key") {
+            return refuse(StatusCode::UNAUTHORIZED, format!("no key: {method} {path}"));
+        }
+        match (method.as_str(), path) {
+            ("GET", "/api/v1/album") => match q.get("foreignAlbumId").map(String::as_str) {
+                Some(GROUP) => Json(json!([{ "id": ALBUM, "monitored": false, "title": "Both Shores", "foreignAlbumId": GROUP }])).into_response(),
+                other => refuse(StatusCode::NOT_FOUND, format!("another group: {other:?}")),
+            },
+            ("GET", "/api/v1/history") => {
+                if q.get("albumId").map(String::as_str) != Some("7") {
+                    return refuse(StatusCode::BAD_REQUEST, format!("another album: {:?}", q.get("albumId")));
+                }
+                let Some(size) = q.get("pageSize").and_then(|s| s.parse::<usize>().ok()).filter(|s| (1..=1000).contains(s)) else {
+                    return refuse(StatusCode::BAD_REQUEST, format!("a page of {:?}", q.get("pageSize")));
+                };
+                let event = q.get("eventType").cloned().unwrap_or_default();
+                seen.reads.lock().unwrap().push(format!("history {event}"));
+                let grabs = || {
+                    GRABS.iter().map(|(id, download, date)| {
+                        json!({ "id": id, "albumId": ALBUM, "eventType": "grabbed", "downloadId": download, "date": date, "sourceTitle": "Salt Meridian - Both Shores (2018) [FLAC]", "data": {} })
+                    })
+                };
+                let mut records: Vec<Value> = match event.as_str() {
+                    "1" => grabs().collect(),
+                    "3" => imports.to_vec(),
+                    "" => grabs().chain(imports.iter().cloned()).collect(),
+                    _ => Vec::new(),
+                };
+                records.sort_by(|a, b| b["date"].as_str().cmp(&a["date"].as_str()));
+                let total = records.len();
+                records.truncate(size);
+                Json(json!({ "page": 1, "pageSize": size, "sortKey": "date", "sortDirection": "descending", "totalRecords": total, "records": records })).into_response()
+            }
+            ("POST", p) if p.starts_with(FAILED) => {
+                let id = p[FAILED.len()..].parse::<i64>().ok();
+                if GRABS.iter().any(|(grab, ..)| Some(*grab) == id) { Json(json!({})).into_response() } else { refuse(StatusCode::NOT_FOUND, format!("not a grab: {p}")) }
+            }
+            ("PUT", "/api/v1/album/monitor") => (StatusCode::ACCEPTED, Json(json!([{ "id": ALBUM }]))).into_response(),
+            ("POST", "/api/v1/command") => (StatusCode::CREATED, Json(json!({ "id": 1, "name": sent["name"] }))).into_response(),
+            _ => refuse(StatusCode::NOT_FOUND, format!("{method} {path}")),
+        }
     }
 }
 
@@ -605,6 +864,33 @@ mod tests {
         let (lidarr, _) = lidarr_at(|_| None, json!([])).await;
         let e = lidarr.want(&AddWith::default(), None, "The Funky Lowlives", "Cartouche").await.unwrap_err();
         assert_eq!(e.to_string(), "Lidarr answered 503 Service Unavailable");
+    }
+
+    /// U5, T9 (the strict fake, in place of one that answered whatever it was asked): the grab marked failed is the one whose download
+    /// the album's newest import is, and only where that import went into the copy's folder, matched by the album folder and its
+    /// parent whatever root Lidarr's container gives them (OQ-J), a disc's folder below them too. An older import there and a newer
+    /// one elsewhere mark none; imports only elsewhere (a folder whose name begins alike, another artist's of that name), or none,
+    /// say Lidarr never imported there. Without the key, nothing is read or marked.
+    #[tokio::test]
+    async fn the_grab_of_the_newest_import_into_the_folder_is_marked_failed() {
+        const HERE: &str = "Salt Meridian/Both Shores (2018)";
+        let lidarrs = |folder: &str| format!("/data/music/{folder}");
+        let cases = [
+            (fake::imports("D1", &lidarrs(HERE), "2026-11-10"), Imported::Failed, vec!["failed 50"]),
+            (fake::imports("D1", &lidarrs("Salt Meridian/Both Shores (2018)/CD 02"), "2026-11-10"), Imported::Failed, vec!["failed 50"]),
+            ([fake::imports("D1", &lidarrs(HERE), "2026-11-10"), fake::imports("D2", &lidarrs("Salt Meridian/Both Shores (2018) (Deluxe)"), "2026-11-13")].concat(), Imported::Unmarked, vec![]),
+            ([fake::imports("D1", &lidarrs("Salt Meridian/Both Shores (2018) (Deluxe)"), "2026-11-10"), fake::imports("D3", &lidarrs("Other Artist/Both Shores (2018)"), "2026-11-11")].concat(), Imported::Not, vec![]),
+            (Vec::new(), Imported::Not, vec![]),
+        ];
+        for (n, (imports, imported, writes)) in cases.into_iter().enumerate() {
+            let (url, seen) = fake::lidarr(fake::Mode::Answers, imports).await;
+            assert_eq!(Lidarr::new(&url, "key").unwrap().fail_grab(fake::GROUP, HERE).await.unwrap(), imported, "case {n}");
+            assert_eq!(seen.writes(), writes, "case {n}");
+            assert!(seen.refused().is_empty(), "case {n}: {:?}", seen.refused());
+        }
+        let (url, seen) = fake::lidarr(fake::Mode::Answers, fake::imports("D1", &lidarrs(HERE), "2026-11-10")).await;
+        assert!(Lidarr::new(&url, "another key").unwrap().fail_grab(fake::GROUP, HERE).await.is_err(), "refused");
+        assert!(seen.writes().is_empty() && seen.reads().is_empty());
     }
 
     #[tokio::test]
