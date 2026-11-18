@@ -160,7 +160,7 @@ test("an empty album's place: PageLoading naming the read while a record not had
   assert.match(view, /import \{ albumRowSub, emptyPlace, keptRows, lookAgainAfter, notHadPage, type NotHadAction \} from '\.\/recordNotHad';/);
   assert.match(
     view,
-    /\{:else if rows && !rows\.length\}\s*\{#if nothing\}[\s\S]{0,300}?\{:else\}\s*(<!--[^>]*-->\s*)?\{@const place = emptyPlace\(notHad && albumHead \? albumHead : \{\}\)\}\s*\{#if 'reading' in place\}<PageLoading><p class="opening">\{place\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{place\.line\}<\/p>\{\/if\}/,
+    /\{:else if rows && !rows\.length\}\s*\{#if nothing\}[\s\S]{0,300}?\{:else\}\s*(<!--[^>]*-->\s*)?\{@const place = emptyPlace\(notHad && albumHead \? albumHead : \{\}\)\}\s*\{#if 'reading' in place\}<PageLoading held=\{false\}><p class="opening">\{place\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{place\.line\}<\/p>\{\/if\}/,
   );
   assert.equal(view.split('<p class="empty">No tracks yet.</p>').length - 1, 1, "only several playlists' sections keep it");
   assert.match(view, /'was_until' \| 'bandcamp' \| 'looking' \| 'no_list' \| 'reading' \| 'sources'/, "the album's head keeps them");
@@ -179,4 +179,20 @@ test('a record not had is asked again through lookAgainAfter while the server re
     /function lookAgain\(subject: string, reading: boolean\) \{\s*clearTimeout\(lookTimer\);\s*if \(lookedFor\.subject !== subject \|\| !reading\) lookedFor = \{ subject, n: 0 \};\s*if \(reading\) lookTimer = setTimeout\(\(\) => id === subject && saved\+\+, lookAgainAfter\(lookedFor\.n\+\+\)\);\s*\}/,
   );
   assert.doesNotMatch(view, /LOOK_TRIES|LOOK_MS/, 'no last ask');
+});
+
+// PB1 (the review of preview 1's fixes): the track list's loader is a part of the page, not the page: it holds no panel (lib/Hold),
+// so a record not had shows its header, Want and About at once while its list is read, and only its track list waits.
+const pageLoading = readFileSync(new URL('../src/lib/PageLoading.svelte', import.meta.url), 'utf8');
+
+test("a record not had's track list loader holds no panel: its header, Want and About show at once, only its track list waits", () => {
+  assert.match(pageLoading, /let \{ children, held = true \}: \{ children\?: import\('svelte'\)\.Snippet; held\?: boolean \} = \$props\(\);/);
+  assert.match(pageLoading, /if \(untrack\(\(\) => held\)\)\s*holdUntil\(/, 'it claims its place only where it loads a page or a panel whole');
+  assert.equal(pageLoading.match(/holdUntil\(/g)?.length, 1, 'its one claim');
+  assert.equal(view.match(/<PageLoading held=\{false\}>/g)?.length, 1, "the track list's loader alone: the page's own still hold it");
+  assert.match(view, /\{#if 'reading' in place\}<PageLoading held=\{false\}><p class="opening">\{place\.reading\}<\/p><\/PageLoading>/);
+  assert.match(view, /<p class="empty">\{place\.line\}<\/p>\{\/if\}\s*\{#if notHad\}\{@render albumFoot\(\)\}\{\/if\}/, 'its About under the waiting track list');
+  const foot = view.match(/\{#snippet albumFoot\(\)\}([\s\S]*?)\{\/snippet\}/)?.[1] ?? '';
+  assert.match(foot, /\{#if notHad\}\s*<AlbumAbout source=\{album\.source\} album=\{album\.id\}[^>]*more=\{albumHead\} labels=\{albumHead\.labels \?\? \[\]\} sources=\{albumHead\.sources\} \/>/, "a record not had's About");
+  assert.match(view, /<SimilarLists kind="crate" id=\{crate\} \/>\{\/if\}\s*\{\/if\}\s*\{@render albumFoot\(\)\}/, 'the same foot under its tracks once they come');
 });

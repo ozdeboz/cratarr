@@ -14,16 +14,19 @@
    *  first look, its progress under the loader at its usual place). With none, what it waits for where that is the library
    *  on this device opening or a busy Cratarr (lib/waiting; the owner, 2026-11-08: "a standard one, with the progress explaining what
    *  it is"). */
-  let { children }: { children?: import('svelte').Snippet } = $props();
+  /** `held`: false where it waits for one part of a page that is otherwise ready (a record not had's track list while its
+   *  list is read, F6): the page shows at once, and only that part waits (the review of preview 1's fixes, PB1). */
+  let { children, held = true }: { children?: import('svelte').Snippet; held?: boolean } = $props();
 
   /** Its size where it is (lib/loader): known once it is placed (its mark shows from then). */
   let size = $state<number | null>(null);
 
   // A page or panel loading as a whole is not ready (lib/Hold): what it showed stays while this is here.
-  holdUntil(
-    () => 0,
-    () => false,
-  );
+  if (untrack(() => held))
+    holdUntil(
+      () => 0,
+      () => false,
+    );
 
   let el: HTMLDivElement;
   /** Its height (to the bottom of what can be seen) and the mark's offset from its top; null until measured. */

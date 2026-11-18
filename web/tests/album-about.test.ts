@@ -105,3 +105,26 @@ test('F9: About draws every label from one list: a chip opening its page, a chip
   assert.match(source('api.ts'), /export const openLabelByRef = \(b: import\('\.\/labelPage'\)\.LabelOpenBody\) => post<\{ id: string \}>\('\/api\/labels\/open', b\);/);
   assert.doesNotMatch(about, /discogs\.labels\.map\(/, "Discogs' labels go through the one list");
 });
+
+// PB2 (the review of preview 1's fixes): a Bandcamp album's About is drawn with the labels its answer names, so its label opens the
+// one label of its name (F9 (c)); fed the server's answer as it comes (`GET /api/albums/bandcamp/<id>`: the album view, its
+// AlbumMore flattened, its `labels` from `labels::of_text`).
+const bandcampAnswer = JSON.parse(`{
+  "source": "bandcamp", "id": "bc.MHxodHRwczovL2tpdGV0aGVvcnkuYmFuZGNhbXAuY29tL2FsYnVtL2Fuc3dlcmVk", "title": "Answered", "artist": "Kite Theory",
+  "year": 2024, "rows": [], "total": 0, "released": "2024-03-01", "label": "Low Tide Records",
+  "labels": [{ "name": "Low Tide Records", "id": "la-12" }],
+  "links": [{ "name": "Bandcamp", "url": "https://kitetheory.bandcamp.com/album/answered" }]
+}`);
+
+test("F9 (c) on a Bandcamp album: the label its answer names, the one label of its name, opens that label's page", () => {
+  const view = source('PlaylistView.svelte');
+  assert.match(view, /label: r\.label, about: r\.about,[^\n]*, labels: r\.labels, /, 'the page keeps what the answer names');
+  const drawn = view.match(/<AlbumAbout\s+source=\{album\.source\}\s+album=\{album\.id\}[^>]*provider=\{\{ server: 'Bandcamp', libraries: \[\] \}\}[^>]*\/>/)?.[0] ?? '';
+  assert.match(drawn, /more=\{albumHead\}\s+labels=\{albumHead\.labels \?\? \[\]\}/, "its About drawn with its answer's labels");
+  const shown = aboutLabels(bandcampAnswer.labels ?? [], bandcampAnswer.label, undefined);
+  assert.deepEqual(shown, [{ name: 'Low Tide Records', id: 'la-12' }]);
+  assert.deepEqual(shown.map(labelOpens), ['page']);
+  // Two labels of its name: the answer names it with no id, plain text.
+  const shared = { ...bandcampAnswer, labels: [{ name: 'Low Tide Records' }] };
+  assert.deepEqual(aboutLabels(shared.labels, shared.label, undefined).map(labelOpens), [null]);
+});

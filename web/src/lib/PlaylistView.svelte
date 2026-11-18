@@ -2765,9 +2765,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if nothing}
         <NothingPopover anchor={nothing.anchor} said={nothing.said} chips={nothing.chips} onclearall={nothing.clearAll} more={nothing.more} />
       {:else}
-        <!-- A record not had whose list is read: the standard loader saying what it reads (F6); else why it has none (F1). -->
+        <!-- A record not had whose list is read: the standard loader saying what it reads (F6), holding no page, so its header,
+             Want and About show at once and only its track list waits (PB1); else why it has none (F1). -->
         {@const place = emptyPlace(notHad && albumHead ? albumHead : {})}
-        {#if 'reading' in place}<PageLoading><p class="opening">{place.reading}</p></PageLoading>{:else}<p class="empty">{place.line}</p>{/if}
+        {#if 'reading' in place}<PageLoading held={false}><p class="opening">{place.reading}</p></PageLoading>{:else}<p class="empty">{place.line}</p>{/if}
+        {#if notHad}{@render albumFoot()}{/if}
       {/if}
     {:else if nothing && shown && !shown.length}
       <!-- What it holds, every track kept out by its words or its filter: why, at what did it (decision 0095). -->
@@ -2818,31 +2820,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if p && !multi}<SimilarLists kind="playlist" id={p.id} />{/if}
       {#if crate && !seeded(crate) && !crateEditing && rows.length >= total}<SimilarLists kind="crate" id={crate} />{/if}
       {/if}
-      {#if album && albumHead && !offServer}
-        <!-- As Symfonium's album: the artist's other albums, the similar ones, then About; seen through a search, its
-             About only. -->
-        {#if !own}
-          {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
-          {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
-          {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
-        {/if}
-        {#if notHad}
-          <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} labels={albumHead.labels ?? []} sources={albumHead.sources} />
-        {:else}
-          <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} sources={albumHead.sources} />
-        {/if}
-      {/if}
-      {#if album && albumHead && album.source === BANDCAMP}
-        <!-- A Bandcamp album's About (the owner, 2026-10-25: "as much as our own panel"): what its page says. -->
-        <AlbumAbout
-          source={album.source}
-          album={album.id}
-          genres={listGenres ?? []}
-          year={albumHead.year}
-          provider={{ server: 'Bandcamp', libraries: [] }}
-          more={albumHead}
-        />
-      {/if}
+      {@render albumFoot()}
     {:else}
       <PageLoading />
     {/if}
@@ -2866,6 +2844,37 @@ ${r.album_artist ?? r.artist ?? ''}`;
     </SelectBar>
   {/if}
 </section>
+
+<!-- An album's foot, under its tracks (a record not had's under its track list's place too, while it waits: PB1). -->
+{#snippet albumFoot()}
+  {#if album && albumHead && !offServer}
+    <!-- As Symfonium's album: the artist's other albums, the similar ones, then About; seen through a search, its
+         About only. -->
+    {#if !own}
+      {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
+      {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
+      {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
+    {/if}
+    {#if notHad}
+      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} labels={albumHead.labels ?? []} sources={albumHead.sources} />
+    {:else}
+      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} sources={albumHead.sources} />
+    {/if}
+  {/if}
+  {#if album && albumHead && album.source === BANDCAMP}
+    <!-- A Bandcamp album's About (the owner, 2026-10-25: "as much as our own panel"): what its page says, its label opening
+         the one label of its name (F9 (c)). -->
+    <AlbumAbout
+      source={album.source}
+      album={album.id}
+      genres={listGenres ?? []}
+      year={albumHead.year}
+      provider={{ server: 'Bandcamp', libraries: [] }}
+      more={albumHead}
+      labels={albumHead.labels ?? []}
+    />
+  {/if}
+{/snippet}
 
 <!-- The Info tab's part for one playlist: how focused it is, and its closest playlists as large rows (a tap views one). -->
 <!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe right plays it next, a swipe left takes
