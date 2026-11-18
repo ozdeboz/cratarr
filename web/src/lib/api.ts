@@ -2729,7 +2729,12 @@ export type KeepPreview = {
   acquisition: boolean;
   /** A copy (C40): the album stays where it is, and its copied files are all that is written. */
   copy?: boolean;
+  /** The copy's own folder in its library, as this preview read it (RF10): the tap carries it back, so it takes the copy shown. */
+  from_dir?: string | null;
 };
+/** What a move's or Copy to's sheet showed (RF10, the owner's "writes nothing the sheet doesn't show"): sent with the tap, which is
+ *  refused where the copy would now be another, or written elsewhere or with other files. A copy needs it. */
+export type MoveSheet = { folder: string; files: number; from_dir: string };
 /** What a move or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
 export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
 const albumPath = (source: string, album: string) => `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
@@ -2745,8 +2750,8 @@ export const movePreview = (source: string, album: string, from: string | undefi
   request<KeepPreview>(`${albumPath(source, album)}/move?${copyQuery({ from, to, year })}`);
 /** Move a copy into another used library of its server, named and converted that library's way (Undo brings it back);
  *  with lossless files above that library's quality limit it is queued. */
-export const moveAlbum = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
-  request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year }));
+export const moveAlbum = (source: string, album: string, from: string | undefined, to: string, year?: string, sheet?: MoveSheet) =>
+  request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year, ...sheet }));
 /** Delete a copy, into its library's trash (Undo brings it back). The record stays while another copy does. */
 export const deleteAlbum = (source: string, album: string, from: string | undefined) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, asJson({ from }));
 /** Delete a record's copy in someone's own music from the Users panel: an administrator's, only there. */
@@ -2777,10 +2782,12 @@ export type ReplacePreview = {
   files: number;
   /** The new copy's library: someone's own music for a Replace from it (RY01), else its Incoming library. */
   from: string | null;
+  /** Someone's own copy's folder in its library, as this preview read it (RY01; RF10): the tap carries it back. */
+  from_dir?: string | null;
 };
 /** What Replace's sheet showed of a Replace from someone's own music (RY01, OQ-G): sent with the tap, which is refused where the
  *  copy or what it would do changed since. */
-export type ReplaceSheet = { folder: string; tracks: number; added: number; files: number };
+export type ReplaceSheet = { folder: string; tracks: number; added: number; files: number; from_dir?: string };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 /** `to`: the main library whose copy it takes the place of. */

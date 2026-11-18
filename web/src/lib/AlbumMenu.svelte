@@ -51,7 +51,7 @@
     type ReplacePreview,
   } from './api';
   import { albumOfDownload, albumPlay, albumRatings, copiesAdded, copiesGone, copiesMoved, copiesReplaced, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
-  import { adds, deleteEntries, moveEntries, moveSentences, moveWords, playFromEntries, replacedWords, replaceEntries, replaceSheet } from './copiesRule';
+  import { adds, deleteEntries, moveEntries, moveSentences, moveSheet, moveWords, playFromEntries, replacedWords, replaceEntries, replaceSheet, replaceShown } from './copiesRule';
   import { shownIn } from './sources.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -560,7 +560,8 @@
     act(async () => {
       if (!to) return;
       const [into, from] = [to, copy?.library];
-      const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined);
+      // The tap carries what its sheet showed (RF10): the server refuses it where the copy changed since.
+      const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined, moveSheet(keep));
       // A copy leaves the record's copy where it was and adds the new one (T3); a move moves it.
       const said = keep ? sentences(keep) : null;
       const went = [{ source, id: a.id, from, to: into.id }];
@@ -571,7 +572,7 @@
     act(async () => {
       if (!to) return;
       const [into, from, kind, asks] = [to, copy?.library, copy?.from?.kind, swapAsks];
-      const shown = asks.shown && swap?.folder ? { folder: swap.folder, tracks: swap.tracks, added: swap.added, files: swap.files } : undefined;
+      const shown = asks.shown ? replaceShown(swap) : undefined;
       const r = await replaceIncoming(source, a.id, from, into.id, year.trim() || undefined, asks.cover && swap?.covers ? coverWay : undefined, asks.carry && carry, shown);
       // The copy that took the other's place is now that one: what is listed of it comes with the next read. From Incoming the copy
       // leaves; from someone's own music it was copied and stays (RY02.4).

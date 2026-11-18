@@ -15,7 +15,7 @@
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo. Of records with several
   // copies Delete is an entry per library, as Move's. No Play from: it starts one record's queue.
   import { offersIn } from './AlbumMenu.svelte';
-  import { deleteGroups, moveGroups, moveWords, type AlbumOffer } from './copiesRule';
+  import { deleteGroups, moveGroups, moveSheet, moveWords, type AlbumOffer } from './copiesRule';
   import { albumOfDownload, albumRatings, copiesAdded, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
   import { cancelJob, deleteAlbum, moveAlbum, movePreview, type AlbumsSource, type KeepPreview, type LibraryInfo, type ListedAlbum, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -204,7 +204,7 @@
         await fewAtATime(
           go,
           async ({ x, p }) => {
-            const r = await moveAlbum(x.s.id, x.a.id, x.from, x.to.id);
+            const r = await moveAlbum(x.s.id, x.a.id, x.from, x.to.id, undefined, moveSheet(p));
             // Queued (lossless files above the quality limit to convert first): its row shows the progress instead.
             // Its end is told to whoever asked, with its Undo (W13).
             if (r.queued) {

@@ -228,7 +228,8 @@ test('the record menu takes its Replace words from copiesRule', () => {
   assert.equal(sheet.split('NO_LIDARR').length, 2, 'one Lidarr line');
   assert.match(sheet, /\{#if !swap\.acquisition && swapAsks\.lidarr\}\s*\{` \$\{NO_LIDARR\}`\}\{\/if\}/, 'said only as a copy leaves Incoming');
   assert.doesNotMatch(sheet, /Incoming/);
-  assert.match(menu, /const shown = asks\.shown && swap\?\.folder \? \{ folder: swap\.folder, tracks: swap\.tracks, added: swap\.added, files: swap\.files \} : undefined;/);
+  // RF10: what it showed, by the one rule, the own copy's folder with it.
+  assert.match(menu, /const shown = asks\.shown \? replaceShown\(swap\) : undefined;/);
   assert.match(menu, /replaceIncoming\(source, a\.id, from, into\.id, year\.trim\(\) \|\| undefined, asks\.cover && swap\?\.covers \? coverWay : undefined, asks\.carry && carry, shown\)/);
 });
 

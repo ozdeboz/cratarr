@@ -4,7 +4,7 @@
 //
 // A list says `copies`, or until the server folds its records (and for a server of another kind) the one `library`, or
 // neither: a list with no libraries (the device's, a server's in its mode, Discover).
-import type { AlbumCopy, AlbumsSource, LibraryInfo, ListedAlbum } from './api';
+import type { AlbumCopy, AlbumsSource, KeepPreview, LibraryInfo, ListedAlbum, MoveSheet, ReplacePreview, ReplaceSheet } from './api';
 import { size } from './exportChoices';
 
 /** Whether a format loses nothing: here so a copy's line can say it, and the list's order by quality too (lib/pageView). */
@@ -179,6 +179,19 @@ export const replaceEntries = (offers: AlbumOffer[]) => named(offers, free(offer
  *  a cover to choose (`cover`), what Cratarr knew carried over if wanted (`carry`), and Lidarr named where it may fetch the album
  *  again as it leaves Incoming (`lidarr`). From someone's own music (RY01) the copy goes in as it is and stays where it is: none of
  *  these, and the tap says what the sheet showed (`shown`, OQ-G). */
+/** What a move's or Copy to's tap carries of its sheet (RF10, the owner's "writes nothing the sheet doesn't show"): the folder where
+ *  the copy goes, how many files, and the copy's own folder, as its preview showed them; none without a preview that names both. */
+export function moveSheet(p: Pick<KeepPreview, 'folder' | 'files' | 'from_dir'> | null | undefined): MoveSheet | undefined {
+  return p?.folder && p.from_dir ? { folder: p.folder, files: p.files, from_dir: p.from_dir } : undefined;
+}
+
+/** What a Replace from someone's own music carries of its sheet (RY01, OQ-G; RF10): its folder, tracks, added and files, and the own
+ *  copy's folder, so the tap takes the copy shown; none without a preview that names its folder. */
+export function replaceShown(p: Pick<ReplacePreview, 'folder' | 'tracks' | 'added' | 'files' | 'from_dir'> | null | undefined): ReplaceSheet | undefined {
+  if (!p?.folder) return undefined;
+  return { folder: p.folder, tracks: p.tracks, added: p.added, files: p.files, ...(p.from_dir ? { from_dir: p.from_dir } : {}) };
+}
+
 export function replaceSheet(kind: LibraryInfo['kind'] | undefined) {
   const own = kind === 'own';
   return { cover: !own, carry: !own, lidarr: !own, shown: own };
