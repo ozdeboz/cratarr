@@ -352,6 +352,32 @@ impl Underway {
     }
 }
 
+/// An Undo of a copy going on (RF9): its entry among the actions going on (`running`), so the pass passes over its Undo begun, and a
+/// second Undo of it at once is refused; given back when it ends.
+struct Undoing {
+    id: EventId,
+    running: Running,
+}
+
+impl Drop for Undoing {
+    fn drop(&mut self) {
+        self.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
+    }
+}
+
+/// The folders the files `rels` lay in, left empty, removed up to `root` (never `root` itself). Blocking.
+fn prune_up_to(root: &std::path::Path, rels: &[String]) {
+    for rel in rels {
+        let mut dir = root.join(rel).parent().map(std::path::Path::to_path_buf);
+        while let Some(d) = dir.filter(|d| d.as_path() != root && d.starts_with(root)) {
+            if std::fs::remove_dir(&d).is_err() {
+                break;
+            }
+            dir = d.parent().map(std::path::Path::to_path_buf);
+        }
+    }
+}
+
 pub struct IncomingService {
     lib: Arc<Library>,
     files: Arc<dyn Files>,
@@ -862,6 +888,102 @@ impl IncomingService {
                 tracing::warn!("journal: {e:#}");
             }
         }
+        // Undos of copies cut short (RF9).
+        self.finish_undos().await;
+    }
+
+    /// Undos of copies begun and not finished (RF9, the review of runs 11 and 12, RA7: a stop between taking the copies and the end),
+    /// as the disk shows them, as for an action's intent: where a copy lies in the trash under the Undo's second, it is finished as a
+    /// second tap would finish it, with no tap; one of which nothing happened is forgotten. One that cannot be finished puts back what
+    /// it took (`put_back_undo`): never a short album, never a main library with neither copy. An Undo going on now is passed over.
+    async fn finish_undos(&self) {
+        let begun = match self.journal.begun(UNCOPIED) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("journal: {e:#}");
+                return;
+            }
+        };
+        for entry in begun {
+            let (Event::AlbumCopied { title, to_dir, copies, .. } | Event::AlbumReplacedFromCopy { title, to_dir, copies, .. }) = &entry.event else { continue };
+            let (Some(stamp), Some(root)) = (self.undo_begun(entry.id), self.lib.catalogue().folders().get(to_dir.0).cloned()) else { continue };
+            if self.running.lock().unwrap_or_else(|p| p.into_inner()).contains(&entry.id) {
+                continue;
+            }
+            let rels: Vec<String> = copies.iter().map(|m| m.to.1.clone()).collect();
+            let happened = tokio::task::spawn_blocking(move || rels.iter().any(|rel| root.join(crate::trash::TRASH_DIR).join(crate::trash::token(stamp, rel)).is_file()))
+                .await
+                .unwrap_or(true);
+            if !happened {
+                tracing::info!("forgot an Undo of {title} that never happened");
+                if let Err(e) = self.journal.forget_result(entry.id, UNCOPIED) {
+                    tracing::warn!("journal: {e:#}");
+                }
+                continue;
+            }
+            let done = match &entry.event {
+                Event::AlbumCopied { .. } => self.undo_copy(&entry).await,
+                _ => self.undo_from_copy(&entry).await,
+            };
+            match done {
+                Ok(_) => tracing::info!("finished an Undo of {title} cut short"),
+                Err(e) => tracing::warn!("could not finish an Undo of {title} cut short: {e}"),
+            }
+        }
+    }
+
+    /// The second an Undo of a copy begun on entry `id` puts its files under (T1, RF9), kept on the entry before a file moves; none
+    /// where none was begun.
+    fn undo_begun(&self, id: EventId) -> Option<i64> {
+        self.journal.result(id, UNCOPIED).ok().flatten().and_then(|v| v["stamp"].as_i64())
+    }
+
+    /// The Undo of entry `id` going on (RF9), until what this gives goes: refused while another Undo of it goes on (a tap's, or the
+    /// pass finishing one cut short).
+    fn undoing(&self, id: EventId, title: &str) -> Result<Undoing, ToggleError> {
+        if !self.running.lock().unwrap_or_else(|p| p.into_inner()).insert(id) {
+            return Err(ToggleError::Refused(format!("{title} is being undone")));
+        }
+        Ok(Undoing { id, running: self.running.clone() })
+    }
+
+    /// An Undo of a copy that cannot go on, put back (RF9): each copy it took into the trash under its second (`stamp`) back at its
+    /// place, and for a Replace from someone's own copy each old file it brought back into the trash again (the copy of its name went
+    /// before it), all or none; its second forgotten, so the album is as it was before the Undo: never short, and never a main library
+    /// with neither copy. Where that cannot be, an error is logged and its second kept, for the pass to try again. Its rows never
+    /// moved: an Undo's rows follow once its files all stand.
+    async fn put_back_undo(&self, entry: &Entry, stamp: i64) {
+        let (title, _) = entry.event.album();
+        let (folder, copies, replaced) = match &entry.event {
+            Event::AlbumCopied { to_dir, copies, .. } => (to_dir.0, copies.clone(), Vec::new()),
+            Event::AlbumReplacedFromCopy { to_dir, copies, replaced, .. } => (to_dir.0, copies.clone(), replaced.clone()),
+            _ => return,
+        };
+        let Some(root) = self.lib.catalogue().folders().get(folder).cloned() else { return };
+        let files = self.files.clone();
+        let back = tokio::task::spawn_blocking(move || -> Result<()> {
+            let at = |rel: &str| (root.clone(), rel.to_string());
+            let trashed = |rel: &str| format!("{}/{}", crate::trash::TRASH_DIR, crate::trash::token(stamp, rel));
+            let took = |rel: &str| root.join(trashed(rel)).is_file();
+            // What the Undo did, as its plan: the copies into the trash, then each old file back where the copy of its name went first.
+            let mut steps: Vec<crate::moves::Step> =
+                copies.iter().filter(|m| took(&m.to.1)).map(|m| crate::moves::Step { from: at(&m.to.1), to: at(&trashed(&m.to.1)) }).collect();
+            steps.extend(
+                replaced
+                    .iter()
+                    .filter(|r| !root.join(&r.to.1).exists() && root.join(&r.from.1).is_file() && copies.iter().filter(|m| m.to.1 == r.from.1).all(|m| took(&m.to.1)))
+                    .map(|r| crate::moves::Step { from: at(&r.to.1), to: at(&r.from.1) }),
+            );
+            files.move_back(&steps)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|done| done)
+        .and_then(|()| self.journal.forget_result(entry.id, UNCOPIED));
+        match back {
+            Ok(()) => tracing::info!("put back what the Undo of {title} took: as it was before"),
+            Err(e) => tracing::error!("could not put back what the Undo of {title} took, so it stays for the next pass: {e:#}"),
+        }
     }
 
     /// Who did the album action an undo key names (X5): its account, as the journal has it; none for one not known.
@@ -924,26 +1046,28 @@ impl IncomingService {
     }
 
     /// Undo a Copy to (C40): file by file, as Keep's (T1), each copied file into its library's trash (Q13: as every Undo), its row
-    /// with it, marked trashed as a Delete marks them (`trash_file`'s token, kept on the entry); the folders it leaves empty go,
-    /// never the library's own. A file added to the copy's folder since stays, and so does a later album at its place: with none
-    /// of the copies there as copied it is refused. One copied file rewritten since, its size or time not as copied (an entry from
-    /// before T1: as its original's now), refuses it whole, naming the file, before anything moves (T1c, as OQ-D for Replace): it
-    /// never leaves the album short, nor takes a file that isn't as copied; deleting the copy is the way then. Refused whole too where
-    /// no original in a kept library holds a copy's bytes any more (RF5): the copy is the album's only copy then. Its second's name
-    /// goes on the entry before a file moves, so an Undo cut short is finished by the next, the files already in the trash under
-    /// it counting as done, never as rewritten. The original as it was.
+    /// with it, marked trashed as a Delete marks them (the token kept on the entry); the folders it leaves empty go, never the
+    /// library's own. A file added to the copy's folder since stays, and so does a later album at its place: with none of the copies
+    /// there as copied it is refused. One copied file rewritten since, its size or time not as copied (an entry from before T1: as its
+    /// original's now), refuses it whole, naming the file, before anything moves (T1c, as OQ-D for Replace): it never leaves the album
+    /// short, nor takes a file that isn't as copied; deleting the copy is the way then. Refused whole too where no original in a kept
+    /// library holds a copy's bytes any more (RF5): the copy is the album's only copy then. Its second goes on the entry before a file
+    /// moves, and its files move as one plan, all or none (RF9): an Undo cut short is finished by the next tap or by the pass, the
+    /// files already in the trash under it counting as done, never as rewritten; one that cannot go on puts back what it took
+    /// (`put_back_undo`), so the album is never left short. One Undo of an entry at a time (`undoing`). The original as it was.
     async fn undo_copy(&self, entry: &Entry) -> Result<String, ToggleError> {
         let gone = || ToggleError::Refused("that copy can no longer be undone".into());
         let Event::AlbumCopied { title, to_dir, copies, .. } = &entry.event else { return Err(gone()) };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is no longer copied")));
         }
+        let _undoing = self.undoing(entry.id, title)?;
         let catalogue = self.lib.catalogue();
         let folders = catalogue.folders();
         let root = folders.get(to_dir.0).cloned().ok_or_else(|| ToggleError::Refused("that library is not in use any more".into()))?;
         let made: Vec<Option<(u64, i64)>> = self.journal.result(entry.id, COPIED).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         let trashed_at = |at: i64, rel: &str| root.join(crate::trash::TRASH_DIR).join(crate::trash::token(at, rel));
-        let begun = self.journal.result(entry.id, UNCOPIED).ok().flatten().and_then(|v| v["stamp"].as_i64());
+        let begun = self.undo_begun(entry.id);
         let plan: Vec<(String, Option<(u64, i64)>)> = copies
             .iter()
             .enumerate()
@@ -975,20 +1099,28 @@ impl IncomingService {
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut refused = None;
         if !lies.iter().any(|l| matches!(l, Lies::Done | Lies::AsCopied)) {
-            return Err(ToggleError::Refused(format!("None of the files copied of {title} is there as it was copied")));
-        }
-        if let Some(((rel, _), _)) = plan.iter().zip(&lies).find(|(_, l)| **l == Lies::Rewritten) {
+            refused = Some(format!("None of the files copied of {title} is there as it was copied"));
+        } else if let Some(((rel, _), _)) = plan.iter().zip(&lies).find(|(_, l)| **l == Lies::Rewritten) {
             let name = rel.strip_prefix(&format!("{}/", to_dir.1)).unwrap_or(rel.as_str());
-            return Err(ToggleError::Refused(format!("{name} has changed since {title} was copied: delete the copy instead")));
+            refused = Some(format!("{name} has changed since {title} was copied: delete the copy instead"));
+        } else {
+            // RF5: a copy whose bytes no original holds any more (deleted, its trash emptied, rewritten, gone with its library) is the
+            // album's only copy: never into the trash by this Undo.
+            let taking: Vec<String> = plan.iter().zip(&lies).filter(|(_, l)| **l == Lies::AsCopied).map(|((rel, _), _)| rel.clone()).collect();
+            let (c, folder, kept) = (catalogue.clone(), to_dir.0, self.not_incoming());
+            let only = tokio::task::spawn_blocking(move || c.only_copies(folder, &taking, &kept)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            if !only.is_empty() {
+                refused = Some("The original is gone: this is the album's only copy.".to_string());
+            }
         }
-        // RF5: a copy whose bytes no original holds any more (deleted, its trash emptied, rewritten, gone with its library) is the
-        // album's only copy: never into the trash by this Undo.
-        let taking: Vec<String> = plan.iter().zip(&lies).filter(|(_, l)| **l == Lies::AsCopied).map(|((rel, _), _)| rel.clone()).collect();
-        let (c, folder, kept) = (catalogue.clone(), to_dir.0, self.not_incoming());
-        let only = tokio::task::spawn_blocking(move || c.only_copies(folder, &taking, &kept)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-        if !only.is_empty() {
-            return Err(ToggleError::Refused("The original is gone: this is the album's only copy.".into()));
+        if let Some(why) = refused {
+            // An Undo cut short that cannot go on puts back what it took (RF9).
+            if let Some(stamp) = begun {
+                self.put_back_undo(entry, stamp).await;
+            }
+            return Err(ToggleError::Refused(why));
         }
         // The second its files go under: an Undo begun before keeps its own; a new one takes one no copy's name is taken in.
         let stamp = match begun {
@@ -1002,30 +1134,39 @@ impl IncomingService {
                 at
             }
         };
-        let (r, c, folder) = (root.clone(), catalogue.clone(), to_dir.0);
+        // Each copy still as copied into the trash under that second, as one plan: all or none (RF9). One that fails puts back what it
+        // took, so the album is whole again.
+        let at = |rel: &str| (root.clone(), rel.to_string());
+        let steps: Vec<crate::moves::Step> = plan
+            .iter()
+            .zip(&lies)
+            .filter(|(_, l)| **l == Lies::AsCopied)
+            .map(|((rel, _), _)| crate::moves::Step { from: at(rel), to: at(&format!("{}/{}", crate::trash::TRASH_DIR, crate::trash::token(stamp, rel))) })
+            .collect();
+        let taken: Vec<String> = plan.iter().zip(&lies).filter(|(_, l)| matches!(l, Lies::Done | Lies::AsCopied)).map(|((rel, _), _)| rel.clone()).collect();
+        let (r, files, rels) = (root.clone(), self.files.clone(), plan.iter().map(|(rel, _)| rel.clone()).collect::<Vec<_>>());
+        let moved = tokio::task::spawn_blocking(move || -> Result<()> {
+            files.move_all(&steps)?;
+            prune_up_to(&r, &rels);
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|done| done);
+        if let Err(e) = moved {
+            self.put_back_undo(entry, stamp).await;
+            return Err(ToggleError::Refused(format!("{e:#}")));
+        }
+        // Their rows into the trash with them, marked trashed as a Delete marks them; one that fails leaves the Undo to the pass.
+        let (c, folder) = (catalogue.clone(), to_dir.0);
         let tokens = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
             let mut tokens = Vec::new();
-            for ((rel, _), lies) in plan.iter().zip(&lies) {
-                if !matches!(lies, Lies::Done | Lies::AsCopied) {
-                    continue;
-                }
-                if *lies == Lies::AsCopied {
-                    crate::trash::trash_file(&r, rel, stamp)?;
-                }
+            for rel in &taken {
                 let token = crate::trash::token(stamp, rel);
                 if c.has_row(folder, rel) {
                     c.mark_trashed(folder, rel, &token)?;
                 }
                 tokens.push(token);
-            }
-            for (rel, _) in &plan {
-                let mut dir = r.join(rel).parent().map(std::path::Path::to_path_buf);
-                while let Some(d) = dir.filter(|d| *d != r && d.starts_with(&r)) {
-                    if std::fs::remove_dir(&d).is_err() {
-                        break;
-                    }
-                    dir = d.parent().map(std::path::Path::to_path_buf);
-                }
             }
             Ok(tokens)
         })
@@ -2816,6 +2957,164 @@ mod tests {
         }
         for d in [music, inc, ann, bob] {
             std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Files as the disk has them, but a plan of moves stops after its first step with an error, that step done (the disk gone away
+    /// midway, RF9). Moved back as the disk does.
+    struct MovesHalf;
+
+    impl crate::ports::Files for MovesHalf {
+        fn trash(&self, folder: &std::path::Path, rel: &str, now_epoch: i64) -> anyhow::Result<String> {
+            crate::trash::trash(folder, rel, now_epoch)
+        }
+        fn restore(&self, folder: &std::path::Path, token: &str) -> anyhow::Result<String> {
+            crate::trash::restore(folder, token)
+        }
+        fn purge(&self, folder: &std::path::Path, now_epoch: i64, keep_days: u32) -> anyhow::Result<usize> {
+            crate::trash::purge(folder, now_epoch, keep_days)
+        }
+        fn can_write(&self, _folder: &std::path::Path) -> bool {
+            true
+        }
+        fn move_all(&self, plan: &[crate::moves::Step]) -> anyhow::Result<()> {
+            crate::moves::apply(&plan[..plan.len().min(1)])?;
+            anyhow::bail!("the disk went away")
+        }
+        fn move_back(&self, plan: &[crate::moves::Step]) -> anyhow::Result<()> {
+            crate::moves::revert(plan)
+        }
+        fn clear_parts(&self, plan: &[crate::moves::Step]) {
+            crate::moves::clear_parts(plan)
+        }
+        fn copy_all(&self, plan: &[crate::moves::Step]) -> anyhow::Result<Vec<bool>> {
+            crate::moves::copy(plan)
+        }
+        fn shares(&self, _from: &std::path::Path, _to: &std::path::Path) -> bool {
+            false
+        }
+    }
+
+    /// RF9 (the review of runs 11 and 12, RA7), Copy to: an Undo cut short is finished by the pass, with no second tap; one of which
+    /// nothing happened is forgotten; one that fails midway, or that cannot be finished, puts back what it took. (1) Cut short after
+    /// 1.flac reached the trash under the Undo's second: the pass takes 2.flac too, both rows trashed, no folder left, the entry undone
+    /// once, its tokens kept. (2) Its second written, nothing moved: the pass forgets it, the copy whole and not undone; a tap then
+    /// undoes it. (3) The disk failing after the tap's first move: refused, the copy whole again, no Undo begun, and the pass changes
+    /// nothing after. (4) Cut short, 2.flac rewritten since: the pass cannot finish it, and 1.flac comes back beside it. Never a short
+    /// album left in own music; Music's original as it was.
+    #[tokio::test]
+    async fn the_pass_finishes_a_copys_undo_cut_short_or_puts_back_what_it_took() {
+        for case in 1..=4 {
+            let (svc, music, inc, own) = with_own_music(&format!("rf9-copy{case}")).await;
+            let before = lying(&music);
+            let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+            let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+            let svc = if case == 3 { IncomingService { files: Arc::new(MovesHalf), ..svc } } else { svc };
+            let (id, stamp): (EventId, i64) = (undo.parse().unwrap(), 1_700_000_000);
+            if case == 4 {
+                std::fs::write(own.join("A/Album/2.flac"), b"two, retagged").unwrap();
+            }
+            let whole = lying(&own);
+            if case != 3 {
+                svc.journal.done(id, UNCOPIED, stamp, &serde_json::json!({ "stamp": stamp, "tokens": [] })).unwrap();
+            }
+            if matches!(case, 1 | 4) {
+                crate::trash::trash_file(&own, "A/Album/1.flac", stamp).unwrap();
+            }
+            if case == 3 {
+                assert!(svc.undo(&undo).await.is_err(), "the disk failing midway: refused");
+            }
+            svc.reconcile().await;
+            let c = svc.lib.catalogue();
+            let entry = svc.journal.get(id).unwrap().unwrap();
+            if case == 1 {
+                assert!(!own.join("A/Album").exists(), "the other file went too, no folder left");
+                let trash = lying(&own.join(crate::trash::TRASH_DIR));
+                assert_eq!(trash.into_keys().collect::<Vec<_>>(), [format!("{stamp}/A/Album/1.flac"), format!("{stamp}/A/Album/2.flac")], "one trash entry each");
+                for f in ["1.flac", "2.flac"] {
+                    assert!(c.has_row(2, &format!("{}/{stamp}/A/Album/{f}", crate::trash::TRASH_DIR)), "{f}: its row trashed");
+                }
+                assert!(entry.undone && uncopied(&svc, id).len() == 2, "undone, its tokens kept");
+                assert!(svc.undo(&undo).await.is_err(), "undone once");
+            } else {
+                assert_eq!(lying(&own), whole, "{case}: the copy whole as before the Undo, nothing in the trash");
+                assert!(c.has_row(2, "A/Album/1.flac") && c.has_row(2, "A/Album/2.flac"), "{case}: its rows at their places");
+                assert!(!entry.undone && svc.journal.result(id, UNCOPIED).unwrap().is_none(), "{case}: not undone, no Undo begun");
+                if case == 2 {
+                    svc.undo(&undo).await.unwrap();
+                    assert!(!own.join("A/Album").exists(), "a tap then undoes it");
+                }
+            }
+            assert_eq!(lying(&music), before, "{case}: Music's original as it was");
+            for d in [music, inc, own] {
+                std::fs::remove_dir_all(d).ok();
+            }
+        }
+    }
+
+    /// RF9 (RA7), a Replace from Bob's copy: its Undo, tapped thirteen days on, cut short between its halves (every copy in Music's
+    /// trash under the Undo's second, Music's old files still in the trash under RY01's: Music holds neither copy). (1) The pass
+    /// finishes it with no tap: Music's old copy back, bytes and times, on its tracks; the copies in Music's trash, their rows trashed
+    /// holding no track; the entry undone, every token kept. (2) The old files purged from the trash meanwhile (RY01's second past the
+    /// trash days): the pass puts the copies back, bytes and times, on the record's tracks; the entry not undone, no Undo begun. (3)
+    /// The disk failing after the tap's first move: refused, the copies back in Music, Music's old files still in its trash, the entry
+    /// not undone, no Undo begun; the pass changes nothing after. Never Music with neither copy; Bob's copy never touched.
+    #[tokio::test]
+    async fn the_pass_finishes_a_replace_from_a_copys_undo_cut_short_and_music_never_holds_neither() {
+        for case in 1..=3 {
+            let (svc, music, inc, ann, bob) = with_three_own(&format!("rf9-ry01-{case}"), RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
+            let (before, theirs) = (lying(&music.join(RY01_DIR)), lying(&bob));
+            let c = svc.lib.catalogue();
+            let olds: Vec<Option<i64>> = (1..=2).map(|n| c.track_of(0, &ry01_file(RY01_DIR, n, "mp3"))).collect();
+            let at = bobs_copy(&svc, &bob, RY01_DIR).await;
+            let done = svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None).await.unwrap();
+            let (key, new) = (done.undo.clone().unwrap(), music.join(&done.folder));
+            let id: EventId = key.parse().unwrap();
+            let copies = lying(&new);
+            let svc = if case == 3 { IncomingService { files: Arc::new(MovesHalf), ..svc } } else { svc };
+            let stamp = epoch_now() + 13 * 86_400;
+            if case != 3 {
+                svc.journal.done(id, UNCOPIED, stamp, &serde_json::json!({ "stamp": stamp, "tokens": [] })).unwrap();
+                for f in copies.keys() {
+                    crate::trash::trash_file(&music, &format!("{}/{f}", done.folder), stamp).unwrap();
+                }
+                assert!(lying(&new).is_empty(), "{case}: Music holds neither copy, for now");
+            }
+            if case == 2 {
+                crate::trash::purge(&music, epoch_now() + 15 * 86_400, 14).unwrap();
+            }
+            if case == 3 {
+                assert!(svc.undo(&key).await.is_err(), "the disk failing midway: refused");
+            }
+            svc.reconcile().await;
+            let entry = svc.journal.get(id).unwrap().unwrap();
+            if case == 1 {
+                assert_eq!(lying(&music.join(RY01_DIR)), before, "Music's old copy back, bytes and times");
+                for (n, t) in (1..=2).zip(&olds) {
+                    assert_eq!(row_at(&c, 0, &ry01_file(RY01_DIR, n, "mp3")), Some((*t, None)), "on its track, not trashed");
+                }
+                let trash: std::collections::BTreeSet<Vec<u8>> = lying(&music.join(crate::trash::TRASH_DIR)).into_values().map(|(b, _)| b).collect();
+                assert_eq!(trash, theirs.values().map(|(b, _)| b.clone()).collect(), "the copies in Music's trash");
+                let tokens = uncopied(&svc, id);
+                assert!(entry.undone && tokens.len() == copies.len(), "undone, every token kept: {tokens:?}");
+                for t in tokens.iter().filter(|t| t.ends_with(".flac")) {
+                    let row = row_at(&c, 0, &format!("{}/{t}", crate::trash::TRASH_DIR)).expect("the copy's row in the trash");
+                    assert!(row.0.is_none() && row.1.is_some(), "{t}: trashed, holding no track");
+                }
+            } else {
+                assert_eq!(lying(&new), copies, "{case}: the copies back in Music, bytes and times");
+                for (n, t) in (1..=2).zip(&olds) {
+                    assert_eq!(row_at(&c, 0, &ry01_file(&done.folder, n, "flac")), Some((*t, None)), "{case}: on the record's track");
+                }
+                assert!(!entry.undone && svc.journal.result(id, UNCOPIED).unwrap().is_none(), "{case}: not undone, no Undo begun");
+                if case == 3 {
+                    assert_eq!(lying(&music.join(crate::trash::TRASH_DIR)).len(), before.len(), "Music's old files still in its trash");
+                }
+            }
+            assert_eq!(lying(&bob), theirs, "{case}: Bob's copy never touched");
+            for d in [music, inc, ann, bob] {
+                std::fs::remove_dir_all(d).ok();
+            }
         }
     }
 

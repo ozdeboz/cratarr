@@ -442,6 +442,28 @@ impl Journal {
         Ok(text.map(|t| serde_json::from_str(&t)).transpose()?)
     }
 
+    /// Events that happened and were not undone that `handler` has a result for, oldest first: an Undo begun (its mark written
+    /// before its files move, RF9) and not finished.
+    pub fn begun(&self, handler: &str) -> Result<Vec<Entry>> {
+        let db = self.db();
+        let mut st = db.prepare(
+            "SELECT id, at, event FROM events e WHERE applied = 1 AND undone_at IS NULL
+             AND EXISTS (SELECT 1 FROM handled h WHERE h.event = e.id AND h.handler = ?1) ORDER BY id",
+        )?;
+        let rows = st.query_map([handler], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        rows.map(|r| {
+            let (id, at, event) = r?;
+            Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: false, applied: true })
+        })
+        .collect()
+    }
+
+    /// What `handler` returned for an event, forgotten: it never happened after all (an Undo put back whole, RF9).
+    pub fn forget_result(&self, id: EventId, handler: &str) -> Result<()> {
+        self.db().execute("DELETE FROM handled WHERE event = ?1 AND handler = ?2", params![id, handler])?;
+        Ok(())
+    }
+
     /// Events since `since` (epoch seconds) that happened, that `handler` has not handled and that were not undone,
     /// oldest first.
     pub fn pending(&self, handler: &str, since: i64) -> Result<Vec<Entry>> {

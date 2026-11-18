@@ -878,14 +878,17 @@ impl IncomingService {
     /// theirs; the folders it leaves empty go. Refused whole, before anything moves, where a copied file was rewritten since (naming
     /// it, and saying only that the library's old copy cannot come back: RF7, no advice, for none would work), where none of the
     /// copies is there as copied (a later album at its place), or where an old file cannot come back (gone from the trash, or its name
-    /// taken since). Files with new names added since stay. An Undo cut short is finished by the next: what is
-    /// in the trash under its second counts as done. The own copy is never touched. Once.
+    /// taken since). Files with new names added since stay. Its files move as one plan, all or none (RF9): an Undo cut short is finished
+    /// by the next tap or by the pass, what is in the trash under its second counting as done; one that cannot go on puts back what it
+    /// took (`put_back_undo`), so Music never holds neither copy. One Undo of an entry at a time (`undoing`). The own copy is never
+    /// touched. Once.
     pub(super) async fn undo_from_copy(&self, entry: &Entry) -> Result<String, ToggleError> {
         let gone = || ToggleError::Refused("that can no longer be undone".into());
         let Event::AlbumReplacedFromCopy { source, title, to_dir, copies, replaced, .. } = &entry.event else { return Err(gone()) };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back as it was")));
         }
+        let _undoing = self.undoing(entry.id, title)?;
         let catalogue = self.lib.catalogue();
         let root = catalogue.folders().get(to_dir.0).cloned().ok_or_else(|| ToggleError::Refused("that library is not in use any more".into()))?;
         let made: Vec<Option<(u64, i64)>> = self.journal.result(entry.id, super::COPIED).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
@@ -935,7 +938,16 @@ impl IncomingService {
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let lies = looked.map_err(ToggleError::Refused)?;
+        let lies = match looked {
+            Ok(lies) => lies,
+            // An Undo cut short that cannot go on puts back what it took (RF9).
+            Err(why) => {
+                if let Some(stamp) = begun {
+                    self.put_back_undo(entry, stamp).await;
+                }
+                return Err(ToggleError::Refused(why));
+            }
+        };
         // The second the copies go under: an Undo begun before keeps its own; a new one takes one no copy's name is taken in.
         let stamp = match begun {
             Some(at) => at,
@@ -948,42 +960,35 @@ impl IncomingService {
                 at
             }
         };
-        let back: Vec<crate::moves::Step> = replaced.iter().map(|x| crate::moves::Step { from: (root.clone(), x.to.1.clone()), to: (root.clone(), x.from.1.clone()) }).collect();
-        let (r, files) = (root.clone(), self.files.clone());
-        let taken = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
-            let mut taken = Vec::new();
-            for ((rel, _), lies) in plan.iter().zip(&lies) {
-                if !matches!(lies, super::Lies::Done | super::Lies::AsCopied) {
-                    continue;
-                }
-                if *lies == super::Lies::AsCopied {
-                    crate::trash::trash_file(&r, rel, stamp)?;
-                }
-                taken.push((rel.clone(), crate::trash::token(stamp, rel)));
-            }
-            // Music's old files back, all or none; refused, the copies go back to their places as they were.
-            if let Err(e) = files.move_all(&back) {
-                for (_, token) in &taken {
-                    if let Err(again) = crate::trash::restore_file(&r, token) {
-                        tracing::warn!("replace: a copy not put back: {again:#}");
-                    }
-                }
-                return Err(e);
-            }
-            for (rel, _) in &plan {
-                let mut dir = r.join(rel).parent().map(std::path::Path::to_path_buf);
-                while let Some(d) = dir.filter(|d| *d != r && d.starts_with(&r)) {
-                    if std::fs::remove_dir(&d).is_err() {
-                        break;
-                    }
-                    dir = d.parent().map(std::path::Path::to_path_buf);
-                }
-            }
-            Ok(taken)
+        // One plan, all or none (RF9): each copy still as copied into the trash under that second, then Music's old files back to their
+        // places. A stop is finished by the pass; a failure puts back what it took: Music never holds neither copy.
+        let at = |rel: &str| (root.clone(), rel.to_string());
+        let mut steps: Vec<crate::moves::Step> = plan
+            .iter()
+            .zip(&lies)
+            .filter(|(_, l)| **l == super::Lies::AsCopied)
+            .map(|((rel, _), _)| crate::moves::Step { from: at(rel), to: at(&format!("{}/{}", crate::trash::TRASH_DIR, crate::trash::token(stamp, rel))) })
+            .collect();
+        steps.extend(replaced.iter().map(|x| crate::moves::Step { from: at(&x.to.1), to: at(&x.from.1) }));
+        let taken: Vec<(String, String)> = plan
+            .iter()
+            .zip(&lies)
+            .filter(|(_, l)| matches!(l, super::Lies::Done | super::Lies::AsCopied))
+            .map(|((rel, _), _)| (rel.clone(), crate::trash::token(stamp, rel)))
+            .collect();
+        let (r, files, rels) = (root.clone(), self.files.clone(), plan.iter().map(|(rel, _)| rel.clone()).collect::<Vec<_>>());
+        let moved = tokio::task::spawn_blocking(move || -> Result<()> {
+            files.move_all(&steps)?;
+            super::prune_up_to(&r, &rels);
+            Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|done| done);
+        if let Err(e) = moved {
+            self.put_back_undo(entry, stamp).await;
+            return Err(ToggleError::Refused(format!("{e:#}")));
+        }
         let (c, event, kept) = (catalogue.clone(), entry.event.clone(), taken.clone());
         let followed = tokio::task::spawn_blocking(move || rows_back_of_copy(&c, &event, &kept)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r);
         if let Err(e) = followed {
