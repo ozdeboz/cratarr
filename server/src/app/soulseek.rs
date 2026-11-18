@@ -3923,6 +3923,81 @@ mod tests {
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), [(9701, older)], "the next round names the record it went into");
     }
 
+    /// RG1 (the owner, 2026-11-18: "When the type agrees"), at 0.17's fold (PA1): alice's open Want "Kite EP", by its names alone (a
+    /// record of its own, as 0.16's step or preview 1 made it), being fetched by Soulseek (its batch 60% done), beside the house's had
+    /// "Kite". Where that "Kite" is an EP by the release type rule (four tracks), or a ten-track one set to EP by hand, the fold joins the
+    /// Want's record to it: the next round takes her item off with its fetch, to be cancelled (no second copy), and the Want is
+    /// delivered as had. Where it is a ten-track album, the two stay two: the Want stays open, its item keeps its record, its batch and
+    /// its share, nothing taken off. The same for "Kite LP": an album joins, an EP does not.
+    #[test]
+    fn the_fold_joins_a_wants_record_to_a_had_one_only_where_the_type_agrees() {
+        for (case, title, tracks, typed, joins) in [
+            ("EP, a had EP", "Kite EP", 4, None, true),
+            ("EP, a had album set to EP by hand", "Kite EP", 10, Some("ep"), true),
+            ("EP, a had album", "Kite EP", 10, None, false),
+            ("LP, a had album", "Kite LP", 10, None, true),
+            ("LP, a had EP", "Kite LP", 4, None, false),
+        ] {
+            let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+            let ud = crate::userdata::UserData::open(None).unwrap();
+            let wanted = crate::catalogue::records::Wanted { artist: "Kite Theory".into(), title: title.into(), ..Default::default() };
+            let own = cat.record_for_request(&wanted).unwrap();
+            let artist = cat.artist_for("Kite Theory").unwrap();
+            let kite = cat.record_for_tests("Kite", tracks);
+            cat.execute_for_tests(&format!("UPDATE records SET artist = 'Kite Theory' WHERE id = {kite}; INSERT INTO record_artists (record, artist, position, how) VALUES ({kite}, {artist}, 0, 'files');"));
+            if let Some(t) = typed {
+                cat.keep_types(&[(kite, t.to_string())]).unwrap();
+            }
+            let id = ud
+                .add_request(&crate::userdata::Request {
+                    id: 0,
+                    user: "alice".into(),
+                    album_key: format!("kitetheory|{}", crate::catalogue::identity::fold(title)),
+                    artist_key: "kite theory".into(),
+                    release_group: None,
+                    album: title.into(),
+                    artist: "Kite Theory".into(),
+                    year: None,
+                    cover: None,
+                    at: 1,
+                    status: super::super::requests::APPROVED.into(),
+                    reason: None,
+                    decided_by: None,
+                    decided_at: None,
+                    fetched: None,
+                    record: Some(own),
+                })
+                .unwrap();
+            let asked = ud.request(id).unwrap().unwrap();
+            let mut k = Kept::default();
+            let round = |k: &mut Kept| -> Vec<Item> {
+                let of = super::super::requests::records_of(&cat, std::slice::from_ref(&asked)).unwrap();
+                take_requests(k, std::slice::from_ref(&asked), &of, &[])
+            };
+            assert!(round(&mut k).is_empty(), "{case}: nothing taken off at first");
+            let item = k.items.iter_mut().find(|i| i.record.request == id).expect("an item of her Want");
+            item.state = State::Fetching;
+            item.batch = Some("batch-60".into());
+            item.percent = 60.0;
+            let fetching = item.clone();
+            super::super::step_017::fold(&cat, &ud, &[], &|| Ok(())).unwrap();
+            let taken = round(&mut k);
+            if joins {
+                assert_eq!(cat.record(own).unwrap().unwrap().id, kite, "{case}: the Want's record joined the had one");
+                assert!(k.items.iter().all(|i| i.record.request != id), "{case}: her item taken off");
+                assert_eq!(taken.iter().map(|i| i.batch.clone()).collect::<Vec<_>>(), [Some("batch-60".to_string())], "{case}: its fetch handed back to be cancelled");
+                assert_eq!(super::super::requests::deliver_in(&ud, &cat, &[], None).len(), 1, "{case}: the Want delivered as had");
+                assert_ne!(ud.request(id).unwrap().unwrap().status, super::super::requests::APPROVED, "{case}: closed");
+            } else {
+                assert_eq!(cat.record(own).unwrap().unwrap().id, own, "{case}: two records");
+                assert!(taken.is_empty(), "{case}: nothing taken off");
+                assert_eq!(k.items.iter().find(|i| i.record.request == id), Some(&fetching), "{case}: its item, its record, its batch and its share untouched");
+                assert!(super::super::requests::deliver_in(&ud, &cat, &[], None).is_empty(), "{case}: nothing delivered");
+                assert_eq!(ud.request(id).unwrap().unwrap().status, super::super::requests::APPROVED, "{case}: the Want stays open");
+            }
+        }
+    }
+
     /// A list reader that must not be asked.
     fn never_read(_: crate::catalogue::records::Ref) -> std::future::Ready<Result<Option<crate::app::references::Read>>> {
         panic!("no list is read while background reading is paused")

@@ -4678,7 +4678,8 @@ pub(crate) mod tests {
     /// the group; Soulseek's item of R keeps its record. (b) A joined record ("Answered", its group and its page): bob's Want from
     /// Bandcamp's card and alice's from MusicBrainz's both name it, and no record is made. (c) OQ-F2b (a): bob's Want of "Answered
     /// EP" by its names alone (no page, no group, as a Spotify Want) names the record not had "Answered", found by its title's key
-    /// (X8 permitting); a had record is still found by its exact folded names alone (B1). Never a Want making a record beside a
+    /// (X8 permitting); a had record by its title's key only where its type agrees (RG1), this one's the rule cannot place. Never a
+    /// Want making a record beside a
     /// joined one that holds its page or group.
     #[tokio::test]
     async fn a_list_after_a_want_joins_its_record_and_a_want_after_finds_it() {
@@ -4734,7 +4735,7 @@ pub(crate) mod tests {
         assert_eq!(now_of(&serve, bobs.id).record, Some(answered), "(c) by its title's key: the record not had \"Answered\"");
         let owned = had_of_theirs(&serve, "Kyverdale Road");
         let loose = record_of_album_in(&serve, None, "Kite Theory", "Kyverdale Road EP", None, None, None).await.unwrap();
-        assert_ne!(loose, owned, "(c) a had record never by its title's key (B1)");
+        assert_ne!(loose, owned, "(c) a had record by its title's key only where its type agrees (RG1): the rule cannot place this one");
         assert_eq!(record_of_album_in(&serve, None, "Kite Theory", "Kyverdale Road", None, None, None).await.unwrap(), owned, "(c) by its exact names");
     }
 
@@ -4755,5 +4756,37 @@ pub(crate) mod tests {
         let asked = acting("alice", false, ask_record_with(&h, &serve, "alice", wanted)).await.unwrap();
         assert_eq!(now_of(&serve, asked.id).fetched.as_deref(), Some(ALREADY_HAD), "in the library");
         assert!(strict.violations().is_empty() && strict.wanted().is_empty(), "no fetcher asked: {:?}", strict.violations());
+    }
+
+    /// RG1 (the owner, 2026-11-18: "When the type agrees"): a Want by its names alone (no group, no page: a Spotify Want) whose title
+    /// differs from a had record's by "EP" or "LP" finds it where the had record's class agrees: "Kite EP" a had EP "Kite" (four
+    /// tracks), "Kite LP" a had album "Kite" (ten); asked, it is in the library at once, no fetcher asked. Beside a had album "Kite" a
+    /// Want "Kite EP", or beside a had EP a Want "Kite LP", takes a record of its own, not had, and stays open.
+    #[tokio::test]
+    async fn a_want_by_names_finds_a_had_record_only_where_its_type_agrees() {
+        for (case, tracks, title, joins) in [("EP, a had EP", 4, "Kite EP", true), ("EP, a had album", 10, "Kite EP", false), ("LP, a had album", 10, "Kite LP", true), ("LP, a had EP", 4, "Kite LP", false)] {
+            let serve = served();
+            askers(&serve);
+            let cat = serve.catalogue();
+            let artist = cat.artist_for("Kite Theory").unwrap();
+            let kite = cat.record_for_tests("Kite", tracks);
+            cat.execute_for_tests(&format!("UPDATE records SET artist = 'Kite Theory' WHERE id = {kite}"));
+            cat.execute_for_tests(&format!("INSERT INTO record_artists (record, artist, position, how) VALUES ({kite}, {artist}, 0, 'files')"));
+            let wanted = record_of_album_in(&serve, None, "Kite Theory", title, None, None, None).await.unwrap();
+            assert_eq!(wanted == kite, joins, "{case}: found the had record");
+            let (strict, house) = (Strict::expecting_nothing(), Copies::none());
+            if joins {
+                let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
+                let asked = acting("alice", false, ask_record_with(&h, &serve, "alice", wanted)).await.unwrap();
+                assert_eq!(now_of(&serve, asked.id).fetched.as_deref(), Some(ALREADY_HAD), "{case}: in the library");
+                assert!(strict.violations().is_empty() && strict.wanted().is_empty(), "{case}: no fetcher asked: {:?}", strict.violations());
+            } else {
+                let h = Hands { lidarr: None, soulseek: true, house: &house, disks: &Roomy };
+                let asked = acting("alice", false, ask_record_with(&h, &serve, "alice", wanted)).await.unwrap();
+                assert!(!cat.record(wanted).unwrap().unwrap().had, "{case}: a record of its own, not had");
+                let now = now_of(&serve, asked.id);
+                assert!(now.status == super::APPROVED && now.fetched.as_deref() != Some(ALREADY_HAD), "{case}: open: {now:?}");
+            }
+        }
     }
 }

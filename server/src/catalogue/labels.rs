@@ -212,18 +212,20 @@ impl Catalogue {
                 .prepare_cached(&format!("SELECT {ROW_COLUMNS} FROM label_rows WHERE label = ?1 ORDER BY source, at, ref_kind, ref_value"))?
                 .query_map([label], listed_of)?
                 .collect::<rusqlite::Result<_>>()?;
-            let mut rows = Vec::with_capacity(listed.len());
+            // F11.2: a row no record holds that a record the house has of its artist and title is one album with is that record's row, as
+            // an open of it joins it (`records::had_by_names_in`): never shown beside it. RG5: the list's rows judged together (X8).
             let mut named = None;
-            for l in listed {
-                let mut found = super::records::found_by_reference(db, &Listing { refs: vec![l.reference.clone()], ..Default::default() })?;
-                // F11.2: a row no record holds that a record the house has of its artist and title is one album with is that record's
-                // row, as an open of it joins it (`records::had_by_names_in`): never shown beside it.
-                if found.is_none() {
-                    found = super::records::had_by_names_in(db, &[(std::slice::from_ref(&l.reference), l.artist.as_str(), l.title.as_str(), l.kind.as_deref())], &mut named)?
-                        .pop()
-                        .flatten()
-                        .map(|(had, _)| had);
-                }
+            let joined: Vec<Option<i64>> = {
+                let asked: Vec<(&[Ref], &str, &str, Option<&str>)> =
+                    listed.iter().map(|l| (std::slice::from_ref(&l.reference), l.artist.as_str(), l.title.as_str(), l.kind.as_deref())).collect();
+                super::records::had_by_names_in(db, &asked, 0, &mut named)?.into_iter().map(|j| j.map(|(had, _)| had)).collect()
+            };
+            let mut rows = Vec::with_capacity(listed.len());
+            for (l, by_names) in listed.into_iter().zip(joined) {
+                let found = match super::records::found_by_reference(db, &Listing { refs: vec![l.reference.clone()], ..Default::default() })? {
+                    Some(found) => Some(found),
+                    None => by_names,
+                };
                 rows.push((l, found));
             }
             let wanted: Vec<i64> = tied.iter().map(|(r, _)| *r).chain(rows.iter().filter_map(|(_, r)| *r)).collect::<BTreeSet<_>>().into_iter().collect();

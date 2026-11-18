@@ -130,7 +130,7 @@ pub fn run(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)], rules: 
     run_with(cat, ud, &|_| Ok(()))?;
     band_waves(cat)?;
     credits(cat, kinds, rules, &|| Ok(()))?;
-    fold(cat, ud, &|| Ok(()))
+    fold(cat, ud, kinds, &|| Ok(()))
 }
 
 /// The part `credits` (P3, W3): what the files of the records you have name and credit, kept for their records once, as a build's
@@ -170,12 +170,12 @@ const FOLDED: &str = "references: the doubles of one name folded";
 /// The part `fold` (F2.11, OQ-F2a (a); F11.1), the step's last: the doubles of one name folded once (`Catalogue::fold_017`): what the
 /// parts before could not join (a had record is credited only by `credits`) and what preview 1 made. It says it begins, and how many
 /// it folded; a part that fails stops the start, as the others do. Then the user data follows (`follow_folded`). `after` hears it done,
-/// inside its transaction (what the tests cut it by). Blocking.
-pub(crate) fn fold(cat: &Catalogue, ud: &UserData, after: &dyn Fn() -> Result<()>) -> Result<()> {
+/// inside its transaction (what the tests cut it by). `kinds` as `run` has them: the two-copies join reads them (RG2). Blocking.
+pub(crate) fn fold(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)], after: &dyn Fn() -> Result<()>) -> Result<()> {
     let named = || format!("0.17's step, part {FOLD_017}");
     if !cat.part_done_017(FOLD_017).with_context(named)? {
         tracing::info!(target: "library", "0.17's step, part {FOLD_017}");
-        if let Some(folded) = cat.fold_017(after).with_context(named)? {
+        if let Some(folded) = cat.fold_017(kinds, after).with_context(named)? {
             tracing::info!(target: "library", folded = folded.len(), "0.17's step: the doubles of one name folded");
         }
     }
@@ -445,6 +445,12 @@ mod tests {
 
         fn open(&self) -> (Catalogue, UserData) {
             let cat = Catalogue::open(Some(&self.0.join("catalogue.sqlite")), vec![PathBuf::from("/music")]).unwrap();
+            (cat, UserData::open(Some(&self.0.join("userdata.sqlite"))).unwrap())
+        }
+
+        /// The catalogue opened with these libraries in use (their folders in this order), and the user data.
+        fn open_with(&self, roots: &[&str]) -> (Catalogue, UserData) {
+            let cat = Catalogue::open(Some(&self.0.join("catalogue.sqlite")), roots.iter().map(|r| PathBuf::from(*r)).collect()).unwrap();
             (cat, UserData::open(Some(&self.0.join("userdata.sqlite"))).unwrap())
         }
 
@@ -1466,7 +1472,7 @@ mod tests {
         credits(&cat, &[], &Rules::default(), &|| Ok(())).unwrap();
         let part = part.elapsed();
         let folding = std::time::Instant::now();
-        fold(&cat, &ud, &|| Ok(())).unwrap();
+        fold(&cat, &ud, &[], &|| Ok(())).unwrap();
         let folding = folding.elapsed();
         assert!(cat.part_done_017(CREDITS_017).unwrap() && cat.part_done_017(FOLD_017).unwrap());
         assert!(cat.references_to_carry().unwrap().is_empty());
@@ -1888,8 +1894,8 @@ mod tests {
         assert_eq!(data.rows_of("catalogue.sqlite", "SELECT key, value FROM meta WHERE key GLOB '017:*' ORDER BY key"), marks);
     }
 
-    /// F11.1 (the owner: "One record, two copies"), at the step: Glass Harbour's "Low Tide" twice, had: an untagged MP3 and the FLAC
-    /// tagged with its release, three tracks each that pair one for one as Replace pairs them (`incoming::pair`); hearts on two of the
+    /// F11.1 (the owner: "One record, two copies"), at the step: Glass Harbour's "Low Tide" twice, had: an untagged MP3 in Music and the
+    /// FLAC in Incoming (RG2: the two-copies join's one rule) tagged with its release, three tracks each that pair one for one as Replace pairs them (`incoming::pair`); hearts on two of the
     /// MP3's, a playlist naming one of each, a heart and a play on one of the FLAC's, bob's heart on the FLAC's album. "Drift Maps"
     /// twice, three tracks against four; "Pale Signal" twice, one credited to another artist of the name. The part `fold`: "Low Tide" is
     /// one record, the older, both copies on its tracks, the FLAC's references on it, the FLAC's id answering as it; its album's heart
@@ -1900,17 +1906,20 @@ mod tests {
         use crate::serve::ids;
         use crate::userdata::{Heard, Kind};
         let data = Data::new("one-record-two-copies");
+        // RG2: the FLACs in Incoming, as F11.1 has it: the two-copies join reads a record kept in Incoming alone beside a main library's.
+        let incoming = data.open_with(&["/music", "/incoming"]).0.folders().id_of(std::path::Path::new("/incoming")).unwrap();
         let album = |record: i64, born: i64, title: &str, dir: &str, form: &str, tracks: &[(i64, &str, i64)], more: &[(&str, &str)]| -> String {
             let mut sql = format!("INSERT INTO records (id, born, title, artist) VALUES ({record}, {born}, '{title}', 'Glass Harbour');");
+            let folder = if form == "FLAC" { incoming } else { 0 };
             for (n, (track, name, ms)) in tracks.iter().enumerate() {
                 let (number, rel) = ((n + 1).to_string(), format!("Glass Harbour/{dir}/{:02} {name}.{}", n + 1, form.to_lowercase()));
                 sql += &format!("INSERT INTO tracks (id, born, record, disc, number) VALUES ({track}, {born}, {record}, 1, {number});");
                 sql += &format!(
-                    "INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES (0, '{rel}', 24000000, {born}, 1, '{form}', 900, {ms}, {track}, 16, 44100, {born});"
+                    "INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES ({folder}, '{rel}', 24000000, {born}, 1, '{form}', 900, {ms}, {track}, 16, 44100, {born});"
                 );
                 let tags = [("album", title), ("albumartist", "Glass Harbour"), ("artist", "Glass Harbour"), ("title", *name), ("tracknumber", number.as_str())];
                 for (i, (k, v)) in tags.iter().chain(more).enumerate() {
-                    sql += &format!("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, '{rel}', {i}, upper('{k}'), '{k}', '{v}');");
+                    sql += &format!("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES ({folder}, '{rel}', {i}, upper('{k}'), '{k}', '{v}');");
                 }
             }
             sql
@@ -1928,7 +1937,7 @@ mod tests {
             ]
             .concat(),
         );
-        let (cat, ud) = data.open();
+        let (cat, ud) = data.open_with(&["/music", "/incoming"]);
         run_without_fold(&cat, &ud, &[]);
         let another = cat.artist_apart("Glass Harbour").unwrap();
         cat.execute_for_tests(&format!("UPDATE record_artists SET artist = {another} WHERE record = 26;"));
@@ -1959,11 +1968,86 @@ mod tests {
         assert_eq!(ud.playlist_tracks("bob", "Mix").unwrap().unwrap(), [Some(song(70)), Some(song(70))], "the playlist's entries");
         for ((a, b), what) in [((23, 24), "another tracklist: another edition"), ((25, 26), "two artist ids")] {
             assert_eq!((cat.record(a).unwrap().unwrap().id, cat.record(b).unwrap().unwrap().id), (a, b), "{what}: two records");
-            assert_eq!(cat.join_copies(a, b).unwrap(), None, "{what}: an arrival joins them neither");
+            assert_eq!(cat.join_copies(a, b, &[]).unwrap(), None, "{what}: an arrival joins them neither");
         }
         let again = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
         assert!(parts_said(&again).is_empty(), "{again:#?}");
-        assert_eq!(cat.join_copies(21, 22).unwrap(), None, "no second join of the pair");
+        assert_eq!(cat.join_copies(21, 22, &[]).unwrap(), None, "no second join of the pair");
         assert!(cat.tracks_to_follow().unwrap().iter().all(|m| moved.contains(m)), "nothing taken again");
+    }
+
+    /// RG2 (PA2): the two-copies join reads one rule, at the upgrade's fold as when a copy arrives (`Catalogue::join_copies`): a record
+    /// kept in Incoming alone and one with a copy in a main library, never a copy in an account's own music. Glass Harbour's untagged
+    /// "Low Tide" in Music beside bob's own rip of it (the same tracks; his year set by hand on his): two records, his facts on his alone;
+    /// "Drift Maps" in bob's own music, the older, beside Music's: two, Music's tracks its own; "Pale Signal" twice in Music: two, as
+    /// after the upgrade; "Brine Flats" in Music and in Incoming: one record, the older. RG1 between two had records: "Grey Cove" (a
+    /// single by the rule) in Music beside Incoming's "Grey Cove LP": two. An arrival joins none of the first three either.
+    #[test]
+    fn the_two_copies_join_reads_main_and_incoming_alone() {
+        use crate::serve::ids;
+        let data = Data::new("two-copies-one-rule");
+        let roots = ["/music", crate::fixtures::BOB_OWN, "/incoming"];
+        let (own, incoming) = {
+            let (cat, _) = data.open_with(&roots);
+            let id = |root: &str| cat.folders().id_of(std::path::Path::new(root)).unwrap();
+            (id(crate::fixtures::BOB_OWN), id("/incoming"))
+        };
+        let kinds = [(0, LibraryKind::Main), (own, LibraryKind::Own), (incoming, LibraryKind::Incoming)];
+        let album = |record: i64, folder: i64, title: &str, names: [&str; 3]| -> String {
+            let dir = format!("Glass Harbour/{title} {record}");
+            let mut sql = format!("INSERT INTO records (id, born, title, artist) VALUES ({record}, {}, '{title}', 'Glass Harbour');", 1_760_000_000 + record);
+            for (n, name) in names.iter().enumerate() {
+                let (track, number) = (record * 10 + n as i64, (n + 1).to_string());
+                let rel = format!("{dir}/{number:0>2} {name}.mp3");
+                sql += &format!("INSERT INTO tracks (id, born, record, disc, number) VALUES ({track}, 1760000000, {record}, 1, {number});");
+                sql += &format!(
+                    "INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES ({folder}, '{rel}', 8000000, 1760000000, 1, 'MP3', 320, {}, {track}, 16, 44100, 1760000000);",
+                    180_000 + 10_000 * n
+                );
+                let tags = [("album", title), ("albumartist", "Glass Harbour"), ("artist", "Glass Harbour"), ("title", *name), ("tracknumber", number.as_str())];
+                for (i, (k, v)) in tags.iter().enumerate() {
+                    sql += &format!("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES ({folder}, '{rel}', {i}, upper('{k}'), '{k}', '{v}');");
+                }
+            }
+            sql
+        };
+        let (tide, maps, signal, flats, cove) = (["Ebb", "Slack", "Flood"], ["North", "South", "East"], ["Glow", "Fade", "Dusk"], ["Brine", "Kelp", "Shoal"], ["Cliff", "Inlet", "Bay"]);
+        data.batch(
+            "catalogue.sqlite",
+            &[
+                album(41, 0, "Low Tide", tide),
+                album(42, own, "Low Tide", tide),
+                album(43, own, "Drift Maps", maps),
+                album(44, 0, "Drift Maps", maps),
+                album(45, 0, "Pale Signal", signal),
+                album(46, 0, "Pale Signal", signal),
+                album(47, 0, "Brine Flats", flats),
+                album(48, incoming, "Brine Flats", flats),
+                album(49, 0, "Grey Cove", cove),
+                album(50, incoming, "Grey Cove LP", cove),
+            ]
+            .concat(),
+        );
+        let (cat, ud) = data.open_with(&roots);
+        ud.set_overrides(&[ids::record(42)], &[("year".to_string(), Some(serde_json::json!(2014)))], 1).unwrap();
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let now = |r: i64| cat.record(r).unwrap().unwrap().id;
+        for ((a, b), what) in [((41, 42), "Music's and bob's own"), ((43, 44), "bob's own, the older, and Music's"), ((45, 46), "two in Music, as after the upgrade"), ((49, 50), "a single and an LP of its name (RG1)")] {
+            assert_eq!((now(a), now(b)), (a, b), "{what}: two records");
+        }
+        assert_eq!(now(48), 47, "Music's and Incoming's: one record, the older");
+        assert_eq!(
+            data.rows_of("userdata.sqlite", "SELECT album, field, value FROM record_overrides WHERE album IN ('al-41', 'al-42') ORDER BY album, field"),
+            ["Text(\"al-42\")|Text(\"year\")|Text(\"2014\")"],
+            "bob's facts on his record alone, none on the house's"
+        );
+        assert_eq!(
+            data.texts("catalogue.sqlite", "SELECT DISTINCT CAST(t.record AS TEXT) FROM files f JOIN tracks t ON t.id = f.track WHERE f.folder = 0 AND f.rel LIKE 'Glass Harbour/Drift Maps%'"),
+            ["44"],
+            "Music's copy keeps its own tracks"
+        );
+        for (a, b) in [(41, 42), (43, 44), (45, 46)] {
+            assert_eq!(cat.join_copies(a, b, &kinds).unwrap(), None, "al-{a} and al-{b}: an arrival joins them neither");
+        }
     }
 }

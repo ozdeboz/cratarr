@@ -588,6 +588,9 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
     if title.chars().count() > NAME_MOST || artist.chars().count() > NAME_MOST {
         anyhow::bail!("A title or an artist that long is no album's.");
     }
+    // RG5 (X8 across the whole list): judged with the other rows of its list, a label's page's kept rows (`Catalogue::keep_opened`)
+    // or Beyond's as it listed them (`beyond::listed_others`).
+    let listed_others = if label.is_some() { 0 } else { super::beyond::listed_others(&refs, super::moment::now_secs()) };
     let listing = Listing {
         artist,
         year: o.year.or(listed.as_ref().and_then(|(_, l)| l.year)),
@@ -597,7 +600,7 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
         refs,
         ..Listing::default()
     };
-    let Some(record) = cat.keep_listing(None, &[listing], "link")?.into_iter().next() else { return Ok(None) };
+    let Some(record) = cat.keep_opened(&listing, label, listed_others)? else { return Ok(None) };
     if let Some(label) = label {
         // Through this label's own kept row alone, with its catalogue number there (U10).
         if let Some(catno) = listed.as_ref().filter(|(of, _)| *of == label).map(|(_, l)| l.catno.as_str()) {

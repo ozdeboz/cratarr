@@ -172,16 +172,37 @@ fn tracks_in(db: &Connection, record: i64) -> Result<Vec<TrackFacts>> {
     Ok(out)
 }
 
+/// RG6 (PA6, the libraries switched on): which of these records hold copies in the catalogue folders `off` alone (the libraries a
+/// viewer has switched off, other accounts' own music among them where it is off): every present file of their live tracks there. One
+/// holding no copy (a record not had) is not. Nothing off: none.
+fn hidden_in(db: &Connection, records: &[i64], off: &[i64]) -> Result<BTreeSet<i64>> {
+    if off.is_empty() || records.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let mut st = db.prepare(&format!(
+        "SELECT t.record FROM tracks t JOIN files f ON f.track = t.id WHERE t.record IN ({}) AND t.retired_at IS NULL AND {} GROUP BY t.record HAVING sum(f.folder NOT IN ({})) = 0",
+        id_list(records),
+        super::PRESENT_F,
+        id_list(off)
+    ))?;
+    let hidden = st.query_map([], |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(hidden)
+}
+
 impl Catalogue {
     /// Which of these records are editions of one album (F12.1, `groups_of`), each group the edition shown first: one with a copy in
     /// one of `mains` (the main libraries), else the fullest. Records gone (merged, retired) are left out. Nothing is written: they
-    /// stay two records (Q8). On a reader, never the writer's lock. Blocking.
-    pub fn edition_groups(&self, records: &[i64], mains: &[i64]) -> Result<Vec<Vec<i64>>> {
+    /// stay two records (Q8). Of the records the viewer sees (RG6): `off` the catalogue folders of the libraries they have off. On a
+    /// reader, never the writer's lock. Blocking.
+    pub fn edition_groups(&self, records: &[i64], mains: &[i64], off: &[i64]) -> Result<Vec<Vec<i64>>> {
         if records.len() < 2 {
             return Ok(Vec::new());
         }
         let read = |db: &Connection| -> Result<Vec<Vec<i64>>> {
-            let facts = facts_in(db, records, mains)?;
+            // RG6 (the libraries switched on): a record whose every copy lies in a library the viewer has off is no edition they see.
+            let hidden = hidden_in(db, records, off)?;
+            let seen: Vec<i64> = records.iter().copied().filter(|r| !hidden.contains(r)).collect();
+            let facts = facts_in(db, &seen, mains)?;
             groups_of(&facts, |r| tracks_in(db, r))
         };
         match self.reader() {
@@ -298,13 +319,33 @@ mod tests {
         group(kites[1], G4);
         let all: Vec<i64> = [mp3, flac, not_had].into_iter().chain(undertow).chain(orbital).chain(tide).chain(kites).collect();
         let before = records_count(&cat);
-        assert_eq!(cat.edition_groups(&all, &[music]).unwrap(), [vec![mp3, flac, not_had], vec![undertow[1], undertow[0]]], "the main library's first");
-        assert_eq!(cat.edition_groups(&all, &[]).unwrap(), [vec![flac, mp3, not_had], vec![undertow[0], undertow[1]]], "else the fullest, then the oldest");
+        assert_eq!(cat.edition_groups(&all, &[music], &[]).unwrap(), [vec![mp3, flac, not_had], vec![undertow[1], undertow[0]]], "the main library's first");
+        assert_eq!(cat.edition_groups(&all, &[], &[]).unwrap(), [vec![flac, mp3, not_had], vec![undertow[0], undertow[1]]], "else the fullest, then the oldest");
         assert_eq!(cat.editions_near(mp3).unwrap(), [flac, not_had], "of its artist and its title's key");
         assert_eq!(cat.editions_near(not_had).unwrap(), [mp3, flac], "and of its release group");
         assert_eq!(records_count(&cat), before, "nothing made");
         for r in all {
             assert_eq!(cat.record(r).unwrap().unwrap().id, r, "al-{r} answers as itself: no merge");
         }
+    }
+
+    /// RG6 (PA6, the libraries switched on): the editions grouped are those the viewer has a library on for. Music's "Night Walks",
+    /// Incoming's and bob's own copy of it, each a record of its own of one release group: one group of three for a viewer with every
+    /// library on; with bob's own music off, the two others; with Incoming off too, none (one edition left).
+    #[test]
+    fn editions_follow_the_libraries_the_viewer_has_on() {
+        const G: &str = "00000000-0000-4000-8000-000000001261";
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let (music, incoming, bobs) = (1, 2, 3);
+        let ten: Vec<String> = (1..=10).map(|n| format!("Part {n}")).collect();
+        let ten: Vec<&str> = ten.iter().map(String::as_str).collect();
+        let records = [music, incoming, bobs].map(|folder| with_tracks(&cat, artist, "Night Walks", &ten, folder));
+        for r in records {
+            cat.set_reference(&ids::record(r), &Ref::new("musicbrainz", "release-group", G), "files").unwrap();
+        }
+        assert_eq!(cat.edition_groups(&records, &[music], &[]).unwrap(), [records.to_vec()], "every library on: three");
+        assert_eq!(cat.edition_groups(&records, &[music], &[bobs]).unwrap(), [records[..2].to_vec()], "bob's own music off: his copy is no edition shown");
+        assert_eq!(cat.edition_groups(&records, &[music], &[bobs, incoming]).unwrap(), Vec::<Vec<i64>>::new(), "one edition left: no group");
     }
 }

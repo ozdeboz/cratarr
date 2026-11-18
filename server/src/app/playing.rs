@@ -1132,8 +1132,10 @@ impl PlayingService {
         }
         // F12.1 (the owner: "One card, 2 editions"): Cratarr's editions of one album, one card.
         if own {
-            super::editions::fold_albums(&self.lib, &mut albums).await;
-            super::editions::fold_albums(&self.lib, &mut appears_on).await;
+            // RG6: of the editions the libraries switched on hold.
+            let off = self.lib.folders_off(without);
+            super::editions::fold_albums(&self.lib, &mut albums, &off).await;
+            super::editions::fold_albums(&self.lib, &mut appears_on, &off).await;
         }
         super::classical::tell(source_id, &mut albums).await;
         super::classical::tell(source_id, &mut appears_on).await;

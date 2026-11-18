@@ -1651,7 +1651,7 @@ async fn album_view(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> 
         return Ok(Json(bandcamp_album_view(&ctx, &album).await?));
     }
     let failed = match app.playing.album_view(&source, &album).await {
-        Ok(v) if !v.rows.is_empty() => return Ok(Json(v)),
+        Ok(v) if !v.rows.is_empty() => return Ok(Json(seen_by_viewer(&ctx, v))),
         Ok(v) => Ok(v),
         Err(e) => Err(e),
     };
@@ -1678,14 +1678,21 @@ async fn album_view(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> 
         && let Ok(v) = app.playing.album_view(&source, &record).await
         && !v.rows.is_empty()
     {
-        return Ok(Json(v));
+        return Ok(Json(seen_by_viewer(&ctx, v)));
     }
     match app.incoming.album_fate(&source, &album).await {
-        Some(AlbumFate::Moved(now)) if now != album => Ok(Json(app.playing.album_view(&source, &now).await?)),
+        Some(AlbumFate::Moved(now)) if now != album => Ok(Json(seen_by_viewer(&ctx, app.playing.album_view(&source, &now).await?))),
         Some(AlbumFate::NotYet(title)) => Err(ToggleError::Refused(format!("{title} is in Music now. The server has not added it yet.")).into()),
         Some(AlbumFate::Deleted(title)) => Err(ToggleError::Refused(format!("{title} was deleted.")).into()),
-        _ => Ok(Json(failed?)),
+        _ => Ok(Json(seen_by_viewer(&ctx, failed?))),
     }
+}
+
+/// RG6 (PA6, the libraries switched on): an album's view with its editions as the asking account sees them (`editions::seen_by`): none
+/// in a library they have off.
+fn seen_by_viewer(ctx: &Ctx, mut v: crate::app::AlbumView) -> crate::app::AlbumView {
+    crate::app::editions::seen_by(&mut v.more.editions, &ctx.listener().off);
+    v
 }
 
 /// What an id from before 0.16 is now (`Catalogue::named_now`).
@@ -5230,8 +5237,10 @@ async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery
     let page = crate::app::labels::page(app.library.catalogue(), label, more, &crate::app::labels::sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     let mut page = page.ok_or_else(not_a_label)?;
     // F12.1 (the owner: "One card, 2 editions"): the editions of one album, one row, in each section.
-    crate::app::editions::fold_rows(&app.library, &mut page.had).await;
-    crate::app::editions::fold_rows(&app.library, &mut page.not_had).await;
+    // RG6: of the editions the asking account's libraries switched on hold.
+    let off = ctx.listener().off;
+    crate::app::editions::fold_rows(&app.library, &mut page.had, &off).await;
+    crate::app::editions::fold_rows(&app.library, &mut page.not_had, &off).await;
     if let Some(marks) = request_marks(&app, &serve).await {
         for row in page.had.iter_mut().chain(page.not_had.iter_mut()) {
             row.request = row.record.as_deref().and_then(crate::serve::ids::record_number).and_then(|r| marks.of_record(r));

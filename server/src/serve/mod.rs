@@ -624,7 +624,8 @@ impl Serve {
     /// its tracks at the next build, `follow_taken`), and the library is told to build them again. Incoming's badge and Replace then read
     /// one record's two copies, as for any copy (C37a). How many were joined. Blocking.
     fn join_paired_copies(&self) -> Result<usize> {
-        let mains: Vec<i64> = self.library.kinds().into_iter().filter(|(_, kind)| *kind == copies::Kind::Main).map(|(folder, _)| folder).collect();
+        let kinds = self.library.kinds();
+        let mains: Vec<i64> = kinds.iter().filter(|(_, kind)| *kind == copies::Kind::Main).map(|(folder, _)| *folder).collect();
         if mains.is_empty() {
             return Ok(0);
         }
@@ -643,7 +644,7 @@ impl Serve {
         let mut merged = Vec::new();
         for (album, (other, _)) in self.paired_editions(&alone, &mains)? {
             let (Some(a), Some(b)) = (ids::record_number(&album), ids::record_number(&other)) else { continue };
-            if let Some((from, into)) = self.catalogue().join_copies(a, b)? {
+            if let Some((from, into)) = self.catalogue().join_copies(a, b, &kinds)? {
                 merged.push((ids::record(from), ids::record(into)));
             }
         }

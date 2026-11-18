@@ -129,22 +129,32 @@ pub struct Listing {
 /// transaction, so two lists read at once make one record. A list with no artist (a label's page, Beyond: Q33) joins by names a
 /// record the house has alone (F11.2, `had_by_names_in`), never a record not had (F2.8).
 pub(super) fn keep_listing_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64, seen: Option<i64>) -> Result<Vec<i64>> {
-    keep_rows_in(tx, artist, list, how, at, seen, true)
+    keep_rows_in(tx, artist, list, how, at, seen, Some(0))
 }
 
-/// `keep_listing_in`; `joins`: whether a row of an artist's own list joins the record of its names (F2). A Want's record
-/// (`request_record_in`) is found its own way, and never so.
-fn keep_rows_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64, seen: Option<i64>, joins: bool) -> Result<Vec<i64>> {
+/// `keep_listing_in`; `joins`: whether a row joins the record of its names (F2, F11.2), with how many rows of its list outside `list`
+/// share its names (RG5: an open's, `Catalogue::keep_opened`); none: never (a Want's record, `request_record_in`, is found its own way).
+fn keep_rows_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &str, at: i64, seen: Option<i64>, joins: Option<usize>) -> Result<Vec<i64>> {
     use super::identity::title_key;
     let mut out = Vec::with_capacity(list.len());
     // Each row's title's key, and the artist's live records by theirs: read once, in this transaction, where a row needs them, and
     // kept as rows make or credit records.
     let keys: Vec<String> = match artist {
-        Some(_) if joins => list.iter().map(|l| title_key(&l.title)).collect(),
+        Some(_) if joins.is_some() => list.iter().map(|l| title_key(&l.title)).collect(),
         _ => Vec::new(),
     };
     let mut theirs: Option<std::collections::HashMap<String, Vec<i64>>> = None;
     let mut names: FoldedNames = None;
+    // F11.2, RG5 (X8 across the whole list): the rows of a list with no artist of its own, judged together for the records the house
+    // has of their names (`had_by_names_in`), with the rows of their list outside `list`; read once, before any row is kept (a row kept
+    // here is credited to no artist, so none changes what another joins).
+    let had_named: Vec<Option<(i64, i64)>> = match (artist, joins) {
+        (None, Some(outside)) => {
+            let rows: Vec<(&[Ref], &str, &str, Option<&str>)> = list.iter().map(|l| (&l.refs[..], l.artist.as_str(), l.title.as_str(), l.kind.as_deref())).collect();
+            had_by_names_in(tx, &rows, outside, &mut names)?
+        }
+        _ => Vec::new(),
+    };
     for (i, l) in list.iter().enumerate() {
         let mut by_names = false;
         let mut found = found_by_reference(tx, l)?;
@@ -165,7 +175,7 @@ fn keep_rows_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &st
             let named = theirs.as_ref().and_then(|t| t.get(key)).map_or(&[][..], Vec::as_slice);
             let others = list.iter().zip(&keys).enumerate().filter(|(j, (o, k))| *j != i && *k == key && o.refs != l.refs).count();
             let mine: Vec<(String, String, String)> = l.refs.iter().map(|r| (r.source.clone(), r.kind.clone(), r.value.clone())).collect();
-            found = one_album_in(tx, named, 0, &mine, Class::said(l.kind.as_deref()), others, &mut names)?;
+            found = one_album_in(tx, named, (0, Some(l.title.as_str())), &mine, Class::said(l.kind.as_deref()), others, &mut names)?;
             by_names = found.is_some();
         }
         // F11.2: a row of a list with no artist (a label's page, Beyond: opened) that no reference finds joins the record the house has
@@ -173,13 +183,11 @@ fn keep_rows_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &st
         // never so (F2.8).
         let mut joined_artist = None;
         if found.is_none()
-            && artist.is_none()
-            && joins
-            && let Some((had, of)) = had_by_names_in(tx, &[(&l.refs[..], l.artist.as_str(), l.title.as_str(), l.kind.as_deref())], &mut names)?.pop().flatten()
+            && let Some(Some((had, of))) = had_named.get(i)
         {
-            found = Some(had);
+            found = Some(*had);
             by_names = true;
-            joined_artist = Some(of);
+            joined_artist = Some(*of);
         }
         // Joined to a had record by its names (F2.9), a row keeps a record of its own, which answers as the had one, its references
         // on it, until a type the had record is had by contradicts the row's kind (F2.9-hand, `give_back_joins_in`): nothing else of
@@ -240,21 +248,42 @@ fn keep_rows_in(tx: &Connection, artist: Option<i64>, list: &[Listing], how: &st
 }
 
 /// F2.9-hand (the owner: "Your hand wins"): the rows of artists' own lists joined to the had record `into` by their names alone
-/// (`joined_by_names`) whose kind the type it is had by now (`typed`) contradicts (`Class::single`), given back: each answers as
-/// itself again, credited to its list's artist, holding the references it brought, which leave `into` where they are still the join's
-/// alone (found `link`); one from the files or the hand stays on `into`. A row of no kind, or an EP's, is never given back. In the
-/// caller's transaction.
+/// (`joined_by_names`) whose kind the type it is had by now (`typed`) contradicts (`Class::single`), given back (`give_back_where`). A
+/// row of no kind, or an EP's, is never given back. In the caller's transaction.
 pub(super) fn give_back_joins_in(tx: &Connection, into: i64, typed: &str, at: i64) -> Result<()> {
     let now = Class::built(typed).single();
+    give_back_where(tx, into, at, |_, kind| matches!((Class::said(kind).single(), now), (Some(a), Some(b)) if a != b))
+}
+
+/// RG3 (PA3): the rows joined to the had record `into` by their names alone whose references name another of a kind `named` holds
+/// (what the files or the hand name now: (source, kind, value)), given back (`give_back_where`): two release groups never sit on one
+/// record, and the album it is not reads missing again. In the caller's transaction.
+fn give_back_others_in(tx: &Connection, into: i64, named: &[(String, String, String)], at: i64) -> Result<()> {
+    give_back_where(tx, into, at, |brought, _| brought.iter().any(|(s, k, v)| named.iter().any(|(ns, nk, nv)| ns == s && nk == k && !nv.eq_ignore_ascii_case(v))))
+}
+
+/// The rows joined to the had record `into` by their names alone (`joined_by_names`) that `give` takes (by the references each brought
+/// and its kind), given back: each answers as itself again, credited to its list's artist, holding the references it brought, which
+/// leave `into` where they are still the join's alone (found `link`). A join that brought a reference `into` now holds by its files or
+/// the hand is no join by names alone any more (RG3): it stays, and that reference with it, so no second record holds it. In the
+/// caller's transaction.
+fn give_back_where(tx: &Connection, into: i64, at: i64, give: impl Fn(&[(String, String, String)], Option<&str>) -> bool) -> Result<()> {
     let joined: Vec<(i64, i64, String, Option<String>)> = {
         let mut st = tx.prepare_cached("SELECT j.record, j.artist, j.refs, r.kind FROM joined_by_names j JOIN records r ON r.id = j.record WHERE r.merged_into = ?1 ORDER BY j.record")?;
         st.query_map([into], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
     };
+    if joined.is_empty() {
+        return Ok(());
+    }
+    let sure: std::collections::HashSet<(String, String, String)> = {
+        let mut st = tx.prepare_cached("SELECT source, kind, lower(value) FROM \"references\" WHERE subject = ?1 AND how IN ('files', 'hand')")?;
+        st.query_map([ids::record(into)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
+    };
     for (record, artist, brought, kind) in joined {
-        if !matches!((Class::said(kind.as_deref()).single(), now), (Some(a), Some(b)) if a != b) {
+        let brought: Vec<(String, String, String)> = serde_json::from_str(&brought)?;
+        if !give(&brought, kind.as_deref()) || brought.iter().any(|(s, k, v)| sure.contains(&(s.clone(), k.clone(), v.to_lowercase()))) {
             continue;
         }
-        let brought: Vec<(String, String, String)> = serde_json::from_str(&brought)?;
         for (source, kind, value) in &brought {
             tx.prepare_cached("DELETE FROM \"references\" WHERE subject = ?1 AND source = ?2 AND kind = ?3 AND value = ?4 AND how = 'link'")?
                 .execute(params![ids::record(into), source, kind, value])?;
@@ -288,6 +317,30 @@ fn records_by_key_in(tx: &Connection, artist: i64) -> Result<std::collections::H
     Ok(out)
 }
 
+/// RG5 (X8 across the whole list): the rows of `label`'s kept lists (`label_rows`) that are other albums of `row`'s names: of one of its
+/// references' source and kind, naming another value there, of its artist's name and its title's key, each once. In the caller's
+/// transaction.
+fn label_others_in(tx: &Connection, label: i64, row: &Listing) -> Result<usize> {
+    use super::identity::title_key;
+    let (who, key) = (ids::artist_key(&row.artist), title_key(&row.title));
+    if who.is_empty() || key.is_empty() {
+        return Ok(0);
+    }
+    let mut st = tx.prepare_cached("SELECT source, ref_kind, ref_value, artist, title FROM label_rows WHERE label = ?1")?;
+    let listed: Vec<(String, String, String, String, String)> = st.query_map([label], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
+    let others: std::collections::BTreeSet<(String, String, String)> = listed
+        .into_iter()
+        .filter(|(s, k, v, artist, title)| {
+            row.refs.iter().any(|r| r.source == *s && r.kind == *k)
+                && !row.refs.iter().any(|r| r.source == *s && r.kind == *k && r.value.eq_ignore_ascii_case(v))
+                && ids::artist_key(artist) == who
+                && title_key(title) == key
+        })
+        .map(|(s, k, v, ..)| (s, k, v.to_ascii_lowercase()))
+        .collect();
+    Ok(others.len())
+}
+
 /// Which of `named` (live records of one artist and one title's key, oldest first) a list's row or a record holding `mine`, of the
 /// kind class `class`, is one album with (F2, `one_album_with`), each read as the had rule reads it: `r` the record, among them, or
 /// 0 for a row, which is none of them; `others` the other rows of its list of that key. One gone since it was read (retired,
@@ -295,12 +348,19 @@ fn records_by_key_in(tx: &Connection, artist: i64) -> Result<std::collections::H
 /// had album's: one of another kind class than the album's, or that the album's references contradict, joins none of it (an album
 /// of a name is never joined to the owned single's record of it). `names`, the live records by their names, read once for every
 /// call that passes it. In the caller's transaction.
-fn one_album_in(tx: &Connection, named: &[i64], r: i64, mine: &[(String, String, String)], class: Class, others: usize, names: &mut FoldedNames) -> Result<Option<i64>> {
+/// RG1 (the owner, 2026-11-18: "When the type agrees"): `asker` is `r` with its title (a row's; none: the record's own), which a had
+/// record's title may differ from by "EP" or "LP" only where the had record's class agrees (`type_agrees`), as a record not had that a
+/// had one holds by its names is judged by that one.
+fn one_album_in(tx: &Connection, named: &[i64], asker: (i64, Option<&str>), mine: &[(String, String, String)], class: Class, others: usize, names: &mut FoldedNames) -> Result<Option<i64>> {
     if named.is_empty() {
         return Ok(None);
     }
-    let sql = format!("SELECT id FROM records WHERE id IN ({}) AND merged_into IS NULL AND retired_at IS NULL ORDER BY id", id_list(named));
-    let live: Vec<i64> = tx.prepare(&sql)?.query_map([], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let r = asker.0;
+    let sql = format!("SELECT id, COALESCE(title, '') FROM records WHERE id IN ({}) AND merged_into IS NULL AND retired_at IS NULL ORDER BY id", id_list(named));
+    let titled: Vec<(i64, String)> = tx.prepare(&sql)?.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let live: Vec<i64> = titled.iter().map(|(id, _)| *id).collect();
+    let titles: std::collections::HashMap<i64, String> = titled.into_iter().collect();
+    let title = asker.1.map(str::to_string).or_else(|| titles.get(&r).cloned()).unwrap_or_default();
     let (refs, had, none) = (refs_of(tx, &live)?, live_had_of(tx, &live)?, Vec::new());
     let classes = classes_of(tx, &live, &had)?;
     let counted: Vec<Counted> =
@@ -309,46 +369,70 @@ fn one_album_in(tx: &Connection, named: &[i64], r: i64, mine: &[(String, String,
     let held: std::collections::HashMap<i64, i64> = holders_in(tx, &not_had, names)?.into_iter().filter(|(c, h)| c != h).collect();
     let holders: Vec<i64> = held.values().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     let (theirs, their_classes) = (refs_of(tx, &holders)?, classes_of(tx, &holders, &holders.iter().copied().collect())?);
+    // RG1: a had record of a title that differs from `title` by "EP" or "LP", and a record not had that a had one holds by its names,
+    // only where that had record's class agrees.
+    let typed = |c: &Counted| {
+        let named = titles.get(&c.0).map_or("", String::as_str);
+        match held.get(&c.0) {
+            _ if c.2 => type_agrees(&title, named, c.3),
+            Some(h) => type_agrees(&title, named, their_classes.get(h).copied().unwrap_or(Class::Unknown)),
+            None => true,
+        }
+    };
     let takes = |c: &Counted| {
-        held.get(&c.0).is_none_or(|h| {
-            let holder = their_classes.get(h).copied().unwrap_or(Class::Either);
-            !matches!((class.single(), holder.single()), (Some(a), Some(b)) if a != b) && !contradicts(mine, theirs.get(h).map_or(&[][..], Vec::as_slice))
-        })
+        typed(c)
+            && held.get(&c.0).is_none_or(|h| {
+                let holder = their_classes.get(h).copied().unwrap_or(Class::Either);
+                !matches!((class.single(), holder.single()), (Some(a), Some(b)) if a != b) && !contradicts(mine, theirs.get(h).map_or(&[][..], Vec::as_slice))
+            })
     };
     Ok(one_album_with(&counted, r, mine, class, others, takes))
 }
 
 /// F11.2 (the owner's word: an outside album never shows beside a record the house has): the live had record each of these rows of a
 /// list with no artist of its own (Beyond's, a label's: its references, its artist's name, its title, its kind) is one album with,
-/// as an artist's own list joins one (F2, `one_album_in`): of the live records credited to an artist of its artist's name
-/// (`ids::artist_key`) whose title has its title's key (`identity::title_key`), under X8 (a name several albums share, two had
-/// untagged copies or two artists' among them, joins nothing), of its kind class, holding nothing that contradicts it; with the
-/// artist it is credited to there. A record not had is never joined so (F2.8: 0100's "two albums of one name stay two"). Each row
-/// judged alone, as an open of it is (`keep_listing_in`). `names` as `one_album_in` takes it. In the caller's transaction, or on a
-/// reader for display.
-pub(super) fn had_by_names_in(db: &Connection, rows: &[(&[Ref], &str, &str, Option<&str>)], names: &mut FoldedNames) -> Result<Vec<Option<(i64, i64)>>> {
+/// as an artist's own list joins one (F2, `one_album_in`): of the live records credited to the one artist of its artist's name
+/// (`ids::artist_key`; RG4, C55: where the owner set two of a name apart, through none) whose title has its title's key
+/// (`identity::title_key`), under X8 (a name several albums share, two had untagged copies among them, joins nothing), of its kind
+/// class, of a title its type agrees with (RG1), holding nothing that contradicts it; with the artist it is credited to there. A record
+/// not had is never joined so (F2.8: 0100's "two albums of one name stay two"). The rows are judged together (RG5, X8 across the whole
+/// list): each other row of one source's kind, one artist's name and one title's key that names something else is an album of its
+/// own, as an artist's own list counts its rows, and `outside` more (the rows of its list an open does not hold). `names` as
+/// `one_album_in` takes it. In the caller's transaction, or on a reader for display.
+pub(super) fn had_by_names_in(db: &Connection, rows: &[(&[Ref], &str, &str, Option<&str>)], outside: usize, names: &mut FoldedNames) -> Result<Vec<Option<(i64, i64)>>> {
     use super::identity::title_key;
     let mut theirs: std::collections::HashMap<String, Vec<(i64, i64, String)>> = std::collections::HashMap::new();
+    // Each row's artist's name, its title's key, and the source's kind it is named by (its first reference's).
+    let keyed: Vec<(String, String, Option<(&str, &str)>)> =
+        rows.iter().map(|(refs, artist, title, _)| (ids::artist_key(artist), title_key(title), refs.first().map(|r| (r.source.as_str(), r.kind.as_str())))).collect();
     let mut out = Vec::with_capacity(rows.len());
-    for (refs, artist, title, kind) in rows {
-        let (who, key) = (ids::artist_key(artist), title_key(title));
+    for (i, (refs, _, title, kind)) in rows.iter().enumerate() {
+        let (who, key, by) = &keyed[i];
         if who.is_empty() || key.is_empty() {
             out.push(None);
             continue;
         }
-        if !theirs.contains_key(&who) {
-            let mut st = db.prepare_cached(
-                "SELECT a.artist, r.id, COALESCE(r.title, '') FROM artists x JOIN record_artists a ON a.artist = x.id JOIN records r ON r.id = a.record
-                 WHERE x.key = ?1 AND r.merged_into IS NULL AND r.retired_at IS NULL ORDER BY r.id, a.artist",
-            )?;
-            let found: Vec<(i64, i64, String)> = st.query_map([&who], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        if !theirs.contains_key(who) {
+            // RG4 (C55): through the one artist of the name alone; where the owner set two of a name apart, through none.
+            let artists: Vec<i64> = db.prepare_cached("SELECT id FROM artists WHERE key = ?1")?.query_map([who], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let found: Vec<(i64, i64, String)> = match artists[..] {
+                [one] => db
+                    .prepare_cached(
+                        "SELECT a.artist, r.id, COALESCE(r.title, '') FROM record_artists a JOIN records r ON r.id = a.record
+                         WHERE a.artist = ?1 AND r.merged_into IS NULL AND r.retired_at IS NULL ORDER BY r.id",
+                    )?
+                    .query_map([one], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<rusqlite::Result<_>>()?,
+                _ => Vec::new(),
+            };
             theirs.insert(who.clone(), found);
         }
-        let of_key: Vec<(i64, i64)> = theirs.get(&who).into_iter().flatten().filter(|(.., t)| title_key(t) == key).map(|(a, r, _)| (*a, *r)).collect();
+        let of_key: Vec<(i64, i64)> = theirs.get(who).into_iter().flatten().filter(|(.., t)| title_key(t) == *key).map(|(a, r, _)| (*a, *r)).collect();
         let mut named: Vec<i64> = of_key.iter().map(|(_, r)| *r).collect();
         named.dedup();
+        let others = outside + keyed.iter().zip(rows).enumerate().filter(|(j, ((w, k, b), (o, ..)))| *j != i && w == who && k == key && b == by && *o != *refs).count();
         let mine: Vec<(String, String, String)> = refs.iter().map(|r| (r.source.clone(), r.kind.clone(), r.value.clone())).collect();
-        let joined = match one_album_in(db, &named, 0, &mine, Class::said(*kind), 0, names)? {
+        let joined = match one_album_in(db, &named, (0, Some(*title)), &mine, Class::said(*kind), others, names)? {
             Some(r) if live_had(db, r)? => of_key.iter().find(|(_, x)| *x == r).map(|(a, _)| (r, *a)),
             _ => None,
         };
@@ -721,11 +805,25 @@ pub(super) fn files_references(tx: &Connection, albums: &[super::AlbumCopy], rec
         let mut st = tx.prepare_cached("SELECT subject, kind, value FROM \"references\" WHERE source = 'musicbrainz' AND kind IN ('release', 'release-group') AND how IN ('files', 'hand')")?;
         st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
     };
+    // RG3: what the files name of the records a row joined by its names alone, for `give_back_others_in` below.
+    let joined: std::collections::HashSet<i64> = {
+        let mut st = tx.prepare_cached("SELECT DISTINCT r.merged_into FROM joined_by_names j JOIN records r ON r.id = j.record WHERE r.merged_into IS NOT NULL")?;
+        st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+    };
+    let mut naming: std::collections::BTreeMap<i64, Vec<(String, String, String)>> = std::collections::BTreeMap::new();
+    for (record, kind, value) in named.iter().filter(|(record, ..)| joined.contains(record)) {
+        naming.entry(*record).or_default().push(("musicbrainz".to_string(), kind.to_string(), value.clone()));
+    }
     for (record, kind, value) in named {
         let subject = ids::record(record);
         if !known.contains(&(subject.clone(), kind.to_string(), value.clone())) {
             put_reference(tx, &subject, &Ref::new("musicbrainz", kind, &value), "files", at, false)?;
         }
+    }
+    // RG3 (PA3): where the files name a release or a release group, a row joined to the record by its names alone that names another
+    // of that kind is given back: two release groups never sit on one record, and the album it is not reads missing again.
+    for (record, named) in naming {
+        give_back_others_in(tx, record, &named, at)?;
     }
     Ok(())
 }
@@ -1017,6 +1115,19 @@ fn contradicts(mine: &[(String, String, String)], theirs: &[(String, String, Str
 /// apart from the others of its name, so it is never what makes a name several albums. Pure.
 fn an_album(refs: &[(String, String, String)], had: bool) -> bool {
     had || refs.iter().any(|(s, k, _)| s == "musicbrainz" && (k == "release-group" || k == "release"))
+}
+
+/// RG1 (the owner, 2026-11-18: "When the type agrees"): whether a title `mine` may name the had record titled `theirs`, of the class
+/// `class` (`classes_of`: the type its album was built with, a type set by hand among them, else the release type rule's): the words of
+/// a type the two titles hold ("EP", "LP": `serve::library::named`) the same, or each that one holds and the other does not agreeing
+/// with that class, "EP" an EP's or a single's, "LP" an album's. "Kite EP" names an EP "Kite", never an album "Kite"; "Kite LP" an album
+/// "Kite", never an EP. Between records not had the words are left out alone (`identity::title_key`). Pure.
+fn type_agrees(mine: &str, theirs: &str, class: Class) -> bool {
+    let words = |t: &str| -> std::collections::BTreeSet<&'static str> { t.split(|c: char| !c.is_alphanumeric()).filter_map(crate::serve::library::named).collect() };
+    words(mine).symmetric_difference(&words(theirs)).all(|w| match *w {
+        "ep" => matches!(class, Class::Ep | Class::Single),
+        _ => class == Class::Album,
+    })
 }
 
 /// What a record is as the had rule counts the albums of its name (U2, T10; RF1: one class for "had"). A had record is what its
@@ -1737,6 +1848,23 @@ impl Catalogue {
         Ok(kept)
     }
 
+    /// A row of a list with no artist of its own opened (C56, Q33: kept at open; `labels::open_record`): kept as `keep_listing(None, …)`
+    /// keeps it, judged with the other rows of its list (RG5, X8 across the whole list): where a label's page opened it, the rows of that
+    /// label's kept lists of its names (`label_others_in`); and `listed` more, those Beyond listed beside it (`beyond::listed_others`).
+    /// Its record; none for no row. Blocking.
+    pub fn keep_opened(&self, row: &Listing, label: Option<i64>, listed: usize) -> Result<Option<i64>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let at = now();
+        let others = match label {
+            Some(label) => label_others_in(&tx, label, row)?,
+            None => 0,
+        } + listed;
+        let kept = keep_rows_in(&tx, None, std::slice::from_ref(row), "link", at, Some(at), Some(others))?;
+        tx.commit()?;
+        Ok(kept.into_iter().next())
+    }
+
     /// What references name here (C57: Beyond's rows), on one reader; nothing made or tied. Each album reference's record as merged
     /// now, as a row opened finds it (`found_by_reference`), else the record the house has of its names that an open of it joins
     /// (F11.2, `had_by_names_in`), never a record not had by a name, and those records read as the lists read them (the one
@@ -1750,11 +1878,12 @@ impl Catalogue {
                 records.push(found_by_reference(db, &Listing { refs: vec![r.clone()], ..Listing::default() })?);
             }
             // F11.2: a row no reference names that a record the house has of its artist and title is one album with names that record,
-            // as an open of it joins it (`keep_listing_in`): never shown beside it.
+            // as an open of it joins it (`keep_listing_in`): never shown beside it. RG5: the rows judged together, as a list's (X8).
             let mut names = None;
-            for (i, (r, artist, title)) in albums.iter().enumerate() {
+            let asked: Vec<(&[Ref], &str, &str, Option<&str>)> = albums.iter().map(|(r, artist, title)| (std::slice::from_ref(r), *artist, *title, None)).collect();
+            for (i, joined) in had_by_names_in(db, &asked, 0, &mut names)?.into_iter().enumerate() {
                 if records[i].is_none() {
-                    records[i] = had_by_names_in(db, &[(std::slice::from_ref(r), *artist, *title, None)], &mut names)?.pop().flatten().map(|(had, _)| had);
+                    records[i] = joined.map(|(had, _)| had);
                 }
             }
             let wanted: Vec<i64> = records.iter().flatten().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
@@ -1828,6 +1957,16 @@ impl Catalogue {
         let mut db = self.db();
         let tx = db.transaction()?;
         let kept = put_reference(&tx, subject, r, how, now(), how == "hand")?.kept();
+        // RG3 (PA3): a release or a release group pasted by hand: a row joined to the record by its names alone that names another of
+        // that kind is given back, as where the files name one.
+        if kept
+            && how == "hand"
+            && r.source == "musicbrainz"
+            && (r.kind == "release" || r.kind == "release-group")
+            && let Some(record) = ids::record_number(subject)
+        {
+            give_back_others_in(&tx, record, &[(r.source.clone(), r.kind.clone(), r.value.clone())], now())?;
+        }
         tx.commit()?;
         Ok(kept)
     }
@@ -2245,7 +2384,9 @@ pub struct Wanted {
 /// release are one album's copies or editions, no clash (X9); a later request by those names alone takes the record made for the
 /// first, so two askers share one. A request by its names alone (no group) that its exact names find no record not had of takes the
 /// one of its title's key (OQ-F2b (a), `identity::title_key`: "EP" and "LP" left out) that is one album with it, as an artist's own
-/// list joins one (F2); a had record is found by its exact names alone (B1). What it came to (`RequestRecord`).
+/// list joins one (F2); a had record by its exact names (B1), else by its title's key where the words of a type ("EP", "LP") its title
+/// and the had record's differ by agree with that record's class (RG1, the owner: "When the type agrees"; `type_agrees`), X8
+/// permitting. What it came to (`RequestRecord`).
 pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<RequestRecord> {
     use super::identity::{fold, title_key};
     let group = w.group.as_deref().map(str::to_ascii_lowercase).filter(|g| is_mbid(g)).map(|g| Ref::new("musicbrainz", "release-group", &g));
@@ -2277,12 +2418,32 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
              ORDER BY r.id",
         )?;
         let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-        for (id, ..) in rows.into_iter().filter(|(_, a, t)| fold(a) == artist && fold(t) == title) {
-            if agrees(id)? {
-                return Ok(Some(id));
+        let theirs: Vec<(i64, String)> = rows.into_iter().filter(|(_, a, _)| fold(a) == artist).map(|(id, _, t)| (id, t)).collect();
+        for (id, _) in theirs.iter().filter(|(_, t)| fold(t) == title) {
+            if agrees(*id)? {
+                return Ok(Some(*id));
             }
         }
-        Ok(None)
+        // RG1 (the owner, 2026-11-18: "When the type agrees"): else one of its title's key whose title differs from its own by "EP" or
+        // "LP" where that record's class agrees (`type_agrees`: "Kite EP" a had EP "Kite", "Kite LP" a had album "Kite"), that nothing
+        // it was asked by contradicts, where those are one album (X8: several, none).
+        let key = title_key(&w.title);
+        if key.is_empty() {
+            return Ok(None);
+        }
+        let keyed: Vec<(i64, String)> = theirs.into_iter().filter(|(_, t)| title_key(t) == key).collect();
+        let keyed_ids: Vec<i64> = keyed.iter().map(|(id, _)| *id).collect();
+        let classes = classes_of(tx, &keyed_ids, &keyed_ids.iter().copied().collect())?;
+        let class = |id: &i64| classes.get(id).copied().unwrap_or(Class::Unknown);
+        let mut agreeing = Vec::new();
+        for (id, t) in &keyed {
+            if type_agrees(&w.title, t, class(id)) && agrees(*id)? {
+                agreeing.push(*id);
+            }
+        }
+        let (refs, none) = (refs_of(tx, &agreeing)?, Vec::new());
+        let counted: Vec<Counted> = agreeing.iter().map(|id| (*id, refs.get(id).unwrap_or(&none).as_slice(), true, class(id))).collect();
+        Ok(if albums_for(&counted, 0, Class::Either).1 > 1 { None } else { agreeing.first().copied() })
     };
     // With no release group, the oldest live record not had of its names (folded) that nothing contradicts (R14, F3): what
     // another request of the album made, so two requests of one album share its record, at the step and after.
@@ -2308,7 +2469,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
     // OQ-F2b (a): none of its exact names, the oldest live record not had of its artist's name and its title's key that is one album
     // with it as an artist's own list joins one (F2, `one_album_with`: never where the name is several albums, X8; of either kind
     // class, as a Want says no kind), that nothing it was asked by contradicts, and that the had rule does not hold (`holders_in`): a
-    // had record is found by its exact names alone (B1), so none is had through a looser name either.
+    // had record is found by `by_names` alone (B1, RG1's type agreeing), so none is had through a looser name either.
     let not_had_by_key = || -> Result<Option<i64>> {
         let (artist, key) = (fold(&w.artist), title_key(&w.title));
         if key.is_empty() {
@@ -2380,7 +2541,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
             let credited = super::artists::artists_in(tx, &names.iter().cloned().collect(), at)?;
             let artist = names.first().map(|n| credited[&ids::artist_key(n)]);
             let listing = Listing { title: w.title.clone(), artist: w.artist.clone(), year: w.year, cover: w.cover.clone(), refs: group.clone().into_iter().collect(), ..Listing::default() };
-            let record = keep_rows_in(tx, artist, &[listing], "link", at, Some(at), false)?[0];
+            let record = keep_rows_in(tx, artist, &[listing], "link", at, Some(at), None)?[0];
             for (position, name) in names.iter().enumerate().skip(1) {
                 tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, credited[&ids::artist_key(name)], position as i64])?;
             }
@@ -3292,15 +3453,15 @@ impl Catalogue {
     /// 0.17's step's part `fold` on the catalogue's side (F2.11, F11.1): the doubles of one name folded (`fold_in`), in one IMMEDIATE
     /// transaction whose last write is the part's mark, holding each merge ("al-<from> into al-<into>"): a part cut off merged nothing.
     /// `after` hears it done, inside it (what the tests cut it by). None: done before; else each merge, (the record that went, the one
-    /// it went into), in order. Blocking.
-    pub fn fold_017(&self, after: &dyn Fn() -> Result<()>) -> Result<Option<Vec<(i64, i64)>>> {
+    /// it went into), in order. `kinds`: each catalogue folder's library, as the two-copies join reads them (RG2). Blocking.
+    pub fn fold_017(&self, kinds: &[(i64, crate::settings::LibraryKind)], after: &dyn Fn() -> Result<()>) -> Result<Option<Vec<(i64, i64)>>> {
         let mark = mark_017(FOLD_017);
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if marked_017(&tx, &mark)? {
             return Ok(None);
         }
-        let folded = fold_in(&tx, now())?;
+        let folded = fold_in(&tx, now(), kinds)?;
         after()?;
         let lines: Vec<String> = folded.iter().map(|(from, into)| format!("{} into {}", ids::record(*from), ids::record(*into))).collect();
         tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![mark, serde_json::json!({ "folded": lines }).to_string()])?;
@@ -3322,12 +3483,12 @@ impl Catalogue {
 
     /// F11.1 as a copy arrives (the owner: "One record, two copies"): of the had records `a` and `b`, the newer joined to the older
     /// where they are one record's two copies (`join_had_in`). The two, (the record that went, the one it went into); none where they
-    /// are not. Blocking.
-    pub fn join_copies(&self, a: i64, b: i64) -> Result<Option<(i64, i64)>> {
+    /// are not; each catalogue folder's library as `kinds` has it (RG2: the fold's one rule). Blocking.
+    pub fn join_copies(&self, a: i64, b: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Option<(i64, i64)>> {
         let (from, into) = (a.max(b), a.min(b));
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let joined = join_had_in(&tx, from, into, now())?;
+        let joined = join_had_in(&tx, from, into, now(), kinds)?;
         tx.commit()?;
         Ok(joined.then_some((from, into)))
     }
@@ -3338,7 +3499,7 @@ impl Catalogue {
 /// folded in turn (`fold_one_in`), the name read again after each, until none is left. One that cannot be folded (a reference the other
 /// cannot take) is left as it was, said in the log, and the rest go on. Each merge, (the record that went, the one it went into), in
 /// order.
-fn fold_in(tx: &Connection, at: i64) -> Result<Vec<(i64, i64)>> {
+fn fold_in(tx: &Connection, at: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Vec<(i64, i64)>> {
     use super::identity::title_key;
     let mut named: std::collections::BTreeMap<(i64, String), Vec<i64>> = std::collections::BTreeMap::new();
     {
@@ -3359,7 +3520,7 @@ fn fold_in(tx: &Connection, at: i64) -> Result<Vec<(i64, i64)>> {
     for ((artist, _), records) in named.into_iter().filter(|(_, records)| records.len() > 1) {
         while let Some((from, into)) = double_in(tx, &records, &refused, &mut names)? {
             tx.execute_batch("SAVEPOINT fold_one")?;
-            match fold_one_in(tx, artist, from, into, at) {
+            match fold_one_in(tx, artist, from, into, at, kinds) {
                 Ok(true) => {
                     tx.execute_batch("RELEASE fold_one")?;
                     folded.push((from, into));
@@ -3395,7 +3556,7 @@ fn double_in(tx: &Connection, records: &[i64], refused: &std::collections::HashS
     let rank = |r: i64| (!had.contains(&r), r);
     for &r in live.iter().rev().filter(|r| !had.contains(r)) {
         let mine = refs.get(&r).map_or(&[][..], Vec::as_slice);
-        let into = one_album_in(tx, &live, r, mine, classes.get(&r).copied().unwrap_or(Class::Either), 0, names)?;
+        let into = one_album_in(tx, &live, (r, None), mine, classes.get(&r).copied().unwrap_or(Class::Either), 0, names)?;
         if let Some(into) = into.filter(|into| rank(*into) < rank(r) && !refused.contains(&(r, *into))) {
             return Ok(Some((r, into)));
         }
@@ -3412,9 +3573,9 @@ fn double_in(tx: &Connection, records: &[i64], refused: &std::collections::HashS
 /// F11.1); a record not had merged into the record of its album (`merge_records_in`), noted where that one is had as a row of
 /// `artist`'s list joined by its names (`joined_by_names`), so a type set by hand gives it back as it gives a list's join back
 /// (F2.9-hand). Whether it was folded. In the caller's transaction.
-fn fold_one_in(tx: &Connection, artist: i64, from: i64, into: i64, at: i64) -> Result<bool> {
+fn fold_one_in(tx: &Connection, artist: i64, from: i64, into: i64, at: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<bool> {
     if live_had(tx, from)? {
-        return join_had_in(tx, from, into, at);
+        return join_had_in(tx, from, into, at, kinds);
     }
     let brought = refs_in(tx, &ids::record(from))?;
     merge_records_in(tx, from, into)?;
@@ -3425,19 +3586,27 @@ fn fold_one_in(tx: &Connection, artist: i64, from: i64, into: i64, at: i64) -> R
 }
 
 /// F11.1 (the owner: "One record, two copies"): the had record `from` joined to the older had record `into`, where both are live, of
-/// one title's key (`identity::title_key`), credited to one artist (by id), holding no references that contradict, and their copies'
-/// tracks pair one for one as Replace pairs them (`paired_tracks_in`): each of `from`'s tracks retires for good into its pair
-/// (`taken_for_good`: its files, and what names it at the first build, `track_moved`), then `from`, holding none, merges into `into`
-/// (`merge_records_in`): its references, artists and labels there, its id answering as `into`. A different tracklist stays another
-/// edition (Q8), two artist ids two records. Whether it was joined. In the caller's transaction.
-fn join_had_in(tx: &Connection, from: i64, into: i64, at: i64) -> Result<bool> {
+/// one title's key (`identity::title_key`) whose type agrees (RG1, `type_agrees`), credited to one artist (by id), holding no references
+/// that contradict, one kept in Incoming alone and the other with a copy in a main library, neither in an account's own music (RG2,
+/// `two_copies_in`: the one rule, at the upgrade's fold as when a copy arrives), and their copies' tracks pair one for one as Replace
+/// pairs them (`paired_tracks_in`): each of `from`'s tracks retires for good into its pair (`taken_for_good`: its files, and what names
+/// it at the first build, `track_moved`), then `from`, holding none, merges into `into` (`merge_records_in`): its references, artists
+/// and labels there, its id answering as `into`. A different tracklist stays another edition (Q8), two artist ids two records. Whether
+/// it was joined. In the caller's transaction.
+fn join_had_in(tx: &Connection, from: i64, into: i64, at: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<bool> {
     use super::identity::title_key;
     if from == into || !live_had(tx, from)? || !live_had(tx, into)? {
         return Ok(false);
     }
-    let key = |r: i64| -> Result<String> { Ok(title_key(&tx.prepare_cached("SELECT COALESCE(title, '') FROM records WHERE id = ?1")?.query_row([r], |row| row.get::<_, String>(0))?)) };
-    let named = key(from)?;
-    if named.is_empty() || named != key(into)? {
+    let title = |r: i64| -> Result<String> { Ok(tx.prepare_cached("SELECT COALESCE(title, '') FROM records WHERE id = ?1")?.query_row([r], |row| row.get::<_, String>(0))?) };
+    let (named, other) = (title(from)?, title(into)?);
+    if title_key(&named).is_empty() || title_key(&named) != title_key(&other) {
+        return Ok(false);
+    }
+    // RG1: titles that differ by "EP" or "LP" only where each record's class agrees with the other's words.
+    let classes = classes_of(tx, &[from, into], &[from, into].into_iter().collect())?;
+    let class = |r: i64| classes.get(&r).copied().unwrap_or(Class::Unknown);
+    if !type_agrees(&named, &other, class(into)) || !type_agrees(&other, &named, class(from)) {
         return Ok(false);
     }
     let one_artist: bool = tx
@@ -3446,7 +3615,8 @@ fn join_had_in(tx: &Connection, from: i64, into: i64, at: i64) -> Result<bool> {
     if !one_artist || contradicts(&refs_in(tx, &ids::record(from))?, &refs_in(tx, &ids::record(into))?) {
         return Ok(false);
     }
-    let Some(pairs) = paired_tracks_in(tx, into, from)? else { return Ok(false) };
+    let Some(main) = two_copies_in(tx, from, into, kinds)? else { return Ok(false) };
+    let Some(pairs) = paired_tracks_in(tx, into, from, main, kinds)? else { return Ok(false) };
     for (goes, stays) in pairs {
         tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {} WHERE id = ?1", super::REMEMBER), params![goes, at])?;
         super::taken_for_good(tx, goes, stays)?;
@@ -3455,11 +3625,39 @@ fn join_had_in(tx: &Connection, from: i64, into: i64, at: i64) -> Result<bool> {
     Ok(true)
 }
 
-/// Two had records' first copies (`first_copy_in`) paired track for track as Replace pairs them (`incoming::pair`, RF2's rule): every
-/// track of each a pair, none left over; each pair as (`from`'s track, `into`'s track). None where they do not. In the caller's
-/// transaction.
-fn paired_tracks_in(tx: &Connection, into: i64, from: i64) -> Result<Option<Vec<(i64, i64)>>> {
-    let (Some(old), Some(new)) = (first_copy_in(tx, into)?, first_copy_in(tx, from)?) else { return Ok(None) };
+/// RG2 (one rule for two copies, at the upgrade's fold as when a copy arrives): which of two had records `a` and `b` is the main
+/// library's where they may be one record's two copies: the other kept in Incoming alone (every present copy of it there), it with a
+/// copy in a main library, and neither with a copy in an account's own music (a user's facts set by hand on their own record never
+/// come onto the house's). Each catalogue folder's library as `kinds` has it (`library::kind_in`). None where they may not. In the
+/// caller's transaction.
+fn two_copies_in(tx: &Connection, a: i64, b: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Option<i64>> {
+    use crate::settings::LibraryKind;
+    let kinds_of = |record: i64| -> Result<Vec<LibraryKind>> {
+        let folders: Vec<i64> = tx
+            .prepare_cached(
+                "SELECT DISTINCT f.folder FROM files f JOIN tracks t ON t.id = f.track
+                 WHERE t.record = ?1 AND t.retired_at IS NULL AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL",
+            )?
+            .query_map([record], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(folders.into_iter().map(|f| crate::serve::library::kind_in(kinds, f).0).collect())
+    };
+    let (of_a, of_b) = (kinds_of(a)?, kinds_of(b)?);
+    let alone = |k: &[LibraryKind]| !k.is_empty() && k.iter().all(|k| *k == LibraryKind::Incoming);
+    let main = |k: &[LibraryKind]| k.contains(&LibraryKind::Main);
+    if of_a.contains(&LibraryKind::Own) || of_b.contains(&LibraryKind::Own) {
+        return Ok(None);
+    }
+    Ok(if alone(&of_a) && main(&of_b) { Some(b) } else if alone(&of_b) && main(&of_a) { Some(a) } else { None })
+}
+
+/// Two had records' copies (`first_copy_in`: the main library's record's there, `main`; the other's, kept in Incoming alone) paired
+/// track for track as Replace pairs them (`incoming::pair`, RF2's rule): every track of each a pair, none left over; each pair as
+/// (`from`'s track, `into`'s track). None where they do not. In the caller's transaction.
+fn paired_tracks_in(tx: &Connection, into: i64, from: i64, main: i64, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<Option<Vec<(i64, i64)>>> {
+    let in_main = |folder: i64| crate::serve::library::kind_in(kinds, folder).0 == crate::settings::LibraryKind::Main;
+    let copy = |r: i64| first_copy_in(tx, r, &|folder: i64| r != main || in_main(folder));
+    let (Some(old), Some(new)) = (copy(into)?, copy(from)?) else { return Ok(None) };
     let facts = |copy: &[(i64, crate::incoming::TrackFacts)]| copy.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>();
     let paired = crate::incoming::pair(&facts(&old), &facts(&new));
     if old.is_empty() || !paired.added.is_empty() || !paired.retired.is_empty() {
@@ -3468,10 +3666,10 @@ fn paired_tracks_in(tx: &Connection, into: i64, from: i64) -> Result<Option<Vec<
     Ok(Some(paired.pairs.iter().map(|(o, n)| (new[*n].0, old[*o].0)).collect()))
 }
 
-/// A had record's first copy as Replace reads one (RF2): the present files of its live tracks in the first folder and directory they
-/// lie in, in path order, each its track and what its tags and length say (`TrackFacts::of`). None where that copy does not hold every
-/// live track of the record, each once. In the caller's transaction.
-fn first_copy_in(tx: &Connection, record: i64) -> Result<Option<Vec<(i64, crate::incoming::TrackFacts)>>> {
+/// A had record's first copy as Replace reads one (RF2), in the catalogue folders `only` takes: the present files of its live tracks in
+/// the first folder and directory they lie in, in path order, each its track and what its tags and length say (`TrackFacts::of`). None
+/// where that copy does not hold every live track of the record, each once. In the caller's transaction.
+fn first_copy_in(tx: &Connection, record: i64, only: &dyn Fn(i64) -> bool) -> Result<Option<Vec<(i64, crate::incoming::TrackFacts)>>> {
     let files: Vec<(i64, String, i64, Option<i64>)> = tx
         .prepare_cached(
             "SELECT f.folder, f.rel, f.track, f.duration_ms FROM files f JOIN tracks t ON t.id = f.track
@@ -3479,6 +3677,7 @@ fn first_copy_in(tx: &Connection, record: i64) -> Result<Option<Vec<(i64, crate:
         )?
         .query_map([record], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<rusqlite::Result<_>>()?;
+    let files: Vec<(i64, String, i64, Option<i64>)> = files.into_iter().filter(|(folder, ..)| only(*folder)).collect();
     let Some((folder, dir)) = files.first().map(|(folder, rel, ..)| (*folder, super::dir_of(rel).to_string())) else { return Ok(None) };
     let copy: Vec<(i64, String, i64, Option<i64>)> = files.into_iter().filter(|(f, rel, ..)| *f == folder && super::dir_of(rel) == dir).collect();
     let tracks: std::collections::BTreeSet<i64> = copy.iter().map(|(_, _, track, _)| *track).collect();
@@ -5532,6 +5731,8 @@ mod tests {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let artist = cat.artist_for("Kite Theory").unwrap();
         let had = had_by(&cat, artist, "Night Walks");
+        // RG1 (the owner: "When the type agrees"): an EP, which Bandcamp's "Night Walks EP" names.
+        built(&cat, had, "ep");
         kept_as_theirs(&cat, artist, &[their_row("Night Walks", Some("album"), &[("musicbrainz", "release-group", GROUP)])]);
         kept_as_theirs(&cat, artist, &[their_row("Night Walks", None, &[("discogs", "master", "3121")])]);
         kept_as_theirs(&cat, artist, &[their_row("Night Walks EP", None, &[("bandcamp", "album", PAGE)])]);
@@ -5555,5 +5756,98 @@ mod tests {
         assert_eq!(cat.record(own).unwrap().unwrap().id, own, "answering as itself");
         assert!(orbital.iter().all(|o| refs_held(&cat, *o).is_empty()), "neither had record holds its page");
         assert_eq!(missing(&cat), ["Orbital"], "and on the list");
+    }
+
+    // ---- RG1, RG3: the review of preview 1's fix batch
+
+    /// RG1 (the owner, 2026-11-18: "When the type agrees"): a row's title may differ from a had record's by "EP" or "LP" only where the
+    /// had record's class by the release type rule agrees, a type set by hand among it: "Kite EP" joins a had EP "Kite" (four tracks),
+    /// or a ten-track "Kite" the hand set to EP; "Kite LP" a had album "Kite" (ten tracks). "Kite EP" beside an album "Kite", or "Kite LP"
+    /// beside an EP or a single the hand set, stays a record of its own, the had record holding nothing of it. An artist's own list (F2)
+    /// and a row of a list with no artist (F11.2, an open) alike.
+    #[test]
+    fn a_type_word_joins_a_had_record_only_where_its_type_agrees() {
+        let cases: [(&str, usize, Option<&str>, &str, bool); 6] = [
+            ("an EP's word, a had EP", 4, None, "Kite EP", true),
+            ("an EP's word, a had album", 10, None, "Kite EP", false),
+            ("an LP's word, a had album", 10, None, "Kite LP", true),
+            ("an LP's word, a had EP", 4, None, "Kite LP", false),
+            ("an EP's word, an album the hand set to EP", 10, Some("ep"), "Kite EP", true),
+            ("an LP's word, a single the hand set", 10, Some("single"), "Kite LP", false),
+        ];
+        for (case, tracks, typed, title, joins) in cases {
+            for own_list in [true, false] {
+                let cat = Catalogue::open(None, Vec::new()).unwrap();
+                let artist = cat.artist_for("Kite Theory").unwrap();
+                let kite = cat.record_for_tests("Kite", tracks);
+                cat.db().execute("UPDATE records SET artist = 'Kite Theory' WHERE id = ?1", [kite]).unwrap();
+                cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", params![kite, artist]).unwrap();
+                if let Some(t) = typed {
+                    built(&cat, kite, t);
+                }
+                let page = format!("https://kitetheory.bandcamp.com/album/{}", title.to_lowercase().replace(' ', "-"));
+                let row = their_row(title, None, &[("bandcamp", "album", page.as_str())]);
+                let made = if own_list { kept_as_theirs(&cat, artist, &[row])[0] } else { cat.keep_listing(None, &[row], "link").unwrap()[0] };
+                let held = refs_held(&cat, kite).iter().any(|(s, ..)| s == "bandcamp");
+                let list = if own_list { "the artist's own list" } else { "an open" };
+                assert_eq!((end_of(&cat, made) == kite, held), (joins, joins), "{case} ({list}): joined {joins}");
+            }
+        }
+    }
+
+    /// RG3 (PA3): a release group joined to a had record by its names alone is let go of where the files or the hand name another: the
+    /// album's row is a record of its own again, not had, on the artist's missing list, holding its group; the had record holds the one
+    /// its files or the hand name. Where the files name the joined group, it is theirs: a type set by hand later gives nothing back, and
+    /// no second live record holds the group. Never two release groups on one record.
+    #[test]
+    fn a_join_by_names_lets_go_where_the_files_or_the_hand_name_another_group() {
+        const G1: &str = "00000000-0000-4000-8000-000000002911";
+        const G2: &str = "00000000-0000-4000-8000-000000002912";
+        let groups = |cat: &Catalogue, record: i64| refs_held(cat, record).into_iter().filter(|(_, k, _)| k == "release-group").map(|(.., v)| v).collect::<Vec<_>>();
+        let retag = |cat: &Catalogue, record: i64, group: &str| {
+            let tracks: Vec<i64> = {
+                let db = cat.db();
+                let mut st = db.prepare("SELECT id FROM tracks WHERE record = ?1 ORDER BY number").unwrap();
+                st.query_map([record], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+            };
+            let copy = crate::catalogue::AlbumCopy {
+                group: Some(group.into()),
+                title: "Kyverdale Road".into(),
+                artist: "Kite Theory".into(),
+                artists: vec!["Kite Theory".into()],
+                tracks: tracks.iter().zip(1..).map(|(t, n)| (*t, Some(1), Some(n))).collect(),
+                ..Default::default()
+            };
+            cat.keep_files_names(&[copy]).unwrap();
+        };
+        for by_hand in [false, true] {
+            let how = if by_hand { "the hand" } else { "the files" };
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let artist = cat.artist_for("Kite Theory").unwrap();
+            let owned = had_by(&cat, artist, "Kyverdale Road");
+            let joined = kept_as_theirs(&cat, artist, &[their_row("Kyverdale Road", Some("album"), &[("musicbrainz", "release-group", G1)])])[0];
+            assert_eq!(end_of(&cat, joined), owned, "{how}: joined by its names first (F2.9)");
+            if by_hand {
+                assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", G2), "hand").unwrap());
+            } else {
+                retag(&cat, owned, G2);
+            }
+            assert_eq!(groups(&cat, owned), [G2], "{how}: the had record holds the group named");
+            assert_eq!(end_of(&cat, joined), joined, "{how}: the album's row a record of its own again");
+            assert_eq!(groups(&cat, joined), [G1], "{how}: holding its group");
+            assert_eq!(cat.requested(&[joined]).unwrap()[&joined].holder, None, "{how}: not had");
+            assert!(cat.missing_of(artist).unwrap().iter().any(|q| q.row.id == joined), "{how}: on the missing list");
+            assert!(two_of_a_kind(&cat).is_empty(), "{how}: never two groups on one record");
+        }
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let owned = had_by(&cat, artist, "Kyverdale Road");
+        built(&cat, owned, "album");
+        let joined = kept_as_theirs(&cat, artist, &[their_row("Kyverdale Road", Some("album"), &[("musicbrainz", "release-group", G1)])])[0];
+        retag(&cat, owned, G1);
+        built(&cat, owned, "single");
+        assert_eq!(end_of(&cat, joined), owned, "the files name the joined group: the join stays, the hand's Single gives nothing back");
+        let holders: Vec<i64> = cat.subject_of(&Ref::new("musicbrainz", "release-group", G1)).unwrap().iter().filter_map(|s| ids::record_number(s)).filter(|r| end_of(&cat, *r) == *r).collect();
+        assert_eq!(holders, [owned], "one live record of the group");
     }
 }

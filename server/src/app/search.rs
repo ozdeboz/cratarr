@@ -672,7 +672,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             albums.extend(by);
         }
         // F12.1 (the owner: "One card, 2 editions"): Cratarr's editions of one album, one item.
-        let folded = super::editions::fold_items(&app.library, &mut albums).await;
+        let folded = super::editions::fold_items(&app.library, &mut albums, &app.library.folders_off(without)).await;
         if let Some(t) = totals.get_mut("album") {
             *t = t.saturating_sub(folded);
         }
