@@ -34,7 +34,7 @@
   import ChoiceList from './ChoiceList.svelte';
   import { clearPlaced, dropSoulseek, fetchFound, loadSoulseek, searchSoulseekNow, soulseek } from './soulseek.svelte';
   import { approvePayload, folderLine, GROUPS, itemLine, itemTone, recordOf, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
-  import { fillOf, handOverAgain, standing, standingTone } from './requestState';
+  import { fillOf, handOverAgain, mayTakeBack, standing, standingTone } from './requestState';
   import SelectBar from './SelectBar.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import Group from './settings/Group.svelte';
@@ -117,7 +117,7 @@
 
   // --- A row's menu ---
   let opened = $state<AlbumRequest | null>(null);
-  const canTakeBack = (r: AlbumRequest) => (r.status === 'pending' && (r.user === me.name || answers)) || (r.status === 'approved' && answers);
+  const canTakeBack = (r: AlbumRequest) => mayTakeBack(r, me.name, answers);
   let declining = $state<number[] | null>(null);
   // Many approved at once ask first (lib/many; declining many asks already, for why).
   function answer(ids: number[], approve: boolean, reason: string | null = null) {

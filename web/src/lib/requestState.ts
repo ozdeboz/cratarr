@@ -117,5 +117,11 @@ export function markOfState(r: Asked | null | undefined): { state: 'wanted' | 'd
   return done !== null ? { state: 'downloading', done } : { state: 'wanted' };
 }
 
+/** Whether Take back is offered on a request (RF18, the review of run 13, RM3): its asker's own, or anyone's for those who answer
+ *  requests, while it is pending or approved, as the server's `cancel` allows. A Want goes ahead with no one's yes since 0.17 (AL02),
+ *  so one waiting for room or for space is approved, and its asker's to take back. */
+export const mayTakeBack = (r: { status: string; user: string }, me: string | null | undefined, answers: boolean): boolean =>
+  (r.status === 'pending' || r.status === 'approved') && (r.user === me || answers);
+
 /** Hand over again (W5, G2): for those who answer requests, where the server says no fetcher has spoken of one wanted. */
 export const handOverAgain = (r: Asked, answers: boolean) => answers && r.hand_over_again === true;

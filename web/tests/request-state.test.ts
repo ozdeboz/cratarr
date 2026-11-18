@@ -87,3 +87,26 @@ test("a record not had's page says where its open request stands", () => {
   assert.deepEqual(notHadPage({ request: r({ state: 'partly_there', has: 3, of: 9 }) }, said).lines, [{ kind: 'request', text: 'Partly there · 3 of 9' }]);
   assert.deepEqual(notHadPage({ request: r({ state: 'declined' }) }, said).lines, []);
 });
+
+// RF18 (the review of run 13, RM3): Take back is its asker's again, as the server's `cancel` allows.
+const { mayTakeBack } = await import('../src/lib/requestState.ts');
+
+test('a user takes back her own Wants, waiting ones included, and only her own', () => {
+  const ann = (status: string, user = 'ann') => ({ status, user });
+  assert.equal(mayTakeBack(ann('approved'), 'ann', false), true, 'her Want waiting for room: approved since 0.17, hers to take back');
+  assert.equal(mayTakeBack(ann('pending'), 'ann', false), true, "0.16's pending one");
+  for (const closed of ['delivered', 'cancelled', 'declined', 'rejected']) assert.equal(mayTakeBack(ann(closed), 'ann', false), false, closed);
+  assert.equal(mayTakeBack(ann('approved', 'bob'), 'ann', false), false, "another account's");
+  assert.equal(mayTakeBack(ann('approved', 'bob'), 'root', true), true, 'anyone\'s, for those who answer requests');
+  assert.equal(mayTakeBack(ann('pending', 'bob'), 'root', true), true);
+  assert.equal(mayTakeBack(ann('delivered', 'bob'), 'root', true), false);
+  assert.equal(mayTakeBack(ann('approved'), null, false), false, 'nobody signed in');
+});
+
+test("the Requests panel offers Take back by the one rule, in a row's menu and in Select", async () => {
+  const { readFileSync } = await import('node:fs');
+  const panel = readFileSync(new URL('../src/lib/RequestsPanel.svelte', import.meta.url), 'utf8');
+  assert.match(panel, /const canTakeBack = \(r: AlbumRequest\) => mayTakeBack\(r, me\.name, answers\);/);
+  assert.match(panel, /mine\.filter\(canTakeBack\)/, 'Select ticks what can be taken back');
+  assert.match(panel, /\{#if canTakeBack\(r\)\}/, "a row's menu offers it");
+});
