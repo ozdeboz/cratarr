@@ -409,15 +409,15 @@ impl Library {
         }
         // Here, as nothing has read a store yet, and no list has been built: `playlists::import` below reads what it leaves.
         let kinds = kinds_of(&folders, &catalogue.folders());
-        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds, rules: tag_rules.clone() };
+        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds: kinds.clone(), rules: tag_rules.clone() };
         start.run().await.context("the first start of 0.16 did not finish")?;
         // 0.17's step, once (`step_017`): what 0.16 knew of each record's references, into the catalogue's tables, before
         // anything reads them. With the ids lost it waits, as the first start does. Failed, it stops the start as the first
         // start does: what it has not carried would be read as never known. The parts it did are done; the next start goes on
-        // from the one that failed.
+        // from the one that failed. Its credits part makes the albums as the library's builds will (the kinds, the tag rules).
         if !catalogue.ids_lost() {
-            let (cat, ud) = (catalogue.clone(), playlists_db.clone());
-            tokio::task::spawn_blocking(move || super::step_017::run(&cat, &ud)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
+            let (cat, ud, rules) = (catalogue.clone(), playlists_db.clone(), tag_rules.clone());
+            tokio::task::spawn_blocking(move || super::step_017::run(&cat, &ud, &kinds, &rules)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
         }
         follow_paths(&catalogue, &playlists_db).context("following the libraries' paths")?;
         if !catalogue.ids_lost() {
@@ -836,7 +836,8 @@ mod switched_off_tests {
     }
 
     /// A catalogue lost after the first start and started afresh is the user data's, though it gave no record then: taken for one
-    /// from before the first start, it would stop every start from then on.
+    /// from before the first start, it would stop every start from then on. P3.6 (W3): while its ids are lost the step waits, its
+    /// credits part too (no mark); started afresh, it runs.
     #[tokio::test]
     async fn a_lost_catalogue_started_afresh_after_the_first_start_still_starts() {
         let (d, db) = data_folder("afresh");
@@ -845,9 +846,13 @@ mod switched_off_tests {
         lost(&d);
         let lib = started(&d, &db).await.unwrap();
         assert!(lib.catalogue().ids_lost());
+        assert!(lib.catalogue().meta("017:credits").is_none(), "the ids lost: the credits part waits");
         lib.fresh_track_ids().unwrap();
         drop(lib);
-        assert!(!started(&d, &db).await.expect("it starts").catalogue().ids_lost());
+        let lib = started(&d, &db).await.expect("it starts");
+        assert!(!lib.catalogue().ids_lost());
+        assert!(lib.catalogue().meta("017:credits").is_some(), "started afresh: the step and its credits part ran");
+        drop(lib);
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -915,7 +920,7 @@ mod switched_off_tests {
         let (d, db) = data_0_16("step-runs");
         drop(started(&d, &db).await.unwrap());
         let marks = marks_017(&d);
-        assert_eq!(marks.len(), crate::catalogue::records::PARTS_017.len() + 1, "and the band waves': {marks:?}");
+        assert_eq!(marks.len(), crate::catalogue::records::PARTS_017.len() + 2, "and the band waves' and the credits': {marks:?}");
         let report = db.migration_report().unwrap()[crate::app::step_017::PART].clone();
         drop(started(&d, &db).await.unwrap());
         assert_eq!((marks_017(&d), db.migration_report().unwrap()[crate::app::step_017::PART].clone()), (marks, report));
@@ -951,7 +956,7 @@ mod switched_off_tests {
 
         catalogue().execute_batch("DROP TRIGGER no_pages").unwrap();
         drop(started(&d, &db).await.expect("it starts"));
-        assert_eq!(marks().len(), crate::catalogue::records::PARTS_017.len() + 1, "and the band waves'");
+        assert_eq!(marks().len(), crate::catalogue::records::PARTS_017.len() + 2, "and the band waves' and the credits'");
         assert!(db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
         std::fs::remove_dir_all(&d).ok();
     }

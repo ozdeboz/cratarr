@@ -2304,6 +2304,12 @@ impl Catalogue {
         served_rows_in(&self.db(), folder, Some(dir))
     }
 
+    /// `served_rows` as a record pass reads them (0.17's step's part `credits`, P3): all but the albums' gains, which the shape's
+    /// loudness blocks give (`album_gains_in`), so no statement here reads `analysis_shape` (M1). Blocking.
+    pub fn rows_to_credit(&self, folder: i64) -> Result<Vec<ServedRow>> {
+        rows_in(&self.db(), folder, None, PRESENT, false)
+    }
+
     /// Each folder's cover files as a print (`cover_prints`).
     pub fn cover_prints(&self) -> Result<HashMap<(i64, String), String>> {
         cover_prints(&self.db())
@@ -4151,11 +4157,12 @@ fn rel_range(dir: Option<&str>) -> Option<(String, String)> {
 /// `served_rows`, of the files right in `dir` only where given (0.9.8: the library builds again just the albums
 /// Cratarr wrote to, `Library::update_dirs`).
 pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Vec<ServedRow>> {
-    rows_in(db, folder, dir, PRESENT)
+    rows_in(db, folder, dir, PRESENT, true)
 }
 
-/// `served_rows_in`, of the files `which` says, a condition on `files` as `f`.
-fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str) -> Result<Vec<ServedRow>> {
+/// `served_rows_in`, of the files `which` says, a condition on `files` as `f`; the albums' gains with their analyses where
+/// `gains` (the shape's loudness blocks: `album_gains_in`).
+fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str, gains: bool) -> Result<Vec<ServedRow>> {
     let range = rel_range(dir);
     let (lo, hi) = range.clone().unzip();
     let within = |col: &str| if range.is_some() { format!(" AND {col} >= ?2 AND {col} < ?3") } else { " AND ?2 IS NULL AND ?3 IS NULL".to_string() };
@@ -4197,7 +4204,7 @@ fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str) -> Resu
         rows.push(f);
     }
     // Their analyses, while the files are as they were then, and their albums' gains (decision 0035).
-    let albums = album_gains_in(db, folder, dir)?;
+    let albums = if gains { album_gains_in(db, folder, dir)? } else { HashMap::new() };
     let mut st = db.prepare(&format!(
         "SELECT a.rel, a.track_gain_db, a.track_peak, a.bpm, a.duration_secs, a.complete FROM analysis a
          JOIN files f ON f.folder = a.folder AND f.rel = a.rel WHERE a.folder = ?1 AND a.size = f.size AND a.mtime = f.mtime{}",

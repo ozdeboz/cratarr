@@ -199,6 +199,12 @@ INSERT INTO tags (folder, rel, n, raw, name, value) VALUES
   (0, 'Glass Harbour/Tide Tables (2012)/05 Flood.flac', 3, 'MUSICBRAINZ_ALBUMARTISTID', 'musicbrainz_albumartistid', '00000000-0000-4000-8000-000000000201'),
   (0, 'Glass Harbour/Tide Tables (2012)/06 Low Water.flac', 2, 'ALBUMARTIST', 'albumartist', 'Glass Harbour'),
   (0, 'Glass Harbour/Tide Tables (2012)/06 Low Water.flac', 3, 'MUSICBRAINZ_ALBUMARTISTID', 'musicbrainz_albumartistid', '00000000-0000-4000-8000-000000000201');
+-- Every file names its album and its album artist, as 0.16's first start named each record by them.
+INSERT INTO tags (folder, rel, n, raw, name, value)
+  SELECT f.folder, f.rel, 10, 'ALBUM', 'album', r.title FROM files f JOIN tracks t ON t.id = f.track JOIN records r ON r.id = t.record;
+INSERT INTO tags (folder, rel, n, raw, name, value)
+  SELECT f.folder, f.rel, 11, 'ALBUMARTIST', 'albumartist', r.artist FROM files f JOIN tracks t ON t.id = f.track JOIN records r ON r.id = t.record
+  WHERE NOT EXISTS (SELECT 1 FROM tags g WHERE g.folder = f.folder AND g.rel = f.rel AND g.name = 'albumartist');
 -- 0.16's first start, done.
 INSERT INTO meta (key, value) VALUES
   ('first_records', '{"records":6,"copies":6,"tracks_merged":0,"bases_on_two_records":0,"artists":6,"shapes_moved":0,"shapes_left":0,"beats_moved":0,"beats_left":0}'),

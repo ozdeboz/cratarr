@@ -2810,7 +2810,39 @@ impl Catalogue {
         }
         Ok(ran)
     }
+
+    /// Whether 0.17's step's `part` is done (its mark), a part outside `PARTS_017` too (`CREDITS_017`). Blocking.
+    pub fn part_done_017(&self, part: &str) -> Result<bool> {
+        Ok(marked_017(&self.db(), &mark_017(part))?)
+    }
+
+    /// 0.17's step's part `credits` (P3, W3) on the catalogue's side: what `albums`' files name and credit kept for `records` (one
+    /// for each album, in its order; none for an album whose tracks hold none), as a build's record pass keeps them where no album
+    /// needs a record (`keep_files_names`: `files_references`, `record_credits`), in one IMMEDIATE transaction whose last write is
+    /// the part's mark, holding how many records the files credit: a part cut off wrote nothing. No record is given, made, moved or
+    /// merged. `after` hears the part done, inside it (what the tests cut it by). None: done before; else how many records the
+    /// files credit. Blocking.
+    pub fn credit_files_017(&self, albums: &[super::AlbumCopy], records: &[Option<i64>], after: &dyn Fn() -> Result<()>) -> Result<Option<u64>> {
+        let mark = mark_017(CREDITS_017);
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if marked_017(&tx, &mark)? {
+            return Ok(None);
+        }
+        let at = now();
+        files_references(&tx, albums, records, at)?;
+        record_credits(&tx, albums, records, at)?;
+        let credited: i64 = tx.query_row("SELECT count(DISTINCT record) FROM record_artists WHERE how = 'files'", [], |r| r.get(0))?;
+        after()?;
+        tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![mark, serde_json::json!({ "records": credited }).to_string()])?;
+        tx.commit()?;
+        Ok(Some(credited.max(0) as u64))
+    }
 }
+
+/// 0.17's step's part after `band_wave` (P3, W3, outside `PARTS_017` as `band_wave` is): the credits of the records you have,
+/// kept as a build keeps them (`Catalogue::credit_files_017`), marked `017:credits`.
+pub const CREDITS_017: &str = "credits";
 
 // ---- RT01: a record not had that nobody sees, forgotten
 

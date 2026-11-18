@@ -529,6 +529,64 @@ mod tests {
         assert!(!lines.iter().any(|l| l == ARTISTS_WAIT), "{lines:#?}");
     }
 
+    /// P2.5 (W2, W3): day one: 0.16's data, its had records' files tagged in production's shapes, one track crediting a guest, and
+    /// Nobody as 0.16 left them; 0.17's step (its credits part with it); no library.sqlite. The first pass, before any build,
+    /// forgets no artist: the album artists are credited on their records (P3), the guest kept by the guard. Built, a pass a day on
+    /// forgets those with nothing alone, Nobody among them and the guest not.
+    #[test]
+    fn day_one_forgets_no_artist_of_the_library() {
+        let d = data_dir("day-one");
+        crate::fixtures::data_0_16(&d).unwrap();
+        let cat = Arc::new(Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music"), std::path::PathBuf::from(crate::fixtures::BOB_OWN)]).unwrap());
+        crate::fixtures::tag_0_16_shapes(&cat);
+        let own = cat.folders().id_of(std::path::Path::new(crate::fixtures::BOB_OWN)).unwrap();
+        let kinds = vec![(0, crate::settings::LibraryKind::Main), (own, crate::settings::LibraryKind::Own)];
+        let [guest, nobody] = ["Ferro Lane", "Nobody"].map(|n| cat.artist_for(n).unwrap());
+        born_a_month_before(&cat);
+        let ud = UserData::open(Some(&d.join("userdata.sqlite"))).unwrap();
+        super::super::step_017::run(&cat, &ud, &kinds, &crate::catalogue::Rules::default()).unwrap();
+        drop(ud);
+        let glass = cat.artist_of("Glass Harbour").unwrap().unwrap();
+        assert_eq!(count(&cat, &format!("SELECT count(*) FROM record_artists WHERE record = 1 AND artist = {glass} AND position = 0 AND how = 'files'")), 1, "P3: credited");
+        assert!(!d.join("library.sqlite").exists());
+        let served = Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.attach_catalogue(cat.clone());
+        served.library.set_kinds(kinds);
+
+        let (done, _) = logged_pass(&served, NOW);
+        assert!(done.artists.is_empty() && done.artists_wait, "{done:?}");
+        assert_eq!(count(&cat, "SELECT count(*) FROM forgotten WHERE subject LIKE 'ar-%'"), 0, "no artist's tombstone on day one");
+
+        build(&served);
+        let credited = served.library.artists_credited().unwrap();
+        assert!(credited.contains(&guest), "the guest's track credits them");
+        let named = served.userdata.artists_named().unwrap();
+        let nothing: Vec<i64> = {
+            let db = cat.db_for_tests();
+            let mut st = db
+                .prepare(
+                    "SELECT a.id FROM artists a WHERE NOT EXISTS (SELECT 1 FROM record_artists r WHERE r.artist = a.id)
+                       AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND (f.how = 'hand' OR f.confirmed = 1))
+                       AND a.id NOT IN (SELECT id FROM artist_moved) ORDER BY a.id",
+                )
+                .unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).filter(|a| !credited.contains(a) && !named.contains(a)).collect()
+        };
+        assert!(nothing.contains(&nobody) && !nothing.contains(&guest), "{nothing:?}");
+        let (done, _) = logged_pass(&served, NOW + DAY);
+        assert_eq!(done.artists, nothing, "those with nothing, and no other");
+        let gone: Vec<String> = {
+            let db = cat.db_for_tests();
+            let mut st = db.prepare("SELECT subject FROM forgotten WHERE subject LIKE 'ar-%' ORDER BY subject").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        let mut expected: Vec<String> = nothing.iter().map(|a| ids::artist(*a)).collect();
+        expected.sort();
+        assert_eq!(gone, expected);
+        drop((served, cat));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// `count` library artists (`Artist <n>`), each credited first on a had record of their own.
     fn library_artists(cat: &Catalogue, count: usize) -> Vec<i64> {
         (0..count)

@@ -3596,7 +3596,7 @@ mod tests {
         crate::fixtures::data_0_16(&d).unwrap();
         let cat = Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![PathBuf::from("/music")]).unwrap());
         let ud = crate::userdata::UserData::open(Some(&d.join("userdata.sqlite"))).unwrap();
-        super::super::step_017::run(&cat, &ud).unwrap();
+        super::super::step_017::run(&cat, &ud, &[], &crate::catalogue::Rules::default()).unwrap();
         let approved = ud.requests(None, Some(super::super::requests::APPROVED), 100).unwrap();
         let of = super::super::requests::records_of(&cat, &approved).unwrap();
         let mut k = Kept::default();

@@ -2511,7 +2511,7 @@ mod tests {
         crate::fixtures::data_0_16(&d).unwrap();
         let serve = Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![std::path::PathBuf::from("/music")]).unwrap()));
-        super::super::step_017::run(serve.catalogue(), &serve.userdata).unwrap();
+        super::super::step_017::run(serve.catalogue(), &serve.userdata, &[], &crate::catalogue::Rules::default()).unwrap();
         let r = serve.userdata.requests(None, Some(APPROVED), LIST).unwrap().into_iter().find(|r| r.id == 12).unwrap();
         assert_eq!(r.release_group, None, "asked with none");
         let lidarr = Wanting::default();

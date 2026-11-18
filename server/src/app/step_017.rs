@@ -28,14 +28,21 @@
 //! - **The waveforms in three bands** (M1, a part of its own after the references, `Catalogue::band_waves_apart`): copied out of
 //!   `analysis_shape` into `analysis_band_wave` in batches, so the analysis pass asks which files have none without reading the
 //!   visuals' signals stored before them (1.3 GB on production). The shape's rows are never written.
+//! - **The credits of the records you have** (P3, W3, a part of its own after `band_wave`, `credits`): who and which labels their
+//!   files credit, and what they name at MusicBrainz, kept for their records as a build's record pass keeps them, once. Nothing
+//!   forces a build at the upgrade (the layout and the files as they were), so until the first file changed the records you have
+//!   would be credited to nobody: Discover's missing albums empty, the paced re-read idle, and the album artists left to
+//!   retention's guard alone (W2). The shape is not read (M1); no record is given, made or moved.
 //! - **One release on two records** (G1): who keeps it goes by the order the parts run in: a link pasted by hand, a certain
 //!   match (MusicBrainz matched the record's tracks to it; two on one release, the older record), the files' own (the older
 //!   record first), a likely match. A retired record holds none.
 
 use anyhow::{Context, Result};
 
-use crate::catalogue::Catalogue;
-use crate::catalogue::records::{JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, CarriedRequest, Ref};
+use crate::catalogue::records::{CREDITS_017, JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, CarriedRequest, Ref};
+use crate::catalogue::{Catalogue, Rules};
+use crate::serve::library::FolderRows;
+use crate::settings::LibraryKind;
 use crate::userdata::UserData;
 
 /// The migration report's part, as `/api/admin/migration` lists it.
@@ -112,10 +119,42 @@ fn give_again(cat: &Catalogue, ud: &UserData, asked_twice: &mut Vec<serde_json::
 /// The rows of `analysis_shape` the part `band_wave` reads at a time (M1): a batch a transaction.
 const BAND_WAVE_BATCH: usize = 500;
 
-/// The step at a start: done before, or done now. Blocking.
-pub fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
+/// The step at a start: done before, or done now. `kinds` (each catalogue folder's library, in the libraries' order) and `rules`
+/// (the tag rules) as the library's builds have them: the part `credits` makes the albums a build makes. Blocking.
+pub fn run(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)], rules: &Rules) -> Result<()> {
     run_with(cat, ud, &|_| Ok(()))?;
-    band_waves(cat)
+    band_waves(cat)?;
+    credits(cat, kinds, rules, &|| Ok(()))
+}
+
+/// The part `credits` (P3, W3): what the files of the records you have name and credit, kept for their records once, as a build's
+/// record pass keeps them where no album needs a record (`Catalogue::keep_files_names`). Each folder's rows read once, all but
+/// the shape (`Catalogue::rows_to_credit`); the albums made as the library makes them (`album_copies`) and ranked as a build ranks
+/// them (`kinds`); each album's record the first its tracks hold, as the rows read say, so no question is asked per album; written
+/// in one transaction whose last write is its mark (`Catalogue::credit_files_017`). It says it begins, and how many records it
+/// credited. `after` hears it done, inside its transaction (what the tests cut it by). Blocking.
+pub(crate) fn credits(cat: &Catalogue, kinds: &[(i64, LibraryKind)], rules: &Rules, after: &dyn Fn() -> Result<()>) -> Result<()> {
+    let named = || format!("0.17's step, part {CREDITS_017}");
+    if cat.part_done_017(CREDITS_017).with_context(named)? {
+        return Ok(());
+    }
+    tracing::info!(target: "library", "0.17's step, part {CREDITS_017}");
+    let started = std::time::Instant::now();
+    let folders = cat
+        .folders()
+        .iter()
+        .map(|(folder, root)| Ok(FolderRows { folder, root: root.display().to_string(), rows: cat.rows_to_credit(folder)? }))
+        .collect::<Result<Vec<_>>>()
+        .with_context(named)?;
+    let held: std::collections::HashMap<i64, i64> = folders.iter().flat_map(|f| &f.rows).filter_map(|r| Some((r.track?, r.record?))).collect();
+    let mut albums = crate::serve::library::album_copies(&folders, rules);
+    drop(folders);
+    albums.iter_mut().for_each(|a| a.rank = crate::serve::copies::keeping(crate::serve::library::kind_in(kinds, a.folder).0));
+    let records: Vec<Option<i64>> = albums.iter().map(|a| a.tracks.iter().find_map(|(track, ..)| held.get(track).copied())).collect();
+    if let Some(credited) = cat.credit_files_017(&albums, &records, after).with_context(named)? {
+        tracing::info!(target: "library", records = credited, secs = started.elapsed().as_secs(), "0.17's step: the records you have credited as their files credit them");
+    }
+    Ok(())
 }
 
 /// The part `band_wave` (M1): the waveforms in three bands apart from the visuals' signals, once. Blocking.
@@ -342,6 +381,12 @@ mod tests {
     use super::*;
     use crate::catalogue::records::PARTS_017;
 
+    /// The step as these tests run it: no word from the app on the libraries (the first folder Music, the others Incoming), the
+    /// tag rules as they come.
+    fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
+        super::run(cat, ud, &[], &Rules::default())
+    }
+
     /// FX01's data folder, its catalogue opened with its one library (`/music`) in use.
     struct Data(PathBuf);
 
@@ -412,6 +457,70 @@ mod tests {
         fn batch(&self, file: &str, sql: &str) {
             Connection::open(self.0.join(file)).unwrap().execute_batch(sql).unwrap();
         }
+
+        /// P3's data: FX01 with its had records' files tagged in production's shapes (`fixtures::tag_0_16_shapes`), Signal's copy
+        /// in bob's own music.
+        fn tagged(name: &str) -> Self {
+            let data = Self::new(name);
+            crate::fixtures::tag_0_16_shapes(&data.open_both().0);
+            data
+        }
+
+        /// The catalogue opened with Music and bob's own music in use, the user data, and each library's kind as the app says.
+        fn open_both(&self) -> (Catalogue, UserData, Vec<(i64, LibraryKind)>) {
+            let cat = Catalogue::open(Some(&self.0.join("catalogue.sqlite")), vec![PathBuf::from("/music"), PathBuf::from(crate::fixtures::BOB_OWN)]).unwrap();
+            let own = cat.folders().id_of(std::path::Path::new(crate::fixtures::BOB_OWN)).unwrap();
+            (cat, UserData::open(Some(&self.0.join("userdata.sqlite"))).unwrap(), vec![(0, LibraryKind::Main), (own, LibraryKind::Own)])
+        }
+
+        /// The credits the files give and the part keeps (P3): the records' artists and labels and the `files` references, but
+        /// for when each reference was found, sorted.
+        fn credit_rows(&self) -> Vec<String> {
+            [
+                self.rows_of("catalogue.sqlite", "SELECT record, artist, position, how FROM record_artists ORDER BY record, artist"),
+                self.rows_of("catalogue.sqlite", "SELECT record, label, catno, how FROM record_labels ORDER BY record, label, catno"),
+                self.rows_of("catalogue.sqlite", "SELECT subject, source, kind, value, how, confirmed, read_at FROM \"references\" WHERE how = 'files' ORDER BY subject, source, kind, value"),
+            ]
+            .concat()
+        }
+
+        /// `credit_rows`, when each reference was found too.
+        fn credit_rows_with_at(&self) -> Vec<String> {
+            [self.credit_rows(), self.rows_of("catalogue.sqlite", "SELECT subject, source, kind, value, at FROM \"references\" WHERE how = 'files' ORDER BY subject, source, kind, value")].concat()
+        }
+
+        /// The records' `files` credits: (record, artist, position), in order.
+        fn files_credits(&self) -> Vec<(i64, i64, i64)> {
+            let db = Connection::open(self.0.join("catalogue.sqlite")).unwrap();
+            let mut st = db.prepare("SELECT record, artist, position FROM record_artists WHERE how = 'files' ORDER BY record, position").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+        }
+    }
+
+    /// The albums a build reads of the catalogue and gives the record pass (`Library::build_from`): each folder's served rows, the
+    /// library's albums, ranked by the libraries' kinds.
+    fn as_built(cat: &Catalogue, kinds: &[(i64, LibraryKind)]) -> Vec<crate::catalogue::AlbumCopy> {
+        let folders: Vec<FolderRows> = cat.folders().iter().map(|(folder, root)| FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder).unwrap() }).collect();
+        let mut albums = crate::serve::library::album_copies(&folders, &Rules::default());
+        albums.iter_mut().for_each(|a| a.rank = crate::serve::copies::keeping(crate::serve::library::kind_in(kinds, a.folder).0));
+        albums
+    }
+
+    /// The step without its credits part: what a data folder holds that ran it before the part came (P3.3), or the step before a
+    /// build (P3.2).
+    fn run_without_credits(cat: &Catalogue, ud: &UserData) {
+        run_with(cat, ud, &|_| Ok(())).unwrap();
+        band_waves(cat).unwrap();
+    }
+
+    /// The function whose head is `head` in `src`, to its closing brace, indented as its head is (the lines ended as a checkout
+    /// may end them).
+    fn body(src: &str, head: &str) -> String {
+        let src = src.replace("\r\n", "\n");
+        let from = src.find(head).unwrap_or_else(|| panic!("no {head}"));
+        let indent = &src[src[..from].rfind('\n').map_or(0, |n| n + 1)..from];
+        let to = src[from..].find(&format!("\n{indent}}}\n")).unwrap_or_else(|| panic!("no end of {head}"));
+        src[from..from + to].to_string()
     }
 
     impl Drop for Data {
@@ -472,7 +581,7 @@ mod tests {
         data.run();
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp' AND value NOT LIKE 'https://paperlantern.%'"), pages, "the part it lacked ran");
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE subject = 'al-2' AND source = 'discogs' AND how = 'hand'"), 0, "a part done did not run again");
-        assert_eq!(data.marks().len(), PARTS_017.len() + 1, "and the band waves'");
+        assert_eq!(data.marks().len(), PARTS_017.len() + 2, "and the band waves' and the credits'");
         let (_, ud) = data.open();
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!(table(report, "bandcamp_found").0, data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM bandcamp_found") as u64, "{report}");
@@ -608,7 +717,7 @@ mod tests {
         data.batch("userdata.sqlite", "DELETE FROM migration_report WHERE part = 'references'");
         let (cat, ud) = data.open();
         run(&cat, &ud).expect("the start goes on");
-        assert_eq!(data.marks().len(), PARTS_017.len() + 1, "no part run again (and the band waves')");
+        assert_eq!(data.marks().len(), PARTS_017.len() + 2, "no part run again (and the band waves' and the credits')");
         let report = &ud.migration_report().unwrap()[PART].1;
         assert!(report["tables"].as_array().unwrap().iter().all(|t| t["name"] != "bandcamp_found"), "{report}");
         assert!(report["tables"].as_array().unwrap().iter().any(|t| t["name"] == "record_references"));
@@ -781,11 +890,12 @@ mod tests {
         let data = Data::new("says-parts");
         let (cat, ud) = data.open();
         let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
-        assert_eq!(parts_said(&lines), PARTS_017.iter().copied().chain(["band_wave"]).collect::<Vec<_>>(), "{lines:#?}");
+        assert_eq!(parts_said(&lines), PARTS_017.iter().copied().chain(["band_wave", "credits"]).collect::<Vec<_>>(), "{lines:#?}");
         assert_eq!(parts_said(&lines[..1]), ["hand"], "the step's first line is its first part's: {lines:#?}");
         let at = |start: &str| lines.iter().position(|l| l.starts_with(start)).unwrap_or_else(|| panic!("no {start}: {lines:#?}"));
         assert!(at("library: 0.17's step, part requests") < at("library: 0.17's step: the records' references moved into the catalogue"), "{lines:#?}");
         assert!(at("library: 0.17's step, part band_wave") < at("library: 0.17's step: the waveforms in three bands apart"), "{lines:#?}");
+        assert!(at("library: 0.17's step, part credits") < at("library: 0.17's step: the records you have credited"), "{lines:#?}");
         let report = &ud.migration_report().unwrap()[PART].1;
         let read: u64 = report["tables"].as_array().unwrap().iter().map(|t| t["before"].as_u64().unwrap()).sum();
         assert!((lines.len() as u64) < read, "no line per row: {} lines, {read} rows read: {lines:#?}", lines.len());
@@ -799,7 +909,7 @@ mod tests {
         done.sort();
         assert_eq!(cut.marks(), done, "hand … discogs done");
         let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
-        assert_eq!(parts_said(&lines), ["discography", "pages", "chosen", "requests", "band_wave"], "none of the parts marked: {lines:#?}");
+        assert_eq!(parts_said(&lines), ["discography", "pages", "chosen", "requests", "band_wave", "credits"], "none of the parts marked: {lines:#?}");
         assert_eq!(parts_said(&lines).first(), Some(&"discography"));
     }
 
@@ -823,11 +933,189 @@ mod tests {
         let (cat, ud) = data.open();
         let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
         assert_eq!(parts_said(&lines).first(), Some(&"discogs"), "{lines:#?}");
-        assert_eq!(parts_said(&lines), PARTS_017[5..].iter().copied().chain(["band_wave"]).collect::<Vec<_>>(), "no part marked runs again");
+        assert_eq!(parts_said(&lines), PARTS_017[5..].iter().copied().chain(["band_wave", "credits"]).collect::<Vec<_>>(), "no part marked runs again");
         let report = "SELECT report FROM migration_report WHERE part = 'references'";
         let uncut = Data::new("cut-said-uncut");
         uncut.run();
         assert_eq!(data.rows_of("userdata.sqlite", report), uncut.rows_of("userdata.sqlite", report), "the report an uncut step writes");
+    }
+
+    /// P3.1 (W3): after the step, before any build, every record a present file holds is credited as its files credit it (`files`):
+    /// its album artists in tag order, Various Artists for a compilation, the untagged one by name to the first artist of that name
+    /// (a second of the name made apart), the record of two copies once per artist and place; the two labelled their labels; the
+    /// part marked with how many records it credited; and Discover's missing list not empty. No had record with an album artist
+    /// in its files goes uncredited.
+    #[test]
+    fn the_step_credits_every_record_you_have() {
+        let data = Data::tagged("credits");
+        let (cat, ud, kinds) = data.open_both();
+        let kite = cat.artist_for("Kite Theory").unwrap();
+        assert!(cat.artist_apart("Kite Theory").unwrap() > kite, "a second Kite Theory");
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let artist = |name: &str| cat.artist_of(name).unwrap().unwrap_or_else(|| panic!("no {name}"));
+        let held: Vec<i64> = data
+            .texts("catalogue.sqlite", "SELECT DISTINCT CAST(t.record AS TEXT) FROM files f JOIN tracks t ON t.id = f.track WHERE f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL ORDER BY t.record")
+            .iter()
+            .map(|r| r.parse().unwrap())
+            .collect();
+        assert_eq!(held, [1, 2, 3, 4, 5, 7, 8], "the records a present file holds");
+        let expected: Vec<(i64, i64, i64)> = [
+            (1, vec!["Glass Harbour"]),
+            (2, vec!["Noor Field", "Orbit Lane"]),
+            (3, vec!["Kite Theory"]),
+            (4, vec!["Kite Theory"]),
+            (5, vec!["Various Artists"]),
+            (7, vec!["Noor Field"]),
+            (8, vec!["Glass Harbour"]),
+        ]
+        .into_iter()
+        .flat_map(|(record, names)| names.into_iter().enumerate().map(move |(position, name)| (record, name, position as i64)).collect::<Vec<_>>())
+        .map(|(record, name, position)| (record, artist(name), position))
+        .collect();
+        assert_eq!(data.files_credits(), expected, "each record its files' album artists, in order, and no other");
+        assert!(data.files_credits().iter().filter(|(record, ..)| *record == 4).all(|(_, a, _)| *a == kite), "the first of the name");
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM record_artists WHERE record = 7"), 1, "two copies: once");
+        let labels = data.rows_of("catalogue.sqlite", "SELECT r.record, l.name, r.catno FROM record_labels r JOIN labels l ON l.id = r.label WHERE r.how = 'files' ORDER BY r.record");
+        assert_eq!(labels, ["Integer(1)|Text(\"Quiet Pier\")|Text(\"QP 001\")", "Integer(2)|Text(\"Long Room\")|Text(\"LR-2\")"]);
+        assert_eq!(cat.meta("017:credits").as_deref(), Some(r#"{"records":7}"#), "marked, with the records it credited");
+        assert!(!cat.missing_everywhere().unwrap().0.is_empty(), "Discover's missing albums: Glass Harbour's discography");
+    }
+
+    /// P3.2 (W3): the part writes exactly what the first build's record pass writes (B: the step without it, then the build's
+    /// `keep_files_names` over the albums a build reads), and a build after it finds nothing to write, `at` included.
+    #[test]
+    fn the_steps_credits_are_the_first_builds() {
+        let (a, b) = (Data::tagged("credits-a"), Data::tagged("credits-b"));
+        let (cat, ud, kinds) = a.open_both();
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        {
+            let (cat, ud, kinds) = b.open_both();
+            run_without_credits(&cat, &ud);
+            cat.keep_files_names(&as_built(&cat, &kinds)).unwrap();
+        }
+        assert!(a.credit_rows().iter().any(|r| r.ends_with("|Text(\"files\")")), "credits written");
+        assert_eq!(a.credit_rows(), b.credit_rows(), "what the first build writes");
+        let before = a.credit_rows_with_at();
+        cat.keep_files_names(&as_built(&cat, &kinds)).unwrap();
+        assert_eq!(a.credit_rows_with_at(), before, "the first build finds nothing to write");
+    }
+
+    /// P3.3 (W3): the part runs once: run again, it writes nothing and says nothing; cut off by its `after`, it wrote no credit and
+    /// set no mark, and the next start completes it; a data folder whose step was done before the part came (every other mark,
+    /// staging's after preview 1's first deploy) runs it at the next start, alone.
+    #[test]
+    fn the_credits_part_runs_once_and_goes_on_after_a_cut() {
+        let twice = Data::tagged("credits-twice");
+        let (cat, ud, kinds) = twice.open_both();
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let (first, marks) = (twice.credit_rows_with_at(), twice.rows_of("catalogue.sqlite", "SELECT key, value FROM meta WHERE key GLOB '017:*' ORDER BY key"));
+        assert!(twice.marks().contains(&"credits".to_string()));
+        let lines = crate::diagnostics::logged_lines(|| super::run(&cat, &ud, &kinds, &Rules::default()).unwrap());
+        assert_eq!(twice.credit_rows_with_at(), first, "run again: nothing written");
+        assert_eq!(twice.rows_of("catalogue.sqlite", "SELECT key, value FROM meta WHERE key GLOB '017:*' ORDER BY key"), marks);
+        assert!(parts_said(&lines).is_empty() && !lines.iter().any(|l| l.contains("credited")), "and nothing said: {lines:#?}");
+
+        let cut = Data::tagged("credits-cut");
+        let (cat, ud, kinds) = cut.open_both();
+        run_without_credits(&cat, &ud);
+        let err = credits(&cat, &kinds, &Rules::default(), &|| anyhow::bail!("cut")).unwrap_err();
+        assert_eq!(format!("{err:#}"), "0.17's step, part credits: cut");
+        let files = |data: &Data| data.sql::<i64>("catalogue.sqlite", "SELECT (SELECT count(*) FROM record_artists WHERE how = 'files') + (SELECT count(*) FROM record_labels WHERE how = 'files')");
+        assert_eq!(files(&cut), 0, "cut off: no credit of the files written");
+        assert!(!cut.marks().contains(&"credits".to_string()), "and no mark");
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        assert!(cut.marks().contains(&"credits".to_string()));
+        assert_eq!(cut.credit_rows(), twice.credit_rows(), "the next start completes it");
+
+        let staged = Data::tagged("credits-staged");
+        let (cat, ud, kinds) = staged.open_both();
+        run_without_credits(&cat, &ud);
+        let mut before: Vec<String> = PARTS_017.iter().map(|p| p.to_string()).chain(["band_wave".to_string()]).collect();
+        before.sort();
+        assert_eq!(staged.marks(), before, "every mark but the credits'");
+        let lines = crate::diagnostics::logged_lines(|| super::run(&cat, &ud, &kinds, &Rules::default()).unwrap());
+        assert_eq!(parts_said(&lines), ["credits"], "the part alone: {lines:#?}");
+        assert_eq!(staged.credit_rows(), twice.credit_rows());
+    }
+
+    /// Ferry Lights' younger copy (record 11) on disk, its files naming the release its older copy (10) holds by a certain match
+    /// (G1: certain before the files).
+    const FERRY_FILES: &str = "
+        INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES
+          (0, 'Kite Theory/Ferry Lights (2016)/01 Pier.flac', 24000000, 1760000000, 1, 'FLAC', 900, 200000, 40, 16, 44100, 1760000000),
+          (0, 'Kite Theory/Ferry Lights (2016)/02 Wake.flac', 24000000, 1760000000, 1, 'FLAC', 900, 200000, 41, 16, 44100, 1760000000);
+        INSERT INTO tags (folder, rel, n, raw, name, value) SELECT folder, rel, 0, 'MUSICBRAINZ_ALBUMID', 'musicbrainz_albumid', 'abcdef00-0000-4000-8000-000000000020' FROM files WHERE rel LIKE 'Kite Theory/Ferry Lights (2016)/%';
+        INSERT INTO tags (folder, rel, n, raw, name, value) SELECT folder, rel, 1, 'ALBUM', 'album', 'Ferry Lights' FROM files WHERE rel LIKE 'Kite Theory/Ferry Lights (2016)/%';
+        INSERT INTO tags (folder, rel, n, raw, name, value) SELECT folder, rel, 2, 'ALBUMARTIST', 'albumartist', 'Kite Theory' FROM files WHERE rel LIKE 'Kite Theory/Ferry Lights (2016)/%';";
+
+    /// P3.4 (W3): the part writes credits and nothing else: every track's record, the records (made, retired, merged, counted:
+    /// all but the names its files give them), the files, every reference not the files', the records not had's listing credits
+    /// and the requests' records as the step's other parts left them; a release a certain match holds stays its record's (G1);
+    /// and a record had keeps a listing credit only where its files credit nobody (R17). Never `assign_records`.
+    #[test]
+    fn the_credits_part_writes_credits_alone() {
+        let data = Data::tagged("credits-alone");
+        data.batch("catalogue.sqlite", FERRY_FILES);
+        let (cat, ud, kinds) = data.open_both();
+        run_without_credits(&cat, &ud);
+        let ferry = || cat.subject_of(&Ref::new("musicbrainz", "release", FERRY)).unwrap();
+        assert_eq!(ferry(), ["al-10"], "held by the certain match, record 11's files naming it too");
+        let snapshot = || {
+            [
+                data.rows_of("catalogue.sqlite", "SELECT id, record, retired_at FROM tracks ORDER BY id"),
+                data.rows_of(
+                    "catalogue.sqlite",
+                    "SELECT id, born, retired_at, merged_into, year, kind, counting, counted_by_hand, checked_by_hand, seen_at, opened_at FROM records ORDER BY id",
+                ),
+                data.rows_of("catalogue.sqlite", "SELECT * FROM files ORDER BY folder, rel"),
+                data.rows_of("catalogue.sqlite", "SELECT * FROM \"references\" WHERE how <> 'files' ORDER BY subject, source, kind, value"),
+                data.rows_of(
+                    "catalogue.sqlite",
+                    "SELECT * FROM record_artists WHERE how = 'listing' AND record NOT IN (SELECT record FROM tracks WHERE record IS NOT NULL) ORDER BY record, artist",
+                ),
+                data.rows_of("userdata.sqlite", "SELECT id, record, status FROM request ORDER BY id"),
+            ]
+        };
+        let before = snapshot();
+        assert!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM records WHERE retired_at IS NOT NULL") > 0, "a retired record");
+        assert!(!before[4].is_empty(), "records not had with listing credits");
+        assert!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM request WHERE status = 'approved'") > 0, "open requests");
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        assert!(cat.part_done_017(CREDITS_017).unwrap() && !data.files_credits().is_empty(), "the part ran");
+        let after = snapshot();
+        for (n, what) in ["tracks", "records", "files", "references not the files'", "listing credits of records not had", "requests"].iter().enumerate() {
+            assert_eq!(after[n], before[n], "{what} as they were");
+        }
+        assert_eq!(ferry(), ["al-10"], "the certain match keeps its release");
+        let credited: std::collections::HashSet<i64> = data.files_credits().iter().map(|(record, ..)| *record).collect();
+        for record in data.rows_of("catalogue.sqlite", "SELECT record FROM record_artists WHERE how = 'listing' AND record IN (SELECT record FROM tracks) ORDER BY record") {
+            assert!(!credited.iter().any(|c| format!("Integer({c})") == record), "R17: a listing credit stays only where the files credit nobody: {record}");
+        }
+        let part = [body(include_str!("step_017.rs"), "pub(crate) fn credits("), body(include_str!("../catalogue/records.rs"), "pub fn credit_files_017(")];
+        assert!(part.iter().all(|code| !code.contains("assign_records") && !code.contains("Self::assign(")), "the part gives no record");
+    }
+
+    /// P3.5 (W3, M1): the part reads each folder's rows once (`rows_to_credit`) and no statement it runs names `analysis_shape`:
+    /// with the table set aside, it runs whole. The code says so too: its rows are read without the albums' gains, which the
+    /// shape gives (`served_rows`' `album_gains_in`), and no question is asked per album.
+    #[test]
+    fn the_credits_part_reads_no_shape() {
+        let data = Data::tagged("credits-no-shape");
+        let (cat, ud, kinds) = data.open_both();
+        run_without_credits(&cat, &ud);
+        data.batch("catalogue.sqlite", "ALTER TABLE analysis_shape RENAME TO shape_set_aside");
+        credits(&cat, &kinds, &Rules::default(), &|| Ok(())).expect("no statement names the shape");
+        assert!(!data.files_credits().is_empty());
+        let catalogue = include_str!("../catalogue/mod.rs");
+        let reader = body(catalogue, "pub fn rows_to_credit(");
+        assert!(reader.contains("PRESENT, false)"), "read without the albums' gains: {reader}");
+        let part = body(include_str!("step_017.rs"), "pub(crate) fn credits(");
+        assert_eq!(part.matches("rows_to_credit(").count(), 1, "one read a folder: {part}");
+        for code in [part, reader, body(include_str!("../catalogue/records.rs"), "pub fn credit_files_017(")] {
+            for named in ["analysis_shape", "SHAPE_JOIN", "album_gains_in", "served_rows", "keep_files_names("] {
+                assert!(!code.contains(named), "{named} in {code}");
+            }
+        }
     }
 
     /// The catalogue's every table, row by row: what a step that stops before its parts leaves as it was.
@@ -866,7 +1154,7 @@ mod tests {
         assert!(data.marks().is_empty(), "nothing done: {:?}", data.marks());
         writer.execute_batch("ROLLBACK").unwrap();
         run(&cat, &ud).unwrap();
-        assert_eq!(data.marks().len(), PARTS_017.len() + 1, "the writer gone, every part (and the band waves')");
+        assert_eq!(data.marks().len(), PARTS_017.len() + 2, "the writer gone, every part (and the band waves' and the credits')");
     }
 
     /// P5.3 (W5): a failure after the parts, the report not written (the user data gone read-only) or the requests not given
@@ -1116,8 +1404,12 @@ mod tests {
         }
         let made = made.elapsed();
         let step = std::time::Instant::now();
-        run(&cat, &ud).unwrap();
+        run_without_credits(&cat, &ud);
         let step = step.elapsed();
+        let part = std::time::Instant::now();
+        credits(&cat, &[], &Rules::default(), &|| Ok(())).unwrap();
+        let part = part.elapsed();
+        assert!(cat.part_done_017(CREDITS_017).unwrap());
         assert!(cat.references_to_carry().unwrap().is_empty());
         let references: i64 = Connection::open(d.join("catalogue.sqlite")).unwrap().query_row("SELECT count(*) FROM \"references\"", [], |r| r.get(0)).unwrap();
         let report = cat.references_carried().unwrap().unwrap();
@@ -1133,7 +1425,7 @@ mod tests {
         cat.keep_files_names(&copies).unwrap();
         let again = again.elapsed();
         eprintln!(
-            "0.17's step at production size: {step:?} for {references} references, {} records not had, {} found by their groups (made in {made:?}); a build's albums: {} copies in {copies_took:?}; keep_files_names: {build:?} the first time, {again:?} with nothing changed",
+            "0.17's step at production size: {step:?} for {references} references, {} records not had, {} found by their groups (made in {made:?}); its part credits: {part:?}; a build's albums: {} copies in {copies_took:?}; keep_files_names after the part: {build:?}, {again:?} with nothing changed",
             report["records_not_had"], report["records_found"], copies.len()
         );
         std::fs::remove_dir_all(&d).ok();
