@@ -2852,6 +2852,312 @@ mod missing_tests {
         assert!(!missing_albums(cat.clone(), artist, &sources).await.unwrap().1, "not asked again at once");
     }
 
+    // ---- F2: an album read from an artist's own list joins the record of its names
+
+    /// MusicBrainz's release groups of the finding's four records, and Bandcamp's pages of them.
+    const THEIR_GROUPS: [&str; 4] = ["00000000-0000-4000-8000-000000002101", "00000000-0000-4000-8000-000000002102", "00000000-0000-4000-8000-000000002103", "00000000-0000-4000-8000-000000002104"];
+    const THEIR_PAGES: [&str; 4] = [
+        "https://kitetheory.bandcamp.com/album/fourth-the-golden-eagle",
+        "https://kitetheory.bandcamp.com/album/the-curved-line",
+        "https://kitetheory.bandcamp.com/album/break-synonyms",
+        "https://kitetheory.bandcamp.com/album/answered-ep",
+    ];
+    const THEIR_TITLES: [&str; 4] = ["Fourth: The Golden Eagle", "The Curved Line", "Break Synonyms", "Answered"];
+    const THEIR_ARTIST: &str = "00000000-0000-4000-8000-000000002100";
+    /// Two albums of theirs the library has, untagged (staging's had halves of the doubles): MusicBrainz's group and Bandcamp's page
+    /// of the one, Bandcamp's page alone of the other.
+    const KYVERDALE_GROUP: &str = "00000000-0000-4000-8000-000000002105";
+    const KYVERDALE_PAGE: &str = "https://kitetheory.bandcamp.com/album/kyverdale-road";
+    const CAMBIO_PAGE: &str = "https://kitetheory.bandcamp.com/album/cambio-wechsel";
+
+    /// MusicBrainz's list of Kite Theory as the finding has it: three albums and an EP, "Answered", whose Discogs master MusicBrainz
+    /// links; and "Kyverdale Road".
+    fn their_musicbrainz_list() -> Vec<Listing> {
+        THEIR_TITLES
+            .iter()
+            .zip(THEIR_GROUPS)
+            .chain([(&"Kyverdale Road", KYVERDALE_GROUP)])
+            .map(|(title, group)| {
+                let answered = *title == "Answered";
+                let refs = std::iter::once(Ref::new("musicbrainz", "release-group", group)).chain(answered.then(|| Ref::new("discogs", "master", "3204"))).collect();
+                Listing { title: title.to_string(), kind: Some(if answered { "ep" } else { "album" }.into()), refs, ..Listing::default() }
+            })
+            .collect()
+    }
+
+    /// Bandcamp's list of them: the same four, "Answered" as "Answered EP", "Kyverdale Road" and "Cambio Wechsel", each with its page
+    /// and no kind, as `BandcampList` reads it.
+    fn their_bandcamp_list() -> Vec<Listing> {
+        ["Fourth: The Golden Eagle", "The Curved Line", "Break Synonyms", "Answered EP", "Kyverdale Road", "Cambio Wechsel"]
+            .iter()
+            .zip(THEIR_PAGES.into_iter().chain([KYVERDALE_PAGE, CAMBIO_PAGE]))
+            .map(|(title, page)| Listing { title: title.to_string(), refs: vec![Ref::new("bandcamp", "album", page)], ..Listing::default() })
+            .collect()
+    }
+
+    /// Their two had albums, "Kyverdale Road" and "Cambio Wechsel": untagged (no reference), their files crediting `artist`.
+    fn their_had(cat: &Catalogue, artist: i64) -> [i64; 2] {
+        ["Kyverdale Road", "Cambio Wechsel"].map(|title| {
+            let record = cat.record_for_tests(title, 3);
+            cat.db_for_tests().execute("UPDATE records SET artist = 'Kite Theory' WHERE id = ?1", [record]).unwrap();
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", [record, artist]).unwrap();
+            record
+        })
+    }
+
+    /// What a had album of theirs holds once their lists are read: the group and page of "Kyverdale Road", the page of "Cambio
+    /// Wechsel"; each a list's row joined to it, none of them a record of its own.
+    fn their_had_hold(cat: &Catalogue, had: [i64; 2]) {
+        let refs = |record: i64| cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().map(|(r, _)| r.value).collect::<Vec<_>>();
+        assert_eq!(refs(had[0]), [KYVERDALE_PAGE, KYVERDALE_GROUP], "Kyverdale Road: MusicBrainz's row and Bandcamp's joined the had album");
+        assert_eq!(refs(had[1]), [CAMBIO_PAGE], "Cambio Wechsel: Bandcamp's row joined the had album");
+    }
+
+    fn their_musicbrainz() -> Arc<dyn ArtistList> {
+        Arc::new(Stub("musicbrainz", |_| Ok(Some((Ref::new("musicbrainz", "artist", THEIR_ARTIST), Some("search"), their_musicbrainz_list())))))
+    }
+
+    fn their_bandcamp() -> Arc<dyn ArtistList> {
+        Arc::new(Stub("bandcamp", |_| Ok(Some((Ref::new("bandcamp", "artist", "https://kitetheory.bandcamp.com"), Some("search"), their_bandcamp_list())))))
+    }
+
+    /// A catalogue of its own, no read of an earlier one's address remembered (`readings` keys reads by it), and Kite Theory.
+    fn fresh_catalogue() -> (Arc<Catalogue>, i64) {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let at = Arc::as_ptr(&cat) as usize;
+        readings().lock().unwrap().retain(|(c, ..), _| *c != at);
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        (cat, artist)
+    }
+
+    fn count_records(cat: &Catalogue) -> i64 {
+        cat.db_for_tests().query_row("SELECT count(*) FROM records", [], |r| r.get(0)).unwrap()
+    }
+
+    /// The live records (merged into none).
+    fn count_live(cat: &Catalogue) -> i64 {
+        cat.db_for_tests().query_row("SELECT count(*) FROM records WHERE merged_into IS NULL", [], |r| r.get(0)).unwrap()
+    }
+
+    /// The live records whose title has `key` (`identity::title_key`).
+    fn of_key(cat: &Catalogue, key: &str) -> Vec<i64> {
+        let db = cat.db_for_tests();
+        let mut st = db.prepare("SELECT id, COALESCE(title, '') FROM records WHERE merged_into IS NULL AND retired_at IS NULL ORDER BY id").unwrap();
+        let rows: Vec<(i64, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        rows.into_iter().filter(|(_, t)| crate::catalogue::identity::title_key(t) == key).map(|(id, _)| id).collect()
+    }
+
+    /// The record that holds `r`.
+    fn holder_of(cat: &Catalogue, r: &Ref) -> i64 {
+        let held = cat.subject_of(r).unwrap();
+        assert_eq!(held.len(), 1, "{r:?} held by {held:?}");
+        crate::serve::ids::record_number(&held[0]).unwrap()
+    }
+
+    fn seen_at(cat: &Catalogue, record: i64) -> Option<i64> {
+        cat.db_for_tests().query_row("SELECT seen_at FROM records WHERE id = ?1", [record], |r| r.get(0)).unwrap()
+    }
+
+    /// The switches as the test sets them, put back when it ends, however it ends.
+    struct Switched(Vec<(&'static str, bool)>);
+
+    impl Switched {
+        fn to(set: &[(&'static str, bool)]) -> Self {
+            Switched(set.iter().map(|(name, on)| (*name, crate::app::switches::set_for_tests(name, *on))).collect())
+        }
+    }
+
+    impl Drop for Switched {
+        fn drop(&mut self) {
+            for (name, on) in &self.0 {
+                crate::app::switches::set_for_tests(name, *on);
+            }
+        }
+    }
+
+    /// F2.1 (the finding): Kite Theory's records not had from MusicBrainz's list; with MusicBrainz and Discogs switched off and
+    /// Bandcamp on (staging's switches), Bandcamp's list of the same four, "Answered" as "Answered EP", joins them: no record made,
+    /// each page on its record alone (how `link`), the settled list four rows titled as before, each with its page. Then "Answered"
+    /// is opened (F1.11's F2 case): MusicBrainz and Discogs answer switched off, Bandcamp with its list, which the record page shows.
+    /// Staging's had halves too (F2.9 on the artist page's path): their two untagged had albums, which MusicBrainz's list and
+    /// Bandcamp's join, none of them listed as missing. Never a record made beside one of its names, a title changed by a list, a
+    /// page on two records.
+    #[tokio::test]
+    async fn an_artists_bandcamp_list_joins_the_records_of_its_names() {
+        use crate::app::switches::{BANDCAMP, DISCOGS, MUSICBRAINZ, TEST_STATE};
+        use crate::catalogue::identity::RefTrack;
+        use crate::serve::ids;
+        let _one = TEST_STATE.lock().await;
+        let d = std::env::temp_dir().join(format!("cratarr-f2-joined-{}", std::process::id()));
+        std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+        let lib = crate::app::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap())).await.unwrap();
+        let cat = lib.catalogue();
+        let at = Arc::as_ptr(&cat) as usize;
+        readings().lock().unwrap().retain(|(c, ..), _| *c != at);
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let had = their_had(&cat, artist);
+        let first = count_live(&cat);
+        settled(&cat, artist, &[their_musicbrainz()]).await;
+        assert_eq!(count_live(&cat), first + 4, "MusicBrainz's list: its four records not had made, Kyverdale Road joined the had album");
+        let theirs: Vec<i64> = THEIR_GROUPS.iter().map(|g| holder_of(&cat, &Ref::new("musicbrainz", "release-group", g))).collect();
+        let answered = theirs[3];
+        let _switched = Switched::to(&[(MUSICBRAINZ, false), (DISCOGS, false), (BANDCAMP, true)]);
+        let (before, live) = (count_records(&cat), count_live(&cat));
+        let rows = settled(&cat, artist, &[their_bandcamp()]).await;
+        assert_eq!(count_live(&cat), live, "no record made beside one of its names");
+        assert_eq!(count_records(&cat), before + 2, "but the two rows joined to had albums, each a record of its own merged into its had album (F2.9-hand)");
+        for (record, page) in theirs.iter().zip(THEIR_PAGES) {
+            assert_eq!(cat.subject_of(&Ref::new("bandcamp", "album", page)).unwrap(), [ids::record(*record)], "{page}: on its record alone");
+            let how = cat.references_of(&ids::record(*record)).unwrap().into_iter().find(|(r, _)| r.source == "bandcamp").map(|(_, row)| row.how);
+            assert_eq!(how.as_deref(), Some("link"), "{page}");
+        }
+        let mut listed: Vec<(String, String, Option<String>)> = rows.iter().map(|m| (m.record.clone(), m.title.clone(), m.bandcamp.clone())).collect();
+        listed.sort();
+        let mut expected: Vec<(String, String, Option<String>)> =
+            theirs.iter().zip(THEIR_TITLES).zip(THEIR_PAGES).map(|((record, title), page)| (ids::record(*record), title.to_string(), Some(page.to_string()))).collect();
+        expected.sort();
+        assert_eq!(listed, expected, "four rows, titled as before, each with its page; no had album among them");
+        their_had_hold(&cat, had);
+        // "Answered" opened: MusicBrainz and Discogs switched off, Bandcamp's list read through its page.
+        let tracks = vec![
+            RefTrack { disc: 1, position: 1, title: "Lamplight".into(), length_ms: Some(200_000), recording: None },
+            RefTrack { disc: 1, position: 2, title: "Morning".into(), length_ms: Some(180_000), recording: None },
+        ];
+        let read = |r: Ref| {
+            let list = tracks.clone();
+            async move {
+                match r.source.as_str() {
+                    "musicbrainz" => Err(anyhow::Error::from(crate::app::references::SwitchedOff("MusicBrainz"))),
+                    "discogs" => Err(anyhow::Error::from(crate::app::references::SwitchedOff("Discogs"))),
+                    "bandcamp" if r.kind == "album" && r.value == THEIR_PAGES[3] => Ok(Some((list, None))),
+                    _ => Err(anyhow::anyhow!("not expected: {r:?}")),
+                }
+            }
+        };
+        let judged = crate::app::references::tracklist(&cat, answered, read).await.unwrap().expect("a list to judge by");
+        assert_eq!(judged.timed.map(|(source, _)| source).as_deref(), Some("bandcamp"), "Bandcamp's list");
+        let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
+        let sync = Arc::new(crate::app::sync::SyncService::new(lib.clone(), crate::sync_state::SyncState::open(None).unwrap(), journal.clone()));
+        let playing = crate::app::PlayingService::new(lib.clone(), Arc::new(crate::app::PlaylistService::new(lib.clone(), sync, journal, None)));
+        let page = playing.record_view(&ids::record(answered)).await.unwrap().expect("its page");
+        let shown: Vec<Option<String>> = page.rows.iter().map(|r| r.name.clone()).collect();
+        assert_eq!(shown, [Some("Lamplight".to_string()), Some("Morning".to_string())], "Answered opens with Bandcamp's tracks");
+        assert_eq!(page.title, "Answered", "no list renames it");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    const ANSWERED_GROUP: &str = "00000000-0000-4000-8000-000000002501";
+    const ANSWERED_PAGE: &str = "https://kitetheory.bandcamp.com/album/answered-ep";
+
+    fn answered_by_musicbrainz() -> Vec<Listing> {
+        vec![Listing { title: "Answered".into(), kind: Some("ep".into()), refs: vec![Ref::new("musicbrainz", "release-group", ANSWERED_GROUP)], ..Listing::default() }]
+    }
+
+    fn answered_by_bandcamp() -> Vec<Listing> {
+        vec![Listing { title: "Answered EP".into(), refs: vec![Ref::new("bandcamp", "album", ANSWERED_PAGE)], ..Listing::default() }]
+    }
+
+    /// A list that answers once every read gated by its barrier has asked: two lists at once (F2.5). Each its source's own reader
+    /// (`turn_of`), under a name of its own (`at once: <source>`), so no other test's read of that source holds it back past the cut
+    /// while the other waits at the barrier.
+    struct Gated(&'static str, Arc<tokio::sync::Barrier>, fn() -> Vec<Listing>);
+
+    impl ArtistList for Gated {
+        fn source(&self) -> &'static str {
+            if self.0 == "bandcamp" { "at once: bandcamp" } else { "at once: musicbrainz" }
+        }
+
+        fn read<'a>(&'a self, _: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+            let (gate, rows) = (self.1.clone(), (self.2)());
+            let known = if self.0 == "bandcamp" { Ref::new("bandcamp", "artist", "https://kitetheory.bandcamp.com") } else { Ref::new(self.0, "artist", THEIR_ARTIST) };
+            Box::pin(async move {
+                gate.wait().await;
+                Ok(Some((known, Some("search"), rows)))
+            })
+        }
+    }
+
+    /// The one record of "Answered" both lists keep (F2.5): its id and title; it holds MusicBrainz's group and Bandcamp's page, is
+    /// credited to the artist, and was seen since `since`.
+    fn the_one_answered(cat: &Catalogue, artist: i64, since: i64, case: &str) -> (i64, String) {
+        let records = of_key(cat, "answered");
+        assert_eq!(records.len(), 1, "{case}: one record of the name, {records:?}");
+        let record = records[0];
+        let held: Vec<(String, String)> = cat.references_of(&crate::serve::ids::record(record)).unwrap().into_iter().map(|(r, _)| (r.kind, r.value)).collect();
+        assert!(held.contains(&("release-group".into(), ANSWERED_GROUP.into())) && held.contains(&("album".into(), ANSWERED_PAGE.into())), "{case}: {held:?}");
+        assert_eq!(cat.record_artists(record).unwrap(), [artist], "{case}: credited to the artist");
+        assert!(seen_at(cat, record).is_some_and(|at| at >= since), "{case}: seen");
+        (record, cat.record(record).unwrap().unwrap().title)
+    }
+
+    /// F2.5 (kind 4): MusicBrainz's "Answered" (its group, an EP) and Bandcamp's "Answered EP" (its page), MusicBrainz's first,
+    /// Bandcamp's first, or both at once (each list's read in its task, answering through one barrier; 20 times): one record of the
+    /// name each time, holding both, credited to the artist, seen by both lists (Z4); its title the first maker's ("Answered",
+    /// "Answered EP", either at once). Never two records; the names looked up inside the write that makes the record.
+    #[tokio::test]
+    async fn either_list_first_or_both_at_once_make_one_record() {
+        let since = super::super::moment::now_secs();
+        let musicbrainz: Arc<dyn ArtistList> = Arc::new(Stub("musicbrainz", |_| Ok(Some((Ref::new("musicbrainz", "artist", THEIR_ARTIST), Some("search"), answered_by_musicbrainz())))));
+        let bandcamp: Arc<dyn ArtistList> = Arc::new(Stub("bandcamp", |_| Ok(Some((Ref::new("bandcamp", "artist", "https://kitetheory.bandcamp.com"), Some("search"), answered_by_bandcamp())))));
+        let mut kept = Vec::new();
+        for (case, first, second, title) in [("MusicBrainz's first", &musicbrainz, &bandcamp, "Answered"), ("Bandcamp's first", &bandcamp, &musicbrainz, "Answered EP")] {
+            let (cat, artist) = fresh_catalogue();
+            settled(&cat, artist, std::slice::from_ref(first)).await;
+            let first_seen: Option<i64> = cat.db_for_tests().query_row("SELECT min(seen_at) FROM records", [], |r| r.get(0)).unwrap();
+            assert!(first_seen.is_some_and(|at| at >= since), "{case}: seen by the first list");
+            cat.db_for_tests().execute("UPDATE records SET seen_at = 5", []).unwrap();
+            settled(&cat, artist, std::slice::from_ref(second)).await;
+            let (_, named) = the_one_answered(&cat, artist, since, case);
+            assert_eq!(named, title, "{case}: the first maker's title");
+            kept.push(cat);
+        }
+        for run in 0..20 {
+            let (cat, artist) = fresh_catalogue();
+            let gate = Arc::new(tokio::sync::Barrier::new(2));
+            let both: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Gated("musicbrainz", gate.clone(), answered_by_musicbrainz)), Arc::new(Gated("bandcamp", gate, answered_by_bandcamp))];
+            settled(&cat, artist, &both).await;
+            let (_, named) = the_one_answered(&cat, artist, since, &format!("at once, run {run}"));
+            assert!(["Answered", "Answered EP"].contains(&named.as_str()), "run {run}: {named}");
+            // Kept to the end: a catalogue's address keys its reads, and none is given again meanwhile.
+            kept.push(cat);
+        }
+    }
+
+    /// F2.6 (kind 4): F2.1's joined records, their had albums' among them, then Bandcamp's list read again once it is old, and the
+    /// monthly re-read of MusicBrainz's: the same records, found by their references; none made; each seen again; the had albums
+    /// still holding what joined them, never listed as missing.
+    #[tokio::test]
+    async fn a_later_list_finds_the_joined_record() {
+        let (cat, artist) = fresh_catalogue();
+        let since = super::super::moment::now_secs();
+        let had = their_had(&cat, artist);
+        settled(&cat, artist, &[their_musicbrainz()]).await;
+        settled(&cat, artist, &[their_bandcamp()]).await;
+        let theirs: Vec<i64> = THEIR_GROUPS.iter().map(|g| holder_of(&cat, &Ref::new("musicbrainz", "release-group", g))).collect();
+        let joined = |cat: &Catalogue| THEIR_PAGES.iter().map(|p| holder_of(cat, &Ref::new("bandcamp", "album", p))).collect::<Vec<i64>>();
+        assert_eq!(joined(&cat), theirs, "joined (F2.1)");
+        let before = count_records(&cat);
+        let all_seen = |cat: &Catalogue| theirs.iter().all(|r| seen_at(cat, *r).is_some_and(|at| at >= since));
+        let (name, refs) = cat.artist_known(artist).unwrap().unwrap();
+        let asked = Arc::new(ArtistAsked { id: artist, name, refs: refs.into_iter().map(|(r, _)| r).collect() });
+        // Bandcamp's list read again, once it is old.
+        cat.db_for_tests().execute("UPDATE records SET seen_at = 5", []).unwrap();
+        let old = super::super::moment::now_secs() + LIST_FRESH_SECS + 1;
+        assert!(read_lists(&cat, &asked, &HashMap::new(), &[their_bandcamp()], old), "read again");
+        settled(&cat, artist, &[their_bandcamp()]).await;
+        assert_eq!((count_records(&cat), joined(&cat)), (before, theirs.clone()), "Bandcamp's again: the same records, none made");
+        assert!(all_seen(&cat), "each seen again");
+        // The monthly re-read of MusicBrainz's.
+        cat.db_for_tests().execute("UPDATE records SET seen_at = 5", []).unwrap();
+        assert!(reread_one(&cat, &asked, their_musicbrainz().as_ref()).await.unwrap(), "read");
+        let again: Vec<i64> = THEIR_GROUPS.iter().map(|g| holder_of(&cat, &Ref::new("musicbrainz", "release-group", g))).collect();
+        assert_eq!((count_records(&cat), again), (before, theirs.clone()), "MusicBrainz's again: the same records, none made");
+        assert!(all_seen(&cat), "each seen again");
+        their_had_hold(&cat, had);
+        let missing: Vec<String> = settled(&cat, artist, &[their_musicbrainz(), their_bandcamp()]).await.into_iter().map(|m| m.title).collect();
+        assert!(!missing.iter().any(|t| t == "Kyverdale Road" || t == "Cambio Wechsel"), "no had album listed as missing: {missing:?}");
+    }
+
     /// C53a's timing at production's size (about 9,000 records not had from 688 discographies, a few hundred an artist; 5,000
     /// records had): an artist page of 300 records not had answers from kept rows. `rt.sh test --ignored --nocapture`.
     #[test]

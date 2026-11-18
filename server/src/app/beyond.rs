@@ -970,4 +970,42 @@ mod tests {
         assert!(found.iter().all(|a| a.artist.is_none()), "no artist holds their ids");
         assert_eq!([count("records"), count("artists"), count("references"), count("record_artists")], before, "nothing made");
     }
+
+    /// F2.8 (0100's "two albums of one name stay two" meets F2): beside "Night Walks" of Kite Theory (its group), Beyond lists its
+    /// MusicBrainz row and Discogs' master 3001 of the name, which no record holds. (a) Two rows: no name merge (C57). (b) Discogs'
+    /// row opened (`labels::open_record`, `keep_listing(None, …)`): a record of its own, credited to nobody (Z3); "Night Walks" holds
+    /// no master. (c) Instead, the artist's own Discogs list names 3001: it joins "Night Walks" by its names (X8 permitting), and
+    /// Beyond then shows one row with both sources, by reference (C57: one record holds both). Never a row opened from Beyond or a
+    /// label's page joined by names; never Beyond's rows merged by name.
+    #[test]
+    fn beyond_and_a_label_page_never_join_by_names() {
+        let fresh = || {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let artist = cat.artist_for("Kite Theory").unwrap();
+            let row = crate::catalogue::records::Listing { title: "Night Walks".into(), artist: "Kite Theory".into(), kind: Some("album".into()), refs: vec![Ref::new("musicbrainz", "release-group", GROUP_1)], ..Default::default() };
+            let walks = cat.keep_listing(Some(artist), &[row], "link").unwrap()[0];
+            (cat, artist, walks)
+        };
+        let mb = [album(GROUP_1, "Night Walks", "Kite Theory")];
+        let discogs = [master(3001, "Night Walks", "Kite Theory")];
+        let sources = |rows: &[BeyondAlbum]| rows.iter().map(|r| r.sources.clone()).collect::<Vec<_>>();
+        let masters = |cat: &Catalogue, record: i64| cat.references_of(&ids::record(record)).unwrap().into_iter().filter(|(r, _)| r.source == "discogs").count();
+        // (a)
+        let (cat, _, walks) = fresh();
+        assert_eq!(sources(&rows(&cat, &mb, &discogs)), [vec!["musicbrainz"], vec!["discogs"]], "(a) two rows: no name merge");
+        // (b)
+        let opened = crate::app::labels::open_record(&cat, &crate::app::labels::Opened { discogs_master: Some(3001), title: "Night Walks".into(), artist: "Kite Theory".into(), ..Default::default() })
+            .unwrap()
+            .expect("opened");
+        assert_ne!(opened, walks, "(b) a record of its own");
+        assert!(cat.record_artists(opened).unwrap().is_empty(), "(b) credited to nobody");
+        assert_eq!(masters(&cat, walks), 0, "(b) Night Walks holds no master");
+        assert_eq!(sources(&rows(&cat, &mb, &discogs)), [vec!["musicbrainz"], vec!["discogs"]], "(b) still two rows");
+        // (c)
+        let (cat, artist, walks) = fresh();
+        let listed = crate::catalogue::records::Listing { title: "Night Walks".into(), artist: "Kite Theory".into(), refs: vec![Ref::new("discogs", "master", "3001")], ..Default::default() };
+        assert_eq!(cat.keep_listing(Some(artist), &[listed], "link").unwrap(), [walks], "(c) the artist's own list joins it by its names");
+        assert_eq!(masters(&cat, walks), 1, "(c)");
+        assert_eq!(sources(&rows(&cat, &mb, &discogs)), [vec!["musicbrainz", "discogs"]], "(c) one row, both sources, by reference");
+    }
 }

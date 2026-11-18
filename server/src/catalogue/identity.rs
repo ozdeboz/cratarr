@@ -37,6 +37,14 @@ pub fn fold(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 
+/// An album's title as an artist's own lists compare it (F2): its words as the release type rule splits a name
+/// (`serve::library::named`), each word that rule reads as a type ("EP", "LP", any case) left out, the rest folded as `fold` folds
+/// them. "Answered EP" and "Answered" are one; "Epoch" keeps its letters, and "Tide Tables (Remixes)" its brackets' words. Nothing
+/// left ("EP" alone): empty, which matches nothing.
+pub fn title_key(title: &str) -> String {
+    title.split(|c: char| !c.is_alphanumeric()).filter(|w| crate::serve::library::named(w).is_none()).map(fold).collect()
+}
+
 /// The file name of a relative path, folded, without its extension.
 pub fn name_of(rel: &str) -> String {
     let file = rel.rsplit('/').next().unwrap_or(rel);
@@ -483,6 +491,37 @@ fn tags_say(files: &[FileNumbers]) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F2.2: the names an artist's own list joins a record by leave out "EP" and "LP" as the release type rule reads them: equal
+    /// where only those words, case or punctuation differ; "EP" inside a word is no word, and bracketed words stay, as `fold` keeps
+    /// them; "EP" or "LP" alone is an empty key. Every word `named` reads as a type is a word left out, and no other.
+    #[test]
+    fn the_names_a_list_joins_by_leave_out_ep_and_lp_as_the_type_rule_reads_them() {
+        use crate::serve::library::named;
+        for (a, b) in [
+            ("Answered EP", "Answered"),
+            ("answered ep", "Answered"),
+            ("Night Walks (EP)", "Night Walks"),
+            ("Long Player LP", "Long Player"),
+            ("Fourth: The Golden Eagle", "Fourth The Golden Eagle"),
+            ("Two Rooms EP", "Two Rooms"),
+        ] {
+            assert_eq!(title_key(a), title_key(b), "{a} and {b}: one name");
+            assert!(!title_key(a).is_empty(), "{a}");
+        }
+        for (a, b) in [("Epoch", "och"), ("Help", "H"), ("Tide Tables (Remixes)", "Tide Tables")] {
+            assert_ne!(title_key(a), title_key(b), "{a} and {b}: two names");
+        }
+        assert_eq!([title_key("EP"), title_key("LP"), title_key("(ep)")], [String::new(), String::new(), String::new()], "nothing left: a key that matches nothing");
+        for title in ["Answered EP", "Night Walks (EP)", "Long Player LP", "Epoch", "Help", "Tide Tables (Remixes)", "LP / EP", "Sleep Lp2", "Ep. 3", "The EP of the Lp"] {
+            let words: Vec<&str> = title.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+            let kept: String = words.iter().filter(|w| named(w).is_none()).map(|w| fold(w)).collect();
+            assert_eq!(title_key(title), kept, "{title}: the words the type rule reads as a type left out, and no other");
+            for w in words {
+                assert_eq!(named(w).is_some(), title_key(w).is_empty(), "{title}: {w}");
+            }
+        }
+    }
 
     /// S.1: a copy lacks tracks by its copies, its counting list, MusicBrainz's check, or its clean tags, in that order; tags that
     /// cannot say are Unknown, which copies.

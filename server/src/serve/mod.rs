@@ -1050,6 +1050,33 @@ mod tests {
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
+    /// F2.9-hand (the owner: "Your hand wins"): RB5 in the other order, the lists read before the files came: the same as when the
+    /// files came first. Built an album by the rule, the album had and the single not; set to Single by hand, the single had and the
+    /// album set apart, a Want of its group asking for it.
+    #[test]
+    fn a_type_set_by_hand_is_the_type_a_record_is_had_by_whichever_came_first() {
+        let (roots, cat, serve) = on_two_folders("rf1-set-lists-first");
+        let single = listed(&cat, "single", &[("discogs", "master", "6101")]);
+        let album = listed(&cat, "album", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006102")]);
+        let eight: Vec<(String, String)> = (1..=8).map(|n| (format!("A/0{n} Version {n}.flac"), format!("Version {n}"))).collect();
+        add(&cat, &roots[0], 0, &eight.iter().map(|(rel, title)| (rel.as_str(), title.as_str())).collect::<Vec<_>>());
+        serve.refresh().unwrap();
+        let owned = record_in(&serve, 0, "A");
+        let holders = || {
+            let read = cat.requested(&[single, album]).unwrap();
+            (read[&single].holder, read[&album].holder)
+        };
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("album"), "built an album by the rule");
+        assert_eq!(holders(), (None, Some(owned)), "an album: the album had, the single not");
+        serve.userdata.set_overrides(&[ids::record(owned)], &[("type".to_string(), Some(serde_json::json!("single")))], 100).unwrap();
+        serve.refresh().unwrap();
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "the type set by hand, kept on the record");
+        assert_eq!(holders(), (Some(owned), None), "set to Single: the single had, the album set apart");
+        let wanted = crate::catalogue::records::Wanted { group: Some("00000000-0000-4000-8000-000000006102".into()), artist: "Artist".into(), title: "Album".into(), ..Default::default() };
+        assert_eq!(cat.record_for_request(&wanted).unwrap(), album, "a Want of its group asks for it");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
     /// RF1 (RB1's third scenario, RB5's second): a copy of three of an album's eight tracks, untagged, is a single by its own files.
     /// Found missing tracks (`app::incomplete`: its whole release eight), the build types it as that release, an album, and the
     /// catalogue keeps that type: the album's record of its name, MusicBrainz's, is held by it, partly there (three of eight), and off

@@ -302,8 +302,9 @@ pub fn type_by_files(name: &str, lengths: &[Option<u64>]) -> Option<String> {
     if single(&shortest) == single(&longest) { shortest } else { None }
 }
 
-/// The type an album's name gives: its last word "EP" an EP, "LP" an album (any case).
-fn named(name: &str) -> Option<&'static str> {
+/// The type an album's name gives: its last word "EP" an EP, "LP" an album (any case). The words an artist's own lists leave out of
+/// a title (`identity::title_key`, F2).
+pub(crate) fn named(name: &str) -> Option<&'static str> {
     name.split(|c: char| !c.is_alphanumeric()).rev().find_map(|w| match w.to_ascii_lowercase().as_str() {
         "ep" => Some("ep"),
         "lp" => Some("album"),

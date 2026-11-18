@@ -2799,7 +2799,9 @@ impl Catalogue {
 
     /// The type each record's album was built with (RF1, `Library::record_types`), kept on its record (`records.typed`): what the had
     /// rule classes a had record by (`records::classes_of`), its type set by hand and an incomplete album's whole release with it.
-    /// Only a type that changed is written. How many changed. Blocking.
+    /// Only a type that changed is written; a row of an artist's list joined to the record by its names alone whose kind the new type
+    /// contradicts is given back its own record (F2.9-hand, the owner: "Your hand wins", `records::give_back_joins_in`). How many
+    /// changed. Blocking.
     pub fn keep_types(&self, types: &[(i64, String)]) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -2807,7 +2809,11 @@ impl Catalogue {
         {
             let mut st = tx.prepare_cached("UPDATE records SET typed = ?2 WHERE id = ?1 AND typed IS NOT ?2")?;
             for (record, kind) in types {
-                changed += st.execute(params![record, kind])?;
+                let typed = st.execute(params![record, kind])?;
+                if typed > 0 {
+                    records::give_back_joins_in(&tx, *record, kind, now())?;
+                }
+                changed += typed;
             }
         }
         tx.commit()?;

@@ -4055,4 +4055,123 @@ pub(crate) mod tests {
         drop(serve);
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    // ---- F2: an artist's own list and a Want meet on one record
+
+    const ANSWERED_GROUP: &str = "00000000-0000-4000-8000-000000002701";
+    const ANSWERED_PAGE: &str = "https://kitetheory.bandcamp.com/album/answered-ep";
+
+    /// The scenarios' accounts on `serve`: root, an administrator (the first made); alice and bob, users with Request albums.
+    fn askers(serve: &Serve) {
+        for (name, admin) in [("root", true), ("alice", false), ("bob", false)] {
+            serve.users.create(name, "pw", admin).unwrap();
+        }
+    }
+
+    /// A row of Kite Theory's own list kept (`keep_listing(Some(artist), …)`): its record.
+    fn their_row(serve: &Serve, title: &str, kind: Option<&str>, refs: &[(&str, &str, &str)]) -> i64 {
+        let cat = serve.catalogue();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let refs = refs.iter().map(|(s, k, v)| crate::catalogue::records::Ref::new(s, k, v)).collect();
+        let row = crate::catalogue::records::Listing { title: title.into(), artist: "Kite Theory".into(), kind: kind.map(str::to_string), refs, ..Default::default() };
+        cat.keep_listing(Some(artist), &[row], "link").unwrap()[0]
+    }
+
+    /// An untagged had record of Kite Theory's, `title`, its files crediting them.
+    fn had_of_theirs(serve: &Serve, title: &str) -> i64 {
+        let cat = serve.catalogue();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let record = cat.record_for_tests(title, 3);
+        cat.execute_for_tests(&format!("UPDATE records SET artist = 'Kite Theory' WHERE id = {record}"));
+        cat.execute_for_tests(&format!("INSERT INTO record_artists (record, artist, position, how) VALUES ({record}, {artist}, 0, 'files')"));
+        record
+    }
+
+    fn records_now(serve: &Serve) -> i64 {
+        serve.catalogue().writer_for_tests().query_row("SELECT count(*) FROM records", [], |r| r.get(0)).unwrap()
+    }
+
+    /// F2.7 (kind 4, kind 6: a Want's record). (a) alice Wants Bandcamp's "Answered EP" (its page, no group): record R holds the page.
+    /// MusicBrainz's list then names "Answered" (its group): the group joins R; her request still names R, and shows R's names and
+    /// the group; Soulseek's item of R keeps its record. (b) A joined record ("Answered", its group and its page): bob's Want from
+    /// Bandcamp's card and alice's from MusicBrainz's both name it, and no record is made. (c) OQ-F2b (a): bob's Want of "Answered
+    /// EP" by its names alone (no page, no group, as a Spotify Want) names the record not had "Answered", found by its title's key
+    /// (X8 permitting); a had record is still found by its exact folded names alone (B1). Never a Want making a record beside a
+    /// joined one that holds its page or group.
+    #[tokio::test]
+    async fn a_list_after_a_want_joins_its_record_and_a_want_after_finds_it() {
+        let house = Copies::none();
+        let h = Hands { lidarr: None, soulseek: true, house: &house, disks: &Roomy };
+        // (a)
+        let serve = served();
+        askers(&serve);
+        crate::bandcamp::Bandcamp::get().keep(crate::bandcamp::Album {
+            url: ANSWERED_PAGE.into(),
+            title: "Answered EP".into(),
+            artist: "Kite Theory".into(),
+            cover: None,
+            tracks: Vec::new(),
+            released: None,
+            label: None,
+            account: None,
+            about: None,
+            credits: None,
+            tags: Vec::new(),
+        });
+        let r = record_of_album_in(&serve, None, "Kite Theory", "Answered EP", None, None, Some(ANSWERED_PAGE.into())).await.unwrap();
+        let asked = acting("alice", false, ask_record_with(&h, &serve, "alice", r)).await.unwrap();
+        assert_eq!(now_of(&serve, asked.id).record, Some(r), "(a) her request names R");
+        assert_eq!(their_row(&serve, "Answered", Some("ep"), &[("musicbrainz", "release-group", ANSWERED_GROUP)]), r, "(a) the group joins R");
+        assert_eq!(now_of(&serve, asked.id).record, Some(r), "(a) her request still names R");
+        let view = views(&serve, None, vec![now_of(&serve, asked.id)]).await.pop().unwrap();
+        assert_eq!(
+            (view.request.album.as_str(), view.request.artist.as_str(), view.request.release_group.as_deref()),
+            ("Answered EP", "Kite Theory", Some(ANSWERED_GROUP)),
+            "(a) R's names, and its group"
+        );
+        let (approved, of) = crate::app::soulseek::requests_taken(&serve.userdata, serve.catalogue(), &serve.library.kinds()).unwrap();
+        assert!(crate::app::soulseek::items_of(&approved, &of).contains(&r), "(a) Soulseek's item of R keeps its record");
+        // (b)
+        let serve = served();
+        askers(&serve);
+        let joined = their_row(&serve, "Answered", Some("ep"), &[("musicbrainz", "release-group", ANSWERED_GROUP)]);
+        assert_eq!(their_row(&serve, "Answered EP", None, &[("bandcamp", "album", ANSWERED_PAGE)]), joined, "(b) joined");
+        let before = records_now(&serve);
+        let by_page = record_of_album_in(&serve, None, "Kite Theory", "Answered EP", None, None, Some(ANSWERED_PAGE.into())).await.unwrap();
+        let by_group = record_of_album_in(&serve, Some(ANSWERED_GROUP.into()), "Kite Theory", "Answered", None, None, None).await.unwrap();
+        let bobs = acting("bob", false, ask_record_with(&h, &serve, "bob", by_page)).await.unwrap();
+        let alices = acting("alice", false, ask_record_with(&h, &serve, "alice", by_group)).await.unwrap();
+        assert_eq!((now_of(&serve, bobs.id).record, now_of(&serve, alices.id).record), (Some(joined), Some(joined)), "(b) by its page, by its group");
+        assert_eq!(records_now(&serve), before, "(b) no record made");
+        // (c)
+        let serve = served();
+        askers(&serve);
+        let answered = their_row(&serve, "Answered", Some("ep"), &[("musicbrainz", "release-group", ANSWERED_GROUP)]);
+        let by_names = record_of_album_in(&serve, None, "Kite Theory", "Answered EP", None, None, None).await.unwrap();
+        let bobs = acting("bob", false, ask_record_with(&h, &serve, "bob", by_names)).await.unwrap();
+        assert_eq!(now_of(&serve, bobs.id).record, Some(answered), "(c) by its title's key: the record not had \"Answered\"");
+        let owned = had_of_theirs(&serve, "Kyverdale Road");
+        let loose = record_of_album_in(&serve, None, "Kite Theory", "Kyverdale Road EP", None, None, None).await.unwrap();
+        assert_ne!(loose, owned, "(c) a had record never by its title's key (B1)");
+        assert_eq!(record_of_album_in(&serve, None, "Kite Theory", "Kyverdale Road", None, None, None).await.unwrap(), owned, "(c) by its exact names");
+    }
+
+    /// F2.9's Want: MusicBrainz's row of an untagged had record's names joins it (its group on it); alice's Want by that group then
+    /// finds the had record: "Already in the library", no fetcher asked (the strict Lidarr expects nothing).
+    #[tokio::test]
+    async fn a_list_row_joins_a_had_record_of_its_names() {
+        const G: &str = "00000000-0000-4000-8000-000000002901";
+        let serve = served();
+        askers(&serve);
+        let owned = had_of_theirs(&serve, "Kyverdale Road");
+        let joined = their_row(&serve, "Kyverdale Road", Some("album"), &[("musicbrainz", "release-group", G)]);
+        assert_eq!(serve.catalogue().record(joined).unwrap().unwrap().id, owned, "MusicBrainz's row joins the had record");
+        let (strict, house) = (Strict::expecting_nothing(), Copies::none());
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
+        let wanted = record_of_album_in(&serve, Some(G.into()), "Kite Theory", "Kyverdale Road", None, None, None).await.unwrap();
+        assert_eq!(wanted, owned, "her Want finds the had record by its group");
+        let asked = acting("alice", false, ask_record_with(&h, &serve, "alice", wanted)).await.unwrap();
+        assert_eq!(now_of(&serve, asked.id).fetched.as_deref(), Some(ALREADY_HAD), "in the library");
+        assert!(strict.violations().is_empty() && strict.wanted().is_empty(), "no fetcher asked: {:?}", strict.violations());
+    }
 }
