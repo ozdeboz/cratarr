@@ -2783,6 +2783,42 @@ mod tests {
         }
     }
 
+    /// RF7 (the review of runs 11 and 12, RA3): after a Replace from Bob's copy, a tag fix rewrote a copied FLAC in Music; RY01's Undo
+    /// is refused, saying only what is so: which file changed, and that the library's old copy cannot come back; no advice. Then the
+    /// fix is undone as 0092's Undo does it (the copy's bytes again, written anew: a new time), and the Undo says the same, which is
+    /// still so. Each time nothing moves, the entry is not undone and no Undo is begun on it. Never advice that cannot work ("undo
+    /// that change first").
+    #[tokio::test]
+    async fn the_undo_of_a_replace_from_a_changed_copy_says_only_what_is_so() {
+        let (svc, music, inc, ann, bob) = with_three_own("rf7-changed", RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
+        let at = bobs_copy(&svc, &bob, RY01_DIR).await;
+        let done = svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None).await.unwrap();
+        let key = done.undo.clone().unwrap();
+        let id: EventId = key.parse().unwrap();
+        let file = music.join(&done.folder).join(ry01_file("", 2, "flac"));
+        let copied = std::fs::read(&file).unwrap();
+        let said = format!("{} has changed since Zebra was copied in, so that library's old copy cannot come back", ry01_file("", 2, "flac"));
+        std::fs::write(&file, b"flac number 2, its tag written").unwrap();
+        for fix_undone in [false, true] {
+            if fix_undone {
+                std::fs::write(&file, &copied).unwrap();
+                let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+                std::fs::File::options().write(true).open(&file).unwrap().set_modified(later).unwrap();
+                assert_eq!(std::fs::read(&file).unwrap(), copied, "the copy's bytes again");
+            }
+            let lies = lying(&music);
+            let e = svc.undo(&key).await.unwrap_err().to_string();
+            assert_eq!(e, said, "the fix undone {fix_undone}: what is so");
+            assert!(!e.contains("undo") && !e.contains("first") && !e.contains("delete"), "no advice: {e}");
+            assert_eq!(lying(&music), lies, "the fix undone {fix_undone}: nothing moved");
+            assert!(svc.journal.get(id).unwrap().is_some_and(|e| e.applied && !e.undone), "not undone");
+            assert!(svc.journal.result(id, UNCOPIED).unwrap().is_none(), "no Undo begun on it");
+        }
+        for d in [music, inc, ann, bob] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     /// The tokens a Copy to's Undo kept on its entry (T1).
     fn uncopied(svc: &IncomingService, id: EventId) -> Vec<String> {
         svc.journal.result(id, UNCOPIED).unwrap().and_then(|v| serde_json::from_value(v["tokens"].clone()).ok()).unwrap_or_default()

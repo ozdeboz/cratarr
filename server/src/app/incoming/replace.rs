@@ -876,12 +876,13 @@ impl IncomingService {
     /// into the main library's trash under a second of its own (`trash::trash_file`, its token kept on the entry), then the old files
     /// back from the trash under their names, all or none, their rows on their tracks again; the copies' rows trashed, letting go of
     /// theirs; the folders it leaves empty go. Refused whole, before anything moves, where a copied file was rewritten since (naming
-    /// it), where none of the copies is there as copied (a later album at its place), or where an old file cannot come back (gone from
-    /// the trash, or its name taken since). Files with new names added since stay. An Undo cut short is finished by the next: what is
+    /// it, and saying only that the library's old copy cannot come back: RF7, no advice, for none would work), where none of the
+    /// copies is there as copied (a later album at its place), or where an old file cannot come back (gone from the trash, or its name
+    /// taken since). Files with new names added since stay. An Undo cut short is finished by the next: what is
     /// in the trash under its second counts as done. The own copy is never touched. Once.
     pub(super) async fn undo_from_copy(&self, entry: &Entry) -> Result<String, ToggleError> {
         let gone = || ToggleError::Refused("that can no longer be undone".into());
-        let Event::AlbumReplacedFromCopy { title, to_dir, copies, replaced, .. } = &entry.event else { return Err(gone()) };
+        let Event::AlbumReplacedFromCopy { source, title, to_dir, copies, replaced, .. } = &entry.event else { return Err(gone()) };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back as it was")));
         }
@@ -893,7 +894,7 @@ impl IncomingService {
         let olds: Vec<(String, String)> = replaced.iter().map(|r| (r.from.1.clone(), r.to.1.clone())).collect();
         let name = |rel: &str| rel.rsplit('/').next().unwrap_or(rel).to_string();
         // How each copy lies, and whether every old file can come back, before anything moves.
-        let (r, p, t) = (root.clone(), plan.clone(), title.clone());
+        let (r, p, t, library) = (root.clone(), plan.clone(), title.clone(), self.library_name(source, to_dir.0));
         let looked = tokio::task::spawn_blocking(move || -> Result<Vec<super::Lies>, String> {
             use super::Lies;
             let trashed = |at: i64, rel: &str| r.join(crate::trash::TRASH_DIR).join(crate::trash::token(at, rel));
@@ -916,7 +917,8 @@ impl IncomingService {
                 return Err(format!("None of the files copied into the place of {t} is there as it was copied"));
             }
             if let Some(((rel, _), _)) = p.iter().zip(&lies).find(|(_, l)| **l == Lies::Rewritten) {
-                return Err(format!("{} has changed since {t} was copied in: undo that change first", name(rel)));
+                // What is so, and no more (RF7): undoing that change writes the file anew, never as copied again.
+                return Err(format!("{} has changed since {t} was copied in, so {library}'s old copy cannot come back", name(rel)));
             }
             let leaving: Vec<&String> = p.iter().zip(&lies).filter(|(_, l)| matches!(l, Lies::Done | Lies::AsCopied)).map(|((rel, _), _)| rel).collect();
             for (from, kept) in &olds {
