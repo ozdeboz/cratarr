@@ -51,8 +51,9 @@ fn yes() -> bool {
 }
 
 /// What a user may do beyond playing (decision 0051, the Users panel): keep tracks to play offline, make playlists,
-/// share them with the others, and make public share links (OpenSubsonic's `createShare`); ask for albums, have that
-/// asking approved at once, and answer everyone's requests (decision 0070).
+/// share them with the others, and make public share links (OpenSubsonic's `createShare`); ask for albums (since 0.17 the
+/// gate itself: a Want goes ahead with no one's yes, AL02), and answer everyone's requests (decision 0070). 0.16's "approve
+/// requests automatically" is gone (AL02.6): a file that holds it is read, and written again, without it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Permissions {
@@ -61,20 +62,19 @@ pub struct Permissions {
     pub share: bool,
     pub links: bool,
     pub request: bool,
-    pub auto_approve: bool,
     pub manage_requests: bool,
 }
 
 impl Default for Permissions {
     fn default() -> Self {
-        Self { offline: true, playlists: true, share: true, links: false, request: true, auto_approve: false, manage_requests: false }
+        Self { offline: true, playlists: true, share: true, links: false, request: true, manage_requests: false }
     }
 }
 
 impl Permissions {
     /// An administrator's: everything.
     pub fn all() -> Self {
-        Self { offline: true, playlists: true, share: true, links: true, request: true, auto_approve: true, manage_requests: true }
+        Self { offline: true, playlists: true, share: true, links: true, request: true, manage_requests: true }
     }
 }
 
@@ -636,6 +636,99 @@ mod tests {
         let me = users.get("me").unwrap();
         assert!(me.admin && !me.directory);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// AL02.6: a users file as 0.16 left production's (users with `"auto_approve": false`, accounts from the directory, an
+    /// administrator with `"permissions": {}`), and one user with `"auto_approve": true`. Opened, then the panel sets ann's
+    /// permissions: the file is written without `"auto_approve"`, every other field as it was (passwords, the directory's flag,
+    /// `active`, display names, the other permissions); no answer carries it (an account's permissions, as `/api/users` and the
+    /// Requests page's `may` send them); and nothing in the server or the page reads it any more (a source check: it is named only as
+    /// a key of 0.16's file, in a test). Never a password, a directory flag or an `active` changed by the load.
+    #[test]
+    fn auto_approve_goes_and_the_users_file_keeps_the_rest() {
+        let dir = std::env::temp_dir().join(format!("cratarr-users-auto-approve-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let asks = r#"{ "offline": true, "playlists": true, "share": true, "links": false, "request": true, "auto_approve": false, "manage_requests": false }"#;
+        let file = format!(
+            r#"[
+  {{ "name": "root", "password": "", "admin": true, "directory": true, "permissions": {{}}, "display_name": "Root Example" }},
+  {{ "name": "carl", "password": "carl's", "admin": true, "permissions": {asks} }},
+  {{ "name": "ann", "password": "", "directory": true, "permissions": {asks}, "display_name": "Ann Example" }},
+  {{ "name": "bob", "password": "", "directory": true, "active": false, "permissions": {asks} }},
+  {{ "name": "cy", "password": "", "directory": true, "permissions": {{ "offline": false, "playlists": false, "share": false, "links": false, "request": true, "auto_approve": false, "manage_requests": false }} }},
+  {{ "name": "fay", "password": "fay's", "permissions": {{ "offline": true, "playlists": true, "share": true, "links": true, "request": true, "auto_approve": true, "manage_requests": false }} }}
+]"#
+        );
+        let path = dir.join("subsonic-users.json");
+        std::fs::write(&path, &file).unwrap();
+        let before: Vec<serde_json::Value> = serde_json::from_str(&file).unwrap();
+        let users = Users::open(Some(&dir)).unwrap();
+        for (u, b) in users.all().iter().zip(["root", "carl", "ann", "bob", "cy", "fay"]) {
+            let was = before.iter().find(|x| x["name"] == u.name).unwrap();
+            assert_eq!(u.password, was["password"].as_str().unwrap(), "{b}: the password as it was");
+            assert_eq!(u.directory, was["directory"].as_bool().unwrap_or(false), "{}: the directory's flag", u.name);
+            assert_eq!(u.active, was["active"].as_bool().unwrap_or(true), "{}: active", u.name);
+        }
+        let ann = users.get("ann").unwrap().permissions;
+        assert!(users.set_permissions("ann", Permissions { share: false, ..ann }).unwrap());
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("auto_approve"), "written without it: {written}");
+        let after: Vec<serde_json::Value> = serde_json::from_str(&written).unwrap();
+        assert_eq!(after.len(), before.len());
+        for was in &before {
+            let now = after.iter().find(|x| x["name"] == was["name"]).unwrap_or_else(|| panic!("{} kept", was["name"]));
+            for field in ["password", "admin", "directory", "active", "display_name"] {
+                let (b, a) = (&was[field], &now[field]);
+                let (b, a) = match field {
+                    "admin" | "directory" => (b.as_bool().unwrap_or(false), a.as_bool().unwrap_or(false)),
+                    "active" => (b.as_bool().unwrap_or(true), a.as_bool().unwrap_or(true)),
+                    _ => {
+                        assert_eq!(b, a, "{}: {field} as it was", was["name"]);
+                        continue;
+                    }
+                };
+                assert_eq!(b, a, "{}: {field} as it was", was["name"]);
+            }
+            let mut perms = was["permissions"].as_object().cloned().unwrap_or_default();
+            perms.remove("auto_approve");
+            if was["name"] == "ann" {
+                perms.insert("share".into(), serde_json::json!(false));
+            }
+            let kept = now["permissions"].as_object().unwrap();
+            for (k, v) in &perms {
+                assert_eq!(kept.get(k), Some(v), "{}: its {k} as it was", was["name"]);
+            }
+        }
+        for sent in [serde_json::to_value(Permissions::default()).unwrap(), serde_json::to_value(Permissions::all()).unwrap(), serde_json::to_value(users.get("fay").unwrap()).unwrap()] {
+            assert!(!sent.to_string().contains("auto_approve"), "no answer carries it: {sent}");
+        }
+        // No reader of it left, in the server or the page: where it is named, it is a key of 0.16's file in a test's JSON, or this
+        // test's own name.
+        fn named_in(dir: &std::path::Path, out: &mut Vec<String>) {
+            for e in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())).flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    named_in(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs" || x == "ts" || x == "svelte" || x == "js") {
+                    let text = std::fs::read_to_string(&p).unwrap_or_default();
+                    for (at, _) in text.match_indices("auto_approve") {
+                        let after = &text[at + "auto_approve".len()..];
+                        if !after.starts_with('"') && !after.starts_with("_goes_and_the_users_file_keeps_the_rest") {
+                            out.push(format!("{}, line {}", p.display(), text[..at].lines().count()));
+                        }
+                    }
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut readers = Vec::new();
+        for tree in [root.join("src"), root.join("../web/src")] {
+            assert!(tree.is_dir(), "{} is there to read", tree.display());
+            named_in(&tree, &mut readers);
+        }
+        assert!(readers.is_empty(), "read still: {readers:#?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

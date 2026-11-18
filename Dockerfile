@@ -43,6 +43,8 @@ RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registr
 # examples the web is held to too are read from ../web/tests/fixtures.
 FROM source AS test
 COPY web/tests/fixtures /app/web/tests/fixtures
+# The page's sources: a server test checks that a setting gone from the server is read nowhere on the page either (AL02.6).
+COPY web/src /app/web/src
 COPY shared /app/shared
 # The Dockerfile itself: the server's test of the image's entrypoint and health check reads it (W4).
 COPY Dockerfile /app/Dockerfile

@@ -444,7 +444,7 @@ pub(super) fn requester_of<'a>(asked: &'a HashMap<i64, super::requests::Requeste
 
 /// Whether the viewer may add an Incoming album (0101 point 2): an administrator any; a user their own request's, and only while
 /// their own music is on (X5): a user's album goes nowhere else. Pure.
-fn may_add(a: &Active, admin: bool, viewer: Option<&str>, requester: Option<&str>) -> bool {
+pub(super) fn may_add(a: &Active, admin: bool, viewer: Option<&str>, requester: Option<&str>) -> bool {
     admin || viewer.is_some_and(|v| requester == Some(v) && a.cfg.own_music_on(v))
 }
 

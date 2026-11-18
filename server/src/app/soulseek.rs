@@ -994,12 +994,7 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
     });
     let (approved, of, (moved, read)) = tokio::task::spawn_blocking(move || -> Result<_> {
         let moved = repoint(&ud, &cat, &placed)?;
-        // Every approved request (X2), not the newest thousand: those whose record is complete give no item (`take_requests`).
-        let approved = ud.requests(None, Some(super::requests::APPROVED), usize::MAX)?;
-        let mut of = super::requests::records_held(&cat, &approved, &kinds)?;
-        // Where each record holding no copy saw its last one go (U7, T8): only one gone from Incoming, deleted there or removed outside
-        // Cratarr, is looked for again.
-        super::requests::mark_gone_from_incoming(&cat, &mut of, &kinds)?;
+        let (approved, of) = requests_taken(&ud, &cat, &kinds)?;
         Ok((approved, of, moved))
     })
     .await??;
@@ -1044,6 +1039,29 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
         }
     }
     Ok(())
+}
+
+/// The requests Soulseek's list is kept by (`take_requests`), each with its record as `records_held` reads it: every approved
+/// request (X2), not the newest thousand, but one waiting for its asker's room (AL02.2: no item of it till it goes); a delivered one
+/// is not approved, so never searched again ((c), AL02.8). Where each record holding no copy saw its last one go (U7, T8): only
+/// one gone from Incoming, deleted there or removed outside Cratarr, is looked for again. Blocking.
+pub(crate) fn requests_taken(
+    ud: &crate::userdata::UserData,
+    cat: &crate::catalogue::Catalogue,
+    kinds: &[(i64, crate::settings::LibraryKind)],
+) -> Result<(Vec<crate::userdata::Request>, Vec<Option<super::requests::RecordOf>>)> {
+    let approved: Vec<crate::userdata::Request> = ud.requests(None, Some(super::requests::APPROVED), usize::MAX)?.into_iter().filter(|r| !super::requests::waits_for_room(r)).collect();
+    let mut of = super::requests::records_held(cat, &approved, kinds)?;
+    super::requests::mark_gone_from_incoming(cat, &mut of, kinds)?;
+    Ok((approved, of))
+}
+
+/// The records `take_requests` makes items of from these requests, on a list of their own (the tests', AL02).
+#[cfg(test)]
+pub(crate) fn items_of(approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>]) -> Vec<i64> {
+    let mut k = Kept::default();
+    take_requests(&mut k, approved, of, &vec![0; approved.len()]);
+    k.items.iter().map(|i| i.record.record).collect()
 }
 
 /// Requests whose record is retired re-pointed to the record their placed album joined or made (X4, D17): one on a retired record
@@ -3723,5 +3741,53 @@ mod tests {
         let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
         let k: Kept = serde_json::from_str(raw).unwrap();
         assert_eq!((k.items[0].due, k.items[0].misses, k.items[0].record.request), (0, 0, 7), "no time kept: due");
+    }
+
+    /// AL02.8 ((c); INTERACTIONS top 12, I09): ann's request of R2, delivered into Music, closes at the requests' round. Months later
+    /// root deletes R2 from Music and the trash is emptied: R2 holds no copy, and no Placed item stands in the way. Soulseek's list,
+    /// kept by the requests it reads (`requests_taken`, `take_requests`), makes no item for R2: a delivered request is never
+    /// searched again, and never reads wanted.
+    #[tokio::test]
+    async fn a_delivered_album_deleted_from_a_kept_library_is_not_searched_again() {
+        use crate::app::requests::tests::{Copies, Strict, with_accounts};
+        use crate::app::requests::{DELIVERED, Hands, RequestState, round_with};
+        use crate::app::room::tests::{MUSIC, room_shape};
+        let serve = room_shape();
+        with_accounts(&serve);
+        let cat = serve.catalogue().clone();
+        let r2 = cat.record_for_tests("Quiet Lanes", 2);
+        cat.copy_for_tests(r2, MUSIC);
+        cat.came_for_tests(MUSIC, 250);
+        let asked = crate::userdata::Request {
+            id: 0,
+            user: "ann".into(),
+            album_key: "k-r2".into(),
+            artist_key: "glass harbour".into(),
+            release_group: None,
+            album: "Quiet Lanes".into(),
+            artist: "Glass Harbour".into(),
+            year: None,
+            cover: None,
+            at: 150,
+            status: super::super::requests::APPROVED.into(),
+            reason: None,
+            decided_by: Some("ann".into()),
+            decided_at: Some(150),
+            fetched: Some(super::super::requests::SOULSEEK_SEARCHES.into()),
+            record: Some(r2),
+        };
+        let id = serve.userdata.add_request(&asked).unwrap();
+        let (strict, house) = (Strict::expecting_nothing(), Copies::none());
+        round_with(&Hands { lidarr: Some(&strict), soulseek: true, house: &house }, &serve, super::super::moment::now_secs()).await.unwrap();
+        assert_eq!(serve.userdata.request(id).unwrap().unwrap().status, DELIVERED, "delivered into Music");
+        cat.mark_trashed(MUSIC, &format!("copy-{r2}"), "300/Quiet Lanes").unwrap();
+        cat.execute_for_tests(&format!("DELETE FROM files WHERE folder = {MUSIC}"));
+        let (approved, of) = requests_taken(&serve.userdata, &cat, &serve.library.kinds()).unwrap();
+        assert!(!approved.iter().any(|r| r.id == id), "not among the requests Soulseek reads");
+        assert!(!items_of(&approved, &of).contains(&r2), "no item for R2");
+        let now = serve.userdata.request(id).unwrap().unwrap();
+        let held = super::super::requests::records_held(&cat, std::slice::from_ref(&now), &serve.library.kinds()).unwrap().pop().flatten().map_or_else(Default::default, |o| o.holding);
+        assert_eq!(super::super::requests::request_state(&now, held, None, None), RequestState::Delivered, "never wanted");
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
     }
 }

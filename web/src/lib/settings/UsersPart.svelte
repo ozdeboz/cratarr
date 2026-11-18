@@ -59,7 +59,6 @@
     { key: 'playlists', label: 'Change playlists in apps' },
     { key: 'share', label: 'Share playlists' },
     { key: 'request', label: 'Request albums' },
-    { key: 'auto_approve', label: 'Approve requests automatically' },
     { key: 'manage_requests', label: 'Answer requests' },
   ];
   let users = $state<User[] | null>(null);

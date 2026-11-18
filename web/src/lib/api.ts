@@ -1380,9 +1380,8 @@ export type Permissions = {
   playlists: boolean;
   share: boolean;
   links: boolean;
-  /** Requests (decision 0070): ask for albums, have that approved at once, answer everyone's. */
+  /** Requests (decision 0070): ask for albums (a Want goes ahead with no one's yes since 0.17), answer everyone's. */
   request: boolean;
-  auto_approve: boolean;
   manage_requests: boolean;
 };
 /** A device that belongs to an account (it plays only on its own, decision 0051): `id` is its player's name. One that is

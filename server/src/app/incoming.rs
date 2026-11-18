@@ -1556,6 +1556,7 @@ impl IncomingService {
         }
         self.finish_adopt(&event, false, playing.is_some()).await;
         self.journal.applied(id)?;
+        self.deliver_requests(id, &at.album.id).await;
         self.hidden.lock().await.insert(hidden_key(&at.album));
         *self.owned.lock().await = None;
         c.poke();
@@ -1712,6 +1713,7 @@ impl IncomingService {
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         self.finish_adopt(&entry.event, true, false).await;
         self.unconvert_rows(&entry.event).await;
+        self.undeliver_requests(entry.id).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
         self.resume_fetching(entry.id, title).await;
         self.unhide(source, album_id, from_dir.0).await;
@@ -1803,6 +1805,39 @@ impl IncomingService {
         let kept = self.journal.result(entry.id, super::requests::KEPT_FOR_REQUESTS).ok().flatten().is_some();
         if kept || self.journal.get(entry.id).ok().flatten().is_some_and(|e| e.undone) {
             self.resume_fetching(entry.id, title).await;
+        }
+    }
+
+    /// The requests a Keep made done for their askers, delivered at once ((c), AL02.8) and named on its entry, so its Undo opens them
+    /// again (OQ-D1, `undeliver_requests`). In the user data the requests are in (the library's, the server's); each catalogue
+    /// folder's library as the running server has it (none: `kind_in`'s own rule). The requests' round delivers the others.
+    async fn deliver_requests(&self, id: EventId, album_id: &str) {
+        let Some(record) = crate::serve::ids::record_number(album_id) else { return };
+        let (ud, c, kinds) = (self.lib.playlists_db().clone(), self.lib.catalogue(), super::requests::library_kinds());
+        let delivered = match tokio::task::spawn_blocking(move || super::requests::deliver_in(&ud, &c, &kinds, Some(record))).await {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!("the requests a Keep made done were not delivered: {e}");
+                return;
+            }
+        };
+        if !delivered.is_empty()
+            && let Err(e) = self.journal.done(id, super::requests::DELIVERED_BY_KEEP, epoch_now(), &serde_json::json!(delivered))
+        {
+            tracing::warn!("the requests a Keep delivered were not kept for its Undo: {e:#}");
+        }
+    }
+
+    /// The requests a Keep delivered (`deliver_requests`), opened again by its Undo as they were (OQ-D1).
+    async fn undeliver_requests(&self, id: EventId) {
+        let delivered: Vec<super::requests::Closed> =
+            self.journal.result(id, super::requests::DELIVERED_BY_KEEP).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        if delivered.is_empty() {
+            return;
+        }
+        let ud = self.lib.playlists_db().clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || super::requests::undeliver(&ud, &delivered)).await {
+            tracing::warn!("the requests a Keep delivered were not opened again: {e}");
         }
     }
 
@@ -2934,6 +2969,160 @@ mod tests {
         assert!(!inc.join("B/Album/1.flac").exists(), "kept into her own music");
         assert_eq!(rooms(), (held, 0), "the same files, counted from her own music now: once");
         for d in [music, inc, ann, bob] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A record of these files' tracks (catalogue folder `folder`, under `dir`), as a build's record pass gives an arrival's tracks
+    /// one: its id.
+    fn record_of_files(svc: &IncomingService, title: &str, folder: i64, dir: &str) -> i64 {
+        let c = svc.lib.catalogue();
+        let record = c.record_for_tests(title, 0);
+        c.execute_for_tests(&format!("UPDATE tracks SET record = {record} WHERE id IN (SELECT track FROM files WHERE folder = {folder} AND rel LIKE '{dir}/%')"));
+        record
+    }
+
+    /// `user`'s approved request of `record`, asked at `at`, answered by root at `at + 50`, kept in the service's user data.
+    fn approved_of(svc: &IncomingService, user: &str, record: i64, at: i64) -> crate::userdata::Request {
+        let r = crate::userdata::Request {
+            id: 0,
+            user: user.into(),
+            album_key: format!("k-{user}-{record}"),
+            artist_key: "a".into(),
+            release_group: None,
+            album: "Album".into(),
+            artist: "A".into(),
+            year: None,
+            cover: None,
+            at,
+            status: crate::app::requests::APPROVED.into(),
+            reason: None,
+            decided_by: Some("root".into()),
+            decided_at: Some(at + 50),
+            fetched: Some(crate::app::requests::SOULSEEK_SEARCHES.into()),
+            record: Some(record),
+        };
+        crate::userdata::Request { id: svc.lib.playlists_db().add_request(&r).unwrap(), ..r }
+    }
+
+    /// AL02.4 (Q1; the owner's "No approval per request"; the plan's `keep_over_room_is_refused`, replaced): adding is never refused
+    /// for room. Ann at 99 of 100 GB, with her 3 GB arrival in Incoming and another of 0.5 GB (102.5 counted, over). Her Add to's
+    /// sheet (the move's plan) has no refusal, and the Keep lands in her own music, her room as it was (the same files, counted once,
+    /// from her own music now); Home Assistant's promote of her other arrival, a Keep naming no library, goes where the page's
+    /// default does (her own music, its requester's) and lands; root's Copy to of Music's album into her own music while she is over
+    /// is made, counted as R.0 has it (free where it shares Music's blocks). Never "over room" as a refusal of a Keep or of an
+    /// administrator's Copy.
+    #[tokio::test]
+    async fn adding_is_never_refused_for_room() {
+        use crate::app::requests::requesters_in;
+        use crate::settings::{Libraries, LibrarySetting, SourceConfig};
+        const GB: u64 = 1_000_000_000;
+        let top = folder("al02-add");
+        let (music, inc, own) = (top.join("music"), top.join("inc"), top.join("own"));
+        let ann = own.join("ann");
+        for d in [&music, &inc, &ann] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let svc = on_disk(&music, &inc).await;
+        let c = svc.lib.catalogue();
+        c.set_folders(vec![music.clone(), inc.clone(), ann.clone()]).unwrap();
+        for (root, dir, files) in [(&music, "A/Album", 2), (&ann, "Mine", 1), (&inc, "B/Album", 2), (&inc, "C/Album", 1)] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            for n in 1..=files {
+                std::fs::write(root.join(dir).join(format!("{n}.flac")), format!("{dir} {n}")).unwrap();
+            }
+        }
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        let (x, y) = (record_of_files(&svc, "Arrival", 1, "B/Album"), record_of_files(&svc, "Another Arrival", 1, "C/Album"));
+        approved_of(&svc, "ann", x, 1);
+        approved_of(&svc, "ann", y, 1);
+        c.execute_for_tests(&format!("UPDATE files SET size = {} WHERE folder = 2", 99 * GB));
+        c.execute_for_tests(&format!("UPDATE files SET size = {} WHERE folder = 1 AND rel LIKE 'B/%'", 3 * GB / 2));
+        c.execute_for_tests(&format!("UPDATE files SET size = {} WHERE folder = 1 AND rel LIKE 'C/%'", GB / 2));
+        let ud = svc.lib.playlists_db().clone();
+        let kinds = [(0, settings::LibraryKind::Main), (1, settings::LibraryKind::Incoming), (2, settings::LibraryKind::Own)];
+        let places = crate::app::room::Places { own: vec![(2, "ann".into())], main: vec![0], incoming: vec![1] };
+        let room = || crate::app::room::used_by(&c, &places, &requesters_in(&c, &ud, &kinds)).unwrap().get("ann").copied().unwrap_or(0);
+        let over = room();
+        assert_eq!(over, 99 * GB + 3 * GB + GB / 2, "over her 100 GB");
+        // Her Add to: its sheet, then the Keep.
+        let at = svc.locate_listed("cratarr", copy_at(&crate::serve::ids::record(x), 1, &inc.to_string_lossy(), "B/Album")).await.unwrap();
+        let (_, sheet) = svc.plan_move(&at, 2, None).await.unwrap();
+        assert!(sheet.is_ok(), "the sheet has no refusal: {:?}", sheet.err());
+        svc.move_located("cratarr", at, 2, settings::Quality::None, None).await.expect("her Keep, over room");
+        assert!(ann.join("B/Album/1.flac").exists() && !inc.join("B/Album").exists(), "it lands in her own music");
+        assert_eq!(room(), over, "counted once, from her own music now");
+        // Home Assistant's promote of her other arrival: no library named, where the page's default goes.
+        let placed = |p: &std::path::Path| crate::placement::PlacedLibrary {
+            id: p.to_string_lossy().into_owned(),
+            name: p.to_string_lossy().into_owned(),
+            folders: vec![p.to_string_lossy().into_owned()],
+            paths: Vec::new(),
+            read_only: false,
+        };
+        let values = [(settings::OWN_MUSIC.to_string(), serde_json::json!(own.to_string_lossy())), (settings::OWN_MUSIC_OFF.to_string(), serde_json::json!([]))].into_iter().collect();
+        let libraries = Libraries(vec![LibrarySetting::new(music.to_string_lossy().into_owned(), settings::LibraryKind::Main), LibrarySetting::new(inc.to_string_lossy().into_owned(), settings::LibraryKind::Incoming)]);
+        let cfg = SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries, values };
+        let placement = crate::placement::Placement { roots: Vec::new(), libraries: [&music, &inc, &ann].into_iter().map(|p| placed(p)).collect() };
+        let a = crate::app::library::Active { cfg, source: None, placement, error: None };
+        let other = copy_at(&crate::serve::ids::record(y), 1, &inc.to_string_lossy(), "C/Album");
+        let asked = requesters_in(&c, &ud, &kinds);
+        let requester = crate::app::albums::requester_of(&asked, &source::Album { added: Some(epoch_now()), ..other.clone() }).cloned();
+        assert_eq!(requester.as_deref(), Some("ann"), "her request's arrival");
+        let to = crate::app::albums::default_target(&a, other.library.as_deref(), requester.as_deref()).expect("a default target");
+        let target = c.folders().id_of(std::path::Path::new(&to)).expect("her own music's folder");
+        assert_eq!(target, 2, "the promote goes into her own music: {to}");
+        let at = svc.locate_listed("cratarr", other).await.unwrap();
+        svc.move_located("cratarr", at, target, settings::Quality::None, None).await.expect("the promote, over room");
+        assert!(ann.join("C/Album/1.flac").exists(), "it lands in her own music");
+        assert_eq!(room(), over, "counted once");
+        // Root's Copy to of Music's album into her own music, while she is over.
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        let root = crate::serve::who::Who { user: "root".into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
+        crate::serve::who::acting_as(root, svc.copying(&at, 2, None)).await.expect("root's copy, she over room");
+        assert_eq!(std::fs::read(ann.join("A/Album/1.flac")).unwrap(), b"A/Album 1", "made");
+        let shared = c.writer_for_tests().query_row("SELECT min(shared) FROM files WHERE folder = 2 AND rel LIKE 'A/%'", [], |r| r.get::<_, i64>(0)).unwrap();
+        let copied: u64 = ["1.flac", "2.flac"].iter().map(|n| std::fs::metadata(music.join("A/Album").join(n)).unwrap().len()).sum();
+        assert_eq!(room(), over + if shared == 1 { 0 } else { copied }, "counted as R.0 has it");
+        std::fs::remove_dir_all(&top).ok();
+    }
+
+    /// AL02.8 (OQ-D1): a Keep that makes requests done for their askers (into Music: done for everyone) delivers them at once and
+    /// names them on its entry; its Undo opens them again as they were (approved, by whom and when), the album back in Incoming.
+    #[tokio::test]
+    async fn a_keeps_undo_reopens_the_requests_it_delivered() {
+        use crate::app::requests::{Closed, DELIVERED, DELIVERED_BY_KEEP};
+        let (music, inc) = (folder("al02-undeliver-music"), folder("al02-undeliver-inc"));
+        let svc = on_disk(&music, &inc).await;
+        std::fs::create_dir_all(inc.join("A/Album")).unwrap();
+        std::fs::write(inc.join("A/Album/1.flac"), b"waiting").unwrap();
+        let c = svc.lib.catalogue();
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        // Its tags, as Music's names want them.
+        let tags = [("albumartist", "Arp"), ("album", "Zebra"), ("artist", "Arp"), ("title", "One"), ("tracknumber", "1"), ("date", "2020")];
+        for (n, (name, value)) in tags.iter().enumerate() {
+            c.execute_for_tests(&format!("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, 'A/Album/1.flac', {n}, '{name}', '{name}', '{value}')"));
+        }
+        let record = record_of_files(&svc, "Album", 1, "A/Album");
+        let rs = [approved_of(&svc, "ann", record, 100), approved_of(&svc, "bob", record, 110)];
+        let ud = svc.lib.playlists_db().clone();
+        let before: Vec<_> = rs.iter().map(|r| answer(&ud, r.id)).collect();
+        let at = svc.locate_listed("cratarr", copy_at(&crate::serve::ids::record(record), 1, &inc.to_string_lossy(), "A/Album")).await.unwrap();
+        let kept = svc.move_located("cratarr", at, 0, settings::Quality::None, None).await.unwrap();
+        assert_eq!(rs.iter().map(|r| answer(&ud, r.id).0).collect::<Vec<_>>(), [DELIVERED, DELIVERED], "delivered at once");
+        let id: EventId = kept.undo.clone().unwrap().parse().unwrap();
+        let named: Vec<Closed> = serde_json::from_value(svc.journal.result(id, DELIVERED_BY_KEEP).unwrap().expect("named on its entry")).unwrap();
+        let mut ids: Vec<i64> = named.iter().map(|c| c.id).collect();
+        ids.sort();
+        assert_eq!(ids, [rs[0].id, rs[1].id]);
+        svc.undo(&kept.undo.unwrap()).await.unwrap();
+        assert!(inc.join("A/Album/1.flac").exists(), "the album back in Incoming");
+        assert_eq!(rs.iter().map(|r| answer(&ud, r.id)).collect::<Vec<_>>(), before, "open again, as they were");
+        for d in [music, inc] {
             std::fs::remove_dir_all(d).ok();
         }
     }

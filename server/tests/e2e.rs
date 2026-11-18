@@ -3567,7 +3567,8 @@ async fn a_want_of_a_record_only_in_bobs_music_copies_his_end_to_end() {
     s.until("Ann's copy read on the record's tracks", Duration::from_secs(120), || async { tracks_at(&data, &mine, &folder) == songs }).await;
     let listed = ann.get("/api/requests").await;
     let r = listed["mine"].as_array().unwrap().iter().find(|r| r["id"] == request).cloned().expect("her request");
-    assert_eq!((r["state"]["state"].as_str(), &r["fetched"]), (Some("done"), &Value::Null), "done, its state alone (W6): {r}");
+    // Done, then delivered at the requests' round (AL02.8): either, its state alone.
+    assert!(matches!(r["state"]["state"].as_str(), Some("done" | "delivered")) && r["fetched"].is_null(), "done, its state alone (W6): {r}");
     let line = request_line(&data, request);
     assert_eq!(line.as_deref(), Some("Copied into your music"), "the line it keeps: {r}");
     assert!(!r.to_string().to_lowercase().contains("bob") && !line.unwrap_or_default().to_lowercase().contains("bob"), "whose music it came from is not said (OQ-I): {r}");
@@ -5200,11 +5201,21 @@ async fn deleting_gives_room_back_at_once_and_its_undo_takes_it_end_to_end() {
     assert!(listed("root").is_null(), "an administrator has no room");
     assert_eq!(listed("ann")["size"].as_u64(), Some(held - 1), "hers, as set");
     assert!(s.get("/api/me").await["room"].is_null(), "root's own: none, never full");
+    // AL01.5's Want part (AL02): full, her Want of a record not had waits for room.
+    let asked = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Nowhere Fast" })).await;
+    let first = asked["request"]["id"].as_i64().unwrap();
+    assert_eq!(asked["request"]["state"]["state"], "waiting_for_room", "{asked}");
+    assert_eq!(request_line(&data, first).as_deref(), Some("Waits for room"));
 
     let gone = ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()), json!({ "from": id_of(&mine) })).await;
     let room = ann.get("/api/me").await["room"].clone();
     assert_eq!((room["used"].as_u64(), room["full"].as_bool()), (Some(held - shores), Some(false)), "at once, not when the trash is emptied: {room}");
     assert!(!mine.join(SHORES).exists() && in_the_trash(&mine) == tracks, "its files in her own music's trash");
+    // Within a round her waiting Want is handed: no fetcher here, so its line says it was not handed over, no longer the room's.
+    s.until("her waiting Want handed at the requests' round", Duration::from_secs(150), || async {
+        request_line(&data, first).is_some_and(|l| l.starts_with("Not handed over: no fetcher"))
+    })
+    .await;
 
     ann.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
     assert_eq!(bytes(&mine.join(SHORES)), shores, "back");
@@ -5213,6 +5224,140 @@ async fn deleting_gives_room_back_at_once_and_its_undo_takes_it_end_to_end() {
         room["used"].as_u64() == Some(held) && room["full"].as_bool() == Some(true)
     })
     .await;
+    assert!(request_line(&data, first).is_some_and(|l| l.starts_with("Not handed over: no fetcher")), "the handed Want stays handed");
+    let again = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Lost Tapes" })).await;
+    assert_eq!(again["request"]["state"]["state"], "waiting_for_room", "full again: a new Want waits: {again}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A request's state as `who` reads it on the Requests page; empty where it is not theirs.
+async fn state_of(who: &Caller<'_>, id: i64) -> String {
+    let listed = who.get("/api/requests").await;
+    listed["mine"].as_array().into_iter().flatten().find(|r| r["id"] == id).and_then(|r| r["state"]["state"].as_str()).unwrap_or_default().to_string()
+}
+
+/// The folder under `root` whose name holds `name`, as a path under it; none where there is none.
+fn folder_named(root: &Path, name: &str) -> Option<String> {
+    fn walk(root: &Path, at: &Path, name: &str) -> Option<String> {
+        for e in std::fs::read_dir(at).ok()?.flatten() {
+            let p = e.path();
+            if !p.is_dir() || e.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if e.file_name().to_string_lossy().contains(name) {
+                return Some(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+            if let Some(found) = walk(root, &p, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(root, root, name)
+}
+
+/// Whether every file of a copy in catalogue folder `library`, under `dir`, shares its blocks (`files.shared`, as the copy found
+/// them): its bytes then counted for no one but the original's payer (R.0).
+fn shares(data: &Path, library: &Path, dir: &str) -> bool {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    db.query_row(
+        "SELECT min(f.shared) FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE ?2",
+        [library.to_string_lossy().to_string(), format!("{dir}/%")],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .unwrap()
+        == Some(1)
+}
+
+/// AL02.9 (INTERACTIONS top 4, I05; OQ-S: the second asker's copy, built in AL02). Ann, then bob, Want "Night Walks EP", a record not
+/// had (its folder taken out of Music); its files are dropped into Incoming (naming no fetcher, as Lidarr's), and both requests read
+/// Arrived. Ann adds it to her own music. Bob's own music then holds a copy of it, made through C52's path and named by its folder
+/// (T5), byte for byte, on the record's tracks (his player plays it), counted as R.0 has it (ann's pays; bob's free where it shares,
+/// else his); his request reads done only once that copy is there. A second run with bob over his room: his request reads
+/// `waiting_for_room` and no copy is made, through rounds, until he is under; then his copy is made and his request done. Never "In
+/// the library" while nothing in his view holds it; never a copy into a full account's music.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn the_second_asker_gets_a_copy_when_the_first_adds_end_to_end() {
+    for bob_over in [false, true] {
+        the_second_asker(bob_over).await;
+    }
+}
+
+/// [`the_second_asker_gets_a_copy_when_the_first_adds_end_to_end`]'s one run, bob over his room or not.
+async fn the_second_asker(bob_over: bool) {
+    let root = temp(if bob_over { "al02-second-over" } else { "al02-second" });
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, incoming, own) = (library.join("music"), library.join("incoming"), library.join("own"));
+    let (anns, bobs) = (own.join("ann"), own.join("bob"));
+    // Night Walks EP, not had: its folder out of Music, to arrive later.
+    const WALKS: &str = "Kite Theory/Night Walks EP (2020)";
+    let held = root.join("held");
+    std::fs::create_dir_all(held.join("Kite Theory")).unwrap();
+    std::fs::rename(music.join(WALKS), held.join(WALKS)).unwrap();
+    let arriving = as_it_lies(&held.join(WALKS));
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.read_in("Other Room", &bobs).await;
+    for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let (ann, bob) = (s.sign_in("ann", "ann pw").await, s.sign_in("bob", "bob pw").await);
+    let want = json!({ "artist": "Kite Theory", "album": "Night Walks EP" });
+    let hers = ann.ok(reqwest::Method::POST, "/api/requests/want", want.clone()).await["request"]["id"].as_i64().unwrap();
+    let his = bob.ok(reqwest::Method::POST, "/api/requests/want", want).await["request"]["id"].as_i64().unwrap();
+    s.until("bob's room counted", Duration::from_secs(120), || async { bob.get("/api/me").await["room"]["used"].as_u64().is_some_and(|u| u > 0) }).await;
+    let his_before = bob.get("/api/me").await["room"]["used"].as_u64().unwrap();
+    if bob_over {
+        s.ok(reqwest::Method::PUT, "/api/users/bob/room", json!({ "gb": 1e-9 })).await;
+        assert_eq!(bob.get("/api/me").await["room"]["full"], true, "bob over his room");
+    }
+    std::fs::create_dir_all(incoming.join("Kite Theory")).unwrap();
+    std::fs::rename(held.join(WALKS), incoming.join(WALKS)).unwrap();
+    s.until("both requests read Arrived", Duration::from_secs(180), || async { state_of(&ann, hers).await == "arrived" && state_of(&bob, his).await == "arrived" }).await;
+    let album = s.incoming_album("Night Walks EP").await;
+    let songs = s.songs_of(&album).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/move"), json!({ "from": id_of(&incoming), "to": id_of(&anns) })).await;
+    let added = folder_named(&anns, "Night Walks").expect("in her own music");
+    assert_eq!(contents(&as_it_lies(&anns.join(&added))), contents(&arriving), "her copy, every file");
+    if bob_over {
+        s.until("bob's request waits for room", Duration::from_secs(150), || async { state_of(&bob, his).await == "waiting_for_room" }).await;
+        tokio::time::sleep(Duration::from_secs(70)).await;
+        assert_eq!(state_of(&bob, his).await, "waiting_for_room", "still waiting, a round on");
+        assert!(folder_named(&bobs, "Night Walks").is_none(), "no copy into his full music");
+        s.ok(reqwest::Method::PUT, "/api/users/bob/room", json!({ "gb": 1000.0 })).await;
+    }
+    // His copy, at a round: done only once it is there, whole.
+    s.until("bob's request done", Duration::from_secs(180), || async {
+        let state = state_of(&bob, his).await;
+        let done = state == "done" || state == "delivered";
+        if done {
+            let copied = folder_named(&bobs, "Night Walks").expect("done only once his copy is there");
+            assert_eq!(contents(&as_it_lies(&bobs.join(&copied))), contents(&arriving), "his copy whole once done");
+        }
+        done
+    })
+    .await;
+    let copied = folder_named(&bobs, "Night Walks").unwrap();
+    s.until("his copy read on the record's tracks", Duration::from_secs(120), || async { tracks_at(&data, &bobs, &copied) == songs }).await;
+    let copy: u64 = as_it_lies(&bobs.join(&copied)).values().map(|b| b.len() as u64).sum();
+    let free = shares(&data, &bobs, &copied);
+    s.until("his room as R.0 counts it", Duration::from_secs(60), || async {
+        bob.get("/api/me").await["room"]["used"].as_u64() == Some(his_before + if free { 0 } else { copy })
+    })
+    .await;
+    assert_eq!(request_line(&data, his).as_deref(), Some("Copied into your music"), "made through C52's path");
+    let hers_now = state_of(&ann, hers).await;
+    assert!(hers_now == "done" || hers_now == "delivered", "hers done in her own music: {hers_now}");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

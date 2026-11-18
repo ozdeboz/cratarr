@@ -100,41 +100,42 @@ pub fn rooms(serve: &Serve, users: &[User]) -> Result<HashMap<String, Room>> {
     if users.iter().all(|u| u.admin) {
         return Ok(HashMap::new());
     }
-    let used = if serve.has_catalogue() {
-        let cat = serve.catalogue();
-        used_by(cat, &Places::of(&serve.library.kinds(), &cat.folders()), &super::requests::requesters(serve))?
-    } else {
-        HashMap::new()
-    };
+    if !serve.has_catalogue() {
+        return Ok(users.iter().filter_map(|u| Some((u.name.clone(), room_of(u, 0)?))).collect());
+    }
+    rooms_in(serve.catalogue(), &serve.library.kinds(), &super::requests::requesters(serve), users)
+}
+
+/// [`rooms`] from the catalogue `cat`, each catalogue folder's library as `kinds` has it, and who asked first for what (`asked`):
+/// one read (`used_by`). What a Want reads to wait or go (AL02), who asked read then. Blocking.
+pub fn rooms_in(cat: &Catalogue, kinds: &[(i64, LibraryKind)], asked: &HashMap<i64, Requester>, users: &[User]) -> Result<HashMap<String, Room>> {
+    let used = used_by(cat, &Places::of(kinds, &cat.folders()), asked)?;
     Ok(users.iter().filter_map(|u| Some((u.name.clone(), room_of(u, used.get(&u.name).copied().unwrap_or(0))?))).collect())
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use crate::app::requests::{APPROVED, CANCELLED, DECLINED, REJECTED, requesters_in};
+    use crate::app::requests::{APPROVED, CANCELLED, DECLINED, DELIVERED, REJECTED, requesters_in};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    const MUSIC: i64 = 0;
-    const LIDARR: i64 = 1;
-    const SOULSEEK: i64 = 2;
-    const ANN: i64 = 3;
-    const BOB: i64 = 4;
-    const EVE: i64 = 5;
+    pub(crate) const MUSIC: i64 = 0;
+    pub(crate) const LIDARR: i64 = 1;
+    pub(crate) const SOULSEEK: i64 = 2;
+    pub(crate) const ANN: i64 = 3;
+    pub(crate) const BOB: i64 = 4;
+    pub(crate) const EVE: i64 = 5;
     const ROOT: i64 = 6;
     const CARL: i64 = 7;
     /// `room_shape`'s catalogue folders, in their order.
-    const FOLDERS: [&str; 8] = ["/library/music", "/library/lidarr", "/library/soulseek", "/own/ann", "/own/bob", "/own/eve", "/own/root", "/own/carl"];
-    /// What AL02.8 marks a delivered request ((c)): any status but approved counts for no one.
-    const DELIVERED: &str = "delivered";
-
-    fn gb(n: f64) -> u64 {
+    pub(crate) const FOLDERS: [&str; 8] = ["/library/music", "/library/lidarr", "/library/soulseek", "/own/ann", "/own/bob", "/own/eve", "/own/root", "/own/carl"];
+    pub(crate) fn gb(n: f64) -> u64 {
         (n * GB as f64).round() as u64
     }
 
     /// The libraries of `room_shape`'s folders, as the library gives them.
-    fn kinds() -> Vec<(i64, LibraryKind)> {
+    pub(crate) fn kinds() -> Vec<(i64, LibraryKind)> {
         let kind = |folder: i64| match folder {
             MUSIC => LibraryKind::Main,
             LIDARR | SOULSEEK => LibraryKind::Incoming,
@@ -146,14 +147,14 @@ mod tests {
     /// AL01's shape (`room_shape`): a server whose catalogue holds Music (folder 0, main), Lidarr's Incoming (1, naming no fetcher,
     /// as production's), Soulseek's (2), and own music: ann's (3), bob's (4), eve's (5), root's (6) and carl's (7). Rows only,
     /// written with their sizes, no file behind them. The data folder `data` where given (its users file, as found there).
-    fn room_shape_in(data: Option<&Path>, catalogue: Option<&Path>) -> Arc<Serve> {
+    pub(crate) fn room_shape_in(data: Option<&Path>, catalogue: Option<&Path>) -> Arc<Serve> {
         let serve = Serve::open(data, crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(Arc::new(Catalogue::open(catalogue, FOLDERS.map(PathBuf::from).to_vec()).unwrap()));
         serve.library.set_kinds(kinds());
         serve
     }
 
-    fn room_shape() -> Arc<Serve> {
+    pub(crate) fn room_shape() -> Arc<Serve> {
         room_shape_in(None, None)
     }
 
@@ -163,18 +164,18 @@ mod tests {
         used_by(cat, &Places::of(&kinds, &cat.folders()), &requesters_in(cat, &serve.userdata, &kinds)).unwrap()
     }
 
-    fn used(serve: &Serve, account: &str) -> u64 {
+    pub(crate) fn used(serve: &Serve, account: &str) -> u64 {
         used_now(serve).get(account).copied().unwrap_or(0)
     }
 
     /// Every account's count added up: one file in two accounts' room, or twice in one's, shows here.
-    fn total(serve: &Serve) -> u64 {
+    pub(crate) fn total(serve: &Serve) -> u64 {
         used_now(serve).values().sum()
     }
 
     /// A file's row with no file behind it: on `track`, `size` bytes, its time `mtime`, shared as a copy said, come at `came`.
     #[allow(clippy::too_many_arguments)]
-    fn put_file(cat: &Catalogue, folder: i64, rel: &str, track: Option<i64>, size: u64, mtime: i64, shared: bool, came: i64) {
+    pub(crate) fn put_file(cat: &Catalogue, folder: i64, rel: &str, track: Option<i64>, size: u64, mtime: i64, shared: bool, came: i64) {
         let track = track.map_or("NULL".to_string(), |t| t.to_string());
         cat.execute_for_tests(&format!(
             "INSERT INTO files (folder, rel, size, mtime, state, track, shared, came) VALUES ({folder}, '{rel}', {size}, {mtime}, 1, {track}, {}, {came})",
@@ -183,7 +184,7 @@ mod tests {
     }
 
     /// A folder's rows as they stand, to see that nothing of an account's is written.
-    fn rows_of(cat: &Catalogue, folder: i64) -> Vec<String> {
+    pub(crate) fn rows_of(cat: &Catalogue, folder: i64) -> Vec<String> {
         let db = cat.writer_for_tests();
         let mut st = db
             .prepare("SELECT rel || '|' || ifnull(track, '') || '|' || size || '|' || mtime || '|' || shared || '|' || ifnull(came, '') || '|' || ifnull(trashed, '') FROM files WHERE folder = ?1 ORDER BY rel")
@@ -439,9 +440,15 @@ mod tests {
 
     /// AL01.8 (OQ7, OQ-R3): root (300 GB of own music) and carl (150 GB) are administrators, bob a user. Root and carl have no room,
     /// never full; the users' list has bob's alone. Carl made a user: 100 GB, 150 used, over; an administrator again: none; a room
-    /// of 200 GB set on him meanwhile is kept, and his once he is a user again. Never an administrator's room read "full".
-    #[test]
-    fn an_administrator_has_no_room_and_a_user_made_of_one_has() {
+    /// of 200 GB set on him meanwhile is kept, and his once he is a user again. Never an administrator's room read "full". Its Wants
+    /// (AL02): root's is handed (the strict Lidarr expects his alone); carl's, a user over his room, waits, Lidarr not asked. Never an
+    /// administrator's Want waiting for room.
+    #[tokio::test]
+    async fn an_administrator_has_no_room_and_a_user_made_of_one_has() {
+        use crate::app::requests::tests::{Copies, Strict, acting, not_had};
+        use crate::app::requests::{Hands, WAITS_FOR_ROOM, ask_record_with};
+        const S: &str = "00000000-0000-4000-8000-000000000411";
+        const C: &str = "00000000-0000-4000-8000-000000000412";
         let serve = room_shape();
         let cat = serve.catalogue();
         for (name, admin) in [("root", true), ("carl", true), ("bob", false)] {
@@ -453,8 +460,18 @@ mod tests {
         assert_eq!((room("root"), room("carl")), (None, None), "administrators: no room");
         let listed = rooms(&serve, &serve.users.all()).unwrap();
         assert_eq!(listed.keys().collect::<Vec<_>>(), ["bob"], "each user's room, none for the administrators");
+        let (strict, house) = (Strict::expecting_wants(&[S]), Copies::none());
+        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house };
+        let (s, c) = (not_had(&serve, "Signal", S), not_had(&serve, "Carl's Want", C));
+        let roots = acting("root", true, ask_record_with(&h, &serve, "root", s)).await.unwrap();
+        assert_ne!(roots.fetched.as_deref(), Some(WAITS_FOR_ROOM), "an administrator's Want never waits: {roots:?}");
+        assert_eq!(strict.wanted(), [S], "root's handed: no room, whatever he holds");
         serve.users.set_admin("carl", false, Some("root")).unwrap();
         assert_eq!(room("carl"), Some(Room { size: gb(100.0), used: gb(150.0), full: true }), "a user now: 100 GB, 150 used, over");
+        let carls = acting("carl", false, ask_record_with(&h, &serve, "carl", c)).await.unwrap();
+        assert_eq!(serve.userdata.request(carls.id).unwrap().unwrap().fetched.as_deref(), Some(WAITS_FOR_ROOM), "a user over room: his new Want waits");
+        assert_eq!(strict.wanted(), [S], "Lidarr not asked for carl's");
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
         serve.users.set_admin("carl", true, Some("root")).unwrap();
         assert_eq!(room("carl"), None, "an administrator again: none");
         serve.users.set_room("carl", gb(200.0)).unwrap();
@@ -513,9 +530,9 @@ mod tests {
     /// AL01.10 (Q3): a users file as 0.16 left production's (users asking with no yes of their own, accounts from the directory, an
     /// administrator with `"permissions": {}`), no room anywhere; bob's own music holds 130 GB. 0.17 starts: bob's room is 100 GB,
     /// 130 used, over; nothing removed or moved, the users file as it was. Never a file of bob's touched, nor a room over 100 GB
-    /// given at the upgrade.
-    #[test]
-    fn over_room_at_the_upgrade_removes_nothing() {
+    /// given at the upgrade. Bob then Wants a record not had (AL02): it waits, Lidarr not asked, his rows and the file as they were.
+    #[tokio::test]
+    async fn over_room_at_the_upgrade_removes_nothing() {
         let data = std::env::temp_dir().join(format!("cratarr-room-upgrade-{}", std::process::id()));
         std::fs::remove_dir_all(&data).ok();
         std::fs::create_dir_all(&data).unwrap();
@@ -545,6 +562,15 @@ mod tests {
         assert_eq!(rooms.get("bob"), Some(&Room { size: gb(100.0), used: gb(130.0), full: true }), "the default room, 130 used, over");
         assert_eq!(rooms.len(), 5, "each user's room; none for the two administrators");
         assert!(rooms.values().all(|r| r.size == ROOM), "no room over 100 GB given");
+        // Bob's Want after the upgrade, over room (AL01.10's Want part): it waits, Lidarr asked nothing.
+        use crate::app::requests::tests::{Copies, Strict, acting, not_had};
+        use crate::app::requests::{Hands, WAITS_FOR_ROOM, ask_record_with};
+        let (strict, house) = (Strict::expecting_nothing(), Copies::none());
+        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house };
+        let wanted = not_had(&serve, "After the Upgrade", "00000000-0000-4000-8000-000000000421");
+        let asked = acting("bob", false, ask_record_with(&h, &serve, "bob", wanted)).await.unwrap();
+        assert_eq!(serve.userdata.request(asked.id).unwrap().unwrap().fetched.as_deref(), Some(WAITS_FOR_ROOM), "his Want waits");
+        assert!(strict.wanted().is_empty() && strict.violations().is_empty(), "Lidarr asked nothing: {:?}", strict.violations());
         assert_eq!(rows_of(cat, BOB), his, "nothing of bob's removed or moved");
         assert_eq!(std::fs::read_to_string(&users_file).unwrap(), file, "the users file as it was");
         std::fs::remove_dir_all(&data).ok();

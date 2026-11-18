@@ -739,7 +739,7 @@ pub fn soulseek_queue(data: &std::path::Path, frozen: bool) -> Vec<Finding> {
 /// Requests waiting for an answer (decision 0070), each named, opening the Requests page; the fetchers out of reach (X1);
 /// Soulseek's records held for its own disk's trouble (Y9), or for their placing failing (Y12); and Soulseek's queue set aside or
 /// not kept (P7).
-fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
+pub(super) fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let now = super::moment::now_secs();
     let queue = served.and_then(|s| s.data_dir.as_deref()).map(|d| soulseek_queue(d, super::soulseek::frozen())).unwrap_or_default();
     let down: Vec<Finding> = fetchers_down(&super::requests::fetchers_down(now), now)

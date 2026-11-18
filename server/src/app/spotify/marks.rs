@@ -219,9 +219,9 @@ impl Marks<'_> {
         let there = if of > 0 { have == of } else { found };
         match request.map(|(_, s)| s) {
             _ if there => IN,
-            Some(RequestState::Done) => IN,
+            Some(RequestState::Done | RequestState::Delivered) => IN,
             Some(RequestState::PartlyThere { .. }) => PARTLY,
-            Some(RequestState::WaitingForApproval | RequestState::Wanted { .. } | RequestState::Arrived) => REQUESTED,
+            Some(RequestState::WaitingForApproval | RequestState::WaitingForRoom { .. } | RequestState::Wanted { .. } | RequestState::Arrived) => REQUESTED,
             _ if have > 0 || found => PARTLY,
             _ => MISSING,
         }
