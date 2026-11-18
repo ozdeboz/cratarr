@@ -33,13 +33,18 @@
 //!   forces a build at the upgrade (the layout and the files as they were), so until the first file changed the records you have
 //!   would be credited to nobody: Discover's missing albums empty, the paced re-read idle, and the album artists left to
 //!   retention's guard alone (W2). The shape is not read (M1); no record is given, made or moved.
+//! - **The doubles of one name** (F2.11, OQ-F2a (a); F11.1; the last part, `fold`, after `credits`): the live records of one artist
+//!   (by id) and one title's key (`identity::title_key`) that are one album folded into the oldest, had first, as an artist's own list
+//!   joins a row since F2: what the parts before could not join (a had record is credited only by `credits`) and what preview 1 made.
+//!   Two had records whose copies pair track for track are one record of two copies (the owner: "One record, two copies"). What the
+//!   user data names by a record that went follows the one it went into, once; what names its tracks, at the first build.
 //! - **One release on two records** (G1): who keeps it goes by the order the parts run in: a link pasted by hand, a certain
 //!   match (MusicBrainz matched the record's tracks to it; two on one release, the older record), the files' own (the older
 //!   record first), a likely match. A retired record holds none.
 
 use anyhow::{Context, Result};
 
-use crate::catalogue::records::{CREDITS_017, JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, CarriedRequest, Ref};
+use crate::catalogue::records::{CREDITS_017, FOLD_017, JOINS, Carry, CarriedChoice, CarriedDiscography, CarriedDiscogs, CarriedLinks, CarriedMatch, CarriedPage, CarriedRequest, Ref};
 use crate::catalogue::{Catalogue, Rules};
 use crate::serve::library::FolderRows;
 use crate::settings::LibraryKind;
@@ -124,7 +129,8 @@ const BAND_WAVE_BATCH: usize = 500;
 pub fn run(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)], rules: &Rules) -> Result<()> {
     run_with(cat, ud, &|_| Ok(()))?;
     band_waves(cat)?;
-    credits(cat, kinds, rules, &|| Ok(()))
+    credits(cat, kinds, rules, &|| Ok(()))?;
+    fold(cat, ud, &|| Ok(()))
 }
 
 /// The part `credits` (P3, W3): what the files of the records you have name and credit, kept for their records once, as a build's
@@ -155,6 +161,45 @@ pub(crate) fn credits(cat: &Catalogue, kinds: &[(i64, LibraryKind)], rules: &Rul
         tracing::info!(target: "library", records = credited, secs = started.elapsed().as_secs(), "0.17's step: the records you have credited as their files credit them");
     }
     Ok(())
+}
+
+/// The user data's part of the fold (F2.11): a part of the migration report of its own, written once what it names by a record that
+/// went follows the one it went into; it lists each merge (`folded`).
+const FOLDED: &str = "references: the doubles of one name folded";
+
+/// The part `fold` (F2.11, OQ-F2a (a); F11.1), the step's last: the doubles of one name folded once (`Catalogue::fold_017`): what the
+/// parts before could not join (a had record is credited only by `credits`) and what preview 1 made. It says it begins, and how many
+/// it folded; a part that fails stops the start, as the others do. Then the user data follows (`follow_folded`). `after` hears it done,
+/// inside its transaction (what the tests cut it by). Blocking.
+pub(crate) fn fold(cat: &Catalogue, ud: &UserData, after: &dyn Fn() -> Result<()>) -> Result<()> {
+    let named = || format!("0.17's step, part {FOLD_017}");
+    if !cat.part_done_017(FOLD_017).with_context(named)? {
+        tracing::info!(target: "library", "0.17's step, part {FOLD_017}");
+        if let Some(folded) = cat.fold_017(after).with_context(named)? {
+            tracing::info!(target: "library", folded = folded.len(), "0.17's step: the doubles of one name folded");
+        }
+    }
+    // Said in the log where it fails, and the start goes on: it is tried again at the next (as the requests' repairs are).
+    if let Err(e) = follow_folded(cat, ud) {
+        tracing::error!(target: "library", reason = %format!("{e:#}"), "0.17's step: what the user data names by a folded record has not followed it; tried again at the next start");
+    }
+    Ok(())
+}
+
+/// What the user data names by a record the fold merged away (hearts and ratings, what was added and imported, a copy's review and what
+/// was heard of it, what was said by hand: `UserData::follow_records`) follows the record it went into, once, under its own part of the
+/// migration report (`FOLDED`), which lists each merge. Its tracks' (plays, hearts, playlist entries) follow at the first build, as a
+/// take's do (`track_moved`, `Serve::follow_taken`); a request reads its record as merged now, and Soulseek's item follows its request.
+/// Blocking.
+fn follow_folded(cat: &Catalogue, ud: &UserData) -> Result<()> {
+    if ud.migration_report()?.contains_key(FOLDED) {
+        return Ok(());
+    }
+    let Some(folded) = cat.folded_017()? else { return Ok(()) };
+    let pairs: Vec<(String, String)> = folded.iter().map(|(from, into)| (crate::serve::ids::record(*from), crate::serve::ids::record(*into))).collect();
+    let mut report = serde_json::to_value(ud.follow_records(&pairs)?)?;
+    report["folded"] = pairs.iter().map(|(from, into)| format!("{from} into {into}")).collect::<Vec<_>>().into();
+    ud.set_migration_part(FOLDED, &report)
 }
 
 /// The part `band_wave` (M1): the waveforms in three bands apart from the visuals' signals, once. Blocking.
@@ -513,6 +558,13 @@ mod tests {
         band_waves(cat).unwrap();
     }
 
+    /// The step without its part `fold`: the parts, the band waves and the credits (P3's tests compare a build with this; the fold's
+    /// make their doubles after it).
+    fn run_without_fold(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)]) {
+        run_without_credits(cat, ud);
+        credits(cat, kinds, &Rules::default(), &|| Ok(())).unwrap();
+    }
+
     /// The function whose head is `head` in `src`, to its closing brace, indented as its head is (the lines ended as a checkout
     /// may end them).
     fn body(src: &str, head: &str) -> String {
@@ -581,7 +633,7 @@ mod tests {
         data.run();
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'bandcamp' AND value NOT LIKE 'https://paperlantern.%'"), pages, "the part it lacked ran");
         assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE subject = 'al-2' AND source = 'discogs' AND how = 'hand'"), 0, "a part done did not run again");
-        assert_eq!(data.marks().len(), PARTS_017.len() + 2, "and the band waves' and the credits'");
+        assert_eq!(data.marks().len(), PARTS_017.len() + 3, "and the band waves', the credits' and the fold's");
         let (_, ud) = data.open();
         let report = &ud.migration_report().unwrap()[PART].1;
         assert_eq!(table(report, "bandcamp_found").0, data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM bandcamp_found") as u64, "{report}");
@@ -717,7 +769,7 @@ mod tests {
         data.batch("userdata.sqlite", "DELETE FROM migration_report WHERE part = 'references'");
         let (cat, ud) = data.open();
         run(&cat, &ud).expect("the start goes on");
-        assert_eq!(data.marks().len(), PARTS_017.len() + 2, "no part run again (and the band waves' and the credits')");
+        assert_eq!(data.marks().len(), PARTS_017.len() + 3, "no part run again (and the band waves', the credits' and the fold's)");
         let report = &ud.migration_report().unwrap()[PART].1;
         assert!(report["tables"].as_array().unwrap().iter().all(|t| t["name"] != "bandcamp_found"), "{report}");
         assert!(report["tables"].as_array().unwrap().iter().any(|t| t["name"] == "record_references"));
@@ -883,19 +935,22 @@ mod tests {
         lines.iter().filter_map(|l| l.strip_prefix("library: 0.17's step, part ")).collect()
     }
 
-    /// P1.1 (W1): each part says it begins, at info under `library`, in the parts' order and then `band_wave`, before anything
+    /// P1.1 (W1): each part says it begins, at info under `library`, in the parts' order and then `band_wave`, `credits` and `fold`
+    /// (the last, OQ-F2a (a)), before anything
     /// else of it, and only the parts that run: a start cut off after `discogs` says the rest alone. Never a line per row.
     #[test]
     fn the_step_says_each_part_as_it_begins() {
         let data = Data::new("says-parts");
         let (cat, ud) = data.open();
         let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
-        assert_eq!(parts_said(&lines), PARTS_017.iter().copied().chain(["band_wave", "credits"]).collect::<Vec<_>>(), "{lines:#?}");
+        assert_eq!(parts_said(&lines), PARTS_017.iter().copied().chain(["band_wave", "credits", "fold"]).collect::<Vec<_>>(), "{lines:#?}");
         assert_eq!(parts_said(&lines[..1]), ["hand"], "the step's first line is its first part's: {lines:#?}");
         let at = |start: &str| lines.iter().position(|l| l.starts_with(start)).unwrap_or_else(|| panic!("no {start}: {lines:#?}"));
         assert!(at("library: 0.17's step, part requests") < at("library: 0.17's step: the records' references moved into the catalogue"), "{lines:#?}");
         assert!(at("library: 0.17's step, part band_wave") < at("library: 0.17's step: the waveforms in three bands apart"), "{lines:#?}");
         assert!(at("library: 0.17's step, part credits") < at("library: 0.17's step: the records you have credited"), "{lines:#?}");
+        assert!(at("library: 0.17's step: the records you have credited") < at("library: 0.17's step, part fold"), "{lines:#?}");
+        assert!(at("library: 0.17's step, part fold") < at("library: 0.17's step: the doubles of one name folded"), "{lines:#?}");
         let report = &ud.migration_report().unwrap()[PART].1;
         let read: u64 = report["tables"].as_array().unwrap().iter().map(|t| t["before"].as_u64().unwrap()).sum();
         assert!((lines.len() as u64) < read, "no line per row: {} lines, {read} rows read: {lines:#?}", lines.len());
@@ -909,7 +964,7 @@ mod tests {
         done.sort();
         assert_eq!(cut.marks(), done, "hand … discogs done");
         let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
-        assert_eq!(parts_said(&lines), ["discography", "pages", "chosen", "requests", "band_wave", "credits"], "none of the parts marked: {lines:#?}");
+        assert_eq!(parts_said(&lines), ["discography", "pages", "chosen", "requests", "band_wave", "credits", "fold"], "none of the parts marked: {lines:#?}");
         assert_eq!(parts_said(&lines).first(), Some(&"discography"));
     }
 
@@ -933,7 +988,7 @@ mod tests {
         let (cat, ud) = data.open();
         let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
         assert_eq!(parts_said(&lines).first(), Some(&"discogs"), "{lines:#?}");
-        assert_eq!(parts_said(&lines), PARTS_017[5..].iter().copied().chain(["band_wave", "credits"]).collect::<Vec<_>>(), "no part marked runs again");
+        assert_eq!(parts_said(&lines), PARTS_017[5..].iter().copied().chain(["band_wave", "credits", "fold"]).collect::<Vec<_>>(), "no part marked runs again");
         let report = "SELECT report FROM migration_report WHERE part = 'references'";
         let uncut = Data::new("cut-said-uncut");
         uncut.run();
@@ -981,13 +1036,14 @@ mod tests {
         assert!(!cat.missing_everywhere().unwrap().0.is_empty(), "Discover's missing albums: Glass Harbour's discography");
     }
 
-    /// P3.2 (W3): the part writes exactly what the first build's record pass writes (B: the step without it, then the build's
+    /// P3.2 (W3): the part writes exactly what the first build's record pass writes (A: the step to it, as the fold after it merges
+    /// records, F2.11; B: the step without it, then the build's
     /// `keep_files_names` over the albums a build reads), and a build after it finds nothing to write, `at` included.
     #[test]
     fn the_steps_credits_are_the_first_builds() {
         let (a, b) = (Data::tagged("credits-a"), Data::tagged("credits-b"));
         let (cat, ud, kinds) = a.open_both();
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        run_without_fold(&cat, &ud, &kinds);
         {
             let (cat, ud, kinds) = b.open_both();
             run_without_credits(&cat, &ud);
@@ -1002,7 +1058,7 @@ mod tests {
 
     /// P3.3 (W3): the part runs once: run again, it writes nothing and says nothing; cut off by its `after`, it wrote no credit and
     /// set no mark, and the next start completes it; a data folder whose step was done before the part came (every other mark,
-    /// staging's after preview 1's first deploy) runs it at the next start, alone.
+    /// staging's after preview 1's first deploy) runs it at the next start, and the fold after it (F2.11).
     #[test]
     fn the_credits_part_runs_once_and_goes_on_after_a_cut() {
         let twice = Data::tagged("credits-twice");
@@ -1034,7 +1090,7 @@ mod tests {
         before.sort();
         assert_eq!(staged.marks(), before, "every mark but the credits'");
         let lines = crate::diagnostics::logged_lines(|| super::run(&cat, &ud, &kinds, &Rules::default()).unwrap());
-        assert_eq!(parts_said(&lines), ["credits"], "the part alone: {lines:#?}");
+        assert_eq!(parts_said(&lines), ["credits", "fold"], "the part, and the fold after it: {lines:#?}");
         assert_eq!(staged.credit_rows(), twice.credit_rows());
     }
 
@@ -1080,7 +1136,7 @@ mod tests {
         assert!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM records WHERE retired_at IS NOT NULL") > 0, "a retired record");
         assert!(!before[4].is_empty(), "records not had with listing credits");
         assert!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM request WHERE status = 'approved'") > 0, "open requests");
-        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        credits(&cat, &kinds, &Rules::default(), &|| Ok(())).unwrap();
         assert!(cat.part_done_017(CREDITS_017).unwrap() && !data.files_credits().is_empty(), "the part ran");
         let after = snapshot();
         for (n, what) in ["tracks", "records", "files", "references not the files'", "listing credits of records not had", "requests"].iter().enumerate() {
@@ -1154,7 +1210,7 @@ mod tests {
         assert!(data.marks().is_empty(), "nothing done: {:?}", data.marks());
         writer.execute_batch("ROLLBACK").unwrap();
         run(&cat, &ud).unwrap();
-        assert_eq!(data.marks().len(), PARTS_017.len() + 2, "the writer gone, every part (and the band waves' and the credits')");
+        assert_eq!(data.marks().len(), PARTS_017.len() + 3, "the writer gone, every part (and the band waves', the credits' and the fold's)");
     }
 
     /// P5.3 (W5): a failure after the parts, the report not written (the user data gone read-only) or the requests not given
@@ -1409,7 +1465,10 @@ mod tests {
         let part = std::time::Instant::now();
         credits(&cat, &[], &Rules::default(), &|| Ok(())).unwrap();
         let part = part.elapsed();
-        assert!(cat.part_done_017(CREDITS_017).unwrap());
+        let folding = std::time::Instant::now();
+        fold(&cat, &ud, &|| Ok(())).unwrap();
+        let folding = folding.elapsed();
+        assert!(cat.part_done_017(CREDITS_017).unwrap() && cat.part_done_017(FOLD_017).unwrap());
         assert!(cat.references_to_carry().unwrap().is_empty());
         let references: i64 = Connection::open(d.join("catalogue.sqlite")).unwrap().query_row("SELECT count(*) FROM \"references\"", [], |r| r.get(0)).unwrap();
         let report = cat.references_carried().unwrap().unwrap();
@@ -1425,7 +1484,7 @@ mod tests {
         cat.keep_files_names(&copies).unwrap();
         let again = again.elapsed();
         eprintln!(
-            "0.17's step at production size: {step:?} for {references} references, {} records not had, {} found by their groups (made in {made:?}); its part credits: {part:?}; a build's albums: {} copies in {copies_took:?}; keep_files_names after the part: {build:?}, {again:?} with nothing changed",
+            "0.17's step at production size: {step:?} for {references} references, {} records not had, {} found by their groups (made in {made:?}); its part credits: {part:?}; its part fold: {folding:?}; a build's albums: {} copies in {copies_took:?}; keep_files_names after the part: {build:?}, {again:?} with nothing changed",
             report["records_not_had"], report["records_found"], copies.len()
         );
         std::fs::remove_dir_all(&d).ok();
@@ -1647,5 +1706,262 @@ mod tests {
         assert_eq!((report["counted_by_hand"].as_u64(), report["checked_by_hand"].as_u64()), (Some(4), Some(2)));
         assert_eq!(report["counted_by_a_match"], serde_json::Value::Null, "the step claims no count (R3)");
         assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM record_references"), 8, "kept one version");
+    }
+
+    /// alice's open request of `record` by Kite Theory, asked by its names alone (no group): its id.
+    fn alice_asks(ud: &UserData, record: i64, album: &str) -> i64 {
+        ud.add_request(&crate::userdata::Request {
+            id: 0,
+            user: "alice".into(),
+            album_key: format!("kitetheory|{}", crate::catalogue::identity::fold(album)),
+            artist_key: "kite theory".into(),
+            release_group: None,
+            album: album.into(),
+            artist: "Kite Theory".into(),
+            year: None,
+            cover: None,
+            at: 1_794_000_000,
+            status: super::super::requests::APPROVED.into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+            record: Some(record),
+        })
+        .unwrap()
+    }
+
+    /// F2.10: 0.17's step makes no doubles of one name from 0.16's data. FX01 plus Glass Harbour's had "Salt Lines" (its files name no
+    /// group; two long tracks, an album by the release type rule, as the discography's row says: U2's one kind class), their 0.16 discography listing "Salt Lines" (a group) and "Quiet Ferry" (another, not had), and a 0.16 Want "Quiet Ferry
+    /// EP" with a Bandcamp page found by its names and no group. After the step: one live "Salt Lines", the had one, holding the group
+    /// (the discography's record folded into it once `credits` credited it); the Want's record "Quiet Ferry" by its title's key
+    /// (OQ-F2b (a)), holding the page, listed as found by names; the had record credited to its artist once. Never two live records of
+    /// one artist and one title's key where one is not had (X8 counts those as one album, nothing contradicting here).
+    #[test]
+    fn the_step_makes_no_doubles_of_one_name() {
+        use crate::catalogue::identity::title_key;
+        let data = Data::new("no-doubles");
+        let salt = "Glass Harbour/Salt Lines (2015)";
+        data.batch(
+            "catalogue.sqlite",
+            &format!(
+                "INSERT INTO records (id, born, title, artist, year) VALUES (20, 1760000700, 'Salt Lines', 'Glass Harbour', 2015);
+                 INSERT INTO tracks (id, born, record, disc, number) VALUES (60, 1760000700, 20, 1, 1), (61, 1760000700, 20, 1, 2);
+                 INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES
+                   (0, '{salt}/01 Brine.flac', 24000000, 1760000000, 1, 'FLAC', 900, 1500000, 60, 16, 44100, 1760000000),
+                   (0, '{salt}/02 Kelp.flac', 24000000, 1760000000, 1, 'FLAC', 900, 1500000, 61, 16, 44100, 1760000000);
+                 INSERT INTO tags (folder, rel, n, raw, name, value) SELECT folder, rel, 0, 'ALBUM', 'album', 'Salt Lines' FROM files WHERE rel LIKE '{salt}/%';
+                 INSERT INTO tags (folder, rel, n, raw, name, value) SELECT folder, rel, 1, 'ALBUMARTIST', 'albumartist', 'Glass Harbour' FROM files WHERE rel LIKE '{salt}/%';
+                 INSERT INTO tags (folder, rel, n, raw, name, value) SELECT folder, rel, 2, 'ARTIST', 'artist', 'Glass Harbour' FROM files WHERE rel LIKE '{salt}/%';"
+            ),
+        );
+        let (salt_group, ferry_group) = (mb(119), mb(120));
+        data.batch(
+            "userdata.sqlite",
+            &format!(
+                "UPDATE discography SET groups = json_insert(groups, '$[#]', json('{{\"id\":\"{salt_group}\",\"title\":\"Salt Lines\",\"kind\":\"Album\",\"year\":2015,\"genres\":[],\"date\":\"2015\"}}'),
+                   '$[#]', json('{{\"id\":\"{ferry_group}\",\"title\":\"Quiet Ferry\",\"kind\":\"Album\",\"year\":2017,\"genres\":[],\"date\":\"2017\"}}')) WHERE artist = '{}';
+                 INSERT INTO request (id, user, album_key, artist_key, album, artist, year, at, status) VALUES (16, 'ann', 'glassharbour|quietferryep', 'glass harbour', 'Quiet Ferry EP', 'Glass Harbour', 2017, 1793951100, 'approved');
+                 INSERT INTO bandcamp_found (album, at, page) VALUES ('glassharbour|quietferryep', 1793951100, 'https://glassharbour.bandcamp.com/album/quiet-ferry-ep');",
+                mb(201)
+            ),
+        );
+        let (cat, ud) = data.open();
+        run(&cat, &ud).unwrap();
+        let live = |title: &str| -> Vec<i64> {
+            data.texts("catalogue.sqlite", &format!("SELECT CAST(id AS TEXT) FROM records WHERE title = '{title}' AND merged_into IS NULL AND retired_at IS NULL ORDER BY id")).iter().map(|r| r.parse().unwrap()).collect()
+        };
+        assert_eq!(live("Salt Lines"), [20], "one live Salt Lines, the had one");
+        assert!(refs(&cat, 20).iter().any(|(s, k, v, ..)| (s.as_str(), k.as_str(), v.as_str()) == ("musicbrainz", "release-group", salt_group.as_str())), "holding the group: {:?}", refs(&cat, 20));
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM record_artists WHERE record = 20"), 1, "credited to its artist once");
+        let ferry = data.sql::<i64>("userdata.sqlite", "SELECT record FROM request WHERE id = 16");
+        let row = cat.record(ferry).unwrap().unwrap();
+        assert_eq!((row.title.as_str(), row.had), ("Quiet Ferry", false), "the Want's record, by its title's key (OQ-F2b (a))");
+        let held = refs(&cat, row.id);
+        assert!(held.iter().any(|(_, k, v, ..)| k == "release-group" && *v == ferry_group) && held.iter().any(|(s, _, v, ..)| s == "bandcamp" && v.ends_with("/quiet-ferry-ep")), "{held:?}");
+        let report = &ud.migration_report().unwrap()[PART].1;
+        assert!(report["requests_found_by_names"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).any(|l| l.starts_with("16 Glass Harbour - Quiet Ferry EP -> ")), "{report}");
+        // Never: a record not had beside another live record of its artist and title's key.
+        let mut names: std::collections::BTreeMap<(String, String), Vec<(i64, bool)>> = std::collections::BTreeMap::new();
+        for row in data.rows_of("catalogue.sqlite", "SELECT a.artist, r.id, r.title FROM record_artists a JOIN records r ON r.id = a.record WHERE r.merged_into IS NULL AND r.retired_at IS NULL") {
+            let cells: Vec<&str> = row.split('|').collect();
+            let id: i64 = cells[1].trim_start_matches("Integer(").trim_end_matches(')').parse().unwrap();
+            let title = cells[2].trim_start_matches("Text(\"").trim_end_matches("\")");
+            names.entry((cells[0].to_string(), title_key(title))).or_default().push((id, cat.record(id).unwrap().unwrap().had));
+        }
+        // One album by the had rule (X8, X9, U2): a record not had that a had record of its names beside it holds, or two records not
+        // had that no two release groups set apart.
+        for ((artist, key), rs) in names.iter().filter(|(_, rs)| rs.len() > 1) {
+            let not_had: Vec<i64> = rs.iter().filter(|(_, had)| !had).map(|(id, _)| *id).collect();
+            let read = cat.requested(&not_had).unwrap();
+            for id in &not_had {
+                assert!(read[id].holder.is_none_or(|h| !rs.iter().any(|(o, _)| *o == h)), "{artist} {key}: {id} is had by the record of its names beside it: {rs:?}");
+                for other in not_had.iter().filter(|o| *o != id) {
+                    let (a, b) = (&read[id].groups, &read[other].groups);
+                    assert!(!a.is_empty() && !b.is_empty() && a != b, "{artist} {key}: {id} and {other} are one album: {rs:?}");
+                }
+            }
+        }
+    }
+
+    /// F2.11 (OQ-F2a (a)): the doubles preview 1 made, as staging's catalogue held them after its step and an opening of the artist,
+    /// made directly after the step's other parts: Kite Theory's records not had from MusicBrainz's list (older, a group each) beside
+    /// Bandcamp's of their names (newer, a page each), each list's row a record of its own then; "Harbour Road" three times (a had
+    /// untagged record, one not had holding a group, one holding a page); a had album beside Bandcamp's record of it (staging's had
+    /// halves); a pair whose newer holds alice's open request and bob's heart; "Orbital" by two groups (X8); a pair the hand's Discogs
+    /// master sets apart; two had records of one name whose copies do not pair; one name of two artists of one name. The part `fold`,
+    /// the step's last: each double merged into the oldest of its name, had first, references moved, the newer answering as the older;
+    /// the three Harbour Roads the had one; a merge into a had record a join by names (F2.9-hand gives it back); alice's request read as
+    /// the older (Soulseek's next round reads it so), bob's heart on it; each merge in the report; the rest untouched. Started again:
+    /// no fold. Never a merge of two had records that are not one record's copies, across artists, or where X8 counts several albums;
+    /// never an id that answers nothing, a heart or a request lost.
+    #[test]
+    fn the_fold_part_merges_the_doubles_of_one_name() {
+        use crate::catalogue::records::Listing;
+        use crate::serve::ids;
+        use crate::userdata::Kind;
+        let data = Data::new("fold");
+        let (cat, ud) = data.open();
+        run_without_fold(&cat, &ud, &[]);
+        let (kite, apart) = (cat.artist_for("Kite Theory").unwrap(), cat.artist_apart("Kite Theory").unwrap());
+        // As preview 1 kept a list's row: a record of its own (no join by names then), credited to the list's artist.
+        let kept = |title: &str, kind: Option<&str>, refs: Vec<Ref>, artist: i64| -> i64 {
+            let row = Listing { title: title.into(), artist: "Kite Theory".into(), kind: kind.map(str::to_string), refs, ..Listing::default() };
+            let record = cat.keep_listing(None, &[row], "link").unwrap()[0];
+            cat.execute_for_tests(&format!("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES ({record}, {artist}, 0, 'listing');"));
+            record
+        };
+        let group = |n: u32| vec![Ref::new("musicbrainz", "release-group", &mb(n))];
+        let page = |slug: &str| vec![Ref::new("bandcamp", "album", &format!("https://kitetheory.bandcamp.com/album/{slug}"))];
+        let had = |title: &str| -> i64 {
+            let record = cat.record_for_tests(title, 3);
+            cat.execute_for_tests(&format!("UPDATE records SET artist = 'Kite Theory' WHERE id = {record}; INSERT INTO record_artists (record, artist, position, how) VALUES ({record}, {kite}, 0, 'files');"));
+            record
+        };
+        let field = (kept("The Long Field", Some("album"), group(401), kite), kept("The Long Field", None, page("the-long-field"), kite));
+        let sky = (kept("Stone Sky", Some("album"), group(402), kite), kept("Stone Sky", None, page("stone-sky"), kite));
+        let answered = (kept("Answered", Some("ep"), group(403), kite), kept("Answered EP", None, page("answered-ep"), kite));
+        let road = (had("Harbour Road"), kept("Harbour Road", Some("album"), group(404), kite), kept("Harbour Road", None, page("harbour-road"), kite));
+        let bridge = (had("Low Bridge"), kept("Low Bridge", None, page("low-bridge"), kite));
+        let orbital = (kept("Orbital", Some("album"), group(405), kite), kept("Orbital", Some("album"), group(406), kite));
+        let shift = (kept("Night Shift", Some("album"), [group(407), vec![Ref::new("discogs", "master", "3001")]].concat(), kite), kept("Night Shift", None, page("night-shift"), kite));
+        assert!(cat.set_reference(&ids::record(shift.1), &Ref::new("discogs", "master", "3002"), "hand").unwrap(), "pasted by hand");
+        let twins = (had("Twin Rooms"), had("Twin Rooms"));
+        let coast = (kept("Far Coast", Some("album"), group(408), kite), kept("Far Coast", None, page("far-coast"), apart));
+        let asked = alice_asks(&ud, sky.1, "Stone Sky");
+        ud.set_starred("bob", Kind::Album, &[ids::record(sky.1)], true).unwrap();
+
+        let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
+        assert_eq!(parts_said(&lines), ["fold"], "the step's last part, alone: {lines:#?}");
+        let now = |r: i64| cat.record(r).unwrap().expect("every id answers").id;
+        for (what, (older, newer)) in [("The Long Field", field), ("Stone Sky", sky), ("Answered", answered)] {
+            assert_eq!(now(newer), older, "{what}: the newer answers as the older");
+            let held = refs(&cat, older);
+            assert!(held.iter().any(|(s, ..)| s == "bandcamp") && held.iter().any(|(s, ..)| s == "musicbrainz"), "{what}: the references moved: {held:?}");
+            assert_eq!(cat.record_artists(older).unwrap(), [kite], "{what}: credited once");
+        }
+        assert_eq!(cat.record(answered.1).unwrap().unwrap().title, "Answered", "the older's title (OQ-F2c)");
+        assert_eq!((now(road.1), now(road.2)), (road.0, road.0), "the three Harbour Roads are one, the had one");
+        assert_eq!(now(bridge.1), bridge.0, "Bandcamp's record of a had album joins it");
+        let joined: Vec<i64> = data.texts("catalogue.sqlite", "SELECT CAST(record AS TEXT) FROM joined_by_names ORDER BY record").iter().map(|r| r.parse().unwrap()).collect();
+        assert!([road.1, road.2, bridge.1].iter().all(|r| joined.contains(r)), "a merge into a had record is a join by names (F2.9-hand): {joined:?}");
+        let request = ud.request(asked).unwrap().unwrap();
+        assert_eq!(super::super::requests::records_of(&cat, &[request]).unwrap()[0].as_ref().map(|o| o.record), Some(sky.0), "alice's request reads the older");
+        let hearts = ud.starred("bob", Kind::Album).unwrap();
+        assert!(hearts.contains(&ids::record(sky.0)) && !hearts.contains(&ids::record(sky.1)), "bob's heart on the older: {hearts:?}");
+        for r in [orbital.0, orbital.1, shift.0, shift.1, twins.0, twins.1, coast.0, coast.1] {
+            assert_eq!(now(r), r, "untouched: X8, a hand's master, two had records not one record's copies, two artists of one name");
+        }
+        let merges = [(field.1, field.0), (sky.1, sky.0), (answered.1, answered.0), (road.1, road.0), (road.2, road.0), (bridge.1, bridge.0)];
+        let report = &ud.migration_report().unwrap()[FOLDED].1;
+        let folded: Vec<&str> = report["folded"].as_array().unwrap().iter().filter_map(serde_json::Value::as_str).collect();
+        for (from, into) in merges {
+            assert!(folded.contains(&format!("al-{from} into al-{into}").as_str()), "the report lists each merge: {folded:?}");
+        }
+        let marked = cat.folded_017().unwrap().expect("marked");
+        assert!(merges.iter().all(|m| marked.contains(m)), "{marked:?}");
+        let marks = data.rows_of("catalogue.sqlite", "SELECT key, value FROM meta WHERE key GLOB '017:*' ORDER BY key");
+        let again = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
+        assert!(parts_said(&again).is_empty(), "started again: no fold, its mark set: {again:#?}");
+        assert_eq!(data.rows_of("catalogue.sqlite", "SELECT key, value FROM meta WHERE key GLOB '017:*' ORDER BY key"), marks);
+    }
+
+    /// F11.1 (the owner: "One record, two copies"), at the step: Glass Harbour's "Low Tide" twice, had: an untagged MP3 and the FLAC
+    /// tagged with its release, three tracks each that pair one for one as Replace pairs them (`incoming::pair`); hearts on two of the
+    /// MP3's, a playlist naming one of each, a heart and a play on one of the FLAC's, bob's heart on the FLAC's album. "Drift Maps"
+    /// twice, three tracks against four; "Pale Signal" twice, one credited to another artist of the name. The part `fold`: "Low Tide" is
+    /// one record, the older, both copies on its tracks, the FLAC's references on it, the FLAC's id answering as it; its album's heart
+    /// follows at once, what names the FLAC's tracks at the first build (`track_moved`; here moved as `Serve::follow_taken` moves it), none
+    /// lost; the other two stay two, and an arrival's join (`Catalogue::join_copies`) refuses them too. Started again, nothing joins again.
+    #[test]
+    fn two_owned_copies_with_one_tracklist_are_one_record() {
+        use crate::serve::ids;
+        use crate::userdata::{Heard, Kind};
+        let data = Data::new("one-record-two-copies");
+        let album = |record: i64, born: i64, title: &str, dir: &str, form: &str, tracks: &[(i64, &str, i64)], more: &[(&str, &str)]| -> String {
+            let mut sql = format!("INSERT INTO records (id, born, title, artist) VALUES ({record}, {born}, '{title}', 'Glass Harbour');");
+            for (n, (track, name, ms)) in tracks.iter().enumerate() {
+                let (number, rel) = ((n + 1).to_string(), format!("Glass Harbour/{dir}/{:02} {name}.{}", n + 1, form.to_lowercase()));
+                sql += &format!("INSERT INTO tracks (id, born, record, disc, number) VALUES ({track}, {born}, {record}, 1, {number});");
+                sql += &format!(
+                    "INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, bits, rate, came) VALUES (0, '{rel}', 24000000, {born}, 1, '{form}', 900, {ms}, {track}, 16, 44100, {born});"
+                );
+                let tags = [("album", title), ("albumartist", "Glass Harbour"), ("artist", "Glass Harbour"), ("title", *name), ("tracknumber", number.as_str())];
+                for (i, (k, v)) in tags.iter().chain(more).enumerate() {
+                    sql += &format!("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, '{rel}', {i}, upper('{k}'), '{k}', '{v}');");
+                }
+            }
+            sql
+        };
+        let release = mb(31);
+        data.batch(
+            "catalogue.sqlite",
+            &[
+                album(21, 1760000700, "Low Tide", "Low Tide (2014)", "MP3", &[(70, "Ebb", 180_000), (71, "Slack", 190_000), (72, "Flood", 200_000)], &[]),
+                album(22, 1794900000, "Low Tide", "Low Tide (2014) [FLAC]", "FLAC", &[(73, "Ebb", 183_000), (74, "Slack", 193_000), (75, "Flood", 203_000)], &[("musicbrainz_albumid", release.as_str())]),
+                album(23, 1760000800, "Drift Maps", "Drift Maps (2016)", "MP3", &[(76, "North", 180_000), (77, "South", 190_000), (78, "East", 200_000)], &[]),
+                album(24, 1794900100, "Drift Maps", "Drift Maps (2016) [FLAC]", "FLAC", &[(79, "North", 180_000), (80, "South", 190_000), (81, "East", 200_000), (82, "West", 210_000)], &[]),
+                album(25, 1760000900, "Pale Signal", "Pale Signal (2018)", "MP3", &[(83, "Glow", 180_000), (84, "Fade", 190_000)], &[]),
+                album(26, 1794900200, "Pale Signal", "Pale Signal (2018) [FLAC]", "FLAC", &[(85, "Glow", 180_000), (86, "Fade", 190_000)], &[]),
+            ]
+            .concat(),
+        );
+        let (cat, ud) = data.open();
+        run_without_fold(&cat, &ud, &[]);
+        let another = cat.artist_apart("Glass Harbour").unwrap();
+        cat.execute_for_tests(&format!("UPDATE record_artists SET artist = {another} WHERE record = 26;"));
+        let song = ids::song;
+        ud.set_starred("bob", Kind::Song, &[song(70), song(71), song(73)], true).unwrap();
+        ud.record("bob", (&song(73), "p"), "al-22", &[], &Heard::counted(100)).unwrap();
+        let lines = ["one".to_string(), "two".to_string()];
+        let tracks: std::collections::HashMap<String, Option<String>> = [(lines[0].clone(), Some(song(70))), (lines[1].clone(), Some(song(73)))].into_iter().collect();
+        ud.create_playlist("bob", "Mix", &lines, &tracks).unwrap().expect("made");
+        ud.set_starred("bob", Kind::Album, &[ids::record(22)], true).unwrap();
+
+        let said = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
+        assert_eq!(parts_said(&said), ["fold"], "{said:#?}");
+        assert_eq!(cat.record(22).unwrap().unwrap().id, 21, "one record, the older; the FLAC's id answers as it");
+        let on = |dir: &str| data.texts("catalogue.sqlite", &format!("SELECT CAST(f.track AS TEXT) || ' ' || CAST(t.record AS TEXT) FROM files f JOIN tracks t ON t.id = f.track WHERE f.rel LIKE 'Glass Harbour/{dir}/%' ORDER BY f.rel"));
+        assert_eq!(on("Low Tide (2014)"), ["70 21", "71 21", "72 21"]);
+        assert_eq!(on("Low Tide (2014) [FLAC]"), ["70 21", "71 21", "72 21"], "two copies on one record's tracks, paired one for one");
+        assert!(refs(&cat, 21).contains(&by("musicbrainz", "release", &release, "files", false)), "the FLAC's references on it: {:?}", refs(&cat, 21));
+        assert!(ud.starred("bob", Kind::Album).unwrap().contains(&ids::record(21)), "the album's heart follows at once");
+        let mut moved = cat.tracks_to_follow().unwrap();
+        moved.sort_unstable();
+        assert_eq!(moved, [(73, 70), (74, 71), (75, 72)], "what names the FLAC's tracks follows at the first build");
+        ud.move_tracks(&moved).unwrap();
+        let mut hearts = ud.starred("bob", Kind::Song).unwrap();
+        hearts.sort();
+        assert_eq!(hearts, [song(70), song(71)], "the hearts on the record's tracks, none lost");
+        assert_eq!(ud.get("bob", Kind::Song, &[song(70)]).unwrap().get(&song(70)).map(|a| a.play_count), Some(1), "the play");
+        assert_eq!(ud.playlist_tracks("bob", "Mix").unwrap().unwrap(), [Some(song(70)), Some(song(70))], "the playlist's entries");
+        for ((a, b), what) in [((23, 24), "another tracklist: another edition"), ((25, 26), "two artist ids")] {
+            assert_eq!((cat.record(a).unwrap().unwrap().id, cat.record(b).unwrap().unwrap().id), (a, b), "{what}: two records");
+            assert_eq!(cat.join_copies(a, b).unwrap(), None, "{what}: an arrival joins them neither");
+        }
+        let again = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
+        assert!(parts_said(&again).is_empty(), "{again:#?}");
+        assert_eq!(cat.join_copies(21, 22).unwrap(), None, "no second join of the pair");
+        assert!(cat.tracks_to_follow().unwrap().iter().all(|m| moved.contains(m)), "nothing taken again");
     }
 }

@@ -3223,6 +3223,217 @@ impl Catalogue {
 /// kept as a build keeps them (`Catalogue::credit_files_017`), marked `017:credits`.
 pub const CREDITS_017: &str = "credits";
 
+/// 0.17's step's last part (F2.11, OQ-F2a (a); F11.1), after `credits`, outside `PARTS_017` as `credits` is: the doubles of one name
+/// folded (`Catalogue::fold_017`), marked `017:fold`.
+pub const FOLD_017: &str = "fold";
+
+impl Catalogue {
+    /// 0.17's step's part `fold` on the catalogue's side (F2.11, F11.1): the doubles of one name folded (`fold_in`), in one IMMEDIATE
+    /// transaction whose last write is the part's mark, holding each merge ("al-<from> into al-<into>"): a part cut off merged nothing.
+    /// `after` hears it done, inside it (what the tests cut it by). None: done before; else each merge, (the record that went, the one
+    /// it went into), in order. Blocking.
+    pub fn fold_017(&self, after: &dyn Fn() -> Result<()>) -> Result<Option<Vec<(i64, i64)>>> {
+        let mark = mark_017(FOLD_017);
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if marked_017(&tx, &mark)? {
+            return Ok(None);
+        }
+        let folded = fold_in(&tx, now())?;
+        after()?;
+        let lines: Vec<String> = folded.iter().map(|(from, into)| format!("{} into {}", ids::record(*from), ids::record(*into))).collect();
+        tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![mark, serde_json::json!({ "folded": lines }).to_string()])?;
+        tx.commit()?;
+        Ok(Some(folded))
+    }
+
+    /// The merges the part `fold` made, as its mark holds them: (the record that went, the one it went into), in order. None: the part
+    /// has not run. Blocking.
+    pub fn folded_017(&self) -> Result<Option<Vec<(i64, i64)>>> {
+        let Some(text) = self.meta(&mark_017(FOLD_017)) else { return Ok(None) };
+        let report: serde_json::Value = serde_json::from_str(&text)?;
+        let merge = |line: &serde_json::Value| -> Option<(i64, i64)> {
+            let (from, into) = line.as_str()?.split_once(" into ")?;
+            Some((ids::record_number(from)?, ids::record_number(into)?))
+        };
+        Ok(Some(report["folded"].as_array().into_iter().flatten().filter_map(merge).collect()))
+    }
+
+    /// F11.1 as a copy arrives (the owner: "One record, two copies"): of the had records `a` and `b`, the newer joined to the older
+    /// where they are one record's two copies (`join_had_in`). The two, (the record that went, the one it went into); none where they
+    /// are not. Blocking.
+    pub fn join_copies(&self, a: i64, b: i64) -> Result<Option<(i64, i64)>> {
+        let (from, into) = (a.max(b), a.min(b));
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let joined = join_had_in(&tx, from, into, now())?;
+        tx.commit()?;
+        Ok(joined.then_some((from, into)))
+    }
+}
+
+/// The doubles of one name folded (F2.11, F11.1), in the caller's transaction: the live records each artist (by id, at any place) is
+/// credited on, by their title's key (`identity::title_key`; an empty key names nothing); in each such name each double (`double_in`)
+/// folded in turn (`fold_one_in`), the name read again after each, until none is left. One that cannot be folded (a reference the other
+/// cannot take) is left as it was, said in the log, and the rest go on. Each merge, (the record that went, the one it went into), in
+/// order.
+fn fold_in(tx: &Connection, at: i64) -> Result<Vec<(i64, i64)>> {
+    use super::identity::title_key;
+    let mut named: std::collections::BTreeMap<(i64, String), Vec<i64>> = std::collections::BTreeMap::new();
+    {
+        let mut st = tx.prepare(
+            "SELECT DISTINCT a.artist, r.id, COALESCE(r.title, '') FROM record_artists a JOIN records r ON r.id = a.record
+             WHERE r.merged_into IS NULL AND r.retired_at IS NULL ORDER BY a.artist, r.id",
+        )?;
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
+            let (artist, id, title) = row?;
+            let key = title_key(&title);
+            if !key.is_empty() {
+                named.entry((artist, key)).or_default().push(id);
+            }
+        }
+    }
+    let (mut folded, mut refused) = (Vec::new(), std::collections::HashSet::new());
+    let mut names: FoldedNames = None;
+    for ((artist, _), records) in named.into_iter().filter(|(_, records)| records.len() > 1) {
+        while let Some((from, into)) = double_in(tx, &records, &refused, &mut names)? {
+            tx.execute_batch("SAVEPOINT fold_one")?;
+            match fold_one_in(tx, artist, from, into, at) {
+                Ok(true) => {
+                    tx.execute_batch("RELEASE fold_one")?;
+                    folded.push((from, into));
+                    names = None;
+                }
+                Ok(false) => {
+                    tx.execute_batch("RELEASE fold_one")?;
+                    refused.insert((from, into));
+                }
+                Err(e) => {
+                    tx.execute_batch("ROLLBACK TO fold_one; RELEASE fold_one")?;
+                    tracing::warn!(target: "library", from, into, reason = %format!("{e:#}"), "0.17's step: a double of one name not folded");
+                    refused.insert((from, into));
+                }
+            }
+        }
+    }
+    Ok(folded)
+}
+
+/// The next double of one name (`records`: one artist's live records of one title's key, as read before the fold), none tried in vain
+/// (`refused`): the newest record not had that is one album with one before it, had first (`one_album_in`, as an artist's own list
+/// joins a row: never where the name is several albums, X8, nor across a reference that contradicts), and that one; else the newest had
+/// record and the oldest had one before it, which `join_had_in` judges (F11.1). None left: none. In the caller's transaction.
+fn double_in(tx: &Connection, records: &[i64], refused: &std::collections::HashSet<(i64, i64)>, names: &mut FoldedNames) -> Result<Option<(i64, i64)>> {
+    let sql = format!("SELECT id FROM records WHERE id IN ({}) AND merged_into IS NULL AND retired_at IS NULL ORDER BY id", id_list(records));
+    let live: Vec<i64> = tx.prepare(&sql)?.query_map([], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+    if live.len() < 2 {
+        return Ok(None);
+    }
+    let (had, refs) = (live_had_of(tx, &live)?, refs_of(tx, &live)?);
+    let classes = classes_of(tx, &live, &had)?;
+    let rank = |r: i64| (!had.contains(&r), r);
+    for &r in live.iter().rev().filter(|r| !had.contains(r)) {
+        let mine = refs.get(&r).map_or(&[][..], Vec::as_slice);
+        let into = one_album_in(tx, &live, r, mine, classes.get(&r).copied().unwrap_or(Class::Either), 0, names)?;
+        if let Some(into) = into.filter(|into| rank(*into) < rank(r) && !refused.contains(&(r, *into))) {
+            return Ok(Some((r, into)));
+        }
+    }
+    for &r in live.iter().rev().filter(|r| had.contains(r)) {
+        if let Some(&into) = live.iter().find(|t| **t < r && had.contains(t) && !refused.contains(&(r, **t))) {
+            return Ok(Some((r, into)));
+        }
+    }
+    Ok(None)
+}
+
+/// One double folded (`fold_in`): a had record joined to the older had one where they are one record's two copies (`join_had_in`,
+/// F11.1); a record not had merged into the record of its album (`merge_records_in`), noted where that one is had as a row of
+/// `artist`'s list joined by its names (`joined_by_names`), so a type set by hand gives it back as it gives a list's join back
+/// (F2.9-hand). Whether it was folded. In the caller's transaction.
+fn fold_one_in(tx: &Connection, artist: i64, from: i64, into: i64, at: i64) -> Result<bool> {
+    if live_had(tx, from)? {
+        return join_had_in(tx, from, into, at);
+    }
+    let brought = refs_in(tx, &ids::record(from))?;
+    merge_records_in(tx, from, into)?;
+    if live_had(tx, into)? {
+        tx.prepare_cached("INSERT OR REPLACE INTO joined_by_names (record, artist, refs) VALUES (?1, ?2, ?3)")?.execute(params![from, artist, serde_json::to_string(&brought)?])?;
+    }
+    Ok(true)
+}
+
+/// F11.1 (the owner: "One record, two copies"): the had record `from` joined to the older had record `into`, where both are live, of
+/// one title's key (`identity::title_key`), credited to one artist (by id), holding no references that contradict, and their copies'
+/// tracks pair one for one as Replace pairs them (`paired_tracks_in`): each of `from`'s tracks retires for good into its pair
+/// (`taken_for_good`: its files, and what names it at the first build, `track_moved`), then `from`, holding none, merges into `into`
+/// (`merge_records_in`): its references, artists and labels there, its id answering as `into`. A different tracklist stays another
+/// edition (Q8), two artist ids two records. Whether it was joined. In the caller's transaction.
+fn join_had_in(tx: &Connection, from: i64, into: i64, at: i64) -> Result<bool> {
+    use super::identity::title_key;
+    if from == into || !live_had(tx, from)? || !live_had(tx, into)? {
+        return Ok(false);
+    }
+    let key = |r: i64| -> Result<String> { Ok(title_key(&tx.prepare_cached("SELECT COALESCE(title, '') FROM records WHERE id = ?1")?.query_row([r], |row| row.get::<_, String>(0))?)) };
+    let named = key(from)?;
+    if named.is_empty() || named != key(into)? {
+        return Ok(false);
+    }
+    let one_artist: bool = tx
+        .prepare_cached("SELECT EXISTS (SELECT 1 FROM record_artists a JOIN record_artists b ON b.artist = a.artist WHERE a.record = ?1 AND b.record = ?2)")?
+        .query_row(params![from, into], |r| r.get(0))?;
+    if !one_artist || contradicts(&refs_in(tx, &ids::record(from))?, &refs_in(tx, &ids::record(into))?) {
+        return Ok(false);
+    }
+    let Some(pairs) = paired_tracks_in(tx, into, from)? else { return Ok(false) };
+    for (goes, stays) in pairs {
+        tx.execute(&format!("UPDATE tracks SET retired_at = ?2, record = NULL, back = NULL, {} WHERE id = ?1", super::REMEMBER), params![goes, at])?;
+        super::taken_for_good(tx, goes, stays)?;
+    }
+    merge_records_in(tx, from, into)?;
+    Ok(true)
+}
+
+/// Two had records' first copies (`first_copy_in`) paired track for track as Replace pairs them (`incoming::pair`, RF2's rule): every
+/// track of each a pair, none left over; each pair as (`from`'s track, `into`'s track). None where they do not. In the caller's
+/// transaction.
+fn paired_tracks_in(tx: &Connection, into: i64, from: i64) -> Result<Option<Vec<(i64, i64)>>> {
+    let (Some(old), Some(new)) = (first_copy_in(tx, into)?, first_copy_in(tx, from)?) else { return Ok(None) };
+    let facts = |copy: &[(i64, crate::incoming::TrackFacts)]| copy.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>();
+    let paired = crate::incoming::pair(&facts(&old), &facts(&new));
+    if old.is_empty() || !paired.added.is_empty() || !paired.retired.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(paired.pairs.iter().map(|(o, n)| (new[*n].0, old[*o].0)).collect()))
+}
+
+/// A had record's first copy as Replace reads one (RF2): the present files of its live tracks in the first folder and directory they
+/// lie in, in path order, each its track and what its tags and length say (`TrackFacts::of`). None where that copy does not hold every
+/// live track of the record, each once. In the caller's transaction.
+fn first_copy_in(tx: &Connection, record: i64) -> Result<Option<Vec<(i64, crate::incoming::TrackFacts)>>> {
+    let files: Vec<(i64, String, i64, Option<i64>)> = tx
+        .prepare_cached(
+            "SELECT f.folder, f.rel, f.track, f.duration_ms FROM files f JOIN tracks t ON t.id = f.track
+             WHERE t.record = ?1 AND t.retired_at IS NULL AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL ORDER BY f.folder, f.rel",
+        )?
+        .query_map([record], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let Some((folder, dir)) = files.first().map(|(folder, rel, ..)| (*folder, super::dir_of(rel).to_string())) else { return Ok(None) };
+    let copy: Vec<(i64, String, i64, Option<i64>)> = files.into_iter().filter(|(f, rel, ..)| *f == folder && super::dir_of(rel) == dir).collect();
+    let tracks: std::collections::BTreeSet<i64> = copy.iter().map(|(_, _, track, _)| *track).collect();
+    let live: i64 = tx.prepare_cached("SELECT count(*) FROM tracks WHERE record = ?1 AND retired_at IS NULL")?.query_row([record], |r| r.get(0))?;
+    if tracks.len() != copy.len() || tracks.len() as i64 != live {
+        return Ok(None);
+    }
+    let mut tags = tx.prepare_cached("SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IS NOT NULL ORDER BY n")?;
+    let mut out = Vec::with_capacity(copy.len());
+    for (folder, rel, track, ms) in copy {
+        let read: Vec<(String, String)> = tags.query_map(params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        out.push((track, crate::incoming::TrackFacts::of(&crate::naming::Tags(read), ms.and_then(|ms| u64::try_from(ms).ok()).filter(|ms| *ms > 0))));
+    }
+    Ok(Some(out))
+}
+
 // ---- RT01: a record not had that nobody sees, forgotten
 
 /// How long a record not had is kept that no list showed and nobody opened (RT01, the owner's six months).

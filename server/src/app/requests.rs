@@ -4358,7 +4358,8 @@ pub(crate) mod tests {
         let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house, disks: &Roomy };
         let log = Logged::default();
         let writer = log.clone();
-        let _logging = tracing::subscriber::set_default(tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).with_max_level(tracing::Level::INFO).finish());
+        // Beside a second dispatcher (`log_here`): alone, a test reaching the callsite first on another thread keeps it off here.
+        let _logging = crate::diagnostics::log_here(tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).with_max_level(tracing::Level::INFO).finish());
         round_with(&h, &old, super::super::moment::now_secs()).await.unwrap();
         let delivered: Vec<i64> = old.userdata.requests(None, Some(DELIVERED), LIST).unwrap().iter().map(|r| r.id).collect();
         assert_eq!(delivered.iter().copied().collect::<std::collections::BTreeSet<_>>(), done.iter().copied().collect(), "delivered at the first round");

@@ -1355,6 +1355,14 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             i.record.record = o.record;
         }
     }
+
+    // A record merged since into another (0.17's fold, F2.11; a copy joined, F11.1): its item names the record its request's is now,
+    // as the request reads it (merges followed), so it is searched, placed and found had as that one.
+    for i in k.items.iter_mut().filter(|i| i.record.record != 0) {
+        if let Some(record) = record_of.get(&i.record.request).filter(|record| **record != i.record.record) {
+            i.record.record = *record;
+        }
+    }
     // A record already had, by its own files or a record holding them (the one had rule, R26, N9), is not searched: none is made for
     // it (Clear placed, or Lidarr's delivery, is no reason to fetch it again).
     let had: std::collections::HashSet<i64> = of.iter().flatten().filter(|o| o.had()).map(|o| o.record).collect();
@@ -3877,6 +3885,42 @@ mod tests {
         assert!(CHECKED_AGAIN_SECS >= 86_400);
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// F2.11 (kind 6): a record merged into another (0.17's fold) takes its Soulseek item along: the next round names the record its
+    /// request reads now, one item still.
+    #[test]
+    fn a_merged_records_soulseek_item_names_the_record_it_went_into() {
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let (older, newer) = (cat.record_for_tests("Stone Sky", 0), cat.record_for_tests("Stone Sky", 0));
+        let asked = crate::userdata::Request {
+            id: 9701,
+            user: "alice".into(),
+            album_key: "glassharbour|stonesky".into(),
+            artist_key: "glass harbour".into(),
+            release_group: None,
+            album: "Stone Sky".into(),
+            artist: "Glass Harbour".into(),
+            year: None,
+            cover: None,
+            at: 1,
+            status: super::super::requests::APPROVED.into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+            record: Some(newer),
+        };
+        let mut k = Kept::default();
+        let round = |k: &mut Kept| {
+            let of = super::super::requests::records_of(&cat, std::slice::from_ref(&asked)).unwrap();
+            take_requests(k, std::slice::from_ref(&asked), &of, &[]);
+        };
+        round(&mut k);
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), [(9701, newer)]);
+        cat.merge_records(newer, older).unwrap();
+        round(&mut k);
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), [(9701, older)], "the next round names the record it went into");
     }
 
     /// A list reader that must not be asked.
