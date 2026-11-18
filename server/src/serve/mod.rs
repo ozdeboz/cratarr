@@ -417,6 +417,11 @@ impl Serve {
             *self.rules.write().unwrap_or_else(|p| p.into_inner()) = saved.tag_rules;
         }
         let rules = self.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+        // The types the library was last built with, at a start's first check (RF1): a library built before it may not be built
+        // again for a while, and the had rule classes a had record by its album's type.
+        if self.checked.lock().unwrap_or_else(|p| p.into_inner()).is_none() {
+            self.types_built();
+        }
         let added = self.userdata.added()?;
         let originals = self.userdata.original_years()?;
         let extra_genres = self.userdata.discogs_genres()?;
@@ -528,8 +533,18 @@ impl Serve {
             self.catalogue().poke();
             self.covers_built();
         }
+        self.types_built();
         self.built.send_replace(at);
         Ok(())
+    }
+
+    /// The types the library's albums were built with, kept on their records (RF1, `Catalogue::keep_types`): the had rule classes a
+    /// had record by its album's type, set by hand or an incomplete album's whole release among what typed it. A failure is told,
+    /// and the next build hands them again. Blocking.
+    fn types_built(&self) {
+        if let Err(e) = self.library.record_types().and_then(|types| self.catalogue().keep_types(&types)) {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "the albums' types not kept on their records: the next build hands them again");
+        }
     }
 
     /// Files Cratarr wrote itself (0.9.7: Renumber, a cover, a tempo), read again now, and the library built from them
@@ -931,6 +946,75 @@ mod tests {
         serve.refresh().unwrap();
         assert_eq!((plays_of(&serve, &is), plays_of(&serve, &was)), (2, 0), "both plays on the one chosen, none left");
         assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// The record a folder's album is, as the build gave it.
+    fn record_in(serve: &Serve, folder: i64, dir: &str) -> i64 {
+        ids::record_number(&serve.library.album_in(folder, dir).unwrap().expect("built")).unwrap()
+    }
+
+    /// A record not had of `add`'s album's names ("Artist", "Album"), as a list keeps it: of `kind`, holding `refs`.
+    fn listed(cat: &Catalogue, kind: &str, refs: &[(&str, &str, &str)]) -> i64 {
+        use crate::catalogue::records::{Listing, Ref};
+        let artist = cat.artist_for("Artist").unwrap();
+        let l = Listing { title: "Album".into(), artist: "Artist".into(), kind: Some(kind.into()), refs: refs.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect(), ..Listing::default() };
+        cat.keep_listing(Some(artist), &[l], "link").unwrap()[0]
+    }
+
+    /// RF1 (RB5's first scenario): a record's type set by hand is the type it is had by. The owner's untagged eight versions of one
+    /// song, built an album by the rule (eight tracks), set to Single in the Library: the build types it a single, the catalogue keeps
+    /// that type on the record, and the Discogs list's single of its name reads had; MusicBrainz's album of the name, held while it
+    /// was an album, is set apart from a single and reads missing. Never: the record's own files' rule winning over the hand.
+    #[test]
+    fn a_type_set_by_hand_is_the_type_a_record_is_had_by() {
+        let (roots, cat, serve) = on_two_folders("rf1-set");
+        let eight: Vec<(String, String)> = (1..=8).map(|n| (format!("A/0{n} Version {n}.flac"), format!("Version {n}"))).collect();
+        add(&cat, &roots[0], 0, &eight.iter().map(|(rel, title)| (rel.as_str(), title.as_str())).collect::<Vec<_>>());
+        serve.refresh().unwrap();
+        let owned = record_in(&serve, 0, "A");
+        let single = listed(&cat, "single", &[("discogs", "master", "6101")]);
+        let album = listed(&cat, "album", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006102")]);
+        let holders = || {
+            let read = cat.requested(&[single, album]).unwrap();
+            (read[&single].holder, read[&album].holder)
+        };
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("album"), "built an album by the rule");
+        assert_eq!(holders(), (None, Some(owned)), "an album: the album had, the single not");
+        serve.userdata.set_overrides(&[ids::record(owned)], &[("type".to_string(), Some(serde_json::json!("single")))], 100).unwrap();
+        serve.refresh().unwrap();
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "the type set by hand, kept on the record");
+        assert_eq!(holders(), (Some(owned), None), "set to Single: the single had, the album set apart");
+        assert_eq!(library::type_by_files("Album", &[Some(200_000); 8]).as_deref(), Some("album"), "its files say an album still: the hand wins");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// RF1 (RB1's third scenario, RB5's second): a copy of three of an album's eight tracks, untagged, is a single by its own files.
+    /// Found missing tracks (`app::incomplete`: its whole release eight), the build types it as that release, an album, and the
+    /// catalogue keeps that type: the album's record of its name, MusicBrainz's, is held by it, partly there (three of eight), and off
+    /// the artist's missing list. Never: the album read missing beside its own partial copy once it is found short.
+    #[test]
+    fn a_partial_copy_holds_its_album_record_partly_there() {
+        use crate::app::requests::{Holding, holding_of};
+        let (roots, cat, serve) = on_two_folders("rf1-partly");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two"), ("A/03 Three.flac", "Three")]);
+        serve.refresh().unwrap();
+        let owned = record_in(&serve, 0, "A");
+        let album = listed(&cat, "album", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006201")]);
+        let list: Vec<crate::catalogue::identity::RefTrack> =
+            (1..=8).map(|n| crate::catalogue::identity::RefTrack { disc: 1, position: n, title: format!("Track {n}"), length_ms: Some(200_000), recording: None }).collect();
+        cat.set_reference_tracks(album, "musicbrainz", &list).unwrap();
+        cat.set_counting(album, Some("musicbrainz"), false).unwrap();
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "three short tracks: a single, until found short");
+        assert_eq!(cat.requested(&[album]).unwrap()[&album].holder, None);
+        serve.userdata.set_album_complete(&ids::record(owned), Some(r#"{"of":8,"has":3,"release":"Album","missing":[]}"#), Some(1), 100).unwrap();
+        serve.refresh().unwrap();
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("album"), "typed as its whole release");
+        let q = cat.requested(&[album]).unwrap().remove(&album).unwrap();
+        assert_eq!(q.holder, Some(owned), "the album had by its partial copy");
+        assert_eq!(holding_of(&q, |_| crate::settings::LibraryKind::Main), Holding::Partly { has: 3, of: 8 }, "partly there");
+        let artist = cat.artist_for("Artist").unwrap();
+        assert!(cat.missing_of(artist).unwrap().iter().all(|m| m.row.id != album), "off the missing list");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 

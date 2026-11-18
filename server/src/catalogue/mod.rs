@@ -557,7 +557,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 43] = [
+const ADDED_COLUMNS: [(&str, &str); 44] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -638,6 +638,11 @@ const ADDED_COLUMNS: [(&str, &str); 43] = [
     // backup's list (`SHARED_WITH`) and by room (`FREE_OF_ROOM`), each by its own rule. Let go of where the file's size or time
     // changes (a tag write makes it a file of its own); kept as it moves.
     ("files", "shared INTEGER NOT NULL DEFAULT 0"),
+    // RF1 (one class for "had"): the release type the record's album was built with, as the last build typed it (the Library's:
+    // set by hand, an incomplete album's whole release, else the services' word and the owner's rule), kept by
+    // `Catalogue::keep_types`: what classes a had record for the had rule's names clause (`records::classes_of`). NULL until a
+    // build typed it.
+    ("records", "typed TEXT"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -2738,6 +2743,23 @@ impl Catalogue {
         records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// The type each record's album was built with (RF1, `Library::record_types`), kept on its record (`records.typed`): what the had
+    /// rule classes a had record by (`records::classes_of`), its type set by hand and an incomplete album's whole release with it.
+    /// Only a type that changed is written. How many changed. Blocking.
+    pub fn keep_types(&self, types: &[(i64, String)]) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut changed = 0;
+        {
+            let mut st = tx.prepare_cached("UPDATE records SET typed = ?2 WHERE id = ?1 AND typed IS NOT ?2")?;
+            for (record, kind) in types {
+                changed += st.execute(params![record, kind])?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
     }
 
     /// An album action is moving a copy's files, until this goes. Passes do not stop for one, and `identify` pairs what has

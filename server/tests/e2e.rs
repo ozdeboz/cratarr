@@ -2563,9 +2563,7 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     s.until("both copies read", Duration::from_secs(120), || async { bob.albums().await.iter().any(|a| a["title"] == "Both Shores" && holds(a, &music) && holds(a, &incoming)) }).await;
     let catalogue = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
     catalogue.busy_timeout(Duration::from_secs(10)).unwrap();
-    // A single (T10): the layout's Both Shores is three tracks of a few seconds, a single by the release type rule, which holds a
-    // record of its name of its own class.
-    catalogue.execute("INSERT INTO records (born, title, artist, kind) VALUES (1, 'Both Shores', 'Salt Meridian', 'single')", []).unwrap();
+    catalogue.execute("INSERT INTO records (born, title, artist) VALUES (1, 'Both Shores', 'Salt Meridian')", []).unwrap();
     let record = catalogue.last_insert_rowid();
     drop(catalogue);
     let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();

@@ -923,6 +923,15 @@ impl Library {
         Ok(copies)
     }
 
+    /// Each record's album as the last build typed it (RF1): its record and its release type, set by hand or an incomplete album's
+    /// whole release among what typed it (`release_type_of`), for the had rule to class it by (`Catalogue::keep_types`). Blocking.
+    pub fn record_types(&self) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT record, release_type FROM albums WHERE release_type IS NOT NULL ORDER BY record")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The copy that plays for most people: `copy_for` with no viewer. What acts on a record as a whole and has no one's
     /// view of it goes by this, not by the lowest folder.
     pub fn row_copy(&self, id: &str) -> Result<Option<Copy>> {
