@@ -92,6 +92,18 @@ const declined = story({ state: 'declined' }, { status: 'declined', reason: 'Not
 const pending = story({ state: 'waiting_for_approval' }, { status: 'pending' });
 const noRecord = story(wanted(), { opens: null });
 
+// PB4 (the review of preview 1's fixes), with Lidarr connected: a Want that waits for its asker's room, for space or for its
+// album's release (no fetcher was to have it yet); one Soulseek alone looks for (Lidarr not its fetcher: the server gives no
+// Lidarr part); one that arrived, Lidarr told to stop.
+const DAY_OUT = '2026-12-04';
+const STOPPED = 'Lidarr is looking for it; Lidarr told to stop: it arrived';
+const lidarrRoom = story({ state: 'waiting_for_room', used: 130e9, room: 100e9 }, { lidarr: { step: 'waits_for_room' } });
+const lidarrSpace = story({ state: 'waiting_for_space' }, { lidarr: { step: 'waits_for_space' } });
+const lidarrRelease = story(wanted({ state: 'waiting' }), { lidarr: { step: 'waits_for_release', day: DAY_OUT }, soulseek: slsk({ state: 'waiting', next_search: NOW + 16 * DAY }) });
+const soulseekAlone = story(wanted({ state: 'searching' }), { soulseek: slsk({ state: 'searching' }) });
+const stopped = story({ state: 'arrived' }, { lidarr: { step: 'stopped' }, soulseek: slsk({ state: 'placed', sources: [peerA], chosen: 0 }), where: { library: 4, name: 'Soulseek Incoming' } });
+const stoppedRoot = story({ state: 'arrived' }, { fetched: STOPPED, lidarr: { step: 'stopped', said: STOPPED }, where: { library: 4, name: 'Soulseek Incoming' } });
+
 const SOULSEEK = { found, searching, approved, fetching, checking, held, checkHeld, waiting, stuck, placed, offFound, offWaiting, offFetching, both };
 const ALL: Record<string, RequestStory> = {
   ...SOULSEEK,
@@ -112,6 +124,11 @@ const ALL: Record<string, RequestStory> = {
   declined,
   pending,
   noRecord,
+  lidarrRoom,
+  lidarrSpace,
+  lidarrRelease,
+  stopped,
+  stoppedRoot,
 };
 
 const groupOf = (sheet: StorySheet, title: string) => sheet.groups.find((g) => g.title === title);
@@ -257,6 +274,35 @@ test("Lidarr's part: looking, grabbed with its fill, importing, imported, stuck,
   assert.equal(words(one(lidarrStuck)), 'Stuck');
   assert.equal(words(one(notHanded)), 'Not handed over');
   for (const s of [looking, importing, imported, lidarrStuck, notHanded]) assert.ok(one(s).progress == null);
+});
+
+// PB4: "Not handed over" only where Lidarr should have had it and didn't.
+test("the Lidarr line says what is true: a wait for room, space or its release says so, in the row's words; told to stop says why", () => {
+  const line = (s: RequestStory, admin = false) => items(requestStory(s, admin, NOW), 'Lidarr').map(words);
+  for (const admin of [false, true]) {
+    assert.deepEqual(line(lidarrRoom, admin), ['Waits for room']);
+    assert.deepEqual(line(lidarrSpace, admin), ['Waits: the server is short of space']);
+    assert.deepEqual(line(lidarrRelease, admin), [`Waits for its release · ${DAY_OUT}`]);
+    assert.deepEqual(line(stopped, admin), ['Told to stop: it arrived']);
+    for (const s of [lidarrRoom, lidarrSpace, lidarrRelease, stopped, stoppedRoot]) assert.ok(!line(s, admin).some((w) => w.includes('Not handed over')), `${admin}: ${line(s, admin)}`);
+  }
+  assert.deepEqual(line(stoppedRoot, true), [`Told to stop: it arrived · ${STOPPED}`], "Lidarr's own words beside it, an administrator's");
+  assert.deepEqual(line(stoppedRoot, false), ['Told to stop: it arrived']);
+  // One state, one word (RQ01.9): the Lidarr line's wait is the row's own.
+  assert.ok(standing(lidarrRoom, when).startsWith(`${line(lidarrRoom)[0]} · `), standing(lidarrRoom, when));
+  assert.equal(line(lidarrSpace)[0], standing(lidarrSpace, when));
+  assert.ok(!JSON.stringify(requestStory(lidarrRoom, false, NOW).groups).includes('GB'), 'the room\'s numbers said once, in the head');
+  // Soulseek's alone: no Lidarr group.
+  assert.deepEqual(requestStory(soulseekAlone, true, NOW).groups.map((g) => g.title), ['Soulseek', 'Set aside', 'Asked']);
+});
+
+test('nothing in the Lidarr group is red unless something failed: stuck, or not handed over', () => {
+  const tone = (s: RequestStory, admin: boolean) => items(requestStory(s, admin, NOW), 'Lidarr')[0]?.tone ?? null;
+  for (const admin of [false, true]) {
+    for (const [name, s] of Object.entries({ lidarrRoom, lidarrSpace, lidarrRelease, stopped, stoppedRoot, looking, grabbed, importing, imported }))
+      assert.equal(tone(s, admin), null, name);
+    for (const [name, s] of Object.entries({ lidarrStuck, notHanded, notHandedRoot })) assert.equal(tone(s, admin), 'bad', name);
+  }
 });
 
 test('Soulseek: each source named by its peer with its folderLine, the one fetching with its fill; held, stuck and failed peers', () => {

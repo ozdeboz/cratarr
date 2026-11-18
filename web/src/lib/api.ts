@@ -2392,8 +2392,14 @@ export const decideRequests = (ids: number[], approve: boolean, reason: string |
   post<{ id: number; said: string }[]>('/api/requests/decide', { ids, approve, reason });
 export const cancelRequest = (id: number) => post<void>(`/api/requests/${id}/cancel`, {});
 /** Lidarr's part of a request's story (RQ01): where it is with it (`done`, 0 to 1, while grabbed), and its own words
- *  (`said`: the queue's message, the hand-over's), administrators' only (W6). */
-export type StoryLidarr = { step: 'looking' | 'grabbed' | 'importing' | 'imported' | 'stuck' | 'not_handed'; done?: number; said?: string };
+ *  (`said`: the queue's message, the hand-over's), administrators' only (W6). Not handed to it yet, what it waits for: its
+ *  asker's room, space, or its release (`day`, as its release date reads); told to stop: its album arrived (PB4). */
+export type StoryLidarr = {
+  step: 'looking' | 'grabbed' | 'importing' | 'imported' | 'stuck' | 'not_handed' | 'waits_for_room' | 'waits_for_space' | 'waits_for_release' | 'stopped';
+  done?: number;
+  said?: string;
+  day?: string;
+};
 /** A folder Soulseek found of a story's record: whose, its last part, and how good and how soon (as the Soulseek list's). */
 export type StorySource = { user: string; folder: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number; unchecked?: string };
 /** Soulseek's part of a request's story (RQ01): its record's item whole, as the asker may read it (never a path on the server),

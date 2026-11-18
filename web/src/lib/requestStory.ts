@@ -6,7 +6,7 @@
 // shared rules' (W5's `standing`, the Soulseek list's `itemLine` and `folderLine`), never worked out again here; Lidarr's own
 // words are the administrators' (W6). In the sheet's own pieces (lib/RequestsPanel: Group, Item, ChoiceList, MenuEntry). Pure.
 import type { RequestStory, StoryLidarr, StorySoulseek, StorySource } from './api';
-import { handOverAgain, mayTakeBack, standing, standingTone } from './requestState';
+import { handOverAgain, mayTakeBack, standing, standingTone, WAITS_FOR } from './requestState';
 import { folderLine, itemLine, searchable, tickable, underWay, type SoulseekFolder, type SoulseekItem } from './soulseekRules';
 import { when } from './settings/when';
 
@@ -22,7 +22,8 @@ export type StoryAction = 'fetch' | 'searchNow' | 'handOverAgain' | 'view' | 'ta
 /** The sheet: its head (the row's own line, and its tone), its groups and its actions. */
 export type StorySheet = { head: string; tone: 'bad' | null; groups: StoryGroup[]; actions: StoryAction[] };
 
-/** Lidarr's steps as the sheet says them. */
+/** Lidarr's steps as the sheet says them; a wait in the words the row says it in (PB4: what is true, never "Not handed over"
+ *  for a Want no fetcher was to have yet). Red only where something failed: stuck, or not handed over. */
 const LIDARR: Record<StoryLidarr['step'], string> = {
   looking: 'Looking for it',
   grabbed: 'Grabbed',
@@ -30,13 +31,19 @@ const LIDARR: Record<StoryLidarr['step'], string> = {
   imported: 'Imported',
   stuck: 'Stuck',
   not_handed: 'Not handed over',
+  waits_for_room: WAITS_FOR.room,
+  waits_for_space: WAITS_FOR.space,
+  waits_for_release: WAITS_FOR.release,
+  stopped: 'Told to stop: it arrived',
 };
 
-/** Lidarr's row: its step, how far while grabbed (with its fill), and for an administrator Lidarr's own words. */
+/** Lidarr's row: its step, how far while grabbed (with its fill), the release day it waits for, and for an administrator
+ *  Lidarr's own words. */
 function lidarrRow(l: StoryLidarr, admin: boolean): StoryItem {
   const done = l.step === 'grabbed' && l.done != null ? l.done : null;
   const said = admin && l.said ? l.said : null;
-  const line = [done !== null ? `${Math.round(done * 100)}%` : null, said].filter(Boolean).join(' · ') || null;
+  const day = l.step === 'waits_for_release' && l.day ? l.day : null;
+  const line = [done !== null ? `${Math.round(done * 100)}%` : null, day, said].filter(Boolean).join(' · ') || null;
   return { name: LIDARR[l.step], line, progress: done, tone: l.step === 'stuck' || l.step === 'not_handed' ? 'bad' : null, wrap: !!said };
 }
 

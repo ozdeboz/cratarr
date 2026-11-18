@@ -1608,7 +1608,8 @@ pub struct Story {
     /// The library holding its asker's whole copy: Music, an Incoming library, their own music. None where there is none.
     #[serde(rename = "where", skip_serializing_if = "Option::is_none")]
     pub held_in: Option<Where>,
-    /// Where Lidarr is with it: none where Lidarr is not connected or is switched off, or the request is closed.
+    /// Where Lidarr is with it, or what it waits for before Lidarr has it: none where Lidarr is not connected or is switched off, the
+    /// request is closed, or Lidarr was never its fetcher (Soulseek's alone, had, not answered yet).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lidarr: Option<LidarrPart>,
     /// Soulseek's item of its record, whole (RQ01.4): none where the record has none, or the request is closed.
@@ -1633,10 +1634,14 @@ pub struct LidarrPart {
     pub done: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub said: Option<String>,
+    /// The day its album comes out, as its release date reads ("2026-12-04", "2026-12", "2026"), while it waits for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub day: Option<String>,
 }
 
 /// Where Lidarr is with a request (RQ01.3): looking for it, grabbed and downloading it, importing it (its queue's state says so),
-/// imported, stuck (its grab failed or stalls), or not handed over (or no longer known or wanted by it).
+/// imported, stuck (its grab failed or stalls), or not handed over (or no longer known or wanted by it). Not handed to it yet, what it
+/// waits for, and told to stop on its album's arrival (PB4, the review of preview 1's fixes: what is true).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
@@ -1646,6 +1651,14 @@ pub enum Step {
     Imported,
     Stuck,
     NotHanded,
+    /// Its asker over their room (AL02.2): handed to no fetcher yet.
+    WaitsForRoom,
+    /// The server short of space (AL03): handed to no fetcher yet, or told to stop till there is.
+    WaitsForSpace,
+    /// Its album not out yet (X1): Lidarr asked once it is; the day in the part's `day`.
+    WaitsForRelease,
+    /// Told to stop: its album arrived (X1: the first arrival stops the other).
+    Stopped,
 }
 
 /// A request's story for `account` (RQ01): its asker's and the administrators' (OQ-RQ2 (a): "Manage requests" reads one's own alone);
@@ -1760,24 +1773,45 @@ fn handed_to_lidarr(r: &Request) -> bool {
     r.fetched.as_deref().is_some_and(|f| f.contains("Lidarr") && !f.starts_with("Not handed over"))
 }
 
-/// Lidarr's part of a request (RQ01.3), as Lidarr says of its group (`progress`; none: not asked, or no answer): one never handed
-/// over says so; one handed, where Lidarr is with it, none where Lidarr said nothing of it. Its words: the queue's, else what the
-/// request's line says of Lidarr. Pure.
+/// Lidarr's part of a request (RQ01.3; PB4, the review of preview 1's fixes: what is true), from its line and what Lidarr says of
+/// its group (`progress`; none: not asked, or no answer). One that waits for its asker's room, for space or for its album's release
+/// says that wait: no fetcher was to have it yet. One Lidarr should have had and did not (its line "Not handed over") is not handed
+/// over. One handed: where Lidarr is with it; told to stop, its album come, unless Lidarr imported it; not handed over where Lidarr
+/// knows or wants it no longer though never told to stop; none where Lidarr said nothing of it. None where Lidarr was never its
+/// fetcher: Soulseek's alone, had, not answered yet. Its words: the queue's, else what the request's line says of Lidarr. Pure.
 fn lidarr_part(r: &Request, progress: Option<&Progress>) -> Option<LidarrPart> {
-    let line = r.fetched.as_deref().map(|f| f.split("; ").filter(|s| s.contains("Lidarr")).collect::<Vec<_>>().join("; ")).filter(|s| !s.is_empty());
-    if !handed_to_lidarr(r) {
-        return Some(LidarrPart { step: Step::NotHanded, done: None, said: line });
+    let fetched = r.fetched.as_deref().unwrap_or_default();
+    let waits = |step: Step, day: Option<String>| Some(LidarrPart { step, done: None, said: None, day });
+    if waits_for_room(r) {
+        return waits(Step::WaitsForRoom, None);
     }
-    let (step, done, said) = match progress? {
-        Progress::Looking => (Step::Looking, None, None),
-        Progress::Fetching { done } => (Step::Grabbed, Some(*done), None),
-        Progress::Importing { .. } => (Step::Importing, None, None),
-        Progress::Fetched { .. } => (Step::Imported, None, None),
-        Progress::Stuck { said } => (Step::Stuck, None, said.clone()),
-        // It knows the album no longer, or no longer wants it: it is not at it.
-        Progress::Unknown | Progress::NotWanted => (Step::NotHanded, None, None),
+    if waits_for_space(r) {
+        return waits(Step::WaitsForSpace, None);
+    }
+    if let Some(day) = fetched.strip_prefix(WAITS_FOR_RELEASE) {
+        return waits(Step::WaitsForRelease, Some(day.trim().to_string()).filter(|d| !d.is_empty()));
+    }
+    let line = Some(fetched.split("; ").filter(|s| s.contains("Lidarr")).collect::<Vec<_>>().join("; ")).filter(|s| !s.is_empty());
+    if fetched.starts_with("Not handed over") {
+        return Some(LidarrPart { step: Step::NotHanded, done: None, said: line, day: None });
+    }
+    if !handed_to_lidarr(r) {
+        return None;
+    }
+    let stopped = fetched.contains(STOPPED_ON_ARRIVAL);
+    let (step, done, said) = match progress {
+        Some(Progress::Fetched { .. }) => (Step::Imported, None, None),
+        // Told to stop, its album come (X1: the first arrival stops the other): not at it, as told.
+        _ if stopped => (Step::Stopped, None, None),
+        None => return None,
+        Some(Progress::Looking) => (Step::Looking, None, None),
+        Some(Progress::Fetching { done }) => (Step::Grabbed, Some(*done), None),
+        Some(Progress::Importing { .. }) => (Step::Importing, None, None),
+        Some(Progress::Stuck { said }) => (Step::Stuck, None, said.clone()),
+        // It knows the album no longer, or no longer wants it, and was never told to stop: it is not at it.
+        Some(Progress::Unknown | Progress::NotWanted) => (Step::NotHanded, None, None),
     };
-    Some(LidarrPart { step, done, said: said.or(line) })
+    Some(LidarrPart { step, done, said: said.or(line), day: None })
 }
 
 /// What Lidarr is looking for and fetching now (the page's "Lidarr is looking for these"); asked while the page is
@@ -3782,6 +3816,96 @@ pub(crate) mod tests {
         let es = told(&serve, None, "ann", false, e.id).await;
         assert!(matches!(es.view.state, RequestState::Wanted { .. }), "{:?}", es.view.state);
         assert_eq!((&es.held_in, es.delivered_at), (&None, None), "no copy of hers, no where");
+    }
+
+    /// RG10 (PB4, the review of preview 1's fixes): with Lidarr connected, a story's Lidarr part says what is true. Ann's Wants: W1
+    /// waits for her room, W2 for space, W3 for its release (no fetcher was to have them yet): each says that wait, never "not handed
+    /// over". S, Soulseek's alone (handed while Lidarr was not connected): no Lidarr part. A, handed
+    /// to Lidarr, came into Soulseek's Incoming, Lidarr told to stop: says so, Lidarr's own words beside it for root alone. H, had
+    /// (handed to no fetcher), and P, 0.16's waiting one: none. Not handed over only where Lidarr should have had it and didn't (pins):
+    /// R7's hand-over that failed (RQ01.3), and D, handed, which Lidarr no longer looks for, never told to stop.
+    #[tokio::test]
+    async fn a_storys_lidarr_part_says_what_is_true() {
+        use crate::app::room::tests::SOULSEEK;
+        const G: [&str; 9] = [
+            "00000000-0000-4000-8000-000000002961",
+            "00000000-0000-4000-8000-000000002962",
+            "00000000-0000-4000-8000-000000002963",
+            "00000000-0000-4000-8000-000000002964",
+            "00000000-0000-4000-8000-000000002965",
+            "00000000-0000-4000-8000-000000002966",
+            "00000000-0000-4000-8000-000000002967",
+            "00000000-0000-4000-8000-000000002968",
+            "00000000-0000-4000-8000-000000002969",
+        ];
+        const AWAY: &str = "Not handed over to Lidarr: error sending request for url (http://192.168.1.20:8686/api/v1/album/lookup)";
+        const HANDED: &str = "Lidarr is looking for it; Soulseek searches for it";
+        let serve = room_shape();
+        with_accounts(&serve);
+        let w1 = kept_request(&serve, "ann", not_had(&serve, "Night Ferry", G[0]), G[0], 100, WAITS_FOR_ROOM);
+        let w2 = kept_request(&serve, "ann", not_had(&serve, "Signal", G[1]), G[1], 110, WAITS_FOR_SPACE);
+        let w3 = kept_request(&serve, "ann", not_had(&serve, "Late Shift", G[2]), G[2], 120, &format!("{WAITS_FOR_RELEASE} 2026-12-04"));
+        let s = kept_request(&serve, "ann", not_had(&serve, "Quiet Lanes", G[3]), G[3], 130, SOULSEEK_SEARCHES);
+        let (a_record, _) = held_in(&serve, "Two Rooms", 2, G[4], SOULSEEK, 0, 1_790_000_600);
+        let a = kept_request(&serve, "ann", a_record, G[4], 140, &format!("{HANDED}; {STOPPED_ON_ARRIVAL}"));
+        let (h_record, _) = held_in(&serve, "Far Room", 2, G[5], MUSIC, 0, 1_790_000_700);
+        let h = kept_request(&serve, "ann", h_record, G[5], 150, ALREADY_HAD);
+        let p = serve
+            .userdata
+            .add_request(&Request {
+                id: 0,
+                user: "ann".into(),
+                album_key: format!("{}-ann", G[6]),
+                artist_key: "glass harbour".into(),
+                release_group: Some(G[6].into()),
+                album: "Low Tide".into(),
+                artist: "Glass Harbour".into(),
+                year: None,
+                cover: None,
+                at: 160,
+                status: PENDING.into(),
+                reason: None,
+                decided_by: None,
+                decided_at: None,
+                fetched: None,
+                record: Some(not_had(&serve, "Low Tide", G[6])),
+            })
+            .unwrap();
+        let r7 = kept_request(&serve, "ann", not_had(&serve, "Other Room", G[7]), G[7], 170, AWAY);
+        let d = kept_request(&serve, "ann", not_had(&serve, "Long Way", G[8]), G[8], 180, HANDED);
+        let strict = Strict::expecting_nothing().with_statuses(&[(G[4], Progress::NotWanted), (G[8], Progress::NotWanted)]);
+        let f: Option<&dyn Fetcher> = Some(&strict);
+        let ids = [w1.id, w2.id, w3.id, s.id, a.id, h.id, p, r7.id, d.id];
+        let (mut anns, mut roots) = (Vec::new(), Vec::new());
+        for &id in &ids {
+            anns.push(told(&serve, f, "ann", false, id).await);
+            roots.push(told(&serve, f, "root", true, id).await);
+        }
+        let steps = |stories: &[Story]| stories.iter().map(|s| s.lidarr.as_ref().map(|l| l.step)).collect::<Vec<_>>();
+        let want = vec![
+            Some(Step::WaitsForRoom),
+            Some(Step::WaitsForSpace),
+            Some(Step::WaitsForRelease),
+            None,
+            Some(Step::Stopped),
+            None,
+            None,
+            Some(Step::NotHanded),
+            Some(Step::NotHanded),
+        ];
+        assert_eq!(steps(&anns), want, "ann's");
+        assert_eq!(steps(&roots), want, "root's");
+        // The waits as sent: their own step, the release's day, no words of Lidarr's.
+        let sent = |s: &Story| serde_json::to_value(s).unwrap()["lidarr"].clone();
+        assert_eq!(sent(&anns[0]), serde_json::json!({ "step": "waits_for_room" }));
+        assert_eq!(sent(&roots[1]), serde_json::json!({ "step": "waits_for_space" }));
+        assert_eq!(sent(&anns[2]), serde_json::json!({ "step": "waits_for_release", "day": "2026-12-04" }));
+        assert_eq!(sent(&roots[2]), serde_json::json!({ "step": "waits_for_release", "day": "2026-12-04" }));
+        // Told to stop: Lidarr's own words beside it, root's alone (W6).
+        assert_eq!(sent(&anns[4]), serde_json::json!({ "step": "stopped" }));
+        assert_eq!(roots[4].lidarr.as_ref().and_then(|l| l.said.as_deref()), Some("Lidarr is looking for it; Lidarr told to stop: it arrived"));
+        assert_eq!(roots[7].lidarr.as_ref().and_then(|l| l.said.as_deref()), Some(AWAY), "R7: what the hand-over said of Lidarr");
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
     }
 
     /// A Soulseek folder of `user`'s as a search finds one (RQ01.4).

@@ -50,6 +50,10 @@ export function fillOf(s: RequestState | null | undefined): number | null {
   return lidarr === null && soulseek === null ? null : Math.max(lidarr ?? 0, soulseek ?? 0);
 }
 
+/** What a Want that waits says, wherever it shows (RQ01.9: its row, and a story's Lidarr line, PB4): for its asker's room, for
+ *  space, for its album's release. */
+export const WAITS_FOR = { room: 'Waits for room', space: 'Waits: the server is short of space', release: 'Waits for its release' } as const;
+
 /** Its state in words, as the Requests page says it: the server's state, never worked out again here. `said` says when. */
 export function standing(r: Asked, said: (t: number) => string): string {
   const s = r.state;
@@ -60,10 +64,10 @@ export function standing(r: Asked, said: (t: number) => string): string {
     case 'waiting_for_room': {
       // Its room's numbers where the server read them (none: both 0, and only that it waits is said).
       const line = s.used || s.room ? roomLine(s.used, s.room / GB) : null;
-      return line ? `Waits for room · ${line}` : 'Waits for room';
+      return line ? `${WAITS_FOR.room} · ${line}` : WAITS_FOR.room;
     }
     case 'waiting_for_space':
-      return 'Waits: the server is short of space';
+      return WAITS_FOR.space;
     case 'delivered':
       return `Delivered · ${said(r.decided_at ?? r.at)}`;
     case 'declined':
