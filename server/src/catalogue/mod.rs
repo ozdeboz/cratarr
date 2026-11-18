@@ -3747,18 +3747,22 @@ impl Catalogue {
     /// `analysis_band_wave` once, `batch` of the shape's rows at a time in key order, each batch a transaction of its own and
     /// the last one's last write the part's mark (`BAND_WAVE_MARK`). A start cut off goes on at the next from the last one
     /// copied: nothing else writes there before the mark, as the step runs before the pass and the pages. The shape is read and
-    /// never written: a row rewritten is rewritten whole, its signals with it. `after` hears each batch done but the last (what
-    /// the tests cut it by). None: done before; else how many waves are apart now. Blocking.
+    /// never written: a row rewritten is rewritten whole, its signals with it. It says it begins, and how many waves are apart
+    /// at the first batch past every `BAND_WAVES_SAID` (W1), those of a start cut off counted. `after` hears each batch done but
+    /// the last (what the tests cut it by). None: done before; else how many waves are apart now. Blocking.
     pub fn band_waves_apart(&self, batch: usize, after: &dyn Fn() -> Result<()>) -> Result<Option<u64>> {
         use crate::analysis::band_wave::BandWave;
         let mut db = self.db();
         if db.query_row("SELECT 1 FROM meta WHERE key = ?1", [BAND_WAVE_MARK], |_| Ok(())).optional()?.is_some() {
             return Ok(None);
         }
+        tracing::info!(target: "library", "0.17's step, part band_wave");
         let mut from: (i64, String) = db
             .query_row("SELECT folder, rel FROM analysis_band_wave ORDER BY folder DESC, rel DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?
             .unwrap_or((i64::MIN, String::new()));
+        let mut apart = db.query_row("SELECT count(*) FROM analysis_band_wave", [], |r| r.get::<_, i64>(0))?.max(0) as u64;
+        let mut said = apart / BAND_WAVES_SAID;
         loop {
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let rows: Vec<(i64, String, Option<Vec<u8>>)> = tx
@@ -3773,7 +3777,7 @@ impl Catalogue {
                 let mut put = tx.prepare("INSERT OR IGNORE INTO analysis_band_wave (folder, rel, form, band_wave) VALUES (?1, ?2, ?3, ?4)")?;
                 for (folder, rel, wave) in rows {
                     let Some(wave) = wave.map(BandWave) else { continue };
-                    put.execute(params![folder, rel, wave.form(), wave.0])?;
+                    apart += put.execute(params![folder, rel, wave.form(), wave.0])? as u64;
                 }
             }
             if last {
@@ -3783,6 +3787,10 @@ impl Catalogue {
                 return Ok(Some(apart.max(0) as u64));
             }
             tx.commit()?;
+            if apart / BAND_WAVES_SAID > said {
+                said = apart / BAND_WAVES_SAID;
+                tracing::info!(target: "library", band_waves = apart, "0.17's step: waveforms in three bands apart so far");
+            }
             after()?;
         }
     }
@@ -4244,6 +4252,8 @@ const SHAPE_JOIN: &str = "LEFT JOIN analysis_shape s ON s.folder = a.folder AND 
 
 /// 0.17's step's part `band_wave` done (M1, `Catalogue::band_waves_apart`), its report the waves apart.
 const BAND_WAVE_MARK: &str = "017:band_wave";
+/// The part `band_wave` says how many waves are apart once past each this many (W1): a few lines on production's 5,000.
+const BAND_WAVES_SAID: u64 = 5_000;
 
 /// The analysis pass's question (M1): present files with an analysis as they are now and no waveform in three bands of this
 /// form (`?2`) nor the mark of one that failed (`?3`), newest music first. `analysis_band_wave` is read through its index of
@@ -4740,6 +4750,58 @@ mod tests {
         cat.db().execute("DELETE FROM analysis_band_wave WHERE rel = 'A/4.flac'", []).unwrap();
         assert_eq!(cat.band_waves_apart(2, &|| Ok(())).unwrap(), None, "done: not again");
         assert_eq!(apart(&cat).len(), 5);
+    }
+
+    /// P1.3 (W1): the part `band_wave` says how far it is at the first batch past every 5,000 waves, never more often and never
+    /// once its mark is set, then its closing line; cut off at 6,000, the next start counts the waves already apart and says
+    /// no count again.
+    #[test]
+    fn band_wave_says_how_far_it_is_every_five_thousand() {
+        const ROWS: u64 = 12_001;
+        let made = || {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let wave = a_band_wave().0;
+            let mut db = cat.db();
+            let tx = db.transaction().unwrap();
+            {
+                let mut put = tx.prepare("INSERT INTO analysis_shape (folder, rel, band_wave) VALUES (0, ?1, ?2)").unwrap();
+                for n in 0..ROWS {
+                    put.execute(params![format!("A/{n:05}.flac"), wave]).unwrap();
+                }
+            }
+            tx.commit().unwrap();
+            drop(db);
+            cat
+        };
+        let so_far = |lines: &[String]| -> Vec<u64> {
+            lines.iter().filter_map(|l| l.strip_prefix("library: 0.17's step: waveforms in three bands apart so far band_waves=")?.parse().ok()).collect()
+        };
+        let cat = made();
+        let lines = crate::diagnostics::logged_lines(|| crate::app::step_017::band_waves(&cat).unwrap());
+        assert_eq!(so_far(&lines), [5_000, 10_000], "at the first batch past 5,000 and 10,000: {lines:#?}");
+        assert!(so_far(&lines).iter().all(|n| *n < ROWS), "none once the mark is set");
+        assert_eq!(lines.first().map(String::as_str), Some("library: 0.17's step, part band_wave"), "{lines:#?}");
+        assert!(lines.last().is_some_and(|l| l.starts_with("library: 0.17's step: the waveforms in three bands apart from the visuals' signals band_waves=12001")), "{lines:#?}");
+        assert_eq!(cat.meta(BAND_WAVE_MARK).as_deref(), Some(r#"{"band_waves":12001}"#));
+
+        let cut = made();
+        let batches = std::cell::Cell::new(0);
+        let first = crate::diagnostics::logged_lines(|| {
+            cut.band_waves_apart(500, &|| {
+                batches.set(batches.get() + 1);
+                if batches.get() == 12 { anyhow::bail!("stopped") } else { Ok(()) }
+            })
+            .unwrap_err();
+        });
+        let copied: i64 = cut.db().query_row("SELECT count(*) FROM analysis_band_wave", [], |r| r.get(0)).unwrap();
+        assert_eq!(copied, 6_000, "cut off inside the part");
+        let again = crate::diagnostics::logged_lines(|| crate::app::step_017::band_waves(&cut).unwrap());
+        let said = so_far(&again);
+        assert!(said.first().is_some_and(|n| *n >= 6_000), "the waves apart before counted: {again:#?}");
+        assert!(said.len() <= 3, "{again:#?}");
+        let all: Vec<u64> = so_far(&first).into_iter().chain(said).collect();
+        assert!(all.windows(2).all(|w| w[0] / 5_000 < w[1] / 5_000), "one line per 5,000, no count again: {all:?}");
+        assert!(all.iter().all(|n| *n < ROWS), "none once the mark is set: {all:?}");
     }
 
     /// C39: a copy shares no more once its file is written (a tag write: a new size or time, read again or walked); it keeps its

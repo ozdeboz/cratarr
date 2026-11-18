@@ -117,7 +117,7 @@ pub fn run(cat: &Catalogue, ud: &UserData) -> Result<()> {
 }
 
 /// The part `band_wave` (M1): the waveforms in three bands apart from the visuals' signals, once. Blocking.
-fn band_waves(cat: &Catalogue) -> Result<()> {
+pub(crate) fn band_waves(cat: &Catalogue) -> Result<()> {
     let started = std::time::Instant::now();
     if let Some(apart) = cat.band_waves_apart(BAND_WAVE_BATCH, &|| Ok(())).context("0.17's step, part band_wave")? {
         tracing::info!(target: "library", band_waves = apart, secs = started.elapsed().as_secs(), "0.17's step: the waveforms in three bands apart from the visuals' signals");
@@ -422,7 +422,9 @@ mod tests {
             {
                 let (cat, ud) = cut.open();
                 let err = run_with(&cat, &ud, &|at| if at == part { anyhow::bail!("stopped after {at}") } else { Ok(()) }).unwrap_err();
-                assert_eq!(err.to_string(), format!("stopped after {part}"));
+                // A part cut off is named as its failure would be (W1).
+                let said = if part == "catalogue" { format!("stopped after {part}") } else { format!("0.17's step, part {part}: stopped after {part}") };
+                assert_eq!(format!("{err:#}"), said);
             }
             let mut done: Vec<String> = PARTS_017[..n.min(PARTS_017.len())].iter().map(|p| p.to_string()).collect();
             done.sort();
@@ -749,6 +751,67 @@ mod tests {
         let (cat, ud) = given.open();
         given.batch("userdata.sqlite", "CREATE TRIGGER broken_record BEFORE UPDATE OF record ON request BEGIN SELECT RAISE(ABORT, 'broken by the test'); END;");
         assert_eq!(run_with(&cat, &ud, &|_| Ok(())).unwrap_err().to_string(), "0.17's step, giving the requests their records");
+    }
+
+    /// The parts the step said it began, in order (W1).
+    fn parts_said(lines: &[String]) -> Vec<&str> {
+        lines.iter().filter_map(|l| l.strip_prefix("library: 0.17's step, part ")).collect()
+    }
+
+    /// P1.1 (W1): each part says it begins, at info under `library`, in the parts' order and then `band_wave`, before anything
+    /// else of it, and only the parts that run: a start cut off after `discogs` says the rest alone. Never a line per row.
+    #[test]
+    fn the_step_says_each_part_as_it_begins() {
+        let data = Data::new("says-parts");
+        let (cat, ud) = data.open();
+        let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
+        assert_eq!(parts_said(&lines), PARTS_017.iter().copied().chain(["band_wave"]).collect::<Vec<_>>(), "{lines:#?}");
+        assert_eq!(parts_said(&lines[..1]), ["hand"], "the step's first line is its first part's: {lines:#?}");
+        let at = |start: &str| lines.iter().position(|l| l.starts_with(start)).unwrap_or_else(|| panic!("no {start}: {lines:#?}"));
+        assert!(at("library: 0.17's step, part requests") < at("library: 0.17's step: the records' references moved into the catalogue"), "{lines:#?}");
+        assert!(at("library: 0.17's step, part band_wave") < at("library: 0.17's step: the waveforms in three bands apart"), "{lines:#?}");
+        let report = &ud.migration_report().unwrap()[PART].1;
+        let read: u64 = report["tables"].as_array().unwrap().iter().map(|t| t["before"].as_u64().unwrap()).sum();
+        assert!((lines.len() as u64) < read, "no line per row: {} lines, {read} rows read: {lines:#?}", lines.len());
+        let step: Vec<&String> = lines.iter().filter(|l| l.starts_with("library: 0.17's step")).collect();
+        assert_eq!(step.iter().collect::<std::collections::HashSet<_>>().len(), step.len(), "each said once: {lines:#?}");
+
+        let cut = Data::new("says-parts-cut");
+        let (cat, ud) = cut.open();
+        run_with(&cat, &ud, &|p| if p == "discography" { anyhow::bail!("stopped at {p}") } else { Ok(()) }).unwrap_err();
+        let mut done: Vec<String> = PARTS_017[..6].iter().map(|p| p.to_string()).collect();
+        done.sort();
+        assert_eq!(cut.marks(), done, "hand … discogs done");
+        let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
+        assert_eq!(parts_said(&lines), ["discography", "pages", "chosen", "requests", "band_wave"], "none of the parts marked: {lines:#?}");
+        assert_eq!(parts_said(&lines).first(), Some(&"discography"));
+    }
+
+    /// P1.2 (W1): a part cut off is the last one said, and the error names it too; the parts before it done, it not; the next
+    /// start says it first, runs no part marked, and ends with the report an uncut step writes.
+    #[test]
+    fn a_part_cut_off_is_the_last_one_said() {
+        let data = Data::new("cut-said");
+        {
+            let (cat, ud) = data.open();
+            let mut cut = None;
+            let lines = crate::diagnostics::logged_lines(|| cut = run_with(&cat, &ud, &|p| if p == "discogs" { anyhow::bail!("cut") } else { Ok(()) }).err());
+            let err = format!("{:#}", cut.expect("cut off"));
+            assert_eq!(parts_said(&lines).last(), Some(&"discogs"), "{lines:#?}");
+            assert!(err.contains("0.17's step, part discogs"), "{err}");
+            assert!(PARTS_017.iter().filter(|p| **p != "discogs").all(|p| !err.contains(&format!("part {p}"))), "no other part: {err}");
+        }
+        let mut done: Vec<String> = PARTS_017[..5].iter().map(|p| p.to_string()).collect();
+        done.sort();
+        assert_eq!(data.marks(), done, "hand … links done, discogs not");
+        let (cat, ud) = data.open();
+        let lines = crate::diagnostics::logged_lines(|| run(&cat, &ud).unwrap());
+        assert_eq!(parts_said(&lines).first(), Some(&"discogs"), "{lines:#?}");
+        assert_eq!(parts_said(&lines), PARTS_017[5..].iter().copied().chain(["band_wave"]).collect::<Vec<_>>(), "no part marked runs again");
+        let report = "SELECT report FROM migration_report WHERE part = 'references'";
+        let uncut = Data::new("cut-said-uncut");
+        uncut.run();
+        assert_eq!(data.rows_of("userdata.sqlite", report), uncut.rows_of("userdata.sqlite", report), "the report an uncut step writes");
     }
 
     /// X7: a request the step closes as asked twice (an account's second open request of one record, W6) is listed in its report:

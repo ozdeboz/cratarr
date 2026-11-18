@@ -1705,6 +1705,11 @@ fn mark_017(part: &str) -> String {
     format!("017:{part}")
 }
 
+/// A part's mark there: the part done.
+fn marked_017(db: &Connection, mark: &str) -> rusqlite::Result<bool> {
+    Ok(db.query_row("SELECT 1 FROM meta WHERE key = ?1", [mark], |_| Ok(())).optional()?.is_some())
+}
+
 /// The user data's table a part reads and reports: its rows, carried or listed by why not. `likely` and `chosen` read again
 /// what `certain` and `hand` report.
 fn table_017(part: &str) -> Option<&'static str> {
@@ -2779,21 +2784,26 @@ impl Catalogue {
 
     /// 0.17's step on the catalogue's side: each part not done, in turn, in a transaction of its own whose last write is its
     /// mark, holding the part's report. Each begins IMMEDIATE, so no writer comes between what it reads and what it writes, and
-    /// finds its mark inside it. `after` hears each part done, inside its transaction: an error from it leaves that part
-    /// unwritten, the parts before it done. The parts run now. Blocking.
+    /// finds its mark inside it. Each says it begins as it begins (W1), a part done before saying nothing, so the log shows how
+    /// far the step is. `after` hears each part done, inside its transaction: an error from it leaves that part unwritten, the
+    /// parts before it done, and names that part as its failure would. The parts run now. Blocking.
     pub fn carry_references(&self, c: &Carry, after: &dyn Fn(&str) -> Result<()>) -> Result<Vec<&'static str>> {
         let mut db = self.db();
         let mut ran = Vec::new();
         for part in PARTS_017 {
-            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let mark = mark_017(part);
-            if tx.query_row("SELECT 1 FROM meta WHERE key = ?1", [&mark], |_| Ok(())).optional()?.is_some() {
+            if marked_017(&db, &mark)? {
+                continue;
+            }
+            tracing::info!(target: "library", "0.17's step, part {part}");
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if marked_017(&tx, &mark)? {
                 continue;
             }
             // A part that fails names itself (X7).
             let named = || format!("0.17's step, part {part}");
             let report = carry_part(&tx, c, part, now()).with_context(named)?;
-            after(part)?;
+            after(part).with_context(named)?;
             tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![mark, report.to_string()]).with_context(named)?;
             tx.commit().with_context(named)?;
             ran.push(part);
