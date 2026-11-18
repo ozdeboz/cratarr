@@ -1,9 +1,11 @@
 # Records and copies: how 0100 and 0101 get built
 
-A design for 0.16's last foundation piece. The rules are decisions 0100 and 0101 (its amendments "a track is the record's
-track" and "how a record's copies behave"); this says how they are built, and in what order.
+The rules are decisions 0100 and 0101 (its amendments "a track is the record's track" and "how a record's copies
+behave"); this says how they are built, and in what order. 0.16 built steps 1 to 5. 0.17's first preview built step 6,
+Copy to, and steps 7 to 11, the rest of 0100. Each step below says so. Where the build differs from the first plan,
+this says what is built.
 
-## Today
+## Before 0.16
 
 - The catalogue knows folders, files and tracks. A file points at one track, a track has one file in use.
 - The served library (`library.sqlite`) is rebuilt from the catalogue. An album is a hash of its tags, with a folder
@@ -199,6 +201,7 @@ and an old id in a queue plays the one chosen. It has no Undo, as a take has non
   card (the owner, 2026-11-06).
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and a "Play from …" for each
   other copy in a library on, Incoming too, shown only where there is one. The record stays while one copy is left.
+  An administrator's "Copy to …" and "Replace in Music from …" are below.
 - The quality on a card is the copy that plays.
 - Third-party apps see every library: the Library page's filter is the page's and does not reach Subsonic's music folders (the owner,
   2026-11-07). It stays on the account, and still says which copy plays.
@@ -223,18 +226,93 @@ and an old id in a queue plays the one chosen. It has no Undo, as a take has non
   as the library has them, not what lies in its folder.
 - A length fix stays in its file: copies differ in length, so it goes by the file's place, never by the track.
 - On a sheet, what a track's copies change alike is one row. Where they differ, each row has a `library`, as `copies` names it.
-- Incoming's verdicts go: a better copy is a copy of the record, and Replace swaps two copies of one record.
+- Incoming's verdicts are gone (0.17). An Incoming copy stands against the record's kept copy that plays for most
+  (`AlbumCopy.against`): better or not, and why ("lossless, yours is 320 kbps"). Better is a whole copy before one
+  short of tracks, then quality. The Library's badge says "Upgrade" where it is better, else the library of the kept
+  copy. Replace is offered where the copy is better than the record's copy in a main library, and swaps two
+  copies of one record.
+- A copy waiting whose tracks pair one for one with another record's copy in a main library stands against that copy
+  too: an untagged copy in Music is two records only for its missing tags. Replace then takes its place, and the plays,
+  hearts and playlist lines on its tracks go with them. A different tracklist is another record, and the intake card
+  says "Music has another edition", with no action (0100's OQ1).
 
-## Copy to own music
+## Copy to own music (step 6, built in 0.17)
 
-`Copy to` makes a shared-block copy (the FICLONE ioctl on btrfs), its files taking the record's track ids. It is free
-against the allocation. A file written afterwards takes room of its own (0101: tags and covers go into every copy).
-`KeepPreview.copy` says so to the page, and Undo takes the copy away.
+**Who and where.** An administrator's Move of a kept record into or out of someone's own music makes a copy: the menu
+says "Copy to Ann's music" and the original stays where it is. Out of Incoming it is still Keep, and between main
+libraries a move. A departed user's music still moves into a main library. A user's own copy comes through Want
+(below).
 
-On a disk without shared blocks (ext4) it is a real copy, and it counts against the user's allocation.
+**An album action in Keep's family** (the owner, 2026-11-17: "Like Keep, gate in 0.18"): one journal entry
+(`AlbumCopied`) and one Undo, not a run through 0092's file runs. It moves onto that gate with Keep in 0.18.
+- It writes the copied files and nothing else: no cover or tag into or beside the copy, nothing into the original, no
+  play data. The tap carries what its sheet showed (the folder, the files, the copy it copies), and is refused where
+  the copy would now be anything else.
+- It is copied as it is, whatever the target's quality limit. Lidarr is not told.
+- Its progress is a task of the account's (`app::tasks`, kind `copy`). After a stop, the pass finishes a copy that
+  reached its target and takes back one that did not.
 
-The off-site backup leaves out shared-block copies of records in Music's mirror, and Cratarr keeps their list for it. A
-copy whose original leaves Music is its own from then on, and backed up (0101).
+**The files.** Each file is copied through a hidden name with the original's time, by the kernel's copy
+(`copy_file_range`). On btrfs that copy shares the original's blocks, also across the container's bind mounts, where
+the FICLONE ioctl refuses. On a disk without shared blocks (ext4) it is a real copy. Whether a copy shares is read back
+from the disk and kept as `files.shared`, which a change of the file's size or time clears: a tag written into a copy
+unshares it. The copy's catalogue rows are made from the original's, on the same tracks (`copy_rows`), so nothing is
+analysed again.
+
+**Its Undo** goes file by file: only the files it copied, still as copied, go into the target's trash. It is refused
+whole while any copied file was rewritten since, naming it. Deleting the copy is the way then. It never leaves a short
+album.
+
+### A Want of a record the house has
+
+A Want of a record held whole somewhere copies it into the asker's own music through Copy to's action, and no fetcher is
+asked. The request says "Copied into your music".
+- The copy comes from a main library first, then the asker's own music, then anyone's (the owner, 2026-11-17: "Yes,
+  from anyone's"). The other person's copy is never moved or changed.
+- Never a copy known to lack tracks (`identity::lacks`: fewer tracks than the record's copies together, a track of the
+  counting list missing, MusicBrainz's check, or clean tags that say so), and never one in a library switched off for
+  the asker.
+- Where the asker has no own music, or already has a copy there, nothing is copied. A copy that fails says why on the
+  request's line.
+
+### Replace in Music from someone's own music
+
+An administrator replaces a main library's copy from a better copy in someone's own music (0100's OQ2, "Copy in,
+admins").
+- Offered only for the best own copy that is better than the main copy: whole before short, then quality, a tie no
+  better, never a lossy copy over a lossless one. One entry per main library it beats.
+- The menu names whose copy it is: "Replace in Music from Your music", or "from Bob's music" for another account's.
+- The own copy is copied in as it is, byte for byte, sharing blocks. No cover choice and nothing carried over. The own
+  copy stays, and its rows are unchanged.
+- The main library's old files go into its trash. The new files take the record's tracks, so plays, hearts and
+  playlists stay on them. One journal entry (`AlbumReplacedFromCopy`), one Undo, a task while it copies.
+- Its Undo is refused whole where a copied file was rewritten since. A request met this way just reads "Arrived".
+
+### Room and the disk's floor (0101 point 4)
+
+`app::room` works room out at each read, with no state of its own.
+- **Each account has a room,** 100 GB unless an administrator sets another. Administrators have none.
+- **What counts:** the account's own music, less free files, plus each copy in Incoming of a record the account asked
+  for, from its arrival. Music on its way counts nothing. A trash, a parked library or Music never counts.
+- **A free file** is one whose bytes another present file holds (the same track, size and time), where either is marked
+  shared, the other lies in a main library, or the other is in someone's own music and pays for those bytes (the
+  original, else the copy made first). A free copy whose twin changes or leaves counts in full from then.
+- **Over room, nothing is removed.** The account's new Wants wait, saying so, and go by themselves once it is under.
+  Adding to a library, and an administrator's Copy to, are never refused for room. A delete gives room back at once.
+- **The floor,** 200 GB unless set, is held against the lowest free space of the disks users' music lands on: each
+  Incoming library's folder and own music's. Below it, users' new Wants wait, Soulseek begins no transfer of theirs,
+  and Lidarr is told to stop the users' requests only it looks for. Administrators' go on. Space comes back at the floor
+  plus 10 GB.
+- `/api/health` says `short_of_space` for Home Assistant to read, and Health has a "Short of space" item. Cratarr holds
+  no Home Assistant token.
+
+### The backup's list
+
+Cratarr keeps `backup-shared-copies.txt` in the data folder for the off-site backup: the copies outside Music whose bytes
+an original holds in a kept library (a main library or anyone's own music; never Incoming or a trash). The backup is to
+take Music and every own music folder whole, less those. The list is written anew after each Copy to and its Undo, and
+at the end of every library build. A copy whose original left is its own from then on, and backed up. Nothing in
+Cratarr reads the list; the NAS's side comes with the release.
 
 ## The migration (0101 point 21)
 
@@ -283,14 +361,15 @@ stops the start, as Cratarr does not run on half-moved data. The way back is the
 
 Each step leaves the server working and its tests green:
 
-1. `records` in the catalogue, `tracks.record`, several files per track, nothing shown differently yet.
-2. Identification by the rules above.
+1. `records` in the catalogue, `tracks.record`, several files per track, nothing shown differently yet. Done in 0.16.
+2. Identification by the rules above. Done in 0.16.
 3. `copies` and `copy_files` in the served library, `al-<record>`, and `copy_for`. Copies still hold ids of their own, so a
-   record is served with the tracks of the copy that plays.
-4. The views and the page: dots, menus, the verdicts' end. Then the take: copies take the record's tracks, and a record is
-   served with every copy's.
-5. The migration, rehearsed on a copy of the dev data, then on staging with production's.
-6. Copy to own music.
+   record is served with the tracks of the copy that plays. Done in 0.16.
+4. The views and the page: dots, menus. Then the take: copies take the record's tracks, and a record is served with every
+   copy's. Done in 0.16; the verdicts' end came in 0.17.
+5. The migration, rehearsed on a copy of the dev data, then on staging with production's. Done in 0.16.
+6. Copy to own music. Done in 0.17's first preview, with Replace from someone's own music, the Want's copy, room and the
+   floor (above).
 
 The take belongs to identification, but it cannot land with it. While an album's id is a hash of its tags, a track shared
 by two copies sits in two albums, and two `songs` rows with one id stop the library building. And `al-<record>` with every
@@ -300,83 +379,174 @@ one file (which file plays, Delete, a fix reaching every copy, a line on any cop
 of what plays and counts on a track, which it shares with the migration. It stays one small commit, so it can be taken
 back alone.
 
-## The rest of 0100
+## The rest of 0100 (steps 7 to 11, built in 0.17)
 
-All of 0100 goes in preview 1 (the owner, 2026-11-05). What is above is its owned half; this is the rest, on the same
+0.16 built 0100's owned half. Its other half, the records you do not have, came in 0.17's first preview, on the same
 `records` table: a record with no tracks, not retired, is a record you do not have.
 
 ### What is kept
 
 In the catalogue, beside `records`, growing with what is looked at and never the whole catalogues:
 
-- `references (subject, source, kind, value, at)`: a record's, artist's or label's id at a source. For a record: a
-  MusicBrainz release group and release, a Discogs master and release, a Bandcamp album. Unique per source, kind and
-  value, so a link finds its subject.
-- `reference_tracks (record, source, tracks)`: the tracklist a reference gives, titles and lengths. What judges a folder.
-- `artists (id, born, name, sort)` and `labels (id, born, name)`, with `record_artists (record, artist)` and
-  `record_labels (record, label, catno)`. An artist's id is for life, like a record's, and served as `ar-<id>`. Two
-  artists of one name are one until their references say otherwise, and then they split.
-- 0.14's `record_references` and the kept `discography` move into these, and go.
+- `"references" (subject, source, kind, value, at, how, confirmed, read_at)`, quoted in every statement, as REFERENCES is
+  SQLite's keyword: a record's, an artist's or a label's id at a source (`al-<n>`, `ar-<n>`, `la-<n>`). For a record: a
+  MusicBrainz release group and release, a Discogs master and release, a Bandcamp album.
+  - A release, an album page, an artist or a label is one subject's alone, so a link finds its subject.
+  - A release group or a master is every edition's: a deluxe edition and the standard one share theirs.
+  - `how` says how it was found (`files`, `link`, `search`, `hand`). Found again it stays, but for a surer way, and a
+    hand never gives way to a guess.
+- `reference_tracks (record, source, tracks, at)`: the tracklist a reference gives, titles and lengths where the source
+  gives them. It judges a folder, and a record's page lists it.
+- `records` gains `released`, `genres`, `cover`, the hand's count and check, `merged_into`, and when a list last showed
+  the record (`seen_at`) and someone last opened it (`opened_at`).
+- `labels (id, born, name)`, served as `la-<id>`, an id for life as an artist's is. `record_artists (record, artist,
+  position)` in the order the files credit them, and `record_labels (record, label, catno)`: the record pass writes a
+  record had's, a list a record not had's.
+- Each artist of a name has a number once, in the order they were made, kept for life (`artist_numbers`). A list that
+  shows two of a name says "Rone (2)". A bare name from outside opens the first.
+- 0.17's step (below) carried 0.14's `record_references` and the kept discographies into these. The old tables stay for
+  one version.
 
 ### Merging (0100 point 4)
 
-One pure function, `same_release(a, b)`, beside `same_record`:
+One pure function, `identity::same_listing(a, b)`, beside `same_record`. It is named apart from `identity::same_release`,
+which means the very same MusicBrainz release.
 
-1. A source's link to the other: MusicBrainz's Discogs and Bandcamp URLs. It decides.
+1. A link from either side to the other's decides, both ways. A release or a Bandcamp album names one record, so the same
+   one is one record and another is two. Two release groups or masters that differ are two; the same one says nothing.
 2. Else the artist, the title and the tracklist, by `same_tracks`.
-3. Else two. A name alone never merges.
+3. Else two. A name alone never merges, nor a list with no lengths.
 
 A discography lists no tracklists, and reading each one costs a request. So a listing merges by links and otherwise stays
-apart, and a tracklist is read when a record is opened or asked for, which merges it then. A list can show a record twice
-until then; 0100 prefers that to a wrong merge.
+apart, and a tracklist is read when a record is opened or asked for. A list can show a record twice until then; 0100
+prefers that to a wrong merge.
+
+`Catalogue::keep_listing` keeps a list's rows. Each is found by its references first, else by `same_listing` among the
+records of its name, else it is a new record not had, credited to the list's artist. Read again, it finds the same
+records.
+
+Two records found to be one merge (`merge_records`): the one with copies keeps its id, else the older. The other's
+references, lists, credits and labels move to it, and its id answers by the keeper's (`merged_into`, which `record()`
+follows). Two records that both have copies are one only by their files.
+
+An artist opened by a MusicBrainz id is the artist who holds it. Else it is the library's artist of that name with no id,
+where MusicBrainz's first sure match for the name is that id. Else it is an artist of their own, with the name's next
+number. An artist the files credit is not split in two by references in this version.
 
 ### The reference that counts
 
-`counting(references, files)`, pure, the owner's rule: the source whose tracklist agrees with the files; with no files,
-MusicBrainz, then Discogs, then Bandcamp. A hand choice (0.14) comes first.
+`identity::counting`, pure, the owner's rule:
+- a hand's choice first (0.14's "Use this");
+- else the source whose tracklist agrees with the files, the first of MusicBrainz, Discogs and Bandcamp where several do;
+- with no files, the first of those with a list.
+
+Where every list disagrees with the files, none counts until one is chosen, and Health's references item asks for the
+choice. A list with no lengths agrees where every title does: it may count, and it never merges. A record's counting list
+is read once and kept (`references::tracklist`). A source out of reach is not "no list".
 
 ### One missing list
 
-`discover::missing_albums` reads MusicBrainz alone. It becomes three reads into one list:
+`discover::missing_albums` lists an artist's records the library has none of, by the artist's id
+(`GET /api/artists/missing?id=ar-<n>`). It answers at once from kept rows. `looking` says while the artist's lists are
+read in the background, each one where it is a month old or never read:
 
-- **MusicBrainz:** release groups, as today.
-- **Discogs:** the artist's masters. New: `discogs::artist_masters`. Albums and EPs only, as the owner chose, and a master
-  gives no type in that listing, so the type comes from its main release's format when that is read.
-- **Bandcamp:** the artist's music page. New in `bandcamp.rs`.
+- **MusicBrainz:** the release groups, by the artist's id from the files, else its sure match for the name.
+- **Discogs:** the masters, and the releases with no master. A row is typed only where a format says so.
+- **Bandcamp:** the albums its search lists on the artist's own address (MusicBrainz's link to it, else a search). No
+  account's `/music` page is read: Bandcamp answers those with a browser check.
 
-An artist known to none of the three has no list, and shows only what you own.
+Albums and EPs only, and rows with no type yet. Each row is kept as a record not had (`keep_listing`).
+- A row is left out where the one "had" rule says another record holds its files: by references first, then by the same
+  artist and folded title where nothing contradicts.
+- A retired record shows as not had, "Was in Music until <date>", unless a live record holds its release group.
+- A source that answers with its browser check, is out of reach, or stays silent past the cut counts as not read. It is
+  asked again after 15 minutes.
+- An artist known to none of the three has no list, and shows only what you own.
+
+The one "had" rule is the requests' and the artist page's. A record is had when it holds live tracks; or a live record
+with tracks holds its release group or release; or a live record with tracks of the same artist has the same folded
+title, with nothing that contradicts it.
 
 ### Pages
 
-No new patterns: the pages there are, fed by the record and the artist.
+No new patterns: the pages there are, fed by the record, the artist and the label.
 
-- **A record you do not have** opens the album page: cover, facts, the counting reference's tracks, not playable, Want.
-- **An artist you have nothing of** opens the artist page, as Discover's does today, for any artist: profile, related,
-  the missing list. `discoverArtist` becomes that one page.
-- **A label** opens a page of its own, built of the artist page's parts: its whole catalogue from every source by year,
-  what you own marked, the rest one tap from Want. The label on an album's facts opens it.
-- **Search's "beyond"** gives records and artists of Cratarr's own, kept on the first look, and opens these pages. Each
-  source's site is one tap from the record's references.
+- **A record you do not have** opens the album page (`GET /api/albums/cratarr/al-<n>`), made from the catalogue alone:
+  its cover, facts and labels, who has it, its request, and the counting list's tracks, none playable, with Want.
+  - With no list kept, the list is read in the background (`looking`).
+  - A merged record moves to the record it became.
+  - A retired one says "Was in Music until <date>".
+  - Its Bandcamp preview plays where it has one.
+  - Opening it marks it opened.
+- **An artist** has one page by id, for anyone, with albums here or none: `GET /api/artists/cratarr?id=ar-<n>`, or
+  `?name=`, which hands back the id. About, related artists, the photo, the heart and the missing list go by id.
+  Discover's own artist page is gone.
+- **A label** has a page of its own (`GET /api/labels/la-<n>`): its records by year, newest first, had or not, with their
+  catalogue numbers and requests.
+  - Its rows come from the records tied to it and from MusicBrainz's and Discogs' lists of it, never Bandcamp's.
+  - The first hundred of each list are read at open, and "More" reads on.
+  - The sources' rows are a cache kept thirty days (`label_rows`, `label_reads`), not records.
+  - A record's labels in its About open the label's page.
+- **Search's "beyond"** gives each row the record or artist that holds its reference, and opens these pages.
+  - Rows are never merged by name: a MusicBrainz row and a Discogs row are one only where a record holds both.
+  - Nothing is made when it answers. A row opened becomes a record by its reference (`POST /api/records/open`), and an
+    artist by their MusicBrainz id (`POST /api/artists/open`), never by a name alone.
+  - Each source's site is one tap from the record's references.
 
 ### Requests and Soulseek (0100 point 5)
 
-- `request.record` replaces `album_key`, `release_group`, `album` and `artist`, which the record holds. A record any
-  source knows can be asked for, so Want works on all of them.
-- A fetcher reads the reference it needs: Lidarr takes a release group and says so when there is none, as it does today.
-- Soulseek's `Record` points at a record. `soulseek.rs` stops reading MusicBrainz itself and asks for the counting
-  reference's tracklist, so a Discogs or Bandcamp record is judged the same way. The one left out: a record with no
-  tracklist anywhere is not fetched, and says why.
+- **Each request names its record** (`request.record`); its own names stay as asked. A Want takes its record by its id,
+  else its release group, its Bandcamp page, then its names. A request's record is never found by a title alone. A
+  record any source knows can be asked for, so Want works on all of them.
+- **An account has one open request of a record.**
+- **A fetcher reads the reference it needs.** Lidarr is asked by the record's names and release group, and a label's
+  "Artist - Title" is split first.
+- **Soulseek fetches records,** judged by the record's counting list, whichever source gives it. A record with no list
+  anywhere is Stuck, and says why. A track with no MusicBrainz recording passes the gate on its sound and length, and
+  AcoustID is not asked.
+- **A placed album joins its record:** Soulseek tells the catalogue which record the folder it places is for
+  (`expect_record`), so the album that arrives there takes it.
 
-### The migration, again
+### Records you do not have are forgotten
 
-The same transaction also: gives each request a record, owned or new; gives each artist an id and rewrites what names
-the name's hash (favourites, exclusions, `artist_person`, related artists, the discography's keys); and moves
-`record_references` and `discography` across. Each is in the report, and the map keeps old artist ids too.
+Records not had outnumber the records had, so they are kept only while something uses them (the owner, 2026-11-16). A
+daily pass does it (`app::retention`).
+- **Six quiet months.** A record not had that no list showed and nobody opened for six months is forgotten, with its
+  references, credits and lists. A tombstone (`forgotten`) keeps its id, which is never given again, and its page says it
+  is no longer known.
+- **Never while something points at it:** a request of any status, a hand's choice or link, a merge, a Soulseek item or
+  an expected folder, a retired record, an id from before 0.16.
+- **Kept lists** of a record not had go after thirty days unopened, and are read again when needed.
+- **An artist left with nothing** (no record, no credit on a track, no heart, play, crate or other mention) is forgotten
+  the same way. Their number stays theirs.
+- **The library's artists' lists** at MusicBrainz and Discogs are read again once a month, a thirtieth of the artists a
+  day, behind the pages. A list that could not be read keeps its records seen.
+
+### 0.17's step
+
+0100's other half moves in once, at 0.17's first start, before anything reads the references (`app/step_017.rs`). It
+reads what 0.16 kept and writes the catalogue in parts. Each part is its own transaction with its own mark (`017:<part>`
+in the catalogue's `meta`): hand, certain, files, likely, links, discogs, discography, pages, chosen, requests, then
+band_wave and credits. A part done is not run again, and a data folder that ran fewer parts runs the ones it lacks. Each
+part says in the log as it begins.
+
+- 0.14's reference choices, matches, and Discogs' and Bandcamp's finds become references. The kept discographies become
+  records not had.
+- Each request gets its record: by its release group, else an owned record of its exact names, else a new record not
+  had. A second open request of one record from one account is closed as "Asked twice".
+- 0.16's waveforms in three bands move to a table of their own (`analysis_band_wave`), so the analysis pass no longer
+  reads the visuals' signals. The records you have are credited to their artists and labels as their files say.
+- Its report is `/api/admin/migration`'s part `references`: each table's rows, what was carried, and what named nothing.
+  A failed part stops the start and names itself.
 
 ### Order of work, after step 6
 
+All five were built in 0.17's first preview:
+
 7. `references`, with `counting`, 0.14's record references moving in.
-8. `artists`, `labels` and `same_release`.
+8. `labels`, a record's artists and labels in order, and `same_listing`.
 9. Requests on the record, Soulseek by reference.
 10. One missing list: Discogs' and Bandcamp's reads.
 11. The pages and search's "beyond".
+
+The forgetting of records not had (above) came with step 11.
