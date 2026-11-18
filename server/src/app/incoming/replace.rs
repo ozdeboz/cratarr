@@ -677,13 +677,16 @@ impl IncomingService {
         done
     }
 
-    /// One Replace from someone's own copy at a time of a record's copy in a main library (RY01.13: two taps at once, one goes and the
-    /// other is told it is being replaced); held until the action ends.
-    pub(super) fn alone(&self, album: &str, main: i64, title: &str) -> Result<Alone, ToggleError> {
-        let key = (album.to_string(), main);
-        if !self.replacing.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone()) {
-            return Err(ToggleError::Refused(format!("{title} is being replaced")));
+    /// One album action at a time on a record's copy in a library (RY01.13, RF15: two taps at once, one goes and the other is told
+    /// what is going on): Replace from someone's own copy, Copy to, and their Undos, `doing` saying which ("being replaced"). Held until
+    /// the action ends.
+    pub(super) fn alone(&self, album: &str, folder: i64, title: &str, doing: &'static str) -> Result<Alone, ToggleError> {
+        let key = (album.to_string(), folder);
+        let mut going = self.replacing.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(held) = going.get(&key) {
+            return Err(ToggleError::Refused(format!("{title} is {held}")));
         }
+        going.insert(key.clone(), doing);
         Ok(Alone { key, held: self.replacing.clone() })
     }
 
@@ -695,7 +698,7 @@ impl IncomingService {
     /// copying leaves Music's old files back and forgets the intent; one after the copies stand keeps it, for the pass to finish (T4).
     pub(super) async fn replacing_from_copy(&self, at: &Located, main: (i64, String), year: Option<&str>, sheet: Option<&ReplaceSheet>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(&at.album.id, main.0)?;
-        let _alone = self.alone(&at.album.id, main.0, &at.album.title)?;
+        let _alone = self.alone(&at.album.id, main.0, &at.album.title, "being replaced")?;
         let now = epoch_now();
         let (event, planned, music) = self.event_from_copy(at, main, year, now).await?;
         if sheet.is_some_and(|s| *s != planned) {
@@ -884,12 +887,15 @@ impl IncomingService {
     /// touched. Once.
     pub(super) async fn undo_from_copy(&self, entry: &Entry) -> Result<String, ToggleError> {
         let gone = || ToggleError::Refused("that can no longer be undone".into());
-        let Event::AlbumReplacedFromCopy { source, title, to_dir, copies, replaced, .. } = &entry.event else { return Err(gone()) };
+        let Event::AlbumReplacedFromCopy { source, album_id, title, to_dir, copies, replaced, .. } = &entry.event else { return Err(gone()) };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back as it was")));
         }
         let _undoing = self.undoing(entry.id, title)?;
+        let _alone = self.alone(album_id, to_dir.0, title, "being undone")?;
         let catalogue = self.lib.catalogue();
+        // The copies held on their records while its files move, to its end (RF15, as Replace's Undo holds them).
+        let moving = catalogue.copies_moving();
         let root = catalogue.folders().get(to_dir.0).cloned().ok_or_else(|| ToggleError::Refused("that library is not in use any more".into()))?;
         let made: Vec<Option<(u64, i64)>> = self.journal.result(entry.id, super::COPIED).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         let begun = self.journal.result(entry.id, super::UNCOPIED).ok().flatten().and_then(|v| v["stamp"].as_i64());
@@ -976,8 +982,9 @@ impl IncomingService {
             .filter(|(_, l)| matches!(l, super::Lies::Done | super::Lies::AsCopied))
             .map(|((rel, _), _)| (rel.clone(), crate::trash::token(stamp, rel)))
             .collect();
-        let (r, files, rels) = (root.clone(), self.files.clone(), plan.iter().map(|(rel, _)| rel.clone()).collect::<Vec<_>>());
+        let (r, files, rels, held) = (root.clone(), self.files.clone(), plan.iter().map(|(rel, _)| rel.clone()).collect::<Vec<_>>(), moving.clone());
         let moved = tokio::task::spawn_blocking(move || -> Result<()> {
+            let _held = held;
             files.move_all(&steps)?;
             super::prune_up_to(&r, &rels);
             Ok(())
@@ -1475,7 +1482,7 @@ mod tests {
         let (svc, music, inc, ann, bob) = with_three_own("ry01-busy", RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
         let at = bobs_copy(&svc, &bob, RY01_DIR).await;
         let before = lying(&music);
-        let other = svc.alone("al-1", 0, "Zebra").unwrap();
+        let other = svc.alone("al-1", 0, "Zebra", "being replaced").unwrap();
         let e = svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None).await.unwrap_err();
         assert!(e.to_string().contains("being replaced"), "{e}");
         drop(other);

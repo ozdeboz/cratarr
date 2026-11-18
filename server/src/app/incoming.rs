@@ -326,8 +326,9 @@ pub(super) fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
 /// Album actions going on in this process, by their journal ids.
 type Running = Arc<std::sync::Mutex<std::collections::HashSet<EventId>>>;
 
-/// Replaces from someone's own copy going on in this process, by record and main library (RY01.13, `IncomingService::alone`).
-type Replacing = Arc<std::sync::Mutex<std::collections::HashSet<(String, i64)>>>;
+/// Album actions going on in this process on a record's copy in a library, by record and library, each with what it is doing
+/// (RY01.13, RF15: `IncomingService::alone`): Replace from someone's own copy, Copy to, and their Undos, one at a time.
+type Replacing = Arc<std::sync::Mutex<std::collections::HashMap<(String, i64), &'static str>>>;
 
 /// An album action going on: its intent in the journal is no crash, and `reconcile` leaves it alone while this lives. A
 /// clone goes with the blocking move: a request dropped half way ends the action's future, not its move.
@@ -1057,12 +1058,15 @@ impl IncomingService {
     /// (`put_back_undo`), so the album is never left short. One Undo of an entry at a time (`undoing`). The original as it was.
     async fn undo_copy(&self, entry: &Entry) -> Result<String, ToggleError> {
         let gone = || ToggleError::Refused("that copy can no longer be undone".into());
-        let Event::AlbumCopied { title, to_dir, copies, .. } = &entry.event else { return Err(gone()) };
+        let Event::AlbumCopied { album_id, title, to_dir, copies, .. } = &entry.event else { return Err(gone()) };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is no longer copied")));
         }
         let _undoing = self.undoing(entry.id, title)?;
+        let _alone = self.alone(album_id, to_dir.0, title, "being undone")?;
         let catalogue = self.lib.catalogue();
+        // The copies held on their records while its files move, to its end (RF15, as Keep's Undo holds them).
+        let moving = catalogue.copies_moving();
         let folders = catalogue.folders();
         let root = folders.get(to_dir.0).cloned().ok_or_else(|| ToggleError::Refused("that library is not in use any more".into()))?;
         let made: Vec<Option<(u64, i64)>> = self.journal.result(entry.id, COPIED).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
@@ -1144,8 +1148,9 @@ impl IncomingService {
             .map(|((rel, _), _)| crate::moves::Step { from: at(rel), to: at(&format!("{}/{}", crate::trash::TRASH_DIR, crate::trash::token(stamp, rel))) })
             .collect();
         let taken: Vec<String> = plan.iter().zip(&lies).filter(|(_, l)| matches!(l, Lies::Done | Lies::AsCopied)).map(|((rel, _), _)| rel.clone()).collect();
-        let (r, files, rels) = (root.clone(), self.files.clone(), plan.iter().map(|(rel, _)| rel.clone()).collect::<Vec<_>>());
+        let (r, files, rels, held) = (root.clone(), self.files.clone(), plan.iter().map(|(rel, _)| rel.clone()).collect::<Vec<_>>(), moving.clone());
         let moved = tokio::task::spawn_blocking(move || -> Result<()> {
+            let _held = held;
             files.move_all(&steps)?;
             prune_up_to(&r, &rels);
             Ok(())
@@ -1463,8 +1468,10 @@ impl IncomingService {
     }
 
     /// Copy to's copying (`copy_album`): its plan, its intent in the journal first (`AlbumCopied`), the copies and their rows, then
-    /// applied. What a failure made goes, and the intent is forgotten.
+    /// applied. What a failure made goes, and the intent is forgotten. One at a time of a record into a library, and none while an
+    /// Undo or a Replace of its copy there goes on (RF15: `alone`).
     async fn copying(&self, at: &Located, target: i64, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let _alone = self.alone(&at.album.id, target, &at.album.title, "being copied")?;
         let (root, plan) = self.plan_move(at, target, year).await?;
         let plan = plan.map_err(|r| match r {
             KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
@@ -3115,6 +3122,123 @@ mod tests {
             for d in [music, inc, ann, bob] {
                 std::fs::remove_dir_all(d).ok();
             }
+        }
+    }
+
+    /// Files as the disk has them, noting at each plan of moves whether the copies are held on their records then
+    /// (`Catalogue::copies_are_moving`, RF15).
+    struct Held(Arc<crate::catalogue::Catalogue>, Arc<std::sync::Mutex<Vec<bool>>>);
+
+    impl crate::ports::Files for Held {
+        fn trash(&self, folder: &std::path::Path, rel: &str, now_epoch: i64) -> anyhow::Result<String> {
+            crate::trash::trash(folder, rel, now_epoch)
+        }
+        fn restore(&self, folder: &std::path::Path, token: &str) -> anyhow::Result<String> {
+            crate::trash::restore(folder, token)
+        }
+        fn purge(&self, folder: &std::path::Path, now_epoch: i64, keep_days: u32) -> anyhow::Result<usize> {
+            crate::trash::purge(folder, now_epoch, keep_days)
+        }
+        fn can_write(&self, _folder: &std::path::Path) -> bool {
+            true
+        }
+        fn move_all(&self, plan: &[crate::moves::Step]) -> anyhow::Result<()> {
+            self.1.lock().unwrap().push(self.0.copies_are_moving());
+            crate::moves::apply(plan)
+        }
+        fn move_back(&self, plan: &[crate::moves::Step]) -> anyhow::Result<()> {
+            crate::moves::revert(plan)
+        }
+        fn clear_parts(&self, plan: &[crate::moves::Step]) {
+            crate::moves::clear_parts(plan)
+        }
+        fn copy_all(&self, plan: &[crate::moves::Step]) -> anyhow::Result<Vec<bool>> {
+            crate::moves::copy(plan)
+        }
+        fn shares(&self, _from: &std::path::Path, _to: &std::path::Path) -> bool {
+            false
+        }
+    }
+
+    /// RF15 (the review of runs 11 and 12, RA6): the Undo of a Copy to and the Undo of a Replace from Bob's copy hold the copies on
+    /// their records while their files move (`Catalogue::copies_moving`, as Keep's and Replace's Undos do), so a pass meanwhile lets
+    /// no copy half way leave its record: every plan of moves an Undo makes is made with the hold on.
+    #[tokio::test]
+    async fn the_undos_of_copies_hold_the_copies_on_their_records_while_they_move() {
+        let seen: Arc<std::sync::Mutex<Vec<bool>>> = Arc::default();
+        let (svc, music, inc, own) = with_own_music("rf15-held-copy").await;
+        let cat = svc.lib.catalogue();
+        let svc = IncomingService { files: Arc::new(Held(cat, seen.clone())), ..svc };
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        seen.lock().unwrap().clear();
+        svc.undo(&undo).await.unwrap();
+        let held = seen.lock().unwrap().clone();
+        assert!(!held.is_empty() && held.iter().all(|h| *h), "Copy to's Undo moves with the copies held: {held:?}");
+        assert!(!own.join("A/Album").exists(), "and it is undone");
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
+        let (svc, music, inc, ann, bob) = with_three_own("rf15-held-ry01", RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
+        let before = lying(&music.join(RY01_DIR));
+        let cat = svc.lib.catalogue();
+        let svc = IncomingService { files: Arc::new(Held(cat, seen.clone())), ..svc };
+        let at = bobs_copy(&svc, &bob, RY01_DIR).await;
+        let done = svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None).await.unwrap();
+        seen.lock().unwrap().clear();
+        svc.undo(&done.undo.unwrap()).await.unwrap();
+        let held = seen.lock().unwrap().clone();
+        assert!(!held.is_empty() && held.iter().all(|h| *h), "RY01's Undo moves with the copies held: {held:?}");
+        assert_eq!(lying(&music.join(RY01_DIR)), before, "and Music's old copy is back");
+        for d in [music, inc, ann, bob] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// The refusal of the one of two at once that did not go, and the other's answer.
+    fn one_of_two<T>(a: Result<T, ToggleError>, b: Result<T, ToggleError>) -> (T, String) {
+        match (a, b) {
+            (Ok(done), Err(e)) | (Err(e), Ok(done)) => (done, e.to_string()),
+            (Ok(_), Ok(_)) => panic!("both went"),
+            (Err(x), Err(y)) => panic!("neither went: {x}; {y}"),
+        }
+    }
+
+    /// RF15 (RA16): taps on one record's copy in one library go one at a time; the other is refused at once, saying what is going on.
+    /// (1) Two Copy to taps of Music's album into Ann's music at once: one copies, the other is refused ("Zebra is being copied"); one
+    /// journal entry, one copy, the original's files alone. (2) That copy's Undo and another Copy to of it into Ann's music at once: one
+    /// goes, the other is refused saying what is going on. (3) Two Undo taps of a Replace from Bob's copy at once: one goes, the other is
+    /// refused ("Zebra is being undone"); Music's trash holds the copies once. Never two entries or two copies from two taps, nor a copy
+    /// under a second no entry names.
+    #[tokio::test]
+    async fn taps_on_one_records_copy_go_one_at_a_time() {
+        let (svc, music, inc, own) = with_own_music("rf15-taps").await;
+        let listed = || copy_at("al-1", 0, &music.to_string_lossy(), "A/Album");
+        let (a, b) = (svc.locate_listed("cratarr", listed()).await.unwrap(), svc.locate_listed("cratarr", listed()).await.unwrap());
+        let (x, y) = tokio::join!(svc.copying(&a, 2, None), svc.copying(&b, 2, None));
+        let (done, refused) = one_of_two(x, y);
+        assert_eq!(refused, "Zebra is being copied", "(1) the other told what is going on");
+        assert_eq!(svc.journal.album_events_since(0).unwrap().len(), 1, "(1) one entry");
+        assert_eq!(lying(&own), lying(&music), "(1) one copy, the original's files alone");
+        let key = done.undo.unwrap();
+        let c = svc.locate_listed("cratarr", listed()).await.unwrap();
+        let (x, y) = tokio::join!(async { svc.undo(&key).await.map(|_| ()) }, async { svc.copying(&c, 2, None).await.map(|_| ()) });
+        let ((), refused) = one_of_two(x, y);
+        assert!(refused == "Zebra is being undone" || refused == "Zebra is being copied", "(2) the other told what is going on: {refused}");
+        assert_eq!(svc.journal.album_events_since(0).unwrap().len(), 1, "(2) no second entry");
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
+        let (svc, music, inc, ann, bob) = with_three_own("rf15-taps-ry01", RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
+        let at = bobs_copy(&svc, &bob, RY01_DIR).await;
+        let key = svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None).await.unwrap().undo.unwrap();
+        let copies = lying(&music.join(RY01_DIR)).len();
+        let (x, y) = tokio::join!(svc.undo(&key), svc.undo(&key));
+        let (_, refused) = one_of_two(x, y);
+        assert_eq!(refused, "Zebra is being undone", "(3) the other told what is going on");
+        assert_eq!(lying(&music.join(crate::trash::TRASH_DIR)).len(), copies, "(3) the copies in Music's trash once");
+        for d in [music, inc, ann, bob] {
+            std::fs::remove_dir_all(d).ok();
         }
     }
 
