@@ -1395,6 +1395,9 @@ mod tests {
     /// let go of after its tries, onto Health's item; MusicBrainz refusing it (a 4xx, `lists_pass`) lets it go at once.
     #[tokio::test]
     async fn a_release_that_always_fails_lets_the_rest_through() {
+        // MusicBrainz switched off makes any failure "out of reach" (`out_of_reach`): the switches as they are by default, under
+        // the one test lock, or a test switching it off meanwhile stops this pass at its first failure.
+        let _state = super::TestState::set().await;
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let (broken, fine) = (waiting(&cat, "Broken", "r1"), waiting(&cat, "Signal", "r2"));
         let files: Arc<dyn Fn(i64) -> Result<Vec<Listed>> + Send + Sync> = Arc::new(|_| Ok(files(&[("Signal", 180_000)])));
