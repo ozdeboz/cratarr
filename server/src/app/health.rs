@@ -272,6 +272,8 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "servers:lidarr" => ("Lidarr", "unreachable"),
         "library:ids-lost" => ("Track ids", "lost"),
         "requests:waiting" => ("Requests", "waiting"),
+        "requests:soulseek-set-aside" => ("Soulseek queue", "set aside"),
+        "requests:soulseek-frozen" => ("Soulseek queue", "not kept"),
         "words:genre" => ("Genres", "differ in the files"),
         "words:style" => ("Styles", "differ in the files"),
         "words:mood" => ("Moods", "differ in the files"),
@@ -322,6 +324,7 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "server:slow" => "Slow responses",
         "server:settings-file" => "Settings",
         "requests:waiting" => "Requests",
+        "requests:soulseek-set-aside" | "requests:soulseek-frozen" => "Soulseek queue",
         "words:genre" => "Genres in the files",
         "words:style" => "Styles in the files",
         "words:mood" => "Moods in the files",
@@ -703,14 +706,47 @@ fn soulseek_held(key: &str, state: &str, held: &[(String, String)]) -> Option<Fi
     Some(f)
 }
 
-/// Requests waiting for an answer (decision 0070), each named, opening the Requests page; the fetchers out of reach (X1); and
-/// Soulseek's records held for its own disk's trouble (Y9), or for their placing failing (Y12).
+/// Soulseek's queue as the starts left it (P7, W7; said in the log alone before): one that could not be read and was set aside,
+/// read from the data folder (`soulseek::queues_set_aside`), so it is said after a restart too, until the file set aside is put back or
+/// removed: a warning, its detail how to put it back. And one that could be neither read nor set aside at this start (`frozen`),
+/// to which nothing is written: critical. Blocking.
+pub fn soulseek_queue(data: &std::path::Path, frozen: bool) -> Vec<Finding> {
+    let mut out = Vec::new();
+    if frozen {
+        // No count: it is kept or not ("Soulseek queue · not kept").
+        let mut f = finding("requests", "requests:soulseek-frozen", Level::Critical, 0, "Soulseek's queue can't be kept");
+        f.detail = Some(
+            "soulseek.json in the data folder could not be read nor set aside, so Cratarr writes nothing to it, and the queue is not \
+             kept over a restart. Make the data folder writable, or move the file out of it, and start Cratarr again."
+                .into(),
+        );
+        out.push(f);
+    }
+    let aside = super::soulseek::queues_set_aside(data);
+    if let Some((latest, _)) = aside.first() {
+        let count = aside.len() as u64;
+        let mut f = finding("requests", "requests:soulseek-set-aside", Level::Warning, count, "Soulseek's queue was set aside");
+        f.detail = Some(format!(
+            "It could not be read at a start, so Cratarr set it aside as {latest} and began an empty queue. To put it back: stop \
+             Cratarr, rename {latest} in the data folder to soulseek.json, and start Cratarr. Or remove {latest}."
+        ));
+        f.items = aside.iter().map(|(name, at)| Item { title: name.clone(), line: Some("set aside".into()), since: *at, ..Item::default() }).collect();
+        out.push(f);
+    }
+    out
+}
+
+/// Requests waiting for an answer (decision 0070), each named, opening the Requests page; the fetchers out of reach (X1);
+/// Soulseek's records held for its own disk's trouble (Y9), or for their placing failing (Y12); and Soulseek's queue set aside or
+/// not kept (P7).
 fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let now = super::moment::now_secs();
+    let queue = served.and_then(|s| s.data_dir.as_deref()).map(|d| soulseek_queue(d, super::soulseek::frozen())).unwrap_or_default();
     let down: Vec<Finding> = fetchers_down(&super::requests::fetchers_down(now), now)
         .into_iter()
         .chain(soulseek_cant_store(&super::soulseek::cant_store(now)))
         .chain(soulseek_cant_place(&super::soulseek::cant_place(now)))
+        .chain(queue)
         .collect();
     let Some(serve) = served else { return Ok(down.into_iter().collect()) };
     // Those whose state says they wait for an answer (W5): one whose album the library has meanwhile waits for no one. Each by its
@@ -1245,6 +1281,122 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A data folder of the test's own.
+    fn data_folder(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-health-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The queue's files set aside in a data folder, by name.
+    fn set_aside_in(d: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> =
+            std::fs::read_dir(d).unwrap().flatten().filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|n| n.starts_with("soulseek.json.unreadable-")).collect();
+        names.sort();
+        names
+    }
+
+    /// P7.1, P7.3 (W7): a queue cut short is set aside at a start, a new empty one begun in its place, and Health's report says so:
+    /// one warning of the requests by a key of its own, naming the file and its time, its detail saying the queue began empty and
+    /// how to put the old one back. After a restart it is said still, as it reads the data folder; once the file is removed, no
+    /// more. No queue, an empty one and 0.16's (copied aside) say nothing.
+    #[test]
+    fn a_queue_set_aside_is_on_health_until_it_is_dealt_with() {
+        use super::super::soulseek::load_for_tests;
+        let d = data_folder("set-aside");
+        let serve = crate::serve::Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        let said = || -> Vec<Finding> {
+            check_requests(Some(serve.as_ref())).unwrap().into_iter().filter(|f| ["requests:soulseek-set-aside", "requests:soulseek-frozen"].contains(&f.key.as_str())).collect()
+        };
+        let p = d.join("soulseek.json");
+        let cut = br#"{"next": 3, "items": ["#;
+        std::fs::write(&p, cut).unwrap();
+
+        // The start.
+        assert_eq!(load_for_tests(&p), (0, false), "a new empty queue, not frozen");
+        let aside = set_aside_in(&d);
+        assert_eq!(aside.len(), 1, "set aside");
+        assert_eq!(std::fs::read(d.join(&aside[0])).unwrap(), cut, "whole");
+        let at: i64 = aside[0].strip_prefix("soulseek.json.unreadable-").unwrap().parse().unwrap();
+        // The new queue written in its place, as the start's first write leaves it.
+        std::fs::write(&p, br#"{"next":0,"items":[],"dropped_records":[]}"#).unwrap();
+
+        let found = said();
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!((f.domain, f.key.as_str(), f.level), ("requests", "requests:soulseek-set-aside", Level::Warning));
+        assert_eq!(f.items.iter().map(|i| (i.title.as_str(), i.since)).collect::<Vec<_>>(), [(aside[0].as_str(), Some(at))], "the file and its time");
+        let detail = f.detail.as_deref().unwrap_or_default();
+        let rename = format!("rename {} in the data folder to soulseek.json", aside[0]);
+        for words in ["began an empty queue", "stop Cratarr", rename.as_str(), "and start Cratarr"] {
+            assert!(detail.contains(words), "{words:?} in {detail:?}");
+        }
+
+        // A restart: the queue begun in its place is read; the finding is said still, from the data folder.
+        assert_eq!(load_for_tests(&p), (0, false));
+        assert_eq!(set_aside_in(&d), aside, "nothing more set aside");
+        assert_eq!(said(), found, "said after a restart while the file is there");
+
+        // Dealt with: the file removed by hand.
+        std::fs::remove_file(d.join(&aside[0])).unwrap();
+        assert!(said().is_empty(), "gone with the file");
+        drop(serve);
+        std::fs::remove_dir_all(&d).ok();
+
+        // P7.3: nothing to say.
+        let of_016 = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
+        for (name, queue) in [("none", None), ("empty", Some(r#"{"next":0,"items":[]}"#)), ("of-016", Some(of_016))] {
+            let d = data_folder(name);
+            let p = d.join("soulseek.json");
+            if let Some(q) = queue {
+                std::fs::write(&p, q).unwrap();
+            }
+            assert!(!load_for_tests(&p).1, "{name}");
+            assert_eq!(d.join("soulseek.json.016").exists(), name == "of-016", "{name}");
+            assert_eq!(soulseek_queue(&d, false), Vec::new(), "{name}");
+            std::fs::remove_dir_all(&d).ok();
+        }
+    }
+
+    /// P7.2 (W7): a queue that can be neither read nor set aside, its data folder refusing the rename, is frozen as before, nothing
+    /// written over it, and Health says so as critical. The tests run as root in the container, whom no mode refuses: the start's
+    /// load runs on a thread of its own as another account (`setresuid` by the system call, that thread alone, as moves.rs's test).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_queue_neither_read_nor_set_aside_is_critical() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = data_folder("frozen");
+        let p = d.join("soulseek.json");
+        let cut = br#"{"next": 3, "items": ["#;
+        std::fs::write(&p, cut).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let q = p.clone();
+        let loaded = std::thread::spawn(move || {
+            // SAFETY: plain numbers to a system call that changes the calling thread's account alone; the thread ends with the load.
+            if unsafe { libc::geteuid() } == 0 {
+                let nobody: libc::uid_t = 65_534;
+                let done = unsafe { libc::syscall(libc::SYS_setresuid, nobody, nobody, nobody) };
+                assert_eq!(done, 0, "another account: {}", std::io::Error::last_os_error());
+            }
+            super::super::soulseek::load_for_tests(&q)
+        })
+        .join()
+        .unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(loaded, (0, true), "frozen, as before");
+        assert_eq!(std::fs::read(&p).unwrap(), cut, "nothing written over it");
+        assert!(set_aside_in(&d).is_empty(), "nothing set aside");
+        let found = soulseek_queue(&d, loaded.1);
+        assert_eq!(
+            found.iter().map(|f| (f.domain, f.key.as_str(), f.level, f.title.as_str())).collect::<Vec<_>>(),
+            [("requests", "requests:soulseek-frozen", Level::Critical, "Soulseek's queue can't be kept")]
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     /// O5: the background reading paused by an administrator is said on Health.
     #[test]

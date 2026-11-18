@@ -271,8 +271,8 @@ fn kept<T>(f: impl FnOnce(&mut Kept) -> T) -> T {
 
 /// The queue as the data folder keeps it (`soulseek.json`); none yet, an empty one (R24, N4). One 0.16 wrote, its items naming
 /// their release group, is copied once to `soulseek.json.016` before 0.17 first writes over it, so a rollback finds it. One that
-/// cannot be read is set aside whole (`soulseek.json.unreadable-<time>`) and said in the log as an error, never emptied; where it
-/// cannot be set aside either, nothing is written to it.
+/// cannot be read is set aside whole (`soulseek.json.unreadable-<time>`) and said in the log as an error, and on Health while the
+/// file lies there (P7), never emptied; where it cannot be set aside either, nothing is written to it (`frozen`, on Health too).
 fn load(p: &Path) -> Kept {
     let bytes = match std::fs::read(p) {
         Ok(bytes) => bytes,
@@ -295,9 +295,43 @@ fn load(p: &Path) -> Kept {
     }
 }
 
+/// What an unreadable queue is set aside as, before its time (`set_aside_unreadable`).
+const UNREADABLE: &str = "soulseek.json.unreadable-";
+
+/// The queues set aside in the data folder `dir` (`set_aside_unreadable`), as the folder holds them now, at this start or an
+/// earlier one: each file's name and when it was set aside (the time in its name; None where that was changed), the latest first.
+/// Health's "Soulseek's queue was set aside" while any is there (P7, W7). Blocking.
+pub fn queues_set_aside(dir: &Path) -> Vec<(String, Option<i64>)> {
+    let mut out: Vec<(String, Option<i64>)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let at = name.strip_prefix(UNREADABLE)?.parse().ok();
+            Some((name, at))
+        })
+        .collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out
+}
+
+/// Whether the queue could be neither read nor set aside at this start (`load`), so nothing is written to it: Health's "Soulseek's
+/// queue can't be kept" (P7). Not read yet: not.
+pub fn frozen() -> bool {
+    KEPT.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|k| k.frozen)
+}
+
+/// Tests elsewhere: a start's load of the queue at `p` (`load`): how many items it holds, and whether it froze.
+#[cfg(test)]
+pub(super) fn load_for_tests(p: &Path) -> (usize, bool) {
+    let k = load(p);
+    (k.items.len(), k.frozen)
+}
+
 /// An unreadable queue set aside under its time (`load`), a new one begun in its place.
 fn set_aside_unreadable(p: &Path, why: &str) -> Kept {
-    let aside = p.with_extension(format!("json.unreadable-{}", now()));
+    let aside = p.with_file_name(format!("{UNREADABLE}{}", now()));
     match std::fs::rename(p, &aside) {
         Ok(()) => {
             tracing::error!(target: "soulseek", file = %p.display(), aside = %aside.display(), reason = why, "the Soulseek queue could not be read: set aside, a new one begun");
