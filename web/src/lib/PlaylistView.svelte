@@ -106,10 +106,11 @@
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import { deleteServerPlaylist, isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
-  import { albumRowSub, notHadPage, type NotHadAction } from './recordNotHad';
+  import { albumRowSub, emptyPlace, keptRows, lookAgainAfter, notHadPage, type NotHadAction } from './recordNotHad';
   import Notice from './Notice.svelte';
   import { artistTitle, movedTo } from './artistIds';
-  import { labelCovers, labelOf, type LabelPageOf } from './labelPage';
+  import { labelCovers, labelOf, labelRows, type LabelPageOf } from './labelPage';
+  import { editionLines } from './editions';
   import { wantOf } from './wantPath';
   import LabelBody from './LabelBody.svelte';
   import RowHeart from './RowHeart.svelte';
@@ -274,7 +275,7 @@
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   // The record's libraries, as dots before its details (0.9.3): where it lies, beside its year.
   const albumDots = $derived(album ? libraryDots(album.source, { id: album.id }) : []);
-  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'was_until' | 'bandcamp'> & { kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'was_until' | 'bandcamp' | 'looking' | 'no_list' | 'reading' | 'sources' | 'editions'> & { kbps: number | null } | null>(null);
   /** A record not had (C54, lib/recordNotHad): its page from the catalogue, of an album the library has no copy of. */
   const notHad = $derived(!!album && !!albumHead?.not_had);
   /** What its page shows of it: no heart or Resume, its header's Want or Requested and its preview's play, its lines. */
@@ -363,6 +364,9 @@
   // details go with what they take from them.
   const albumCopies = $derived(listedHere && albumHead ? copyLines(listedHere.a, listedHere.s.library_info, shownIn(listedHere.s.id)) : []);
   const headDots = $derived(albumCopies.length ? [] : albumDots);
+  // Its editions where it has others (F12): a line each, as its copies have, each but its own opening its record.
+  const editionShown = $derived(album && albumHead ? editionLines(albumHead.editions, album.id, library.view?.sources.find((x) => x.id === album.source)?.library_info) : []);
+  const openEdition = (id: string) => album && viewOver(albumSubject(album.source, id));
   /** Another copy's line tapped: its Play from, as the record's menu does it. */
   function playCopy(library: string) {
     if (!listedHere) return;
@@ -442,14 +446,14 @@
     }
   }
 
-  /** A record not had asked again while its list is read: this often, at most this many times for one opening. */
-  const LOOK_MS = 4000;
-  const LOOK_TRIES = 8;
+  /** A record not had asked again while the server reads its list (F1.12, lib/recordNotHad): soon at first, then seldom,
+   *  for as long as its answer says it reads and the page shows it; one ask waiting at a time. */
   let lookedFor = { subject: '', n: 0 };
-  function lookAgain(subject: string) {
-    if (lookedFor.subject !== subject) lookedFor = { subject, n: 0 };
-    if (lookedFor.n++ >= LOOK_TRIES) return;
-    setTimeout(() => id === subject && saved++, LOOK_MS);
+  let lookTimer: ReturnType<typeof setTimeout> | undefined;
+  function lookAgain(subject: string, reading: boolean) {
+    clearTimeout(lookTimer);
+    if (lookedFor.subject !== subject || !reading) lookedFor = { subject, n: 0 };
+    if (reading) lookTimer = setTimeout(() => id === subject && saved++, lookAgainAfter(lookedFor.n++));
   }
 
   // The rows: asked for when the playlist is viewed and again when it changes (its counts, from the shell's state).
@@ -518,17 +522,19 @@
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
-              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, was_until: r.was_until, bandcamp: r.bandcamp };
-            // A record not had whose list is being read (C54): asked again a little later, a few times, until its rows are in.
-            if (want === id && r.not_had && r.looking) lookAgain(want);
-            return { ...r, total: r.rows.length };
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, was_until: r.was_until, bandcamp: r.bandcamp, looking: r.looking, no_list: r.no_list, reading: r.reading, sources: r.sources, editions: r.editions };
+            // A record not had whose list is being read (C54, F1): asked again a little later, until the server has read it.
+            if (want === id && r.not_had) lookAgain(want, !!r.looking);
+            // Its rows once shown stay while the server reads again (F6): never the loader again for it.
+            const kept = keptRows(r.rows, rowsFor === want ? rows : null, r);
+            return { ...r, rows: kept, total: kept.length };
           })
         : lb
           ? // A label's page (W11): its records are its own list (lib/LabelBody), no tracks; its picture its records' covers.
             getLabel(lb).then((p) => {
               if (want === id) {
                 labelHead = p;
-                covers = labelCovers(p.rows);
+                covers = labelCovers(labelRows(p));
               }
               return { source: 'cratarr', rows: [] as PlaylistRow[], total: 0, genres: null };
             })
@@ -1448,7 +1454,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return rows ? plural(total, 'track') : '';
     if (multi) return playlistsKnown() ? plural(chosenCount, 'track') : '';
     if (!rows) return '';
-    if (label) return labelHead?.rows.length ? plural(labelHead.rows.length, 'record') : '';
+    if (label) return labelHead && labelRows(labelHead).length ? plural(labelRows(labelHead).length, 'record') : '';
     if (artist) {
       const albums = artist.tracks ? null : plural(artistHead?.albums.length ?? 0, 'album');
       return [albums, plural(rows.length, 'track'), length ? clockText(length) : null].filter(Boolean).join(' • ');
@@ -2552,6 +2558,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
               {/each}
             </div>
           {/if}
+          <!-- Its editions (F12): each with its tracks and copies, each but its own opening its record. -->
+          {#if editionShown.length}
+            <div class="details copies">
+              {#each editionShown as e (e.album)}
+                {#if e.here}<p class="copy"><span class="copy-name">{e.text}</span></p>{:else}<button class="copy" onclick={() => openEdition(e.album)}><span class="copy-name">{e.text}</span></button>{/if}
+              {/each}
+            </div>
+          {/if}
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
           <!-- A record missing tracks (0.13): how many of its release's it holds, to Health's albums missing tracks. -->
           {#if album && filesLine}
@@ -2751,7 +2765,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if nothing}
         <NothingPopover anchor={nothing.anchor} said={nothing.said} chips={nothing.chips} onclearall={nothing.clearAll} more={nothing.more} />
       {:else}
-        <p class="empty">No tracks yet.</p>
+        <!-- A record not had whose list is read: the standard loader saying what it reads (F6), holding no page, so its header,
+             Want and About show at once and only its track list waits (PB1); else why it has none (F1). -->
+        {@const place = emptyPlace(notHad && albumHead ? albumHead : {})}
+        {#if 'reading' in place}<PageLoading held={false}><p class="opening">{place.reading}</p></PageLoading>{:else}<p class="empty">{place.line}</p>{/if}
+        {#if notHad}{@render albumFoot()}{/if}
       {/if}
     {:else if nothing && shown && !shown.length}
       <!-- What it holds, every track kept out by its words or its filter: why, at what did it (decision 0095). -->
@@ -2802,31 +2820,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if p && !multi}<SimilarLists kind="playlist" id={p.id} />{/if}
       {#if crate && !seeded(crate) && !crateEditing && rows.length >= total}<SimilarLists kind="crate" id={crate} />{/if}
       {/if}
-      {#if album && albumHead && !offServer}
-        <!-- As Symfonium's album: the artist's other albums, the similar ones, then About; seen through a search, its
-             About only. -->
-        {#if !own}
-          {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
-          {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
-          {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
-        {/if}
-        {#if notHad}
-          <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} labels={albumHead.labels ?? []} />
-        {:else}
-          <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} />
-        {/if}
-      {/if}
-      {#if album && albumHead && album.source === BANDCAMP}
-        <!-- A Bandcamp album's About (the owner, 2026-10-25: "as much as our own panel"): what its page says. -->
-        <AlbumAbout
-          source={album.source}
-          album={album.id}
-          genres={listGenres ?? []}
-          year={albumHead.year}
-          provider={{ server: 'Bandcamp', libraries: [] }}
-          more={albumHead}
-        />
-      {/if}
+      {@render albumFoot()}
     {:else}
       <PageLoading />
     {/if}
@@ -2850,6 +2844,37 @@ ${r.album_artist ?? r.artist ?? ''}`;
     </SelectBar>
   {/if}
 </section>
+
+<!-- An album's foot, under its tracks (a record not had's under its track list's place too, while it waits: PB1). -->
+{#snippet albumFoot()}
+  {#if album && albumHead && !offServer}
+    <!-- As Symfonium's album: the artist's other albums, the similar ones, then About; seen through a search, its
+         About only. -->
+    {#if !own}
+      {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
+      {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
+      {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
+    {/if}
+    {#if notHad}
+      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} labels={albumHead.labels ?? []} sources={albumHead.sources} />
+    {:else}
+      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} sources={albumHead.sources} />
+    {/if}
+  {/if}
+  {#if album && albumHead && album.source === BANDCAMP}
+    <!-- A Bandcamp album's About (the owner, 2026-10-25: "as much as our own panel"): what its page says, its label opening
+         the one label of its name (F9 (c)). -->
+    <AlbumAbout
+      source={album.source}
+      album={album.id}
+      genres={listGenres ?? []}
+      year={albumHead.year}
+      provider={{ server: 'Bandcamp', libraries: [] }}
+      more={albumHead}
+      labels={albumHead.labels ?? []}
+    />
+  {/if}
+{/snippet}
 
 <!-- The Info tab's part for one playlist: how focused it is, and its closest playlists as large rows (a tap views one). -->
 <!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe right plays it next, a swipe left takes
@@ -3981,6 +4006,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   .empty,
   .error {
     margin: 16px;
+    color: var(--muted);
+  }
+
+  /* What a page's loader waits for, under its mark (lib/PageLoading's own line). */
+  .opening {
+    margin: 0;
     color: var(--muted);
   }
 

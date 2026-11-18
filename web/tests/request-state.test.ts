@@ -108,5 +108,9 @@ test("the Requests panel offers Take back by the one rule, in a row's menu and i
   const panel = readFileSync(new URL('../src/lib/RequestsPanel.svelte', import.meta.url), 'utf8');
   assert.match(panel, /const canTakeBack = \(r: AlbumRequest\) => mayTakeBack\(r, me\.name, answers\);/);
   assert.match(panel, /mine\.filter\(canTakeBack\)/, 'Select ticks what can be taken back');
-  assert.match(panel, /\{#if canTakeBack\(r\)\}/, "a row's menu offers it");
+  // RQ01: a row's menu is its story's sheet, whose Take back is requestStory's by the same rule; one whose story is not read
+  // (someone who answers requests, on another's waiting one) offers it by canTakeBack.
+  assert.match(panel, /\{:else if !readsStory\(r\) && canTakeBack\(r\)\}/, "a row's menu offers it");
+  const story = readFileSync(new URL('../src/lib/requestStory.ts', import.meta.url), 'utf8');
+  assert.match(story, /if \(mayTakeBack\(s, s\.user, admin\)\) actions\.push\('takeBack'\);/, "a story's sheet offers it");
 });

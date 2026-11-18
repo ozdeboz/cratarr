@@ -2,6 +2,11 @@
 //! row stays when nothing names the label any more, so it comes back to its id. Its records are `record_labels`, written by
 //! the record pass from what the files name, and by a row of its page once opened (C56).
 //!
+//! A label About shows by its Discogs id or its MBID (F9) is the label holding that reference, else, when it is opened
+//! (`open_label`), the one label of its name that holds none of that source's references (PB3: as an outside row joins the record the
+//! house has of its names, F11.2), else one made with it: so two labels may share a name, as two artists may (two ids at one source,
+//! or X8), and a label known by its name alone is the one of its name only where exactly one has it (`labels_shown`, X8).
+//!
 //! A label's lists at MusicBrainz and Discogs are a cache, not records (C56, Q33): their rows are kept in `label_rows` thirty days
 //! from when they were read, then let go of by RT01's daily pass, and a record is made of one only when it is opened.
 
@@ -60,7 +65,8 @@ pub struct LabelKept {
     /// order.
     pub tied: Vec<(i64, String)>,
     /// Its sources' kept rows, each with the record its reference names now (`records::found_by_reference`, as a row opened
-    /// finds it); none: no record yet.
+    /// finds it), else the record the house has of its names that an open of it joins (F11.2, `records::had_by_names_in`); none: no
+    /// record yet.
     pub rows: Vec<(LabelListed, Option<i64>)>,
     /// Every record above, read as the lists read records (`Requested`: the one had rule's holder), by id.
     pub records: HashMap<i64, Requested>,
@@ -121,6 +127,37 @@ pub(super) fn labels_in(tx: &Connection, names: &BTreeSet<String>, born: i64) ->
         known.insert(key, id);
     }
     Ok(known)
+}
+
+/// The label a label's reference names (F9): the label kept that holds it; none where none does. Blocking.
+fn holding_in(db: &Connection, r: &Ref) -> Result<Option<i64>> {
+    let subjects: Vec<String> = db
+        .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?
+        .query_map(params![r.source, r.kind, r.value], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for id in subjects.iter().filter_map(|s| ids::label_number(s)) {
+        if db.prepare_cached("SELECT 1 FROM labels WHERE id = ?1")?.exists([id])? {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+/// The one label of a name (X8: exactly one has it; none where none, or several, do). Blocking.
+fn one_of_name_in(db: &Connection, name: &str) -> Result<Option<i64>> {
+    let of_name: Vec<i64> = db.prepare_cached("SELECT id FROM labels WHERE key = ?1 ORDER BY id LIMIT 2")?.query_map([key(name.trim())], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(match of_name[..] {
+        [one] => Some(one),
+        _ => None,
+    })
+}
+
+/// The label a reference no label holds joins when it is opened (PB3, the review of preview 1's fixes): the one label of its name
+/// (X8), where it holds none of that source's references (one holding another id there is another label). Blocking.
+fn joined_by_name_in(db: &Connection, r: &Ref, name: &str) -> Result<Option<i64>> {
+    let Some(one) = one_of_name_in(db, name)? else { return Ok(None) };
+    let holds = db.prepare_cached("SELECT 1 FROM \"references\" WHERE subject = ?1 AND source = ?2 AND kind = ?3")?.exists(params![ids::label(one), r.source, r.kind])?;
+    Ok((!holds).then_some(one))
 }
 
 impl Catalogue {
@@ -193,9 +230,20 @@ impl Catalogue {
                 .prepare_cached(&format!("SELECT {ROW_COLUMNS} FROM label_rows WHERE label = ?1 ORDER BY source, at, ref_kind, ref_value"))?
                 .query_map([label], listed_of)?
                 .collect::<rusqlite::Result<_>>()?;
+            // F11.2: a row no record holds that a record the house has of its artist and title is one album with is that record's row, as
+            // an open of it joins it (`records::had_by_names_in`): never shown beside it. RG5: the list's rows judged together (X8).
+            let mut named = None;
+            let joined: Vec<Option<i64>> = {
+                let asked: Vec<(&[Ref], &str, &str, Option<&str>)> =
+                    listed.iter().map(|l| (std::slice::from_ref(&l.reference), l.artist.as_str(), l.title.as_str(), l.kind.as_deref())).collect();
+                super::records::had_by_names_in(db, &asked, 0, &mut named)?.into_iter().map(|j| j.map(|(had, _)| had)).collect()
+            };
             let mut rows = Vec::with_capacity(listed.len());
-            for l in listed {
-                let found = super::records::found_by_reference(db, &Listing { refs: vec![l.reference.clone()], ..Default::default() })?;
+            for (l, by_names) in listed.into_iter().zip(joined) {
+                let found = match super::records::found_by_reference(db, &Listing { refs: vec![l.reference.clone()], ..Default::default() })? {
+                    Some(found) => Some(found),
+                    None => by_names,
+                };
                 rows.push((l, found));
             }
             let wanted: Vec<i64> = tied.iter().map(|(r, _)| *r).chain(rows.iter().filter_map(|(_, r)| *r)).collect::<BTreeSet<_>>().into_iter().collect();
@@ -215,6 +263,48 @@ impl Catalogue {
             Some(c) => read(&c),
             None => read(&self.db()),
         }
+    }
+
+    /// The labels About shows, as known (F9), in their order, on one reader: one with a reference, the label that holds it, by it
+    /// alone (a label of its name is not it); one with none, the one label of its name where exactly one has it (X8: a name two
+    /// share, or none has, is neither; no name, none). Blocking.
+    pub fn labels_shown(&self, asked: &[(Option<Ref>, String)]) -> Result<Vec<Option<i64>>> {
+        let read = |db: &Connection| -> Result<Vec<Option<i64>>> {
+            let mut out = Vec::with_capacity(asked.len());
+            for (r, name) in asked {
+                out.push(match r {
+                    Some(r) => holding_in(db, r)?,
+                    None if name.trim().is_empty() => None,
+                    None => one_of_name_in(db, name)?,
+                });
+            }
+            Ok(out)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// The label a label's reference names (F9: one About shows, opened): the one that holds it; else the one label of its name that
+    /// holds none of that source's (`joined_by_name_in`, PB3: one real label, one page), given it; else one made now with it, named
+    /// `name`. In one transaction, so two opens at once make or join one. Blocking.
+    pub fn open_label(&self, r: &Ref, name: &str) -> Result<i64> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        if let Some(id) = holding_in(&tx, r)? {
+            return Ok(id);
+        }
+        let at = now();
+        let id = match joined_by_name_in(&tx, r, name)? {
+            Some(one) => one,
+            None => give_label(&tx, &key(name.trim()), name.trim(), at)?,
+        };
+        if !super::records::put_reference(&tx, &ids::label(id), r, "link", at, false)?.kept() {
+            anyhow::bail!("Another holds {} {}.", r.source, r.value);
+        }
+        tx.commit()?;
+        Ok(id)
     }
 
     /// A label's rows read at a source (C56), kept at `at`, each by its reference (found again, as read now); and how far its list
@@ -370,5 +460,47 @@ mod tests {
         let fresh = Catalogue::open(None, Vec::new()).unwrap();
         assert_eq!(fresh.label_for("New").unwrap(), 1);
         assert_eq!(fresh.top_id(), 1, "a label counts though nothing else was given");
+    }
+
+    /// F11.2 (the owner's word: an outside album never shows beside a record the house has), a label's page: Discogs' row of "Night
+    /// Walks" by Kite Theory, which the house has untagged (credited to them, tied to no label), is that record's row, had; opened
+    /// (`keep_listing(None, …)`, as `labels::open_record` keeps it) it is that record, its master added. A name two had records share
+    /// (X8): the row stays a row of its own, and opened is a record of its own.
+    #[test]
+    fn a_labels_row_joins_the_record_the_house_has() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let had_named = |title: &str| {
+            let record = cat.record_for_tests(title, 2);
+            cat.db().execute("UPDATE records SET artist = 'Kite Theory' WHERE id = ?1", [record]).unwrap();
+            cat.db().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", params![record, artist]).unwrap();
+            record
+        };
+        let had = had_named("Night Walks");
+        let orbital = [had_named("Orbital"), had_named("Orbital")];
+        let row = |title: &str, master: &str| LabelListed {
+            reference: Ref::new("discogs", "master", master),
+            title: title.into(),
+            artist: "Kite Theory".into(),
+            year: Some(2020),
+            catno: "LTR-040".into(),
+            kind: Some("ep".into()),
+            cover: None,
+        };
+        let rows = [row("Night Walks", "3001"), row("Orbital", "3002")];
+        cat.keep_label_rows(label, "discogs", &rows, None, true, 1).unwrap();
+        let kept = cat.label_kept(label).unwrap().expect("a label");
+        let named: Vec<(&str, Option<i64>)> = kept.rows.iter().map(|(l, r)| (l.title.as_str(), *r)).collect();
+        assert_eq!(named, [("Night Walks", Some(had)), ("Orbital", None)], "the row of the record the house has is its; a name two share stays its own");
+        assert_eq!(kept.records.get(&had).and_then(|q| q.holder), Some(had), "had");
+        let opened = |l: &LabelListed| {
+            let listing = Listing { title: l.title.clone(), artist: l.artist.clone(), kind: l.kind.clone(), refs: vec![l.reference.clone()], ..Listing::default() };
+            cat.record(cat.keep_listing(None, &[listing], "link").unwrap()[0]).unwrap().unwrap().id
+        };
+        assert_eq!(opened(&rows[0]), had, "opened: the record the house has");
+        assert!(cat.references_of(&ids::record(had)).unwrap().iter().any(|(r, row)| r.value == "3001" && row.how == "link"), "its master added");
+        let own = opened(&rows[1]);
+        assert!(!orbital.contains(&own), "a name two had records share: a record of its own");
     }
 }

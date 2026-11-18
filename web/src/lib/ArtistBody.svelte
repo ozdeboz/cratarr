@@ -3,11 +3,15 @@
   // description, from the server's artist store; a tap opens all of it; their photo is the page's header, not here too), their albums, the albums they
   // appear on (others', credited on a track), both newest first as covers, and their most played tracks (the panel's
   // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2); last
-  // their albums not in the library (0.9.5).
+  // their albums not in the library (0.9.5). The sections read in the background show the section's loader while they are
+  // read, fill by themselves, and say why they have none (F8).
   import ProblemSheet from './ProblemSheet.svelte';
   import type { Snippet } from 'svelte';
-  import { tick } from 'svelte';
-  import { getArtistAbout, getArtistDiscogs, getArtistMissing, type ArtistDiscogs, type ListedAlbum, type MissingAlbum, type PhotoCredit } from './api';
+  import { setContext, tick } from 'svelte';
+  import { getArtistAbout, getArtistDiscogs, getArtistMissing, type ArtistDiscogs, type ListedAlbum, type ListRead, type MissingAlbum, type PhotoCredit } from './api';
+  import { HOLD } from './holdPlace.svelte';
+  import PageLoading from './PageLoading.svelte';
+  import { lookAgainAfter, sectionPlace } from './recordNotHad';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import RelatedArtists from './RelatedArtists.svelte';
@@ -48,6 +52,9 @@
     searching?: boolean;
   } = $props();
   const hit = (...texts: (string | null | undefined)[]) => !searching || matchesSearch(...texts);
+  // Its sections' reads never hold the panel (lib/holdPlace: what is asked later follows): the page shows at once, each
+  // section's loader in its place until its read ends (F8).
+  setContext(HOLD, undefined);
   const albumsShown = $derived(albums.filter((a) => hit(a.title, a.artist)));
   const appearsShown = $derived(appearsOn.filter((a) => hit(a.title, a.artist)));
   // The page's words leave none of what they have (the owner, 2026-11-02: the panel said its own "Nothing of …
@@ -81,31 +88,34 @@
   });
   // Not in your library (the owner, 2026-10-25; the server's lookup since 0.9.3): the artist's albums MusicBrainz lists
   // that the library lacks, asked when the page opens; while the server is still reading their discography (`looking`)
-  // asked again a little later. A tap opens its record's page (W9: a record not had, Want in its header). Cratarr's own
-  // artists, by their id (W10).
-  let missing = $state<MissingAlbum[]>([]);
+  // asked again as a record not had is (F8, lib/recordNotHad), until it has read it. A tap opens its record's page (W9: a
+  // record not had, Want in its header). Cratarr's own artists, by their id (W10).
+  let missing = $state<({ albums: MissingAlbum[] } & ListRead) | null>(null);
   $effect(() => {
-    const [s, n] = [source, id ?? name];
-    missing = [];
+    const [s, who] = [source, id ?? name];
+    missing = null;
     if (s !== 'cratarr') return;
     let gone = false;
     let t = 0;
-    const ask = (left: number) =>
-      getArtistMissing(n).then(
+    const ask = (n: number) =>
+      getArtistMissing(who).then(
         (r) => {
           if (gone) return;
-          missing = r.albums;
-          if (r.looking && left > 0) t = window.setTimeout(() => ask(left - 1), 4000);
+          missing = r;
+          if (r.looking) t = window.setTimeout(() => ask(n + 1), lookAgainAfter(n));
         },
         () => {},
       );
-    void ask(5);
+    void ask(0);
     return () => {
       gone = true;
       clearTimeout(t);
     };
   });
-  const missingShown = $derived(missing.filter((a) => hit(a.title)));
+  const missingShown = $derived((missing?.albums ?? []).filter((a) => hit(a.title)));
+  /** What the section shows (F8): its records; while read, the loader naming what it reads; once read, why it has none. While
+   *  the panel's search is on, its hits alone. */
+  const missingPlace = $derived(searching ? (missingShown.length ? 'rows' : null) : missing && sectionPlace(missing, missingShown.length));
   let aboutEl = $state<HTMLElement>();
 
   // Discogs (0.9.8, the owner: "Yes to all"): their profile where TheAudioDB has none, and who they are there: their
@@ -204,10 +214,12 @@
 {/if}
 <!-- Related artists to explore (0.9.2): Cratarr's own library only (the server knows its artists' MusicBrainz ids). -->
 {#if !searching && source === 'cratarr'}<RelatedArtists ask={id ?? name} />{/if}
-<!-- Their albums the library lacks, last on the page (the owner, 2026-10-25: "at the very bottom"). -->
-{#if missingShown.length}
+<!-- Their albums the library lacks, last on the page (the owner, 2026-10-25: "at the very bottom"); the section's loader while
+     they are read, why there are none where the read failed (F8). -->
+{#if missingPlace}
   <section aria-label="Not in your library">
     <SectionHead title="Not in your library" />
+    {#if missingPlace === 'rows'}
     <ul class="grid">
       {#each missingShown as m (m.record)}
         {@const key = m.record}
@@ -226,6 +238,7 @@
         </li>
       {/each}
     </ul>
+    {:else if 'reading' in missingPlace}<PageLoading><p class="opening">{missingPlace.reading}</p></PageLoading>{:else}<p class="empty">{missingPlace.line}</p>{/if}
   </section>
 {/if}
 {#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}
@@ -359,6 +372,12 @@
 
   .empty {
     padding: 24px 16px;
+    color: var(--muted);
+  }
+
+  /* What a section's loader waits for, under its mark (lib/PageLoading's own line). */
+  .opening {
+    margin: 0;
     color: var(--muted);
   }
 </style>

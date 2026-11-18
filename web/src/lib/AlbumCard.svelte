@@ -18,6 +18,7 @@
   import { albumAway } from './away.svelte';
   import { DEVICE } from './deviceMusic.svelte';
   import CoverWait from './CoverWait.svelte';
+  import { editionsMark } from './editions';
 
   let {
     source,
@@ -68,7 +69,8 @@
     /></span
   >
   <span class="title">{#each dots as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{album.title}</span>
-  {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else if album.year}<span class="year">{album.year}</span>{/if}
+  <!-- Its year; a card standing for several editions of one album says how many (F12). -->
+  {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else}{#if album.year}<span class="year">{album.year}</span>{/if}{#if editionsMark(album.editions)}<span class="year">{editionsMark(album.editions)}</span>{/if}{/if}
 </button>
 {#if own && !gone}<CoverPlay label={album.title} album={album.id} busy={albumPlay.starting === album.id} disabled={albumPlay.starting !== null} onplay={() => playListedAlbum(source, album)} />{/if}
 </div>

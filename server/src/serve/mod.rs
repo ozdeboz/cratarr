@@ -535,6 +535,7 @@ impl Serve {
             self.covers_built();
         }
         self.types_built();
+        self.join_arrived_copies();
         self.built.send_replace(at);
         Ok(())
     }
@@ -606,6 +607,54 @@ impl Serve {
             }
         }
         Ok(out)
+    }
+
+    /// F11.1 (the owner: "One record, two copies"), as a copy arrives: what `join_paired_copies` joins, a failure told (the next build
+    /// tries again). Blocking.
+    fn join_arrived_copies(&self) {
+        if let Err(e) = self.join_paired_copies() {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "copies arrived not joined to the records they are copies of: the next build tries again");
+        }
+    }
+
+    /// Each Incoming copy of a record kept nowhere else whose tracks pair one for one with another record's copy in a main library
+    /// (`paired_editions`, RF2's rule: production's untagged MP3 in Music against Lidarr's FLAC) is that record's copy: the catalogue
+    /// joins the two where they are one artist's (by id) and nothing contradicts (`Catalogue::join_copies`: the newer's tracks taken by
+    /// the older's, then merged into it), what the user data names by the one that went follows (`UserData::follow_records`; what names
+    /// its tracks at the next build, `follow_taken`), and the library is told to build them again. Incoming's badge and Replace then read
+    /// one record's two copies, as for any copy (C37a). How many were joined. Blocking.
+    fn join_paired_copies(&self) -> Result<usize> {
+        let kinds = self.library.kinds();
+        let mains: Vec<i64> = kinds.iter().filter(|(_, kind)| *kind == copies::Kind::Main).map(|(folder, _)| *folder).collect();
+        if mains.is_empty() {
+            return Ok(0);
+        }
+        let mut alone = Vec::new();
+        for album in self.library.waiting_copies()?.into_keys() {
+            let held = self.library.copies_of(&album)?;
+            if held.iter().all(|c| c.kind == copies::Kind::Incoming)
+                && let Some(copy) = held.into_iter().next()
+            {
+                alone.push((album, copy));
+            }
+        }
+        if alone.is_empty() {
+            return Ok(0);
+        }
+        let mut merged = Vec::new();
+        for (album, (other, _)) in self.paired_editions(&alone, &mains)? {
+            let (Some(a), Some(b)) = (ids::record_number(&album), ids::record_number(&other)) else { continue };
+            if let Some((from, into)) = self.catalogue().join_copies(a, b, &kinds)? {
+                merged.push((ids::record(from), ids::record(into)));
+            }
+        }
+        if merged.is_empty() {
+            return Ok(0);
+        }
+        self.userdata.follow_records(&merged)?;
+        tracing::info!(target: "library", joined = merged.len(), "copies arrived joined the records they are copies of");
+        self.catalogue().changed_outside_pass();
+        Ok(merged.len())
     }
 
     /// Files Cratarr wrote itself (0.9.7: Renumber, a cover, a tempo), read again now, and the library built from them
@@ -1050,6 +1099,33 @@ mod tests {
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
+    /// F2.9-hand (the owner: "Your hand wins"): RB5 in the other order, the lists read before the files came: the same as when the
+    /// files came first. Built an album by the rule, the album had and the single not; set to Single by hand, the single had and the
+    /// album set apart, a Want of its group asking for it.
+    #[test]
+    fn a_type_set_by_hand_is_the_type_a_record_is_had_by_whichever_came_first() {
+        let (roots, cat, serve) = on_two_folders("rf1-set-lists-first");
+        let single = listed(&cat, "single", &[("discogs", "master", "6101")]);
+        let album = listed(&cat, "album", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006102")]);
+        let eight: Vec<(String, String)> = (1..=8).map(|n| (format!("A/0{n} Version {n}.flac"), format!("Version {n}"))).collect();
+        add(&cat, &roots[0], 0, &eight.iter().map(|(rel, title)| (rel.as_str(), title.as_str())).collect::<Vec<_>>());
+        serve.refresh().unwrap();
+        let owned = record_in(&serve, 0, "A");
+        let holders = || {
+            let read = cat.requested(&[single, album]).unwrap();
+            (read[&single].holder, read[&album].holder)
+        };
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("album"), "built an album by the rule");
+        assert_eq!(holders(), (None, Some(owned)), "an album: the album had, the single not");
+        serve.userdata.set_overrides(&[ids::record(owned)], &[("type".to_string(), Some(serde_json::json!("single")))], 100).unwrap();
+        serve.refresh().unwrap();
+        assert_eq!(cat.typed_for_tests(owned).as_deref(), Some("single"), "the type set by hand, kept on the record");
+        assert_eq!(holders(), (Some(owned), None), "set to Single: the single had, the album set apart");
+        let wanted = crate::catalogue::records::Wanted { group: Some("00000000-0000-4000-8000-000000006102".into()), artist: "Artist".into(), title: "Album".into(), ..Default::default() };
+        assert_eq!(cat.record_for_request(&wanted).unwrap(), album, "a Want of its group asks for it");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
     /// RF1 (RB1's third scenario, RB5's second): a copy of three of an album's eight tracks, untagged, is a single by its own files.
     /// Found missing tracks (`app::incomplete`: its whole release eight), the build types it as that release, an album, and the
     /// catalogue keeps that type: the album's record of its name, MusicBrainz's, is held by it, partly there (three of eight), and off
@@ -1140,6 +1216,56 @@ mod tests {
         assert_eq!(serve.stands_of(&[(album.clone(), copy.clone())], &[0]).unwrap(), [None], "no stand");
         assert!(serve.paired_editions(&[(album.clone(), copy)], &[0]).unwrap().is_empty(), "nothing for Replace");
         assert_eq!(cat.other_edition_in(ids::record_number(&album).unwrap(), &[0]).unwrap(), Some(0), "Music has another edition");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// F11.1 (the owner: "One record, two copies"), as a copy arrives: RF2's shape, Music's untagged MP3 of three tracks, hearts on two
+    /// of them, and Lidarr's FLAC of the same three arriving in Incoming, a heart and a play on one of its tracks before its first build.
+    /// At the build it arrives in, it pairs one for one with Music's copy (`paired_editions`) and joins Music's record: built again, one
+    /// record of two copies (Music's, Incoming's), the FLAC's files on Music's tracks; the hearts and the play on the record's tracks,
+    /// none lost, none left on the ids that went; Incoming's badge still says Upgrade, and Replace still takes Music's copy's place. A
+    /// fourth track (another tracklist) stays another record. Never a join across tracklists, a heart or a play lost.
+    #[test]
+    fn a_copy_arriving_with_one_tracklist_joins_the_record_of_its_names() {
+        let (roots, cat, serve) = on_two_folders("f11-arrives");
+        serve.library.set_kinds(vec![(0, Kind::Main), (1, Kind::Incoming)]);
+        let kept = [("A/01 One.mp3", "One"), ("A/02 Two.mp3", "Two"), ("A/03 Three.mp3", "Three")];
+        add(&cat, &roots[0], 0, &kept);
+        numbered(&cat, 0, &kept);
+        cat.execute_for_tests("UPDATE files SET format = 'MP3', bitrate = 320 WHERE folder = 0");
+        serve.refresh().unwrap();
+        let music = record_in(&serve, 0, "A");
+        let mine: Vec<String> = kept.iter().map(|(rel, _)| ids::song(cat.track_of(0, rel).unwrap())).collect();
+        serve.userdata.set_starred("me", Item::Song, &mine[..2], true).unwrap();
+        let three = [("B/01 One.flac", "One"), ("B/02 Two.flac", "Two"), ("B/03 Three.flac", "Three")];
+        add(&cat, &roots[1], 1, &three);
+        numbered(&cat, 1, &three);
+        cat.execute_for_tests("UPDATE files SET format = 'FLAC', bits = 16, rate = 44100, bitrate = 900, duration_ms = 203000 WHERE folder = 1");
+        let theirs = ids::song(cat.track_of(1, "B/01 One.flac").unwrap());
+        assert_ne!(theirs, mine[0], "a track of its own as it arrives");
+        serve.userdata.set_starred("me", Item::Song, std::slice::from_ref(&theirs), true).unwrap();
+        serve.userdata.record("me", (&theirs, "p"), "al-x", &[], &Heard::counted(100)).unwrap();
+        checked_again(&serve);
+        checked_again(&serve);
+        assert_eq!(record_in(&serve, 1, "B"), music, "one record");
+        let album = ids::record(music);
+        let held = serve.library.copies_of(&album).unwrap();
+        assert_eq!(held.iter().map(|c| (c.folder, c.dir.as_str())).collect::<Vec<_>>(), [(0, "A"), (1, "B")], "two copies: Music's and Incoming's");
+        assert_eq!(cat.track_of(1, "B/01 One.flac"), cat.track_of(0, "A/01 One.mp3"), "its files on the record's tracks");
+        let copy = held.iter().find(|c| c.folder == 1).unwrap().clone();
+        let (better, against) = serve.stands_of(&[(album.clone(), copy)], &[0]).unwrap()[0].clone().expect("stands against Music's copy");
+        assert_eq!((better, against.folder, against.dir.as_str()), (true, 0, "A"), "better than Music's copy: the badge says Upgrade");
+        assert!(copies::replaces(better, against.kind), "Replace's to take");
+        let starred = serve.userdata.starred("me", Item::Song).unwrap();
+        assert!(starred.contains(&mine[0]) && starred.contains(&mine[1]) && !starred.contains(&theirs), "the hearts on the record's tracks: {starred:?}");
+        assert_eq!((plays_of(&serve, &mine[0]), plays_of(&serve, &theirs)), (1, 0), "the play followed, once");
+        assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+
+        let four = [("B/01 One.flac", "One"), ("B/02 Two.flac", "Two"), ("B/03 Three.flac", "Three"), ("B/04 Four.flac", "Four")];
+        let (roots, _cat, serve, music, _) = split_from_music("f11-other", &four);
+        checked_again(&serve);
+        assert_ne!(record_in(&serve, 1, "B"), music, "another tracklist: another record");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 

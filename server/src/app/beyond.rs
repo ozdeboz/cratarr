@@ -4,8 +4,10 @@
 //!
 //! - **No name merge.** A MusicBrainz row and a Discogs row are one only where a record holds both the release group and the
 //!   master; two albums or two artists of one name from the sources stay two.
-//! - **Here by reference alone.** An album row names the record that holds its release group or its master (`record`), as merged
-//!   now, and is had by the one had rule on that record. An artist row names the artist who holds their MusicBrainz id
+//! - **Here by reference, or as the house's.** An album row names the record that holds its release group or its master (`record`),
+//!   as merged now, else the record the house has of its artist and title that it is one album with (F11.2, the owner's word: an
+//!   outside album never shows beside a record the house has; X8 kept), which an open of it joins; and is had by the one had rule
+//!   on that record. An artist row names the artist who holds their MusicBrainz id
 //!   (`artist`), had where the library has albums by them. A name alone names no record.
 //! - **Had through its names, for display alone (Z6).** A row no record holds is had where the had rule's names clause would hold
 //!   it: a live had record of its folded artist and title, holding no reference that contradicts the row's, the name one album's
@@ -86,6 +88,58 @@ fn mbid(id: &str) -> String {
     id.trim().to_ascii_lowercase()
 }
 
+/// RG5 (X8 across the whole list): what Beyond listed lately, by each album row's reference: how many other rows of its source's list
+/// share its artist's name and its title's key, each an album of its own, and when. An open of the row is judged with them
+/// (`labels::open_record`, `Catalogue::keep_opened`), as Beyond showed it (`Catalogue::by_reference`). Kept as long as its answers are.
+type ListedTitles = HashMap<(String, String, String), (usize, i64)>;
+
+/// `f` on what Beyond listed lately (`ListedTitles`): the server's, one for every request; a test's own, as each runs on a thread of
+/// its own and many list the same ids at once.
+fn with_listed<T>(f: impl FnOnce(&mut ListedTitles) -> T) -> T {
+    #[cfg(not(test))]
+    {
+        static LISTED_TITLES: std::sync::OnceLock<std::sync::Mutex<ListedTitles>> = std::sync::OnceLock::new();
+        f(&mut LISTED_TITLES.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner()))
+    }
+    #[cfg(test)]
+    {
+        thread_local! {
+            static LISTED_TITLES: std::cell::RefCell<ListedTitles> = Default::default();
+        }
+        LISTED_TITLES.with(|kept| f(&mut kept.borrow_mut()))
+    }
+}
+
+/// How long Beyond's rows are kept for an open of one: as long as its answers are (`discogs::search_masters`' ten minutes).
+const LISTED_KEEP: i64 = 600;
+
+/// Beyond's album rows (each its reference, its artist and its title) noted at `now` (`with_listed`), the notes older than
+/// `LISTED_KEEP` let go of.
+fn note_listed(rows: &[(Ref, &str, &str)], now: i64) {
+    use crate::catalogue::identity::title_key;
+    let keys: Vec<(String, String)> = rows.iter().map(|(_, artist, title)| (ids::artist_key(artist), title_key(title))).collect();
+    with_listed(|kept| {
+        kept.retain(|_, (_, at)| now - *at < LISTED_KEEP);
+        for (i, (r, ..)) in rows.iter().enumerate() {
+            let others = rows.iter().zip(&keys).enumerate().filter(|(j, ((o, ..), k))| *j != i && o.source == r.source && o.kind == r.kind && o.value != r.value && *k == &keys[i]).count();
+            kept.insert((r.source.clone(), r.kind.clone(), r.value.to_ascii_lowercase()), (others, now));
+        }
+    });
+}
+
+/// RG5 (X8 across the whole list): the other rows of its source's list Beyond listed lately beside a row of these references
+/// (`note_listed`): the most any of them had; none noted, none. Blocking.
+pub fn listed_others(refs: &[Ref], now: i64) -> usize {
+    with_listed(|kept| {
+        refs.iter()
+            .filter_map(|r| kept.get(&(r.source.clone(), r.kind.clone(), r.value.to_ascii_lowercase())))
+            .filter(|(_, at)| now - *at < LISTED_KEEP)
+            .map(|(n, _)| *n)
+            .max()
+            .unwrap_or(0)
+    })
+}
+
 /// What the catalogue holds of what Beyond found (C57), by reference alone (`Catalogue::by_reference`), on one reader: nothing is
 /// made. Blocking.
 pub fn known(cat: &Catalogue, albums: &[FoundAlbum], masters: &[FoundMaster], artists: &[FoundArtist]) -> Result<Known> {
@@ -95,6 +149,7 @@ pub fn known(cat: &Catalogue, albums: &[FoundAlbum], masters: &[FoundMaster], ar
         .chain(masters.iter().map(|d| (Ref::new("discogs", "master", &d.id.to_string()), d.artist.as_str(), d.title.as_str())))
         .collect();
     let people: Vec<Ref> = artists.iter().map(|a| Ref::new("musicbrainz", "artist", &mbid(&a.mbid))).collect();
+    note_listed(&refs, super::moment::now_secs());
     let mut here = cat.by_reference(&refs, &people)?;
     let masters = here.records.split_off(albums.len().min(here.records.len()));
     let groups = std::mem::take(&mut here.records);
@@ -969,5 +1024,140 @@ mod tests {
         assert_eq!(listed.iter().filter(|a| a.record.is_some()).count(), 1, "the one a record holds");
         assert!(found.iter().all(|a| a.artist.is_none()), "no artist holds their ids");
         assert_eq!([count("records"), count("artists"), count("references"), count("record_artists")], before, "nothing made");
+    }
+
+    /// F2.8 (0100's "two albums of one name stay two" meets F2): beside "Night Walks" of Kite Theory (its group), Beyond lists its
+    /// MusicBrainz row and Discogs' master 3001 of the name, which no record holds. (a) Two rows: no name merge (C57). (b) Discogs'
+    /// row opened (`labels::open_record`, `keep_listing(None, …)`): a record of its own, credited to nobody (Z3); "Night Walks" holds
+    /// no master. (c) Instead, the artist's own Discogs list names 3001: it joins "Night Walks" by its names (X8 permitting), and
+    /// Beyond then shows one row with both sources, by reference (C57: one record holds both). Never a row opened from Beyond or a
+    /// label's page joined by names; never Beyond's rows merged by name.
+    #[test]
+    fn beyond_and_a_label_page_never_join_by_names() {
+        let fresh = || {
+            let cat = Catalogue::open(None, Vec::new()).unwrap();
+            let artist = cat.artist_for("Kite Theory").unwrap();
+            let row = crate::catalogue::records::Listing { title: "Night Walks".into(), artist: "Kite Theory".into(), kind: Some("album".into()), refs: vec![Ref::new("musicbrainz", "release-group", GROUP_1)], ..Default::default() };
+            let walks = cat.keep_listing(Some(artist), &[row], "link").unwrap()[0];
+            (cat, artist, walks)
+        };
+        let mb = [album(GROUP_1, "Night Walks", "Kite Theory")];
+        let discogs = [master(3001, "Night Walks", "Kite Theory")];
+        let sources = |rows: &[BeyondAlbum]| rows.iter().map(|r| r.sources.clone()).collect::<Vec<_>>();
+        let masters = |cat: &Catalogue, record: i64| cat.references_of(&ids::record(record)).unwrap().into_iter().filter(|(r, _)| r.source == "discogs").count();
+        // (a)
+        let (cat, _, walks) = fresh();
+        assert_eq!(sources(&rows(&cat, &mb, &discogs)), [vec!["musicbrainz"], vec!["discogs"]], "(a) two rows: no name merge");
+        // (b)
+        let opened = crate::app::labels::open_record(&cat, &crate::app::labels::Opened { discogs_master: Some(3001), title: "Night Walks".into(), artist: "Kite Theory".into(), ..Default::default() })
+            .unwrap()
+            .expect("opened");
+        assert_ne!(opened, walks, "(b) a record of its own");
+        assert!(cat.record_artists(opened).unwrap().is_empty(), "(b) credited to nobody");
+        assert_eq!(masters(&cat, walks), 0, "(b) Night Walks holds no master");
+        assert_eq!(sources(&rows(&cat, &mb, &discogs)), [vec!["musicbrainz"], vec!["discogs"]], "(b) still two rows");
+        // (c)
+        let (cat, artist, walks) = fresh();
+        let listed = crate::catalogue::records::Listing { title: "Night Walks".into(), artist: "Kite Theory".into(), refs: vec![Ref::new("discogs", "master", "3001")], ..Default::default() };
+        assert_eq!(cat.keep_listing(Some(artist), &[listed], "link").unwrap(), [walks], "(c) the artist's own list joins it by its names");
+        assert_eq!(masters(&cat, walks), 1, "(c)");
+        assert_eq!(sources(&rows(&cat, &mb, &discogs)), [vec!["musicbrainz", "discogs"]], "(c) one row, both sources, by reference");
+    }
+
+    /// F11.2 (the owner's word: an outside album never shows beside a record the house has), Beyond: "Night Walks" the house has,
+    /// untagged, credited to Kite Theory, an EP by the type set on it (RG1: "Night Walks EP" names an EP alone). MusicBrainz's row of it
+    /// and Discogs' "Night Walks EP" are one row, that record's, had;
+    /// opened, each is that record, its reference added (how `link`), no live record of the name beside it. A name two had records
+    /// share (X8): the row names none, and opened it is a record of its own. Records not had stay as F2.8 has them.
+    #[test]
+    fn an_outside_album_on_beyond_joins_the_record_the_house_has() {
+        use crate::app::labels::{Opened, open_record};
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let credit = |record: i64| {
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", rusqlite::params![record, artist]).unwrap();
+            record
+        };
+        let had = credit(record(&cat, "Night Walks", 2, &[]));
+        cat.keep_types(&[(had, "ep".to_string())]).unwrap();
+        let shown = rows(&cat, &[album(GROUP_1, "Night Walks", "Kite Theory")], &[master(3001, "Night Walks EP", "Kite Theory")]);
+        let named: Vec<(Option<String>, bool, Vec<&str>)> = shown.iter().map(|r| (r.record.clone(), r.have, r.sources.clone())).collect();
+        assert_eq!(named, [(Some(ids::record(had)), true, vec!["musicbrainz", "discogs"])], "one row: the record the house has");
+        let opened = |o: Opened| cat.record(open_record(&cat, &o).unwrap().expect("opened")).unwrap().unwrap().id;
+        assert_eq!(opened(Opened { discogs_master: Some(3001), title: "Night Walks EP".into(), artist: "Kite Theory".into(), ..Opened::default() }), had);
+        assert_eq!(opened(Opened { release_group: Some(GROUP_1.into()), title: "Night Walks".into(), artist: "Kite Theory".into(), ..Opened::default() }), had);
+        let held: Vec<(String, String)> = cat.references_of(&ids::record(had)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect();
+        for value in ["3001", GROUP_1] {
+            assert!(held.contains(&(value.to_string(), "link".to_string())), "{value} added: {held:?}");
+        }
+        let live: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM records WHERE merged_into IS NULL AND retired_at IS NULL AND title LIKE 'Night Walks%'", [], |r| r.get(0)).unwrap();
+        assert_eq!(live, 1, "none beside it");
+        let orbital = [credit(record(&cat, "Orbital", 2, &[])), credit(record(&cat, "Orbital", 3, &[]))];
+        let shown = rows(&cat, &[album(GROUP_2, "Orbital", "Kite Theory")], &[]);
+        assert_eq!((shown.len(), shown[0].record.clone()), (1, None), "a name two had records share: a row of its own");
+        let own = opened(Opened { release_group: Some(GROUP_2.into()), title: "Orbital".into(), artist: "Kite Theory".into(), ..Opened::default() });
+        assert!(!orbital.contains(&own), "opened: a record of its own");
+    }
+
+    /// RG4 (PA4, C55) and RG5 (PA5: X8 across the whole list): an outside row joins the record the house has by its names only through
+    /// the one artist of its name, and a list's rows are judged together, Beyond's and a label's alike. (a) Two "Kite Theory" the owner
+    /// set apart, only the first holding an untagged "Night Walks": Beyond's "Night Walks" by Kite Theory names no record, and opened it
+    /// is a record of its own, the house's record holding nothing of it. (b) The house's untagged "Live" beside Beyond's two Discogs
+    /// "Live" masters: neither row is the house's record; opened, each is a record of its own, the house's record holding no master.
+    /// (c) The same two on a label's page: neither row is the house's record, and opened from the page each is a record of its own.
+    #[test]
+    fn an_outside_row_joins_through_one_artist_and_its_list_is_judged_together() {
+        use crate::app::labels::{Opened, open_record};
+        const APART: &str = "00000000-0000-4000-8000-000000003901";
+        let credited = |cat: &Catalogue, title: &str, artist: i64| {
+            let made = record(cat, title, 2, &[]);
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", rusqlite::params![made, artist]).unwrap();
+            made
+        };
+        let opened = |cat: &Catalogue, o: Opened| cat.record(open_record(cat, &o).unwrap().expect("opened")).unwrap().unwrap().id;
+        let holds_nothing = |cat: &Catalogue, made: i64| cat.references_of(&ids::record(made)).unwrap().is_empty();
+        // (a)
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let first = cat.artist_for("Kite Theory").unwrap();
+        cat.artist_apart("Kite Theory").unwrap();
+        let walks = credited(&cat, "Night Walks", first);
+        let shown = rows(&cat, &[album(APART, "Night Walks", "Kite Theory")], &[]);
+        assert_eq!((shown.len(), shown[0].record.clone()), (1, None), "(a) two artists of the name: no join through it");
+        let own = opened(&cat, Opened { release_group: Some(APART.into()), title: "Night Walks".into(), artist: "Kite Theory".into(), ..Opened::default() });
+        assert_ne!(own, walks, "(a) opened: a record of its own");
+        assert!(holds_nothing(&cat, walks), "(a) the house's record holds nothing of it");
+        // (b)
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let live = credited(&cat, "Live", artist);
+        let shown = rows(&cat, &[], &[master(3911, "Live", "Kite Theory"), master(3912, "Live", "Kite Theory")]);
+        assert!(shown.len() == 2 && shown.iter().all(|r| r.record.is_none()), "(b) two rows of one title in one list: neither the house's: {shown:?}");
+        for id in [3911, 3912] {
+            let made = opened(&cat, Opened { discogs_master: Some(id), title: "Live".into(), artist: "Kite Theory".into(), ..Opened::default() });
+            assert_ne!(made, live, "(b) {id} opened: a record of its own");
+        }
+        assert!(holds_nothing(&cat, live), "(b) the house's record holds no master");
+        // (c)
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let live = credited(&cat, "Live", artist);
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let row = |master: &str| crate::catalogue::labels::LabelListed {
+            reference: Ref::new("discogs", "master", master),
+            title: "Live".into(),
+            artist: "Kite Theory".into(),
+            year: Some(2020),
+            catno: String::new(),
+            kind: None,
+            cover: None,
+        };
+        cat.keep_label_rows(label, "discogs", &[row("3913"), row("3914")], None, true, 1).unwrap();
+        let kept = cat.label_kept(label).unwrap().expect("a label");
+        assert!(kept.rows.iter().all(|(_, r)| r.is_none()), "(c) a label's two rows of one title: neither the house's");
+        for id in [3913, 3914] {
+            let made = opened(&cat, Opened { discogs_master: Some(id), title: "Live".into(), artist: "Kite Theory".into(), label: Some(ids::label(label)), ..Opened::default() });
+            assert_ne!(made, live, "(c) {id} opened from the page: a record of its own");
+        }
+        assert!(holds_nothing(&cat, live), "(c) the house's record holds no master");
     }
 }

@@ -28,6 +28,8 @@ export type SearchResult = {
   request?: import('./api').RequestMark | null;
   /** A classical record's or track's composers (0.10), said on its line. */
   composers?: { key: string; name: string }[];
+  /** A record's card standing for several editions of one album (F12): how many, said on its line. */
+  editions?: number;
   /** Known elsewhere (decision 0076): why Cratarr knows it (on your Spotify, missing from an artist you have,
    *  suggested, requested). */
   known?: string[];

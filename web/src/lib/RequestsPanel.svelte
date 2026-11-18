@@ -16,7 +16,7 @@
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
-  import { albumCoverUrl, cancelRequest, type AlbumRequest, type WatchedAlbum } from './api';
+  import { albumCoverUrl, approveSoulseek, cancelRequest, getRequestStory, soulseekNow, type AlbumRequest, type RequestStory, type WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
   import { me, readRoom } from './me.svelte';
   import { reach } from './reach.svelte';
@@ -34,7 +34,8 @@
   import ChoiceList from './ChoiceList.svelte';
   import { clearPlaced, dropSoulseek, fetchFound, loadSoulseek, searchSoulseekNow, soulseek } from './soulseek.svelte';
   import { approvePayload, folderLine, GROUPS, itemLine, itemTone, recordOf, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
-  import { fillOf, handOverAgain, mayTakeBack, standing, standingTone } from './requestState';
+  import { fillOf, mayTakeBack, standing, standingTone } from './requestState';
+  import { requestStory, storyAgainIn, tickOf } from './requestStory';
   import SelectBar from './SelectBar.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import Group from './settings/Group.svelte';
@@ -118,6 +119,58 @@
   // --- A row's menu ---
   let opened = $state<AlbumRequest | null>(null);
   const canTakeBack = (r: AlbumRequest) => mayTakeBack(r, me.name, answers);
+  // Its story (RQ01, lib/requestStory): read when its sheet opens, again while it shows (storyAgainIn: every 3 s while Soulseek's
+  // part is under way, else every 30 s), and no more once it closes. Its asker's and the administrators', as the server answers
+  // it: someone who answers requests opening another's waiting one keeps the row's own line and its answers.
+  let story = $state<RequestStory | null>(null);
+  let storyError = $state<string | null>(null);
+  let storyNow = $state(0);
+  let storyPick = $state<number | null>(null);
+  let storyGen = 0;
+  let storyTimer: ReturnType<typeof setTimeout> | undefined;
+  const readsStory = (r: AlbumRequest) => me.admin || r.user === me.name;
+  function readStory(id: number, gen: number) {
+    clearTimeout(storyTimer);
+    getRequestStory(id).then(
+      (s) => {
+        if (gen !== storyGen) return;
+        story = s;
+        storyError = null;
+        storyNow = Math.floor(Date.now() / 1000);
+        storyTimer = setTimeout(() => readStory(id, gen), storyAgainIn(s, storyNow));
+      },
+      (e) => gen === storyGen && (storyError = e instanceof Error ? e.message : String(e)),
+    );
+  }
+  $effect(() => {
+    const r = opened;
+    const gen = ++storyGen;
+    story = null;
+    storyError = null;
+    storyPick = null;
+    if (r && readsStory(r)) readStory(r.id, gen);
+    return () => (storyGen++, clearTimeout(storyTimer));
+  });
+  /** An administrator's call on a story's Soulseek item, then the story read again (a refusal, such as a source gone since, in
+   *  the server's words). */
+  async function onSoulseek(s: RequestStory, act: () => Promise<unknown>, failed: string) {
+    try {
+      await act();
+    } catch (e) {
+      toast.fail(e, failed);
+    }
+    if (opened?.id === s.id) readStory(s.id, storyGen);
+  }
+  /** Its found record fetched from the source picked, named by its user and folder (RQ01.8 (b): one gone since is refused). */
+  function fetchStory(s: RequestStory) {
+    const tick = s.soulseek && tickOf(s.soulseek, storyPick);
+    if (tick) void onSoulseek(s, () => approveSoulseek([tick]), "It wasn't fetched");
+  }
+  /** Its record searched for now, whatever its wait. */
+  function searchStory(s: RequestStory) {
+    const id = s.soulseek?.id;
+    if (id) void onSoulseek(s, () => soulseekNow(id), "It isn't being searched");
+  }
   let declining = $state<number[] | null>(null);
   // Many approved at once ask first (lib/many; declining many asks already, for why).
   function answer(ids: number[], approve: boolean, reason: string | null = null) {
@@ -315,6 +368,7 @@
 
 {#if opened}
   {@const r = opened}
+  {@const st = story?.id === r.id ? requestStory(story, me.admin, storyNow) : null}
   <MenuSheet
     label={r.album}
     title={r.album}
@@ -323,19 +377,49 @@
     copy={`${r.artist} – ${r.album}`}
     onclose={() => (opened = null)}
   >
+    <!-- Its story (RQ01, lib/requestStory): where it stands, each fetcher's part, what was set aside, when it was asked and
+         delivered and where; until it is read, or with Cratarr out of reach, the row's own line. Only administrators act. -->
+    <Group><Item name={st?.head ?? standing(r, when)} lead={st?.tone ?? standingTone(r)} /></Group>
+    {#if st}
+      {#each st.groups as g (g.title)}
+        <Group title={g.title}>
+          {#each g.rows as x, n (n)}
+            {#if 'choice' in x}
+              <ChoiceList label={x.choice.label} options={x.choice.options} value={storyPick === null ? x.choice.chosen : String(storyPick)} onchange={(v) => (storyPick = Number(v))} />
+            {:else}
+              <Item name={x.name} line={x.line} value={x.value} tone={x.tone} lead={x.lead ?? null} progress={x.progress ?? null} wrap={x.wrap} />
+            {/if}
+          {/each}
+        </Group>
+      {/each}
+    {:else if storyError}
+      <Notice text={storyError} onretry={() => readStory(r.id, storyGen)} away="Requests need Cratarr." />
+    {/if}
     <div role="menu">
-      <!-- Approve one waiting; Hand over again where the server says no fetcher has spoken of it (W5, G2). -->
-      {#if answers && (r.status === 'pending' || handOverAgain(r, answers))}
-        <MenuEntry icon="check" label={r.status === 'pending' ? 'Approve' : 'Hand over again'} onclick={() => (answer([r.id], true), (opened = null))} />
-      {/if}
+      <!-- Approve or decline one waiting (those who answer requests), from its row as before. -->
       {#if answers && r.status === 'pending'}
+        <MenuEntry icon="check" label="Approve" onclick={() => (answer([r.id], true), (opened = null))} />
         <MenuEntry icon="ban" label="Decline…" onclick={() => ((declining = [r.id]), (opened = null))} />
       {/if}
-      {#if canTakeBack(r)}
+      {#if st && story}
+        {@const s = story}
+        {#each st.actions as a (a)}
+          {#if a === 'fetch'}
+            <MenuEntry icon="download" label="Fetch" onclick={() => fetchStory(s)} />
+          {:else if a === 'searchNow'}
+            <MenuEntry icon="search" label="Search now" onclick={() => searchStory(s)} />
+          {:else if a === 'handOverAgain'}
+            <!-- Where the server says no fetcher has spoken of it (W5, G2). -->
+            <MenuEntry icon="check" label="Hand over again" onclick={() => (answer([r.id], true), (opened = null))} />
+          {:else if a === 'view'}
+            <!-- Its record's page (W12), merges followed. -->
+            <MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => ((opened = null), viewOver(albumSubject('cratarr', s.opens ?? '')))} />
+          {:else}
+            <MenuEntry icon="undo" label="Take back" danger onclick={() => (takeBack(r), (opened = null))} />
+          {/if}
+        {/each}
+      {:else if !readsStory(r) && canTakeBack(r)}
         <MenuEntry icon="undo" label="Take back" danger onclick={() => (takeBack(r), (opened = null))} />
-      {/if}
-      {#if !answers && !canTakeBack(r)}
-        <MenuEntry icon="compass" label="Discover" onclick={() => ((opened = null), (location.hash = hrefOf('discover')))} />
       {/if}
     </div>
   </MenuSheet>

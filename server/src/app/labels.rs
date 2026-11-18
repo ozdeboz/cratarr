@@ -10,6 +10,14 @@
 //!   label's list at a source at a time.
 //! - **Where it is known:** its MusicBrainz and Discogs ids are its references; else MusicBrainz's search finds it by its name,
 //!   and Discogs' id is MusicBrainz's link to it. What is found is kept as its references.
+//! - **What you have, apart (F10):** the page answers what the house has of the label (`had`: the one had rule, in any library)
+//!   apart from the rest (`not_had`); a source's row no record holds goes with the had record its names point at (Z6), so a had
+//!   album is never among the rest for want of a reference. While a list is read, `reading` names its source; after, `no_list`
+//!   says which could not be had, in F1's words.
+//! - **Labels About shows (F9):** every one opens its page where it has a reference (`LabelOf`): the label holding its Discogs id
+//!   or MBID, else at the tap (`open_label`) the one label of its name that holds none of that source's (PB3: one real label, one
+//!   page), else one made with it; never by a name alone; one known by its name alone opens the one label of that name, where exactly
+//!   one has it (X8).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -156,10 +164,21 @@ pub struct LabelPage {
     /// Its id for life (`la-<n>`).
     pub id: String,
     pub name: String,
-    /// Its records by year, newest first (none last), then by title.
-    pub rows: Vec<LabelEntry>,
+    /// What the house has of it (F10): its records had by the one had rule, in any library (Music, anyone's own music, Incoming),
+    /// from what is kept, at once; by year, newest first (none last), then by title.
+    pub had: Vec<LabelEntry>,
+    /// The rest (F10): its records not had and its sources' rows no record holds, with their catalogue numbers and requests; by year
+    /// as `had`.
+    pub not_had: Vec<LabelEntry>,
     /// Whether a list of it is being read: the page asks again until none is.
     pub looking: bool,
+    /// While `looking`: the source whose list is being read now, the first in their order (F10, as F8's sections).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading: Option<&'static str>,
+    /// Once none is read: each source whose list could not be had (F10, F1's words: `off`, switched off with its list not kept;
+    /// `unanswered`, failed within the quarter hour), in their order; absent while `looking`, and where every source answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_list: Option<Vec<super::references::Said>>,
     /// Whether each source's list reads on (`?more=<source>`).
     pub more: More,
     /// Its ids at MusicBrainz and Discogs, where known.
@@ -206,6 +225,9 @@ pub struct LabelEntry {
     /// An open request's mark for its record.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<super::requests::Mark>,
+    /// How many editions of one album its record's row stands for, its own among them (F12.1, `app::editions`); none: one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editions: Option<u32>,
 }
 
 impl LabelEntry {
@@ -230,6 +252,7 @@ impl LabelEntry {
             record: Some(ids::record(q.row.id)),
             had: q.holder.is_some(),
             request: None,
+            editions: None,
         }
     }
 
@@ -267,9 +290,10 @@ impl LabelEntry {
 }
 
 /// A label's rows from what the catalogue keeps (C56, `LabelKept`): each record once, as merged now, its catalogue number the
-/// first its ties give; a source's row of a record (by its reference) is that record's row, and one no record holds is a row of
-/// its own. By year, newest first, then by title and artist.
-fn rows_of(kept: &LabelKept) -> Vec<LabelEntry> {
+/// first its ties give; a source's row of a record (by its reference) is that record's row, as is one no record holds whose names
+/// point at a had record (`by_names`, in the rows' order, those records read in `holders` where `kept` has them not: F10), and any
+/// other is a row of its own. By year, newest first, then by title and artist.
+fn rows_of(kept: &LabelKept, by_names: &[Option<i64>], holders: &HashMap<i64, Requested>) -> Vec<LabelEntry> {
     let mut by_record: BTreeMap<i64, LabelEntry> = BTreeMap::new();
     let mut loose: Vec<LabelEntry> = Vec::new();
     for (record, catno) in &kept.tied {
@@ -279,8 +303,9 @@ fn rows_of(kept: &LabelKept) -> Vec<LabelEntry> {
             row.catno = Some(catno.clone());
         }
     }
-    for (listed, record) in &kept.rows {
-        match record.and_then(|r| kept.records.get(&r)) {
+    for (i, (listed, record)) in kept.rows.iter().enumerate() {
+        let named = || by_names.get(i).copied().flatten().and_then(|h| kept.records.get(&h).or_else(|| holders.get(&h)));
+        match record.and_then(|r| kept.records.get(&r)).or_else(named) {
             Some(q) => by_record.entry(q.row.id).or_insert_with(|| LabelEntry::of_record(q)).fill(listed),
             None => loose.push(LabelEntry::of_row(listed)),
         }
@@ -288,6 +313,39 @@ fn rows_of(kept: &LabelKept) -> Vec<LabelEntry> {
     let mut rows: Vec<LabelEntry> = by_record.into_values().chain(loose).collect();
     rows.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.title.cmp(&b.title)).then_with(|| a.artist.cmp(&b.artist)));
     rows
+}
+
+/// A label's rows as its page shows them (F10): what the house has of it by the one had rule (in any library: Music, anyone's own
+/// music, Incoming), then the rest, each by year as `rows_of` sorts them. A source's row no record holds is the had record its names
+/// point at, where they point at one (the had rule's names clause, Z6: for display alone, nothing made or tied), so a had album is
+/// never among the rest for want of a reference. Blocking.
+fn split(cat: &Catalogue, kept: &LabelKept) -> Result<(Vec<LabelEntry>, Vec<LabelEntry>)> {
+    let loose: Vec<usize> = (0..kept.rows.len()).filter(|&i| kept.rows[i].1.is_none()).collect();
+    let mut by_names: Vec<Option<i64>> = vec![None; kept.rows.len()];
+    let mut holders: HashMap<i64, Requested> = HashMap::new();
+    if !loose.is_empty() {
+        let asked: Vec<(Ref, &str, &str)> = loose.iter().map(|&i| (kept.rows[i].0.reference.clone(), kept.rows[i].0.artist.as_str(), kept.rows[i].0.title.as_str())).collect();
+        for (&i, held) in loose.iter().zip(cat.by_reference(&asked, &[])?.named) {
+            by_names[i] = held;
+        }
+        let wanted: Vec<i64> = by_names.iter().flatten().copied().filter(|h| !kept.records.contains_key(h)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        if !wanted.is_empty() {
+            holders = cat.requested(&wanted)?;
+        }
+    }
+    Ok(rows_of(kept, &by_names, &holders).into_iter().partition(|r| r.had))
+}
+
+/// Why a source's list of a label is not had now (F10, as F8's sections, in F1's words), where it is not being read: switched off
+/// with its list not kept (`off`); failed within `RETRY_SECS` (`unanswered`, asked again after it). None where it answered.
+fn unread(cat: &Arc<Catalogue>, label: i64, source: &'static str, kept: bool, on: bool, now: i64) -> Option<super::references::Said> {
+    let said = if on {
+        let failed = readings().lock().unwrap_or_else(|p| p.into_inner()).get(&(Arc::as_ptr(cat) as usize, label, source)).copied();
+        matches!(failed, Some(Reading::Failed(at)) if now - at <= RETRY_SECS).then_some("unanswered")
+    } else {
+        (!kept).then_some("off")
+    };
+    said.map(|said| super::references::Said { source, said, until: None })
 }
 
 /// A label as its lists are read: its id and name.
@@ -408,36 +466,60 @@ fn start_read(cat: &Arc<Catalogue>, label: &Arc<LabelAsked>, source: &Arc<dyn La
     true
 }
 
-/// A label's page (C56): its rows as kept, at once (`rows_of`), while the first hundred of each source's list not read in thirty
-/// days (`ROWS_KEPT`), or never, is read in the background; with `more`, the next hundred of that source's (OQ10 (a)). Whether a
-/// list of it is being read (`looking`), so the page asks again until none is, and whether each source's reads on. None: no such
-/// label.
+/// A label's page (C56, F10): what the house has of it (`had`, the one had rule) apart from the rest (`not_had`), from what is kept,
+/// at once (`split`), while the first hundred of each source's list not read in thirty days (`ROWS_KEPT`), or never, is read in the
+/// background; with `more`, the next hundred of that source's (OQ10 (a)). Whether a list of it is being read (`looking`), so the page
+/// asks again until none is, and from which source (`reading`); once none is, why a source's list is not had (`no_list`, `unread`);
+/// whether each source's reads on. None: no such label.
 pub async fn page(cat: Arc<Catalogue>, label: i64, more: Option<&str>, sources: &[Arc<dyn LabelList>]) -> Result<Option<LabelPage>> {
     let c = cat.clone();
     let Some(kept) = tokio::task::spawn_blocking(move || c.label_kept(label)).await?? else { return Ok(None) };
     let asked = Arc::new(LabelAsked { id: label, name: kept.label.name.clone() });
     let now = super::moment::now_secs();
-    let mut looking = false;
-    for source in sources.iter().filter(|s| s.on()) {
-        let by_hand = more == Some(source.source());
-        let fresh = kept.reads.get(source.source()).filter(|r| now - r.at <= ROWS_KEPT);
+    let (mut looking, mut reading, mut no_list) = (false, None, Vec::new());
+    for source in sources {
+        let name = source.source();
+        let fresh = kept.reads.get(name).filter(|r| now - r.at <= ROWS_KEPT);
+        if !source.on() {
+            no_list.extend(unread(&cat, label, name, fresh.is_some(), false, now));
+            continue;
+        }
+        let by_hand = more == Some(name);
         // Never read, or thirty days ago: from its start. Read since: on from where it stands, for "More" alone.
         let from = match fresh {
             None => Some(None),
             Some(r) if by_hand => r.next.map(Some),
             Some(_) => None,
         };
-        looking |= match from {
+        let now_reading = match from {
             Some(from) => start_read(&cat, &asked, source, from, now),
-            None => being_read(&cat, label, source.source()),
+            None => being_read(&cat, label, name),
         };
+        looking |= now_reading;
+        if now_reading {
+            reading.get_or_insert(name);
+        } else {
+            no_list.extend(unread(&cat, label, name, fresh.is_some(), true, now));
+        }
     }
+    // Its rows read once the reads' states are known: a read that ended before is in them; one ending now is still `looking`.
+    let c = cat.clone();
+    let read = tokio::task::spawn_blocking(move || -> Result<Option<(LabelKept, Vec<LabelEntry>, Vec<LabelEntry>)>> {
+        let Some(kept) = c.label_kept(label)? else { return Ok(None) };
+        let (had, not_had) = split(&c, &kept)?;
+        Ok(Some((kept, had, not_had)))
+    })
+    .await??;
+    let Some((kept, had, not_had)) = read else { return Ok(None) };
     let reads_on = |name: &str| sources.iter().any(|s| s.source() == name && s.on()) && kept.reads.get(name).is_some_and(|r| r.next.is_some());
     Ok(Some(LabelPage {
         id: ids::label(label),
         name: kept.label.name.clone(),
-        rows: rows_of(&kept),
+        had,
+        not_had,
         looking,
+        reading,
+        no_list: (!looking && !no_list.is_empty()).then_some(no_list),
         more: More { musicbrainz: reads_on("musicbrainz"), discogs: reads_on("discogs") },
         musicbrainz: label_id_at(&kept.refs, "musicbrainz"),
         discogs: label_id_at(&kept.refs, "discogs"),
@@ -507,6 +589,9 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
     if title.chars().count() > NAME_MOST || artist.chars().count() > NAME_MOST {
         anyhow::bail!("A title or an artist that long is no album's.");
     }
+    // RG5 (X8 across the whole list): judged with the other rows of its list, a label's page's kept rows (`Catalogue::keep_opened`)
+    // or Beyond's as it listed them (`beyond::listed_others`).
+    let listed_others = if label.is_some() { 0 } else { super::beyond::listed_others(&refs, super::moment::now_secs()) };
     let listing = Listing {
         artist,
         year: o.year.or(listed.as_ref().and_then(|(_, l)| l.year)),
@@ -516,7 +601,7 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
         refs,
         ..Listing::default()
     };
-    let Some(record) = cat.keep_listing(None, &[listing], "link")?.into_iter().next() else { return Ok(None) };
+    let Some(record) = cat.keep_opened(&listing, label, listed_others)? else { return Ok(None) };
     if let Some(label) = label {
         // Through this label's own kept row alone, with its catalogue number there (U10).
         if let Some(catno) = listed.as_ref().filter(|(of, _)| *of == label).map(|(_, l)| l.catno.as_str()) {
@@ -524,6 +609,145 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
         }
     }
     Ok(Some(record))
+}
+
+// ---- F9: every label About shows opens its page where it has a reference
+
+/// What opens a label's page where no label is kept for it yet (F9): its reference at a source, Discogs' id or MusicBrainz's MBID,
+/// which `POST /api/labels/open` finds or makes the label by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LabelRef {
+    pub source: &'static str,
+    pub id: String,
+}
+
+/// A label as About shows it (F9; every answer that names an album's labels: the album's `labels`, its Discogs answer's `labels`):
+/// its name and the album's catalogue number there; its id for life (`la-<n>`) where a label is kept for it, else its reference
+/// (`ref`) for `POST /api/labels/open`; neither, text: no reference, and a name two labels share, or none has.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LabelOf {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catno: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<LabelRef>,
+}
+
+/// A label as a source or a page names it (F9): its name, the album's catalogue number there, and its reference there where it
+/// gives one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LabelNamed {
+    pub name: String,
+    pub catno: Option<String>,
+    pub reference: Option<Ref>,
+}
+
+/// Discogs' "Not On Label" (self-released): no label, as the crates read it (`discogs_facts::label_names`), so shown as text.
+fn no_label(name: &str) -> bool {
+    name.trim().to_lowercase().starts_with("not on label")
+}
+
+/// Labels as About shows them (F9), in their order, on one reader (`Catalogue::labels_shown`): one with a reference, the label that
+/// holds it (`id`), else the reference itself (`ref`), never a label of its name; one with none, the one label of its name where
+/// exactly one has it (X8); "Not On Label" text. Nothing is made. Blocking.
+pub fn shown(cat: &Catalogue, named: &[LabelNamed]) -> Result<Vec<LabelOf>> {
+    let asked: Vec<(Option<Ref>, String)> =
+        named.iter().map(|n| if no_label(&n.name) { (None, String::new()) } else { (n.reference.clone(), n.name.trim().to_string()) }).collect();
+    let known = cat.labels_shown(&asked)?;
+    Ok(named
+        .iter()
+        .zip(asked)
+        .zip(known)
+        .map(|((n, (r, _)), id)| LabelOf {
+            name: n.name.trim().to_string(),
+            catno: n.catno.as_deref().map(str::trim).filter(|c| !c.is_empty()).map(str::to_string),
+            reference: r.filter(|_| id.is_none()).and_then(|r| Some(LabelRef { source: source_named(&r.source)?, id: r.value })),
+            id: id.map(ids::label),
+        })
+        .collect())
+}
+
+/// A page elsewhere's label (Bandcamp's `label`), as About shows it (F9): by its name alone, the one label of its name where exactly
+/// one has it. Blocking.
+pub fn of_text(cat: &Catalogue, text: &str) -> Result<Vec<LabelOf>> {
+    let name = text.trim();
+    if name.is_empty() {
+        return Ok(Vec::new());
+    }
+    shown(cat, &[LabelNamed { name: name.to_string(), ..LabelNamed::default() }])
+}
+
+/// An album's labels at Discogs and MusicBrainz as About shows them (F9): Discogs' main release's, each by its id there (facts kept
+/// before C46 have none: by its name alone), then those of the files' release at MusicBrainz, by their MBIDs, of a name Discogs
+/// names none of. Blocking.
+pub fn about(cat: &Catalogue, discogs: &[super::discogs::Label], musicbrainz: &[super::discogs::MbLabel]) -> Result<Vec<LabelOf>> {
+    let at_discogs: std::collections::HashSet<String> = discogs.iter().map(|l| ids::artist_key(l.name.trim())).collect();
+    let named: Vec<LabelNamed> = discogs
+        .iter()
+        .map(|l| LabelNamed { name: l.name.clone(), catno: l.catno.clone(), reference: l.id.map(|id| Ref::new("discogs", "label", &id.to_string())) })
+        .chain(
+            musicbrainz
+                .iter()
+                .filter(|l| !at_discogs.contains(&ids::artist_key(l.name.trim())))
+                .map(|l| LabelNamed { name: l.name.clone(), catno: l.catno.clone(), reference: Some(Ref::new("musicbrainz", "label", &l.mbid)) }),
+        )
+        .collect();
+    shown(cat, &named)
+}
+
+/// A label About shows, opened (F9, `POST /api/labels/open`): its reference at a source, and its name as shown.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LabelOpened {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// What a label opened came to (F9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelOpen {
+    /// The label: found by its reference, else the one label of its name given it, else made now with it.
+    Opened(i64),
+    /// No reference a label is opened by (Discogs' id, a number; MusicBrainz's MBID): a name alone opens none.
+    NoReference,
+    /// No label holds it, and it is no reference an album's labels were kept with, by that name, for one who is no administrator (as
+    /// Z8's artists).
+    NotNamed,
+}
+
+/// The reference a label is opened by (F9): Discogs' id, MusicBrainz's MBID as MusicBrainz writes it; none else.
+fn label_reference(source: &str, id: &str) -> Option<Ref> {
+    let id = id.trim();
+    match source.trim() {
+        "discogs" => id.parse::<u64>().ok().filter(|n| *n > 0).map(|n| Ref::new("discogs", "label", &n.to_string())),
+        "musicbrainz" => Some(id.to_ascii_lowercase()).filter(|m| super::discogs::is_mbid(m)).map(|m| Ref::new("musicbrainz", "label", &m)),
+        _ => None,
+    }
+}
+
+/// A label About shows, opened (F9): the label that holds its reference, found by anyone; else the one label of its name given it, or
+/// one made now with it (`Catalogue::open_label`), only where the reference is one an album's labels were kept with (`named`: its name
+/// then), by that name, or by an administrator, by the name given; never by a name alone. Blocking.
+pub fn open_label(cat: &Catalogue, o: &LabelOpened, named: impl FnOnce(&Ref) -> Result<Option<String>>, administering: bool) -> Result<LabelOpen> {
+    let Some(r) = label_reference(&o.source, &o.id) else { return Ok(LabelOpen::NoReference) };
+    if let Some(Some(id)) = cat.labels_shown(&[(Some(r.clone()), String::new())])?.first() {
+        return Ok(LabelOpen::Opened(*id));
+    }
+    let asked = o.name.trim();
+    let name = match named(&r)? {
+        Some(kept) if ids::artist_key(kept.trim()) == ids::artist_key(asked) => kept.trim().to_string(),
+        _ if administering && !asked.is_empty() => asked.to_string(),
+        _ => return Ok(LabelOpen::NotNamed),
+    };
+    if name.chars().count() > NAME_MOST {
+        anyhow::bail!("A name that long is no label's.");
+    }
+    Ok(LabelOpen::Opened(cat.open_label(&r, &name)?))
 }
 
 #[cfg(test)]
@@ -608,8 +832,9 @@ mod tests {
         panic!("still looking")
     }
 
+    /// Every row's title: what is had, then the rest (F10).
     fn titles(shown: &LabelPage) -> Vec<&str> {
-        shown.rows.iter().map(|r| r.title.as_str()).collect()
+        shown.had.iter().chain(&shown.not_had).map(|r| r.title.as_str()).collect()
     }
 
     /// C56: a label's page from what the catalogue keeps, newest first: its records each once with its catalogue number, had by
@@ -631,19 +856,22 @@ mod tests {
         let rows = [group_row(GROUP_1, "Undertow", 2019), group_row(GROUP_2, "Paper Kites", 2016)];
         cat.keep_label_rows(label, "musicbrainz", &rows, None, true, crate::app::moment::now_secs()).unwrap();
         let shown = page(cat.clone(), label, None, &[]).await.unwrap().expect("a label");
-        let listed: Vec<(&str, Option<i32>, Option<&str>, bool, Option<String>)> = shown.rows.iter().map(|r| (r.title.as_str(), r.year, r.catno.as_deref(), r.had, r.record.clone())).collect();
+        fn listed(rows: &[LabelEntry]) -> Vec<(&str, Option<i32>, Option<&str>, bool, Option<String>)> {
+            rows.iter().map(|r| (r.title.as_str(), r.year, r.catno.as_deref(), r.had, r.record.clone())).collect()
+        }
+        assert_eq!(listed(&shown.had), [("Tide Tables", Some(2012), Some("LTR-012"), true, Some(ids::record(had)))], "F10: what the house has");
         assert_eq!(
-            listed,
+            listed(&shown.not_had),
             [
                 ("Undertow", Some(2019), Some("LTR-030"), false, Some(ids::record(wanted))),
                 ("Paper Kites", Some(2016), None, false, None),
-                ("Tide Tables", Some(2012), Some("LTR-012"), true, Some(ids::record(had))),
                 ("Open Water", Some(2003), None, false, Some(ids::record(older))),
-            ]
+            ],
+            "the rest"
         );
-        assert_eq!(shown.rows[0].release_group.as_deref(), Some(GROUP_1), "the source's row and the record are one row");
-        assert_eq!(shown.rows[1].cover, Some(format!("/api/covers/release-group/{GROUP_2}")));
-        assert_eq!(shown.rows[2].cover, Some(format!("/api/albums/cratarr/{}/cover", ids::record(had))));
+        assert_eq!(shown.not_had[0].release_group.as_deref(), Some(GROUP_1), "the source's row and the record are one row");
+        assert_eq!(shown.not_had[1].cover, Some(format!("/api/covers/release-group/{GROUP_2}")));
+        assert_eq!(shown.had[0].cover, Some(format!("/api/albums/cratarr/{}/cover", ids::record(had))));
         assert_eq!((shown.id, shown.name.as_str(), shown.looking, shown.more), (ids::label(label), "Low Tide Records", false, More::default()));
         assert!(page(cat.clone(), label + 1, None, &[]).await.unwrap().is_none(), "no such label");
     }
@@ -660,7 +888,7 @@ mod tests {
         let sources: Vec<Arc<dyn LabelList>> = vec![musicbrainz.clone(), discogs.clone()];
         let shown = settled(&cat, label, None, &sources).await;
         assert_eq!(titles(&shown), ["Night Walks", "Undertow", "Paper Kites"]);
-        assert!(shown.rows.iter().all(|r| r.record.is_none() && !r.had), "{:?}", shown.rows);
+        assert!(shown.had.is_empty() && shown.not_had.iter().all(|r| r.record.is_none() && !r.had), "{shown:?}");
         assert_eq!(records(), 0, "no record made of a label's list");
         assert_eq!(cat.artist_of("Kite Theory").unwrap(), None, "nor an artist");
         assert_eq!((shown.musicbrainz.as_deref(), shown.discogs.as_deref()), (Some(LABEL_MBID), Some("23528")), "what the sources know it by, kept");
@@ -673,7 +901,7 @@ mod tests {
         let ties: Vec<(i64, String)> = cat.record_labels(night).unwrap().into_iter().map(|(l, catno)| (l.id, catno)).collect();
         assert_eq!(ties, [(label, "LTR-040".to_string())], "tied to the label it was opened from");
         let shown = settled(&cat, label, None, &sources).await;
-        let listed: Vec<(&str, Option<String>, bool, Option<&str>)> = shown.rows.iter().map(|r| (r.title.as_str(), r.record.clone(), r.had, r.catno.as_deref())).collect();
+        let listed: Vec<(&str, Option<String>, bool, Option<&str>)> = shown.not_had.iter().map(|r| (r.title.as_str(), r.record.clone(), r.had, r.catno.as_deref())).collect();
         assert_eq!(listed.len(), 3, "one row: {listed:?}");
         assert_eq!(listed[0], ("Night Walks", Some(ids::record(night)), false, Some("LTR-040")), "the row is its record");
         assert_eq!(*musicbrainz.asked.lock().unwrap(), [None], "read once in thirty days");
@@ -844,21 +1072,395 @@ mod tests {
         let discogs = stub("discogs", None, |_| (hundred(500, 100), Some(2)));
         let sources: Vec<Arc<dyn LabelList>> = vec![musicbrainz.clone(), discogs.clone()];
         let first = settled(&cat, label, None, &sources).await;
-        assert_eq!(first.rows.len(), 100, "the first hundred");
+        assert_eq!(first.not_had.len(), 100, "the first hundred");
         assert_eq!(first.more, More { musicbrainz: true, discogs: false }, "Discogs does not know it");
         assert!(discogs.asked.lock().unwrap().is_empty(), "nor is it read there");
-        assert!(first.rows.windows(2).all(|w| w[0].year >= w[1].year), "newest first");
+        assert!(first.not_had.windows(2).all(|w| w[0].year >= w[1].year), "newest first");
         let asked = page(cat.clone(), label, Some("musicbrainz"), &sources).await.unwrap().unwrap();
         let again = page(cat.clone(), label, Some("musicbrainz"), &sources).await.unwrap().unwrap();
         assert!(asked.looking && again.looking);
         gate.add_permits(1);
         let all = settled(&cat, label, None, &sources).await;
-        assert_eq!(all.rows.len(), 140, "the next hundred, here the last forty");
+        assert_eq!(all.not_had.len(), 140, "the next hundred, here the last forty");
         assert_eq!(*musicbrainz.asked.lock().unwrap(), [None, Some(100)], "one read at a time: the second More started none");
         assert_eq!(all.more, More::default(), "at its end");
         settled(&cat, label, Some("musicbrainz"), &sources).await;
         assert_eq!(musicbrainz.asked.lock().unwrap().len(), 2, "no more to read");
         let known: Vec<(String, String)> = cat.references_of(&ids::label(label)).unwrap().into_iter().map(|(r, row)| (r.value, row.how)).collect();
         assert_eq!(known, [(LABEL_MBID.to_string(), "search".to_string())], "its MusicBrainz id found by its name, kept");
+    }
+
+    // ---- F9 (preview 1's fix batch): every label About shows opens its page where it has a reference
+
+    /// The name a reference was kept with, as `discogs_facts::label_named` answers it: every one, by this name (the test's).
+    fn named_as(name: &'static str) -> impl Fn(&Ref) -> Result<Option<String>> {
+        move |_| Ok(Some(name.to_string()))
+    }
+
+    /// A source of the test's own that knows no label by its name: how often it was asked to find one, and the ids its list was read
+    /// by, in turn.
+    struct Asking {
+        source: &'static str,
+        finds: std::sync::atomic::AtomicUsize,
+        ids: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl Asking {
+        fn new(source: &'static str) -> Arc<Self> {
+            Arc::new(Asking { source, finds: Default::default(), ids: Default::default() })
+        }
+
+        fn asked(&self) -> (Vec<String>, usize) {
+            (self.ids.lock().unwrap().clone(), self.finds.load(std::sync::atomic::Ordering::SeqCst))
+        }
+    }
+
+    impl LabelList for Asking {
+        fn source(&self) -> &'static str {
+            self.source
+        }
+
+        fn find<'a>(&'a self, _: &'a str, _: &'a [Ref]) -> crate::source::Fut<'a, Found> {
+            self.finds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn page<'a>(&'a self, id: &'a str, _: Option<i64>) -> crate::source::Fut<'a, Page> {
+            self.ids.lock().unwrap().push(id.to_string());
+            Box::pin(async { Ok((Vec::new(), None)) })
+        }
+    }
+
+    fn labels_kept(cat: &Catalogue) -> i64 {
+        cat.db_for_tests().query_row("SELECT count(*) FROM labels", [], |r| r.get(0)).unwrap()
+    }
+
+    /// F9.1 (b), (e): a label About shows by its Discogs id, or by its MBID, opens the label found by that reference, else one made now
+    /// with it, by the name it was kept with: opened twice, or by two at once, one label; never a label of another name (one the files
+    /// name, holding no reference); found by anyone, by any name. A later read of About names it by its id (nothing left to open); a
+    /// later read of its list reads it at that source by that reference, finding nothing by its name. (The one label of its name it
+    /// joins: `a_label_opened_by_its_reference_is_the_one_label_of_its_name`, RG9.)
+    #[tokio::test]
+    async fn a_label_is_found_or_made_by_its_reference_once() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let files = cat.label_for("Quiet Pier").unwrap();
+        let by_discogs = LabelOpened { source: "discogs".into(), id: "23528".into(), name: "Low Tide Records".into() };
+        let LabelOpen::Opened(made) = open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap() else { panic!("not opened") };
+        assert_ne!(made, files, "by its reference alone: a label of another name is not it");
+        assert_eq!(open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(made), "opened again: the same label");
+        let anyone = LabelOpened { id: " 23528 ".into(), name: "Something Else".into(), ..by_discogs.clone() };
+        assert_eq!(open_label(&cat, &anyone, |_| Ok(None), false).unwrap(), LabelOpen::Opened(made), "found by its reference, by anyone, by any name");
+        assert_eq!(labels_kept(&cat), 2);
+        assert_eq!(cat.label(made).unwrap().map(|l| l.name), Some("Low Tide Records".to_string()));
+        let refs = |id: i64| cat.references_of(&ids::label(id)).unwrap().into_iter().map(|(r, _)| r).collect::<Vec<_>>();
+        assert_eq!(refs(made), [Ref::new("discogs", "label", "23528")]);
+        assert!(refs(files).is_empty(), "a label of another name is given nothing");
+        // MusicBrainz's MBID, as MusicBrainz writes it.
+        let by_mbid = LabelOpened { source: "musicbrainz".into(), id: LABEL_MBID.to_uppercase(), name: "Kite Records".into() };
+        let LabelOpen::Opened(kite) = open_label(&cat, &by_mbid, named_as("Kite Records"), false).unwrap() else { panic!("not opened") };
+        assert_eq!(open_label(&cat, &by_mbid, named_as("Kite Records"), false).unwrap(), LabelOpen::Opened(kite));
+        assert_eq!(refs(kite), [Ref::new("musicbrainz", "label", LABEL_MBID)]);
+        assert_eq!(labels_kept(&cat), 3);
+        // Two at once: one label.
+        let at_once = LabelOpened { id: "4401".into(), name: "Paper Lantern".into(), ..by_discogs.clone() };
+        let both: Vec<LabelOpen> = std::thread::scope(|s| {
+            let runs: Vec<_> = (0..2).map(|_| s.spawn(|| open_label(&cat, &at_once, named_as("Paper Lantern"), false).unwrap())).collect();
+            runs.into_iter().map(|r| r.join().unwrap()).collect()
+        });
+        assert_eq!(both[0], both[1], "one label");
+        assert_eq!(labels_kept(&cat), 4);
+        // A later read of About: each by its id.
+        let discogs = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528) }];
+        let musicbrainz = [crate::app::discogs::MbLabel { name: "Kite Records".into(), mbid: LABEL_MBID.into(), catno: None }];
+        assert_eq!(
+            serde_json::to_value(about(&cat, &discogs, &musicbrainz).unwrap()).unwrap(),
+            serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012", "id": ids::label(made) }, { "name": "Kite Records", "id": ids::label(kite) }])
+        );
+        // A later read of its list: at Discogs by its id, at MusicBrainz by its MBID, nothing found by its name there.
+        let (musicbrainz, discogs) = (Asking::new("musicbrainz"), Asking::new("discogs"));
+        let sources: Vec<Arc<dyn LabelList>> = vec![musicbrainz.clone(), discogs.clone()];
+        let shown = settled(&cat, made, None, &sources).await;
+        assert_eq!(discogs.asked(), (vec!["23528".to_string()], 0), "Discogs' list read by its id");
+        assert_eq!(shown.discogs.as_deref(), Some("23528"));
+        let (musicbrainz, discogs) = (Asking::new("musicbrainz"), Asking::new("discogs"));
+        let sources: Vec<Arc<dyn LabelList>> = vec![musicbrainz.clone(), discogs];
+        let shown = settled(&cat, kite, None, &sources).await;
+        assert_eq!(musicbrainz.asked(), (vec![LABEL_MBID.to_string()], 0), "MusicBrainz's list read by its MBID");
+        assert_eq!(shown.musicbrainz.as_deref(), Some(LABEL_MBID));
+        assert_eq!(labels_kept(&cat), 4, "nothing made by reading");
+    }
+
+    /// F9 (as Z8's artists): a label no label holds is made only by a reference an album's labels were kept with (at Discogs or
+    /// MusicBrainz, `discogs_facts::label_named`), by the name it was kept with, or by an administrator, by the name given; never by a
+    /// name alone, nor by what is no Discogs id or MBID. Nothing is made where it is refused.
+    #[test]
+    fn a_label_is_made_only_by_a_reference_the_server_named() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let open = |source: &str, id: &str, name: &str, named: Option<&'static str>, administering: bool| {
+            open_label(&cat, &LabelOpened { source: source.into(), id: id.into(), name: name.into() }, move |_| Ok(named.map(str::to_string)), administering).unwrap()
+        };
+        for (source, id) in [("", ""), ("bandcamp", "23528"), ("discogs", "x1"), ("discogs", "0"), ("discogs", ""), ("musicbrainz", "not an id"), ("musicbrainz", "23528")] {
+            assert_eq!(open(source, id, "Low Tide Records", Some("Low Tide Records"), true), LabelOpen::NoReference, "{source:?} {id:?}: a name alone opens none");
+        }
+        assert_eq!(open("discogs", "23528", "Low Tide Records", None, false), LabelOpen::NotNamed, "named by nothing kept");
+        assert_eq!(open("discogs", "23528", "Kite Records", Some("Low Tide Records"), false), LabelOpen::NotNamed, "by another name than it was kept with");
+        assert_eq!(open("discogs", "23528", " ", None, true), LabelOpen::NotNamed, "an administrator names it");
+        assert_eq!(labels_kept(&cat), 0, "nothing made");
+        let LabelOpen::Opened(kept) = open("discogs", "23528", "low tide records", Some("Low Tide Records"), false) else { panic!("not opened") };
+        assert_eq!(cat.label(kept).unwrap().map(|l| l.name), Some("Low Tide Records".to_string()), "by the name it was kept with");
+        let LabelOpen::Opened(any) = open("musicbrainz", LABEL_MBID, " Quiet Pier ", None, true) else { panic!("not opened") };
+        assert_eq!(cat.label(any).unwrap().map(|l| l.name), Some("Quiet Pier".to_string()), "an administrator's, by the name given");
+        let long = LabelOpened { source: "discogs".into(), id: "77".into(), name: "\u{e9}".repeat(NAME_MOST + 1) };
+        assert!(open_label(&cat, &long, |_| Ok(None), true).is_err(), "a name that long is no label's");
+        assert_eq!(labels_kept(&cat), 2);
+    }
+
+    /// F9.1 (c), (d): a label known by its name alone (a page elsewhere's label, Discogs' kept before C46 with no id) opens the one
+    /// label of its name where exactly one has it; with two of its name, or none, it is text, and nothing is made. Discogs' "Not On
+    /// Label" (self-released) is text, though Discogs gives it an id.
+    #[test]
+    fn a_label_known_by_name_alone_opens_only_the_one_of_its_name() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let low = cat.label_for("Low Tide Records").unwrap();
+        let text = |t: &str| serde_json::to_value(of_text(&cat, t).unwrap()).unwrap();
+        assert_eq!(text(" LOW TIDE RECORDS "), serde_json::json!([{ "name": "LOW TIDE RECORDS", "id": ids::label(low) }]), "(c) the one label of its name");
+        assert_eq!(text("Quiet Pier"), serde_json::json!([{ "name": "Quiet Pier" }]), "no label of its name: text");
+        assert_eq!(text(" "), serde_json::json!([]));
+        let old = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: None }];
+        let at_discogs = |labels: &[crate::app::discogs::Label]| serde_json::to_value(about(&cat, labels, &[]).unwrap()).unwrap();
+        assert_eq!(at_discogs(&old), serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012", "id": ids::label(low) }]), "kept with no id: by its name");
+        // (d) A second label of the name, made by its reference, the files' label holding another Discogs id (RG9: by the first, the
+        // files' label was joined): the name opens neither.
+        assert_eq!(cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records").unwrap(), low, "the one label of its name");
+        let second = cat.open_label(&Ref::new("discogs", "label", "777"), "Low Tide Records").unwrap();
+        assert_ne!(second, low);
+        assert_eq!(text("Low Tide Records"), serde_json::json!([{ "name": "Low Tide Records" }]), "(d) two labels of its name: text");
+        assert_eq!(at_discogs(&old), serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012" }]));
+        let self_released = [crate::app::discogs::Label { name: "Not On Label (Kite Theory Self-released)".into(), catno: None, id: Some(1818) }];
+        assert_eq!(at_discogs(&self_released), serde_json::json!([{ "name": "Not On Label (Kite Theory Self-released)" }]), "no label: text");
+        assert_eq!(labels_kept(&cat), 2, "nothing made by showing");
+    }
+
+    /// RG9 (PB3, the review of preview 1's fixes): a label opened by its Discogs id or its MBID that no label holds is the one label
+    /// of its name, where exactly one has it (X8) and it holds none of that source's references: it is given the reference, as an
+    /// outside row joins the record the house has of its names (F11.2). One real label never gets two pages: the files' label keeps
+    /// its albums and takes the Discogs id; a later About names it by that id, a name-only chip of its name (a Bandcamp album's) still
+    /// opens it, and a later read of its page reads Discogs' list by that id. Where the one label of its name holds another id of that
+    /// source, a label is made by the reference alone; where two labels have the name, it joins neither; never a second label for one
+    /// reference.
+    #[tokio::test]
+    async fn a_label_opened_by_its_reference_is_the_one_label_of_its_name() {
+        const MBID_2: &str = "00000000-0000-4000-8000-000000000569";
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let refs = |id: i64| cat.references_of(&ids::label(id)).unwrap().into_iter().map(|(r, _)| r).collect::<Vec<_>>();
+        // The files name Low Tide Records on an album: its label, with no reference yet.
+        let files = cat.label_for("Low Tide Records").unwrap();
+        let record = cat.record_for_tests("Night Walks", 2);
+        cat.tie_label(record, files, "LTR-012").unwrap();
+        // Its Discogs id, from a record not had's About: the files' label, given the id.
+        let by_discogs = LabelOpened { source: "discogs".into(), id: "23528".into(), name: "low tide records".into() };
+        assert_eq!(open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(files), "the one label of its name");
+        assert_eq!(refs(files), [Ref::new("discogs", "label", "23528")], "the files' label keeps the Discogs id");
+        assert_eq!(cat.label_records(files).unwrap(), [(record, "LTR-012".to_string())], "its page holds the files' albums");
+        assert_eq!(cat.label(files).unwrap().map(|l| l.name), Some("Low Tide Records".to_string()), "its name as it was");
+        assert_eq!(labels_kept(&cat), 1, "one real label, one page");
+        assert_eq!(open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(files), "opened again: the same");
+        // A later About names it by its id; a name-only chip of its name still opens it.
+        let at_discogs = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528) }];
+        assert_eq!(
+            serde_json::to_value(about(&cat, &at_discogs, &[]).unwrap()).unwrap(),
+            serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012", "id": ids::label(files) }])
+        );
+        assert_eq!(serde_json::to_value(of_text(&cat, "Low Tide Records").unwrap()).unwrap(), serde_json::json!([{ "name": "Low Tide Records", "id": ids::label(files) }]));
+        // A later read of its page: Discogs' list by that id, nothing found by its name.
+        let (musicbrainz, discogs) = (Asking::new("musicbrainz"), Asking::new("discogs"));
+        let sources: Vec<Arc<dyn LabelList>> = vec![musicbrainz, discogs.clone()];
+        let shown = settled(&cat, files, None, &sources).await;
+        assert_eq!(discogs.asked(), (vec!["23528".to_string()], 0), "Discogs' list read by its id");
+        assert_eq!(shown.discogs.as_deref(), Some("23528"));
+        // By its MBID: the one label of its name, which holds none of MusicBrainz's, given it beside its Discogs id.
+        let kite = cat.label_for("Kite Records").unwrap();
+        let by_mbid = LabelOpened { source: "musicbrainz".into(), id: LABEL_MBID.to_uppercase(), name: "Kite Records".into() };
+        assert_eq!(open_label(&cat, &by_mbid, named_as("Kite Records"), false).unwrap(), LabelOpen::Opened(kite));
+        let kite_discogs = LabelOpened { source: "discogs".into(), id: "4401".into(), name: "Kite Records".into() };
+        assert_eq!(open_label(&cat, &kite_discogs, named_as("Kite Records"), false).unwrap(), LabelOpen::Opened(kite));
+        assert_eq!(refs(kite), [Ref::new("discogs", "label", "4401"), Ref::new("musicbrainz", "label", LABEL_MBID)]);
+        assert_eq!(labels_kept(&cat), 2);
+        // Another Discogs id of Low Tide Records' name: the one of its name holds another of Discogs', so it is made by its reference.
+        let other = LabelOpened { source: "discogs".into(), id: "777".into(), name: "Low Tide Records".into() };
+        let LabelOpen::Opened(second) = open_label(&cat, &other, named_as("Low Tide Records"), false).unwrap() else { panic!("not opened") };
+        assert_ne!(second, files, "a label holding another id at that source is another label");
+        assert_eq!(open_label(&cat, &other, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(second), "never a second label for one reference");
+        assert_eq!((refs(files), refs(second)), (vec![Ref::new("discogs", "label", "23528")], vec![Ref::new("discogs", "label", "777")]));
+        assert_eq!(labels_kept(&cat), 3);
+        // Two labels of its name now (X8): its MBID joins neither, and its name opens neither.
+        let x8 = LabelOpened { source: "musicbrainz".into(), id: MBID_2.into(), name: "Low Tide Records".into() };
+        let LabelOpen::Opened(third) = open_label(&cat, &x8, named_as("Low Tide Records"), false).unwrap() else { panic!("not opened") };
+        assert!(third != files && third != second, "X8: a name two labels have joins neither");
+        assert_eq!((refs(files).len(), refs(second).len()), (1, 1), "each keeps its own");
+        assert_eq!(labels_kept(&cat), 4);
+        assert_eq!(serde_json::to_value(of_text(&cat, "Low Tide Records").unwrap()).unwrap(), serde_json::json!([{ "name": "Low Tide Records" }]));
+    }
+
+    // ---- F10 (preview 1's fix batch): a label page shows what the house has apart from what it doesn't
+
+    /// A source whose list is the test's, each page read once the test lets it (`gate`); it knows the label as `LABEL_MBID`.
+    struct Gated {
+        source: &'static str,
+        rows: Vec<LabelListed>,
+        gate: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl LabelList for Gated {
+        fn source(&self) -> &'static str {
+            self.source
+        }
+
+        fn find<'a>(&'a self, _: &'a str, _: &'a [Ref]) -> crate::source::Fut<'a, Found> {
+            let found = vec![(Ref::new(self.source, "label", LABEL_MBID), "search")];
+            Box::pin(async move { Ok(found) })
+        }
+
+        fn page<'a>(&'a self, _: &'a str, _: Option<i64>) -> crate::source::Fut<'a, Page> {
+            Box::pin(async move {
+                let _turn = self.gate.acquire().await?;
+                Ok((self.rows.clone(), None))
+            })
+        }
+    }
+
+    /// A source that does not answer (F10).
+    struct Unanswering(&'static str);
+
+    impl LabelList for Unanswering {
+        fn source(&self) -> &'static str {
+            self.0
+        }
+
+        fn find<'a>(&'a self, _: &'a str, _: &'a [Ref]) -> crate::source::Fut<'a, Found> {
+            Box::pin(async { Err(anyhow::anyhow!("out of reach")) })
+        }
+
+        fn page<'a>(&'a self, _: &'a str, _: Option<i64>) -> crate::source::Fut<'a, Page> {
+            Box::pin(async { Ok((Vec::new(), None)) })
+        }
+    }
+
+    /// A source switched off (F10): never asked.
+    struct Off(&'static str);
+
+    impl LabelList for Off {
+        fn source(&self) -> &'static str {
+            self.0
+        }
+
+        fn on(&self) -> bool {
+            false
+        }
+
+        fn find<'a>(&'a self, _: &'a str, _: &'a [Ref]) -> crate::source::Fut<'a, Found> {
+            Box::pin(async { Err(anyhow::anyhow!("asked though switched off")) })
+        }
+
+        fn page<'a>(&'a self, _: &'a str, _: Option<i64>) -> crate::source::Fut<'a, Page> {
+            Box::pin(async { Err(anyhow::anyhow!("asked though switched off")) })
+        }
+    }
+
+    /// What is had of a label page, in its order: each title, record and mark.
+    fn had_of(p: &LabelPage) -> Vec<(&str, Option<String>, bool)> {
+        p.had.iter().map(|r| (r.title.as_str(), r.record.clone(), r.had)).collect()
+    }
+
+    /// F10.1: a label page answers what the house has of the label apart from the rest. Its three records had, one in Music, one in
+    /// Incoming, one in an own music (the one had rule: any library), are `had` at once, by year, while its list is read; once read,
+    /// `had` is the same three in the same order, the list's row of each among them (two by their references, one by its names alone,
+    /// Z6), and `not_had` the twelve others by year with their catalogue numbers, the record not had among them. A record that arrives
+    /// is had at the next read. Never a had record among the rest; never one list of both.
+    #[tokio::test]
+    async fn a_label_page_shows_what_is_had_apart() {
+        let cat = Arc::new(Catalogue::open(None, ["/music", "/incoming", "/own/ann"].map(std::path::PathBuf::from).to_vec()).unwrap());
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let group = |n: usize| format!("00000000-0000-4000-8000-{:012}", 7000 + n);
+        let tied = |title: &str, tracks: usize, year: i32| {
+            let record = cat.record_for_tests(title, tracks);
+            let db = cat.db_for_tests();
+            db.execute("UPDATE records SET year = ?2, kind = 'album' WHERE id = ?1", rusqlite::params![record, year]).unwrap();
+            db.execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, '', 'files')", rusqlite::params![record, label]).unwrap();
+            record
+        };
+        // Had: Tide Tables in Music, Open Water in Incoming, Harbour Lights in Ann's own music; Undertow not had.
+        let (tide, open, lights) = (tied("Tide Tables", 2, 2012), tied("Open Water", 1, 2015), tied("Harbour Lights", 1, 2009));
+        for (record, folder) in [(tide, 0), (open, 1), (lights, 2)] {
+            cat.copy_for_tests(record, folder);
+        }
+        let undertow = tied("Undertow", 0, 2019);
+        for (record, n) in [(tide, 1), (open, 2), (undertow, 3)] {
+            cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release-group", &group(n)), "files").unwrap();
+        }
+        // Its list: the three had (Harbour Lights by a group no record holds: its names alone), Undertow, and eleven no record holds.
+        let mut rows = vec![
+            group_row(&group(1), "Tide Tables", 2012),
+            group_row(&group(2), "Open Water", 2015),
+            group_row(&group(4), "Harbour Lights", 2009),
+            LabelListed { catno: "LTR-030".into(), ..group_row(&group(3), "Undertow", 2019) },
+        ];
+        rows.extend((0..11).map(|i| LabelListed { catno: format!("LTR-1{i:02}"), ..group_row(&group(10 + i), &format!("Record {i}"), 2000 + i as i32) }));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let sources: Vec<Arc<dyn LabelList>> = vec![Arc::new(Gated { source: "musicbrainz", rows, gate: gate.clone() })];
+        let at_once = page(cat.clone(), label, None, &sources).await.unwrap().expect("a label");
+        assert!(at_once.looking, "its list being read");
+        let three = [("Open Water", Some(ids::record(open)), true), ("Tide Tables", Some(ids::record(tide)), true), ("Harbour Lights", Some(ids::record(lights)), true)];
+        assert_eq!(had_of(&at_once), three, "at once, by year: Incoming's, Music's, the own music's");
+        assert_eq!(at_once.not_had.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(), ["Undertow"]);
+        gate.add_permits(1);
+        let read = settled(&cat, label, None, &sources).await;
+        assert_eq!(had_of(&read), three, "the list's arrival moves none of them");
+        assert_eq!(read.had[2].release_group, Some(group(4)), "Harbour Lights' row of the list, by its names alone (Z6)");
+        let rest: Vec<(&str, Option<&str>, bool)> = read.not_had.iter().map(|r| (r.title.as_str(), r.catno.as_deref(), r.had)).collect();
+        let others: Vec<(String, String)> = (0..11).rev().map(|i| (format!("Record {i}"), format!("LTR-1{i:02}"))).collect();
+        let mut expected = vec![("Undertow", Some("LTR-030"), false)];
+        expected.extend(others.iter().map(|(t, c)| (t.as_str(), Some(c.as_str()), false)));
+        assert_eq!(rest, expected, "the twelve others by year, newest first, with their catalogue numbers");
+        let had: Vec<&Option<String>> = read.had.iter().map(|r| &r.record).collect();
+        assert!(read.not_had.iter().all(|r| !r.had && (r.record.is_none() || !had.contains(&&r.record))), "never a had record among the rest");
+        // Undertow arrives, in the own music: had at the next read.
+        cat.db_for_tests().execute("INSERT INTO tracks (born, record, disc, number) VALUES (1, ?1, 1, 1)", [undertow]).unwrap();
+        cat.copy_for_tests(undertow, 2);
+        let after = settled(&cat, label, None, &sources).await;
+        assert_eq!(had_of(&after).first().map(|(t, ..)| *t), Some("Undertow"), "{:?}", had_of(&after));
+        assert_eq!((after.had.len(), after.not_had.len()), (4, 11));
+        assert!(after.not_had.iter().all(|r| r.title != "Undertow"));
+        let v = serde_json::to_value(&after).unwrap();
+        assert!(v.get("rows").is_none() && v["had"].is_array() && v["not_had"].is_array(), "two lists, not one: {v}");
+    }
+
+    /// F10.1 (as F8's sections, in F1's words): while a label's list is read, its page names the source it reads and says nothing
+    /// missing; once none is read, each source whose list could not be had: one that failed (`unanswered`, until it is asked again a
+    /// quarter hour on), one switched off with its list not kept (`off`). One switched off whose list is kept says nothing.
+    #[tokio::test]
+    async fn a_label_page_says_what_it_reads_and_what_it_could_not() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        // Kept for the process: no later test's catalogue takes its address, and with it these failures.
+        std::mem::forget(cat.clone());
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let musicbrainz: Arc<dyn LabelList> = Arc::new(Gated { source: "musicbrainz", rows: vec![group_row(GROUP_1, "Undertow", 2019)], gate: gate.clone() });
+        let sources: Vec<Arc<dyn LabelList>> = vec![musicbrainz, Arc::new(Unanswering("discogs"))];
+        let asked = page(cat.clone(), label, None, &sources).await.unwrap().expect("a label");
+        assert!(asked.looking);
+        assert_eq!((asked.reading, asked.no_list.is_none()), (Some("musicbrainz"), true), "the source read now; nothing said missing while one is read");
+        gate.add_permits(1);
+        let read = settled(&cat, label, None, &sources).await;
+        let said = |p: &LabelPage| serde_json::to_value(p).unwrap();
+        assert_eq!(said(&read).get("reading"), None, "none read now");
+        assert_eq!(said(&read)["no_list"], serde_json::json!([{ "source": "discogs", "said": "unanswered" }]), "F1's words");
+        assert_eq!(titles(&read), ["Undertow"], "what MusicBrainz listed");
+        // MusicBrainz switched off: its list kept, nothing said of it; a label never read there, said off.
+        let off: Vec<Arc<dyn LabelList>> = vec![Arc::new(Off("musicbrainz")), Arc::new(Unanswering("discogs"))];
+        let kept = settled(&cat, label, None, &off).await;
+        assert_eq!(said(&kept)["no_list"], serde_json::json!([{ "source": "discogs", "said": "unanswered" }]));
+        let never = settled(&cat, cat.label_for("Kite Records").unwrap(), None, &off).await;
+        assert_eq!(said(&never)["no_list"], serde_json::json!([{ "source": "musicbrainz", "said": "off" }, { "source": "discogs", "said": "unanswered" }]));
     }
 }

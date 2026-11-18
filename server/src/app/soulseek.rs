@@ -695,20 +695,52 @@ pub fn view(app: &Arc<super::App>) -> View {
     View { items: kept(|k| k.items.clone()), library: library().ok().map(|p| p.display().to_string()) }
 }
 
-/// These records approved, each with the folder given (else the best); the queue as it is now.
-pub fn approve(app: &Arc<super::App>, picked: &[(String, Option<usize>)]) -> View {
-    kept(|k| {
-        for (id, folder) in picked {
-            if let Some(i) = k.items.iter_mut().find(|i| i.id == *id && i.state == State::Found) {
-                let f = folder.unwrap_or(0);
-                if f < i.folders.len() {
-                    (i.state, i.chosen, i.why) = (State::Approved, Some(f), None);
-                }
+/// A tick (RQ01.8 (b)): an item and its folder chosen by its place (none: the best), and, from a request's story, the source it names
+/// there (its user, its folder's last part), so a tick sent before a new search changed the folders fetches from no other.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct Pick {
+    pub id: String,
+    #[serde(default)]
+    pub folder: Option<usize>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub folder_name: Option<String>,
+}
+
+/// What a tick naming a source no longer at its place says (RQ01.8 (b)).
+pub const SOURCE_GONE: &str = "That source is gone; look again";
+
+/// These records approved, each with the folder given (else the best); the queue as it is now. A tick naming a source no longer at
+/// its place is refused (`SOURCE_GONE`), and nothing is ticked.
+pub fn approve(app: &Arc<super::App>, picked: &[Pick]) -> Result<View> {
+    kept(|k| approve_in(&mut k.items, picked))?;
+    wake();
+    Ok(view(app))
+}
+
+/// [`approve`]'s, on the list's items: each Found item ticked approved with its folder (the first tick wins: one approved since is
+/// left as it is, RQ01.8 (a)); none where a tick names a source not at its place now. Pure.
+fn approve_in(items: &mut [Item], picked: &[Pick]) -> Result<()> {
+    // Gone: no item of that id holds the source the tick names at its place (a new search moved it, or the item went).
+    let gone = |p: &Pick| {
+        (p.user.is_some() || p.folder_name.is_some())
+            && !items.iter().find(|i| i.id == p.id).and_then(|i| i.folders.get(p.folder.unwrap_or(0))).is_some_and(|f| {
+                p.user.as_ref().is_none_or(|u| *u == f.user) && p.folder_name.as_deref().is_none_or(|n| n == folder_name(&f.dir))
+            })
+    };
+    if picked.iter().any(gone) {
+        bail!(SOURCE_GONE);
+    }
+    for p in picked {
+        if let Some(i) = items.iter_mut().find(|i| i.id == p.id && i.state == State::Found) {
+            let f = p.folder.unwrap_or(0);
+            if f < i.folders.len() {
+                (i.state, i.chosen, i.why) = (State::Approved, Some(f), None);
             }
         }
-    });
-    wake();
-    view(app)
+    }
+    Ok(())
 }
 
 /// A record searched now, whatever its wait (and from the ladder's first rung).
@@ -751,31 +783,141 @@ pub enum Word {
     },
 }
 
-/// What Soulseek says of these requests (W5): each one's item, by the request's id.
-pub fn item_words(requests: &[i64]) -> std::collections::HashMap<i64, Word> {
+/// What Soulseek says of these requests (W5), each given with its record: its item's word (`item_of`), by the request's id.
+pub fn item_words(requests: &[(i64, Option<i64>)]) -> std::collections::HashMap<i64, Word> {
     kept(|k| words_in(&k.items, requests))
 }
 
-/// [`item_words`]'s: pure (V1). A request with two items (a placed copy short of its list and the one looking again, Y2) reads the
-/// later.
-fn words_in(items: &[Item], requests: &[i64]) -> std::collections::HashMap<i64, Word> {
-    items
-        .iter()
-        .filter(|i| requests.contains(&i.record.request))
-        .map(|i| {
-            let word = match i.state {
-                State::Searching => Word::Searching,
-                State::Found => Word::Found,
-                // Held by the disk floor (AL03.2): no transfer begun, so not fetching.
-                State::Approved if i.why.as_deref() == Some(SHORT_OF_SPACE) => Word::Waiting { why: i.why.clone() },
-                State::Approved | State::Fetching => Word::Fetching { percent: i.percent },
-                State::Checking | State::Placed => Word::Fetching { percent: 100.0 },
-                State::Waiting => Word::Waiting { why: i.why.clone() },
-                State::Stuck => Word::Stuck { why: i.why.clone() },
-            };
-            (i.record.request, word)
-        })
-        .collect()
+/// [`item_words`]'s: pure (V1).
+fn words_in(items: &[Item], requests: &[(i64, Option<i64>)]) -> std::collections::HashMap<i64, Word> {
+    requests.iter().filter_map(|&(request, record)| Some((request, word_of(item_of(items, request, record)?)))).collect()
+}
+
+/// A request's item (RQ01.5): its own, else its record's, so every open request of a record reads its one item (one item a record,
+/// `take_requests`); of two (a placed copy short of its list and the one looking again, Y2), the later. Pure.
+fn item_of(items: &[Item], request: i64, record: Option<i64>) -> Option<&Item> {
+    items.iter().rev().find(|i| i.record.request == request).or_else(|| record.filter(|r| *r != 0).and_then(|r| items.iter().rev().find(|i| i.record.record == r)))
+}
+
+/// An item's word (W5).
+fn word_of(i: &Item) -> Word {
+    match i.state {
+        State::Searching => Word::Searching,
+        State::Found => Word::Found,
+        // Held by the disk floor (AL03.2): no transfer begun, so not fetching.
+        State::Approved if i.why.as_deref() == Some(SHORT_OF_SPACE) => Word::Waiting { why: i.why.clone() },
+        State::Approved | State::Fetching => Word::Fetching { percent: i.percent },
+        State::Checking | State::Placed => Word::Fetching { percent: 100.0 },
+        State::Waiting => Word::Waiting { why: i.why.clone() },
+        State::Stuck => Word::Stuck { why: i.why.clone() },
+    }
+}
+
+/// A request's record's item as its story tells it (RQ01.4), whole, for its asker too (the owner: Soulseek's user names included):
+/// its state, how far while fetched, the sources found (by Soulseek user, in its order; never a path on the server), the one ticked,
+/// the users who failed it, what holds it and till when, why it is stuck, its misses and next search, what was set aside and why per
+/// file, and whether slskd is switched off (nothing moves). Its whys whole: a user's story cuts them (`requests::story`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Part {
+    pub id: String,
+    pub state: State,
+    /// 0 to 100, while fetched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<f64>,
+    pub sources: Vec<Source>,
+    /// Of `sources`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chosen: Option<usize>,
+    pub failed: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<Held>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<String>,
+    pub misses: u32,
+    /// Epoch seconds, while waiting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_search: Option<i64>,
+    pub set_aside: Vec<Aside>,
+    pub off: bool,
+}
+
+/// A folder found, as a story shows it (RQ01.4): whose, its own name (its path's last part), how good and how soon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Source {
+    pub user: String,
+    pub folder: String,
+    pub format: String,
+    pub lossless: bool,
+    pub free_slot: bool,
+    pub queue: i64,
+    pub speed: i64,
+    pub extra: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unchecked: Option<String>,
+}
+
+/// What holds an item, and till when (epoch seconds).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Held {
+    pub why: String,
+    pub until: i64,
+}
+
+/// A folder set aside, as a story shows it: whose, and why each file failed; never where it is kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Aside {
+    pub user: String,
+    pub files: Vec<AsideFile>,
+}
+
+/// A file set aside, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AsideFile {
+    pub file: String,
+    pub why: String,
+}
+
+/// The item of a request's record as its story tells it at `now` (RQ01.4, RQ01.5): the request's own item, else its record's
+/// (`item_of`). None where its record has none.
+pub fn part_of(request: i64, record: Option<i64>, now: i64) -> Option<Part> {
+    let off = !super::switches::is_on(super::switches::SLSKD);
+    kept(|k| item_of(&k.items, request, record).map(|i| part(i, now, off)))
+}
+
+/// [`part_of`]'s: an item as a story tells it at `now`, `off` where slskd is switched off. Held: ticked, fetched or checked, and
+/// waiting for its time with why (`hold`, the disk floor). Pure.
+fn part(i: &Item, now: i64, off: bool) -> Part {
+    let held = (matches!(i.state, State::Approved | State::Fetching | State::Checking) && i.due > now).then(|| i.why.clone()).flatten().map(|why| Held { why, until: i.due });
+    let source = |f: &Folder| Source {
+        user: f.user.clone(),
+        folder: folder_name(&f.dir).to_string(),
+        format: f.format.clone(),
+        lossless: f.lossless,
+        free_slot: f.free_slot,
+        queue: f.queue,
+        speed: f.speed,
+        extra: f.extra,
+        unchecked: f.unchecked.clone(),
+    };
+    Part {
+        id: i.id.clone(),
+        state: i.state,
+        percent: (i.state == State::Fetching).then_some(i.percent),
+        sources: i.folders.iter().map(source).collect(),
+        chosen: i.chosen,
+        failed: i.failed.clone(),
+        held,
+        stuck: (i.state == State::Stuck).then(|| i.why.clone()).flatten(),
+        misses: i.misses,
+        next_search: (i.state == State::Waiting && i.due > now).then_some(i.due),
+        set_aside: i.set_aside.iter().map(|a| Aside { user: a.user.clone(), files: a.why.iter().map(|(file, why)| AsideFile { file: file.clone(), why: why.clone() }).collect() }).collect(),
+        off,
+    }
+}
+
+/// A folder's own name: the last part of its path as its user shares it.
+fn folder_name(dir: &str) -> &str {
+    dir.rsplit(['\\', '/']).find(|part| !part.is_empty()).unwrap_or(dir)
 }
 
 /// The records on the list (RT01: a record not had is never forgotten while an item of it is there); an item 0.16 kept with
@@ -857,6 +999,20 @@ pub fn placed_for_tests(id: &str, record: i64) {
 #[cfg(test)]
 pub fn listed_for_tests(id: &str) -> bool {
     kept(|k| k.items.iter().any(|i| i.id == id))
+}
+
+/// Tests elsewhere: item `id` on the list as `f` leaves it (`list_for_tests` puts one there).
+#[cfg(test)]
+pub fn change_for_tests(id: &str, f: impl FnOnce(&mut Item)) {
+    with_item(id, f);
+}
+
+/// Tests elsewhere: item `id`'s fetch failed on `user` (refused, offline): the next folder chosen, as a fetch does (`on_failed`).
+#[cfg(test)]
+pub fn failed_for_tests(id: &str, user: &str) {
+    with_item(id, |i| {
+        on_failed(i, user, format!("{user} is offline"));
+    });
 }
 
 /// A record taken off the list (not while it is fetched): its Request is not taken in again. What it fetched goes with
@@ -1140,7 +1296,7 @@ pub fn first_search(r: &crate::userdata::Request, released: Option<i64>, lidarr:
 fn bring_forward(items: &mut [Item], groups: &HashMap<i64, String>, unreleased: &[i64], progress: &HashMap<String, Progress>, now: i64) {
     for i in items.iter_mut().filter(|i| i.state == State::Waiting && i.due > now && !unreleased.contains(&i.record.request)) {
         let Some(p) = groups.get(&i.record.request).and_then(|g| progress.get(g)) else { continue };
-        if matches!(p, Progress::Stuck | Progress::Unknown | Progress::NotWanted) {
+        if matches!(p, Progress::Stuck { .. } | Progress::Unknown | Progress::NotWanted) {
             i.due = now;
         }
     }
@@ -1197,6 +1353,14 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
     for i in k.items.iter_mut().filter(|i| i.record.record == 0) {
         if let Some((_, Some(o))) = approved.iter().zip(of).find(|(r, _)| r.id == i.record.request) {
             i.record.record = o.record;
+        }
+    }
+
+    // A record merged since into another (0.17's fold, F2.11; a copy joined, F11.1): its item names the record its request's is now,
+    // as the request reads it (merges followed), so it is searched, placed and found had as that one.
+    for i in k.items.iter_mut().filter(|i| i.record.record != 0) {
+        if let Some(record) = record_of.get(&i.record.request).filter(|record| **record != i.record.record) {
+            i.record.record = *record;
         }
     }
     // A record already had, by its own files or a record holding them (the one had rule, R26, N9), is not searched: none is made for
@@ -3278,7 +3442,7 @@ mod tests {
         let mut k = Kept::default();
         take_requests(&mut k, &[asked(1, None), asked(2, None), asked(3, None)], &[of(101), of(102), of(103)], &[5_000, 5_000, 90_000]);
         let groups: HashMap<i64, String> = [(1, "g1".to_string()), (2, "g2".to_string()), (3, "g3".to_string())].into();
-        let progress: HashMap<String, Progress> = [("g1".to_string(), Progress::Stuck), ("g2".to_string(), Progress::Fetching { done: 0.4 }), ("g3".to_string(), Progress::Stuck)].into();
+        let progress: HashMap<String, Progress> = [("g1".to_string(), Progress::Stuck { said: None }), ("g2".to_string(), Progress::Fetching { done: 0.4 }), ("g3".to_string(), Progress::Stuck { said: None })].into();
         bring_forward(&mut k.items, &groups, &[3], &progress, 1_000);
         assert_eq!(k.items.iter().map(|i| i.due).collect::<Vec<_>>(), [1_000, 5_000, 90_000]);
     }
@@ -3455,7 +3619,7 @@ mod tests {
         // Deleted from Incoming: its request closed (W4), its record holds no copy, and someone asks for it again.
         take_requests(&mut k, &[asked(2, None)], &[gone(101)], &[]);
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record, i.state)).collect::<Vec<_>>(), [(2, 101, State::Waiting)], "searched again");
-        let words = words_in(&k.items, &[2]);
+        let words = words_in(&k.items, &[(2, None)]);
         assert_eq!(words.get(&2), Some(&Word::Waiting { why: None }));
         let state = request_state(&asked(2, None), Holding::None, None, words.get(&2));
         assert!(matches!(state, RequestState::Wanted { soulseek: Some(Word::Waiting { .. }), .. }), "not fetching 100%: {state:?}");
@@ -3579,7 +3743,7 @@ mod tests {
         for request in [2, 3, 4] {
             assert_eq!(states(request), [State::Placed], "kept into Music and deleted there: never looked for again ({request})");
         }
-        let words = words_in(&k.items, &[1]);
+        let words = words_in(&k.items, &[(1, None)]);
         assert_eq!(words.get(&1), Some(&Word::Waiting { why: None }));
         let state = request_state(&rs[0], Holding::None, None, words.get(&1));
         assert!(matches!(state, RequestState::Wanted { soulseek: Some(Word::Waiting { .. }), .. }), "not fetching 100%: {state:?}");
@@ -3648,7 +3812,7 @@ mod tests {
             }
             assert_eq!(read, [(Holding::None, true)], "{case}: its last copy went from Incoming");
             assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record, i.state)).collect::<Vec<_>>(), [(1, placed, State::Waiting)], "{case}: let go, and looked for again");
-            let words = words_in(&k.items, &[1]);
+            let words = words_in(&k.items, &[(1, None)]);
             let state = request_state(&rs[0], Holding::None, None, words.get(&1));
             assert!(matches!(state, RequestState::Wanted { soulseek: Some(Word::Waiting { .. }), .. }), "{case}: not fetching 100%: {state:?}");
             let theirs = [crate::userdata::Request { record: Some(other), ..asked(2, None) }];
@@ -3672,7 +3836,7 @@ mod tests {
         let read = round(&cat, &mut k, &rs);
         assert_eq!(read, [(Holding::None, true)], "its last copy went from Incoming");
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record, i.state)).collect::<Vec<_>>(), [(1, placed, State::Waiting)], "let go, and looked for again");
-        let words = words_in(&k.items, &[1]);
+        let words = words_in(&k.items, &[(1, None)]);
         let state = request_state(&rs[0], Holding::None, None, words.get(&1));
         assert!(matches!(state, RequestState::Wanted { soulseek: Some(Word::Waiting { .. }), .. }), "not fetching 100%: {state:?}");
         let theirs = [crate::userdata::Request { record: Some(other), ..asked(2, None) }];
@@ -3721,6 +3885,117 @@ mod tests {
         assert!(CHECKED_AGAIN_SECS >= 86_400);
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// F2.11 (kind 6): a record merged into another (0.17's fold) takes its Soulseek item along: the next round names the record its
+    /// request reads now, one item still.
+    #[test]
+    fn a_merged_records_soulseek_item_names_the_record_it_went_into() {
+        let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+        let (older, newer) = (cat.record_for_tests("Stone Sky", 0), cat.record_for_tests("Stone Sky", 0));
+        let asked = crate::userdata::Request {
+            id: 9701,
+            user: "alice".into(),
+            album_key: "glassharbour|stonesky".into(),
+            artist_key: "glass harbour".into(),
+            release_group: None,
+            album: "Stone Sky".into(),
+            artist: "Glass Harbour".into(),
+            year: None,
+            cover: None,
+            at: 1,
+            status: super::super::requests::APPROVED.into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+            record: Some(newer),
+        };
+        let mut k = Kept::default();
+        let round = |k: &mut Kept| {
+            let of = super::super::requests::records_of(&cat, std::slice::from_ref(&asked)).unwrap();
+            take_requests(k, std::slice::from_ref(&asked), &of, &[]);
+        };
+        round(&mut k);
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), [(9701, newer)]);
+        cat.merge_records(newer, older).unwrap();
+        round(&mut k);
+        assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), [(9701, older)], "the next round names the record it went into");
+    }
+
+    /// RG1 (the owner, 2026-11-18: "When the type agrees"), at 0.17's fold (PA1): alice's open Want "Kite EP", by its names alone (a
+    /// record of its own, as 0.16's step or preview 1 made it), being fetched by Soulseek (its batch 60% done), beside the house's had
+    /// "Kite". Where that "Kite" is an EP by the release type rule (four tracks), or a ten-track one set to EP by hand, the fold joins the
+    /// Want's record to it: the next round takes her item off with its fetch, to be cancelled (no second copy), and the Want is
+    /// delivered as had. Where it is a ten-track album, the two stay two: the Want stays open, its item keeps its record, its batch and
+    /// its share, nothing taken off. The same for "Kite LP": an album joins, an EP does not.
+    #[test]
+    fn the_fold_joins_a_wants_record_to_a_had_one_only_where_the_type_agrees() {
+        for (case, title, tracks, typed, joins) in [
+            ("EP, a had EP", "Kite EP", 4, None, true),
+            ("EP, a had album set to EP by hand", "Kite EP", 10, Some("ep"), true),
+            ("EP, a had album", "Kite EP", 10, None, false),
+            ("LP, a had album", "Kite LP", 10, None, true),
+            ("LP, a had EP", "Kite LP", 4, None, false),
+        ] {
+            let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+            let ud = crate::userdata::UserData::open(None).unwrap();
+            let wanted = crate::catalogue::records::Wanted { artist: "Kite Theory".into(), title: title.into(), ..Default::default() };
+            let own = cat.record_for_request(&wanted).unwrap();
+            let artist = cat.artist_for("Kite Theory").unwrap();
+            let kite = cat.record_for_tests("Kite", tracks);
+            cat.execute_for_tests(&format!("UPDATE records SET artist = 'Kite Theory' WHERE id = {kite}; INSERT INTO record_artists (record, artist, position, how) VALUES ({kite}, {artist}, 0, 'files');"));
+            if let Some(t) = typed {
+                cat.keep_types(&[(kite, t.to_string())]).unwrap();
+            }
+            let id = ud
+                .add_request(&crate::userdata::Request {
+                    id: 0,
+                    user: "alice".into(),
+                    album_key: format!("kitetheory|{}", crate::catalogue::identity::fold(title)),
+                    artist_key: "kite theory".into(),
+                    release_group: None,
+                    album: title.into(),
+                    artist: "Kite Theory".into(),
+                    year: None,
+                    cover: None,
+                    at: 1,
+                    status: super::super::requests::APPROVED.into(),
+                    reason: None,
+                    decided_by: None,
+                    decided_at: None,
+                    fetched: None,
+                    record: Some(own),
+                })
+                .unwrap();
+            let asked = ud.request(id).unwrap().unwrap();
+            let mut k = Kept::default();
+            let round = |k: &mut Kept| -> Vec<Item> {
+                let of = super::super::requests::records_of(&cat, std::slice::from_ref(&asked)).unwrap();
+                take_requests(k, std::slice::from_ref(&asked), &of, &[])
+            };
+            assert!(round(&mut k).is_empty(), "{case}: nothing taken off at first");
+            let item = k.items.iter_mut().find(|i| i.record.request == id).expect("an item of her Want");
+            item.state = State::Fetching;
+            item.batch = Some("batch-60".into());
+            item.percent = 60.0;
+            let fetching = item.clone();
+            super::super::step_017::fold(&cat, &ud, &[], &|| Ok(())).unwrap();
+            let taken = round(&mut k);
+            if joins {
+                assert_eq!(cat.record(own).unwrap().unwrap().id, kite, "{case}: the Want's record joined the had one");
+                assert!(k.items.iter().all(|i| i.record.request != id), "{case}: her item taken off");
+                assert_eq!(taken.iter().map(|i| i.batch.clone()).collect::<Vec<_>>(), [Some("batch-60".to_string())], "{case}: its fetch handed back to be cancelled");
+                assert_eq!(super::super::requests::deliver_in(&ud, &cat, &[], None).len(), 1, "{case}: the Want delivered as had");
+                assert_ne!(ud.request(id).unwrap().unwrap().status, super::super::requests::APPROVED, "{case}: closed");
+            } else {
+                assert_eq!(cat.record(own).unwrap().unwrap().id, own, "{case}: two records");
+                assert!(taken.is_empty(), "{case}: nothing taken off");
+                assert_eq!(k.items.iter().find(|i| i.record.request == id), Some(&fetching), "{case}: its item, its record, its batch and its share untouched");
+                assert!(super::super::requests::deliver_in(&ud, &cat, &[], None).is_empty(), "{case}: nothing delivered");
+                assert_eq!(ud.request(id).unwrap().unwrap().status, super::super::requests::APPROVED, "{case}: the Want stays open");
+            }
+        }
     }
 
     /// A list reader that must not be asked.
@@ -3897,5 +4172,80 @@ mod tests {
         let held = super::super::requests::records_held(&cat, std::slice::from_ref(&now), &serve.library.kinds()).unwrap().pop().flatten().map_or_else(Default::default, |o| o.holding);
         assert_eq!(super::super::requests::request_state(&now, held, None, None), RequestState::Delivered, "never wanted");
         assert!(strict.violations().is_empty(), "{:?}", strict.violations());
+    }
+
+    /// An item of record 9700 found with peer-a's and peer-b's folders, waiting for a tick (RQ01.8).
+    fn found_twice(id: &str) -> Item {
+        let folder = |user: &str| Folder {
+            user: user.into(),
+            dir: format!("@@{user}\\Music\\Night Ferry"),
+            format: "flac".into(),
+            lossless: true,
+            free_slot: true,
+            queue: 0,
+            speed: 1_000_000,
+            extra: 0,
+            files: Vec::new(),
+            unchecked: None,
+        };
+        Item {
+            id: id.into(),
+            record: Record { record: 9_700, artist: "Glass Harbour".into(), album: "Night Ferry".into(), year: None, request: 1 },
+            state: State::Found,
+            tracks: Vec::new(),
+            untimed: Vec::new(),
+            folders: vec![folder("peer-a"), folder("peer-b")],
+            chosen: None,
+            failed: Vec::new(),
+            misses: 0,
+            due: 0,
+            why: None,
+            batch: None,
+            percent: 0.0,
+            placed: None,
+            set_aside: Vec::new(),
+            checked: None,
+            local_failures: 0,
+            placing: None,
+            placed_at: 0,
+            place_failures: 0,
+        }
+    }
+
+    /// RQ01.8 (kind 4). (a) Two administrators tick different sources of one Found item at once: the first wins, as a tick acts on a
+    /// Found item alone, and the second changes nothing, from the Soulseek list (by place) as from two stories' sheets (naming their
+    /// sources). (b) A tick from a sheet read before a new search changed the folders names its source: one no longer at its place
+    /// (another user's folder there, another folder of its user's, or none) is refused, "That source is gone; look again", and nothing
+    /// is ticked, nor the other ticks sent with it; one still there is ticked. (c) Search now while it fetches changes nothing: its
+    /// fetch keeps its batch and its tick. Never a fetch from another peer than the one ticked.
+    #[test]
+    fn two_ticks_at_once_the_first_wins_and_a_gone_source_is_refused() {
+        let pick = |id: &str, folder: usize, named: Option<(&str, &str)>| Pick { id: id.into(), folder: Some(folder), user: named.map(|n| n.0.to_string()), folder_name: named.map(|n| n.1.to_string()) };
+        // (a)
+        for named in [false, true] {
+            let mut items = vec![found_twice("ss-a")];
+            let at = |user: &'static str| named.then_some((user, "Night Ferry"));
+            approve_in(&mut items, &[pick("ss-a", 0, at("peer-a"))]).unwrap();
+            approve_in(&mut items, &[pick("ss-a", 1, at("peer-b"))]).unwrap();
+            assert_eq!((items[0].state, items[0].chosen), (State::Approved, Some(0)), "the first tick wins (named: {named})");
+        }
+        // (b) A new search put peer-c's folder where peer-b's was.
+        let mut items = vec![found_twice("ss-b"), found_twice("ss-c")];
+        items[0].folders[1].user = "peer-c".into();
+        let before = items.clone();
+        let e = approve_in(&mut items, &[pick("ss-c", 0, Some(("peer-a", "Night Ferry"))), pick("ss-b", 1, Some(("peer-b", "Night Ferry")))]).unwrap_err();
+        assert_eq!(e.to_string(), SOURCE_GONE);
+        assert_eq!(items, before, "nothing ticked, the other tick neither");
+        assert_eq!(approve_in(&mut items, &[pick("ss-b", 0, Some(("peer-a", "Night Ferry (Live)")))]).unwrap_err().to_string(), SOURCE_GONE, "another folder of its user's");
+        assert_eq!(approve_in(&mut items, &[pick("ss-b", 5, Some(("peer-a", "Night Ferry")))]).unwrap_err().to_string(), SOURCE_GONE, "none at that place");
+        assert_eq!(items, before);
+        approve_in(&mut items, &[pick("ss-b", 1, Some(("peer-c", "Night Ferry")))]).unwrap();
+        assert_eq!((items[0].state, items[0].chosen, items[0].folders[1].user.as_str()), (State::Approved, Some(1), "peer-c"), "the source still there, ticked");
+        // (c) Search now while it fetches.
+        let mut i = found_twice("ss-d");
+        (i.state, i.chosen, i.batch, i.percent) = (State::Fetching, Some(1), Some("b-rq01-8".into()), 40.0);
+        let was = i.clone();
+        search_again(&mut i);
+        assert_eq!(i, was, "nothing changes: its fetch goes on");
     }
 }

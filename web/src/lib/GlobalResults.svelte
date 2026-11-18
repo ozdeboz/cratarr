@@ -33,6 +33,7 @@
   import { quickOn } from './quickCrates.svelte';
   import { leaveOnArrival } from './navStep.svelte';
   import { matchLine, type SearchResult } from './search';
+  import { withEditions } from './editions';
   import Asking from './Asking.svelte';
   import Notice from './Notice.svelte';
   import { keepWhile } from './keepWhile.svelte';
@@ -173,12 +174,14 @@
 
 {#snippet found(it: Found)}
   {@const has = menuOf(it) !== null}
+  <!-- Its line; a record's card standing for several editions says how many (F12). -->
+  {@const line = withEditions(it.sub, it.editions)}
   <li>
     {#if it.kind === 'work'}{@render work(it)}{:else}
     <Row size="large" title={it.kind === 'artist' ? artistLabel(it.title, it.number, artistNames) : it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={has ? press(it) : undefined}>
       {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if finding === it.subject}<CoverBusy small />{/if}</span>{/if}{/snippet}
       {#snippet badges()}{#each dotsOfResult(it) as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{/snippet}
-      {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if matchLine(it.matched, it.kind)}<span class="why">{it.sub ? ' · ' : ''}{matchLine(it.matched, it.kind)}</span>{/if}{/snippet}
+      {#snippet sub()}{line}{#if it.composers?.length}<span class="why">{line ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{line ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if matchLine(it.matched, it.kind)}<span class="why">{line ? ' · ' : ''}{matchLine(it.matched, it.kind)}</span>{/if}{/snippet}
       {#snippet action()}{#if has}<button class="icon" aria-label={`Menu of ${it.title}`} title="More" onclick={() => (menu = menuOf(it))}><Icon name="moreVert" size={22} /></button>{/if}{/snippet}
     </Row>
     {/if}

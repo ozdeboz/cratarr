@@ -1159,6 +1159,7 @@ mod tests {
             library: Some(library.into()),
             copies: Vec::new(),
             artists: Vec::new(),
+            editions: None,
             release: Default::default(),
         }
     }

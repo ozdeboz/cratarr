@@ -910,21 +910,15 @@ async fn a_labels_page_from_kept_rows_end_to_end() {
 
     let page = s.get(&format!("/api/labels/la-{label}")).await;
     assert_eq!((page["id"].as_str(), page["name"].as_str()), (Some(&*format!("la-{label}")), Some("Fixture Records")), "{page}");
-    let rows: Vec<(&str, Option<i64>, Option<&str>, bool, Option<&str>)> = page["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| (r["title"].as_str().unwrap(), r["year"].as_i64(), r["catno"].as_str(), r["had"].as_bool().unwrap(), r["record"].as_str()))
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("Signal", Some(2021), Some("FR-021"), true, Some(&*signal)),
-            ("Low Water Dub", Some(2016), Some("FR-016"), false, Some(&*dub)),
-            ("Tide Tables", Some(2012), None, true, Some(&*tide)),
-        ],
-        "by year, newest first: {page}"
-    );
+    // F10: what the house has apart from the rest, each by year, newest first.
+    let rows = |part: &Value| -> Vec<(String, Option<i64>, Option<String>, bool, Option<String>)> {
+        let row = |r: &Value| (r["title"].as_str().unwrap().to_string(), r["year"].as_i64(), r["catno"].as_str().map(str::to_string), r["had"].as_bool().unwrap(), r["record"].as_str().map(str::to_string));
+        part.as_array().unwrap().iter().map(row).collect()
+    };
+    let entry = |title: &str, year: i64, catno: Option<&str>, had: bool, record: &str| (title.to_string(), Some(year), catno.map(str::to_string), had, Some(record.to_string()));
+    assert_eq!(rows(&page["had"]), [entry("Signal", 2021, Some("FR-021"), true, &signal), entry("Tide Tables", 2012, None, true, &tide)], "what the house has: {page}");
+    assert_eq!(rows(&page["not_had"]), [entry("Low Water Dub", 2016, Some("FR-016"), false, &dub)], "the rest: {page}");
+    assert!(page.get("rows").is_none(), "two lists in place of one: {page}");
     assert_eq!((&page["looking"], &page["more"]), (&json!(false), &json!({ "musicbrainz": false, "discogs": false })), "nothing read elsewhere: {page}");
     for asked in ["/api/labels/la-999999", "/api/labels/al-1", "/api/labels/la-x"] {
         let (status, answer) = s.send(reqwest::Method::GET, asked, Value::Null).await;
@@ -945,8 +939,19 @@ async fn a_labels_page_from_kept_rows_end_to_end() {
     assert_eq!(s.send(reqwest::Method::POST, "/api/records/open", by_name).await.0, 409, "never by its names alone");
     let page = s.get(&format!("/api/labels/la-{label}")).await;
     // U10: a row the label never listed, opened with it, is made (above) but tied to no label: not one of its page's rows.
-    let row = page["rows"].as_array().unwrap().iter().find(|r| r["title"] == "Harbour Lights").cloned().unwrap_or(Value::Null);
+    let row = page["had"].as_array().unwrap().iter().chain(page["not_had"].as_array().unwrap()).find(|r| r["title"] == "Harbour Lights").cloned().unwrap_or(Value::Null);
     assert_eq!(row, Value::Null, "a made-up row ties nothing: {page}");
+
+    // F9: a label About shows, opened by its reference (by an administrator here: signing in is off): made once with it, the same
+    // when opened again, a label's page; never by a name alone.
+    let label_of = |answer: Value| answer["id"].as_str().unwrap().to_string();
+    let anthem = json!({ "source": "discogs", "id": "4401", "name": "International Anthem" });
+    let made = label_of(s.ok(reqwest::Method::POST, "/api/labels/open", anthem.clone()).await);
+    assert_ne!(made, format!("la-{label}"), "by its reference: a label of its own");
+    assert_eq!(label_of(s.ok(reqwest::Method::POST, "/api/labels/open", anthem).await), made, "opened again: the same label");
+    assert_eq!(s.get(&format!("/api/labels/{made}")).await["name"], "International Anthem");
+    let (status, _) = s.send(reqwest::Method::POST, "/api/labels/open", json!({ "name": "Fixture Records" })).await;
+    assert_eq!(status, 409, "never by a name alone");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
@@ -1041,10 +1046,12 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let both = |a: &Value| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 3);
     s.until("the record's three copies", Duration::from_secs(120), || async { ann.albums().await.iter().any(both) }).await;
 
-    // The catalogue: the main library's tracks stand, the other two copies on them, and nothing new, nothing else moved.
+    // The catalogue: the main library's tracks stand, the other two copies on them, and nothing new, nothing else moved. F11.1 (the
+    // owner: "One record, two copies"; RG2): Long Cut's copy in Second, an Incoming here, pairs one for one with Music's, so 0.17's
+    // fold joins it to Music's record, its two tracks on Music's.
     let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
     let taken: std::collections::HashMap<i64, i64> = db.prepare("SELECT old, id FROM track_moved").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
-    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46), (15, 41), (14, 40), (13, 39)].into(), "Music's ids survive, each track by its place");
+    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46), (15, 41), (14, 40), (13, 39), (3, 44), (4, 45)].into(), "Music's ids survive, each track by its place");
     let followed: Vec<(i64, String, i64)> = left.iter().map(|(folder, rel, track)| (*folder, rel.clone(), *taken.get(track).unwrap_or(track))).collect();
     assert_eq!(tracks_of_files(&db), followed, "nothing new, and nothing moved but what the merge moved");
     assert_eq!(db.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), left.len() as i64 + 1, "a taken id keeps its row, and the retired one stands");
@@ -1077,6 +1084,12 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     assert_eq!((part["shapes_moved"].as_u64(), part["beats_moved"].as_u64()), (Some(2), Some(2)), "{part}");
     assert_eq!(report["parts"]["libraries"]["sources"]["cratarr"], json!({ "main": 1, "incoming": 2 }));
     assert_eq!((report["parts"]["playlists"]["playlists"].as_u64(), report["parts"]["playlists"]["lines"].as_u64()), (Some(2), Some(4)), "{report}");
+    // The fold joined that one pair and nothing else (Bonus Round's copy in Second holds a track Music's has not: another edition).
+    let cuts: Vec<Value> = ann.albums().await.into_iter().filter(|a| a["title"] == "Long Cut").collect();
+    assert_eq!((cuts.len(), cuts.first().and_then(|c| c["copies"].as_array()).map(Vec::len)), (1, Some(2)), "one record, two copies: {cuts:?}");
+    let folded = &report["parts"]["references: the doubles of one name folded"]["folded"];
+    assert_eq!(folded.as_array().map(Vec::len), Some(1), "{report}");
+    assert!(folded[0].as_str().unwrap().ends_with(&format!(" into {}", cuts[0]["id"].as_str().unwrap())), "{folded}");
 
     // Every play, heart and rating, by the map as the owner's release run reads it: added up, the better rating, the first star.
     let moved = ann.get("/api/admin/migration/moved").await;
@@ -1113,7 +1126,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let picture = format!("x{}.jpg", format!("like:{}", now("al-4Jx9dQszNKgnbo4mZtic7y")).bytes().map(|b| format!("{b:02x}")).collect::<String>());
     assert!(data.join("crate-images").join(picture).is_file(), "a crate's picture follows its seed");
     assert_eq!(every_text(&data.join("journal.sqlite")).iter().flat_map(|(_, text)| hashes_in(text)).collect::<Vec<_>>(), Vec::<String>::new());
-    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6", "tr-15", "tr-14", "tr-13"];
+    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6", "tr-15", "tr-14", "tr-13", "tr-3", "tr-4"];
     let names_one = |text: &str| gone.iter().any(|id| text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|word| word == *id));
     // A device told of a heart hears it went, by the id it knew, and a play keeps the event it was told by.
     let kept = |table: &str, text: &str| table == "migration_report" || table == "change_log" || text.starts_with("backfill:");
@@ -3078,9 +3091,10 @@ async fn replace_takes_the_old_tracks_ids_and_its_undo_gives_both_back_end_to_en
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// RF2 (RB2, the census's five): the layout's Long Cut from Second waits in Incoming. Its two tracks are Music's by name and number,
-/// but its last is three seconds longer, which makes it a record of its own, as an untagged copy in Music made production's five two.
-/// It stands against Music's copy all the same, as a copy of one record does: the Library says so on it, Health lists it among the
+/// RF2 (RB2, the census's five), as F11.1 has it (the owner: "One record, two copies"): the layout's Long Cut from Second waits in
+/// Incoming. Its two tracks are Music's by name and number, its last three seconds longer: they pair one for one as Replace pairs them,
+/// so it joins Music's record as it arrives (RG2: a copy in Incoming alone, the other in a main library), where 0.16 made production's
+/// five two records. It stands against Music's copy as a copy of one record does: the Library says so on it, Health lists it among the
 /// copies waiting, and the card names Music's copy. Replace takes Music's copy's place: Music holds the copy's files on Music's tracks,
 /// their play, heart and playlist lines with them, and Music's old files in its trash. Bonus Round's copy waiting holds a track
 /// Music's has not (OQ1): another edition, said so with no action, and Replace refused, nothing moved.
@@ -3103,10 +3117,15 @@ async fn a_copy_split_from_musics_record_stands_against_it_and_replaces_it_end_t
     s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
     let ann = s.sign_in(ANN.0, ANN.1).await;
     s.act_as(ANN.0, ANN.1).await;
+    // F11.1: joined as the build it arrives in ends, then built again: one Long Cut on the Library, with both copies.
+    let holds = |a: &Value, library: &Path| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"].as_str() == Some(&*library.to_string_lossy())));
+    s.until("Long Cut's copy waiting on Music's record", Duration::from_secs(120), || async { s.albums().await.iter().any(|a| a["title"] == "Long Cut" && holds(a, &music) && holds(a, &incoming)) }).await;
+    let cuts: Vec<Value> = s.albums().await.into_iter().filter(|a| a["title"] == "Long Cut").collect();
+    assert_eq!(cuts.len(), 1, "one record of one name: {cuts:?}");
     let kept = s.read_in("Long Cut", &music).await;
     let waiting = s.read_in("Long Cut", &incoming).await;
     let other = s.read_in("Bonus Round", &incoming).await;
-    assert_ne!(kept["id"], waiting["id"], "two records of one name");
+    assert_eq!((&kept["id"], kept["copies"].as_array().map(Vec::len)), (&waiting["id"], Some(2)), "one record, two copies (Music's, Incoming's): {kept}");
     let from = incoming.to_string_lossy().replace('/', "%2F");
     let copy_in = |a: &Value, library: &Path| a["copies"].as_array().unwrap().iter().find(|c| c["library"].as_str() == Some(&*library.to_string_lossy())).cloned().unwrap();
 
@@ -3713,6 +3732,139 @@ fn request_line(data: &Path, id: i64) -> Option<String> {
     let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
     db.busy_timeout(Duration::from_secs(10)).unwrap();
     db.query_row("SELECT fetched FROM request WHERE id = ?1", [id], |r| r.get(0)).unwrap()
+}
+
+/// RQ01.1 (OQ-RQ2 (a)): a request's story is its asker's and the administrators'. Alice reads her Want's story, its row as her list
+/// gives it; root reads it with the administrators' words (`fetched`); bob, a user, gets exactly what a request that does not exist
+/// gets, naming nothing of hers, and so does bob given "Manage requests"; nobody signed in is asked to sign in; bob's own list holds his
+/// request and none of hers. MusicBrainz off and no fetcher connected: her Want is approved and handed to none.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_requests_story_is_its_askers_and_the_administrators_end_to_end() {
+    use reqwest::Method;
+    let root = temp("request-story");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("alice", false), ("bob", false)] {
+        s.ok(Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    // The disk floor at nothing: a user's Want goes ahead whatever this disk holds free (AL03).
+    s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    let (alice, bob) = (s.sign_in("alice", "alice pw").await, s.sign_in("bob", "bob pw").await);
+    let asked = alice.ok(Method::POST, "/api/requests/want", json!({ "artist": "Kite Theory", "album": "Night Ferry" })).await;
+    let a = asked["request"]["id"].as_i64().expect("her request");
+    let his = bob.ok(Method::POST, "/api/requests/want", json!({ "artist": "Orbit Lane", "album": "Late Shift" })).await["request"]["id"].as_i64().expect("his request");
+    let path = format!("/api/requests/{a}");
+
+    // Alice: her story, her row as her list gives it, no fetcher's own words (W6), no Lidarr part (none is connected).
+    let (status, hers) = alice.send(Method::GET, &path, json!(null)).await;
+    assert_eq!(status, 200, "{hers}");
+    assert_eq!((hers["id"].as_i64(), hers["user"].as_str(), hers["album"].as_str(), hers["status"].as_str()), (Some(a), Some("alice"), Some("Night Ferry"), Some("approved")), "{hers}");
+    assert!(hers["opens"].as_str().is_some_and(|o| o.starts_with("al-")) && hers["asked_at"].is_i64() && hers["fetched"].is_null() && hers.get("lidarr").is_none() && hers.get("soulseek").is_none(), "{hers}");
+    let listed = alice.get("/api/requests").await;
+    let row = listed["mine"].as_array().unwrap().iter().find(|r| r["id"] == a).cloned().expect("her row");
+    assert_eq!((&hers["state"], &hers["album_state"], &hers["hand_over_again"]), (&row["state"], &row["album_state"], &row["hand_over_again"]), "one state (W5)");
+    let record = hers["opens"].as_str().unwrap().to_string();
+
+    // Bob: exactly what a request that does not exist gets, naming nothing of hers.
+    let none = bob.send(Method::GET, "/api/requests/999999", json!(null)).await;
+    assert_eq!(none.0, 404, "{}", none.1);
+    let (status, answer) = bob.send(Method::GET, &path, json!(null)).await;
+    assert_eq!((status, &answer), (none.0, &none.1), "as for a request that does not exist");
+    let text = answer.to_string();
+    for word in ["alice", "Night Ferry", "Kite Theory", record.as_str()] {
+        assert!(!text.contains(word), "{word} in {text}");
+    }
+
+    // Root: hers, with the administrators' words.
+    let (status, roots) = s.sign_in("root", "root pw").await.send(Method::GET, &path, json!(null)).await;
+    assert_eq!((status, roots["id"].as_i64()), (200, Some(a)), "{roots}");
+    assert!(roots["fetched"].as_str().is_some_and(|f| f.starts_with("Not handed over")), "the administrators' words: {roots}");
+
+    // Nobody signed in.
+    assert_eq!(s.anyone().send(Method::GET, &path, json!(null)).await.0, 401);
+
+    // Bob given "Manage requests" (OQ-RQ2 (a)): his own story still, and no one else's.
+    s.ok(Method::PUT, "/api/users/bob/permissions", json!({ "request": true, "manage_requests": true })).await;
+    let bob = s.sign_in("bob", "bob pw").await;
+    let (status, answer) = bob.send(Method::GET, &path, json!(null)).await;
+    assert_eq!((status, &answer), (none.0, &none.1), "Manage requests reads no one else's story");
+    assert_eq!(bob.send(Method::GET, &format!("/api/requests/{his}"), json!(null)).await.0, 200, "his own");
+
+    // Bob's list: his own request, none of hers.
+    let listed = bob.get("/api/requests").await;
+    let mine: Vec<i64> = listed["mine"].as_array().unwrap().iter().filter_map(|r| r["id"].as_i64()).collect();
+    assert_eq!(mine, [his], "his own alone: {listed}");
+    assert!(!listed["mine"].to_string().contains("alice"), "{listed}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RQ01.2: only administrators act on a story. Alice's request A has an item of its record on Soulseek's list, Found with peer-a's
+/// and peer-b's folders, written into `soulseek.json` before the start (slskd unset, as on staging: nothing moves). Her tick, her
+/// Search now and her read of the whole list are refused (403), the list as it was; root's tick of peer-b's folder approves it, and
+/// her next story shows that source ticked. Never a user's tick or Search now taking effect, nor Soulseek's whole list read by one.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn only_administrators_act_on_a_story_end_to_end() {
+    use reqwest::Method;
+    let root = temp("story-acts");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("alice", false)] {
+        s.ok(Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    // The disk floor at nothing: a user's Want goes ahead whatever this disk holds free (AL03).
+    s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    let asked = s.sign_in("alice", "alice pw").await.ok(Method::POST, "/api/requests/want", json!({ "artist": "Kite Theory", "album": "Night Ferry" })).await;
+    let (a, record) = (asked["request"]["id"].as_i64().expect("her request"), asked["request"]["record"].as_i64().expect("its record"));
+    s.stop();
+    // Her record's item, Found with two users' folders, as the list keeps it.
+    let folder = |user: &str, dir: &str, format: &str| {
+        json!({ "user": user, "dir": dir, "format": format, "lossless": format == "flac", "free_slot": true, "queue": 0, "speed": 1_000_000, "extra": 0, "files": [] })
+    };
+    let item = json!({
+        "id": "ss-1", "record": { "record": record, "artist": "Kite Theory", "album": "Night Ferry", "request": a }, "state": "found", "tracks": [],
+        "folders": [folder("peer-a", "@@a\\Music\\Kite Theory\\Night Ferry", "flac"), folder("peer-b", "@@b\\Night Ferry", "mp3")],
+    });
+    std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&json!({ "next": 1, "items": [item] })).unwrap()).unwrap();
+    let s = Server::start(&data).await;
+    let (alice, admin) = (s.sign_in("alice", "alice pw").await, s.sign_in("root", "root pw").await);
+    let path = format!("/api/requests/{a}");
+    let story = alice.get(&path).await;
+    assert_eq!((story["soulseek"]["id"].as_str(), story["soulseek"]["state"].as_str(), story["soulseek"]["sources"].as_array().map(Vec::len)), (Some("ss-1"), Some("found"), Some(2)), "{story}");
+    let list = || serde_json::from_slice::<Value>(&std::fs::read(data.join("soulseek.json")).unwrap()).unwrap();
+    let before = list();
+    // Alice acts on none of it, nor reads the whole list.
+    assert_eq!(alice.send(Method::POST, "/api/soulseek/approve", json!({ "items": [{ "id": "ss-1", "folder": 1 }] })).await.0, 403);
+    assert_eq!(alice.send(Method::POST, "/api/soulseek/ss-1/now", json!({})).await.0, 403);
+    assert_eq!(alice.send(Method::GET, "/api/soulseek", json!(null)).await.0, 403);
+    let after = list();
+    assert_eq!(after, before, "the list as it was");
+    assert_eq!((after["items"][0]["state"].as_str(), after["items"][0].get("chosen")), (Some("found"), None), "found, nothing ticked: {after}");
+    // Root's tick of peer-b's folder.
+    admin.ok(Method::POST, "/api/soulseek/approve", json!({ "items": [{ "id": "ss-1", "folder": 1 }] })).await;
+    let ticked = list();
+    assert_eq!((ticked["items"][0]["state"].as_str(), ticked["items"][0]["chosen"].as_i64()), (Some("approved"), Some(1)), "{ticked}");
+    let story = alice.get(&path).await;
+    let part = &story["soulseek"];
+    assert_eq!((part["chosen"].as_i64(), part["sources"][1]["user"].as_str()), (Some(1), Some("peer-b")), "her story shows peer-b's source ticked: {story}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
 }
 
 /// A track's own word goes into its file in every copy, by the track and not the file's name, and into no other track's. One
@@ -5742,6 +5894,41 @@ async fn below_the_floor_soulseek_starts_no_users_transfer_end_to_end() {
     assert_eq!(floor["short"], false, "{floor}");
     s.until("R3's transfer once there is space", Duration::from_secs(150), || async { asked.lock().unwrap().contains(&"peer-r3".to_string()) }).await;
     assert!(violations.lock().unwrap().is_empty(), "{:?}", violations.lock().unwrap());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// F1.1 (preview 1's fix batch, the owner's "No tracks yet" on staging): a record not had whose one source is switched off says so on
+/// its page at once, nothing read: alice's Want by a release group, MusicBrainz switched off, opens with `no_list` naming MusicBrainz
+/// off and no `looking`; asked again, the same.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_record_not_had_says_its_sources_are_off_end_to_end() {
+    let root = temp("f1-sources-off");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("alice", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let alice = s.sign_in("alice", "alice pw").await;
+    let group = "00000000-0000-4000-8000-000000000521";
+    let asked = alice.ok(reqwest::Method::POST, "/api/requests/want", json!({ "release_group": group, "artist": "Kite Theory", "album": "Answered" })).await;
+    let record = asked["request"]["record"].as_i64().unwrap_or_else(|| panic!("a record: {asked}"));
+    let path = format!("/api/albums/cratarr/al-{record}");
+    let page = alice.get(&path).await;
+    assert_eq!(page["not_had"], true, "{page}");
+    assert!(page["rows"].as_array().is_some_and(Vec::is_empty), "{page}");
+    assert_eq!(page["no_list"], json!([{ "source": "musicbrainz", "said": "off" }]), "{page}");
+    assert!(page.get("looking").is_none(), "nothing being read: {page}");
+    let again = alice.get(&path).await;
+    assert_eq!((&again["no_list"], again.get("looking")), (&page["no_list"], None), "asked again, the same: {again}");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

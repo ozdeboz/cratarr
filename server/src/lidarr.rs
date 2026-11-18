@@ -96,8 +96,8 @@ impl AlbumRow {
     }
 }
 
-/// How far Lidarr is with an album (decision 0070): not known to it, known and not fetched, looked for, being fetched
-/// (how far, 0 to 1), or fetched (tracks there of how many).
+/// How far Lidarr is with an album (decision 0070): not known to it, known and not fetched, looked for, grabbed and being
+/// downloaded (how far, 0 to 1), downloaded and being imported (RQ01.3), or fetched (tracks there of how many).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Progress {
@@ -105,9 +105,13 @@ pub enum Progress {
     NotWanted,
     Looking,
     Fetching { done: f32 },
+    /// Downloaded and being imported, as its queue row's state says (`importPending`, `importing`), never as its bytes do: how far
+    /// its download came (0 to 1).
+    Importing { done: f32 },
     Fetched { tracks: u32, of: u32 },
-    /// Its grab failed, or stalls (its queue row says a warning or an error, or failed): the next fetcher's turn (X1).
-    Stuck,
+    /// Its grab failed, or stalls (its queue row says a warning or an error, or failed): the next fetcher's turn (X1). What Lidarr
+    /// says of it, and why where it gives it: its own words, which name paths and its address (W6: administrators' alone).
+    Stuck { said: Option<String> },
 }
 
 /// One album Lidarr is looking for or fetching (the Requests page's "Lidarr is looking for these", decision 0070).
@@ -173,6 +177,11 @@ impl QueueRow {
     fn stuck(&self) -> bool {
         let said = |s: &Option<String>, what: &[&str]| s.as_deref().is_some_and(|s| what.iter().any(|w| s.to_ascii_lowercase().starts_with(w)));
         said(&self.status, &["warning", "error"]) || said(&self.state, &["failed", "importfailed"])
+    }
+
+    /// Whether it is downloaded and being imported (RQ01.3): its state says so (`importPending`, `importing`), whatever its bytes say.
+    fn importing(&self) -> bool {
+        self.state.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("importpending") || s.eq_ignore_ascii_case("importing"))
     }
 
     fn done(&self) -> f32 {
@@ -463,7 +472,8 @@ impl Lidarr {
                 }
                 let ids: Vec<i64> = known.iter().map(|a| a.id).collect();
                 match queue.iter().flatten().find(|q| q.album_id.is_some_and(|id| ids.contains(&id))) {
-                    Some(q) if q.stuck() => Progress::Stuck,
+                    Some(q) if q.stuck() => Progress::Stuck { said: q.said() },
+                    Some(q) if q.importing() => Progress::Importing { done: q.done() },
                     Some(q) => Progress::Fetching { done: q.done() },
                     None if known.iter().any(|a| a.monitored) => Progress::Looking,
                     None => Progress::NotWanted,
@@ -902,5 +912,60 @@ mod tests {
         let handed = lidarr.want(&AddWith::default(), Some("rg-1"), "Air", "Moon Safari").await.unwrap();
         assert_eq!(handed, Handed { said: "Lidarr added it and is looking for it".into(), release_group: "rg-1".into() });
         assert_eq!(*calls.lock().unwrap(), ["albums rg-1", "lookup lidarr:rg-1", "add"]);
+    }
+
+    /// RQ01.3: how far Lidarr is with each album, from its albums and its queue as Lidarr answers them, the queue read once for them
+    /// all. G1, monitored and in no queue row: looked for. G2, downloading, 42 of its 100 bytes there: grabbed, 0.42. G3 waiting to
+    /// import and G4 importing: importing, as their rows' state says. G5, its row's status a warning: stuck, in Lidarr's own words and
+    /// why. G6, its 11 tracks of 11 there: fetched. G7, every byte there but its state still downloading: grabbed, never read as
+    /// importing from its bytes.
+    #[tokio::test]
+    async fn lidarrs_queue_says_grabbed_or_importing() {
+        const WHY: &str = "Import failed: /media/music not found on http://192.168.1.20:8686";
+        let albums = json!({
+            "g1": [{ "id": 1, "monitored": true }],
+            "g2": [{ "id": 2, "monitored": true }],
+            "g3": [{ "id": 3, "monitored": true }],
+            "g4": [{ "id": 4, "monitored": true }],
+            "g5": [{ "id": 5, "monitored": true }],
+            "g6": [{ "id": 6, "monitored": true, "statistics": { "trackFileCount": 11, "trackCount": 11 } }],
+            "g7": [{ "id": 7, "monitored": true }],
+        });
+        let row = |album: i64, left: f64, state: &str, status: &str| {
+            json!({ "albumId": album, "size": 100.0, "sizeleft": left, "trackedDownloadState": state, "trackedDownloadStatus": status })
+        };
+        let mut stuck = row(5, 0.0, "importPending", "warning");
+        stuck["statusMessages"] = json!([{ "title": "Night Ferry", "messages": [WHY] }]);
+        let queue = json!({ "records": [row(2, 58.0, "downloading", "ok"), row(3, 0.0, "importPending", "ok"), row(4, 0.0, "importing", "ok"), stuck, row(7, 0.0, "downloading", "ok")] });
+        let calls = Calls::default();
+        let (a, b) = (calls.clone(), calls.clone());
+        let app = Router::new()
+            .route(
+                "/api/v1/album",
+                get(move |Query(q): Query<HashMap<String, String>>| {
+                    let group = q["foreignAlbumId"].clone();
+                    a.lock().unwrap().push(format!("albums {group}"));
+                    ready(Json(albums[group.as_str()].clone()))
+                }),
+            )
+            .route(
+                "/api/v1/queue",
+                get(move || {
+                    b.lock().unwrap().push("queue".to_string());
+                    ready(Json(queue.clone()))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let groups: Vec<String> = (1..=7).map(|n| format!("g{n}")).collect();
+        let p = Lidarr::new(&url, "key").unwrap().progress(&groups).await.unwrap();
+        assert_eq!(p["g1"], Progress::Looking, "looked for");
+        assert!(matches!(p["g2"], Progress::Fetching { done } if (done - 0.42).abs() < 1e-6), "grabbed, 42%: {:?}", p["g2"]);
+        assert_eq!((&p["g3"], &p["g4"]), (&Progress::Importing { done: 1.0 }, &Progress::Importing { done: 1.0 }), "importing, by the rows' state");
+        assert_eq!(p["g5"], Progress::Stuck { said: Some(format!("warning: {WHY}")) }, "stuck, in Lidarr's own words");
+        assert_eq!(p["g6"], Progress::Fetched { tracks: 11, of: 11 }, "imported");
+        assert_eq!(p["g7"], Progress::Fetching { done: 1.0 }, "every byte there, still grabbed: importing is read from the state alone");
+        assert_eq!(calls.lock().unwrap().iter().filter(|c| *c == "queue").count(), 1, "the queue read once for them all");
     }
 }
