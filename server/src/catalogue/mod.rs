@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS beat_this (
 -- behind each row's signals for the visuals (`bands`, about 250 KB), so the pass's question of which files have none read
 -- 1.3 GB every ten minutes. `form` says what `band_wave` holds (`BandWave::form`), and the index holds it too, so that
 -- question reads the index alone. A rowid table: a row of 1.5 KB stays on its page, where WITHOUT ROWID would put most of
--- each on an overflow page of its own. `analysis_shape.band_wave` stays as 0.16 left it, read by nothing.
+-- each on an overflow page of its own. `analysis_shape.band_wave` stays as 0.16 left it, never written; read a row at a time, by
+-- its key, where the part `band_wave` was marked by hand and left a file none here (P6, `copy_kept_band_wave`).
 CREATE TABLE IF NOT EXISTS analysis_band_wave (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, form INTEGER NOT NULL, band_wave BLOB NOT NULL,
   PRIMARY KEY (folder, rel));
@@ -3706,6 +3707,32 @@ impl Catalogue {
         self.store_band_wave(folder, rel, size, mtime, &crate::analysis::band_wave::BandWave(vec![crate::analysis::band_wave::FAILED]))
     }
 
+    /// P6 (W6): the waveform in three bands 0.16 kept in a file's shape row, copied apart where the file has none apart, is as it
+    /// was analysed and as the pass took it (`size`, `mtime`), and that wave is of the current form or the mark of one that
+    /// failed: what the part `band_wave` would have copied, had its mark not been set by hand (the runbook's escape). So the pass
+    /// copies a kept wave and decodes none. One shape row read by its key (`KEPT_BAND_WAVE`: the signals behind it the one file's
+    /// alone), never written. False: none to copy. Blocking.
+    pub fn copy_kept_band_wave(&self, folder: i64, rel: &str, size: u64, mtime: i64) -> Result<bool> {
+        use crate::analysis::band_wave::BandWave;
+        if self.file_to_analyse(folder, rel).is_none_or(|(_, s, m)| (s, m) != (size, mtime)) {
+            return Ok(false);
+        }
+        let db = self.db();
+        if db.query_row("SELECT 1 FROM analysis_band_wave WHERE folder = ?1 AND rel = ?2", params![folder, rel], |_| Ok(())).optional()?.is_some() {
+            return Ok(false);
+        }
+        let kept: Option<Vec<u8>> = db.query_row(KEPT_BAND_WAVE, params![folder, rel], |r| r.get(0)).optional()?.flatten();
+        // An older form is worked out again, as the pass's question asks it to be.
+        let Some(wave) = kept.map(BandWave).filter(|w| w.form() != 0) else { return Ok(false) };
+        let n = db.execute(
+            "INSERT INTO analysis_band_wave (folder, rel, form, band_wave)
+               SELECT ?1, ?2, ?5, ?6 WHERE EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)
+             ON CONFLICT (folder, rel) DO NOTHING",
+            params![folder, rel, size as i64, mtime, wave.form(), wave.0],
+        )?;
+        Ok(n > 0)
+    }
+
     /// Present files with an analysis as they are now but no waveform in three bands (or one of an older form), and not
     /// marked as failed: the analysis pass's work when it has nothing else to do, newest music first. Asked through the
     /// index of forms alone (M1, `without_band_wave_sql`). Blocking.
@@ -4266,6 +4293,9 @@ const SHAPE_JOIN: &str = "LEFT JOIN analysis_shape s ON s.folder = a.folder AND 
 const BAND_WAVE_MARK: &str = "017:band_wave";
 /// The part `band_wave` says how many waves are apart once past each this many (W1): a few lines on production's 5,000.
 const BAND_WAVES_SAID: u64 = 5_000;
+/// The one read of the shape where the part `band_wave` was marked by hand (P6, `Catalogue::copy_kept_band_wave`): one row by its
+/// key, the file being worked on.
+const KEPT_BAND_WAVE: &str = "SELECT band_wave FROM analysis_shape WHERE folder = ?1 AND rel = ?2";
 
 /// The analysis pass's question (M1): present files with an analysis as they are now and no waveform in three bands of this
 /// form (`?2`) nor the mark of one that failed (`?3`), newest music first. `analysis_band_wave` is read through its index of
@@ -4714,6 +4744,25 @@ mod tests {
         cat.db().execute_batch("ALTER TABLE analysis_shape RENAME TO analysis_shape_away").unwrap();
         assert_eq!(wanted(&cat), before, "the shape's table away, the same answer");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// P6.3 (W6): with the part `band_wave` marked by hand, the pass's question still reads no shape, and the copy of a file's
+    /// kept wave reads one shape row by its key (folder, rel), the file being worked on alone, and nothing else of the shape.
+    #[test]
+    fn the_wave_copy_reads_one_row_by_its_key() {
+        assert!(!without_band_wave_sql().contains("analysis_shape"));
+        assert!(KEPT_BAND_WAVE.ends_with("FROM analysis_shape WHERE folder = ?1 AND rel = ?2"), "{KEPT_BAND_WAVE}");
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let plan: Vec<String> = {
+            let db = cat.db();
+            let mut st = db.prepare(&format!("EXPLAIN QUERY PLAN {KEPT_BAND_WAVE}")).unwrap();
+            st.query_map(params![0, "A/1.flac"], |r| r.get::<_, String>(3)).unwrap().map(Result::unwrap).collect()
+        };
+        assert!(!plan.is_empty() && plan.iter().all(|p| p.starts_with("SEARCH analysis_shape USING") && p.ends_with("(folder=? AND rel=?)")), "{plan:?}");
+        let source = include_str!("mod.rs");
+        let at = source.find("pub fn copy_kept_band_wave").unwrap();
+        let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
+        assert!(body.contains("db.query_row(KEPT_BAND_WAVE, params![folder, rel]") && !body.contains("analysis_shape"), "the shape read once, by its key: {body}");
     }
 
     /// M1, 0.17's step's part `band_wave`: the waves 0.16 kept in `analysis_shape` copied apart once, a batch at a time, each

@@ -8,7 +8,8 @@
 //! it hears, more than the NAS's 768 MB leaves beside the rest, so by default the PC hears new music as it heard the
 //! library (`beat_this::write_wanted` lists it; the owner, 2026-10-24). With no beats left to hear either, it works out
 //! the waveform in three bands (`analysis::band_wave`) of a file that has none yet, a file at a time, resting as long
-//! again.
+//! again; or copies the one 0.16 kept in the file's shape row, where 0.17's step was told to skip moving it (P6), with no
+//! decode and no rest.
 //!
 //! One file is decoded at a time, whoever asked (`HEAVY`): the pass, a page's visuals, a play's waveform, the look ahead.
 //! And only with room for it (`memwatch::room`, the audit's memory budget): the pass waits; one asked for now or looked
@@ -153,47 +154,16 @@ pub fn run(cat: Arc<Catalogue>) {
                     .await
                     .unwrap_or_default();
                     banding = queue;
-                    let Some((folder, rel, path, size, mtime)) = next else {
+                    let Some(work) = next else {
                         rest_idle().await;
                         continue;
                     };
-                    crate::memwatch::wait_for_room().await;
-                    let turn = HEAVY.acquire().await.expect("the turn is never closed");
-                    let started = Instant::now();
-                    let c = cat.clone();
-                    let r = rel.clone();
-                    let done = tokio::task::spawn_blocking(move || {
-                        let _turn = turn;
-                        // Taken with its batch, a while ago maybe: still there as it was, or passed over.
-                        if c.file_to_analyse(folder, &r).is_none_or(|(_, s, m)| (s, m) != (size, mtime)) {
-                            return Ok(false);
-                        }
-                        let _job = crate::memwatch::job(format!("band wave: {r}"));
-                        match crate::analysis::band_wave::work_out(&path) {
-                            Ok(w) => c.store_band_wave(folder, &r, size, mtime, &w),
-                            Err(e) => {
-                                // Marked, so it is not tried again after a restart either.
-                                c.store_band_wave_failed(folder, &r, size, mtime)?;
-                                Err(e)
-                            }
-                        }
-                    })
-                    .await;
-                    match done {
-                        Ok(Ok(true)) => {}
-                        Ok(Ok(false)) => {
-                            unbanded.insert((folder, rel, size, mtime));
-                        }
-                        Ok(Err(e)) => {
-                            tracing::warn!("band waveform: {rel}: {e:#}");
-                            unbanded.insert((folder, rel, size, mtime));
-                        }
-                        Err(e) => {
-                            tracing::warn!("band waveform: {rel}: {e}");
-                            unbanded.insert((folder, rel, size, mtime));
-                        }
+                    let (folder, rel, size, mtime) = (work.0, work.1.clone(), work.3, work.4);
+                    let banded = band_wave_item(&cat, work, crate::analysis::band_wave::work_out).await;
+                    if let Banded::Missed(_) = banded {
+                        unbanded.insert((folder, rel, size, mtime));
                     }
-                    tokio::time::sleep(started.elapsed() * REST).await;
+                    tokio::time::sleep(banded.rest()).await;
                     continue;
                 };
                 crate::memwatch::wait_for_room().await;
@@ -253,6 +223,76 @@ pub fn run(cat: Arc<Catalogue>) {
             }
         }
     });
+}
+
+/// What one file of the pass's waveforms in three bands came to (`band_wave_item`).
+#[derive(Debug, PartialEq)]
+enum Banded {
+    /// The wave 0.16 kept in its shape row, copied apart (P6): nothing decoded.
+    Copied,
+    /// Worked out and kept, in this long.
+    Worked(Duration),
+    /// Not kept, after this long: the file changed or went since it was taken, or its decode failed. Not tried again this run.
+    Missed(Duration),
+}
+
+impl Banded {
+    /// The pass's rest after it: `REST` times as long as it took; none after a copy, which decoded nothing.
+    fn rest(&self) -> Duration {
+        match self {
+            Banded::Copied => Duration::ZERO,
+            Banded::Worked(took) | Banded::Missed(took) => *took * REST,
+        }
+    }
+}
+
+/// One file of the pass's waveforms in three bands. Where none is apart, the wave 0.16 kept in its shape row is copied
+/// (`Catalogue::copy_kept_band_wave`; P6, W6: with `017:band_wave` marked by hand, `analysis_band_wave` is empty and the
+/// question lists every analysed file, so a copy each costs a read where a decode each cost days), with no turn, no wait for
+/// room and no rest. Else it is worked out by `decode`, with room for it and on the one turn (`HEAVY`).
+async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): Work, decode: fn(&std::path::Path) -> anyhow::Result<BandWave>) -> Banded {
+    let (c, r) = (cat.clone(), rel.clone());
+    match tokio::task::spawn_blocking(move || c.copy_kept_band_wave(folder, &r, size, mtime)).await {
+        Ok(Ok(true)) => return Banded::Copied,
+        Ok(Ok(false)) => {}
+        Ok(Err(e)) => tracing::warn!("band waveform: {rel}: the one kept not copied: {e:#}"),
+        Err(e) => tracing::warn!("band waveform: {rel}: the one kept not copied: {e}"),
+    }
+    crate::memwatch::wait_for_room().await;
+    let turn = HEAVY.acquire().await.expect("the turn is never closed");
+    let started = Instant::now();
+    let c = cat.clone();
+    let r = rel.clone();
+    let done = tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        // Taken with its batch, a while ago maybe: still there as it was, or passed over.
+        if c.file_to_analyse(folder, &r).is_none_or(|(_, s, m)| (s, m) != (size, mtime)) {
+            return Ok(false);
+        }
+        let _job = crate::memwatch::job(format!("band wave: {r}"));
+        match decode(&path) {
+            Ok(w) => c.store_band_wave(folder, &r, size, mtime, &w),
+            Err(e) => {
+                // Marked, so it is not tried again after a restart either.
+                c.store_band_wave_failed(folder, &r, size, mtime)?;
+                Err(e)
+            }
+        }
+    })
+    .await;
+    let took = started.elapsed();
+    match done {
+        Ok(Ok(true)) => Banded::Worked(took),
+        Ok(Ok(false)) => Banded::Missed(took),
+        Ok(Err(e)) => {
+            tracing::warn!("band waveform: {rel}: {e:#}");
+            Banded::Missed(took)
+        }
+        Err(e) => {
+            tracing::warn!("band waveform: {rel}: {e}");
+            Banded::Missed(took)
+        }
+    }
 }
 
 /// The one decode at a time (see the top). A turn moves into the blocking work and ends with it.
@@ -583,6 +623,133 @@ mod tests {
         assert_eq!(done.len(), 119, "all but the one that failed");
         assert!(!done.contains(&"7.flac".to_string()));
         assert_eq!(asked.get(), 4, "three batches, and the answer that holds only the one that failed");
+    }
+
+    /// A wave of the current form, its bins `bin`.
+    fn a_wave(bin: u8) -> BandWave {
+        let mut w = vec![crate::analysis::band_wave::FORMAT];
+        w.resize(crate::analysis::band_wave::LEN, bin);
+        BandWave(w)
+    }
+
+    /// The runbook's escape (P6): a catalogue of these files in a folder of the test's own, each analysed as it is now, its shape
+    /// row as 0.16 left it (the visuals' signals of 300 KB, beats, a spectrum, and its wave, None where none was worked out), and
+    /// `017:band_wave` marked by hand, so nothing is apart.
+    fn escaped(name: &str, waves: &[(&str, Option<Vec<u8>>)]) -> (std::path::PathBuf, Arc<Catalogue>) {
+        let d = std::env::temp_dir().join(format!("cratarr-escape-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        for (rel, _) in waves {
+            std::fs::write(d.join(rel), b"never decoded here").unwrap();
+        }
+        let cat = Arc::new(Catalogue::open(None, vec![d.clone()]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.set_meta("017:band_wave", "{}");
+        let db = cat.writer_for_tests();
+        for (rel, wave) in waves {
+            db.execute(
+                "INSERT INTO analysis (folder, rel, size, mtime, version, analysed_at, complete) SELECT folder, rel, size, mtime, ?2, 1, 1 FROM files WHERE folder = 0 AND rel = ?1",
+                rusqlite::params![rel, crate::analysis::VERSION],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO analysis_shape (folder, rel, waveform, beats, bands, band_wave, spectrum) VALUES (0, ?1, x'07', x'0102', zeroblob(300000), ?2, x'0304')",
+                rusqlite::params![rel, wave],
+            )
+            .unwrap();
+        }
+        drop(db);
+        (d, cat)
+    }
+
+    /// A file's shape row as it lies, every column.
+    fn shape_row(cat: &Catalogue, rel: &str) -> Vec<String> {
+        cat.writer_for_tests()
+            .query_row(
+                "SELECT quote(rowid), quote(waveform), quote(blocks), quote(beats), quote(bands), quote(beats_by), quote(band_wave), quote(spectrum) FROM analysis_shape WHERE folder = 0 AND rel = ?1",
+                [rel],
+                |r| (0..8usize).map(|i| r.get::<_, String>(i)).collect::<rusqlite::Result<Vec<String>>>(),
+            )
+            .unwrap()
+    }
+
+    /// P6.1 (W6): with `017:band_wave` marked by hand and nothing apart, the pass takes a file whose shape row holds a wave of the
+    /// current form: it is copied apart as it was, nothing decoded, no turn taken nor room waited for, no rest after it, and the
+    /// shape row byte for byte as before.
+    #[tokio::test]
+    async fn a_kept_wave_is_copied_not_decoded() {
+        static DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn decode(_: &std::path::Path) -> anyhow::Result<BandWave> {
+            DECODES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(a_wave(5))
+        }
+        let kept = a_wave(9);
+        let (d, cat) = escaped("copied", &[("F.flac", Some(kept.0.clone()))]);
+        let before = shape_row(&cat, "F.flac");
+        let work = cat.without_band_wave(10).unwrap();
+        assert_eq!(work.iter().map(|w| w.1.as_str()).collect::<Vec<_>>(), ["F.flac"], "the escape: asked for");
+
+        // The turn held here, and no room on this thread, all along: an item that waited for either would never end.
+        let turn = HEAVY.acquire().await.unwrap();
+        let permits = HEAVY.available_permits();
+        crate::memwatch::FULL.set(true);
+        let item = tokio::time::timeout(Duration::from_secs(10), band_wave_item(&cat, work[0].clone(), decode)).await;
+        crate::memwatch::FULL.set(false);
+        assert_eq!(HEAVY.available_permits(), permits, "HEAVY's permits as before");
+        drop(turn);
+        let item = item.expect("no turn nor room waited for");
+        assert_eq!(item, Banded::Copied);
+        assert_eq!(item.rest(), Duration::ZERO, "no rest: nothing decoded");
+        assert_eq!(DECODES.load(std::sync::atomic::Ordering::SeqCst), 0, "not decoded");
+
+        let apart: (u8, Vec<u8>) = cat
+            .writer_for_tests()
+            .query_row("SELECT form, band_wave FROM analysis_band_wave WHERE folder = 0 AND rel = 'F.flac'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(apart, (crate::analysis::band_wave::FORMAT, kept.0.clone()), "the shape's wave, apart");
+        assert_eq!(cat.band_wave_of(0, "F.flac"), Some(Some(kept)));
+        assert_eq!(shape_row(&cat, "F.flac"), before, "the shape row byte for byte as before");
+        assert!(cat.without_band_wave(10).unwrap().is_empty(), "asked for no more");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// P6.2 (W6): of the files the escape lists, (i) one whose shape row holds a wave of an older form and (ii) one with none are
+    /// each decoded once and kept; (iii) one rewritten since it was analysed has its old wave never copied (nor decoded), and the
+    /// question leaves it out until it is analysed again.
+    #[tokio::test]
+    async fn a_wave_of_another_form_or_none_is_worked_out() {
+        static DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn decode(_: &std::path::Path) -> anyhow::Result<BandWave> {
+            DECODES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(a_wave(5))
+        }
+        let older = vec![0; crate::analysis::band_wave::LEN];
+        assert_eq!(BandWave(older.clone()).form(), 0, "an older form");
+        let (d, cat) = escaped("worked", &[("older.flac", Some(older)), ("none.flac", None), ("rewritten.flac", Some(a_wave(9).0))]);
+        let work = cat.without_band_wave(10).unwrap();
+        assert_eq!(work.len(), 3, "{work:?}");
+        // (iii): rewritten after the pass took it, and walked.
+        std::fs::write(d.join("rewritten.flac"), b"rewritten since it was analysed, and longer").unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+
+        let mut came = Vec::new();
+        for w in work {
+            let rel = w.1.clone();
+            let banded = band_wave_item(&cat, w, decode).await;
+            came.push((rel, matches!(banded, Banded::Worked(_))));
+        }
+        came.sort();
+        assert_eq!(came, [("none.flac".to_string(), true), ("older.flac".to_string(), true), ("rewritten.flac".to_string(), false)]);
+        assert_eq!(DECODES.load(std::sync::atomic::Ordering::SeqCst), 2, "the older form and the one with none, once each");
+        assert_eq!(cat.band_wave_of(0, "older.flac"), Some(Some(a_wave(5))), "worked out and kept");
+        assert_eq!(cat.band_wave_of(0, "none.flac"), Some(Some(a_wave(5))), "worked out and kept");
+        let apart: i64 = cat.writer_for_tests().query_row("SELECT count(*) FROM analysis_band_wave WHERE rel = 'rewritten.flac'", [], |r| r.get(0)).unwrap();
+        assert_eq!(apart, 0, "its old wave never copied");
+        assert!(cat.without_band_wave(10).unwrap().iter().all(|w| w.1 != "rewritten.flac"), "left out until analysed again");
+        assert!(cat.unanalysed(10).unwrap().iter().any(|w| w.1 == "rewritten.flac"), "analysed again first");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[tokio::test]
