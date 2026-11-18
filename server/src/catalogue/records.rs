@@ -2792,16 +2792,16 @@ impl Catalogue {
         let mut ran = Vec::new();
         for part in PARTS_017 {
             let mark = mark_017(part);
-            if marked_017(&db, &mark)? {
+            // A part that fails names itself (X7), one that cannot begin too (W5): the catalogue held by another writer.
+            let named = || format!("0.17's step, part {part}");
+            if marked_017(&db, &mark).with_context(named)? {
                 continue;
             }
             tracing::info!(target: "library", "0.17's step, part {part}");
-            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            if marked_017(&tx, &mark)? {
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).with_context(named)?;
+            if marked_017(&tx, &mark).with_context(named)? {
                 continue;
             }
-            // A part that fails names itself (X7).
-            let named = || format!("0.17's step, part {part}");
             let report = carry_part(&tx, c, part, now()).with_context(named)?;
             after(part).with_context(named)?;
             tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", params![mark, report.to_string()]).with_context(named)?;

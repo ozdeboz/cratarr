@@ -16,7 +16,9 @@
 //!   before it done; a data folder that ran an earlier version runs the parts it lacks. The report goes into the user data's
 //!   migration report from the marks, as one, whenever a part ran, or where it is missing. Every write finds its row there
 //!   the second time and leaves it.
-//! - **Failed, it stops the start**, as 0.16's first start does: what it has not carried would be read as never known.
+//! - **Failed, it stops the start**, as 0.16's first start does: what it has not carried would be read as never known. The
+//!   error names the part that failed or could not begin; a failure outside the parts says so, and that with no mark to set
+//!   the way back is a restore (W5). Each part says in the log as it begins (W1).
 //! - **Old tables kept** one version, read by nothing else: none is emptied or dropped.
 //! - **The discographies** (C48b, a part of its own): each artist's albums and EPs as MusicBrainz listed them (`discography`)
 //!   become records not had, but for those a record holds already by its release group, credited to the artist and found
@@ -125,16 +127,30 @@ pub(crate) fn band_waves(cat: &Catalogue) -> Result<()> {
     Ok(())
 }
 
+/// What a failure outside the parts says (W5): no part's mark holds what was done, so nothing tells the next start what was half
+/// done, and the way back is the backup taken before the upgrade.
+const OUTSIDE: &str = "outside its parts (no mark to set: restore)";
+
+/// The context of a failure outside the parts: what the step was doing, and that only a restore undoes it (W5).
+fn outside(doing: &str) -> String {
+    format!("0.17's step, {doing}, {OUTSIDE}")
+}
+
 /// `run`, `after` hearing each part done: an error from it stops the step there, as a stop would (what the tests cut it by).
 /// "catalogue" is after the parts, before the report.
 fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) -> Result<()> {
-    let ran = if cat.references_to_carry()?.is_empty() { Vec::new() } else { cat.carry_references(&carry_of(&ud.kept_for_017()?), after)? };
+    let ran = if cat.references_to_carry().with_context(|| outside("reading which parts are done"))?.is_empty() {
+        Vec::new()
+    } else {
+        let kept = ud.kept_for_017().with_context(|| outside("reading what 0.16 kept"))?;
+        cat.carry_references(&carry_of(&kept), after)?
+    };
     // The records the step gave the requests, into the user data where it has none yet (C49a): at every start, so a step cut
     // off between its part and here gives them at the next.
     let mut asked_twice = Vec::new();
-    for (id, record) in cat.request_records_017().context("0.17's step, reading the records it gave the requests")? {
+    for (id, record) in cat.request_records_017().with_context(|| outside("reading the records it gave the requests"))? {
         // An account's second open request of one record, closed as asked twice (W6), is no longer silent (X7): the report lists it.
-        if let (_, Some(kept)) = ud.give_request_record(id, record).context("0.17's step, giving the requests their records")? {
+        if let (_, Some(kept)) = ud.give_request_record(id, record).with_context(|| outside("giving the requests their records"))? {
             asked_twice.push(asked_twice_line(id, kept, record));
         }
     }
@@ -155,19 +171,19 @@ fn run_with(cat: &Catalogue, ud: &UserData, after: &dyn Fn(&str) -> Result<()>) 
         tracing::info!(target: "library", count = asked_twice.len(), "0.17's step: requests closed as asked twice, each an account's second open request of one record");
     }
     if ran.is_empty()
-        && let Some((_, mut report)) = ud.migration_report()?.remove(PART)
+        && let Some((_, mut report)) = ud.migration_report().with_context(|| outside("reading the migration report"))?.remove(PART)
     {
         // Done before: those closed now join its report.
         if !asked_twice.is_empty() {
             with_asked_twice(&mut report, asked_twice);
-            ud.set_migration_part(PART, &report).context("0.17's step, writing its report")?;
+            ud.set_migration_part(PART, &report).with_context(|| outside("writing its report"))?;
         }
         return Ok(());
     }
     after("catalogue")?;
-    let Some(mut report) = cat.references_carried().context("0.17's step, reading its report")? else { return Ok(()) };
+    let Some(mut report) = cat.references_carried().with_context(|| outside("reading its report"))? else { return Ok(()) };
     with_asked_twice(&mut report, asked_twice);
-    ud.set_migration_part(PART, &report).context("0.17's step, writing its report")?;
+    ud.set_migration_part(PART, &report).with_context(|| outside("writing its report"))?;
     if !ran.is_empty() {
         let references = report["tables"].as_array().and_then(|t| t.iter().find(|t| t["name"] == "references")).and_then(|t| t["after"].as_u64()).unwrap_or(0);
         tracing::info!(
@@ -750,7 +766,7 @@ mod tests {
         let given = Data::new("records-fail");
         let (cat, ud) = given.open();
         given.batch("userdata.sqlite", "CREATE TRIGGER broken_record BEFORE UPDATE OF record ON request BEGIN SELECT RAISE(ABORT, 'broken by the test'); END;");
-        assert_eq!(run_with(&cat, &ud, &|_| Ok(())).unwrap_err().to_string(), "0.17's step, giving the requests their records");
+        assert_eq!(run_with(&cat, &ud, &|_| Ok(())).unwrap_err().to_string(), "0.17's step, giving the requests their records, outside its parts (no mark to set: restore)");
     }
 
     /// The parts the step said it began, in order (W1).
@@ -812,6 +828,88 @@ mod tests {
         let uncut = Data::new("cut-said-uncut");
         uncut.run();
         assert_eq!(data.rows_of("userdata.sqlite", report), uncut.rows_of("userdata.sqlite", report), "the report an uncut step writes");
+    }
+
+    /// The catalogue's every table, row by row: what a step that stops before its parts leaves as it was.
+    fn catalogue_rows(data: &Data) -> Vec<String> {
+        let tables = data.texts("catalogue.sqlite", "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name");
+        tables.iter().flat_map(|t| data.rows_of("catalogue.sqlite", &format!("SELECT * FROM \"{t}\"")).into_iter().map(move |r| format!("{t}: {r}"))).collect()
+    }
+
+    /// P5.1 (W5): what 0.16 kept unreadable (a table of it gone), the step stops saying so, outside its parts and to restore: no
+    /// part's mark written, and the catalogue as it was.
+    #[test]
+    fn a_failure_reading_what_016_kept_says_restore() {
+        let data = Data::new("kept-unread");
+        let (cat, ud) = data.open();
+        data.batch("userdata.sqlite", "DROP TABLE album_matches");
+        let before = catalogue_rows(&data);
+        let err = format!("{:#}", run(&cat, &ud).unwrap_err());
+        assert!(err.contains("0.17's step, reading what 0.16 kept"), "{err}");
+        assert!(err.contains("outside its parts (no mark to set: restore)"), "{err}");
+        assert!(data.marks().is_empty(), "no mark: {:?}", data.marks());
+        assert_eq!(cat.references_to_carry().unwrap(), PARTS_017, "every part still to run");
+        assert_eq!(catalogue_rows(&data), before, "the catalogue as it was");
+    }
+
+    /// P5.2 (W5): a part that cannot begin (another writer holds the catalogue past its wait) names itself; the writer gone, the
+    /// step runs whole.
+    #[test]
+    fn a_part_that_cannot_begin_names_itself() {
+        let data = Data::new("cannot-begin");
+        let (cat, ud) = data.open();
+        let writer = Connection::open(data.0.join("catalogue.sqlite")).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        cat.writer_for_tests().busy_timeout(std::time::Duration::from_millis(200)).unwrap();
+        let err = format!("{:#}", run(&cat, &ud).unwrap_err());
+        assert!(err.contains("0.17's step, part hand"), "{err}");
+        assert!(data.marks().is_empty(), "nothing done: {:?}", data.marks());
+        writer.execute_batch("ROLLBACK").unwrap();
+        run(&cat, &ud).unwrap();
+        assert_eq!(data.marks().len(), PARTS_017.len() + 1, "the writer gone, every part (and the band waves')");
+    }
+
+    /// P5.3 (W5): a failure after the parts, the report not written (the user data gone read-only) or the requests not given
+    /// their records, says so, outside its parts and to restore; every part's mark stays, and the next start, the user data
+    /// writable, runs no part again and writes the report an uncut step writes.
+    #[test]
+    fn a_failure_after_the_parts_says_restore_and_keeps_the_parts() {
+        let report = "SELECT report FROM migration_report WHERE part = 'references'";
+        let uncut = Data::new("after-parts-uncut");
+        {
+            let (cat, ud) = uncut.open();
+            run_with(&cat, &ud, &|_| Ok(())).unwrap();
+        }
+        let mut every: Vec<String> = PARTS_017.iter().map(|p| p.to_string()).collect();
+        every.sort();
+        for (case, doing) in [("read-only", "writing its report"), ("records", "giving the requests their records")] {
+            let data = Data::new(&format!("after-parts-{case}"));
+            {
+                let (cat, ud) = data.open();
+                if case == "records" {
+                    data.batch("userdata.sqlite", "CREATE TRIGGER broken_record BEFORE UPDATE OF record ON request BEGIN SELECT RAISE(ABORT, 'broken by the test'); END;");
+                }
+                let err = run_with(&cat, &ud, &|at| {
+                    if at == "catalogue" && case == "read-only" {
+                        ud.read_only_for_tests();
+                    }
+                    Ok(())
+                })
+                .unwrap_err();
+                let err = format!("{err:#}");
+                assert!(err.contains(&format!("0.17's step, {doing}")), "{case}: {err}");
+                assert!(err.contains("outside its parts (no mark to set: restore)"), "{case}: {err}");
+            }
+            assert_eq!(data.marks(), every, "{case}: every part's mark stays");
+            assert!(data.rows_of("userdata.sqlite", report).is_empty(), "{case}: no report yet");
+            data.batch("userdata.sqlite", "DROP TRIGGER IF EXISTS broken_record");
+            let (cat, ud) = data.open();
+            let lines = crate::diagnostics::logged_lines(|| run_with(&cat, &ud, &|_| Ok(())).unwrap());
+            assert!(parts_said(&lines).is_empty(), "{case}: no part again: {lines:#?}");
+            assert_eq!(data.marks(), every, "{case}");
+            assert_eq!(data.rows_of("userdata.sqlite", report), uncut.rows_of("userdata.sqlite", report), "{case}: the report written");
+            assert_eq!(data.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM request WHERE record IS NULL"), 0, "{case}: every request its record");
+        }
     }
 
     /// X7: a request the step closes as asked twice (an account's second open request of one record, W6) is listed in its report:

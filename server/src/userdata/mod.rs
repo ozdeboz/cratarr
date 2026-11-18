@@ -884,6 +884,12 @@ impl UserData {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// Read-only from now on, as a disk gone read-only leaves it: nothing more is written (`PRAGMA query_only`).
+    #[cfg(test)]
+    pub fn read_only_for_tests(&self) {
+        self.db().execute_batch("PRAGMA query_only = ON").unwrap();
+    }
+
     /// A value the user data remembers (`set_meta`). Blocking.
     pub fn meta(&self, key: &str) -> Result<Option<String>> {
         Ok(self.db().query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?)
