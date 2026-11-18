@@ -422,6 +422,8 @@ pub(crate) enum WantCopy {
     Nothing,
     /// No copy of it is known whole (S.1): nothing copied; the Want goes to the fetchers.
     NoneWhole,
+    /// Below the floor (AL03.1), asked for a copy that shares its blocks alone, it would not: nothing copied; the Want waits for space.
+    NoSpace,
     /// Not made, and why.
     Failed(String),
 }
@@ -671,7 +673,9 @@ impl App {
     /// to makes one (C40), from anyone's whole copy (T5, the owner's "Yes, from anyone's"): the copy `want_copy` chooses among those
     /// judged whole enough (`judged_copies`), named by its folder and place, read from the one record's listing (never the whole
     /// Albums view); into their own music, made now where it is not in use yet. The copy it is made of is never moved or changed.
-    pub(super) async fn copy_for(&self, account: &str, record: i64) -> WantCopy {
+    /// `sharing` (below the floor, AL03.1): made only where a copy from that copy's library into their own music shares its blocks
+    /// (`Files::shares`, C38's probe), taking no new space; else none is made, nor their own music (`WantCopy::NoSpace`).
+    pub(super) async fn copy_for(&self, account: &str, record: i64, sharing: bool) -> WantCopy {
         let source = crate::source::cratarr::KIND.id;
         let Some(served) = self.served.clone() else { return WantCopy::Failed("Cratarr's own library is not open".into()) };
         let (own, used, asker, off) = {
@@ -684,21 +688,35 @@ impl App {
         };
         let id = crate::serve::ids::record(record);
         let s = served.clone();
-        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<source::Album, Chosen>> {
+        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<(source::Album, Option<std::path::PathBuf>), Chosen>> {
             let chosen = want_copy(&judged_copies(&s, &id, record)?, asker, &off);
             let Chosen::From(folder, dir) = chosen else { return Ok(Err(chosen)) };
             let card = s.library.albums_by_id(std::slice::from_ref(&id))?.pop().ok_or_else(|| anyhow::anyhow!("its record is not listed"))?;
             let root = s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).ok_or_else(|| anyhow::anyhow!("its copy's library is not listed"))?;
-            Ok(Ok(copy_listed(crate::source::cratarr::card(card), &root, (folder, dir))))
+            let from = s.catalogue().folders().get(folder).cloned();
+            Ok(Ok((copy_listed(crate::source::cratarr::card(card), &root, (folder, dir)), from)))
         })
         .await;
-        let album = match read {
-            Ok(Ok(Ok(album))) => album,
+        let (album, from) = match read {
+            Ok(Ok(Ok(read))) => read,
             Ok(Ok(Err(Chosen::Theirs))) => return WantCopy::Nothing,
             Ok(Ok(Err(_))) => return WantCopy::NoneWhole,
             Ok(Err(e)) => return WantCopy::Failed(format!("its copies could not be read: {e:#}")),
             Err(e) => return WantCopy::Failed(format!("its copies could not be read: {e}")),
         };
+        // Below the floor: only a copy that shares its blocks, probed into their own music, or the own-music folder it is made in.
+        if sharing {
+            let target = std::path::PathBuf::from(&own);
+            let to = if target.is_dir() { Some(target) } else { target.parent().map(std::path::Path::to_path_buf) };
+            let incoming = self.incoming.clone();
+            let shares = match (from, to) {
+                (Some(from), Some(to)) => tokio::task::spawn_blocking(move || incoming.shares(&from, &to)).await.unwrap_or(false),
+                _ => false,
+            };
+            if !shares {
+                return WantCopy::NoSpace;
+            }
+        }
         let to = if used {
             own
         } else {

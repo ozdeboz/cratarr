@@ -11,8 +11,13 @@
 //!
 //! Never a main library's files, anything in a trash (Q4: at once), a parked folder's, nor a fetcher's own download folders (no
 //! catalogue folder). Full is `used >= size` (Q3: until under).
+//!
+//! The disk floor (AL03, 0084) watches the real disk where users' music lands (Q4): below it, users' new Wants wait and Soulseek
+//! starts no transfer of theirs; administrators' go on. It is read where the requests' round, a Want, Soulseek's fetch and the health
+//! answer run, and keeps only whether the server is short, in the user data's meta (OQ-F3), so a restart reads it as it was.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -22,6 +27,7 @@ use crate::catalogue::{Catalogue, InUse};
 use crate::serve::Serve;
 use crate::serve::users::User;
 use crate::settings::LibraryKind;
+use crate::userdata::UserData;
 
 /// A GB as room counts it (OQ-R5): 10^9 bytes.
 pub const GB: u64 = 1_000_000_000;
@@ -113,6 +119,144 @@ pub fn rooms_in(cat: &Catalogue, kinds: &[(i64, LibraryKind)], asked: &HashMap<i
     Ok(users.iter().filter_map(|u| Some((u.name.clone(), room_of(u, used.get(&u.name).copied().unwrap_or(0))?))).collect())
 }
 
+// ---- The disk floor (AL03)
+
+/// The floor where an administrator set none (0084).
+pub const FLOOR: u64 = 200 * GB;
+/// How far above the floor the disks must be before the server is no longer short (OQ-F3): it changes once per crossing, never
+/// flapping at the floor.
+pub const MARGIN: u64 = 10 * GB;
+/// The floor an administrator set, in bytes, as the user data's meta keeps it.
+const FLOOR_KEY: &str = "room:floor";
+/// Whether the server is short of space, as last read (OQ-F3), in the user data's meta: `SHORT`, `CLEAR`, or `UNREADABLE` (the
+/// disks' free space could not be read, said once in the log).
+const SHORT_KEY: &str = "room:short-of-space";
+const SHORT: &str = "short";
+const CLEAR: &str = "clear";
+const UNREADABLE: &str = "unreadable";
+
+/// The free space of the disk a folder is on (OQ-F2): statvfs on the server (`folders::free`); the tests' stand in.
+pub trait Disks: Send + Sync {
+    fn free(&self, dir: &Path) -> Option<u64>;
+}
+
+/// The disks themselves.
+pub struct TheDisks;
+
+impl Disks for TheDisks {
+    fn free(&self, dir: &Path) -> Option<u64> {
+        crate::folders::free(dir)
+    }
+}
+
+/// The floor and the disks as just read (AL03): the floor, the lowest free space of the disks users' music lands on (none where none
+/// could be read), and whether the server is short of space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Space {
+    pub floor: u64,
+    pub free: Option<u64>,
+    pub short: bool,
+}
+
+/// The floor in bytes: an administrator's, else `FLOOR`. Blocking.
+pub fn floor(ud: &UserData) -> u64 {
+    ud.meta(FLOOR_KEY).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(FLOOR)
+}
+
+/// The floor an administrator sets, in bytes. Blocking.
+pub fn set_floor(ud: &UserData, bytes: u64) -> Result<()> {
+    ud.set_meta(FLOOR_KEY, &bytes.to_string())
+}
+
+/// The folders the floor reads on `serve` (OQ-F2): those users' music lands on, each Incoming library's (Lidarr's, Soulseek's, an
+/// Uploads library's) and the own-music folder; never a main library's, nor the data folder. Blocking.
+pub fn floor_folders(serve: &Serve) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if serve.has_catalogue() {
+        let folders = serve.catalogue().folders();
+        let places = Places::of(&serve.library.kinds(), &folders);
+        dirs.extend(places.incoming.iter().filter_map(|f| folders.get(*f).cloned()));
+    }
+    dirs.extend(serve.own_music());
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// The disks read against the floor now (AL03): the lowest free space of `dirs`' disks (OQ-F2); short below the floor, no longer
+/// short only from the floor plus `MARGIN`, and between the two as it was (OQ-F3). Free space none of them could be read for is not
+/// short, said once in the log. Whether it is short is kept in the user data's meta when it changes, and said in the log; once it is
+/// no longer short, the Soulseek fetches it held go (`soulseek::space_again`). One read at a time. Blocking.
+pub fn space(ud: &UserData, disks: &dyn Disks, dirs: &[PathBuf]) -> Space {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|p| p.into_inner());
+    let floor = floor(ud);
+    let was = ud.meta(SHORT_KEY).ok().flatten().unwrap_or_else(|| CLEAR.to_string());
+    let free = dirs.iter().filter_map(|d| disks.free(d)).min();
+    let now = match free {
+        None if dirs.is_empty() => CLEAR,
+        None => UNREADABLE,
+        Some(f) if f < floor => SHORT,
+        Some(f) if f >= floor.saturating_add(MARGIN) => CLEAR,
+        Some(_) if was == SHORT => SHORT,
+        Some(_) => CLEAR,
+    };
+    if was != now {
+        if let Err(e) = ud.set_meta(SHORT_KEY, now) {
+            tracing::warn!(target: "room", reason = %format!("{e:#}"), "whether the server is short of space was not kept");
+        }
+        let (free_text, floor_text) = (size_text(free.unwrap_or(0)), size_text(floor));
+        match now {
+            SHORT => tracing::warn!(target: "room", free = %free_text, floor = %floor_text, "short of space: users' new Wants wait"),
+            UNREADABLE => tracing::warn!(target: "room", "the free space where users' music lands could not be read: not taken as short"),
+            _ if was == SHORT => tracing::info!(target: "room", free = %free_text, floor = %floor_text, "space again: users' Wants go"),
+            _ => {}
+        }
+        if was == SHORT {
+            super::soulseek::space_again();
+        }
+    }
+    Space { floor, free, short: now == SHORT }
+}
+
+/// Whether the server is short of space now ([`space`]). Blocking.
+pub fn short(ud: &UserData, disks: &dyn Disks, dirs: &[PathBuf]) -> bool {
+    space(ud, disks, dirs).short
+}
+
+/// [`space`] on `serve`, its floor's folders (`floor_folders`). Blocking.
+pub fn space_on(serve: &Serve, disks: &dyn Disks) -> Space {
+    space(&serve.userdata, disks, &floor_folders(serve))
+}
+
+/// Whether `serve` is short of space now ([`short`], its floor's folders). Blocking.
+pub fn short_on(serve: &Serve, disks: &dyn Disks) -> bool {
+    short(&serve.userdata, disks, &floor_folders(serve))
+}
+
+/// What the trashes on the floor's disks hold (AL03.3, Q4): the bytes of every file moved into the trash of an Incoming library or of
+/// anyone's own music, not emptied yet; emptying them frees that. Blocking.
+pub fn in_the_trash(serve: &Serve) -> Result<u64> {
+    if !serve.has_catalogue() {
+        return Ok(0);
+    }
+    let cat = serve.catalogue();
+    let places = Places::of(&serve.library.kinds(), &cat.folders());
+    let folders: Vec<i64> = places.incoming.iter().copied().chain(places.own.iter().map(|(f, _)| *f)).collect();
+    cat.trash_bytes(&folders)
+}
+
+/// A size as Health says it (AL03.3): in GB from one GB up ("150 GB", "199.9 GB"), else in MB or KB.
+pub fn size_text(bytes: u64) -> String {
+    let (n, unit) = match bytes {
+        b if b >= GB => (b as f64 / GB as f64, "GB"),
+        b if b >= 1_000_000 => (b as f64 / 1e6, "MB"),
+        b => (b as f64 / 1e3, "KB"),
+    };
+    let s = format!("{n:.1}");
+    format!("{} {unit}", s.strip_suffix(".0").unwrap_or(&s))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -156,6 +300,55 @@ pub(crate) mod tests {
 
     pub(crate) fn room_shape() -> Arc<Serve> {
         room_shape_in(None, None)
+    }
+
+    /// Disks with room to spare, wherever asked: what a test not about the floor hands a Want with (AL03).
+    pub(crate) struct Roomy;
+
+    impl Disks for Roomy {
+        fn free(&self, _: &Path) -> Option<u64> {
+            Some(u64::MAX / 2)
+        }
+    }
+
+    /// The scenarios' disks stand-in (AL03): each folder's disk's free space as a test sets it (none: unreadable), each ask
+    /// recorded; asked of a folder not in its map, it panics.
+    #[derive(Default)]
+    pub(crate) struct Stand {
+        free: std::sync::Mutex<HashMap<PathBuf, Option<u64>>>,
+        asked: std::sync::Mutex<Vec<PathBuf>>,
+    }
+
+    impl Stand {
+        /// Folders and the free space of their disks, in GB.
+        pub(crate) fn of(free: &[(&str, f64)]) -> Self {
+            let stand = Stand::default();
+            for (dir, n) in free {
+                stand.set(dir, Some(*n));
+            }
+            stand
+        }
+
+        /// A folder's disk now `n` GB free; none: its free space unreadable.
+        pub(crate) fn set(&self, dir: &str, n: Option<f64>) {
+            self.free.lock().unwrap().insert(PathBuf::from(dir), n.map(gb));
+        }
+
+        /// The folders it was asked of, each once.
+        pub(crate) fn asked(&self) -> Vec<PathBuf> {
+            let mut asked = self.asked.lock().unwrap().clone();
+            asked.sort();
+            asked.dedup();
+            asked
+        }
+    }
+
+    impl Disks for Stand {
+        fn free(&self, dir: &Path) -> Option<u64> {
+            self.asked.lock().unwrap().push(dir.to_path_buf());
+            let known = self.free.lock().unwrap().get(dir).copied();
+            known.unwrap_or_else(|| panic!("asked of a disk no user's music lands on: {}", dir.display()))
+        }
     }
 
     /// What counts against each account's room now: the rule's one read, who asked first read now.
@@ -461,7 +654,7 @@ pub(crate) mod tests {
         let listed = rooms(&serve, &serve.users.all()).unwrap();
         assert_eq!(listed.keys().collect::<Vec<_>>(), ["bob"], "each user's room, none for the administrators");
         let (strict, house) = (Strict::expecting_wants(&[S]), Copies::none());
-        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house, disks: &Roomy };
         let (s, c) = (not_had(&serve, "Signal", S), not_had(&serve, "Carl's Want", C));
         let roots = acting("root", true, ask_record_with(&h, &serve, "root", s)).await.unwrap();
         assert_ne!(roots.fetched.as_deref(), Some(WAITS_FOR_ROOM), "an administrator's Want never waits: {roots:?}");
@@ -566,7 +759,7 @@ pub(crate) mod tests {
         use crate::app::requests::tests::{Copies, Strict, acting, not_had};
         use crate::app::requests::{Hands, WAITS_FOR_ROOM, ask_record_with};
         let (strict, house) = (Strict::expecting_nothing(), Copies::none());
-        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house, disks: &Roomy };
         let wanted = not_had(&serve, "After the Upgrade", "00000000-0000-4000-8000-000000000421");
         let asked = acting("bob", false, ask_record_with(&h, &serve, "bob", wanted)).await.unwrap();
         assert_eq!(serve.userdata.request(asked.id).unwrap().unwrap().fetched.as_deref(), Some(WAITS_FOR_ROOM), "his Want waits");
@@ -666,5 +859,142 @@ pub(crate) mod tests {
         let at = source.find("pub fn room_rows").unwrap();
         let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
         assert!(body.contains("{FREE_OF_ROOM}") && !body.contains("SHARED_WITH") && !body.contains("shared_copies"), "{body}");
+    }
+
+    // AL03 (run 13): the disk floor (SCENARIOS-RUNS-13-14's AL03.4-AL03.6; the owner's Q4 and Q6; OQ-F2, OQ-F3).
+
+    /// The lines `f` says in the log of the floor's own (`room`).
+    fn floor_said(f: impl FnOnce()) -> Vec<String> {
+        crate::diagnostics::logged_lines(f).into_iter().filter(|l| l.starts_with("room: ")).collect()
+    }
+
+    /// AL03.4 (OQ-F3): the floor 200 GB (none set: 0084's), the disk at 199.9, 200.1, 199.95, 205, a restart, 205 and 210.5 GB in
+    /// turn, the flag read after each: on at 199.9, still on at 200.1, 199.95 and 205, after the restart too, off at 210.5 (the floor
+    /// and 10 GB). So it changes twice, each said once in the log, and the user data's meta keeps it over the restart. Never flapping
+    /// at the floor; never a restart turning it off.
+    #[test]
+    fn the_flag_flips_once_per_crossing() {
+        let data = std::env::temp_dir().join(format!("cratarr-room-floor-{}", std::process::id()));
+        std::fs::remove_dir_all(&data).ok();
+        std::fs::create_dir_all(&data).unwrap();
+        let dirs = [PathBuf::from(FOLDERS[1])];
+        let stand = Stand::of(&[(FOLDERS[1], 199.9)]);
+        let read = |serve: &Serve, n: f64, seen: &mut Vec<bool>| {
+            stand.set(FOLDERS[1], Some(n));
+            seen.push(short(&serve.userdata, &stand, &dirs));
+        };
+        let mut seen = Vec::new();
+        let serve = room_shape_in(Some(&data), None);
+        assert_eq!(floor(&serve.userdata), gb(200.0), "none set: 200 GB");
+        let mut said = floor_said(|| {
+            for n in [199.9, 200.1, 199.95, 205.0] {
+                read(&serve, n, &mut seen);
+            }
+        });
+        drop(serve);
+        let serve = room_shape_in(Some(&data), None);
+        assert_eq!(serve.userdata.meta(SHORT_KEY).unwrap().as_deref(), Some(SHORT), "kept in the user data's meta over the restart");
+        said.extend(floor_said(|| {
+            for n in [205.0, 210.5] {
+                read(&serve, n, &mut seen);
+            }
+        }));
+        assert_eq!(seen, [true, true, true, true, true, false], "on below the floor, off only at the floor and 10 GB, a restart changing nothing");
+        assert_eq!(said.len(), 2, "twice, once per crossing: {said:?}");
+        assert!(said[0].contains("short of space") && said[1].contains("space again"), "{said:?}");
+        drop(serve);
+        std::fs::remove_dir_all(&data).ok();
+    }
+
+    /// AL03.5 (Q4: the trash gives room back at once, and the disk when it is emptied): the disk 5 GB below the floor, ann over her
+    /// room by her own music, her Want waiting for room. Her delete of 20 GB into her own music's trash: her room down at once and
+    /// under (AL01.5), but the disk holds the trash, so the floor still reads below and her Want waits on, for space now, Lidarr asked
+    /// nothing; Health's item says the trash holds 20 GB. The trash emptied (the purge, the disk 20 GB freer): no longer short, her
+    /// Want goes at the round, and Health says nothing of space.
+    #[tokio::test]
+    async fn the_trash_frees_room_at_once_and_the_disk_when_emptied() {
+        use crate::app::requests::tests::{Copies, Strict, acting, not_had, with_accounts};
+        use crate::app::requests::{Hands, Holding, RequestState, WAITS_FOR_ROOM, WAITS_FOR_SPACE, ask_record_with, request_state, round_with};
+        const G: &str = "00000000-0000-4000-8000-000000000471";
+        let serve = room_shape();
+        with_accounts(&serve);
+        let cat = serve.catalogue();
+        put_file(cat, ANN, "Big/1.flac", Some(1), gb(20.0), 10, false, 100);
+        put_file(cat, ANN, "Rest/1.flac", Some(2), gb(85.0), 10, false, 100);
+        let stand = Stand::of(&[(FOLDERS[1], 195.0), (FOLDERS[2], 195.0)]);
+        let (strict, house) = (Strict::expecting_wants(&[G]), Copies::none());
+        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house, disks: &stand };
+        let r = not_had(&serve, "Night Ferry", G);
+        let asked = acting("ann", false, ask_record_with(&h, &serve, "ann", r)).await.unwrap();
+        let row = || serve.userdata.request(asked.id).unwrap().unwrap();
+        assert_eq!((row().fetched.as_deref(), used(&serve, "ann")), (Some(WAITS_FOR_ROOM), gb(105.0)), "over her room: it waits for room");
+        // Her delete, into her own music's trash.
+        cat.mark_trashed(ANN, "Big", "100/Big").unwrap();
+        assert_eq!(used(&serve, "ann"), gb(85.0), "her room down at once, under");
+        assert!(short_on(&serve, &stand), "the disk holds the trash: still below the floor");
+        round_with(&h, &serve, crate::app::moment::now_secs()).await.unwrap();
+        assert_eq!(row().fetched.as_deref(), Some(WAITS_FOR_SPACE), "her Want waits on, for space now");
+        assert_eq!(request_state(&row(), Holding::None, None, None), RequestState::WaitingForSpace);
+        assert!(strict.wanted().is_empty(), "Lidarr asked nothing while short");
+        let f = crate::app::health::short_of_space(&serve, &stand).expect("Health says it");
+        let detail = f.detail.clone().unwrap_or_default();
+        assert!(detail.contains("195 GB free, below the floor of 200 GB") && detail.contains("The trash holds 20 GB: emptying it frees that"), "{detail}");
+        // The purge: the trash emptied, the disk 20 GB freer, its rows gone at the next pass.
+        cat.execute_for_tests("DELETE FROM files WHERE trashed IS NOT NULL");
+        for d in [FOLDERS[1], FOLDERS[2]] {
+            stand.set(d, Some(215.0));
+        }
+        assert!(!short_on(&serve, &stand), "the disk recovered");
+        round_with(&h, &serve, crate::app::moment::now_secs()).await.unwrap();
+        assert_eq!(strict.wanted(), [G], "her Want goes at the round");
+        assert!(row().fetched.as_deref().is_some_and(|f| f.contains("Lidarr is looking for it")), "{:?}", row());
+        assert!(crate::app::health::short_of_space(&serve, &stand).is_none(), "Health says nothing of space");
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
+    }
+
+    /// AL03.6 (OQ-F2): Music alone on a disk with 50 GB free; Lidarr's and Soulseek's Incoming, an Uploads library and the own-music
+    /// folder on one with 900 GB: Music's disk alone pauses no one. That disk at 150 GB: short. Its free space then unreadable: not
+    /// short, said once in the log however often it is read. The stand-in is asked only of the Incoming libraries' folders (Uploads
+    /// among them) and the own-music folder: never of Music's, of each account's own folder, nor of the data folder (it panics).
+    #[test]
+    fn the_floor_reads_the_disks_users_music_lands_on() {
+        use crate::settings::{Libraries, Saved, SourceConfig};
+        const UPLOADS: &str = "/library/uploads";
+        let data = std::env::temp_dir().join(format!("cratarr-room-disks-{}", std::process::id()));
+        std::fs::remove_dir_all(&data).ok();
+        std::fs::create_dir_all(&data).unwrap();
+        let values = [(crate::settings::OWN_MUSIC.to_string(), serde_json::json!("/own"))].into_iter().collect();
+        let cfg = SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: Libraries::default(), values };
+        crate::settings::save(&data.join("settings.json"), &Saved { sources: vec![cfg], ..Saved::default() }).unwrap();
+        let serve = Serve::open(Some(&data), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let folders: Vec<PathBuf> = FOLDERS.iter().chain([&UPLOADS]).map(|f| PathBuf::from(*f)).collect();
+        serve.attach_catalogue(Arc::new(Catalogue::open(None, folders).unwrap()));
+        serve.library.set_kinds(kinds().into_iter().chain([(FOLDERS.len() as i64, LibraryKind::Incoming)]).collect());
+        assert_eq!(serve.own_music(), Some(PathBuf::from("/own")));
+        let lands = [FOLDERS[1], FOLDERS[2], UPLOADS, "/own"];
+        let stand = Stand::of(&[(FOLDERS[0], 50.0)]);
+        for d in lands {
+            stand.set(d, Some(900.0));
+        }
+        assert!(!short_on(&serve, &stand), "Music's disk alone pauses no one");
+        let mut where_music_lands: Vec<PathBuf> = lands.iter().map(|d| PathBuf::from(*d)).collect();
+        where_music_lands.sort();
+        assert_eq!(stand.asked(), where_music_lands, "only the Incoming libraries' folders and the own-music folder");
+        for d in lands {
+            stand.set(d, Some(150.0));
+        }
+        assert!(short_on(&serve, &stand), "the disk users' music lands on at 150 GB");
+        for d in lands {
+            stand.set(d, None);
+        }
+        let said = floor_said(|| {
+            assert!(!short_on(&serve, &stand), "unreadable: not short");
+            assert!(!short_on(&serve, &stand), "read again: still not");
+        });
+        assert_eq!(said.len(), 1, "said once in the log: {said:?}");
+        assert!(said[0].contains("could not be read"), "{said:?}");
+        assert_eq!(stand.asked(), where_music_lands, "never Music's, an account's own folder, nor the data folder");
+        drop(serve);
+        std::fs::remove_dir_all(&data).ok();
     }
 }

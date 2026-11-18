@@ -638,6 +638,38 @@ fn hold(i: &mut Item, why: String, wait: i64) {
     (i.why, i.due) = (Some(why), now() + wait);
 }
 
+/// What a user's fetch held by the disk floor says (AL03.2): no transfer of it begins while the server is short of space.
+pub const SHORT_OF_SPACE: &str = "The server is short of space";
+/// A fetch the floor held is looked at again after this long, and at once when the server is no longer short (`space_again`).
+const FLOOR_AGAIN: i64 = 60;
+
+/// The fetches the disk floor held, taken up now (AL03.2): the server is no longer short of space (`room::space`).
+pub fn space_again() {
+    let taken = kept(|k| {
+        let held: Vec<&mut Item> = k.items.iter_mut().filter(|i| i.state == State::Approved && i.why.as_deref() == Some(SHORT_OF_SPACE)).collect();
+        let n = held.len();
+        for i in held {
+            (i.due, i.why) = (0, None);
+        }
+        n
+    });
+    if taken > 0 {
+        wake();
+    }
+}
+
+/// Whether the disk floor holds a fetch of `request`'s now (AL03.2): its asker a user, and the server short of space. An
+/// administrator's, or one whose asker is not known, goes on.
+async fn below_floor(request: i64) -> bool {
+    let Some(serve) = crate::serve::instance() else { return false };
+    tokio::task::spawn_blocking(move || {
+        let asker = serve.userdata.request(request).ok().flatten().map(|r| r.user);
+        asker.is_some_and(|a| serve.users.get(&a).is_some_and(|u| !u.admin)) && super::room::short_on(&serve, &super::room::TheDisks)
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Whether its fetch is at work: one held at its check is not, until it is due.
 fn fetched(i: &Item, now: i64) -> bool {
     match i.state {
@@ -734,6 +766,8 @@ fn words_in(items: &[Item], requests: &[i64]) -> std::collections::HashMap<i64, 
             let word = match i.state {
                 State::Searching => Word::Searching,
                 State::Found => Word::Found,
+                // Held by the disk floor (AL03.2): no transfer begun, so not fetching.
+                State::Approved if i.why.as_deref() == Some(SHORT_OF_SPACE) => Word::Waiting { why: i.why.clone() },
                 State::Approved | State::Fetching => Word::Fetching { percent: i.percent },
                 State::Checking | State::Placed => Word::Fetching { percent: 100.0 },
                 State::Waiting => Word::Waiting { why: i.why.clone() },
@@ -1042,7 +1076,8 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
 }
 
 /// The requests Soulseek's list is kept by (`take_requests`), each with its record as `records_held` reads it: every approved
-/// request (X2), not the newest thousand, but one waiting for its asker's room (AL02.2: no item of it till it goes); a delivered one
+/// request (X2), not the newest thousand, but one waiting for its asker's room (AL02.2: no item of it till it goes; one waiting for
+/// space keeps the item it had, AL03.2, and is given none, `take_requests`); a delivered one
 /// is not approved, so never searched again ((c), AL02.8). Where each record holding no copy saw its last one go (U7, T8): only
 /// one gone from Incoming, deleted there or removed outside Cratarr, is looked for again. Blocking.
 pub(crate) fn requests_taken(
@@ -1176,6 +1211,10 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
         }
         // No record yet (0.17's step gives each one at the start): taken once it has one; a had one, never.
         let Some(o) = o.as_ref().filter(|o| !o.had()) else { continue };
+        // A Want waiting for space (AL03.1): no item of it till it goes; an item it has stays, its transfer held by the floor.
+        if super::requests::waits_for_space(r) {
+            continue;
+        }
         // One item a record; a placed copy partly there lets Soulseek look again, its item kept as history (Y2).
         if k.items.iter().any(|i| (i.record.request == r.id || i.record.record == o.record) && !looks_again(i, o.holding)) {
             continue;
@@ -1447,6 +1486,11 @@ where
     let Some(f) = it.chosen.and_then(|c| it.folders.get(c)).cloned() else {
         return with_item(id, |i| (i.state, i.chosen, i.due) = (State::Waiting, None, 0));
     };
+    // Below the disk floor (AL03.2, OQ-F1): a user's fetch begins no transfer, held saying so, and goes once there is space; an
+    // administrator's goes on, and one under way finishes.
+    if it.batch.is_none() && below_floor(it.record.request).await {
+        return with_item(id, |i| hold(i, SHORT_OF_SPACE.into(), FLOOR_AGAIN));
+    }
     // Room for its files on slskd's disk and the library's before a fetch begins (X4): a disk full is no user's failure.
     if it.batch.is_none() {
         let need: u64 = f.files.iter().map(|o| o.size.max(0) as u64).sum();
@@ -3751,7 +3795,7 @@ mod tests {
     async fn a_delivered_album_deleted_from_a_kept_library_is_not_searched_again() {
         use crate::app::requests::tests::{Copies, Strict, with_accounts};
         use crate::app::requests::{DELIVERED, Hands, RequestState, round_with};
-        use crate::app::room::tests::{MUSIC, room_shape};
+        use crate::app::room::tests::{MUSIC, Roomy, room_shape};
         let serve = room_shape();
         with_accounts(&serve);
         let cat = serve.catalogue().clone();
@@ -3778,7 +3822,7 @@ mod tests {
         };
         let id = serve.userdata.add_request(&asked).unwrap();
         let (strict, house) = (Strict::expecting_nothing(), Copies::none());
-        round_with(&Hands { lidarr: Some(&strict), soulseek: true, house: &house }, &serve, super::super::moment::now_secs()).await.unwrap();
+        round_with(&Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy }, &serve, super::super::moment::now_secs()).await.unwrap();
         assert_eq!(serve.userdata.request(id).unwrap().unwrap().status, DELIVERED, "delivered into Music");
         cat.mark_trashed(MUSIC, &format!("copy-{r2}"), "300/Quiet Lanes").unwrap();
         cat.execute_for_tests(&format!("DELETE FROM files WHERE folder = {MUSIC}"));

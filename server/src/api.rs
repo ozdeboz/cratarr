@@ -351,6 +351,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/track-files/fetch", post(start_file_fetch))
             .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
             .route("/api/settings/server-runtime", get(get_runtime).put(put_runtime))
+            // The disk floor (AL03, 0084): below it users' new Wants wait.
+            .route("/api/settings/floor", get(get_floor).put(put_floor))
             .route("/api/settings/acoustid", get(get_acoustid).put(put_acoustid))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
@@ -556,12 +558,18 @@ fn new_request_id() -> String {
 
 /// Open to anyone: that Cratarr answers, and which install it is (the app checks its local address is the same
 /// Cratarr as its public one before the page there may talk to it), and its page's build (`web`, decision 0085: an app
-/// with its own copy of the page serves the newer).
+/// with its own copy of the page serves the newer). And whether the server is short of space (`short_of_space`, AL03, the owner's
+/// Q6: cratarr-ha reads it, and Home Assistant tells the owner): a flag alone, never a size, a path or an account, and never a reason
+/// to answer other than 200, or Docker's health check would mark Cratarr unhealthy.
 async fn health(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let n = app.playlists.count().await.map_err(ToggleError::from)?;
     let instance = ctx.served.as_ref().and_then(|s| s.sessions.instance_id().ok());
-    Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance, "web": crate::web::page_build() })))
+    let short = match ctx.served.clone() {
+        Some(s) => tokio::task::spawn_blocking(move || crate::app::room::short_on(&s, &crate::app::room::TheDisks)).await.unwrap_or(false),
+        None => false,
+    };
+    Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance, "web": crate::web::page_build(), "short_of_space": short })))
 }
 
 /// `?source=<id>`: follow that source; absent (or unknown): whichever started playing most recently.
@@ -6850,6 +6858,35 @@ async fn put_runtime(ctx: Ctx, Json(c): Json<crate::app::runtime::Change>) -> Re
         app.play_on.set_lan_base(crate::app::runtime::lan_base(&r));
     }
     get_runtime(ctx).await
+}
+
+// ---- The disk floor (AL03)
+
+#[derive(Deserialize)]
+struct FloorSize {
+    gb: f64,
+}
+
+/// The disk floor (AL03, 0084), as just read against the disks users' music lands on: the floor in GB, the lowest free space there in
+/// bytes (none where it cannot be read), and whether the server is short of space.
+async fn get_floor(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let space = tokio::task::spawn_blocking(move || crate::app::room::space_on(&serve, &crate::app::room::TheDisks)).await.map_err(|e| ToggleError::Refused(format!("{e}")))?;
+    Ok(Json(json!({ "gb": space.floor as f64 / crate::app::room::GB as f64, "free": space.free, "short": space.short })))
+}
+
+/// The disk floor set by an administrator: GB with decimals, kept in bytes (1 GB = 10^9), and read against the disks at once.
+async fn put_floor(ctx: Ctx, Json(b): Json<FloorSize>) -> Result<Json<serde_json::Value>, ApiError> {
+    if !b.gb.is_finite() || b.gb < 0.0 {
+        return Err(ToggleError::BadSettings("Give the floor in GB, from 0.".into()).into());
+    }
+    let serve = ctx.serve()?;
+    let bytes = (b.gb * crate::app::room::GB as f64).round() as u64;
+    tokio::task::spawn_blocking(move || crate::app::room::set_floor(&serve.userdata, bytes))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    get_floor(ctx).await
 }
 
 // ---- Discogs' facts (0.9.8)

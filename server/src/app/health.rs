@@ -269,6 +269,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "server:runaway" => ("Clients", "running away"),
         "server:slow" => ("Responses", "slow"),
         "server:settings-file" => ("Settings file", "unreadable"),
+        "server:short-of-space" => ("Disk space", "short"),
         "servers:lidarr" => ("Lidarr", "unreachable"),
         "library:ids-lost" => ("Track ids", "lost"),
         "requests:waiting" => ("Requests", "waiting"),
@@ -323,6 +324,7 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "server:runaway" => "Runaway client",
         "server:slow" => "Slow responses",
         "server:settings-file" => "Settings",
+        "server:short-of-space" => "Short of space",
         "requests:waiting" => "Requests",
         "requests:soulseek-set-aside" | "requests:soulseek-frozen" => "Soulseek queue",
         "words:genre" => "Genres in the files",
@@ -811,7 +813,7 @@ impl App {
         findings.extend(self.check_players());
         checked.insert("players", at);
         findings.extend(or_failed("library", self.check_missing().await));
-        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
+        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at, self.served.as_deref())), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
         }
@@ -1259,11 +1261,11 @@ fn check_sign_in(at: i64) -> anyhow::Result<Vec<Finding>> {
     Ok(out)
 }
 
-/// The server's own: slow answers and runaway clients (decision 0045, amended 2026-10-23).
-fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
+/// The server's own: slow answers and runaway clients (decision 0045, amended 2026-10-23), and the disk floor (AL03): short of space.
+fn check_server(at: i64, served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let slow = last_hour("server", "slow response", at)?;
     let runaway = last_hour("server", "client requests too often", at)?;
-    let mut out = Vec::new();
+    let mut out: Vec<Finding> = served.and_then(|s| short_of_space(s, &super::room::TheDisks)).into_iter().collect();
     if slow > 0 {
         let mut f = finding("server", "server:slow", Level::Info, slow, format!("{} in the last hour", n(slow, "slow answer", "slow answers")));
         f.detail = Some("Answers that took longer than a second, by page: how often, the slowest, and who asked.".into());
@@ -1276,6 +1278,35 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
         out.push(f);
     }
     Ok(out)
+}
+
+/// The disk floor (AL03; Q6, OQ-F5): the server short of space, one warning for the whole server, never one per user: its detail the
+/// free space where users' music lands, the floor, and what the trash there holds, as emptying it frees that; opening Settings. None
+/// while it is not short. What cratarr-ha reads is `/api/health`'s flag; Cratarr calls no one. Blocking.
+pub(crate) fn short_of_space(served: &crate::serve::Serve, disks: &dyn super::room::Disks) -> Option<Finding> {
+    use super::room::{MARGIN, size_text};
+    let space = super::room::space_on(served, disks);
+    if !space.short {
+        return None;
+    }
+    // No count: it is short or not ("Disk space · short").
+    let mut f = finding("server", "server:short-of-space", Level::Warning, 0, "The server is short of space");
+    let mut detail = format!(
+        "{} free, below the floor of {}. Users' new Wants wait until {} is free.",
+        size_text(space.free.unwrap_or(0)),
+        size_text(space.floor),
+        size_text(space.floor.saturating_add(MARGIN))
+    );
+    let trash = super::room::in_the_trash(served).unwrap_or_else(|e| {
+        tracing::warn!(target: "room", reason = %format!("{e:#}"), "what the trash holds was not read");
+        0
+    });
+    if trash > 0 {
+        detail.push_str(&format!(" The trash holds {}: emptying it frees that.", size_text(trash)));
+    }
+    f.detail = Some(detail);
+    f.open = Some(Open { page: "settings", switch: None, thing: None });
+    Some(f)
 }
 
 #[cfg(test)]

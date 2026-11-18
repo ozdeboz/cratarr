@@ -3171,6 +3171,21 @@ impl Catalogue {
         }
     }
 
+    /// The bytes in the trashes of these catalogue folders (AL03.3): every file Cratarr moved into one, not emptied yet. One statement,
+    /// on a reader where there is one. Blocking.
+    pub fn trash_bytes(&self, folders: &[i64]) -> Result<u64> {
+        let ids = serde_json::to_string(folders)?;
+        let read = |db: &Connection| -> Result<u64> {
+            let sql = "SELECT ifnull(sum(size), 0) FROM files WHERE trashed IS NOT NULL AND folder IN (SELECT value FROM json_each(?1))";
+            let bytes: i64 = db.query_row(sql, [&ids], |r| r.get(0))?;
+            Ok(bytes.max(0) as u64)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// A copy's audio files (catalogue folder `folder`, under `dir`; all of it where `dir` is empty), present, each with its track
     /// and its numbers as its tags give them (S.1, T5). On a reader where there is one. Blocking.
     pub fn numbers_under(&self, folder: i64, dir: &str) -> Result<Vec<(Option<i64>, identity::FileNumbers)>> {

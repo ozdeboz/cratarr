@@ -29,8 +29,8 @@ pub trait Files: Send + Sync {
     /// the original's blocks, in the plan's order.
     #[allow(dead_code)] // Copy to's action (C40) is its first caller.
     fn copy_all(&self, plan: &[crate::moves::Step]) -> Result<Vec<bool>>;
-    /// Whether a copy from folder `from` into folder `to` shares its blocks: tried once, and kept. Read by the room count (AL01).
-    #[allow(dead_code)]
+    /// Whether a copy from folder `from` into folder `to` shares its blocks: tried once, and kept. Read below the disk floor, where a
+    /// Want's copy is made only if it takes no new space (AL03.1).
     fn shares(&self, from: &Path, to: &Path) -> bool;
 }
 

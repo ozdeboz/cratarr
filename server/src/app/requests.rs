@@ -5,7 +5,9 @@
 //! (`serve::users::Permissions`), an administrator's all. Since 0.17 (AL02, the owner's "No approval per request") "Request albums"
 //! is the gate: a Want goes ahead with no one's yes, and its asker's room is a brake, not an approval: over it, a new Want waits,
 //! saying so, and goes by itself at the requests' round once they are under, oldest first. A request done in a library is
-//! delivered ((c)): kept in the history, it pulls no copy, room, right or search any more.
+//! delivered ((c)): kept in the history, it pulls no copy, room, right or search any more. Below the disk floor (AL03, `room::space`)
+//! a user's new Want waits for space the same way, and one Lidarr only looks for is told to stop till there is space; an
+//! administrator's goes on.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -77,6 +79,8 @@ pub enum RequestState {
         used: u64,
         room: u64,
     },
+    /// The server is short of space (AL03): a user's Want handed to no fetcher, or told to stop, till there is space.
+    WaitingForSpace,
     Declined,
     Cancelled,
     Rejected,
@@ -109,7 +113,7 @@ pub enum Fetching {
 /// A request's state (W5): `RequestState`, from the request as kept, how its record is held for its asker (`holding`), Lidarr's
 /// progress for its group, and Soulseek's word of its item. A request of an album the asker has, or that arrived, reads so whatever
 /// its answer was to be; one held only in another's own music is still wanted, for its asker's copy (I05). One waiting for room
-/// reads so (AL02.2), its numbers 0 till a view gives them (`views_of`). Pure.
+/// reads so (AL02.2), its numbers 0 till a view gives them (`views_of`); one waiting for space too (AL03). Pure.
 pub fn request_state(r: &Request, held: Holding, lidarr: Option<&Progress>, soulseek: Option<&super::soulseek::Word>) -> RequestState {
     match r.status.as_str() {
         DECLINED => return RequestState::Declined,
@@ -123,6 +127,7 @@ pub fn request_state(r: &Request, held: Holding, lidarr: Option<&Progress>, soul
         Holding::Arrived => RequestState::Arrived,
         _ if r.status != APPROVED => RequestState::WaitingForApproval,
         _ if waits_for_room(r) => RequestState::WaitingForRoom { used: 0, room: 0 },
+        _ if waits_for_space(r) => RequestState::WaitingForSpace,
         Holding::Partly { has, of } => RequestState::PartlyThere { has, of },
         Holding::None | Holding::Elsewhere => {
             let lidarr = lidarr.and_then(|p| match *p {
@@ -151,6 +156,7 @@ fn album_state_of(s: &RequestState) -> Album {
         RequestState::Wanted { .. }
         | RequestState::WaitingForApproval
         | RequestState::WaitingForRoom { .. }
+        | RequestState::WaitingForSpace
         | RequestState::Declined
         | RequestState::Cancelled
         | RequestState::Rejected => Album::Requested,
@@ -191,22 +197,25 @@ pub fn fetcher(app: &super::App) -> Option<Box<dyn Fetcher>> {
     Some(Box::new(LidarrFetcher { lidarr, with: super::discover::add_with(app) }))
 }
 
-/// What a Want is handed with (AL02): Lidarr where it is connected, whether Soulseek is, and the house's copy of a record held whole
-/// into its asker's own music (C52, T5: `App::copy_for`). The tests' stand in for each.
+/// What a Want is handed with (AL02): Lidarr where it is connected, whether Soulseek is, the house's copy of a record held whole
+/// into its asker's own music (C52, T5: `App::copy_for`), and the disks the floor reads (AL03, `room::Disks`). The tests' stand in
+/// for each.
 pub(crate) struct Hands<'a> {
     pub lidarr: Option<&'a dyn Fetcher>,
     pub soulseek: bool,
     pub house: &'a dyn House,
+    pub disks: &'a dyn super::room::Disks,
 }
 
-/// The house's copy of a record into an account's own music (C52, T5): what it came to.
+/// The house's copy of a record into an account's own music (C52, T5): what it came to. `sharing`: made only where it shares its
+/// blocks with what it is made of, taking no new space (below the floor, AL03.1); else not made (`WantCopy::NoSpace`).
 pub(crate) trait House: Send + Sync {
-    fn copy_into_own<'a>(&'a self, account: &'a str, record: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>>;
+    fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>>;
 }
 
 impl House for super::App {
-    fn copy_into_own<'a>(&'a self, account: &'a str, record: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>> {
-        Box::pin(self.copy_for(account, record))
+    fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>> {
+        Box::pin(self.copy_for(account, record, sharing))
     }
 }
 
@@ -227,7 +236,7 @@ pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> R
     }
     let record = record_of_album_in(serve, s.release_group.clone(), &s.artist, &s.album, s.year, s.cover.clone(), s.bandcamp.clone()).await?;
     let (lidarr, soulseek) = fetchers(app).await;
-    asked_record(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app }, serve, account, record, Some(s.key), s.release_group).await
+    asked_record(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, account, record, Some(s.key), s.release_group).await
 }
 
 /// Any album asked for by its names (0.9.3, the owner: Want for any album an artist's page says is missing): keyed as
@@ -250,14 +259,14 @@ pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_g
     }
     let record = record_of_album_in(serve, release_group.clone(), artist, album, year, cover, page).await?;
     let (lidarr, soulseek) = fetchers(app).await;
-    asked_record(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app }, serve, account, record, Some(key), release_group).await
+    asked_record(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, account, record, Some(key), release_group).await
 }
 
 /// A record asked for by its id (C49a): an artist's or a label's missing record, any record not had. The account's open
 /// request for it is the answer where there is one.
 pub async fn ask_record(app: &super::App, serve: &Serve, account: &str, record: i64) -> Result<Request> {
     let (lidarr, soulseek) = fetchers(app).await;
-    ask_record_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app }, serve, account, record).await
+    ask_record_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, account, record).await
 }
 
 /// [`ask_record`], handed with `h`.
@@ -453,13 +462,27 @@ pub fn waits_for_room(r: &Request) -> bool {
     r.status == APPROVED && r.fetched.as_deref() == Some(WAITS_FOR_ROOM)
 }
 
+/// What a user's Want says, on its line, while the server is short of space (AL03): below the disk floor it is handed to no fetcher,
+/// or told to stop where Lidarr only looks for it; its state then reads `waiting_for_space`, and the requests' round hands it by
+/// itself once there is space, oldest first (`hand_waiting`).
+pub const WAITS_FOR_SPACE: &str = "Waits for space";
+
+/// Whether an approved request waits for space (AL03): its line the floor's word.
+pub fn waits_for_space(r: &Request) -> bool {
+    r.status == APPROVED && r.fetched.as_deref() == Some(WAITS_FOR_SPACE)
+}
+
 /// A Want goes ahead (AL02, the owner's "No approval per request": room is a brake, not an approval): its asker over their room,
 /// it waits, saying so (`WAITS_FOR_ROOM`), handed to no fetcher and copied from nothing (AL02.5: a Want the house would meet waits
-/// too, and a copy's cost is read from its rows once made, never guessed); else it is handed (`hand_with`). An administrator has no
-/// room, so theirs always goes. What it says.
+/// too, and a copy's cost is read from its rows once made, never guessed); a user's below the disk floor goes only as far as it
+/// takes no new space (`below_the_floor`, AL03.1); else it is handed (`hand_with`). An administrator has no room, and the floor
+/// holds nothing of theirs, so theirs always goes. What it says.
 async fn go_ahead(h: &Hands<'_>, serve: &Serve, r: &Request) -> String {
     if full(serve, &r.user).await {
         return wait_for_room(serve, r);
+    }
+    if held_by_floor(h, serve, &r.user) {
+        return below_the_floor(h, serve, r).await;
     }
     hand_with(h, serve, r).await
 }
@@ -471,6 +494,42 @@ fn wait_for_room(serve: &Serve, r: &Request) -> String {
     }
     tracing::info!(target: "requests", request = r.id, user = %r.user, "a Want waits for its asker's room");
     WAITS_FOR_ROOM.to_string()
+}
+
+/// `r` set to wait for space (AL03): the floor's word on its line, which a restart keeps. The word.
+fn wait_for_space(serve: &Serve, r: &Request) -> String {
+    if let Err(e) = serve.userdata.set_request_fetched(r.id, WAITS_FOR_SPACE) {
+        tracing::warn!("request {}: that it waits for space was not kept: {e:#}", r.id);
+    }
+    tracing::info!(target: "requests", request = r.id, user = %r.user, "a Want waits for space: the server is short of space");
+    WAITS_FOR_SPACE.to_string()
+}
+
+/// Whether `account` is a user (AL01, AL03): an account that is not an administrator. One not known is neither held by the floor nor
+/// given a room, as room reads it.
+fn is_user(serve: &Serve, account: &str) -> bool {
+    serve.users.get(account).is_some_and(|u| !u.admin)
+}
+
+/// Whether the disk floor holds `account`'s new Wants now (AL03.1): a user's, while the server is short of space (`room::short_on`,
+/// the disks as `h` reads them). Never an administrator's.
+fn held_by_floor(h: &Hands<'_>, serve: &Serve, account: &str) -> bool {
+    is_user(serve, account) && super::room::short_on(serve, h.disks)
+}
+
+/// A user's Want below the floor (AL03.1): the house's copy of a record it holds whole is made only where it shares its blocks, which
+/// takes no new space; a record Incoming holds whole is had, and no fetcher's (W3); any other waits for space, handed to no fetcher,
+/// and goes by itself at the round once there is space (`hand_waiting`). What it says.
+async fn below_the_floor(h: &Hands<'_>, serve: &Serve, r: &Request) -> String {
+    let of = named(serve, std::slice::from_ref(r)).await.pop().flatten();
+    match of.map(|o| (o.holding, o.holder)) {
+        Some((Holding::Done | Holding::Elsewhere, Some(holder))) => match h.house.copy_into_own(&r.user, holder, true).await {
+            WantCopy::NoneWhole => wait_for_space(serve, r),
+            copied => hand_after(h.lidarr, h.soulseek, serve, r, copied).await,
+        },
+        Some((Holding::Arrived, _)) => hand_to(h.lidarr, h.soulseek, serve, r).await,
+        _ => wait_for_space(serve, r),
+    }
 }
 
 /// Whether `account` is a user over their room now (AL01's `room::rooms`, one read): an administrator, an account not known, or a
@@ -785,12 +844,14 @@ async fn hand_with(h: &Hands<'_>, serve: &Serve, r: &Request) -> String {
 }
 
 /// What a Want says once its asker's copy was looked at (T5): made, "Copied into your music" (whose music it came from is not said:
-/// the owner's OQ-I); not made, why, in the log (`requests`) and on its line, never "Already in the library"; no copy known whole,
-/// handed to the fetchers past a had record's shortcut, said in the log; nothing to do, as [`hand_to`].
+/// the owner's OQ-I); not made, why, in the log (`requests`) and on its line, never "Already in the library"; not made below the floor
+/// as it would not share its blocks, waiting for space (AL03.1); no copy known whole, handed to the fetchers past a had record's
+/// shortcut, said in the log; nothing to do, as [`hand_to`].
 pub(super) async fn hand_after(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, r: &Request, copied: WantCopy) -> String {
     let record = r.record.map_or_else(|| "none".to_string(), |n| n.to_string());
     let said = match copied {
         WantCopy::Made => COPIED_INTO_OWN.to_string(),
+        WantCopy::NoSpace => return wait_for_space(serve, r),
         WantCopy::Failed(why) => {
             tracing::warn!(target: "requests", "request {}, record {record}: its asker's copy was not made: {why}", r.id);
             format!("{NOT_COPIED}: {why}")
@@ -821,7 +882,7 @@ pub const NOT_COPIED: &str = "Not copied into your music";
 async fn copied_for(house: &dyn House, serve: &Serve, r: &Request) -> WantCopy {
     let Some(of) = named(serve, std::slice::from_ref(r)).await.pop().flatten() else { return WantCopy::Nothing };
     match (of.holding, of.holder) {
-        (Holding::Done | Holding::Elsewhere, Some(holder)) => house.copy_into_own(&r.user, holder).await,
+        (Holding::Done | Holding::Elsewhere, Some(holder)) => house.copy_into_own(&r.user, holder, false).await,
         _ => WantCopy::Nothing,
     }
 }
@@ -949,21 +1010,27 @@ async fn round(app: &super::App, serve: &Serve, asked_at: &mut i64) -> Result<()
             serve.userdata.set_migration_part(HANDED_AT_START, &serde_json::json!({ "handed": handed }))?;
         }
     }
-    round_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app }, serve, now).await
+    round_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, now).await
 }
 
-/// The round's own work (X1, AL02), handed with `h`, at `now`, in this order:
+/// The round's own work (X1, AL02, AL03), handed with `h`, at `now`, the disk floor read once for it (`room::short_on`), in this order:
 /// - 0.16's pending requests go ahead as any Want does (the owner's answer to OQ-R4: no request is pending from 0.17 on);
-/// - the Wants waiting for room whose asker is under now go by themselves, oldest first (`hand_waiting`);
-/// - a request held whole only in another's own music has its asker's copy made, room permitting (`copy_for_askers`, I05: the
-///   second asker's copy once the first adds);
+/// - the Wants waiting for room whose asker is under now, and those waiting for space once there is space, go by themselves, oldest
+///   first (`hand_waiting`);
+/// - below the floor, a user's request Lidarr only looks for is told to stop, and waits for space (`pause_for_space`, AL03.2);
+/// - a request held whole only in another's own music has its asker's copy made, room and space permitting (`copy_for_askers`, I05:
+///   the second asker's copy once the first adds);
 /// - an album now out handed to Lidarr, Soulseek's turn coming with it;
 /// - the first arrival stops the other fetcher, and the stops not told yet are told;
 /// - then each approved request done for its asker is delivered ((c)), the count in the log.
 pub(crate) async fn round_with(h: &Hands<'_>, serve: &Serve, now: i64) -> Result<()> {
     pending_go_ahead(h, serve).await?;
-    hand_waiting(h, serve).await?;
-    copy_for_askers(h, serve).await?;
+    let short = super::room::short_on(serve, h.disks);
+    hand_waiting(h, serve, short).await?;
+    if short {
+        pause_for_space(h, serve).await?;
+    }
+    copy_for_askers(h, serve, short).await?;
     // Out now: handed to Lidarr, Soulseek's turn coming with it.
     let approved = serve.userdata.requests(None, Some(APPROVED), OPEN)?;
     let of = named(serve, &approved).await;
@@ -1003,11 +1070,14 @@ async fn pending_go_ahead(h: &Hands<'_>, serve: &Serve) -> Result<Vec<i64>> {
     Ok(went)
 }
 
-/// The Wants waiting for room whose asker is under now, handed by themselves (AL02.3), oldest first; a copy one of them makes from
-/// the house counts at once (its rows read again), so the next of that asker's waits if it filled the room (AL02.5). No yes is asked,
-/// and none lets one through over room. Their ids.
-pub(crate) async fn hand_waiting(h: &Hands<'_>, serve: &Serve) -> Result<Vec<i64>> {
-    let mut waiting: Vec<Request> = serve.userdata.requests(None, Some(APPROVED), OPEN)?.into_iter().filter(waits_for_room).collect();
+/// The Wants waiting for room or for space, handed by themselves once they may go (AL02.3, AL03.2), oldest first: their asker under
+/// their room, and the server not short of space (`short`, as the round read it) or their asker no user. One whose asker is under but
+/// the server short waits for space now, and one waiting for space whose asker went over their room waits for room, each saying so. A
+/// copy one of them makes from the house counts at once (its rows read again), so the next of that asker's waits if it filled the room
+/// (AL02.5). No yes is asked, and none lets one through. Their ids.
+pub(crate) async fn hand_waiting(h: &Hands<'_>, serve: &Serve, short: bool) -> Result<Vec<i64>> {
+    let waits = |r: &Request| waits_for_room(r) || waits_for_space(r);
+    let mut waiting: Vec<Request> = serve.userdata.requests(None, Some(APPROVED), OPEN)?.into_iter().filter(waits).collect();
     if waiting.is_empty() {
         return Ok(Vec::new());
     }
@@ -1016,11 +1086,18 @@ pub(crate) async fn hand_waiting(h: &Hands<'_>, serve: &Serve) -> Result<Vec<i64
     let mut rooms = rooms_now(serve, &askers).await;
     let mut handed = Vec::new();
     for r in waiting {
+        // Read again now (W6): one cancelled meanwhile is not handed.
+        let Some(now) = serve.userdata.request(r.id)?.filter(waits) else { continue };
         if rooms.get(&r.user).is_some_and(|room| room.full) {
+            if waits_for_space(&now) {
+                wait_for_room(serve, &now);
+            }
             continue;
         }
-        // Read again now (W6): one cancelled meanwhile is not handed.
-        if !serve.userdata.request(r.id)?.is_some_and(|now| waits_for_room(&now)) {
+        if short && is_user(serve, &r.user) {
+            if waits_for_room(&now) {
+                wait_for_space(serve, &now);
+            }
             continue;
         }
         let said = hand_with(h, serve, &r).await;
@@ -1032,19 +1109,64 @@ pub(crate) async fn hand_waiting(h: &Hands<'_>, serve: &Serve) -> Result<Vec<i64
     Ok(handed)
 }
 
+/// Below the floor (AL03.2; OQ-F1 (a)): a user's request Lidarr only looks for, monitored with nothing grabbed, is told to stop and
+/// waits for space, handed again once there is (`hand_waiting`); one in Lidarr's queue is left to finish, and an administrator's goes
+/// on, as does a user's of an album an administrator asked for too. Lidarr asked once for all of them; one it could not be told of is
+/// looked at again at the next round. Their ids.
+async fn pause_for_space(h: &Hands<'_>, serve: &Serve) -> Result<Vec<i64>> {
+    let Some(f) = h.lidarr else { return Ok(Vec::new()) };
+    let approved = serve.userdata.requests(None, Some(APPROVED), OPEN)?;
+    let lidarrs = |r: &Request| r.fetched.as_deref().is_some_and(|f| f.contains("Lidarr") && !f.starts_with("Not handed over") && !f.contains(STOPPED_ON_ARRIVAL));
+    let handed: Vec<Request> = approved.iter().filter(|r| is_user(serve, &r.user) && r.release_group.is_some() && lidarrs(r)).cloned().collect();
+    if handed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let of = named(serve, &handed).await;
+    let handed: Vec<Request> = handed.into_iter().zip(of).filter(|(_, o)| !o.as_ref().is_some_and(RecordOf::had)).map(|(r, _)| r).collect();
+    let mut groups: Vec<String> = handed.iter().filter_map(|r| r.release_group.clone()).collect();
+    groups.sort();
+    groups.dedup();
+    // An administrator's request of the album keeps Lidarr at it.
+    groups.retain(|g| !approved.iter().any(|o| o.release_group.as_deref() == Some(g.as_str()) && !is_user(serve, &o.user)));
+    if groups.is_empty() {
+        return Ok(Vec::new());
+    }
+    let progress = match f.statuses(&groups).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(target: "requests", reason = %format!("{e:#}"), "below the floor, Lidarr not asked how far it is: asked again at the next round");
+            return Ok(Vec::new());
+        }
+    };
+    let mut paused = Vec::new();
+    for g in groups.iter().filter(|g| matches!(progress.get(*g), Some(Progress::Looking))) {
+        match f.cancel(g).await {
+            Ok(()) => {
+                for r in handed.iter().filter(|r| r.release_group.as_deref() == Some(g.as_str())) {
+                    wait_for_space(serve, r);
+                    paused.push(r.id);
+                }
+            }
+            Err(e) => tracing::warn!(target: "requests", group = %g, reason = %format!("{e:#}"), "below the floor, Lidarr not told to stop a user's request: told at the next round"),
+        }
+    }
+    Ok(paused)
+}
+
 /// Whether a request's line says the house's copy for its asker was looked at already (C52, T5, AL02): copied, not copied (why),
-/// nothing to copy into, or waiting for room. One that says none of these, held whole only in another's own music, is still to have
-/// its asker's copy (`copy_for_askers`).
+/// nothing to copy into, or waiting for room or for space. One that says none of these, held whole only in another's own music, is
+/// still to have its asker's copy (`copy_for_askers`).
 fn house_said(r: &Request) -> bool {
-    r.fetched.as_deref().is_some_and(|f| f == COPIED_INTO_OWN || f == ALREADY_HAD || f == WAITS_FOR_ROOM || f.starts_with(NOT_COPIED))
+    r.fetched.as_deref().is_some_and(|f| f == COPIED_INTO_OWN || f == ALREADY_HAD || f == WAITS_FOR_ROOM || f == WAITS_FOR_SPACE || f.starts_with(NOT_COPIED))
 }
 
 /// The second asker's copy (AL02.9, I05, the Want path's taken default: "a copy goes into each other asker's, free when shared"):
 /// each approved request whose record is held whole only in another's own music (the first asker added it there), not looked at for
 /// its asker's copy yet (`house_said`): its asker over room, it waits, saying so; else their copy is made through C52's path
-/// (`App::copy_for`, named by folder: T5), and its request reads done once it is there. Never handed to a fetcher from here: a record
-/// held whole is had. Their ids.
-pub(crate) async fn copy_for_askers(h: &Hands<'_>, serve: &Serve) -> Result<Vec<i64>> {
+/// (`App::copy_for`, named by folder: T5), and its request reads done once it is there; a user's while the server is short of space
+/// (`short`) only where it shares its blocks, else it waits for space (AL03.1). Never handed to a fetcher from here: a record held whole
+/// is had. Their ids.
+pub(crate) async fn copy_for_askers(h: &Hands<'_>, serve: &Serve, short: bool) -> Result<Vec<i64>> {
     // One with no line yet is being asked for right now: its asking hands it (`ask_for`).
     let approved: Vec<Request> = serve.userdata.requests(None, Some(APPROVED), OPEN)?.into_iter().filter(|r| r.fetched.is_some() && !house_said(r)).collect();
     if approved.is_empty() {
@@ -1059,7 +1181,7 @@ pub(crate) async fn copy_for_askers(h: &Hands<'_>, serve: &Serve) -> Result<Vec<
         if full(serve, &r.user).await {
             wait_for_room(serve, &r);
         } else {
-            let copied = match h.house.copy_into_own(&r.user, holder).await {
+            let copied = match h.house.copy_into_own(&r.user, holder, short && is_user(serve, &r.user)).await {
                 WantCopy::NoneWhole => WantCopy::Failed("no copy of it is known whole".into()),
                 c => c,
             };
@@ -1178,7 +1300,7 @@ pub async fn stop_arrived(lidarr: Option<&dyn Fetcher>, serve: &Serve) -> Vec<i6
 /// Each id's outcome, in words.
 pub async fn decide(app: &super::App, serve: &Serve, by: &str, ids: &[i64], approve: bool, reason: Option<&str>) -> Result<Vec<(i64, String)>> {
     let (lidarr, soulseek) = fetchers(app).await;
-    decide_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app }, serve, by, ids, approve, reason).await
+    decide_with(&Hands { lidarr: lidarr.as_deref(), soulseek, house: app, disks: &super::room::TheDisks }, serve, by, ids, approve, reason).await
 }
 
 /// [`decide`], handed with `h`.
@@ -1195,6 +1317,10 @@ pub(crate) async fn decide_with(h: &Hands<'_>, serve: &Serve, by: &str, ids: &[i
         };
         if approve && waits_for_room(&r) {
             out.push((id, format!("It waits for room: raise {}'s room", r.user)));
+            continue;
+        }
+        if approve && waits_for_space(&r) {
+            out.push((id, "It waits for space: the server is short of space".to_string()));
             continue;
         }
         let retry = approve && r.status == APPROVED && no_fetcher_spoke(&r);
@@ -1766,7 +1892,7 @@ async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<Record
     let rs: Vec<(Request, Holding)> = rs.into_iter().zip(of).map(|(r, o)| (shown(r, o.as_ref()), o.as_ref().map_or(Holding::None, |o| o.holding))).collect();
     let asked: Vec<String> = rs
         .iter()
-        .filter(|(r, held)| !matches!(held, Holding::Arrived | Holding::Done | Holding::Elsewhere) && r.status == APPROVED && !waits_for_room(r))
+        .filter(|(r, held)| !matches!(held, Holding::Arrived | Holding::Done | Holding::Elsewhere) && r.status == APPROVED && !waits_for_room(r) && !waits_for_space(r))
         .filter_map(|(r, _)| r.release_group.clone())
         .collect();
     let progress = match f {
@@ -2947,16 +3073,18 @@ pub(crate) mod tests {
     // AL02 (run 13): Wants and room, no approval per request (SCENARIOS-RUNS-13-14's AL02.1-AL02.10, the owner's "No approval per
     // request", Q1-Q3, (c), OQ-R4 answered "go ahead").
 
-    use crate::app::room::tests::{ANN, BOB, FOLDERS, LIDARR, MUSIC, gb, put_file, room_shape, room_shape_in, rows_of, total, used};
+    use crate::app::room::tests::{ANN, BOB, FOLDERS, LIDARR, MUSIC, Roomy, gb, put_file, room_shape, room_shape_in, rows_of, total, used};
 
     /// Lidarr as the scenarios' `Strict` fake: made with what it expects, it records what it is asked, and a call it does not expect
     /// is a violation, answered "not expected" (each test ends asserting there are none). `want` takes only the release groups
     /// listed, in their order, each once, and never one with no group; `cancel` only the groups listed; `fail_grab` never (T9 decides
-    /// grabs, and nothing here should); `statuses` knows of nothing.
+    /// grabs, and nothing here should); `statuses` answers from its map (AL03.2: `Looking`, monitored with nothing grabbed, or
+    /// `Fetching`, in its queue), knowing of nothing else.
     #[derive(Default)]
     pub(crate) struct Strict {
         wants: Vec<String>,
         cancels: Vec<String>,
+        statuses: HashMap<String, Progress>,
         wanted: Mutex<Vec<String>>,
         cancelled: Mutex<Vec<String>>,
         violations: Mutex<Vec<String>>,
@@ -2976,8 +3104,17 @@ pub(crate) mod tests {
             Strict { cancels: groups.to_vec(), ..self }
         }
 
+        /// Saying how far it is with these groups.
+        pub(crate) fn with_statuses(self, statuses: &[(&str, Progress)]) -> Self {
+            Strict { statuses: statuses.iter().map(|(g, p)| (g.to_string(), p.clone())).collect(), ..self }
+        }
+
         pub(crate) fn wanted(&self) -> Vec<String> {
             self.wanted.lock().unwrap().clone()
+        }
+
+        pub(crate) fn cancelled(&self) -> Vec<String> {
+            self.cancelled.lock().unwrap().clone()
         }
 
         pub(crate) fn violations(&self) -> Vec<String> {
@@ -3003,8 +3140,9 @@ pub(crate) mod tests {
             Box::pin(async move { Ok(crate::lidarr::Handed { said: "Lidarr is looking for it".into(), release_group: group }) })
         }
 
-        fn statuses<'a>(&'a self, _: &'a [String]) -> crate::source::Fut<'a, HashMap<String, Progress>> {
-            Box::pin(async { Ok(HashMap::new()) })
+        fn statuses<'a>(&'a self, groups: &'a [String]) -> crate::source::Fut<'a, HashMap<String, Progress>> {
+            let known: HashMap<String, Progress> = groups.iter().filter_map(|g| Some((g.clone(), self.statuses.get(g)?.clone()))).collect();
+            Box::pin(async move { Ok(known) })
         }
 
         fn cancel<'a>(&'a self, release_group: &'a str) -> crate::source::Fut<'a, ()> {
@@ -3024,8 +3162,9 @@ pub(crate) mod tests {
 
     /// The house's copy as the tests make it (C52, T5's `App::copy_for`): each ask recorded; for an account given its own music's
     /// catalogue folder, the copy's rows written as Copy to writes them (`copy_rows`), each file of `from` (folder and place) into
-    /// theirs at the same place, sharing blocks as the sharing stand-in says (`shares`: btrfs; ext4 where not). Asked for one who
-    /// holds the copy already, or has no own music: nothing to copy.
+    /// theirs at the same place, sharing blocks as the sharing stand-in says (`shares`: btrfs; ext4 where not); asked for a copy that
+    /// shares alone (below the floor, AL03.1) where it would not, none made. Asked for one who holds the copy already, or has no own
+    /// music: nothing to copy.
     pub(crate) struct Copies {
         cat: Option<Arc<crate::catalogue::Catalogue>>,
         from: Vec<(i64, String)>,
@@ -3049,9 +3188,10 @@ pub(crate) mod tests {
     }
 
     impl House for Copies {
-        fn copy_into_own<'a>(&'a self, account: &'a str, record: i64) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>> {
+        fn copy_into_own<'a>(&'a self, account: &'a str, record: i64, sharing: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = WantCopy> + Send + 'a>> {
             self.asked.lock().unwrap().push((account.to_string(), record));
             let made = match (&self.cat, self.own.get(account)) {
+                (Some(cat), Some(&to)) if !self.from.iter().any(|(_, rel)| cat.has_row(to, rel)) && sharing && !self.shares => WantCopy::NoSpace,
                 (Some(cat), Some(&to)) if !self.from.iter().any(|(_, rel)| cat.has_row(to, rel)) => {
                     let pairs: Vec<((i64, String), (i64, String), bool)> = self.from.iter().map(|(f, rel)| ((*f, rel.clone()), (to, rel.clone()), self.shares)).collect();
                     match cat.copy_rows(&pairs) {
@@ -3149,7 +3289,7 @@ pub(crate) mod tests {
         with_accounts(&serve);
         let r = not_had(&serve, "Night Ferry", G);
         let (strict, house) = (Strict::expecting_wants(&[G]), Copies::none());
-        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
         let asked = acting("ann", false, ask_record_with(&h, &serve, "ann", r)).await.unwrap();
         let row = now_of(&serve, asked.id);
         assert_eq!((row.status.as_str(), row.decided_by.as_deref()), (APPROVED, Some("ann")), "approved at once, no administrator's answer");
@@ -3181,7 +3321,7 @@ pub(crate) mod tests {
         put_file(serve.catalogue(), ANN, "Mine/1.flac", None, gb(101.0), 10, false, 100);
         let (r, s) = (not_had(&serve, "Night Ferry", R), not_had(&serve, "Signal", S));
         let (strict, house) = (Strict::expecting_wants(&[S]), Copies::none());
-        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
         let asked = acting("ann", false, ask_record_with(&h, &serve, "ann", r)).await.unwrap();
         let row = now_of(&serve, asked.id);
         assert_eq!((row.status.as_str(), row.fetched.as_deref()), (APPROVED, Some(WAITS_FOR_ROOM)), "approved, its line the room's word");
@@ -3220,7 +3360,7 @@ pub(crate) mod tests {
             let records: Vec<i64> = (0..3).map(|n| not_had(&serve, &format!("Want {n}"), G[n])).collect();
             let waiting: Vec<Request> = [2, 0, 1].into_iter().map(|n| kept_request(&serve, "ann", records[n], G[n], 1000 * (n as i64 + 1), WAITS_FOR_ROOM)).collect();
             let (strict, house) = (Strict::expecting_wants(&G), Copies::none());
-            let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+            let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
             let now = super::super::moment::now_secs();
             round_with(&h, &serve, now).await.unwrap();
             assert!(strict.wanted().is_empty(), "{case}: none handed while she is full");
@@ -3261,7 +3401,7 @@ pub(crate) mod tests {
             put_file(&cat, ANN, "Mine/1.flac", None, gb(99.0), 10, false, 100);
             put_file(&cat, BOB, "His/1.flac", None, gb(101.0), 10, false, 100);
             let (strict, house) = (Strict::expecting_nothing(), Copies::of(&cat, &files, &[("ann", ANN), ("bob", BOB)], shares));
-            let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+            let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
             let anns = acting("ann", false, ask_record_with(&h, &serve, "ann", r)).await.unwrap();
             assert_eq!(anns.fetched.as_deref(), Some(COPIED_INTO_OWN), "shares {shares}: her copy made");
             assert_eq!(used(&serve, "ann"), if shares { gb(99.0) } else { gb(101.0) }, "shares {shares}: read from the rows after the copy");
@@ -3327,7 +3467,7 @@ pub(crate) mod tests {
         assert_eq!(waiting(&serve).unwrap().len(), 3, "listed as waiting till the first round");
         let strict = Strict::expecting_wants(&G).and_cancels(&stops_due(&serve).await);
         let house = Copies::none();
-        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house, disks: &Roomy };
         round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
         assert_eq!(strict.wanted(), G, "they went ahead at the first round, oldest first");
         for r in &pending {
@@ -3368,7 +3508,7 @@ pub(crate) mod tests {
         let held = used(&serve, "ann");
         assert_eq!(held, gb(2.0), "her own copy of R");
         let (strict, house) = (Strict::expecting_nothing(), Copies::none());
-        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
         round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
         for id in [rq.id, rq2.id] {
             assert_eq!(now_of(&serve, id).status, DELIVERED, "within one round");
@@ -3425,7 +3565,7 @@ pub(crate) mod tests {
         let done: Vec<i64> = approved.iter().zip(named(&old, &approved).await).filter(|(_, o)| o.as_ref().is_some_and(|o| o.holding == Holding::Done)).map(|(r, _)| r.id).collect();
         assert!(!done.is_empty(), "0.16's data holds requests done");
         let strict = Strict::expecting_nothing().and_cancels(&stops_due(&old).await);
-        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house, disks: &Roomy };
         let log = Logged::default();
         let writer = log.clone();
         let _logging = tracing::subscriber::set_default(tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).with_max_level(tracing::Level::INFO).finish());
@@ -3450,7 +3590,7 @@ pub(crate) mod tests {
         let (r, _) = held_in(&serve, "Two Rooms", 2, R, ANN, gb(1.0), 200);
         let rq = kept_request(&serve, "ann", r, R, 100, &format!("Lidarr is looking for it; {STOPPED_ON_ARRIVAL}"));
         let (strict, house) = (Strict::expecting_nothing(), Copies::none());
-        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: false, house: &house, disks: &Roomy };
         round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
         assert_eq!(now_of(&serve, rq.id).status, DELIVERED);
         serve.catalogue().copy_for_tests(r, LIDARR);
@@ -3497,7 +3637,7 @@ pub(crate) mod tests {
         assert!(matches!(state_of(&serve, hers.id).await, RequestState::Wanted { lidarr: None, .. }), "never In the library for her yet");
         assert_eq!(state_of(&serve, his.id).await, RequestState::Done, "in his own music: his is done");
         let (strict, house) = (Strict::expecting_nothing(), Copies::of(&cat, &files, &[("ann", ANN)], true));
-        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
         round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
         assert_eq!(house.asked(), [("ann".to_string(), r)], "her copy, made at the round");
         assert_eq!(now_of(&serve, hers.id).fetched.as_deref(), Some(COPIED_INTO_OWN));
@@ -3507,7 +3647,7 @@ pub(crate) mod tests {
         let hers2 = kept_request(&serve, "ann", r2, G2, 200, SOULSEEK_SEARCHES);
         put_file(&cat, ANN, "Mine/1.flac", None, gb(101.0), 10, false, 100);
         let house = Copies::of(&cat, &files2, &[("ann", ANN)], true);
-        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
         let hers_now = rows_of(&cat, ANN);
         for _ in 0..2 {
             round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
@@ -3535,7 +3675,7 @@ pub(crate) mod tests {
         put_file(serve.catalogue(), ANN, "Mine/1.flac", None, gb(101.0), 10, false, 100);
         let r = not_had(&serve, "Night Ferry", G);
         let strict = Strict::expecting_nothing();
-        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
         let asked = acting("ann", false, ask_record_with(&h, &serve, "ann", r)).await.unwrap();
         assert_eq!(now_of(&serve, asked.id).fetched.as_deref(), Some(WAITS_FOR_ROOM));
         acting("ann", false, cancel_with(Some(&strict), &serve, "ann", asked.id)).await.unwrap();
@@ -3554,7 +3694,7 @@ pub(crate) mod tests {
             put_file(serve.catalogue(), ANN, "Mine/1.flac", None, gb(101.0), 10, false, 100);
             let r = not_had(&serve, "Night Ferry", G);
             let strict = Strict::expecting_nothing();
-            let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+            let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
             let asked = acting("ann", false, ask_record_with(&h, &serve, "ann", r)).await.unwrap();
             assert!(strict.wanted().is_empty() && strict.violations().is_empty());
             (asked.id, r)
@@ -3564,7 +3704,7 @@ pub(crate) mod tests {
         assert_eq!(state_of(&serve, id).await, RequestState::WaitingForRoom { used: gb(101.0), room: gb(100.0) }, "(ii) still waiting");
         serve.users.set_room("ann", gb(200.0)).unwrap();
         let strict = Strict::expecting_wants(&[G]);
-        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
         round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
         assert_eq!(strict.wanted(), [G], "(ii) handed at the first round once she is under");
         assert_eq!(now_of(&serve, id).record, Some(r));
@@ -3577,12 +3717,133 @@ pub(crate) mod tests {
         put_file(serve.catalogue(), ANN, "Mine/1.flac", None, gb(101.0), 10, false, 100);
         let r = not_had(&serve, "Night Ferry", G);
         let strict = Strict::expecting_nothing();
-        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house };
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
         let (one, two) = tokio::join!(acting("ann", false, ask_record_with(&h, &serve, "ann", r)), acting("ann", false, ask_record_with(&h, &serve, "ann", r)));
         let (one, two) = (one.unwrap(), two.unwrap());
         assert_eq!(one.id, two.id, "(iii) one request");
         assert_eq!(serve.userdata.requests(Some("ann"), None, LIST).unwrap().len(), 1, "(iii) one row");
         assert_eq!(now_of(&serve, one.id).fetched.as_deref(), Some(WAITS_FOR_ROOM), "(iii) waiting");
         assert!(strict.violations().is_empty(), "(iii) {:?}", strict.violations());
+    }
+
+    // AL03 (run 13): the disk floor (SCENARIOS-RUNS-13-14's AL03.1, AL03.2; the owner's "No approval per request"; OQ-F1).
+
+    /// AL03.1: the disks users' music lands on 150 GB free, the floor 200 GB; ann under her room. Ann's Want of R: approved, its line
+    /// the floor's word, `waiting_for_space`, Lidarr not asked, and Soulseek takes no item of it. Root's Want of S: handed at once (the
+    /// strict Lidarr expects his alone). Ann's Want of a record Music holds whole, where the sharing stand-in says her copy shares its
+    /// blocks: made, as it takes no new space; of another, where it would not: none made, it waits for space. Never a user's Want
+    /// handed below the floor; never an administrator's held by it.
+    #[tokio::test]
+    async fn below_the_floor_users_wants_wait_and_administrators_go() {
+        use crate::app::room::tests::Stand;
+        const R: &str = "00000000-0000-4000-8000-000000000481";
+        const S: &str = "00000000-0000-4000-8000-000000000482";
+        const M1: &str = "00000000-0000-4000-8000-000000000483";
+        const M2: &str = "00000000-0000-4000-8000-000000000484";
+        let serve = room_shape();
+        with_accounts(&serve);
+        let cat = serve.catalogue().clone();
+        let stand = Stand::of(&[(FOLDERS[1], 150.0), (FOLDERS[2], 150.0)]);
+        let (r, s) = (not_had(&serve, "Night Ferry", R), not_had(&serve, "Signal", S));
+        let (m1, shares) = held_in(&serve, "Two Rooms", 2, M1, MUSIC, gb(1.0), 50);
+        let (m2, apart) = held_in(&serve, "Far Room", 2, M2, MUSIC, gb(1.0), 50);
+        let strict = Strict::expecting_wants(&[S]);
+        let (sharing, not_sharing) = (Copies::of(&cat, &shares, &[("ann", ANN)], true), Copies::of(&cat, &apart, &[("ann", ANN)], false));
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &sharing, disks: &stand };
+        let anns = acting("ann", false, ask_record_with(&h, &serve, "ann", r)).await.unwrap();
+        let row = now_of(&serve, anns.id);
+        assert_eq!((row.status.as_str(), row.fetched.as_deref()), (APPROVED, Some(WAITS_FOR_SPACE)), "approved, its line the floor's word");
+        assert_eq!(state_of(&serve, row.id).await, RequestState::WaitingForSpace);
+        assert!(strict.wanted().is_empty(), "Lidarr not asked for R");
+        let (approved, of) = crate::app::soulseek::requests_taken(&serve.userdata, &cat, &serve.library.kinds()).unwrap();
+        assert!(!crate::app::soulseek::items_of(&approved, &of).contains(&r), "Soulseek takes no item of R");
+        let roots = acting("root", true, ask_record_with(&h, &serve, "root", s)).await.unwrap();
+        assert_eq!(strict.wanted(), [S], "root's handed at once, below the floor");
+        assert!(roots.fetched.as_deref().is_some_and(|f| f.contains("Lidarr is looking for it")), "{roots:?}");
+        let hers = rows_of(&cat, ANN);
+        let copied = acting("ann", false, ask_record_with(&h, &serve, "ann", m1)).await.unwrap();
+        assert_eq!(copied.fetched.as_deref(), Some(COPIED_INTO_OWN), "her copy that shares its blocks made: no new space");
+        assert_eq!(rows_of(&cat, ANN).len(), hers.len() + shares.len(), "its rows in her own music");
+        let h = Hands { house: &not_sharing, ..h };
+        let hers = rows_of(&cat, ANN);
+        let waits = acting("ann", false, ask_record_with(&h, &serve, "ann", m2)).await.unwrap();
+        assert_eq!(now_of(&serve, waits.id).fetched.as_deref(), Some(WAITS_FOR_SPACE), "where it would not share: none made, it waits for space");
+        assert_eq!(not_sharing.asked(), [("ann".to_string(), m2)], "asked for a copy that shares alone");
+        assert_eq!(rows_of(&cat, ANN), hers, "nothing copied into her music");
+        assert_eq!(strict.wanted(), [S], "never a user's Want handed below the floor");
+        assert!(serve.userdata.requests(None, Some(PENDING), LIST).unwrap().is_empty(), "never a pending row");
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
+    }
+
+    /// AL03.2 (INTERACTIONS top 13, I14; OQ-F1 (a)), Lidarr's side: ann's R handed and only looked for (monitored, nothing grabbed),
+    /// her R2 in Lidarr's queue (0.4 of it), her R3 Soulseek's alone, root's S looked for. The disk drops below the floor: at the round
+    /// Lidarr is told to stop R, once, and R waits for space, never reading fetching; R2 is left to finish, R3 and root's S untouched.
+    /// The server restarts below the floor: its round tells Lidarr nothing more, the states as before. The disk rises to the floor and
+    /// its margin: at the round R is handed again, once. R2 then arrives: placed in Incoming, it counts in ann's room. Never a second
+    /// stop, an administrator's fetch stopped, nor one in Lidarr's queue.
+    #[tokio::test]
+    async fn below_the_floor_handed_requests_pause_where_they_are() {
+        use crate::app::room::tests::Stand;
+        const G_R: &str = "00000000-0000-4000-8000-000000000485";
+        const G_R2: &str = "00000000-0000-4000-8000-000000000486";
+        const G_R3: &str = "00000000-0000-4000-8000-000000000487";
+        const G_S: &str = "00000000-0000-4000-8000-000000000488";
+        const HANDED: &str = "Lidarr is looking for it; Soulseek searches for it";
+        let dir = std::env::temp_dir().join(format!("cratarr-requests-al03-pause-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        let (data, file) = (dir.join("data"), dir.join("catalogue.sqlite"));
+        let serve = room_shape_in(Some(&data), Some(&file));
+        with_accounts(&serve);
+        let r2_record = not_had(&serve, "Quiet Lanes", G_R2);
+        let r = kept_request(&serve, "ann", not_had(&serve, "Night Ferry", G_R), G_R, 1000, HANDED);
+        let r2 = kept_request(&serve, "ann", r2_record, G_R2, 1100, HANDED);
+        let r3 = kept_request(&serve, "ann", not_had(&serve, "Signal", G_R3), G_R3, 1200, SOULSEEK_SEARCHES);
+        let s = kept_request(&serve, "root", not_had(&serve, "Late Shift", G_S), G_S, 1300, HANDED);
+        let statuses = [(G_R, Progress::Looking), (G_R2, Progress::Fetching { done: 0.4 }), (G_S, Progress::Looking)];
+        let strict = Strict::expecting_wants(&[G_R]).and_cancels(&[G_R.to_string()]).with_statuses(&statuses);
+        let house = Copies::none();
+        let stand = Stand::of(&[(FOLDERS[1], 150.0), (FOLDERS[2], 150.0)]);
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &stand };
+        let lines = |serve: &Serve| [&r, &r2, &r3, &s].map(|q| now_of(serve, q.id).fetched);
+        let below = [Some(WAITS_FOR_SPACE.to_string()), Some(HANDED.to_string()), Some(SOULSEEK_SEARCHES.to_string()), Some(HANDED.to_string())];
+
+        // Below the floor: a round.
+        round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
+        assert_eq!(strict.cancelled(), [G_R], "Lidarr told to stop R alone");
+        assert_eq!(lines(&serve), below, "R waits for space; R2, R3 and root's S as they were");
+        let viewed = views(&serve, Some(&strict as &dyn Fetcher), vec![now_of(&serve, r.id), now_of(&serve, r2.id), now_of(&serve, s.id)]).await;
+        assert_eq!((&viewed[0].state, &viewed[0].album_state), (&RequestState::WaitingForSpace, &Album::Requested), "R waits for space, never fetching");
+        assert!(matches!(viewed[1].state, RequestState::Wanted { lidarr: Some(Fetching::Fetching { done }), .. } if (done - 0.4).abs() < 1e-6), "R2 left to finish: {:?}", viewed[1].state);
+        assert!(matches!(viewed[2].state, RequestState::Wanted { lidarr: Some(Fetching::Looking), .. }), "root's S looked for still: {:?}", viewed[2].state);
+
+        // The server restarts below the floor: its round tells Lidarr nothing more.
+        drop(serve);
+        let serve = room_shape_in(Some(&data), Some(&file));
+        round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
+        assert_eq!(strict.cancelled(), [G_R], "no second stop after the restart");
+        assert_eq!(lines(&serve), below, "the states as before");
+        assert!(strict.wanted().is_empty(), "nothing handed below the floor");
+
+        // The disk rises to the floor and its margin: R handed again, once.
+        for d in [FOLDERS[1], FOLDERS[2]] {
+            stand.set(d, Some(210.0));
+        }
+        round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
+        assert_eq!(strict.wanted(), [G_R], "R handed again, once");
+        assert_eq!(now_of(&serve, r.id).fetched.as_deref(), Some(HANDED));
+        round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
+        assert_eq!((strict.wanted(), strict.cancelled()), (vec![G_R.to_string()], vec![G_R.to_string()]), "a round on asks nothing more");
+
+        // R2, left to finish, arrives: placed in Lidarr's Incoming, counted in ann's room.
+        let cat = serve.catalogue().clone();
+        cat.execute_for_tests(&format!("INSERT INTO tracks (born, record, disc, number) VALUES (1, {r2_record}, 1, 1), (1, {r2_record}, 1, 2)"));
+        cat.copy_for_tests(r2_record, LIDARR);
+        cat.execute_for_tests(&format!("UPDATE files SET size = {}, came = 2000 WHERE folder = {LIDARR}", gb(0.5)));
+        assert_eq!(state_of(&serve, r2.id).await, RequestState::Arrived, "R2 placed");
+        assert_eq!(used(&serve, "ann"), gb(1.0), "and counted in her room");
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
+        drop(serve);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

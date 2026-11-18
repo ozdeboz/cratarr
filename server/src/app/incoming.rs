@@ -461,6 +461,12 @@ impl IncomingService {
         self.trash_days.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Whether a copy from folder `from` into folder `to` shares its blocks (C38's probe, `Files::shares`): below the floor a Want's
+    /// copy is made only where it does (AL03.1). Blocking.
+    pub(super) fn shares(&self, from: &std::path::Path, to: &std::path::Path) -> bool {
+        self.files.shares(from, to)
+    }
+
     /// Take saved settings into use: the Lidarr connection and the trash days.
     pub(super) fn apply_settings(&self, lidarr: LidarrPair, trash_days: u32) {
         *self.lidarr.write().unwrap_or_else(|p| p.into_inner()) = lidarr;

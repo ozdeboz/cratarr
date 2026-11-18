@@ -221,7 +221,7 @@ impl Marks<'_> {
             _ if there => IN,
             Some(RequestState::Done | RequestState::Delivered) => IN,
             Some(RequestState::PartlyThere { .. }) => PARTLY,
-            Some(RequestState::WaitingForApproval | RequestState::WaitingForRoom { .. } | RequestState::Wanted { .. } | RequestState::Arrived) => REQUESTED,
+            Some(RequestState::WaitingForApproval | RequestState::WaitingForRoom { .. } | RequestState::WaitingForSpace | RequestState::Wanted { .. } | RequestState::Arrived) => REQUESTED,
             _ if have > 0 || found => PARTLY,
             _ => MISSING,
         }

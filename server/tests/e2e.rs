@@ -5361,3 +5361,167 @@ async fn the_second_asker(bob_over: bool) {
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// What a user's Soulseek fetch says while the disk floor holds it (AL03.2).
+const SHORT_OF_SPACE: &str = "The server is short of space";
+
+/// AL03.3 (the owner's Q6, "HA reads it"; OQ-F5). The floor raised above the disk (10^9 GB), the Incoming trash holding an album:
+/// `/api/health`, asked by no one signed in, answers 200 and "ok" with `short_of_space` true and nothing else new; the image's
+/// `--healthcheck` passes; root's Health report holds one finding, a warning, "Short of space", its detail the free space, the floor
+/// and what the trash holds ("emptying it frees that"), opening Settings. The floor back at 0: the flag false, the finding gone. Never
+/// an answer other than 200 and "ok" for space, a size, a path or an account in the open answer, one finding per user, nor a Home
+/// Assistant address, token or outbound purpose in Cratarr: it calls no one, cratarr-ha reads the flag.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn short_of_space_is_a_flag_and_a_health_item_end_to_end() {
+    let (s, root, _music, incoming) = on_music_and_incoming("al03-health").await;
+    let arriving = s.incoming_album("Just Arrived").await;
+    s.ok(reqwest::Method::POST, &format!("/api/incoming/delete/cratarr/{}", arriving["id"].as_str().unwrap()), json!({})).await;
+    assert!(in_the_trash(&incoming) > 0, "the Incoming trash holds an album");
+    for (name, admin) in [("root", true), ("ann", false), ("bob", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let floor = s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 1e9 })).await;
+    assert_eq!((&floor["gb"], &floor["short"]), (&json!(1e9), &json!(true)), "{floor}");
+    let open = s.anyone().get("/api/health").await;
+    let keys: std::collections::BTreeSet<&str> = open.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["instance", "playlists", "short_of_space", "status", "web"].into_iter().collect(), "nothing else new: {open}");
+    assert_eq!((&open["status"], &open["short_of_space"]), (&json!("ok"), &json!(true)), "{open}");
+    // The image's health check: 200 whatever the space, so Docker never marks Cratarr unhealthy for it.
+    let bind = s.base.trim_start_matches("http://").to_string();
+    let checked = Command::new(BIN).arg("--healthcheck").env("CRATARR_BIND", &bind).stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap();
+    assert!(checked.success(), "--healthcheck exits 0 while short of space");
+    let report = s.get("/api/health/report").await;
+    let found: Vec<&Value> = report["findings"].as_array().unwrap().iter().filter(|f| f["key"] == "server:short-of-space").collect();
+    assert_eq!(found.len(), 1, "one finding for the server, never one per user: {report}");
+    let f = found[0];
+    assert_eq!((&f["level"], &f["name"], &f["open"]["page"]), (&json!("warning"), &json!("Short of space"), &json!("settings")), "{f}");
+    let detail = f["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains(" free, below the floor of 1000000000 GB") && detail.contains("The trash holds ") && detail.contains(": emptying it frees that."), "{detail}");
+    // The floor back at 0.
+    let floor = s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    assert_eq!(floor["short"], false, "{floor}");
+    assert_eq!(s.anyone().get("/api/health").await["short_of_space"], false);
+    let report = s.get("/api/health/report").await;
+    assert!(!report["findings"].as_array().unwrap().iter().any(|f| f["key"] == "server:short-of-space"), "the finding gone: {report}");
+    // Cratarr calls no one for it (Q6): no Home Assistant address, token or outbound purpose where the floor and the outbound guard are.
+    for (file, text) in [("app/reach.rs", include_str!("../src/app/reach.rs")), ("settings.rs", include_str!("../src/settings.rs")), ("app/room.rs", include_str!("../src/app/room.rs"))] {
+        let text = text.to_lowercase();
+        for word in ["home assistant", "homeassistant", "hass", ":8123", "long-lived"] {
+            assert!(!text.contains(word), "{file} names {word}");
+        }
+    }
+    let room = include_str!("../src/app/room.rs");
+    assert!(!room.contains("reqwest") && !room.contains("reach::"), "the floor asks nothing outside");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A slskd for the floor's fetches to meet (AL03.2): each batch asked for recorded by the user it is asked of, taken and complete at
+/// once, `file` in the folder its batch names under `completed`; while refusing is on, a batch asked of `refused` is a violation,
+/// answered 409, and fetches nothing. Its address, the users asked in order, the refusing switch, and the violations.
+#[allow(clippy::type_complexity)]
+async fn slskd_watching(completed: PathBuf, file: PathBuf, refused: &'static str) -> (String, Arc<std::sync::Mutex<Vec<String>>>, Arc<std::sync::atomic::AtomicBool>, Arc<std::sync::Mutex<Vec<String>>>) {
+    use axum::routing::{get, post};
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let refusing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let violations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (a, r, v) = (asked.clone(), refusing.clone(), violations.clone());
+    let take = move |axum::Json(b): axum::Json<Value>| {
+        let (completed, file, a, r, v) = (completed.clone(), file.clone(), a.clone(), r.clone(), v.clone());
+        async move {
+            let user = b["username"].as_str().unwrap_or_default().to_string();
+            if user == refused && r.load(Ordering::SeqCst) {
+                v.lock().unwrap().push(format!("a batch asked of {user} below the floor"));
+                return (axum::http::StatusCode::CONFLICT, axum::Json(json!({ "error": "not expected" })));
+            }
+            a.lock().unwrap().push(user);
+            let dir = completed.join("cratarr").join(b["id"].as_str().unwrap());
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::copy(&file, dir.join(file.file_name().unwrap())).unwrap();
+            (axum::http::StatusCode::OK, axum::Json(json!({ "batch": { "transfers": [] } })))
+        }
+    };
+    let done = || async { axum::Json(json!({ "transfers": [{ "id": "t1", "filename": "x", "state": "Completed, Succeeded", "percentComplete": 100.0 }] })) };
+    let app = axum::Router::new().route("/api/v0/transfers/downloads/batches", post(take)).route("/api/v0/transfers/downloads/batches/{id}", get(done));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, asked, refusing, violations)
+}
+
+/// AL03.2, slskd's side (INTERACTIONS top 13, I14; OQ-F1 (a)). Ann's Wants R3 and R4 and root's S2 asked; the floor raised above the
+/// disk (10^9 GB); the server restarts with Soulseek's list holding R3's item ticked (its transfer not begun), R4's under way and root's
+/// S2 ticked. Below the floor: R3 starts no transfer (slskd refuses one asked of its user, and none comes), its item saying the server
+/// is short of space and its request reading wanted and waiting, never fetching; R4's transfer is followed to its end, never asked
+/// again; root's S2 transfers. The floor set to 0: R3's transfer starts. Never a user's transfer begun below the floor, nor an
+/// administrator's held.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn below_the_floor_soulseek_starts_no_users_transfer_end_to_end() {
+    let root = temp("al03-soulseek");
+    let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let file = library.join("music/Glass Harbour/Tide Tables (2012)/01 Slack Water.flac");
+    let name = file.file_name().unwrap().to_string_lossy().to_string();
+    let (url, asked, refusing, violations) = slskd_watching(completed.clone(), file.clone(), "peer-r3").await;
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/slskd", json!({ "url": url, "key": "k", "folder": completed, "enabled": true })).await;
+    for (who, admin) in [("root", true), ("ann", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": who, "password": format!("{who} pw"), "admin": admin })).await;
+        if who == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let ann = s.sign_in("ann", "ann pw").await;
+    let r3 = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Nowhere Fast" })).await["request"].clone();
+    let r4 = ann.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Lost Tapes" })).await["request"].clone();
+    let s2 = s.ok(reqwest::Method::POST, "/api/requests/want", json!({ "artist": "Tape Club", "album": "Late Shift" })).await["request"].clone();
+    let floor = s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 1e9 })).await;
+    assert_eq!(floor["short"], true, "{floor}");
+    s.stop();
+    // Soulseek's list as the next start reads it: R3's item ticked, R4's under way, root's S2 ticked.
+    let folder = |user: &str| json!({ "user": user, "dir": "d", "format": "flac", "lossless": true, "free_slot": true, "queue": 0, "speed": 1, "extra": 0, "files": [{ "filename": format!("d\\{name}"), "size": 1 }] });
+    let item = |id: &str, r: &Value, user: &str, state: &str, batch: Option<&str>| {
+        json!({ "id": id, "record": { "record": r["record"], "artist": "Tape Club", "album": r["album"], "request": r["id"] }, "state": state,
+                "tracks": [{ "disc": 1, "position": 1, "title": "Slack Water", "recording": "r1" }], "folders": [folder(user)], "chosen": 0, "batch": batch })
+    };
+    let items = [item("ss-1", &r3, "peer-r3", "approved", None), item("ss-2", &r4, "peer-r4", "fetching", Some("b-r4")), item("ss-3", &s2, "peer-s2", "approved", None)];
+    std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&json!({ "next": 3, "items": items })).unwrap()).unwrap();
+
+    let s = Server::start(&data).await;
+    s.act_as("root", "root pw").await;
+    let item_now = |id: &'static str| {
+        let s = &s;
+        async move { s.get("/api/soulseek").await["items"].as_array().into_iter().flatten().find(|i| i["id"] == id).cloned().unwrap_or(Value::Null) }
+    };
+    s.until("below the floor: S2 fetched, R3 held, R4 followed to its end", Duration::from_secs(120), || async {
+        asked.lock().unwrap().contains(&"peer-s2".to_string()) && item_now("ss-1").await["why"] == SHORT_OF_SPACE && item_now("ss-2").await["state"] == "checking"
+    })
+    .await;
+    let held = item_now("ss-1").await;
+    assert_eq!((held["state"].as_str(), held["why"].as_str(), &held["batch"]), (Some("approved"), Some(SHORT_OF_SPACE), &Value::Null), "R3 starts no transfer, saying so: {held}");
+    assert_eq!(*asked.lock().unwrap(), ["peer-s2"], "root's batch alone: none for R3, and R4's own followed, never asked again");
+    assert!(violations.lock().unwrap().is_empty(), "{:?}", violations.lock().unwrap());
+    let ann = s.sign_in("ann", "ann pw").await;
+    let listed = ann.get("/api/requests").await;
+    let hers = listed["mine"].as_array().unwrap().iter().find(|r| r["id"] == r3["id"]).cloned().unwrap();
+    let state = &hers["state"];
+    assert_eq!((state["state"].as_str(), state["soulseek"]["state"].as_str(), state["soulseek"]["why"].as_str()), (Some("wanted"), Some("waiting"), Some(SHORT_OF_SPACE)), "{hers}");
+    assert_ne!(hers["album_state"]["state"], "fetching", "never fetching while paused: {hers}");
+
+    // The floor at 0: R3's transfer starts.
+    refusing.store(false, Ordering::SeqCst);
+    let floor = s.ok(reqwest::Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    assert_eq!(floor["short"], false, "{floor}");
+    s.until("R3's transfer once there is space", Duration::from_secs(150), || async { asked.lock().unwrap().contains(&"peer-r3".to_string()) }).await;
+    assert!(violations.lock().unwrap().is_empty(), "{:?}", violations.lock().unwrap());
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
