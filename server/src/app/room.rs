@@ -601,6 +601,7 @@ pub(crate) mod tests {
             from_dir: (BOB, "Bob/Drift".into()),
             to_dir: (MUSIC, "Drift".into()),
             copies: vec![TrackMove { track: Some(1), from: (BOB, "Bob/Drift/1.flac".into()), to: (MUSIC, "Drift/1.flac".into()), was: None }],
+            stamps: Vec::new(),
             replaced: vec![TrackMove { track: Some(1), from: (MUSIC, "Drift/1.mp3".into()), to: (MUSIC, ".cratarr-trash/100/Drift/1.mp3".into()), was: None }],
             token: "100/Drift".into(),
         };

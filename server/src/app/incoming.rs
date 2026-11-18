@@ -2574,6 +2574,101 @@ mod tests {
         }
     }
 
+    /// A Replace from Bob's copy (RY01) stopped after Music's old files went into its trash and every copy but Bob's second FLAC was
+    /// made, `cover.jpg` among them at Music's old cover's name (RF6's shape, RA2's crash): its intent in the journal, nothing holding
+    /// it. The service, its folders, the entry, Music as it was before, and the event.
+    async fn ry01_stopped_before_its_last_copy(tag: &str) -> (IncomingService, [PathBuf; 4], EventId, std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)>, Event) {
+        let (svc, music, inc, ann, bob) = with_three_own(tag, RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
+        let before = lying(&music);
+        let at = bobs_copy(&svc, &bob, RY01_DIR).await;
+        let (event, ..) = svc.event_from_copy(&at, (0, RY01_DIR.into()), None, epoch_now()).await.unwrap();
+        let id = svc.journal.intend(100, &event).unwrap();
+        let Event::AlbumReplacedFromCopy { replaced, .. } = &event else { unreachable!() };
+        let mut out = svc.steps(&event).unwrap();
+        let ins = out.split_off(replaced.len());
+        crate::moves::apply(&out).unwrap();
+        for s in ins.iter().filter(|s| !s.from.1.ends_with(&ry01_file("", 2, "flac"))) {
+            crate::moves::clone_file(&s.from.0.join(&s.from.1), &s.to.0.join(&s.to.1)).unwrap();
+        }
+        assert!(music.join(RY01_DIR).join("cover.jpg").is_file() && music.join(ry01_file(RY01_DIR, 1, "flac")).is_file(), "the cover and the first FLAC copied");
+        (svc, [music, inc, ann, bob], id, before, event)
+    }
+
+    /// The log of what `f` says at INFO and above, on this thread.
+    async fn logged<F: std::future::Future<Output = ()>>(f: F) -> String {
+        let log = Logged::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).with_max_level(tracing::Level::INFO).finish();
+        let logging = tracing::subscriber::set_default(subscriber);
+        f.await;
+        drop(logging);
+        log.text()
+    }
+
+    /// RF6 (the review of runs 11 and 12, RA2): a Replace from Bob's copy cut short, then Bob's copy changes before the pass: (1) Bob
+    /// deletes his copy (his Delete: into his trash); (2) Bob retags the FLAC already copied (other bytes, other time). The pass cannot
+    /// make the copy whole, and puts it back: every copy it made taken away, told by Bob's files as they were when the intent was
+    /// written, whatever they are now, `cover.jpg` at Music's old cover's name too; Music's old files back under their names, bytes and
+    /// times, on their tracks; no row of a copy; the entry forgotten, a warning logged. Bob's files as he left them. Never a copy of
+    /// Bob's left in Music, nor Music's album left in its trash with no entry.
+    #[tokio::test]
+    async fn a_replace_from_a_copy_put_back_takes_away_what_it_copied_whatever_bobs_copy_became() {
+        for case in ["deleted", "retagged"] {
+            let (svc, [music, inc, ann, bob], id, before, _) = ry01_stopped_before_its_last_copy(&format!("rf6-{case}")).await;
+            let c = svc.lib.catalogue();
+            let olds: Vec<Option<i64>> = (1..=2).map(|n| c.track_of(0, &ry01_file(RY01_DIR, n, "mp3"))).collect();
+            if case == "deleted" {
+                crate::trash::trash(&bob, RY01_DIR, epoch_now()).unwrap();
+            } else {
+                std::fs::write(bob.join(ry01_file(RY01_DIR, 1, "flac")), b"flac number 1, its tag written since").unwrap();
+            }
+            let theirs = lying(&bob);
+            let text = logged(svc.reconcile()).await;
+            assert!(svc.journal.get(id).unwrap().is_none(), "{case}: forgotten");
+            assert_eq!(lying(&music), before, "{case}: Music's album back as it was, bytes and times; nothing of Bob's copy left");
+            for (n, t) in (1..=2).zip(&olds) {
+                assert_eq!(row_at(&c, 0, &ry01_file(RY01_DIR, n, "mp3")), Some((*t, None)), "{case}: on its track, not trashed");
+                assert!(!c.has_row(0, &ry01_file(RY01_DIR, n, "flac")), "{case}: no row of a copy");
+            }
+            assert!(text.lines().any(|l| l.contains("WARN") && l.contains("put Zebra back as it was")), "{case}: {text}");
+            assert_eq!(lying(&bob), theirs, "{case}: Bob's files as he left them");
+            for d in [music, inc, ann, bob] {
+                std::fs::remove_dir_all(d).ok();
+            }
+        }
+    }
+
+    /// RF6: a Replace from Bob's copy cut short, Bob's copy deleted since, and Music's copied `cover.jpg` rewritten since it was copied
+    /// (a picture written into it: no copy as made any more), so Music's old cover cannot come back to its name. The pass takes away
+    /// the copy it made and leaves the rewritten cover, logs an error, and keeps the intent for the next pass, Music's old files still
+    /// in its trash under the entry's token. Once the cover is moved aside, the next pass puts Music's album back and forgets the entry.
+    /// Never Music's album left in its trash with no entry; never a file it did not copy taken away.
+    #[tokio::test]
+    async fn a_replace_from_a_copy_that_cannot_be_put_back_stays_for_the_next_pass() {
+        let (svc, [music, inc, ann, bob], id, before, event) = ry01_stopped_before_its_last_copy("rf6-stuck").await;
+        let Event::AlbumReplacedFromCopy { replaced, .. } = &event else { unreachable!() };
+        crate::trash::trash(&bob, RY01_DIR, epoch_now()).unwrap();
+        let cover = music.join(RY01_DIR).join("cover.jpg");
+        std::fs::write(&cover, b"a picture written since").unwrap();
+        let text = logged(svc.reconcile()).await;
+        assert!(svc.journal.get(id).unwrap().is_some_and(|e| !e.applied), "the intent kept for the next pass");
+        assert!(text.lines().any(|l| l.contains("ERROR") && l.contains("stays for the next pass")), "an error logged: {text}");
+        for r in replaced {
+            let (_, (bytes, _)) = before.iter().find(|(rel, _)| **rel == r.from.1).unwrap();
+            assert_eq!(std::fs::read(music.join(&r.to.1)).ok().as_ref(), Some(bytes), "{}: still in Music's trash under the entry's token", r.from.1);
+        }
+        assert!(!music.join(ry01_file(RY01_DIR, 1, "flac")).exists(), "the copy it made taken away");
+        assert_eq!(std::fs::read(&cover).unwrap(), b"a picture written since", "the rewritten cover left as it is");
+        std::fs::remove_file(&cover).unwrap();
+        let text = logged(svc.reconcile()).await;
+        assert!(svc.journal.get(id).unwrap().is_none(), "then forgotten");
+        assert_eq!(lying(&music), before, "Music's album back as it was");
+        assert!(text.lines().any(|l| l.contains("WARN") && l.contains("put Zebra back as it was")), "{text}");
+        for d in [music, inc, ann, bob] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     /// RY01.8: the Undo of a Replace from Bob's copy. (1) Each copied file still as copied goes into Music's trash, file by file;
     /// Music's old files come back under their names, bytes and times, on their tracks, not trashed; the copies' rows trashed and
     /// holding no track; the trash tokens kept on the entry. (2) A booklet dropped in since stays beside the old files. (3) A copied

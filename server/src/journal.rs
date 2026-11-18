@@ -96,6 +96,9 @@ pub enum Event {
         to_dir: (i64, String),
         /// Every file of the own copy, audio and others, copied into the main library; `track` the one it is on, its old file's.
         copies: Vec<TrackMove>,
+        /// Each own file's size and time in milliseconds as the intent was written, in `copies`' order: what a copy of it is told by
+        /// (RF6), whatever the own copy has become since (deleted, retagged).
+        stamps: Vec<Option<(u64, i64)>>,
         /// The main library's old files, into its trash; `track` the one each let go of.
         replaced: Vec<TrackMove>,
         /// Where the old files lie in that trash.

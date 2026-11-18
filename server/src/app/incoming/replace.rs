@@ -779,6 +779,10 @@ impl IncomingService {
                 TrackMove { track: c.track_of(own, &from), from: (own, from), to: (main, to.clone()), was: None }
             })
             .collect();
+        // Each own file as it is now, at the intent: what a copy of it is told by from then on (RF6).
+        let sources: Vec<PathBuf> = copies.iter().map(|m| at.root.join(&m.from.1)).collect();
+        let stamps: Vec<Option<(u64, i64)>> =
+            tokio::task::spawn_blocking(move || sources.iter().map(|p| super::stamp_of(p)).collect()).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let event = Event::AlbumReplacedFromCopy {
             source: at.source.clone(),
             album_id: at.album.id.clone(),
@@ -786,6 +790,7 @@ impl IncomingService {
             from_dir: (own, dir),
             to_dir: (main, plan.folder.clone()),
             copies,
+            stamps,
             replaced,
             token,
         };
@@ -817,42 +822,49 @@ impl IncomingService {
     /// RY01's files and rows (`replacing_from_copy`, and the pass for one a stop cut short), safe to repeat: Music's old files into its
     /// trash, then every file of the own copy copied in (`Files::copy_all`: shared blocks where the disk can, byte for byte, the times
     /// kept), what the copies are kept on the entry (`COPIED`: each one's size and time as copied, for its Undo), then the rows
-    /// (`rows_of_copy`). A copy that fails takes away every copy it or a try before it made (their size and time still the own
-    /// copy's), and puts the old files back: all or none, and it says nothing stands written (false). A failure once the copies stand
-    /// says so (true): the intent stays, for the pass. `held`: the action's mark as under way, kept through its files. The servers hear
-    /// of the main library's folders alone.
+    /// (`rows_of_copy`). A copy that fails takes away every copy it or a try before it made, each told by its own file's size and time
+    /// as the intent was written (RF6: whatever that file became since), and puts the old files back: all or none, and it says nothing
+    /// stands written (false). Where the old files cannot be put back, an error is logged and it says written (true), so the intent
+    /// stays for the next pass: never Music's album in its trash with no entry. A failure once the copies stand says so too (true).
+    /// `held`: the action's mark as under way, kept through its files. The servers hear of the main library's folders alone.
     pub(super) async fn finish_from_copy(&self, id: EventId, event: &Event, hold_gone: bool, held: Option<super::Underway>) -> Result<(), (bool, anyhow::Error)> {
-        let Event::AlbumReplacedFromCopy { replaced, title, .. } = event else { return Ok(()) };
+        let Event::AlbumReplacedFromCopy { replaced, title, stamps, .. } = event else { return Ok(()) };
         let (before, after) = (|e: anyhow::Error| (false, e), |e: anyhow::Error| (true, e));
         // A library out of use moves nothing: the intent stays for the pass, which forgets it where nothing went.
         let mut out = self.steps(event).ok_or_else(|| after(anyhow::anyhow!("the folders are not in use any more")))?;
         let ins = out.split_off(replaced.len().min(out.len()));
-        let files = self.files.clone();
-        let (shared, made) = tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<bool>, Vec<Option<(u64, i64)>>)> {
+        let (files, stamps) = (self.files.clone(), stamps.clone());
+        let copied = tokio::task::spawn_blocking(move || -> Result<(Vec<bool>, Vec<Option<(u64, i64)>>), (bool, anyhow::Error)> {
             let _held = held;
             // An old file in the trash under this token already went (a try cut short): a copy may lie at its name by now.
             let left: Vec<crate::moves::Step> = out.iter().filter(|s| !s.to.0.join(&s.to.1).exists()).cloned().collect();
-            files.move_all(&left)?;
-            match files.copy_all(&ins) {
+            match files.move_all(&left).and_then(|()| files.copy_all(&ins)) {
                 Ok(shared) => Ok((shared, ins.iter().map(|s| super::stamp_of(&s.to.0.join(&s.to.1))).collect())),
                 Err(e) => {
-                    for s in &ins {
-                        let (from, to) = (s.from.0.join(&s.from.1), s.to.0.join(&s.to.1));
-                        if super::stamp_of(&to).is_some() && super::stamp_of(&to) == super::stamp_of(&from) {
+                    for (s, was) in ins.iter().zip(&stamps) {
+                        let to = s.to.0.join(&s.to.1);
+                        if was.is_some() && super::stamp_of(&to) == *was {
                             std::fs::remove_file(&to).ok();
                         }
                     }
                     files.clear_parts(&ins);
-                    if let Err(back) = files.move_back(&out) {
-                        tracing::warn!("replace: the old files not put back: {back:#}");
+                    match files.move_back(&out) {
+                        Ok(()) => Err(before(e)),
+                        Err(back) => Err(after(anyhow::anyhow!("{e:#}; the old files could not be put back: {back:#}"))),
                     }
-                    Err(e)
                 }
             }
         })
         .await
-        .map_err(|e| before(anyhow::anyhow!("{e}")))?
-        .map_err(before)?;
+        .map_err(|e| before(anyhow::anyhow!("{e}")))?;
+        let (shared, made) = match copied {
+            Ok(done) => done,
+            Err((true, e)) => {
+                tracing::error!("replace: {title} not put back as it was, so it stays for the next pass: {e:#}");
+                return Err((true, e));
+            }
+            Err(e) => return Err(e),
+        };
         self.journal.done(id, super::COPIED, epoch_now(), &serde_json::json!(made)).map_err(after)?;
         let (c, written) = (self.lib.catalogue(), event.clone());
         tokio::task::spawn_blocking(move || rows_of_copy(&c, &written, &shared)).await.map_err(|e| after(anyhow::anyhow!("{e}")))?.map_err(after)?;

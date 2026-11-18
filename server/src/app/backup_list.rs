@@ -141,6 +141,7 @@ mod tests {
                 from_dir: (3, "Bob".into()),
                 to_dir: (0, "Drift".into()),
                 copies: tracks.iter().enumerate().map(|(n, (_, t))| TrackMove { track: Some(*t), from: (3, bobs(n)), to: (0, format!("Drift/{n}.flac")), was: None }).collect(),
+                stamps: Vec::new(),
                 replaced: tracks.iter().map(|(rel, t)| TrackMove { track: Some(*t), from: (0, rel.clone()), to: (0, format!(".cratarr-trash/100/{rel}")), was: None }).collect(),
                 token: format!("100/copy-{record}"),
             };
