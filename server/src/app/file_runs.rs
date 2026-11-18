@@ -540,16 +540,14 @@ impl RunEntry {
         let failed = p.failed.iter().chain(&cut).cloned().collect();
         let planned = cut.iter().map(|c| c.album.clone()).collect();
         let run = FileRun { what: p.kind.clone(), title: p.title.clone(), records: p.records.clone(), files, failed, planned };
-        let id = (!p.files.is_empty() || !p.failed.is_empty()).then(|| journal.record_run(at, &run, account, keep)).and_then(|kept| match kept {
+        // Kept and writing in one step: a reading of the list in between would say it done before it wrote (F5).
+        let id = (!p.files.is_empty() || !p.failed.is_empty()).then(|| journal.record_run_writing(at, &run, account, keep)).and_then(|kept| match kept {
             Ok(id) => Some(id),
             Err(e) => {
                 tracing::warn!(target: "library", reason = %format!("{e:#}"), "a run of file changes not kept for Undo");
                 None
             }
         });
-        if let Some(id) = id {
-            journal.run_writing(id);
-        }
         Self { journal, id, run, cut, saved: std::time::Instant::now() }
     }
 
@@ -1366,6 +1364,50 @@ mod tests {
         assert_eq!(j.file_run(id).unwrap(), None);
         let (j, e) = entry(&proposal(Vec::new()));
         assert_eq!((e.id, j.file_runs_since(0).unwrap().len()), (None, 0), "nothing to write, nothing set aside: not even begun");
+    }
+
+    /// F5 (the e2e saw the cover run listed done, its cover not written yet): a run is kept before it writes, and is writing
+    /// from that same moment. A reading of the list wherever another thread's could come between the journal's steps
+    /// (`between`) never finds it kept and not writing, which the list says done; once it ended, it is there.
+    #[test]
+    fn a_run_begun_is_on_no_reading_of_the_list_before_it_ends() {
+        let j = Arc::new(Journal::open(None).unwrap());
+        let p = proposal(vec![tag_write("a", Path::new("/m/a.flac"), &["ep"])]);
+        let seen: std::rc::Rc<std::cell::RefCell<Vec<Vec<EventId>>>> = Default::default();
+        let (reads, into) = (j.clone(), seen.clone());
+        crate::journal::between(Some(Box::new(move || {
+            let listed = reads.file_runs_since(0).unwrap().into_iter().map(|(id, ..)| id).collect();
+            into.borrow_mut().push(listed);
+        })));
+        let mut e = RunEntry::begin(j.clone(), &p, 100, None, 1000);
+        crate::journal::between(None);
+        let id = e.id.unwrap();
+        let seen = seen.borrow().clone();
+        assert!(seen.len() >= 2, "read before and after each of the journal's steps: {seen:?}");
+        assert!(seen.iter().all(|listed| !listed.contains(&id)), "never on the list while it writes: {seen:?}");
+        e.album_done("a", vec![p.files[0].clone()], &[]);
+        assert_eq!(e.end(), Some(format!("{RUN}{id}")));
+        assert_eq!(j.file_runs_since(0).unwrap().into_iter().map(|(id, ..)| id).collect::<Vec<_>>(), [id], "on it once it ended");
+    }
+
+    /// F5, the other side: one reading of the list is one look at the journal. A run begun as it reads, as another thread's
+    /// could (`between`: before the reading takes the journal), is on it as writing or not at all, never as done.
+    #[test]
+    fn a_run_begun_while_the_list_is_read_is_not_on_it_as_done() {
+        let j = Arc::new(Journal::open(None).unwrap());
+        let p = proposal(vec![tag_write("a", Path::new("/m/a.flac"), &["ep"])]);
+        let begun: std::rc::Rc<std::cell::RefCell<Option<RunEntry>>> = Default::default();
+        let (writes, into) = (j.clone(), begun.clone());
+        crate::journal::between(Some(Box::new(move || {
+            if into.borrow().is_none() {
+                let e = RunEntry::begin(writes.clone(), &p, 100, None, 1000);
+                *into.borrow_mut() = Some(e);
+            }
+        })));
+        let listed: Vec<EventId> = j.file_runs_since(0).unwrap().into_iter().map(|(id, ..)| id).collect();
+        crate::journal::between(None);
+        let id = begun.borrow().as_ref().and_then(|e| e.id).expect("begun while the list was read");
+        assert!(!listed.contains(&id), "begun as the list was read, and on it as done: {listed:?}");
     }
 
     /// An `App` with no server, for what asks it: its journal, the list of runs.

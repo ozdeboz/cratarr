@@ -315,7 +315,8 @@ pub struct Journal {
     tell: tokio::sync::broadcast::Sender<EventId>,
     /// Events just undone, for handlers that put their work back (`subscribe_undone`).
     tell_undone: tokio::sync::broadcast::Sender<EventId>,
-    /// Runs still writing, by id (`run_writing`).
+    /// Runs still writing, by id (`record_run_writing`): added and read only inside a hold of `db` (never the other way
+    /// round), so the list sees a run kept and writing at once.
     writing: Mutex<Vec<EventId>>,
     /// Which journal this is in the process (`key`).
     key: u64,
@@ -323,6 +324,60 @@ pub struct Journal {
 
 /// The next journal's key: one a journal opened, never twice in a process.
 static NEXT_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(test)]
+thread_local! {
+    // A test's step (`between`), on its own thread alone.
+    static BETWEEN: std::cell::RefCell<Option<Box<dyn FnMut()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What another thread could do between the journal's own steps, done on this one (tests): `step` comes each time before
+/// the journal takes its database and each time once it lets it go, until set to `None`. What the step itself asks of the
+/// journal lets nothing in.
+#[cfg(test)]
+pub(crate) fn between(step: Option<Box<dyn FnMut()>>) {
+    BETWEEN.with(|b| *b.borrow_mut() = step);
+}
+
+/// The step a test set (`between`), if any.
+#[cfg(test)]
+fn let_in() {
+    let Some(mut step) = BETWEEN.with(|b| b.borrow_mut().take()) else { return };
+    step();
+    BETWEEN.with(|b| {
+        let mut b = b.borrow_mut();
+        if b.is_none() {
+            *b = Some(step);
+        }
+    });
+}
+
+/// The journal's database while a step holds it (tests): `between`'s step comes once it is let go.
+#[cfg(test)]
+struct Held<'a>(Option<std::sync::MutexGuard<'a, Connection>>);
+
+#[cfg(test)]
+impl std::ops::Deref for Held<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.0.as_deref().expect("held until let go")
+    }
+}
+
+#[cfg(test)]
+impl std::ops::DerefMut for Held<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.0.as_deref_mut().expect("held until let go")
+    }
+}
+
+#[cfg(test)]
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        drop(self.0.take());
+        let_in();
+    }
+}
 
 impl Journal {
     /// `file`: the journal; `None` keeps it in memory (no data folder).
@@ -349,8 +404,16 @@ impl Journal {
         self.key
     }
 
+    #[cfg(not(test))]
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// As above, with the step a test set (`between`) before the database is taken and once it is let go.
+    #[cfg(test)]
+    fn db(&self) -> Held<'_> {
+        let_in();
+        Held(Some(self.db.lock().unwrap_or_else(|p| p.into_inner())))
     }
 
     /// Write-ahead: write what is about to be done, before doing it. Nobody hears of it until `applied`; a crash in
@@ -602,7 +665,22 @@ impl Journal {
     /// Keep a run of changes to the library's files (decision 0092) of `account`'s; runs older than `keep` seconds (the
     /// trash's days) are forgotten on the way.
     pub fn record_run(&self, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
+        Self::keep_run(&self.db(), at, run, account, keep)
+    }
+
+    /// A run kept before it writes, and writing from that moment, both in one hold of the journal: a reading of the list
+    /// (`file_runs_since`) never finds it kept and not writing, which says it done before it wrote anything (F5: the cover
+    /// run listed done, its cover not written yet). Left out of the list until `run_ended`. In memory: after a restart
+    /// nothing is writing, and a run cut off is listed.
+    pub fn record_run_writing(&self, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
         let db = self.db();
+        let id = Self::keep_run(&db, at, run, account, keep)?;
+        self.writing.lock().unwrap_or_else(|p| p.into_inner()).push(id);
+        Ok(id)
+    }
+
+    /// A run into the journal, those older than `keep` seconds out.
+    fn keep_run(db: &Connection, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
         db.execute("DELETE FROM file_runs WHERE at < ?1", [at - keep])?;
         db.execute("INSERT INTO file_runs (at, run, account) VALUES (?1, ?2, ?3)", params![at, serde_json::to_string(run)?, account])?;
         Ok(db.last_insert_rowid())
@@ -625,12 +703,6 @@ impl Journal {
         Ok(())
     }
 
-    /// A run kept before it wrote, and writing now: told as it goes, so `file_runs_since` leaves it out until `run_ended`.
-    /// In memory: after a restart nothing is writing, and a run cut off is listed.
-    pub fn run_writing(&self, id: EventId) {
-        self.writing.lock().unwrap_or_else(|p| p.into_inner()).push(id);
-    }
-
     /// A run writing no more.
     pub fn run_ended(&self, id: EventId) {
         self.writing.lock().unwrap_or_else(|p| p.into_inner()).retain(|w| *w != id);
@@ -645,8 +717,9 @@ impl Journal {
     /// The runs kept since `since` (epoch seconds), newest first, those writing left out: id, when, the run, whether all of
     /// it was undone.
     pub fn file_runs_since(&self, since: i64) -> Result<Vec<(EventId, i64, FileRun, bool)>> {
-        let writing = self.writing.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        // Both in one hold of the journal, as a run is kept and set writing in one (`record_run_writing`).
         let db = self.db();
+        let writing = self.writing.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let mut st = db.prepare_cached("SELECT id, at, run, undone_at FROM file_runs WHERE at >= ?1 ORDER BY id DESC")?;
         let rows = st.query_map([since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<i64>>(3)?)))?;
         let mut out = Vec::new();
