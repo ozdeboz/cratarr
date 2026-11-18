@@ -190,6 +190,14 @@ pub struct AlbumMore {
     /// Its list is being read (C54): none kept yet, so its rows come when the page asks again.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub looking: bool,
+    /// Why a record not had has no rows (F1), where its list is not being read: what each source it has a reference of said
+    /// (`references::Said`: switched off, held back until when, didn't answer, has none), in the design's order, up to the first that
+    /// didn't answer or is held back; empty where it has no reference of those sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_list: Option<Vec<super::references::Said>>,
+    /// The source its list is being read from now (F6), while `looking`: the page's loader names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading: Option<&'static str>,
     /// The record that has the album by the one had rule (C54, R13), where it is another (`al-<n>`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub have: Option<String>,
@@ -225,7 +233,7 @@ fn labels_of(cat: &crate::catalogue::Catalogue, record: i64) -> Result<Vec<Label
 }
 
 /// What Cratarr's album answers where the served library cannot read it (C54, `record_page`).
-enum RecordPage {
+pub(crate) enum RecordPage {
     /// A record not had: its own page (`AlbumMore::not_had`).
     NotHad(Box<AlbumView>),
     /// Merged into a record that is had (G3): that record's id, whose usual view answers.
@@ -270,7 +278,9 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
             ..Default::default()
         })
         .collect();
-    let looking = list.is_none() && q.refs.iter().any(|(s, ..)| COUNTING_ORDER.contains(&s.as_str()));
+    let referenced = q.refs.iter().any(|(s, ..)| COUNTING_ORDER.contains(&s.as_str()));
+    // None kept: read where a reference may give it (`looking`); with no reference to read one from, said so (F1.4).
+    let (looking, no_list) = (list.is_none() && referenced, (list.is_none() && !referenced).then(Vec::new));
     let labels = labels_of(cat, q.row.id)?;
     let cover = super::cover_cache::addresses_of(q.row.cover.as_deref(), q.groups.first().map(String::as_str), q.bandcamp.as_deref()).into_iter().next();
     let id = q.row.id;
@@ -294,6 +304,7 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
             release_group: q.groups.into_iter().next(),
             not_had: true,
             looking,
+            no_list,
             have: q.holder.filter(|h| *h != id).map(ids::record),
             labels,
             cover,
@@ -302,6 +313,31 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
             ..AlbumMore::default()
         },
     }))))
+}
+
+/// A record's page at `now` from the catalogue (`record_page`), a record not had's list asked for through `read` where none is kept
+/// (C54, F1: `references::read_soon_with`): being read (`looking`), from which source now (`reading`, F6), else why it has none
+/// (`no_list`). `record_view`'s, its sources read by `references::read_reference` there.
+pub(crate) async fn page_at<R, F>(cat: &Arc<crate::catalogue::Catalogue>, record: i64, now: i64, read: R) -> Result<Option<RecordPage>>
+where
+    R: Fn(crate::catalogue::records::Ref) -> F + Send + Sync + 'static,
+    F: std::future::Future<Output = Result<Option<super::references::Read>>> + Send + 'static,
+{
+    let c = cat.clone();
+    let mut page = tokio::task::spawn_blocking(move || record_page(&c, record, now)).await??;
+    if let Some(RecordPage::NotHad(view)) = &mut page
+        && view.more.looking
+    {
+        let end = crate::serve::ids::record_number(&view.id).unwrap_or(record);
+        match super::references::read_soon_with(cat, end, now, read).await {
+            super::references::PageList::Looking(reading) => view.more.reading = reading,
+            super::references::PageList::Said(said) => {
+                view.more.looking = false;
+                view.more.no_list = Some(said);
+            }
+        }
+    }
+    Ok(page)
 }
 
 /// A track the page plays itself (decision 0022) as the player shows it: its playlists, and whether it can be added
@@ -918,32 +954,20 @@ impl PlayingService {
     }
 
     /// What Cratarr's album `album` answers where the served library cannot read it (C54): a record not had, its own page from the
-    /// catalogue (`record_page`), its list asked for where none is kept (`references::read_soon`); one merged into a record had,
-    /// that one's view. The page's path alone: opening it marks the record opened. None: no record of the catalogue's, or one had
-    /// that the library does not serve now (answered as before).
+    /// catalogue, its list asked for where none is kept, or why it has none (`page_at`, its sources read by
+    /// `references::read_reference`); one merged into a record had, that one's view. The page's path alone: opening it marks the
+    /// record opened. None: no record of the catalogue's, or one had that the library does not serve now (answered as before).
     pub async fn record_view(&self, album: &str) -> Result<Option<AlbumView>, ToggleError> {
         let Some(record) = crate::serve::ids::record_number(album) else { return Ok(None) };
-        let cat = self.lib.catalogue();
-        let c = cat.clone();
-        let page = match tokio::task::spawn_blocking(move || record_page(&c, record, super::moment::now_secs())).await {
-            Ok(Ok(page)) => page,
-            Ok(Err(e)) => {
-                tracing::warn!("record {album}: {e:#}");
-                None
-            }
+        let page = match page_at(&self.lib.catalogue(), record, super::moment::now_secs(), super::references::read_reference).await {
+            Ok(page) => page,
             Err(e) => {
-                tracing::warn!("record {album}: {e}");
+                tracing::warn!("record {album}: {e:#}");
                 None
             }
         };
         match page {
-            Some(RecordPage::NotHad(mut view)) => {
-                if view.more.looking {
-                    let end = crate::serve::ids::record_number(&view.id).unwrap_or(record);
-                    view.more.looking = super::references::read_soon(&cat, end, super::moment::now_secs());
-                }
-                Ok(Some(*view))
-            }
+            Some(RecordPage::NotHad(view)) => Ok(Some(*view)),
             Some(RecordPage::Held(end)) => self.album_view(crate::source::cratarr::KIND.id, &end).await.map(Some),
             None => Ok(None),
         }
@@ -1378,5 +1402,91 @@ mod tests {
         let (asked, _) = own_artist(&served, "me", Some(ids::artist(second).as_str()), "Rone").await.unwrap().expect("the second");
         assert_eq!((asked.id, asked.name.as_str(), asked.number), (ids::artist(second), "Rone", Some(2)), "by id, though another has the name");
         assert!(own_artist(&served, "me", None, "Nobody Here").await.unwrap().is_none());
+    }
+
+    // ---- F1 (preview 1's fix batch): a record not had says why it has no tracks
+
+    use super::super::references::{Read, Said, TestState, page_read_of, page_read_settled};
+    use crate::app::switches::{DISCOGS, MUSICBRAINZ, set_for_tests};
+
+    /// A record not had's page as `record_view` answers it at `now`, its list asked for through `read`.
+    async fn opened<R, F>(cat: &Arc<Catalogue>, record: i64, now: i64, read: R) -> AlbumView
+    where
+        R: Fn(Ref) -> F + Send + Sync + 'static,
+        F: std::future::Future<Output = Result<Option<Read>>> + Send + 'static,
+    {
+        match page_at(cat, record, now, read).await.unwrap() {
+            Some(RecordPage::NotHad(v)) => *v,
+            _ => panic!("al-{record} is no page of a record not had"),
+        }
+    }
+
+    /// A reader that keeps what it is asked and answers `answer`.
+    fn asking(asked: &Arc<std::sync::Mutex<Vec<String>>>, answer: fn() -> Result<Option<Read>>) -> impl Fn(Ref) -> std::future::Ready<Result<Option<Read>>> + Clone + Send + Sync + 'static {
+        let asked = asked.clone();
+        move |r: Ref| {
+            asked.lock().unwrap().push(format!("{}:{}", r.source, r.kind));
+            std::future::ready(answer())
+        }
+    }
+
+    fn off(source: &'static str) -> Said {
+        Said { source, said: "off", until: None }
+    }
+
+    /// F1.1: a record not had every source of whose references is switched off says so at once, as the page reads it: no rows, not
+    /// looking, MusicBrainz and Discogs said off, nothing asked and no read kept for it (one switched on is read at once). Never
+    /// Bandcamp named: it has no page. F1.4: one with no reference, or only an AcoustID one, says it has none to read one from.
+    #[tokio::test]
+    async fn a_record_whose_sources_are_switched_off_says_so_at_once() {
+        let _state = TestState::set().await;
+        set_for_tests(MUSICBRAINZ, false);
+        set_for_tests(DISCOGS, false);
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = cat.record_for_tests("Answered", 0);
+        for r in [Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000514"), Ref::new("discogs", "master", "4001")] {
+            assert!(cat.set_reference(&ids::record(record), &r, "link").unwrap());
+        }
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let t = super::super::moment::now_secs();
+        let v = opened(&cat, record, t, asking(&asked, || Ok(None))).await;
+        assert!(v.rows.is_empty() && !v.more.looking, "said at once, not being read");
+        assert_eq!(v.more.no_list, Some(vec![off("musicbrainz"), off("discogs")]));
+        assert!(asked.lock().unwrap().is_empty(), "nothing asked");
+        assert_eq!(page_read_of(&cat, record), None, "no read kept for it");
+        let shown = serde_json::to_value(&v).unwrap();
+        assert_eq!(shown["no_list"], serde_json::json!([{ "source": "musicbrainz", "said": "off" }, { "source": "discogs", "said": "off" }]), "{shown}");
+        assert!(shown.get("looking").is_none() && shown.get("reading").is_none(), "{shown}");
+        // F1.4: no reference to read one from.
+        let bare = cat.record_for_tests("Quiet Lanes", 0);
+        let heard = cat.record_for_tests("Lamplight", 0);
+        cat.set_reference(&ids::record(heard), &Ref::new("acoustid", "track", "00000000-0000-4000-8000-000000000515"), "link").unwrap();
+        for record in [bare, heard] {
+            let v = opened(&cat, record, t, asking(&asked, || Ok(None))).await;
+            assert_eq!((v.rows.len(), v.more.looking, v.more.no_list.clone()), (0, false, Some(Vec::new())), "{record}");
+            assert_eq!(serde_json::to_value(&v).unwrap()["no_list"], serde_json::json!([]));
+        }
+        assert!(asked.lock().unwrap().is_empty(), "nothing asked");
+    }
+
+    /// F1.7 (kind 3, a pin): a list kept another way after a read came to none (Soulseek's `tracklist`, Search now): the next open shows
+    /// its rows, never the old reason beside them, and reads nothing.
+    #[tokio::test]
+    async fn a_list_kept_since_shows_its_rows_not_the_old_reason() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = cat.record_for_tests("Answered", 0);
+        assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release", "r17"), "link").unwrap());
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let away = asking(&asked, || Err(anyhow::anyhow!("MusicBrainz answered 503 Service Unavailable")));
+        let t = super::super::moment::now_secs();
+        assert!(opened(&cat, record, t, away.clone()).await.more.looking);
+        page_read_settled(&cat, record).await;
+        assert!(!opened(&cat, record, t + 60, away.clone()).await.more.looking, "its read came to nothing");
+        cat.set_reference_tracks(record, "musicbrainz", &[track(1, "Lamplight"), track(2, "Morning")]).unwrap();
+        let v = opened(&cat, record, t + 180, away.clone()).await;
+        assert_eq!((v.rows.len(), v.more.looking, v.more.no_list.clone()), (2, false, None), "the rows, not the old reason");
+        assert_eq!(page(&cat, record).rows.len(), 2);
+        assert_eq!(asked.lock().unwrap().len(), 1, "nothing read again");
     }
 }

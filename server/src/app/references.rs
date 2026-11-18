@@ -196,6 +196,70 @@ where
     R: Fn(Ref) -> F,
     F: std::future::Future<Output = Result<Option<Read>>>,
 {
+    let j = judge(cat, record, read).await?;
+    if let Some(e) = j.stop {
+        return Err(e);
+    }
+    match (j.answer, j.off) {
+        // Switched off (R23, N16) where no other gave a list: out of reach until it is on again.
+        (Err(_), Some(off)) => Err(off),
+        (answer, _) => Ok(answer),
+    }
+}
+
+/// What a source said of a record's list where it gave none (F1): switched off, held back after Bandcamp's bot check, not
+/// answering (out of reach, or a page's read cut at `PAGE_READ_AT_MOST`), or no list of it (no such release, none with tracks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Off,
+    Held,
+    Unanswered,
+    None,
+}
+
+impl Outcome {
+    /// What a reader's failure says: a source switched off, Bandcamp's bot check, else no answer.
+    fn of(e: &anyhow::Error) -> Outcome {
+        if e.is::<SwitchedOff>() {
+            Outcome::Off
+        } else if crate::bandcamp::not_read(e) {
+            Outcome::Held
+        } else {
+            Outcome::Unanswered
+        }
+    }
+
+    /// As a record not had's page says it (`Said::said`).
+    fn word(self) -> &'static str {
+        match self {
+            Outcome::Off => "off",
+            Outcome::Held => "held",
+            Outcome::Unanswered => "unanswered",
+            Outcome::None => "none",
+        }
+    }
+}
+
+/// What `tracklist`'s reading came to (F1.11: one set of outcomes, two wordings: Soulseek's `why`, the page's `no_list`): its answer
+/// where no source stopped it; what each source read said where it gave no list, in the order read, up to the first that did not
+/// answer; that one's failure, and a source's switched off.
+struct Judged {
+    answer: std::result::Result<Judging, String>,
+    said: Vec<(&'static str, Outcome)>,
+    /// The failure that stopped it: a source out of reach, Bandcamp's bot check.
+    stop: Option<anyhow::Error>,
+    /// A source switched off, passed over.
+    off: Option<anyhow::Error>,
+}
+
+/// `tracklist`'s reading and keeping, each source's outcome kept (`Judged`): `tracklist` words it for Soulseek, a page's read
+/// (`read_soon_with`) for the page.
+async fn judge<R, F>(cat: &Arc<Catalogue>, record: i64, read: R) -> Result<Judged>
+where
+    R: Fn(Ref) -> F,
+    F: std::future::Future<Output = Result<Option<Read>>>,
+{
+    let answered = |answer: std::result::Result<Judging, String>| Judged { answer, said: Vec::new(), stop: None, off: None };
     let c = cat.clone();
     let Some((row, refs, kept, short)) = tokio::task::spawn_blocking(move || -> Result<_> {
         let Some(row) = c.record(record)? else { return Ok(None) };
@@ -207,7 +271,7 @@ where
     })
     .await??
     else {
-        return Ok(Err("No such record".into()));
+        return Ok(answered(Err("No such record".into())));
     };
     let kept_of = |source: &str| kept.iter().find(|(s, l)| s == source && !l.is_empty()).map(|(_, l)| l.clone());
     let keep = |source: &'static str, list: Vec<RefTrack>, release: Option<Ref>, count: bool| {
@@ -233,12 +297,13 @@ where
         Some(counting) => identity::COUNTING_ORDER.iter().copied().filter(|s| *s == counting).chain(identity::COUNTING_ORDER.iter().copied().filter(|s| *s != counting)).collect(),
         // Had, short of the list its files name: searched by that list (W4), nothing counted by it.
         None if row.had && short && kept_of("musicbrainz").is_some() => vec!["musicbrainz"],
-        None if row.had => return Ok(Err("No list counts until one is chosen".into())),
+        None if row.had => return Ok(answered(Err("No list counts until one is chosen".into()))),
         None => identity::COUNTING_ORDER.to_vec(),
     };
     let mut counted = row.counting.is_some() || row.had;
     let mut judging = Judging::default();
-    let mut why: Vec<String> = Vec::new();
+    let mut said: Vec<(&'static str, Outcome)> = Vec::new();
+    let mut stop = None;
     let mut off = None;
     for (n, source) in sources.into_iter().enumerate() {
         // Its own list alone, the others only where it has no lengths (R33); where its own source is switched off, the next judges
@@ -263,16 +328,21 @@ where
                         list
                     }
                     Ok(_) => {
-                        why.push(format!("{} has no list of it", source_name(source)));
+                        said.push((source, Outcome::None));
                         continue;
                     }
-                    // Switched off (R23, N16): passed over for the next list; where none answers, out of reach until it is on again.
-                    Err(e) if e.is::<SwitchedOff>() => {
-                        off = Some(e);
-                        continue;
+                    Err(e) => {
+                        let outcome = Outcome::of(&e);
+                        said.push((source, outcome));
+                        // Switched off (R23, N16): passed over for the next list; where none answers, out of reach until it is on again.
+                        if outcome == Outcome::Off {
+                            off = Some(e);
+                            continue;
+                        }
+                        // Out of reach, Bandcamp's bot check among them (R23, N3): asked again later, nothing said against the record.
+                        stop = Some(e);
+                        break;
                     }
-                    // Out of reach, Bandcamp's bot check among them (R23, N3): asked again later, nothing said against the record.
-                    Err(e) => return Err(e),
                 }
             }
         };
@@ -286,69 +356,248 @@ where
             judging.untimed = Some((source.to_string(), list));
         }
     }
-    if judging.timed.is_some() || judging.untimed.is_some() {
-        return Ok(Ok(judging));
-    }
-    if let Some(e) = off {
-        return Err(e);
-    }
-    Ok(Err(if why.is_empty() { "No list to judge by".to_string() } else { why.join("; ") }))
+    let answer = if judging.timed.is_some() || judging.untimed.is_some() {
+        Ok(judging)
+    } else {
+        let none: Vec<String> = said.iter().filter(|(_, o)| *o == Outcome::None).map(|(s, _)| format!("{} has no list of it", source_name(s))).collect();
+        Err(if none.is_empty() { "No list to judge by".to_string() } else { none.join("; ") })
+    };
+    Ok(Judged { answer, said, stop, off })
 }
 
 /// A list read through a reference (`tracklist`'s reader): its tracks, and the release they were read from where the reference was
 /// a release group's (R25: kept as a reference).
 pub type Read = (Vec<RefTrack>, Option<Ref>);
 
-/// How long a record's list its page asked for and could not have is left before a page asks for it again (C54).
+/// How long a record's list its page asked for and could not have is left before a page asks for it again (C54), unless a source
+/// it said was switched off is on again, or Bandcamp's hold it said was lifted (F1.6): read at once then.
 const PAGE_READ_AGAIN_SECS: i64 = 15 * 60;
 
-/// The records whose list a page asked for (C54), by the catalogue and the record: being read (none), or when it could not be.
-type PageReads = std::sync::Mutex<HashMap<(usize, i64), Option<i64>>>;
+/// The longest a page's read may take (F1.9), as an artist's list's (`discover`'s `LIST_READ_AT_MOST`): past it, the source it waits
+/// on did not answer.
+const PAGE_READ_AT_MOST: std::time::Duration = std::time::Duration::from_secs(if cfg!(test) { 1 } else { 300 });
 
-fn page_reads() -> &'static PageReads {
-    static READS: std::sync::OnceLock<PageReads> = std::sync::OnceLock::new();
-    READS.get_or_init(Default::default)
+/// What a source said of a record not had's list where it gave none, as its page tells it (F1, `AlbumMore::no_list`): `off`
+/// (switched off), `held` (Bandcamp held back after its bot check, `until` when), `unanswered` (out of reach, or too slow), `none`
+/// (no list of it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Said {
+    pub source: &'static str,
+    pub said: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<i64>,
 }
 
-/// Ends a page's read, whatever becomes of its task: read, else not (a panic, a task dropped), and when.
-struct PageRead((usize, i64), bool);
+/// What a record not had's page has of its list where none is kept (F1): being read (`looking`), from which source now (F6:
+/// `reading`), or why there is none.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PageList {
+    Looking(Option<&'static str>),
+    Said(Vec<Said>),
+}
+
+/// Where a page's read of a record's list stands (C54): being read, asking which source now (F6; before its first question, the
+/// first it will ask), or ended (when) without one, with what its sources said.
+enum PageReadState {
+    Reading(Option<&'static str>),
+    Ended(i64, Vec<(&'static str, Outcome)>),
+}
+
+/// The records whose list a page asked for (C54), by the catalogue and the record, each with its catalogue: while the entry holds
+/// it, its address is no other catalogue's; one gone is let go of as a read begins.
+type PageReads = std::sync::Mutex<HashMap<(usize, i64), (std::sync::Weak<Catalogue>, PageReadState)>>;
+
+fn page_reads() -> std::sync::MutexGuard<'static, HashMap<(usize, i64), (std::sync::Weak<Catalogue>, PageReadState)>> {
+    static READS: std::sync::OnceLock<PageReads> = std::sync::OnceLock::new();
+    READS.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Ends a page's read, whatever becomes of its task: what its sources said and when, where it came to no list; else (a list kept, an
+/// error, a panic, a task dropped) let go of, so the next open shows the rows or reads again.
+struct PageRead((usize, i64), Option<(i64, Vec<(&'static str, Outcome)>)>);
 
 impl Drop for PageRead {
     fn drop(&mut self) {
-        let mut reads = page_reads().lock().unwrap_or_else(|p| p.into_inner());
-        if self.1 {
-            reads.remove(&self.0);
-        } else {
-            reads.insert(self.0, Some(super::moment::now_secs()));
+        let mut reads = page_reads();
+        match self.1.take() {
+            Some((at, said)) => {
+                if let Some(entry) = reads.get_mut(&self.0) {
+                    entry.1 = PageReadState::Ended(at, said);
+                }
+            }
+            None => {
+                reads.remove(&self.0);
+            }
         }
     }
 }
 
-/// A record not had's list asked for by its page where none is kept (C54): its counting list read in the background through
-/// `tracklist` and its sources (`read_reference`), and kept, so the page lists its rows when asked again. One read a record at a
-/// time; one that came to no list is asked for again after `PAGE_READ_AGAIN_SECS`. Whether it is being read (the page's
-/// `looking`).
-pub fn read_soon(cat: &Arc<Catalogue>, record: i64, now: i64) -> bool {
-    let key = (Arc::as_ptr(cat) as usize, record);
-    {
-        let mut reads = page_reads().lock().unwrap_or_else(|p| p.into_inner());
-        match reads.get(&key) {
-            Some(None) => return true,
-            Some(Some(failed)) if now - failed < PAGE_READ_AGAIN_SECS => return false,
-            _ => {}
-        }
-        reads.insert(key, None);
+/// A source switched off (R23, X3, Y12): asked nothing.
+fn switched_off(source: &str) -> Option<SwitchedOff> {
+    use super::switches::{BANDCAMP, DISCOGS, MUSICBRAINZ, is_on};
+    match source {
+        "musicbrainz" if !is_on(MUSICBRAINZ) => Some(SwitchedOff("MusicBrainz")),
+        "discogs" if !is_on(DISCOGS) => Some(SwitchedOff("Discogs")),
+        "bandcamp" if !is_on(BANDCAMP) => Some(SwitchedOff("Bandcamp")),
+        _ => None,
     }
-    let cat = cat.clone();
+}
+
+/// Why a page's read asks a source nothing at `now` (F1.1, F1.5): switched off, or Bandcamp held back after its bot check.
+fn refused(source: &str, now: i64) -> Option<anyhow::Error> {
+    if let Some(off) = switched_off(source) {
+        return Some(off.into());
+    }
+    (source == "bandcamp" && crate::bandcamp::held_until(now).is_some()).then(|| crate::bandcamp::NotRead.into())
+}
+
+/// Whether what a page's read said still stands at `now` (F1.6): each source it said was switched off still is, and Bandcamp still
+/// held back where it said so.
+fn still_said(said: &[(&'static str, Outcome)], now: i64) -> bool {
+    said.iter().all(|(source, o)| match o {
+        Outcome::Off => switched_off(source).is_some(),
+        Outcome::Held => crate::bandcamp::held_until(now).is_some(),
+        Outcome::Unanswered | Outcome::None => true,
+    })
+}
+
+/// What the page says of its sources at `now` (`Said`), in the design's order (`identity::COUNTING_ORDER`): Bandcamp's hold until when.
+fn page_words(said: &[(&'static str, Outcome)], now: i64) -> Vec<Said> {
+    let at = |s: &str| identity::COUNTING_ORDER.iter().position(|o| *o == s).unwrap_or(usize::MAX);
+    let mut words: Vec<Said> =
+        said.iter().map(|&(source, o)| Said { source, said: o.word(), until: if o == Outcome::Held { crate::bandcamp::held_until(now) } else { None } }).collect();
+    words.sort_by_key(|w| at(w.source));
+    words
+}
+
+/// What a page's read of `key` has to say at `now`: being read, or what its sources said within `PAGE_READ_AGAIN_SECS`, where that
+/// still stands.
+fn page_read_known(key: (usize, i64), now: i64) -> Option<PageList> {
+    match page_reads().get(&key)? {
+        (_, PageReadState::Reading(source)) => Some(PageList::Looking(*source)),
+        (_, PageReadState::Ended(at, said)) => ((0..PAGE_READ_AGAIN_SECS).contains(&(now - at)) && still_said(said, now)).then(|| PageList::Said(page_words(said, now))),
+    }
+}
+
+/// A page's read of `key` begun where none is being read, `first` the source it asks first, the catalogues gone let go of first.
+/// Whether it begins.
+fn page_read_begins(key: (usize, i64), cat: &Arc<Catalogue>, first: Option<&'static str>) -> bool {
+    let mut reads = page_reads();
+    reads.retain(|_, (c, _)| c.strong_count() > 0);
+    if matches!(reads.get(&key), Some((_, PageReadState::Reading(_)))) {
+        return false;
+    }
+    reads.insert(key, (Arc::downgrade(cat), PageReadState::Reading(first)));
+    true
+}
+
+/// A page's read of `key` asking `source` now (F6: the page's loader names it).
+fn page_read_asks(key: (usize, i64), source: &str) {
+    let source = identity::COUNTING_ORDER.iter().copied().find(|s| *s == source);
+    if let Some((_, PageReadState::Reading(asking))) = page_reads().get_mut(&key) {
+        *asking = source;
+    }
+}
+
+/// What an ended read of `key` said let go of: its sources say so unasked now.
+fn page_read_unasked(key: (usize, i64)) {
+    let mut reads = page_reads();
+    if matches!(reads.get(&key), Some((_, PageReadState::Ended(..)))) {
+        reads.remove(&key);
+    }
+}
+
+/// A source a page's read would ask (`said_unasked`'s reader).
+#[derive(Debug)]
+struct ToAsk;
+
+impl std::fmt::Display for ToAsk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("to be asked")
+    }
+}
+
+impl std::error::Error for ToAsk {}
+
+/// What a record's sources say at `now` without one being asked (F1.1, F1.5): where every source a read would ask is switched off or
+/// held back, what each says (`Err`), in `tracklist`'s way; else the source a read asks first (F6; none where a list was kept
+/// meanwhile).
+async fn said_unasked(cat: &Arc<Catalogue>, record: i64, now: i64) -> Result<std::result::Result<Option<&'static str>, Vec<(&'static str, Outcome)>>> {
+    let j = judge(cat, record, |r: Ref| std::future::ready(Err::<Option<Read>, _>(refused(&r.source, now).unwrap_or_else(|| anyhow::Error::from(ToAsk))))).await?;
+    if j.answer.is_ok() {
+        return Ok(Ok(None));
+    }
+    if j.stop.is_some_and(|e| e.is::<ToAsk>()) {
+        return Ok(Ok(j.said.last().map(|(source, _)| *source)));
+    }
+    Ok(Err(j.said))
+}
+
+/// A record not had's list asked for by its page at `now` where none is kept (C54, F1), its sources read through `read`
+/// (`read_reference` for the server's page): in the background, as `tracklist` reads and keeps (`judge`), so the page lists its rows
+/// when asked again; a page's, so read while background reading is paused (Y7). One read a record at a time, cut at
+/// `PAGE_READ_AT_MOST`. Where every source it would read is switched off or Bandcamp held back, said at once, nothing read; a read that
+/// came to no list is said, and read again after `PAGE_READ_AGAIN_SECS`, or at once where a source it said was off is on again or
+/// Bandcamp's hold was lifted. `Looking` while it is read (the page's `looking`), with the source it asks now (`reading`, F6), else
+/// why it has no list (`no_list`).
+pub async fn read_soon_with<R, F>(cat: &Arc<Catalogue>, record: i64, now: i64, read: R) -> PageList
+where
+    R: Fn(Ref) -> F + Send + Sync + 'static,
+    F: std::future::Future<Output = Result<Option<Read>>> + Send + 'static,
+{
+    let key = (Arc::as_ptr(cat) as usize, record);
+    if let Some(known) = page_read_known(key, now) {
+        return known;
+    }
+    let first = match said_unasked(cat, record, now).await {
+        Ok(Err(said)) => {
+            page_read_unasked(key);
+            return PageList::Said(page_words(&said, now));
+        }
+        Ok(Ok(first)) => first,
+        Err(e) => {
+            tracing::debug!(target: "library", record, "a page's list: {e:#}");
+            None
+        }
+    };
+    if !page_read_begins(key, cat, first) {
+        return page_read_known(key, now).unwrap_or(PageList::Looking(first));
+    }
+    let (cat, read) = (cat.clone(), Arc::new(read));
+    let (deadline, started) = (tokio::time::Instant::now() + PAGE_READ_AT_MOST, std::time::Instant::now());
+    // Each source asked as the page may: nothing of one switched off or held back, none waited on past the read's end.
+    let asking = move |r: Ref| {
+        let read = read.clone();
+        async move {
+            if let Some(e) = refused(&r.source, now) {
+                return Err(e);
+            }
+            page_read_asks(key, &r.source);
+            match tokio::time::timeout_at(deadline, (*read)(r)).await {
+                Ok(answer) => answer,
+                Err(_) => Err(anyhow::anyhow!("No answer within {} s", PAGE_READ_AT_MOST.as_secs())),
+            }
+        }
+    };
     tokio::spawn(async move {
-        let mut settles = PageRead(key, false);
-        match tracklist(&cat, record, read_reference).await {
-            Ok(Ok(_)) => settles.1 = true,
-            Ok(Err(why)) => tracing::debug!(target: "library", record, "a page's list not read: {why}"),
+        let mut ends = PageRead(key, None);
+        match judge(&cat, record, asking).await {
+            Ok(j) => {
+                if let Err(why) = &j.answer {
+                    tracing::debug!(target: "library", record, "a page's list not read: {why}");
+                    ends.1 = Some((now + i64::try_from(started.elapsed().as_secs()).unwrap_or(0), j.said));
+                }
+            }
             Err(e) => tracing::debug!(target: "library", record, "a page's list not read: {e:#}"),
         }
     });
-    true
+    PageList::Looking(first)
+}
+
+/// Tests: where a page's read of `record` stands: being read (true), ended without a list (false), or none kept.
+#[cfg(test)]
+pub(crate) fn page_read_of(cat: &Arc<Catalogue>, record: i64) -> Option<bool> {
+    page_reads().get(&(Arc::as_ptr(cat) as usize, record)).map(|(_, s)| matches!(s, PageReadState::Reading(_)))
 }
 
 /// A source switched off: no answer about any record, and none against it (R23).
@@ -376,16 +625,10 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
             Err(e) => Err(e),
         }
     };
-    if r.source == "musicbrainz" && !super::switches::is_on(super::switches::MUSICBRAINZ) {
-        return Err(SwitchedOff("MusicBrainz").into());
-    }
     // Discogs switched off is passed over as MusicBrainz is (X3): out of reach until it is on, nothing said against the record.
-    if r.source == "discogs" && !super::switches::is_on(super::switches::DISCOGS) {
-        return Err(SwitchedOff("Discogs").into());
-    }
     // Bandcamp too (Y12): its plain "switched off" ended the read, so no other list was tried.
-    if r.source == "bandcamp" && !super::switches::is_on(super::switches::BANDCAMP) {
-        return Err(SwitchedOff("Bandcamp").into());
+    if let Some(off) = switched_off(&r.source) {
+        return Err(off.into());
     }
     match (r.source.as_str(), r.kind.as_str()) {
         ("musicbrainz", "release") => Ok(release(r.value).await?.map(|list| (list, None))),
@@ -894,6 +1137,47 @@ pub fn unreferenced(served: &crate::serve::Serve) -> Result<Vec<(String, String,
         out.push((album, name, artist));
     }
     Ok(out)
+}
+
+/// Tests: what a page's read looks at that the whole process shares (Y12): every source and background reading switched on, Bandcamp
+/// not held back, under the one test lock (`switches::TEST_STATE`); put back as they were when it ends.
+#[cfg(test)]
+pub(crate) struct TestState {
+    was: Vec<(&'static str, bool)>,
+    held: i64,
+    _one: tokio::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl TestState {
+    pub(crate) async fn set() -> TestState {
+        use super::switches::{BACKGROUND, BANDCAMP, DISCOGS, MUSICBRAINZ, TEST_STATE, set_for_tests};
+        let one = TEST_STATE.lock().await;
+        let was = [MUSICBRAINZ, DISCOGS, BANDCAMP, BACKGROUND].into_iter().map(|name| (name, set_for_tests(name, true))).collect();
+        TestState { was, held: crate::bandcamp::hold_for_tests(0), _one: one }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestState {
+    fn drop(&mut self) {
+        for &(name, on) in &self.was {
+            super::switches::set_for_tests(name, on);
+        }
+        crate::bandcamp::hold_for_tests(self.held);
+    }
+}
+
+/// Tests: waits for a page's read of `record` to end (ten seconds at most).
+#[cfg(test)]
+pub(crate) async fn page_read_settled(cat: &Arc<Catalogue>, record: i64) {
+    for _ in 0..1_000 {
+        if page_read_of(cat, record) != Some(true) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("a page's read of record {record} never ended");
 }
 
 #[cfg(test)]
@@ -1413,5 +1697,417 @@ mod tests {
         assert!(cat.references_of(&guessed_id).unwrap().iter().all(|(_, row)| row.confirmed));
         had(&cat, "Not Had", 0);
         assert_eq!(cat.unreferenced(true).unwrap(), [alone, guessed], "a guess and a group are no reference that speaks");
+    }
+
+    // ---- F1 (preview 1's fix batch): a record not had says why it has no tracks
+
+    use crate::app::playing::{RecordPage, page_at};
+    use crate::app::switches::{BACKGROUND, BANDCAMP, DISCOGS, MUSICBRAINZ, set_for_tests};
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+
+    /// A Bandcamp page of the tests' artist.
+    const PAGE: &str = "https://kitetheory.bandcamp.com/album/answered";
+
+    /// A record not had's page as the server answers it at `now`, its list asked for through `read`.
+    async fn opened<R, F>(cat: &Arc<Catalogue>, record: i64, now: i64, read: R) -> crate::app::AlbumView
+    where
+        R: Fn(Ref) -> F + Send + Sync + 'static,
+        F: std::future::Future<Output = Result<Option<Read>>> + Send + 'static,
+    {
+        match page_at(cat, record, now, read).await.unwrap() {
+            Some(RecordPage::NotHad(v)) => *v,
+            _ => panic!("al-{record} is no page of a record not had"),
+        }
+    }
+
+    /// What the page says a source said.
+    fn saying(source: &'static str, said: &'static str) -> Said {
+        Said { source, said, until: None }
+    }
+
+    /// What a reader was asked, in order.
+    fn asks() -> Arc<std::sync::Mutex<Vec<String>>> {
+        Arc::new(std::sync::Mutex::new(Vec::new()))
+    }
+
+    /// `reader`, minding the MusicBrainz switch as `read_reference` does: switched off, it says so and is asked nothing.
+    fn minding(lists: &'static [(&'static str, &'static [&'static str])], asked: Arc<std::sync::Mutex<Vec<String>>>) -> impl Fn(Ref) -> std::future::Ready<Result<Option<Read>>> + Send + Sync + 'static {
+        let read = reader(lists, asked, || Ok(None));
+        move |r: Ref| {
+            if r.source == "musicbrainz" && !crate::app::switches::is_on(MUSICBRAINZ) {
+                return std::future::ready(Err(SwitchedOff("MusicBrainz").into()));
+            }
+            read(r)
+        }
+    }
+
+    type Asking = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Read>>> + Send>>;
+
+    /// A reader held at a gate until the test opens it, then answering any reference with one track; it counts its questions.
+    fn gated(gate: &Arc<tokio::sync::Semaphore>, asked: &Arc<AtomicUsize>) -> impl Fn(Ref) -> Asking + Clone + Send + Sync + 'static {
+        let (gate, asked) = (gate.clone(), asked.clone());
+        move |_: Ref| -> Asking {
+            asked.fetch_add(1, SeqCst);
+            let gate = gate.clone();
+            Box::pin(async move {
+                let _open = gate.acquire().await;
+                Ok::<Option<Read>, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None)))
+            })
+        }
+    }
+
+    /// Waits for a gated reader's first question (its read begun), then a beat for any other.
+    async fn first_asked(asked: &AtomicUsize) {
+        for _ in 0..1_000 {
+            if asked.load(SeqCst) > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("nothing was asked");
+    }
+
+    /// The titles of a page's rows.
+    fn titles(v: &crate::app::AlbumView) -> Vec<String> {
+        v.rows.iter().map(|r| r.name.clone().unwrap_or_default()).collect()
+    }
+
+    /// `gated`, but MusicBrainz's release `r62` has none at once, so a read of it moves on; it keeps what it is asked (source:value).
+    fn following(gate: &Arc<tokio::sync::Semaphore>, asked: &Arc<std::sync::Mutex<Vec<String>>>) -> impl Fn(Ref) -> Asking + Clone + Send + Sync + 'static {
+        let (gate, asked) = (gate.clone(), asked.clone());
+        move |r: Ref| -> Asking {
+            asked.lock().unwrap().push(format!("{}:{}", r.source, r.value));
+            let gate = gate.clone();
+            Box::pin(async move {
+                if r.value == "r62" {
+                    return Ok::<Option<Read>, anyhow::Error>(None);
+                }
+                let _open = gate.acquire().await;
+                Ok::<Option<Read>, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None)))
+            })
+        }
+    }
+
+    /// Waits until `asked` holds `what`.
+    async fn until_asked(asked: &std::sync::Mutex<Vec<String>>, what: &str) {
+        for _ in 0..1_000 {
+            if asked.lock().unwrap().iter().any(|a| a == what) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("{what} was never asked");
+    }
+
+    /// F6 (F1.12's loader): while a record not had's list is read, its page is told the source the read asks now: before its first
+    /// question the first it will ask, then each it moves on to; with MusicBrainz switched off, Discogs from the start. None once the
+    /// read has ended.
+    #[tokio::test]
+    async fn a_read_says_which_source_it_reads() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let asked = asks();
+        let t = super::super::moment::now_secs();
+        // MusicBrainz asked, waiting at its gate.
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let waits = wanted(&cat, "Answered", &[("musicbrainz", "release", "r61"), ("discogs", "release", "2000061")]);
+        let v = opened(&cat, waits, t, following(&gate, &asked)).await;
+        assert_eq!((v.more.looking, v.more.reading), (true, Some("musicbrainz")), "the first it will ask");
+        until_asked(&asked, "musicbrainz:r61").await;
+        assert_eq!(opened(&cat, waits, t, following(&gate, &asked)).await.more.reading, Some("musicbrainz"), "while MusicBrainz is asked");
+        gate.add_permits(8);
+        page_read_settled(&cat, waits).await;
+        let v = opened(&cat, waits, t + 1, following(&gate, &asked)).await;
+        assert_eq!((v.rows.len(), v.more.looking, v.more.reading), (1, false, None), "ended: no source named");
+        assert!(serde_json::to_value(&v).unwrap().get("reading").is_none());
+        // MusicBrainz has none: the read moves on to Discogs, and says so.
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let moves = wanted(&cat, "Break Synonyms", &[("musicbrainz", "release", "r62"), ("discogs", "release", "2000062")]);
+        assert_eq!(opened(&cat, moves, t, following(&gate, &asked)).await.more.reading, Some("musicbrainz"));
+        until_asked(&asked, "discogs:2000062").await;
+        assert_eq!(opened(&cat, moves, t, following(&gate, &asked)).await.more.reading, Some("discogs"), "it follows the read");
+        gate.add_permits(8);
+        page_read_settled(&cat, moves).await;
+        // MusicBrainz switched off: Discogs from the start.
+        set_for_tests(MUSICBRAINZ, false);
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let off = wanted(&cat, "The Curved Line", &[("musicbrainz", "release", "r63"), ("discogs", "release", "2000063")]);
+        assert_eq!(opened(&cat, off, t, following(&gate, &asked)).await.more.reading, Some("discogs"), "MusicBrainz off: Discogs first");
+        until_asked(&asked, "discogs:2000063").await;
+        assert_eq!(opened(&cat, off, t, following(&gate, &asked)).await.more.reading, Some("discogs"), "while Discogs is asked");
+        gate.add_permits(8);
+        page_read_settled(&cat, off).await;
+        assert!(!asked.lock().unwrap().iter().any(|a| a == "musicbrainz:r63"), "MusicBrainz asked nothing while off");
+    }
+
+    /// F1.2: a source that does not answer is said once its read ends, and read again after a quarter hour, not before; meanwhile the
+    /// next source is neither read nor kept nor counted (C51a: the first that answers counts from then on), and never "none".
+    #[tokio::test]
+    async fn a_source_that_does_not_answer_is_said_and_read_again_after_a_quarter_hour() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Answered", &[("musicbrainz", "release", "r12"), ("bandcamp", "album", PAGE)]);
+        let asked = asks();
+        let read = || reader(&[("bandcamp", &["Lamplight", "Morning"])], asked.clone(), || Err(anyhow::anyhow!("MusicBrainz answered 503 Service Unavailable")));
+        let t = super::super::moment::now_secs();
+        let first = opened(&cat, record, t, read()).await;
+        assert!(first.more.looking && first.rows.is_empty() && first.more.no_list.is_none(), "at t: being read");
+        page_read_settled(&cat, record).await;
+        let later = opened(&cat, record, t + 60, read()).await;
+        assert!(!later.more.looking && later.rows.is_empty(), "a minute on: read, nothing to show");
+        assert_eq!(later.more.no_list, Some(vec![saying("musicbrainz", "unanswered")]));
+        assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release"], "MusicBrainz alone, once; Bandcamp not while MusicBrainz is away");
+        assert!(cat.reference_tracks(record).unwrap().is_empty(), "nothing kept");
+        assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "nothing counted");
+        let again = opened(&cat, record, t + 960, read()).await;
+        assert!(again.more.looking && again.more.no_list.is_none(), "a quarter hour on: read again");
+        page_read_settled(&cat, record).await;
+        assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release", "musicbrainz:release"]);
+    }
+
+    /// F1.3: none of a record's references gives a list: each named as having none, nothing counted, no list kept; never "off" or
+    /// "unanswered", nor the three lost to one word.
+    #[tokio::test]
+    async fn a_record_no_reference_lists_says_which_have_none() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Answered", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000513"), ("discogs", "master", "4002"), ("bandcamp", "album", PAGE)]);
+        let asked = asks();
+        let t = super::super::moment::now_secs();
+        assert!(opened(&cat, record, t, reader(&[], asked.clone(), || Ok(None))).await.more.looking);
+        page_read_settled(&cat, record).await;
+        let v = opened(&cat, record, t + 1, reader(&[], asked.clone(), || Ok(None))).await;
+        assert!(!v.more.looking && v.rows.is_empty());
+        assert_eq!(v.more.no_list, Some(vec![saying("musicbrainz", "none"), saying("discogs", "none"), saying("bandcamp", "none")]));
+        assert_eq!(cat.record(record).unwrap().unwrap().counting, None, "nothing counted");
+        assert!(cat.reference_tracks(record).unwrap().is_empty(), "no list kept");
+        assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release-group", "discogs:master", "bandcamp:album"], "each read once");
+    }
+
+    /// F1.5: Bandcamp held back after its bot check says until when: (a) a record with only its page, at once, nothing read; (b) one
+    /// whose MusicBrainz release has none, once its read ends, Bandcamp asked nothing while held. After the hold, or Bandcamp switched
+    /// off and on (its hold lifted), (a) is read at once. Never "unanswered" of a hold Cratarr keeps itself.
+    #[tokio::test]
+    async fn bandcamp_held_back_says_until_when() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let t = super::super::moment::now_secs();
+        let until = t + 3_600;
+        crate::bandcamp::hold_for_tests(until);
+        let alone = wanted(&cat, "Answered", &[("bandcamp", "album", PAGE)]);
+        let both = wanted(&cat, "Kyverdale Road", &[("musicbrainz", "release", "r15"), ("bandcamp", "album", "https://kitetheory.bandcamp.com/album/kyverdale-road")]);
+        let lifted = wanted(&cat, "The Curved Line", &[("bandcamp", "album", "https://kitetheory.bandcamp.com/album/the-curved-line")]);
+        let asked = asks();
+        let read = || {
+            let asked = asked.clone();
+            move |r: Ref| {
+                asked.lock().unwrap().push(format!("{}:{}", r.source, r.kind));
+                std::future::ready(if r.source == "bandcamp" { Err(anyhow::Error::from(crate::bandcamp::NotRead)) } else { Ok::<Option<Read>, anyhow::Error>(None) })
+            }
+        };
+        let held = Said { source: "bandcamp", said: "held", until: Some(until) };
+        let a = opened(&cat, alone, t, read()).await;
+        assert!(!a.more.looking, "(a) at once, nothing read");
+        assert_eq!(a.more.no_list, Some(vec![held.clone()]));
+        assert!(asked.lock().unwrap().is_empty());
+        assert!(opened(&cat, both, t, read()).await.more.looking, "(b) MusicBrainz is to be read");
+        page_read_settled(&cat, both).await;
+        let b = opened(&cat, both, t + 1, read()).await;
+        assert!(!b.more.looking);
+        assert_eq!(b.more.no_list, Some(vec![saying("musicbrainz", "none"), held.clone()]));
+        assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release"], "Bandcamp asked nothing while held");
+        assert!(opened(&cat, alone, until + 1, read()).await.more.looking, "(a) after its hold: read at once");
+        page_read_settled(&cat, alone).await;
+        assert_eq!(opened(&cat, lifted, t, read()).await.more.no_list, Some(vec![held.clone()]));
+        set_for_tests(BANDCAMP, false);
+        crate::bandcamp::switched(None, false);
+        set_for_tests(BANDCAMP, true);
+        crate::bandcamp::switched(None, true);
+        assert!(opened(&cat, lifted, t, read()).await.more.looking, "switched off and on: its hold lifted, read at once");
+        page_read_settled(&cat, lifted).await;
+    }
+
+    /// F1.6 (kind 3): a source said to be switched off that is on since is read at once: a record said off at once, and one whose read
+    /// came to "MusicBrainz off, Discogs unanswered" a minute before; MusicBrainz is asked, and its list shown at the next answer.
+    /// Never "switched off" said while it is on, nor a quarter hour waited.
+    #[tokio::test]
+    async fn a_source_switched_on_since_is_read_at_once() {
+        let _state = TestState::set().await;
+        set_for_tests(MUSICBRAINZ, false);
+        set_for_tests(DISCOGS, false);
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let off = wanted(&cat, "Answered", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000516"), ("discogs", "master", "4001")]);
+        let away = wanted(&cat, "Break Synonyms", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000517"), ("discogs", "master", "4006")]);
+        let asked = asks();
+        let read = || reader(&[("musicbrainz", &["Lamplight"])], asked.clone(), || Err(anyhow::anyhow!("Discogs answered 503 Service Unavailable")));
+        let t = super::super::moment::now_secs();
+        assert_eq!(opened(&cat, off, t, read()).await.more.no_list, Some(vec![saying("musicbrainz", "off"), saying("discogs", "off")]));
+        set_for_tests(DISCOGS, true);
+        assert!(opened(&cat, away, t, read()).await.more.looking);
+        page_read_settled(&cat, away).await;
+        assert_eq!(opened(&cat, away, t + 1, read()).await.more.no_list, Some(vec![saying("musicbrainz", "off"), saying("discogs", "unanswered")]));
+        assert_eq!(*asked.lock().unwrap(), ["discogs:master"], "nothing asked of MusicBrainz while it was off");
+        set_for_tests(MUSICBRAINZ, true);
+        for record in [off, away] {
+            let v = opened(&cat, record, t + 60, read()).await;
+            assert!(v.more.looking && v.more.no_list.is_none(), "{record}: read at once, nothing said off");
+            page_read_settled(&cat, record).await;
+            let v = opened(&cat, record, t + 61, read()).await;
+            assert_eq!((titles(&v), v.more.looking, v.more.no_list.clone()), (vec!["Lamplight".to_string()], false, None), "{record}: MusicBrainz's list shown");
+        }
+        assert_eq!(asked.lock().unwrap().iter().filter(|a| *a == "musicbrainz:release-group").count(), 2, "MusicBrainz asked for each");
+    }
+
+    /// F1.8 (kind 4): two opens at once read once; both say it is being read, and once it ends one list is kept and each next answer
+    /// has its rows. Never two reads of one record at once, nor a read ended left `looking`.
+    #[tokio::test]
+    async fn two_opens_read_once() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Fourth: The Golden Eagle", &[("musicbrainz", "release", "r18")]);
+        let (gate, asked) = (Arc::new(tokio::sync::Semaphore::new(0)), Arc::new(AtomicUsize::new(0)));
+        let read = gated(&gate, &asked);
+        let t = super::super::moment::now_secs();
+        let (a, b) = tokio::join!(opened(&cat, record, t, read.clone()), opened(&cat, record, t, read.clone()));
+        assert!(a.more.looking && b.more.looking, "both see it read");
+        first_asked(&asked).await;
+        assert_eq!(asked.load(SeqCst), 1, "one read");
+        gate.add_permits(8);
+        page_read_settled(&cat, record).await;
+        assert_eq!(cat.reference_tracks(record).unwrap().len(), 1, "one list kept");
+        let (a, b) = tokio::join!(opened(&cat, record, t + 1, read.clone()), opened(&cat, record, t + 1, read.clone()));
+        for v in [a, b] {
+            assert_eq!((v.rows.len(), v.more.looking, v.more.no_list.clone()), (1, false, None), "each has the rows");
+        }
+        assert_eq!(asked.load(SeqCst), 1, "nothing read again");
+    }
+
+    /// F1.9 (kind 4): a read that never ends is cut at `PAGE_READ_AT_MOST` (a second in tests) and said unanswered: never `looking` for
+    /// good, never left "being read".
+    #[tokio::test]
+    async fn a_page_read_that_never_ends_is_cut_and_said_unanswered() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Answered", &[("musicbrainz", "release", "r19")]);
+        let silent = |_: Ref| std::future::pending::<Result<Option<Read>>>();
+        let t = super::super::moment::now_secs();
+        assert!(opened(&cat, record, t, silent).await.more.looking);
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+        page_read_settled(&cat, record).await;
+        let v = opened(&cat, record, t + 2, silent).await;
+        assert!(!v.more.looking, "cut: no longer looking");
+        assert_eq!(v.more.no_list, Some(vec![saying("musicbrainz", "unanswered")]));
+        assert_eq!(page_read_of(&cat, record), Some(false), "ended, not left being read");
+    }
+
+    /// F1.10 (kind 4): a record merged into another while its page's read waits on Bandcamp: the list lands on the record it is now,
+    /// whose page (opened by the old id) shows its rows. Never a list kept on a merged-away record.
+    #[tokio::test]
+    async fn a_list_read_during_a_merge_lands_on_the_record_it_is_now() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let a = wanted(&cat, "Kyverdale Road", &[("bandcamp", "album", "https://kitetheory.bandcamp.com/album/kyverdale-road")]);
+        let b = wanted(&cat, "Kyverdale Road", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000510")]);
+        let (gate, asked) = (Arc::new(tokio::sync::Semaphore::new(0)), Arc::new(AtomicUsize::new(0)));
+        let read = gated(&gate, &asked);
+        let t = super::super::moment::now_secs();
+        assert!(opened(&cat, a, t, read.clone()).await.more.looking);
+        first_asked(&asked).await;
+        cat.merge_records(a, b).unwrap();
+        gate.add_permits(8);
+        page_read_settled(&cat, a).await;
+        let kept = cat.reference_tracks(b).unwrap();
+        assert!(kept.iter().any(|(s, l)| s == "bandcamp" && l.len() == 1), "on the record it is now: {kept:?}");
+        let on_a: i64 = cat.db_for_tests().query_row("SELECT COUNT(*) FROM reference_tracks WHERE record = ?1", [a], |r| r.get(0)).unwrap();
+        assert_eq!(on_a, 0, "none on the record merged away");
+        let v = opened(&cat, a, t + 1, read.clone()).await;
+        assert_eq!((v.id.clone(), titles(&v)), (ids::record(b), vec!["Lamplight".to_string()]), "its old id opens the page it is now, with its rows");
+    }
+
+    /// F1.11, the pause (a pin): a page's read is the page's, not background reading's: it goes while background reading is paused,
+    /// its list kept and shown; nothing says "paused".
+    #[tokio::test]
+    async fn a_page_read_goes_while_background_reading_is_paused() {
+        let _state = TestState::set().await;
+        set_for_tests(BACKGROUND, false);
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Answered", &[("musicbrainz", "release", "r111")]);
+        let asked = asks();
+        let read = || reader(&[("musicbrainz", &["Lamplight", "Morning"])], asked.clone(), || Ok(None));
+        let t = super::super::moment::now_secs();
+        let v = opened(&cat, record, t, read()).await;
+        assert!(v.more.looking && v.more.no_list.is_none(), "read, no word of a pause");
+        page_read_settled(&cat, record).await;
+        let v = opened(&cat, record, t + 1, read()).await;
+        assert_eq!((v.rows.len(), v.more.looking, v.more.no_list.clone()), (2, false, None));
+        assert_eq!(cat.reference_tracks(record).unwrap().len(), 1, "its list kept");
+        assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release"]);
+    }
+
+    /// F1.11, Y12 (a pin): MusicBrainz switched off, Bandcamp's list answers: its rows show and Bandcamp counts; MusicBrainz switched
+    /// on later reads nothing new for it, its count kept. As before.
+    #[tokio::test]
+    async fn with_musicbrainz_off_a_pages_read_counts_bandcamp_and_keeps_it() {
+        let _state = TestState::set().await;
+        set_for_tests(MUSICBRAINZ, false);
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Answered", &[("musicbrainz", "release", "r112"), ("bandcamp", "album", PAGE)]);
+        let asked = asks();
+        let read = || minding(&[("musicbrainz", &["Other"]), ("bandcamp", &["Lamplight", "Morning"])], asked.clone());
+        let t = super::super::moment::now_secs();
+        assert!(opened(&cat, record, t, read()).await.more.looking);
+        page_read_settled(&cat, record).await;
+        let shown = vec!["Lamplight".to_string(), "Morning".to_string()];
+        let v = opened(&cat, record, t + 1, read()).await;
+        assert_eq!((titles(&v), v.more.looking), (shown.clone(), false), "Bandcamp's rows");
+        assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("bandcamp"), "Bandcamp counts");
+        set_for_tests(MUSICBRAINZ, true);
+        let v = opened(&cat, record, t + 2, read()).await;
+        assert_eq!((titles(&v), v.more.looking), (shown, false), "nothing new read");
+        assert_eq!(*asked.lock().unwrap(), ["bandcamp:album"]);
+        assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("bandcamp"), "its count stays");
+    }
+
+    /// F1.11, RT01: a kept list let go of after thirty days unopened is read again at the next open, and shown.
+    #[tokio::test]
+    async fn a_list_let_go_of_after_thirty_days_is_read_again_when_opened() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Answered", &[("musicbrainz", "release", "r113")]);
+        let asked = asks();
+        let read = || reader(&[("musicbrainz", &["Lamplight"])], asked.clone(), || Ok(None));
+        let t = super::super::moment::now_secs();
+        assert!(opened(&cat, record, t, read()).await.more.looking);
+        page_read_settled(&cat, record).await;
+        assert_eq!(opened(&cat, record, t + 1, read()).await.rows.len(), 1);
+        cat.db_for_tests().execute("UPDATE reference_tracks SET at = ?1", [t - 45 * 86_400]).unwrap();
+        cat.db_for_tests().execute("UPDATE records SET opened_at = ?1", [t - 45 * 86_400]).unwrap();
+        assert_eq!(cat.forget_quiet_lists(t, &Default::default()).unwrap(), 1, "let go of");
+        let v = opened(&cat, record, t + 2, read()).await;
+        assert!(v.more.looking && v.rows.is_empty() && v.more.no_list.is_none(), "read again");
+        page_read_settled(&cat, record).await;
+        assert_eq!(opened(&cat, record, t + 3, read()).await.rows.len(), 1);
+        assert_eq!(asked.lock().unwrap().len(), 2);
+    }
+
+    /// F1.11, Soulseek's Stuck: for a record whose sources all have none, `tracklist`'s why names the same sources as the page's
+    /// `no_list`: one set of outcomes, two wordings. Never two different source lists for one record.
+    #[tokio::test]
+    async fn the_page_and_soulseek_name_the_same_sources() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let record = wanted(&cat, "Answered", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000511"), ("discogs", "master", "4011"), ("bandcamp", "album", PAGE)]);
+        let asked = asks();
+        let none = || reader(&[], asked.clone(), || Ok(None));
+        let t = super::super::moment::now_secs();
+        opened(&cat, record, t, none()).await;
+        page_read_settled(&cat, record).await;
+        let listed = opened(&cat, record, t + 1, none()).await.more.no_list.expect("the page says why");
+        let why = tracklist(&cat, record, none()).await.unwrap().expect_err("no list to judge by");
+        let named: Vec<&str> = identity::COUNTING_ORDER.iter().copied().filter(|s| why.contains(source_name(s))).collect();
+        assert_eq!(listed.iter().map(|s| s.source).collect::<Vec<_>>(), named, "{why}");
+        assert_eq!(named.len(), 3, "{why}");
+        assert!(listed.iter().all(|s| s.said == "none"), "{listed:?}");
     }
 }

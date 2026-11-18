@@ -5745,3 +5745,38 @@ async fn below_the_floor_soulseek_starts_no_users_transfer_end_to_end() {
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// F1.1 (preview 1's fix batch, the owner's "No tracks yet" on staging): a record not had whose one source is switched off says so on
+/// its page at once, nothing read: alice's Want by a release group, MusicBrainz switched off, opens with `no_list` naming MusicBrainz
+/// off and no `looking`; asked again, the same.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_record_not_had_says_its_sources_are_off_end_to_end() {
+    let root = temp("f1-sources-off");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("alice", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let alice = s.sign_in("alice", "alice pw").await;
+    let group = "00000000-0000-4000-8000-000000000521";
+    let asked = alice.ok(reqwest::Method::POST, "/api/requests/want", json!({ "release_group": group, "artist": "Kite Theory", "album": "Answered" })).await;
+    let record = asked["request"]["record"].as_i64().unwrap_or_else(|| panic!("a record: {asked}"));
+    let path = format!("/api/albums/cratarr/al-{record}");
+    let page = alice.get(&path).await;
+    assert_eq!(page["not_had"], true, "{page}");
+    assert!(page["rows"].as_array().is_some_and(Vec::is_empty), "{page}");
+    assert_eq!(page["no_list"], json!([{ "source": "musicbrainz", "said": "off" }]), "{page}");
+    assert!(page.get("looking").is_none(), "nothing being read: {page}");
+    let again = alice.get(&path).await;
+    assert_eq!((&again["no_list"], again.get("looking")), (&page["no_list"], None), "asked again, the same: {again}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}

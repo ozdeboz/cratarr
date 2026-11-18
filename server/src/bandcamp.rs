@@ -111,6 +111,12 @@ pub fn switched(ud: Option<&crate::userdata::UserData>, on: bool) {
     }
 }
 
+/// Tests: Bandcamp held back after its bot check until `until` (0: not), as its own tests hold it; what it was.
+#[cfg(test)]
+pub fn hold_for_tests(until: i64) -> i64 {
+    HELD_UNTIL.swap(until, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Why nothing is asked of Bandcamp now (O4): switched off, or left alone after its bot check (`NotRead`).
 fn refused() -> Result<()> {
     if !crate::app::switches::is_on(crate::app::switches::BANDCAMP) {
