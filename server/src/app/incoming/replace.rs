@@ -443,24 +443,38 @@ impl IncomingService {
 
     /// The copy Replace takes the place of: the record's own, in a main library (C37a: two copies of one record, never a match by
     /// name), as its catalogue folder and its folder there. Named (`into`, the library the page chose or the job was planned for),
-    /// the record's copy there; else its copy in the first main library in the libraries' order.
+    /// the record's copy there; else its copy in the first main library in the libraries' order. A record kept in no main library:
+    /// another record's copy there that its tracks pair with one for one (RF2, `Serve::paired_editions`, as 0.16's Replace found an
+    /// upgrade's album), whose tracks, plays, hearts and playlist places the new files take over.
     async fn replaced_copy(&self, at: &Located, into: Option<i64>) -> Result<(i64, String), ToggleError> {
         if let Some(folder) = into
             && let Some(dir) = super::copy_dir_in(&at.album.id, folder).await
         {
             return Ok((folder, dir));
         }
-        let (mains, id) = (self.lib.main_folders(), at.album.id.clone());
-        let copies = match crate::serve::instance() {
-            Some(served) => tokio::task::spawn_blocking(move || served.library.copies_of(&id)).await.ok().and_then(Result::ok).unwrap_or_default(),
-            None => Vec::new(),
+        let (mains, id, place) = (self.lib.main_folders(), at.album.id.clone(), (at.dir.folder, at.dir.dir.clone()));
+        let found = match crate::serve::instance() {
+            Some(served) => tokio::task::spawn_blocking(move || -> Result<Option<(i64, String)>> {
+                let copies = served.library.copies_of(&id)?;
+                let own = copies
+                    .iter()
+                    .filter(|c| mains.contains(&c.folder) && into.is_none_or(|i| i == c.folder))
+                    .min_by(|a, b| (a.order, a.folder, &a.dir).cmp(&(b.order, b.folder, &b.dir)))
+                    .map(|c| (c.folder, c.dir.clone()));
+                if own.is_some() || copies.iter().any(|c| mains.contains(&c.folder)) {
+                    return Ok(own);
+                }
+                let Some(waiting) = copies.into_iter().find(|c| (c.folder, c.dir.clone()) == place) else { return Ok(None) };
+                let paired = served.paired_editions(&[(id.clone(), waiting)], &mains)?.remove(&id);
+                Ok(paired.map(|(_, kept)| (kept.folder, kept.dir)).filter(|(folder, _)| into.is_none_or(|i| i == *folder)))
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten(),
+            None => None,
         };
-        copies
-            .into_iter()
-            .filter(|c| mains.contains(&c.folder) && into.is_none_or(|i| i == c.folder))
-            .min_by(|a, b| (a.order, a.folder, &a.dir).cmp(&(b.order, b.folder, &b.dir)))
-            .map(|c| (c.folder, c.dir))
-            .ok_or_else(|| ToggleError::Refused(format!("{} is not in a main library", at.album.title)))
+        found.ok_or_else(|| ToggleError::Refused(format!("{} is not in a main library", at.album.title)))
     }
 
     /// Work out Replace for an album: the album it replaces and what moves, or why not. Changes nothing.

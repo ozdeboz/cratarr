@@ -334,14 +334,16 @@ async fn soulseek_user(files: &[String]) -> Option<String> {
     best.map(|(_, u)| u)
 }
 
-/// How a record's copy waiting stands in the library (C37a, OQ1): against the copy that plays the record for most, whether it is
-/// better, that copy's catalogue folder and why; else the folder of a main library holding another edition of it by its names.
-/// Blocking.
+/// How a record's copy waiting stands in the library (C37a, OQ1; RF2): against the copy that plays the record for most, else another
+/// record's copy in a main library its tracks pair with one for one (`Serve::stands_of`), whether it is better, that copy's catalogue
+/// folder and why; else the folder of a main library holding another edition of it by its names. Blocking.
 fn stands_of(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>, mains: &[i64]) -> Result<(Option<(bool, i64, String)>, Option<i64>)> {
-    use crate::serve::copies::{against, why};
+    use crate::serve::copies::why;
     let copies = served.library.copies_of(album)?;
-    let waiting = at.and_then(|(f, d)| copies.iter().find(|c| c.folder == *f && &c.dir == d));
-    let kept = waiting.and_then(|c| against(&copies, c).map(|(better, kept)| (better, kept.folder, why(c, kept))));
+    let kept = match at.and_then(|(f, d)| copies.iter().find(|c| c.folder == *f && &c.dir == d)) {
+        Some(c) => served.stands_of(&[(album.to_string(), c.clone())], mains)?.pop().flatten().map(|(better, kept)| (better, kept.folder, why(c, &kept))),
+        None => None,
+    };
     if kept.is_some() {
         return Ok((kept, None));
     }
@@ -466,18 +468,28 @@ pub async fn waiting(app: &super::App) -> Vec<Waiting> {
             out.push(Waiting { source: s.id.clone(), album: a.id.clone(), title: a.title.clone(), artist: a.artist.clone().unwrap_or_default(), library: a.library.clone(), verdict: None });
         }
     }
-    // Each one's stand against a copy kept elsewhere (C37a): an upgrade where Replace would take it, else in two libraries.
+    // Each one's stand against a copy kept elsewhere (C37a; RF2: another record's, paired track for track): an upgrade where Replace
+    // would take it, else in two libraries.
     if let Some(served) = app.served.clone() {
-        use crate::serve::copies::{against, replaces};
+        use crate::serve::copies::replaces;
+        let mains = app.library.main_folders();
         let stands = tokio::task::spawn_blocking(move || {
-            places
+            let found: Vec<Option<(String, crate::serve::copies::Copy)>> = places
                 .iter()
                 .map(|(id, at)| {
-                    let copies = served.library.copies_of(id).ok()?;
-                    let c = copies.iter().find(|c| at.as_ref().is_some_and(|(f, d)| c.folder == *f && &c.dir == d))?;
-                    let (better, kept) = against(&copies, c)?;
-                    Some(if replaces(better, kept.kind) { "upgrade" } else { "duplicate" })
+                    let c = served.library.copies_of(id).ok()?.into_iter().find(|c| at.as_ref().is_some_and(|(f, d)| c.folder == *f && &c.dir == d))?;
+                    Some((id.clone(), c))
                 })
+                .collect();
+            let asked: Vec<(String, crate::serve::copies::Copy)> = found.iter().flatten().cloned().collect();
+            let mut stood = served.stands_of(&asked, &mains).unwrap_or_else(|e| {
+                tracing::warn!(target: "library", reason = %format!("{e:#}"), "how records waiting stand not read");
+                vec![None; asked.len()]
+            });
+            stood.reverse();
+            found
+                .iter()
+                .map(|f| f.as_ref().and_then(|_| stood.pop().flatten()).map(|(better, kept)| if replaces(better, kept.kind) { "upgrade" } else { "duplicate" }))
                 .collect::<Vec<_>>()
         })
         .await

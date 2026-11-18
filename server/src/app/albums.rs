@@ -294,6 +294,7 @@ impl App {
         for s in sources.iter_mut().filter(|s| s.id == crate::source::cratarr::KIND.id) {
             let orders = self.play_orders(&s.albums, viewer.as_deref()).await;
             s.albums = fold(std::mem::take(&mut s.albums), &orders);
+            self.paired_stands(s).await;
         }
         // Classical (0.10): Cratarr's own albums say whether they are, their composers and performers. Another server's
         // are typed by the owner's rule (0.13: a type is always known).
@@ -617,6 +618,48 @@ impl App {
             Err(e) => {
                 tracing::warn!(target: "library", reason = %e, "which copy plays not read: copies as listed");
                 HashMap::new()
+            }
+        }
+    }
+
+    /// RF2: each Incoming copy of a record kept nowhere else that another record's copy in a main library pairs with track for track
+    /// stands against that copy (`Serve::stands_of`), as a copy of one record does (`fold`): the badge, Health's better copies and
+    /// records in two libraries, and Replace read it, that copy named by its library as listed.
+    async fn paired_stands(&self, s: &mut AlbumsSourceView) {
+        let Some(served) = self.served.clone() else { return };
+        let incoming: Vec<String> = s.library_info.iter().filter(|l| l.kind == LibraryKind::Incoming.as_str()).map(|l| l.id.clone()).collect();
+        let waiting: Vec<(String, (i64, String))> = s
+            .albums
+            .iter()
+            .filter(|a| !a.copies.is_empty() && a.copies.iter().all(|c| c.against.is_none() && incoming.contains(&c.library)))
+            .flat_map(|a| a.copies.iter().map(|c| (a.id.clone(), (c.folder, c.dir.clone()))))
+            .collect();
+        if waiting.is_empty() {
+            return;
+        }
+        let mains = self.library.main_folders();
+        type Stood = Vec<(String, (i64, String), Option<(bool, Copy, Copy)>)>;
+        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Stood> {
+            let mut asked: Vec<(String, Copy)> = Vec::new();
+            for (id, (folder, dir)) in &waiting {
+                if let Some(c) = served.library.copies_of(id)?.into_iter().find(|c| c.folder == *folder && &c.dir == dir) {
+                    asked.push((id.clone(), c));
+                }
+            }
+            let stands = served.stands_of(&asked, &mains)?;
+            Ok(asked.into_iter().zip(stands).map(|((id, c), stand)| (id, (c.folder, c.dir.clone()), stand.map(|(better, kept)| (better, c, kept)))).collect())
+        });
+        let stood = match read.await {
+            Ok(Ok(stood)) => stood,
+            Ok(Err(e)) => return tracing::warn!(target: "library", reason = %format!("{e:#}"), "how copies waiting stand not read"),
+            Err(e) => return tracing::warn!(target: "library", reason = %e, "how copies waiting stand not read"),
+        };
+        let libraries: HashMap<(i64, String), String> = s.albums.iter().flat_map(|a| a.copies.iter().map(|c| ((c.folder, c.dir.clone()), c.library.clone()))).collect();
+        for (id, at, stand) in stood {
+            let Some((better, c, kept)) = stand else { continue };
+            let Some(library) = libraries.get(&(kept.folder, kept.dir.clone())).cloned() else { continue };
+            if let Some(copy) = s.albums.iter_mut().filter(|a| a.id == id).flat_map(|a| a.copies.iter_mut()).find(|x| (x.folder, x.dir.clone()) == at) {
+                copy.against = Some(source::Against { better, replaces: replaces(better, kept.kind), library, dir: kept.dir.clone(), why: why(&c, &kept) });
             }
         }
     }

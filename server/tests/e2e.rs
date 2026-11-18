@@ -3072,6 +3072,87 @@ async fn replace_takes_the_old_tracks_ids_and_its_undo_gives_both_back_end_to_en
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// RF2 (RB2, the census's five): the layout's Long Cut from Second waits in Incoming. Its two tracks are Music's by name and number,
+/// but its last is three seconds longer, which makes it a record of its own, as an untagged copy in Music made production's five two.
+/// It stands against Music's copy all the same, as a copy of one record does: the Library says so on it, Health lists it among the
+/// copies waiting, and the card names Music's copy. Replace takes Music's copy's place: Music holds the copy's files on Music's tracks,
+/// their play, heart and playlist lines with them, and Music's old files in its trash. Bonus Round's copy waiting holds a track
+/// Music's has not (OQ1): another edition, said so with no action, and Replace refused, nothing moved.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_split_from_musics_record_stands_against_it_and_replaces_it_end_to_end() {
+    let root = temp("rf2-split");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
+    for dir in [CUT, BONUS] {
+        std::fs::create_dir_all(incoming.join(dir).parent().unwrap()).unwrap();
+        std::fs::rename(second.join(dir), incoming.join(dir)).unwrap();
+    }
+    let arriving = as_it_lies(&incoming.join(CUT));
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    s.act_as(ANN.0, ANN.1).await;
+    let kept = s.read_in("Long Cut", &music).await;
+    let waiting = s.read_in("Long Cut", &incoming).await;
+    let other = s.read_in("Bonus Round", &incoming).await;
+    assert_ne!(kept["id"], waiting["id"], "two records of one name");
+    let from = incoming.to_string_lossy().replace('/', "%2F");
+    let copy_in = |a: &Value, library: &Path| a["copies"].as_array().unwrap().iter().find(|c| c["library"].as_str() == Some(&*library.to_string_lossy())).cloned().unwrap();
+
+    // What Music's tracks hold: a play, a heart, a playlist's lines.
+    let songs = tracks_at(&data, &music, CUT);
+    assert_eq!(songs.len(), 2);
+    ann.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{}/favorite?on=true", songs[0]), json!({})).await;
+    ask(&ann, "scrobble", &format!("id={}&time=1700000000000", songs[0])).await;
+    let list = ask(&ann, "createPlaylist", &format!("name=Cut&songId={}&songId={}", songs[0], songs[1])).await["playlist"]["id"].as_str().unwrap().to_string();
+
+    // The copy waiting stands against Music's: on the Library's list, among Health's copies waiting, on the card.
+    let stand = copy_in(&waiting, &incoming)["against"].clone();
+    assert_eq!((stand["library"].as_str(), stand["dir"].as_str()), (Some(&*id_of(&music)), Some(CUT)), "against Music's copy: {stand}");
+    assert!(stand["why"].as_str().is_some_and(|w| w.starts_with("lossless")), "{stand}");
+    let listed = |f: &Value| f["items"].as_array().unwrap().iter().any(|i| i["title"] == "Long Cut");
+    let report = ann.get("/api/health/report").await;
+    let found = report["findings"].as_array().unwrap().iter().filter(|f| f["key"] == "incoming:upgrades" || f["key"] == "incoming:duplicates").filter(|f| listed(f)).count();
+    assert_eq!(found, 1, "one of Health's copies waiting: {report}");
+    let line = |card: &Value| card["checks"].as_array().unwrap().iter().find(|c| c["key"] == "in_library").unwrap()["said"].as_str().unwrap().to_string();
+    let said = line(&ann.get(&format!("/api/albums/cratarr/{}/card?from={from}", waiting["id"].as_str().unwrap())).await);
+    assert!(said.starts_with("Better than the copy in ") || said.starts_with("Already in "), "{said}");
+
+    // Another tracklist: another edition, no stand, no Replace.
+    assert!(copy_in(&other, &incoming)["against"].is_null(), "{other}");
+    let said = line(&ann.get(&format!("/api/albums/cratarr/{}/card?from={from}", other["id"].as_str().unwrap())).await);
+    assert!(said.ends_with("has another edition"), "{said}");
+    let (old, new) = (as_it_lies(&music.join(BONUS)), as_it_lies(&incoming.join(BONUS)));
+    assert_eq!(ann.send(reqwest::Method::POST, &format!("/api/incoming/replace/cratarr/{}", other["id"].as_str().unwrap()), json!({})).await.0, 409);
+    assert!(as_it_lies(&music.join(BONUS)) == old && as_it_lies(&incoming.join(BONUS)) == new, "a refusal moves nothing");
+
+    // Replace takes Music's copy's place, as 0.16's did: the copy's files on Music's tracks, what they held with them.
+    let replacing = format!("/api/incoming/replace/cratarr/{}", waiting["id"].as_str().unwrap());
+    let preview = ann.get(&replacing).await;
+    assert_eq!((preview["tracks"].as_u64(), preview["added"].as_u64(), &preview["refused"]), (Some(2), Some(0), &Value::Null), "{preview}");
+    let done = ann.ok(reqwest::Method::POST, &replacing, json!({})).await;
+    assert_eq!(done["queued"], false, "{done}");
+    let folder = done["folder"].as_str().unwrap().to_string();
+    assert!(contents(&as_it_lies(&music.join(&folder))) == contents(&arriving), "the copy's files in Music");
+    assert!(!incoming.join(CUT).exists(), "none left in Incoming");
+    assert_eq!(in_the_trash(&music), 2, "Music's old files in its trash");
+    let last = contents(&arriving)[1].clone();
+    s.until("Music to serve the copy's files on its tracks", Duration::from_secs(120), || async { ann.bytes(&format!("/api/file/cratarr/{}", songs[1])).await.1 == last }).await;
+    assert_eq!(tracks_at(&data, &music, &folder), songs, "Music's tracks, taken over");
+    let song = ask(&ann, "getSong", &format!("id={}", songs[0])).await["song"].clone();
+    assert_eq!(song["playCount"], 1, "its play: {song}");
+    assert!(song["starred"].is_string(), "its heart: {song}");
+    let lines: Vec<String> = ask(&ann, "getPlaylist", &format!("id={list}")).await["playlist"]["entry"].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(lines, songs, "its playlist's lines");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A length's fix, on a FLAC that a whole decode heard end early: the file written whole, its header saying what was heard. Its Undo
 /// gives back the file itself, byte for byte, which is what its copy beside the journal is for.
 #[tokio::test(flavor = "multi_thread")]

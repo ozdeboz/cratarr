@@ -1648,6 +1648,64 @@ impl Catalogue {
             .unwrap();
     }
 
+    /// The other live records of each of these records' names (folded as the had rule folds them, `names_of`) with a present file in
+    /// one of `folders`, by record, the oldest first: what an Incoming copy of a record kept nowhere else may be a copy of all the
+    /// same, split from it only by missing tags (RF2). By the names each row keeps (Y12), a row not folded yet folded here and never
+    /// written; on a reader, never the writer's lock: the Library and Health ask it of every copy waiting. Blocking.
+    pub fn editions_of(&self, records: &[i64], folders: &[i64]) -> Result<std::collections::HashMap<i64, Vec<i64>>> {
+        use super::identity::fold;
+        if records.is_empty() || folders.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let read = |db: &Connection| -> Result<std::collections::HashMap<i64, Vec<i64>>> {
+            let asked: Vec<(i64, String)> = db
+                .prepare(&format!("SELECT id, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE id IN ({})", id_list(records)))?
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .filter(|(_, artist, title)| !fold(artist).is_empty() && !fold(title).is_empty())
+                .map(|(id, artist, title)| (id, names_of(&artist, &title)))
+                .collect();
+            let keys: std::collections::BTreeSet<String> = asked.iter().map(|(_, names)| names.clone()).collect();
+            let mut named: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+            if !keys.is_empty() {
+                let sql = format!(
+                    "SELECT id, names, COALESCE(artist, ''), COALESCE(title, '') FROM records WHERE (names IN ({}) OR names IS NULL) AND merged_into IS NULL AND retired_at IS NULL ORDER BY id",
+                    quoted_list(keys.iter().cloned())
+                );
+                for row in db.prepare(&sql)?.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
+                    let (id, names, artist, title) = row?;
+                    let names = names.unwrap_or_else(|| names_of(&artist, &title));
+                    if keys.contains(&names) {
+                        named.entry(names).or_default().push(id);
+                    }
+                }
+            }
+            let mut there = db.prepare(&format!(
+                "SELECT EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track = t.id WHERE t.record = ?1 AND t.retired_at IS NULL AND {} AND f.folder IN ({}))",
+                super::PRESENT_F,
+                id_list(folders)
+            ))?;
+            let mut out = std::collections::HashMap::new();
+            for (id, names) in asked {
+                let mut others = Vec::new();
+                for &other in named.get(&names).into_iter().flatten() {
+                    if other != id && there.query_row([other], |r| r.get::<_, bool>(0))? {
+                        others.push(other);
+                    }
+                }
+                if !others.is_empty() {
+                    out.insert(id, others);
+                }
+            }
+            Ok(out)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// Tests elsewhere: the type a build kept on a record (RF1, `keep_types`).
     #[cfg(test)]
     pub fn typed_for_tests(&self, record: i64) -> Option<String> {

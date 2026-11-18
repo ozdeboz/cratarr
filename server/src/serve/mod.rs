@@ -547,6 +547,66 @@ impl Serve {
         }
     }
 
+    /// RF2 (RB2): Incoming copies of records kept nowhere else, each another record's copy all the same, split from it only by missing
+    /// tags (production's five: Music's untagged MP3 against Lidarr's FLAC). Of the other live records of a copy's names with a copy in
+    /// one of the main libraries `mains` (`Catalogue::editions_of`), the first such copy whose tracks pair with the copy's files one for
+    /// one, as Replace pairs them (`incoming::pair`, as 0.16's Replace did): every track of each a pair, none left over. By album, the
+    /// other record's album and that copy. A copy none pairs with whole is another edition (OQ1): left out. Blocking.
+    pub fn paired_editions(&self, waiting: &[(String, copies::Copy)], mains: &[i64]) -> Result<std::collections::HashMap<String, (String, copies::Copy)>> {
+        let mut out = std::collections::HashMap::new();
+        let records: Vec<i64> = waiting.iter().filter_map(|(album, _)| ids::record_number(album)).collect();
+        let editions = self.catalogue().editions_of(&records, mains)?;
+        if editions.is_empty() {
+            return Ok(out);
+        }
+        let facts = |folder: i64, dir: &str| -> Result<Vec<crate::incoming::TrackFacts>> {
+            Ok(self.catalogue().copy_read(folder, dir)?.into_iter().map(|(tags, ms)| crate::incoming::TrackFacts::of(&crate::naming::Tags(tags), ms)).collect())
+        };
+        for (album, waiting) in waiting {
+            let Some(others) = ids::record_number(album).and_then(|r| editions.get(&r)) else { continue };
+            let new = facts(waiting.folder, &waiting.dir)?;
+            'others: for &other in others {
+                let id = ids::record(other);
+                for kept in self.library.copies_of(&id)?.into_iter().filter(|c| c.kind == copies::Kind::Main && mains.contains(&c.folder)) {
+                    let old = facts(kept.folder, &kept.dir)?;
+                    let paired = crate::incoming::pair(&old, &new);
+                    if !old.is_empty() && paired.added.is_empty() && paired.retired.is_empty() {
+                        out.insert(album.clone(), (id, kept));
+                        break 'others;
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// How each of these Incoming copies stands (C37a; RF2): against the copy that plays its record for most among its kept ones
+    /// (`copies::against`); else, its record kept nowhere else, against another record's copy in a main library its tracks pair with
+    /// one for one (`paired_editions`), as a copy of one record stands. Whether it is better, and that copy; none where neither: the
+    /// badge, Health's better copies and records in two libraries, the intake card and Replace all read this. Blocking.
+    pub fn stands_of(&self, waiting: &[(String, copies::Copy)], mains: &[i64]) -> Result<Vec<Option<(bool, copies::Copy)>>> {
+        let mut out = Vec::with_capacity(waiting.len());
+        let mut alone = Vec::new();
+        for (album, c) in waiting {
+            let held = self.library.copies_of(album)?;
+            let stand = copies::against(&held, c).map(|(better, kept)| (better, kept.clone()));
+            if stand.is_none() && c.kind == copies::Kind::Incoming && held.iter().all(|h| h.kind == copies::Kind::Incoming) {
+                alone.push((album.clone(), c.clone()));
+            }
+            out.push(stand);
+        }
+        let paired = self.paired_editions(&alone, mains)?;
+        for ((album, c), stand) in waiting.iter().zip(&mut out) {
+            if stand.is_none()
+                && let Some((_, kept)) = paired.get(album)
+            {
+                let both = [kept.clone(), c.clone()];
+                *stand = copies::against(&both, c).map(|(better, kept)| (better, kept.clone()));
+            }
+        }
+        Ok(out)
+    }
+
     /// Files Cratarr wrote itself (0.9.7: Renumber, a cover, a tempo), read again now, and the library built from them
     /// at once: an album shows its change in seconds, not at the next pass. Where that fails, the next pass reads them.
     /// Blocking.
@@ -1015,6 +1075,70 @@ mod tests {
         assert_eq!(holding_of(&q, |_| crate::settings::LibraryKind::Main), Holding::Partly { has: 3, of: 8 }, "partly there");
         let artist = cat.artist_for("Artist").unwrap();
         assert!(cat.missing_of(artist).unwrap().iter().all(|m| m.row.id != album), "off the missing list");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// These files of folder `folder` (path, title) tagged as `add` tags them, each numbered by its place in the list.
+    fn numbered(cat: &Catalogue, folder: i64, files: &[(&str, &str)]) {
+        for (n, (rel, title)) in files.iter().enumerate() {
+            let number = (n + 1).to_string();
+            cat.tag_for_tests(folder, rel, &[("album", "Album"), ("albumartist", "Artist"), ("title", title), ("tracknumber", &number)]);
+        }
+    }
+
+    /// RF2's shape: Music (catalogue folder 0, main) holds an untagged copy of `add`'s "Album" as MP3 at 320 kb/s, three numbered
+    /// tracks; Incoming (folder 1) a copy of its names as FLAC under `B`, of `incoming`'s numbered tracks, each three seconds
+    /// longer than Music's: a record of its own (the lengths tell two records, `identity::same_record`), as production's five
+    /// are two only because Music's copy is untagged. The folders, the catalogue, the server, Music's record and the copy waiting.
+    #[allow(clippy::type_complexity)]
+    fn split_from_music(name: &str, incoming: &[(&str, &str)]) -> ([PathBuf; 2], Arc<Catalogue>, Arc<Serve>, i64, (String, copies::Copy)) {
+        let (roots, cat, serve) = on_two_folders(name);
+        serve.library.set_kinds(vec![(0, Kind::Main), (1, Kind::Incoming)]);
+        let kept = [("A/01 One.mp3", "One"), ("A/02 Two.mp3", "Two"), ("A/03 Three.mp3", "Three")];
+        add(&cat, &roots[0], 0, &kept);
+        numbered(&cat, 0, &kept);
+        cat.execute_for_tests("UPDATE files SET format = 'MP3', bitrate = 320 WHERE folder = 0");
+        serve.refresh().unwrap();
+        let music = record_in(&serve, 0, "A");
+        add(&cat, &roots[1], 1, incoming);
+        numbered(&cat, 1, incoming);
+        cat.execute_for_tests("UPDATE files SET format = 'FLAC', bits = 16, rate = 44100, bitrate = 900, duration_ms = 203000 WHERE folder = 1");
+        checked_again(&serve);
+        let album = serve.library.album_in(1, "B").unwrap().expect("built");
+        let copy = serve.library.copies_of(&album).unwrap().into_iter().find(|c| c.folder == 1).expect("its copy");
+        (roots, cat, serve, music, (album, copy))
+    }
+
+    /// RF2 (RB2's scenario, the census's five): Music's untagged MP3 and Lidarr's FLAC of the same three tracks are two records of one
+    /// name. The copy waiting pairs with Music's track for track (`incoming::pair`, as 0.16's Replace paired them), so it stands against
+    /// it as a copy of one record does: better, and Music's a main library's copy, so Replace's to take (the badge, Health's better
+    /// copies, the card's line), saying why; Replace takes Music's copy's place. Default taken: an untagged Music copy of the same names,
+    /// paired one for one, is an upgrade. Never: "another edition" with no action for one tracklist.
+    #[test]
+    fn a_tracklist_split_from_musics_record_by_missing_tags_is_an_upgrade() {
+        let three = [("B/01 One.flac", "One"), ("B/02 Two.flac", "Two"), ("B/03 Three.flac", "Three")];
+        let (roots, _cat, serve, music, (album, copy)) = split_from_music("rf2-same", &three);
+        assert_ne!(ids::record_number(&album), Some(music), "two records of one name");
+        let stood = serve.stands_of(&[(album.clone(), copy.clone())], &[0]).unwrap();
+        let (better, kept) = stood[0].clone().expect("stands against Music's copy");
+        assert_eq!((better, kept.folder, kept.dir.as_str()), (true, 0, "A"), "better than Music's copy");
+        assert!(copies::replaces(better, kept.kind), "Replace's to take: Health's better copies, the badge");
+        assert_eq!(copies::why(&copy, &kept), "lossless, yours is 320 kbps");
+        let paired = serve.paired_editions(&[(album.clone(), copy)], &[0]).unwrap();
+        assert_eq!(paired.get(&album).map(|(of, c)| (of.clone(), c.folder, c.dir.clone())), Some((ids::record(music), 0, "A".to_string())), "Replace takes Music's copy's place");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// RF2, OQ1 kept (the census's sixth, 10 tracks against 12): Lidarr's copy holds a fourth track Music's has not. Another tracklist
+    /// is another record: the copy stands against nothing, Replace has no copy to take the place of, and Music has another edition,
+    /// said so with no action.
+    #[test]
+    fn another_tracklist_stays_another_edition() {
+        let four = [("B/01 One.flac", "One"), ("B/02 Two.flac", "Two"), ("B/03 Three.flac", "Three"), ("B/04 Four.flac", "Four")];
+        let (roots, cat, serve, _music, (album, copy)) = split_from_music("rf2-other", &four);
+        assert_eq!(serve.stands_of(&[(album.clone(), copy.clone())], &[0]).unwrap(), [None], "no stand");
+        assert!(serve.paired_editions(&[(album.clone(), copy)], &[0]).unwrap().is_empty(), "nothing for Replace");
+        assert_eq!(cat.other_edition_in(ids::record_number(&album).unwrap(), &[0]).unwrap(), Some(0), "Music has another edition");
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 

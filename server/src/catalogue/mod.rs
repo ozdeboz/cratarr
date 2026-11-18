@@ -2241,32 +2241,21 @@ impl Catalogue {
     /// The audio files of one album folder (`dir`, relative to `folder`) with all their named tags, in path order:
     /// what Keep names the files from (decision 0013). Read-only; blocking.
     pub fn album_tags(&self, folder: i64, dir: &str) -> Result<Vec<(String, Vec<(String, String)>)>> {
-        let db = self.db();
-        let prefix = format!("{}/", dir.trim_end_matches('/'));
-        let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
-        let mut st = db.prepare(&format!(
-            "SELECT rel FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND {PRESENT} ORDER BY rel"
-        ))?;
-        let rels = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| r.get::<_, String>(0))?;
-        let mut index = std::collections::HashMap::new();
-        for rel in rels {
-            let rel = rel?;
-            index.insert(rel.clone(), out.len());
-            out.push((rel, Vec::new()));
+        album_tags_in(&self.db(), folder, dir)
+    }
+
+    /// One copy's audio files as Replace pairs them (RF2): each present file under `dir` of catalogue folder `folder`, in path order,
+    /// with its named tags (`album_tags`) and its length where read (`album_lengths`). On a reader, never the writer's lock: the
+    /// Library and Health ask it of copies waiting while a build runs. Blocking.
+    pub fn copy_read(&self, folder: i64, dir: &str) -> Result<Vec<(Vec<(String, String)>, Option<u64>)>> {
+        let read = |db: &Connection| -> Result<Vec<(Vec<(String, String)>, Option<u64>)>> {
+            let lengths = album_lengths_in(db, folder, dir)?;
+            Ok(album_tags_in(db, folder, dir)?.into_iter().map(|(rel, tags)| (tags, lengths.get(&rel).copied())).collect())
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
         }
-        let mut st = db.prepare(
-            "SELECT rel, name, value FROM tags WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND name IS NOT NULL ORDER BY rel, n",
-        )?;
-        let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-        })?;
-        for row in rows {
-            let (rel, name, value) = row?;
-            if let Some(&i) = index.get(&rel) {
-                out[i].1.push((name, value));
-            }
-        }
-        Ok(out)
     }
 
     /// Every present file's values of the tags named in `names`, by (folder, path): what the files hold of what Cratarr
@@ -3346,13 +3335,7 @@ impl Catalogue {
 
     /// The length of each audio file in an album folder (`dir`, relative to `folder`), by path. Read-only; blocking.
     pub fn album_lengths(&self, folder: i64, dir: &str) -> Result<std::collections::HashMap<String, u64>> {
-        let db = self.db();
-        let prefix = format!("{}/", dir.trim_end_matches('/'));
-        let mut st = db.prepare(&format!(
-            "SELECT rel, duration_ms FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND duration_ms > 0 AND {PRESENT}"
-        ))?;
-        let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        album_lengths_in(&self.db(), folder, dir)
     }
 
     /// The track id of a file, once it has one. Blocking.
@@ -4298,6 +4281,45 @@ const LENGTH_SLACK_MS: u64 = 1_500;
 
 pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     served_rows_in(db, folder, None)
+}
+
+/// `Catalogue::album_tags` on the caller's connection.
+fn album_tags_in(db: &Connection, folder: i64, dir: &str) -> Result<Vec<(String, Vec<(String, String)>)>> {
+    let prefix = format!("{}/", dir.trim_end_matches('/'));
+    let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut st = db.prepare(&format!(
+        "SELECT rel FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND {PRESENT} ORDER BY rel"
+    ))?;
+    let rels = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| r.get::<_, String>(0))?;
+    let mut index = std::collections::HashMap::new();
+    for rel in rels {
+        let rel = rel?;
+        index.insert(rel.clone(), out.len());
+        out.push((rel, Vec::new()));
+    }
+    let mut st = db.prepare(
+        "SELECT rel, name, value FROM tags WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND name IS NOT NULL ORDER BY rel, n",
+    )?;
+    let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+    })?;
+    for row in rows {
+        let (rel, name, value) = row?;
+        if let Some(&i) = index.get(&rel) {
+            out[i].1.push((name, value));
+        }
+    }
+    Ok(out)
+}
+
+/// `Catalogue::album_lengths` on the caller's connection.
+fn album_lengths_in(db: &Connection, folder: i64, dir: &str) -> Result<std::collections::HashMap<String, u64>> {
+    let prefix = format!("{}/", dir.trim_end_matches('/'));
+    let mut st = db.prepare(&format!(
+        "SELECT rel, duration_ms FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND duration_ms > 0 AND {PRESENT}"
+    ))?;
+    let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// A file's folder within its library folder ("" at its top).
