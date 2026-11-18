@@ -1824,11 +1824,13 @@ mod tests {
         let (cat, ud) = data.open();
         run_without_fold(&cat, &ud, &[]);
         let (kite, apart) = (cat.artist_for("Kite Theory").unwrap(), cat.artist_apart("Kite Theory").unwrap());
-        // As preview 1 kept a list's row: a record of its own (no join by names then), credited to the list's artist.
+        // As preview 1 kept a list's row: a record of its own (no join by names then), credited to the list's artist. Kept under
+        // a name no artist has, then named and credited: F11.2's join of an artist-less row onto a had record of its names would
+        // otherwise join it at the making, and the fold would have no double left to fold.
         let kept = |title: &str, kind: Option<&str>, refs: Vec<Ref>, artist: i64| -> i64 {
-            let row = Listing { title: title.into(), artist: "Kite Theory".into(), kind: kind.map(str::to_string), refs, ..Listing::default() };
+            let row = Listing { title: title.into(), artist: "Kite Theory as preview 1 kept it".into(), kind: kind.map(str::to_string), refs, ..Listing::default() };
             let record = cat.keep_listing(None, &[row], "link").unwrap()[0];
-            cat.execute_for_tests(&format!("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES ({record}, {artist}, 0, 'listing');"));
+            cat.execute_for_tests(&format!("UPDATE records SET artist = 'Kite Theory' WHERE id = {record}; INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES ({record}, {artist}, 0, 'listing');"));
             record
         };
         let group = |n: u32| vec![Ref::new("musicbrainz", "release-group", &mb(n))];
