@@ -652,6 +652,13 @@ impl IncomingService {
         self.lib.folder_kinds()
     }
 
+    /// The catalogue folders in use that are no Incoming library's: the kept ones, where an original holds its copies' bytes (RF5,
+    /// as the backup's list keeps them).
+    fn not_incoming(&self) -> Vec<i64> {
+        let incoming: Vec<i64> = self.lib.folder_kinds().into_iter().filter(|(_, k)| *k == settings::LibraryKind::Incoming).map(|(f, _)| f).collect();
+        self.lib.catalogue().folders().ids().filter(|f| !incoming.contains(f)).collect()
+    }
+
     /// The catalogue folders that libraries switched off (`source/library`) leave out: those no library switched on
     /// keeps (`Library::folders_off`), for which copy a stream hears.
     pub fn folders_off(&self, without: &[String]) -> Vec<i64> {
@@ -921,7 +928,8 @@ impl IncomingService {
     /// never the library's own. A file added to the copy's folder since stays, and so does a later album at its place: with none
     /// of the copies there as copied it is refused. One copied file rewritten since, its size or time not as copied (an entry from
     /// before T1: as its original's now), refuses it whole, naming the file, before anything moves (T1c, as OQ-D for Replace): it
-    /// never leaves the album short, nor takes a file that isn't as copied; deleting the copy is the way then. Its second's name
+    /// never leaves the album short, nor takes a file that isn't as copied; deleting the copy is the way then. Refused whole too where
+    /// no original in a kept library holds a copy's bytes any more (RF5): the copy is the album's only copy then. Its second's name
     /// goes on the entry before a file moves, so an Undo cut short is finished by the next, the files already in the trash under
     /// it counting as done, never as rewritten. The original as it was.
     async fn undo_copy(&self, entry: &Entry) -> Result<String, ToggleError> {
@@ -973,6 +981,14 @@ impl IncomingService {
         if let Some(((rel, _), _)) = plan.iter().zip(&lies).find(|(_, l)| **l == Lies::Rewritten) {
             let name = rel.strip_prefix(&format!("{}/", to_dir.1)).unwrap_or(rel.as_str());
             return Err(ToggleError::Refused(format!("{name} has changed since {title} was copied: delete the copy instead")));
+        }
+        // RF5: a copy whose bytes no original holds any more (deleted, its trash emptied, rewritten, gone with its library) is the
+        // album's only copy: never into the trash by this Undo.
+        let taking: Vec<String> = plan.iter().zip(&lies).filter(|(_, l)| **l == Lies::AsCopied).map(|((rel, _), _)| rel.clone()).collect();
+        let (c, folder, kept) = (catalogue.clone(), to_dir.0, self.not_incoming());
+        let only = tokio::task::spawn_blocking(move || c.only_copies(folder, &taking, &kept)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        if !only.is_empty() {
+            return Err(ToggleError::Refused("The original is gone: this is the album's only copy.".into()));
         }
         // The second its files go under: an Undo begun before keeps its own; a new one takes one no copy's name is taken in.
         let stamp = match begun {
@@ -3219,6 +3235,98 @@ mod tests {
         assert_eq!(std::fs::read(own.join("Artist/Album/CD2/2.flac")).unwrap(), b"two");
         for d in [music, inc, own] {
             std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// RF5's shape: an album held only in Bob's own music (catalogue folder 3), two FLAC tagged as Music's template names them (the
+    /// year 2019), read and on their tracks; Music (0), Incoming (1) and Ann's own music (2) hold nothing of it. The service, and the
+    /// four folders.
+    async fn with_bobs_alone(tag: &str) -> (IncomingService, PathBuf, PathBuf, PathBuf, PathBuf) {
+        let roots: Vec<PathBuf> = ["music", "inc", "ann", "bob"].iter().map(|n| folder(&format!("{tag}-{n}"))).collect();
+        let svc = on_disk(&roots[0], &roots[1]).await;
+        let c = svc.lib.catalogue();
+        c.set_folders(roots.clone()).unwrap();
+        std::fs::create_dir_all(roots[3].join("A/Album")).unwrap();
+        for n in 1..=2 {
+            std::fs::write(roots[3].join(format!("A/Album/{n}.flac")), format!("bob's flac {n}")).unwrap();
+        }
+        c.walk_all();
+        c.pretend_read_for_tests();
+        for n in 1..=2usize {
+            let number = n.to_string();
+            let tags = [("albumartist", "A"), ("artist", "A"), ("album", "Album"), ("title", TITLES[n - 1]), ("tracknumber", number.as_str()), ("date", "2019")];
+            c.tag_for_tests(3, &format!("A/Album/{n}.flac"), &tags);
+        }
+        c.identify().unwrap();
+        let mut roots = roots.into_iter();
+        let mut next = || roots.next().unwrap();
+        (svc, next(), next(), next(), next())
+    }
+
+    /// RF5 (the review of runs 11 and 12, RA1): an old Copy's Undo once its original is gone is refused before anything moves,
+    /// saying "The original is gone: this is the album's only copy." (1) An administrator copied Bob's own album into Music, then
+    /// Bob deleted his copy (into his trash): Music's copy, its rows and its trash as they were, the entry not undone, no Undo
+    /// begun on it; once Bob's Delete is undone (the original back), the Undo goes and Bob's album stays as it was. (2) A Want's copy
+    /// of Bob's in Ann's own music, then Bob deleted his copy and his trash emptied: refused alike. (3) Bob left (his own music out
+    /// of use): refused. (4) One track's original gone (Bob deleted 2.flac alone): refused whole, both copies in place. (5) Bob's
+    /// 1.flac rewritten since (a tag written: other bytes and time): refused. Never a copy whose bytes no original holds taken into
+    /// the trash by an Undo.
+    #[tokio::test]
+    async fn an_old_copys_undo_is_refused_once_its_original_is_gone() {
+        const GONE: &str = "The original is gone: this is the album's only copy.";
+        for case in 1..=5 {
+            let (svc, music, inc, ann, bob) = with_bobs_alone(&format!("rf5-{case}")).await;
+            let c = svc.lib.catalogue();
+            let theirs = lying(&bob);
+            let at = svc.locate_listed("cratarr", copy_at("al-1", 3, &bob.to_string_lossy(), "A/Album")).await.unwrap();
+            let (to, root) = if case == 1 { (0, music.clone()) } else { (2, ann.clone()) };
+            let done = svc.copying(&at, to, None).await.unwrap();
+            let key = done.undo.clone().unwrap();
+            let id: EventId = key.parse().unwrap();
+            let copies: Vec<String> = files_under(&root.join(&done.folder)).into_iter().map(|f| format!("{}/{f}", done.folder)).collect();
+            assert_eq!(copies.len(), 2, "{case}: both copied");
+            let deleted = match case {
+                1 | 2 => Some(svc.delete_listed("cratarr", copy_at("al-1", 3, &bob.to_string_lossy(), "A/Album")).await.unwrap().undo),
+                3 => {
+                    c.set_folders(vec![music.clone(), inc.clone(), ann.clone()]).unwrap();
+                    assert_eq!(c.folders().id_of(&ann), Some(2), "Ann's own music as it was");
+                    None
+                }
+                4 => {
+                    let token = crate::trash::trash_file(&bob, "A/Album/2.flac", epoch_now()).unwrap();
+                    c.mark_trashed(3, "A/Album/2.flac", &token).unwrap();
+                    None
+                }
+                _ => {
+                    std::fs::write(bob.join("A/Album/1.flac"), b"bob's flac 1, its tag written").unwrap();
+                    c.walk_all();
+                    None
+                }
+            };
+            if case == 2 {
+                crate::trash::purge(&bob, epoch_now() + 30 * 86_400, 14).unwrap();
+                assert!(lying(&bob.join(crate::trash::TRASH_DIR)).is_empty(), "his trash emptied");
+            }
+            let rows = || copies.iter().map(|rel| row_at(&c, to, rel)).collect::<Vec<_>>();
+            let (lies, held) = (lying(&root), rows());
+            assert!(held.iter().all(|r| r.as_ref().is_some_and(|(track, trashed)| track.is_some() && trashed.is_none())), "{case}: on their tracks: {held:?}");
+            let e = svc.undo(&key).await.unwrap_err().to_string();
+            assert_eq!(e, GONE, "{case}: refused, saying why");
+            assert_eq!(lying(&root), lies, "{case}: the copy in place, nothing in its library's trash");
+            assert!(lying(&root.join(crate::trash::TRASH_DIR)).is_empty(), "{case}: nothing in the trash");
+            assert_eq!(rows(), held, "{case}: its rows as they were");
+            assert!(svc.journal.get(id).unwrap().is_some_and(|e| e.applied && !e.undone), "{case}: the entry not undone");
+            assert!(svc.journal.result(id, UNCOPIED).unwrap().is_none(), "{case}: no Undo begun on it");
+            if let (1, Some(deleted)) = (case, deleted) {
+                svc.undo(&deleted).await.unwrap();
+                assert_eq!(lying(&bob), theirs, "Bob's album back as it was");
+                assert_eq!(svc.undo(&key).await.unwrap(), "Zebra", "the original back: the Undo goes");
+                assert!(!music.join(&done.folder).exists(), "the copy into Music's trash");
+                assert_eq!(lying(&bob), theirs, "Bob's untouched by it");
+            }
+            for d in [music, inc, ann, bob] {
+                std::fs::remove_dir_all(d).ok();
+            }
         }
     }
 

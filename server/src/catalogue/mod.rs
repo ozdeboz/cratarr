@@ -192,6 +192,15 @@ pub const SHARED_WITH: &str = concat!(
     " AND o.shared = 0 AND o.folder IN (SELECT value FROM json_each(:kept)))"
 );
 
+/// Whether copy `f`'s bytes are still an original's (RF5, the review of runs 11 and 12, RA1): another file holds the same bytes
+/// (`same_bytes!`) and is an original itself (`shared = 0`), in a kept library (`:kept`): the backup's test (`SHARED_WITH`) asked
+/// of the original, whatever the copy's own mark says. Where none does, the copy is the album's only copy of those bytes.
+const HELD_BY_ORIGINAL: &str = concat!(
+    "EXISTS (SELECT 1 FROM files o WHERE ",
+    same_bytes!("o", "f"),
+    " AND (o.folder, o.rel) <> (f.folder, f.rel) AND o.shared = 0 AND o.folder IN (SELECT value FROM json_each(:kept)))"
+);
+
 /// Whether own-music file `f` is free of room (AL01; R.0, the owner's Q5, Q9 and (d) "Free anywhere", OQ-R1): another file holds
 /// the same bytes (`same_bytes!`), the two share their blocks as their copy said (either marked `shared`), and that file lies in
 /// a main library (`:main`), or in someone's own music (`:own`) and is the one there that pays for those bytes: the original
@@ -3157,6 +3166,23 @@ impl Catalogue {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Of the files `rels` in catalogue folder `folder` (copies), those that are their album's only copy of their bytes (RF5): a
+    /// track's file whose bytes no original in one of the folders `kept` holds any more (`HELD_BY_ORIGINAL`: deleted, emptied from
+    /// its trash, rewritten, replaced, moved out of the kept libraries, or its library out of use). A file with no row or no track
+    /// (a cover) is none. In `rels`' order. Blocking.
+    pub fn only_copies(&self, folder: i64, rels: &[String], kept: &[i64]) -> Result<Vec<String>> {
+        let kept = serde_json::to_string(kept)?;
+        let db = self.db();
+        let mut st = db.prepare_cached(&format!("SELECT 1 FROM files f WHERE f.folder = :folder AND f.rel = :rel AND f.track IS NOT NULL AND NOT {HELD_BY_ORIGINAL}"))?;
+        let mut only = Vec::new();
+        for rel in rels {
+            if st.exists(rusqlite::named_params! { ":folder": folder, ":rel": rel, ":kept": kept })? {
+                only.push(rel.clone());
+            }
+        }
+        Ok(only)
+    }
+
     /// Room's rows (AL01, R.0), every account's at once (AL01.11): one statement, on a reader of its own where there is one (never
     /// the writer's lock), naming no `analysis_shape`. The bytes of the present files in each own-music folder of `own` that are
     /// not free of room (`FREE_OF_ROOM`, with the main libraries `main`), by folder; and each copy of the records `asked` in the
@@ -4878,6 +4904,33 @@ mod tests {
         let at = source.find("pub fn shared_copies").unwrap();
         let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
         assert!(body.contains("{SHARED_WITH}") && !body.contains("f.shared ="), "shared_copies reads the backup's one rule: {body}");
+    }
+
+    /// RF5: a copy is its album's only copy of its bytes once no original in a kept library holds them: Music's original holds
+    /// them, and so does one moved into someone's own music; one moved into Incoming (not kept), rewritten, or in a trash does not,
+    /// nor does another copy sharing their blocks (two copies never hold each other, as T2b). A file on no track (a cover) is never
+    /// one.
+    #[test]
+    fn a_copys_bytes_are_held_while_an_original_in_a_kept_library_has_them() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/music"), PathBuf::from("/incoming"), PathBuf::from("/own/ann"), PathBuf::from("/own/bob")]).unwrap();
+        let record = cat.record_for_tests("Tide Tables", 2);
+        cat.copy_for_tests(record, 0);
+        let original = |n: i64| format!("copy-{record}/{n}.flac");
+        cat.copy_rows(&[1, 2].map(|n| ((0, original(n)), (2, format!("Own/{n}.flac")), true))).unwrap();
+        let copies = ["Own/1.flac", "Own/2.flac", "Own/cover.jpg"].map(String::from);
+        let only = || cat.only_copies(2, &copies, &[0, 2, 3]).unwrap();
+        assert!(only().is_empty(), "Music's originals hold them");
+        cat.move_files(0, &format!("copy-{record}"), 3, "Moved").unwrap();
+        assert!(only().is_empty(), "moved into Bob's own music: kept, and holding them still");
+        cat.move_files(3, "Moved", 1, "Moved").unwrap();
+        assert_eq!(only(), ["Own/1.flac", "Own/2.flac"], "moved into Incoming: no kept library holds them");
+        cat.move_files(1, "Moved", 0, &format!("copy-{record}")).unwrap();
+        assert!(only().is_empty(), "back in Music");
+        cat.rewrite_for_tests(0, &original(2), 2, 2);
+        assert_eq!(only(), ["Own/2.flac"], "its original rewritten: other bytes");
+        cat.copy_rows(&[((0, original(1)), (3, "Bob/1.flac".to_string()), true)]).unwrap();
+        cat.mark_trashed(0, &original(1), &format!("100/{}", original(1))).unwrap();
+        assert_eq!(only(), ["Own/1.flac", "Own/2.flac"], "its original in the trash; Bob's copy sharing its blocks holds nothing");
     }
 
     /// M1: the pass's question of which files have no waveform in three bands reads `analysis_band_wave`'s index of forms
