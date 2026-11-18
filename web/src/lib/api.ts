@@ -2389,6 +2389,39 @@ export const getWatching = () => quietly<Watching | null>('/api/requests/watchin
 export const decideRequests = (ids: number[], approve: boolean, reason: string | null = null) =>
   post<{ id: number; said: string }[]>('/api/requests/decide', { ids, approve, reason });
 export const cancelRequest = (id: number) => post<void>(`/api/requests/${id}/cancel`, {});
+/** Lidarr's part of a request's story (RQ01): where it is with it (`done`, 0 to 1, while grabbed), and its own words
+ *  (`said`: the queue's message, the hand-over's), administrators' only (W6). */
+export type StoryLidarr = { step: 'looking' | 'grabbed' | 'importing' | 'imported' | 'stuck' | 'not_handed'; done?: number; said?: string };
+/** A folder Soulseek found of a story's record: whose, its last part, and how good and how soon (as the Soulseek list's). */
+export type StorySource = { user: string; folder: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number; unchecked?: string };
+/** Soulseek's part of a request's story (RQ01): its record's item whole, as the asker may read it (never a path on the server),
+ *  by its id (what an administrator's tick and Search now name); `off`: slskd switched off, so nothing moves. Times in seconds. */
+export type StorySoulseek = {
+  id: string;
+  state: import('./soulseekRules').SoulseekState;
+  percent?: number;
+  sources: StorySource[];
+  chosen?: number;
+  failed: string[];
+  held?: { why: string; until: number };
+  stuck?: string;
+  misses: number;
+  next_search?: number;
+  set_aside: { user: string; files: { file: string; why: string }[] }[];
+  off: boolean;
+};
+/** A request's story (RQ01, `GET /api/requests/{id}`, its asker's and the administrators'): its row as the list gives it, the
+ *  record it opens (merges followed), when it was asked and delivered and where its asker's copy is, each fetcher's part. */
+export type RequestStory = AlbumRequest & {
+  opens: string | null;
+  asked_at: number;
+  delivered_at?: number;
+  where?: { library: number; name: string };
+  lidarr?: StoryLidarr;
+  soulseek?: StorySoulseek;
+};
+/** Read while its sheet shows, so quietly (no progress bar). */
+export const getRequestStory = (id: number) => quietly<RequestStory>(`/api/requests/${id}`);
 /** Not interested: never again, its artist held against it (twice, and they are left out). Its undo token. */
 export const notDiscover = (key: string) => post<{ undo: string }>('/api/discover/no', { key });
 /** Not interested in an artist (the owner, 2026-10-29): they and their records leave every mode of Discover for good. */
@@ -2523,9 +2556,11 @@ export const setScrobbleOn = (target: string, on: boolean) =>
 export const forgetScrobble = (target: string) => request<void>(`/api/scrobble/${encodeURIComponent(target)}`, { method: 'DELETE' });
 /** Soulseek in Cratarr (decision 0099): the records Lidarr wants as Cratarr searches and fetches them; found ones
  *  fetched on a tick (`folder`: one picked, else the best), one searched now, one out of the list, those placed
- *  cleared. Administrators'. */
+ *  cleared. Administrators'. A tick from a request's story names its source too (`user`, `folder_name`: RQ01.8 (b)), so one
+ *  no longer at that place is refused. */
 export const getSoulseek = () => request<import('./soulseekRules').SoulseekView>('/api/soulseek');
-export const approveSoulseek = (items: { id: string; folder?: number }[]) => post<import('./soulseekRules').SoulseekView>('/api/soulseek/approve', { items });
+export const approveSoulseek = (items: { id: string; folder?: number; user?: string; folder_name?: string }[]) =>
+  post<import('./soulseekRules').SoulseekView>('/api/soulseek/approve', { items });
 export const soulseekNow = (id: string) => post<import('./soulseekRules').SoulseekView>(`/api/soulseek/${encodeURIComponent(id)}/now`, {});
 export const dropSoulseekItem = (id: string) => request<import('./soulseekRules').SoulseekView>(`/api/soulseek/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const clearSoulseekPlaced = () => request<import('./soulseekRules').SoulseekView>('/api/soulseek', { method: 'DELETE' });
