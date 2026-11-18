@@ -5,9 +5,13 @@
   // rating (decided 2026-10-16) as five stars, the same as its menu's: a tap rates, where its server keeps ratings.
   // A library album's Discogs (0.9.8, the owner: "Yes to all"): its labels with their catalogue numbers, its credits
   // by role, its styles beside its genres, and its page among Elsewhere; asked once (Discogs keeps a pace: they come
-  // in a moment the first time). Its labels by their ids (a record not had's, C54) are chips that open each label's page (W11).
+  // in a moment the first time). Its labels are chips that open each label's page (W11): by its row's id (C54), or found or
+  // made by its Discogs id or MBID first (F9); a label no row or reference names is plain text. Where it comes from (F7): a
+  // chip per source the record has a reference of, each opening its page there, the one its tracklist was read from marked.
   import { albumRatings, loadAlbumRating, rateAlbum } from './albums.svelte';
-  import { labelChip, labelSubject, type LabelChip } from './labelPage';
+  import { aboutLabels, labelChip, labelOpenBody, labelOpens, labelSubject, type LabelChip } from './labelPage';
+  import { sourceChips } from './recordNotHad';
+  import { toast } from './toast.svelte';
   import { viewOver } from './panel.svelte';
   import { CRATE, GENRE, viewGenre } from './crates.svelte';
   import { longpress } from './longpress';
@@ -15,7 +19,7 @@
   import RatingStars from './RatingStars.svelte';
   import Icon from './Icon.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { getAlbumDiscogs, type AlbumDiscogs } from './api';
+  import { getAlbumDiscogs, openLabelByRef, type AlbumDiscogs, type RecordSource } from './api';
 
   let {
     source,
@@ -28,6 +32,7 @@
     provider,
     more = null,
     labels = [],
+    sources = [],
   }: {
     source: string;
     album: string;
@@ -40,8 +45,10 @@
     provider: { server: string; libraries: Pick<import('./api').LibraryInfo, 'id' | 'name' | 'colour'>[] };
     /** What a page elsewhere says of it (a Bandcamp album's, 0.9.2): no rating then, which only a server keeps. */
     more?: Pick<import('./api').AlbumView, 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> | null;
-    /** Its labels by their ids for life, where the server names them (C54): chips opening each label's page. */
+    /** Its labels as the server names them (C54, F9): by their ids for life, else by their references. */
     labels?: LabelChip[];
+    /** Its references the server may show (F7): where it comes from. */
+    sources?: RecordSource[];
   } = $props();
 
   $effect(() => {
@@ -79,6 +86,26 @@
     const d = new Date(secs * 1000);
     return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
   };
+  /** Its labels, from one list (F9): its own, else its label text, else Discogs'; each opens as it can. */
+  const shownLabels = $derived(aboutLabels(labels, more?.label, discogs?.labels));
+  /** A label's page: by its row, else its row found or made by its reference first; one at a time. */
+  let openingLabel = false;
+  async function openLabel(l: LabelChip) {
+    if (l.id) return viewOver(labelSubject(l.id));
+    if (!l.ref || openingLabel) return;
+    openingLabel = true;
+    try {
+      const { id } = await openLabelByRef(labelOpenBody(l));
+      viewOver(labelSubject(id));
+    } catch (e) {
+      toast.fail(e, "It couldn't be opened");
+    } finally {
+      openingLabel = false;
+    }
+  }
+  /** Where it comes from (F7): a chip per source, in the server's order. */
+  const sourced = $derived(sourceChips(sources));
+
   // A badge's menu (decision 0058: a chip that opens an object opens its menu on a long-press).
   let menuOf = $state<string | null>(null);
 </script>
@@ -107,15 +134,12 @@
     <h3>Year</h3>
     <p class="chips"><span class="chip">{year}</span></p>
   {/if}
-  {#if labels.length}
-    <h3>{labels.length === 1 ? 'Label' : 'Labels'}</h3>
-    <p class="chips">{#each labels as l (l.id)}<button class="chip" onclick={() => viewOver(labelSubject(l.id))}>{labelChip(l)}</button>{/each}</p>
-  {:else if more?.label}
-    <h3>Label</h3>
-    <p>{more.label}</p>
-  {:else if discogs?.labels?.length}
-    <h3>{discogs.labels.length === 1 ? 'Label' : 'Labels'}</h3>
-    <p class="words">{discogs.labels.map((l) => (l.catno && l.catno.toLowerCase() !== 'none' ? `${l.name} · ${l.catno}` : l.name)).join('\n')}</p>
+  {#if shownLabels.length}
+    {@const chipped = shownLabels.filter((l) => labelOpens(l))}
+    {@const plain = shownLabels.filter((l) => !labelOpens(l))}
+    <h3>{shownLabels.length === 1 ? 'Label' : 'Labels'}</h3>
+    {#if chipped.length}<p class="chips">{#each chipped as l, i (i)}<button class="chip" onclick={() => openLabel(l)}>{labelChip(l)}</button>{/each}</p>{/if}
+    {#if plain.length}<p class="words">{plain.map(labelChip).join('\n')}</p>{/if}
   {/if}
   {#if more?.listeners}
     <h3>Listeners</h3>
@@ -150,6 +174,10 @@
   {#if added}
     <h3>Date added</h3>
     <p>{when(added)}</p>
+  {/if}
+  {#if sourced.length}
+    <h3>Sources</h3>
+    <p class="chips">{#each sourced as s (s.url)}<a class="chip" href={s.url} target="_blank" rel="noopener noreferrer">{s.name}{#if s.tracks}<span class="sep">·</span>Tracklist{/if}</a>{/each}</p>
   {/if}
   <h3>Media provider</h3>
   <p class="chips">

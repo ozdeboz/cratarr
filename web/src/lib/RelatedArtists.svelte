@@ -4,33 +4,33 @@
   // members and collaborators (the server's app/related.rs), as one row of chips, as Home's Artists to explore shows its
   // others; those that play first (the owner: "prioritize Bandcamp playable artists"). Each opens their page (W10): by
   // their id where Cratarr has them, else opened by their MusicBrainz id, else by name; never a Bandcamp album or
-  // MusicBrainz's page. The server's first look runs in the background: the row asks again while it does.
-  import { artistPhotoUrl, discoverArtistPhotoUrl, getRelatedArtists, type RelatedArtist } from './api';
+  // MusicBrainz's page. The server's first look runs in the background: the section's loader naming what it reads while it
+  // does, asked again until it has (F8); why there are none where a source was off or didn't answer, in F1's words.
+  import { artistPhotoUrl, discoverArtistPhotoUrl, getRelatedArtists, type ListRead, type RelatedArtist } from './api';
   import { openArtistPage } from './albums.svelte';
   import { artistLabel, artistOpen } from './artistIds';
+  import PageLoading from './PageLoading.svelte';
+  import { lookAgainAfter, sectionPlace } from './recordNotHad';
   import SectionHead from './SectionHead.svelte';
   import { toast } from './toast.svelte';
 
   /** The artist whose related artists these are: their id (W10), else their name. */
   let { ask }: { ask: string } = $props();
 
-  /** Asked again this often while the server looks (a first look takes a minute or two), at most this many times. */
-  const AGAIN_MS = 15_000;
-  const TRIES = 12;
-
-  let artists = $state<RelatedArtist[]>([]);
+  /** The server's answer: the artists, and while it looks what it reads, or why it found none. */
+  let answer = $state<({ artists: RelatedArtist[] } & ListRead) | null>(null);
   $effect(() => {
-    const n = ask;
+    const who = ask;
     let gone = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let tries = 0;
-    artists = [];
+    let n = 0;
+    answer = null;
     const look = () =>
-      getRelatedArtists(n).then(
+      getRelatedArtists(who).then(
         (r) => {
           if (gone) return;
-          artists = r.artists;
-          if (r.looking && ++tries < TRIES) timer = setTimeout(look, AGAIN_MS);
+          answer = r;
+          if (r.looking) timer = setTimeout(look, lookAgainAfter(n++));
         },
         () => {},
       );
@@ -40,6 +40,9 @@
       clearTimeout(timer);
     };
   });
+  const artists = $derived(answer?.artists ?? []);
+  /** What the section shows (F8): the artists; while read, the loader naming what it reads; once read, why there are none. */
+  const place = $derived(answer && sectionPlace(answer, answer.artists.length));
 
   const photo = (a: RelatedArtist) => (a.id ? artistPhotoUrl(a.id) : discoverArtistPhotoUrl(a.name));
   // No picture: the chip is its name alone.
@@ -47,14 +50,16 @@
   const open = (a: RelatedArtist) => openArtistPage(artistOpen(a)).catch((e) => toast.fail(e, "Their page couldn't be opened"));
 </script>
 
-{#if artists.length}
+{#if place}
   <section aria-label="Related artists to explore">
     <SectionHead title="Related artists to explore" />
+    {#if place === 'rows'}
     <div class="chips">
       {#each artists as a (a.mbid ?? a.name)}
         <button class="chip" onclick={() => open(a)}><img src={photo(a)} alt="" onerror={none} />{artistLabel(a.name, a.number, artists.map((x) => x.name))}</button>
       {/each}
     </div>
+    {:else if 'reading' in place}<PageLoading><p class="opening">{place.reading}</p></PageLoading>{:else}<p class="empty">{place.line}</p>{/if}
   </section>
 {/if}
 
@@ -87,6 +92,17 @@
     text-decoration: none;
     white-space: nowrap;
     cursor: pointer;
+  }
+
+  /* Why there are none, and what its loader waits for: as the artist page's other sections say it (lib/ArtistBody). */
+  .empty {
+    padding: 24px 16px;
+    color: var(--muted);
+  }
+
+  .opening {
+    margin: 0;
+    color: var(--muted);
   }
 
   .chip img {

@@ -2,8 +2,10 @@
 // none of them playable; no heart, no Resume, nothing of a copy's. Want is in its header, or Requested while its request is
 // open; its Bandcamp preview plays from there where it has one (OQ14). One the library has through another record (`have`)
 // says so, and opens that one, with no Want. A retired one says until when it was in Music (OQ16). One with no rows says
-// why (F1), and is asked again while the server reads its list. Pure.
-import type { NoList } from './api';
+// why (F1), with the standard loader in its track list's place while the server reads its list (F6), and is asked again
+// meanwhile. A record's About names where it comes from (F7); an artist's and a label's sections read in the background say
+// so and why they have none in the same words (F8, F10). Pure.
+import type { ListRead, NoList, RecordSource } from './api';
 import type { EntryId } from './menuTable';
 import { requestOpen, standing, type Asked } from './requestState';
 import { when } from './settings/when';
@@ -44,36 +46,72 @@ export function notHadPage(v: NotHad, said: (t: number) => string = when): NotHa
 export const NOT_HAD_ENTRIES: readonly EntryId[] = ['view', 'goArtist', 'share', 'webSearch', 'geniusSearch'];
 export const offeredNotHad = (e: EntryId) => NOT_HAD_ENTRIES.includes(e);
 
-/** The sources a record's list is read from, in the server's counting order (MusicBrainz, Discogs, Bandcamp), by name. */
-const SOURCES: Record<NoList['source'], string> = { musicbrainz: 'MusicBrainz', discogs: 'Discogs', bandcamp: 'Bandcamp' };
-const COUNTING_ORDER = Object.keys(SOURCES) as NoList['source'][];
+/** The sources lists are read from, by name: a record's (MusicBrainz, Discogs, Bandcamp: the server's counting order), an
+ *  artist's (ListenBrainz, Last.fm) too; another by its id as the server says it. */
+const SOURCES: Record<string, string> = { musicbrainz: 'MusicBrainz', discogs: 'Discogs', bandcamp: 'Bandcamp', listenbrainz: 'ListenBrainz', lastfm: 'Last.fm' };
+const COUNTING_ORDER: readonly NoList['source'][] = ['musicbrainz', 'discogs', 'bandcamp'];
+const sourceName = (id: string) => SOURCES[id] ?? id;
 /** "A", "A and B", "A, B and C". */
 const names = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
-/** An empty album's line (F1): a record not had says why it has no tracks, from its view's `no_list`: its sources switched
- *  off, held back until when, unanswered, then with none, each part's sources in counting order; "Reading its tracklist…"
- *  while the server reads it. Anything else with no rows: "No tracks yet." as ever. */
-export function emptyLine(v: { not_had?: boolean; looking?: boolean; no_list?: NoList[] }, said: (t: number) => string = when): string {
-  if (!v.not_had) return 'No tracks yet.';
-  if (v.looking) return 'Reading its tracklist…';
-  const list = [...(v.no_list ?? [])].sort((a, b) => COUNTING_ORDER.indexOf(a.source) - COUNTING_ORDER.indexOf(b.source));
-  if (!list.length) return 'No tracklist: it has no reference to read one from';
-  const saying = (s: NoList['said']) => list.filter((x) => x.said === s);
-  const part = (s: NoList['said'], one: string, more: string) => {
-    const xs = saying(s).map((x) => SOURCES[x.source]);
+/** Why a list is not there (F1's words, one way for a record's tracklist and a section's list): its sources switched off,
+ *  held back until when, unanswered, then with none, each part's sources in the order given. */
+function why(list: readonly { source: string; said: string; until?: number }[], said: (t: number) => string): string {
+  const saying = (s: string) => list.filter((x) => x.said === s);
+  const part = (s: string, one: string, more: string) => {
+    const xs = saying(s).map((x) => sourceName(x.source));
     return xs.length ? [`${names(xs)} ${xs.length > 1 ? more : one}`] : [];
   };
-  const parts = [
+  return [
     ...part('off', 'is switched off', 'are switched off'),
-    ...saying('held').map((x) => `${SOURCES[x.source]} is held back${x.until ? ` until ${said(x.until)}` : ''}`),
+    ...saying('held').map((x) => `${sourceName(x.source)} is held back${x.until ? ` until ${said(x.until)}` : ''}`),
     ...part('unanswered', "didn't answer", "didn't answer"),
     ...part('none', 'has none', 'have none'),
-  ];
-  return `No tracklist: ${parts.join('; ')}`;
+  ].join('; ');
 }
 
-/** How long a record not had waits to be asked again while the server reads its list (n: asks made for this opening):
- *  soon at first, then seldom, with no last ask (the read is cut at the server's own limit, F1.9). */
+/** An empty album's line (F1): a record not had says why it has no tracks once the server's read of its list has ended, from
+ *  its view's `no_list`, each part's sources in counting order. Anything else with no rows: "No tracks yet." as ever. */
+export function emptyLine(v: { not_had?: boolean; looking?: boolean; no_list?: NoList[] }, said: (t: number) => string = when): string {
+  if (!v.not_had) return 'No tracks yet.';
+  const list = [...(v.no_list ?? [])].sort((a, b) => COUNTING_ORDER.indexOf(a.source) - COUNTING_ORDER.indexOf(b.source));
+  if (!list.length) return 'No tracklist: it has no reference to read one from';
+  return `No tracklist: ${why(list, said)}`;
+}
+
+/** What a one-list view's track list shows where it has no rows (F6): for a record not had whose list the server reads, the
+ *  standard loader saying the source it reads now, never a line; else the empty line (F1). */
+export type EmptyPlace = { reading: string } | { line: string };
+export function emptyPlace(v: { not_had?: boolean; looking?: boolean; reading?: string; no_list?: NoList[] }, said: (t: number) => string = when): EmptyPlace {
+  if (v.not_had && v.looking) return { reading: v.reading ? `Reading its tracklist from ${sourceName(v.reading)}` : 'Reading its tracklist' };
+  return { line: emptyLine(v, said) };
+}
+
+/** The rows a record not had shows from an answer (F6): once it showed rows, an answer with none while the server reads again
+ *  keeps them, so the loader never comes back for it. */
+export const keptRows = <T>(answer: T[], shown: T[] | null | undefined, v: { not_had?: boolean; looking?: boolean }): T[] =>
+  v.not_had && v.looking && !answer.length && shown?.length ? shown : answer;
+
+/** What a section filled by a background read shows (an artist's Not in your library and recommendations, F8; a label's Not
+ *  in your library, F10), from its answer and how many rows it has to show: its rows; while it is read, the section's loader
+ *  naming the source it reads now; once read, why it has none in F1's words; nothing where the read ended with none and no
+ *  source failed. Never absent while it is read or after it failed. */
+export type SectionPlace = 'rows' | { reading: string } | { line: string } | null;
+export function sectionPlace(v: ListRead, rows: number, said: (t: number) => string = when): SectionPlace {
+  if (rows) return 'rows';
+  if (v.looking) return { reading: v.reading ? `Reading ${sourceName(v.reading)}…` : 'Reading…' };
+  return v.no_list?.length ? { line: `No list: ${why(v.no_list, said)}` } : null;
+}
+
+/** A record's About's Sources row (F7): a chip per reference the server names, in its order, by its source's name, opening
+ *  its page there (https only); `tracks` on the one its tracklist is read from. None: no row. */
+export function sourceChips(sources: readonly RecordSource[] | null | undefined): { name: string; url: string; tracks: boolean }[] {
+  return (sources ?? []).filter((s) => /^https:\/\//.test(s.url)).map((s) => ({ name: sourceName(s.source), url: s.url, tracks: !!s.tracks }));
+}
+
+/** How long a record not had waits to be asked again while the server reads its list (n: asks made for this opening), and
+ *  an artist's or a label's section read in the background (F8, F10): soon at first, then seldom, with no last ask (the read
+ *  is cut at the server's own limit, F1.9). */
 export const lookAgainAfter = (n: number): number => (n < 8 ? 4000 : 30000);
 
 /** A row's second line on an album's page: its own artist where it is another than the album's; a file gone, said so, but

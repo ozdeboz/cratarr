@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const { albumRowSub, emptyLine, lookAgainAfter, NOT_HAD_ENTRIES, notHadPage, offeredNotHad, wasInMusic } = await import('../src/lib/recordNotHad.ts');
+const { albumRowSub, emptyLine, emptyPlace, keptRows, lookAgainAfter, NOT_HAD_ENTRIES, notHadPage, offeredNotHad, wasInMusic } = await import('../src/lib/recordNotHad.ts');
 const { when } = await import('../src/lib/settings/when.ts');
 const { MENUS } = await import('../src/lib/menuTable.ts');
 
@@ -67,8 +67,36 @@ const notHad = (...no_list: ReturnType<typeof of>[]) => ({ not_had: true, no_lis
 const T = Date.UTC(2026, 10, 18, 21, 30) / 1000;
 const at = (t: number) => `at ${t}`;
 
-test('a record not had whose list the server reads says so', () => {
-  assert.equal(emptyLine({ not_had: true, looking: true }, when), 'Reading its tracklist…');
+// F6.1 (the owner's F6, preview 1: no loader while a record not had's list was read; F1.12's first bullet as the owner amended
+// it): while the server reads it, the track list's place is the standard loader naming the source it reads now, never a line;
+// rows replace it; F1's reason once the read ends with none; once rows show, never the loader again for that record.
+test("while the server reads a record not had's list, its track list's place is the standard loader naming the source, never a line", () => {
+  for (const [reading, name] of [['musicbrainz', 'MusicBrainz'], ['discogs', 'Discogs'], ['bandcamp', 'Bandcamp']] as const)
+    assert.deepEqual(emptyPlace({ not_had: true, looking: true, reading }, when), { reading: `Reading its tracklist from ${name}` }, reading);
+  for (const v of [{ not_had: true, looking: true, reading: 'musicbrainz' as const, no_list: [of('discogs', 'off')] }, { not_had: true, looking: true, reading: 'bandcamp' as const, no_list: [] }])
+    assert.ok(!('line' in emptyPlace(v, when)), `no line while it reads: ${JSON.stringify(v)}`);
+});
+
+test("when the read ends with none, F1's reason takes the loader's place", () => {
+  const ended = notHad(of('musicbrainz', 'unanswered'), of('bandcamp', 'unanswered'));
+  assert.deepEqual(emptyPlace(ended, when), { line: "No tracklist: MusicBrainz and Bandcamp didn't answer" });
+  assert.deepEqual(emptyPlace(ended, when), { line: emptyLine(ended, when) }, "the line is emptyLine's");
+  assert.deepEqual(emptyPlace(notHad(), when), { line: 'No tracklist: it has no reference to read one from' });
+  assert.deepEqual(emptyPlace({}, when), { line: 'No tracks yet.' }, 'an album or a playlist with no rows, as before');
+  assert.deepEqual(emptyPlace({ not_had: false, looking: true }, when), { line: 'No tracks yet.' }, 'only a record not had waits for its list');
+  assert.doesNotMatch(readFileSync(new URL('../src/lib/recordNotHad.ts', import.meta.url), 'utf8'), /Reading its tracklist…/, 'the text line went');
+});
+
+test('rows replace the loader; once they show, an answer with none while it reads keeps them, never the loader again', () => {
+  const shown = [{ id: 't1' }, { id: 't2' }];
+  const came = [{ id: 't1' }];
+  assert.equal(keptRows(came, null, { not_had: true, looking: true }), came, 'its rows, read meanwhile');
+  assert.equal(keptRows(came, shown, { not_had: true }), came, "the answer's rows");
+  assert.equal(keptRows([], shown, { not_had: true, looking: true }), shown, 'no flicker back to the loader');
+  assert.deepEqual(keptRows([], null, { not_had: true, looking: true }), [], 'none shown yet: the loader');
+  assert.deepEqual(keptRows([], [], { not_had: true, looking: true }), []);
+  assert.deepEqual(keptRows([], shown, { not_had: true }), [], 'the read ended: what the server has');
+  assert.deepEqual(keptRows([], shown, { looking: true }), [], 'only a record not had');
 });
 
 test('every source it has a reference of switched off: said in one part', () => {
@@ -128,12 +156,20 @@ test('asked again every 4 s for its first eight asks, then every 30 s, with no l
 // The panel's use of them, read from the source, as the view does not run here.
 const view = readFileSync(new URL('../src/lib/PlaylistView.svelte', import.meta.url), 'utf8');
 
-test("an empty album's line is emptyLine's, in the same .empty paragraph where \"No tracks yet.\" sat", () => {
-  assert.match(view, /import \{ albumRowSub, emptyLine, lookAgainAfter, notHadPage, type NotHadAction \} from '\.\/recordNotHad';/);
-  assert.match(view, /\{:else if rows && !rows\.length\}\s*\{#if nothing\}[\s\S]{0,300}?\{:else\}\s*(<!--[^>]*-->\s*)?<p class="empty">\{emptyLine\(notHad && albumHead \? albumHead : \{\}\)\}<\/p>/);
+test("an empty album's place: PageLoading naming the read while a record not had's list is read, else emptyLine's line in the .empty paragraph where \"No tracks yet.\" sat", () => {
+  assert.match(view, /import \{ albumRowSub, emptyPlace, keptRows, lookAgainAfter, notHadPage, type NotHadAction \} from '\.\/recordNotHad';/);
+  assert.match(
+    view,
+    /\{:else if rows && !rows\.length\}\s*\{#if nothing\}[\s\S]{0,300}?\{:else\}\s*(<!--[^>]*-->\s*)?\{@const place = emptyPlace\(notHad && albumHead \? albumHead : \{\}\)\}\s*\{#if 'reading' in place\}<PageLoading><p class="opening">\{place\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{place\.line\}<\/p>\{\/if\}/,
+  );
   assert.equal(view.split('<p class="empty">No tracks yet.</p>').length - 1, 1, "only several playlists' sections keep it");
-  assert.match(view, /'was_until' \| 'bandcamp' \| 'looking' \| 'no_list'>/, "the album's head keeps them");
-  assert.match(view, /was_until: r\.was_until, bandcamp: r\.bandcamp, looking: r\.looking, no_list: r\.no_list \};/);
+  assert.match(view, /'was_until' \| 'bandcamp' \| 'looking' \| 'no_list' \| 'reading' \| 'sources'/, "the album's head keeps them");
+  assert.match(view, /was_until: r\.was_until, bandcamp: r\.bandcamp, looking: r\.looking, no_list: r\.no_list, reading: r\.reading, sources: r\.sources\b/);
+  assert.match(view, /\.opening \{\s*margin: 0;\s*color: var\(--muted\);\s*\}/, "said under the mark as PageLoading's own line");
+});
+
+test("a record not had's rows, once shown, stay while the server reads again: never the loader again for it", () => {
+  assert.match(view, /const kept = keptRows\(r\.rows, rowsFor === want \? rows : null, r\);\s*return \{ \.\.\.r, rows: kept, total: kept\.length \};/);
 });
 
 test('a record not had is asked again through lookAgainAfter while the server reads, until it stops or the page shows another', () => {

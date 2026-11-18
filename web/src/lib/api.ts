@@ -1846,6 +1846,8 @@ export type ListedAlbum = {
    *  plays. None from a list with no libraries; from a server of another kind, `library` alone. lib/copiesRule reads
    *  these. */
   copies?: AlbumCopy[];
+  /** How many editions of one album its card stands for (F12), its own among them; absent where one. */
+  editions?: number;
   /** Its artists one by one, when the source credits several; absent: `artist` alone. */
   artists?: string[];
   /** Its length (s), its tracks' together; null where one of them is not known (0.10; a server before it gives none). */
@@ -2226,7 +2228,7 @@ export type AlbumDiscogs = {
   year?: number;
   genres?: string[];
   styles?: string[];
-  labels?: { name: string; catno?: string }[];
+  labels?: LabelOf[];
   credits?: { name: string; role: string; tracks?: string }[];
   url?: string;
 };
@@ -2457,7 +2459,7 @@ export type MissingAlbum = {
 export const getDiscoverMissing = () => quietly<{ albums: MissingAlbum[]; artists: number }>('/api/discover/missing');
 /** One artist's missing albums (their page), by their id for life where it is one (W10), else by name (the first of it). */
 export const getArtistMissing = (nameOrId: string) =>
-  quietly<{ albums: MissingAlbum[]; looking: boolean }>(`/api/artists/missing?${new URLSearchParams(artistAsk(nameOrId))}`);
+  quietly<{ albums: MissingAlbum[]; looking: boolean } & ListRead>(`/api/artists/missing?${new URLSearchParams(artistAsk(nameOrId))}`);
 /** What Discover leaves out for the account: its answers (Not interested: `no`, Hide: `hidden`), the artists left out. */
 export type DiscoverExcluded = { key: string; album: string; artist: string; year?: number | null; cover?: string | null; how: 'no' | 'hidden'; at: number };
 export const getDiscoverExcluded = () => quietly<{ albums: DiscoverExcluded[]; artists: { artist: string; key: string; at: number }[] }>('/api/discover/excluded');
@@ -2467,8 +2469,10 @@ export const takeBackExcluded = (what: { key: string } | { artist: string }) =>
 /** An album's page on Bandcamp, looked for when it is opened (MusicBrainz's link first, the artist's page, the search). */
 export const findOnBandcamp = (artist: string, album: string, release_group?: string) =>
   request<{ page: string | null }>(`/api/bandcamp/find?${new URLSearchParams({ artist, album, ...(release_group ? { release_group } : {}) })}`);
-/** A label's page (C56, lib/labelPage): its records by year, had or not, `looking` while its lists are read (asked again
- *  until it is false); `more` reads the next hundred of that source's list. */
+/** A label's page (C56, lib/labelPage): its records by year, what the house has apart from the rest (F10), `looking` while its
+ *  lists are read (asked again until it is false); `more` reads the next hundred of that source's list. */
+/** A label's row found or made by its reference (F9): its id, opened then as any label's page. */
+export const openLabelByRef = (b: import('./labelPage').LabelOpenBody) => post<{ id: string }>('/api/labels/open', b);
 export const getLabel = (id: string, more?: import('./labelPage').LabelSource) =>
   quietly<import('./labelPage').LabelPageOf>(`/api/labels/${encodeURIComponent(id)}${more ? `?${new URLSearchParams({ more })}` : ''}`);
 /** A row no record holds yet opened (C56, C57; Q33: kept at open): the record made of what its sources know it by, or the one
@@ -2491,7 +2495,7 @@ export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/ph
 export type RelatedArtist = { name: string; mbid?: string; why: string[]; id?: string; number?: number | null; bandcamp?: string };
 /** An artist's related artists to explore (0.9.2) as last looked up; `looking`: a look runs now. */
 export const getRelatedArtists = (nameOrId: string) =>
-  quietly<{ artists: RelatedArtist[]; looking: boolean }>(`/api/artists/related?${new URLSearchParams(artistAsk(nameOrId))}`);
+  quietly<{ artists: RelatedArtist[]; looking: boolean } & ListRead>(`/api/artists/related?${new URLSearchParams(artistAsk(nameOrId))}`);
 /** An artist Beyond listed opened (C57, Z8): Cratarr's artist who holds their MusicBrainz id, made now where none does. Refused
  *  (403) to one who is no administrator for an artist Beyond did not list within the day. */
 export const openArtist = (mbid: string, name: string) => post<{ artist: string }>('/api/artists/open', { mbid, name });
@@ -2584,6 +2588,13 @@ export type WordOf = { kind: WordKind; word: string; sources: WordSource[] };
 /** What a source said of a record not had's list (F1): switched off; held back (Bandcamp's bot check, `until` its end,
  *  epoch seconds); no answer; or no list there. */
 export type NoList = { source: 'musicbrainz' | 'discogs' | 'bandcamp'; said: 'off' | 'held' | 'unanswered' | 'none'; until?: number };
+/** What a list read in the background says of itself (an artist's sections, F8; a label's, F10): `looking` while it is read,
+ *  `reading` the source asked now; once read, `no_list`: the sources whose read could not be had, in the order read, in F1's
+ *  words (`source` also `listenbrainz`, `lastfm` or another list source by its id). */
+export type ListRead = { looking?: boolean; reading?: string; no_list?: { source: string; said: 'off' | 'held' | 'unanswered'; until?: number }[] };
+/** One of a record's references its About shows (F7): its source's own page for it (`kind`: release-group, release, master,
+ *  album); `tracks` on the one its rows are read from. */
+export type RecordSource = { source: NoList['source']; kind: string; url: string; tracks?: true };
 export type AlbumView = {
   /** As a listed album's (decision 0092). */
   files_state?: FilesState | null;
@@ -2621,11 +2632,17 @@ export type AlbumView = {
   /** Why a record not had has no rows (F1): what each source it has a reference of said, in counting order; empty where
    *  it has none to read one from. Absent while it is read, where it has rows, and on a record had. */
   no_list?: NoList[];
+  /** While `looking`: the source its list is asked of now (F6). */
+  reading?: NoList['source'];
+  /** Its references the page may show, in counting order (F7). */
+  sources?: RecordSource[];
+  /** Its editions where it has others (F12): each opening its record, the one asked among them. */
+  editions?: import('./editions').Edition[];
   /** The record that has it by the one had rule, where it is another (`al-<n>`). */
   have?: string;
   /** The account's newest request of it, whatever its status, as the Requests page shows it. */
   request?: AlbumRequest;
-  /** Its labels, each by its id for life. */
+  /** Its labels, each by its id for life where it has a row, else by its reference (F9). */
   labels?: LabelOf[];
   /** Its cover's address: its own, else its release group's, else its Bandcamp page's. */
   cover?: string;
@@ -2637,8 +2654,9 @@ export type AlbumView = {
   record?: string;
   release_group?: string;
 };
-/** A record's label as its page names it (C54): its id for life (`la-<n>`), its name, its catalogue number there. */
-export type LabelOf = { id: string; name: string; catno?: string };
+/** A record's label as its page names it (C54, F9): its name, its catalogue number there, its id for life (`la-<n>`) where it
+ *  has a row, else its reference. */
+export type LabelOf = import('./labelPage').LabelChip;
 /** One search's answer from the server (decision 0072, 0.9.3): per kind, and the kinds merged for Top results. Each
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
