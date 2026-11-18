@@ -79,6 +79,8 @@ pub mod refind;
 pub mod related;
 pub mod search;
 pub mod requests;
+// What counts against each user's room (AL01).
+pub mod room;
 // Records not had that nobody sees, forgotten (RT01).
 pub mod retention;
 pub mod queue_requests;

@@ -1235,8 +1235,14 @@ impl Requester {
 
 /// `requesters`, read now.
 fn requesters_now(serve: &Serve) -> HashMap<i64, Requester> {
-    let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
-    let of = records_held(serve.catalogue(), &approved, &serve.library.kinds()).unwrap_or_else(|e| {
+    requesters_in(serve.catalogue(), &serve.userdata, &serve.library.kinds())
+}
+
+/// Who asked first for each approved request's record (`requesters`), read now from the user data `ud` and the catalogue `cat`,
+/// each catalogue folder's library as `kinds` says: what room counts a copy in Incoming for (AL01) as well. Blocking.
+pub(crate) fn requesters_in(cat: &crate::catalogue::Catalogue, ud: &crate::userdata::UserData, kinds: &[(i64, crate::settings::LibraryKind)]) -> HashMap<i64, Requester> {
+    let approved = ud.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
+    let of = records_held(cat, &approved, kinds).unwrap_or_else(|e| {
         tracing::debug!("the requests' records not read: {e:#}");
         vec![None; approved.len()]
     });

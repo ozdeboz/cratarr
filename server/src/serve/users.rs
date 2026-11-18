@@ -39,6 +39,11 @@ pub struct User {
     /// `None` for an account the directory never signed in, or one it gives no such name.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Its room in bytes, as an administrator set it (AL01; 0084, OQ-R5: GB with decimals); none: the default, 100 GB
+    /// (`app::room::ROOM`). Kept while it is an administrator, who has none (OQ-R3); written only once set, so a file from
+    /// before keeps every field as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_bytes: Option<u64>,
 }
 
 fn yes() -> bool {
@@ -109,6 +114,7 @@ impl User {
             directory: false,
             permissions: Permissions::default(),
             display_name: None,
+            room_bytes: None,
         }
     }
 }
@@ -429,6 +435,16 @@ impl Users {
             if let Some(u) = users.iter_mut().find(|u| u.name == name) {
                 u.admin = admin;
             }
+            Ok(())
+        })
+    }
+
+    /// An account's room in bytes, set by an administrator (AL01; 0084: per user, in the Users panel): any account's, the
+    /// directory's too, and kept on an administrator for when it is a user again (OQ-R3).
+    pub fn set_room(&self, name: &str, bytes: u64) -> Result<(), Refusal> {
+        self.change(|users| {
+            let u = users.iter_mut().find(|u| u.name == name).ok_or(Refusal::Missing)?;
+            u.room_bytes = Some(bytes);
             Ok(())
         })
     }

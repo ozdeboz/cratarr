@@ -107,8 +107,8 @@ mod tests {
     /// Bob's rows keep `shared = 0` and are never listed (OQ-E); Music's are never listed (they are Music's). Case 2, as T2b has it
     /// (an original in anyone's own music covers its copy, and a copy never holds another): Ann's FLAC, a Want's copy of Bob's, is
     /// covered by Bob's original before, after and after the Undo, Music's new rows being copies that hold nothing. Case 3 (the
-    /// coordinator, T2b's own rule): as case 2, then Bob's original trashed after the Replace: Ann's copy and Music's new rows both
-    /// count in full and leave the list.
+    /// coordinator, T2b's own rule): as case 2, then Bob's original trashed after the Replace: it covers neither Ann's copy nor
+    /// Music's new rows, and Ann's leaves the list, backed up.
     #[test]
     fn the_backup_list_follows_a_replace_from_a_copy() {
         use crate::journal::{Event, TrackMove};
@@ -159,8 +159,8 @@ mod tests {
             }
             if case == 3 {
                 cat.mark_trashed(3, "Bob", "300/Bob").unwrap();
-                let free = cat.shared_copies(-1, &kept).unwrap();
-                assert!(free.iter().all(|(folder, _)| *folder != 2 && *folder != 0), "Bob's original in his trash: Ann's and Music's count in full: {free:?}");
+                let covered = cat.shared_copies(-1, &kept).unwrap();
+                assert!(covered.iter().all(|(folder, _)| *folder != 2 && *folder != 0), "Bob's original in his trash covers neither Ann's copy nor Music's new rows: {covered:?}");
                 assert_eq!(ann_listed(), 0, "Ann's copy leaves the list: backed up");
                 continue;
             }
@@ -265,8 +265,8 @@ mod tests {
     }
     const KEPT: [i64; 4] = [0, 1, 3, 4];
 
-    /// The copies free of room (AL01): every copy that shares, wherever it lies.
-    fn free(cat: &Catalogue) -> Vec<(i64, String)> {
+    /// The copies the backup's rule covers (T2b): every copy whose original covers it, wherever it lies, Music's too.
+    fn covered(cat: &Catalogue) -> Vec<(i64, String)> {
         cat.shared_copies(-1, &KEPT).unwrap()
     }
 
@@ -289,7 +289,7 @@ mod tests {
         original_in(&cat, "Drift", 4, &[(0, "Agoria/Drift/1.flac"), (3, "Agoria/Drift/1.flac")]);
         original_in(&cat, "Tide Tables", 1, &[(3, "Glass Harbour/Tide Tables/1.flac")]);
         assert_eq!(
-            free(&cat),
+            covered(&cat),
             [(0, "Agoria/Drift/1.flac".to_string()), (3, "Agoria/Drift/1.flac".to_string()), (3, "Glass Harbour/Tide Tables/1.flac".to_string())],
             "Music's copy and Ann's of Bob's original, Ann's of the second main library's"
         );
@@ -297,32 +297,33 @@ mod tests {
     }
 
     /// T2b: an original in Incoming covers nothing (Incoming is not kept), nor one in a trash, nor one deleted and its trash
-    /// emptied: the copy counts in full and is backed up.
+    /// emptied: the copy is its own and is backed up.
     #[test]
     fn a_copy_of_an_original_in_incoming_or_a_trash_is_its_own() {
         let cat = five();
         original_in(&cat, "Night Ferry", 2, &[(3, "Night Ferry/1.flac")]);
-        assert!(free(&cat).is_empty(), "an original waiting in Incoming covers nothing");
+        assert!(covered(&cat).is_empty(), "an original waiting in Incoming covers nothing");
         let record = cat.record_for_tests("Drift", 1);
         cat.copy_for_tests(record, 4);
         cat.copy_rows(&[((4, format!("copy-{record}/{record}.flac")), (3, "Drift/1.flac".into()), true)]).unwrap();
-        assert_eq!(free(&cat), [(3, "Drift/1.flac".to_string())], "covered while Bob's original is there");
+        assert_eq!(covered(&cat), [(3, "Drift/1.flac".to_string())], "covered while Bob's original is there");
         cat.mark_trashed(4, &format!("copy-{record}"), "300/x").unwrap();
-        assert!(free(&cat).is_empty() && paths(&cat, 0, &KEPT).unwrap().is_empty(), "Bob deleted his: Ann's copy counts in full, backed up");
+        assert!(covered(&cat).is_empty() && paths(&cat, 0, &KEPT).unwrap().is_empty(), "Bob deleted his: Ann's copy is her own, backed up");
         cat.unmark_trashed(4, &format!("copy-{record}"), "300/x").unwrap();
-        assert_eq!(free(&cat).len(), 1, "his Undo covers it again");
+        assert_eq!(covered(&cat).len(), 1, "his Undo covers it again");
     }
 
-    /// T2b (the coordinator: two copies never keep each other free): Music's original M, Ann's copy A and Bob's copy B. M deleted
-    /// and its trash emptied: A and B hold the same bytes, yet neither is an original, so both count in full and both are backed up.
+    /// T2b (the coordinator: two copies never cover each other on the list): Music's original M, Ann's copy A and Bob's copy B. M
+    /// deleted and its trash emptied: A and B hold the same bytes, yet neither is an original, so neither covers the other and both
+    /// are backed up.
     #[test]
-    fn two_copies_never_keep_each_other_free() {
+    fn two_copies_never_cover_each_other() {
         let cat = five();
         let m = original_in(&cat, "Two Rooms", 0, &[(3, "Two Rooms/1.flac"), (4, "Two Rooms/1.flac")]);
         assert_eq!(paths(&cat, 0, &KEPT).unwrap().len(), 2, "both covered by M");
         cat.mark_trashed(0, m.rsplit_once('/').unwrap().0, "400/x").unwrap();
         cat.execute_for_tests("DELETE FROM files WHERE trashed IS NOT NULL");
-        assert!(free(&cat).is_empty(), "A and B count in full");
+        assert!(covered(&cat).is_empty(), "neither A nor B covered");
         assert!(paths(&cat, 0, &KEPT).unwrap().is_empty(), "A and B both backed up");
     }
 

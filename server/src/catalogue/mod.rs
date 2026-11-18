@@ -172,13 +172,42 @@ const PRESENT: &str = "folder >= 0 AND gone_at IS NULL AND trashed IS NULL";
 /// The same, with the files table named `f` (in a join with `source_ids`, which has a folder too).
 const PRESENT_F: &str = "f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL";
 
-/// Whether copy `f` (`files.shared`) still shares its blocks with an original (T2, T2b; the owner's (d), "Free anywhere"): a row
-/// of the same track that is an original itself (`shared = 0`: two copies never keep each other free), present (neither gone nor
-/// in a trash: a copy in the trash never counts as had, and room comes back at once on a delete, Q4), in a kept library
-/// (`:kept`, a JSON list of catalogue folders: the main libraries and anyone's own music, never Incoming), whose size and time
-/// are still the copy's, as the copy was made of it (C38 keeps both). A copy whose original was replaced, rewritten, deleted or
-/// moved out since is its own. The one rule wherever `shared` is read: the backup's list, and room (AL01).
-pub const SHARED_WITH: &str = "f.shared = 1 AND f.track IS NOT NULL AND EXISTS (SELECT 1 FROM files o WHERE o.track = f.track AND o.shared = 0 AND o.folder IN (SELECT value FROM json_each(:kept)) AND o.gone_at IS NULL AND o.trashed IS NULL AND o.size = f.size AND o.mtime = f.mtime)";
+/// T2's test of "the same bytes", one test read by two rules of their own (the backup's `SHARED_WITH`, room's `FREE_OF_ROOM`):
+/// file `$o` lies on file `$f`'s track with its size and time, as a copy keeps its original's (C38 keeps both), and is present
+/// (in a folder in use, neither gone nor in a trash). Text, so that each rule's SQL holds it whole.
+macro_rules! same_bytes {
+    ($o:literal, $f:literal) => {
+        concat!($o, ".track = ", $f, ".track AND ", $o, ".size = ", $f, ".size AND ", $o, ".mtime = ", $f, ".mtime AND ", $o, ".folder >= 0 AND ", $o, ".gone_at IS NULL AND ", $o, ".trashed IS NULL")
+    };
+}
+
+/// Whether copy `f` (`files.shared`) is covered on the backup's list (C41; T2, T2b): another file holds the same bytes
+/// (`same_bytes!`) and is an original itself (`shared = 0`: two copies never cover each other), in a kept library (`:kept`, a
+/// JSON list of catalogue folders: the main libraries and anyone's own music, never Incoming). An original in a trash covers
+/// nothing (T2b: the backup errs on the safe side); a copy whose original was replaced, rewritten, deleted or moved out since is
+/// its own, and is backed up. The backup's rule alone: room has its own (`FREE_OF_ROOM`), on the same test of the same bytes.
+pub const SHARED_WITH: &str = concat!(
+    "f.shared = 1 AND f.track IS NOT NULL AND EXISTS (SELECT 1 FROM files o WHERE ",
+    same_bytes!("o", "f"),
+    " AND o.shared = 0 AND o.folder IN (SELECT value FROM json_each(:kept)))"
+);
+
+/// Whether own-music file `f` is free of room (AL01; R.0, the owner's Q5, Q9 and (d) "Free anywhere", OQ-R1): another file holds
+/// the same bytes (`same_bytes!`), the two share their blocks as their copy said (either marked `shared`), and that file lies in
+/// a main library (`:main`), or in someone's own music (`:own`) and is the one there that pays for those bytes: the original
+/// (`shared = 0`), else the copy that came first, then the lowest folder. So an own copy is free while Music holds its bytes,
+/// whichever came first (Q9: an original too, once Music holds a copy of it), and of own-music files holding one set of bytes
+/// with no main library's among them exactly one pays. Once that other file changes or leaves (rewritten, replaced, gone, in a
+/// trash, parked) the copy counts in full, whoever changed it (Q5), and is free again when it is back. A copy made on a disk
+/// that could not share (`shared = 0` on both) costs its size. Room's rule alone: the backup's list reads `SHARED_WITH`.
+pub const FREE_OF_ROOM: &str = concat!(
+    "f.track IS NOT NULL AND EXISTS (SELECT 1 FROM files g WHERE ",
+    same_bytes!("g", "f"),
+    " AND (g.folder, g.rel) <> (f.folder, f.rel) AND (f.shared = 1 OR g.shared = 1)",
+    " AND (g.folder IN (SELECT value FROM json_each(:main)) OR (g.folder IN (SELECT value FROM json_each(:own)) AND NOT EXISTS (SELECT 1 FROM files h WHERE ",
+    same_bytes!("h", "g"),
+    " AND h.folder IN (SELECT value FROM json_each(:own)) AND (h.shared, ifnull(h.came, 0), h.folder, h.rel) < (g.shared, ifnull(g.came, 0), g.folder, g.rel)))))"
+);
 
 /// How many of a folder's files `set_folders` looks for at a path, to tell whether those rows are that folder's.
 const SAMPLE: i64 = 20;
@@ -605,8 +634,9 @@ const ADDED_COLUMNS: [(&str, &str); 43] = [
     // Y12: its names as the clash of names compares them (`records::names_of`: artist|title, each folded), kept so a Want finds the
     // records of its names by an index. NULL until folded (`records::live_named_in`), and again once either is renamed (a trigger).
     ("records", "names TEXT"),
-    // C39 (Copy to, files.md CP5): a copy whose blocks are its original's, as the file system said when it was made: it costs no
-    // room. Let go of where the file's size or time changes (a tag write makes it a file of its own); kept as it moves.
+    // C39 (Copy to, files.md CP5): a copy whose blocks are its original's, as the file system said when it was made: read by the
+    // backup's list (`SHARED_WITH`) and by room (`FREE_OF_ROOM`), each by its own rule. Let go of where the file's size or time
+    // changes (a tag write makes it a file of its own); kept as it moves.
     ("files", "shared INTEGER NOT NULL DEFAULT 0"),
 ];
 
@@ -973,6 +1003,23 @@ impl FromIterator<(i64, PathBuf)> for InUse {
     fn from_iter<T: IntoIterator<Item = (i64, PathBuf)>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
     }
+}
+
+/// What room reads of the catalogue (`Catalogue::room_rows`, AL01): each own-music folder's bytes not free of room, and each copy in
+/// Incoming of a record asked for.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoomRows {
+    /// (catalogue folder, bytes): a folder all of whose files are free is not here.
+    pub own: Vec<(i64, u64)>,
+    pub copies: Vec<RoomCopy>,
+}
+
+/// A copy in Incoming of a record asked for, as room reads it: its record, when its first file came (none: not known), its bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomCopy {
+    pub record: i64,
+    pub came: Option<i64>,
+    pub bytes: u64,
 }
 
 /// The meta key of the highest folder id ever given (`set_folders`).
@@ -2401,6 +2448,14 @@ impl Catalogue {
         self.db().execute("UPDATE files SET came = ?2 WHERE folder = ?1", [folder, at]).unwrap();
     }
 
+    /// Tests elsewhere: a file rewritten in place, as a tag write's row update leaves it (`carry_over`, C39): its new size and time,
+    /// and a copy that shared its original's blocks shares them no more.
+    #[cfg(test)]
+    pub fn rewrite_for_tests(&self, folder: i64, rel: &str, size: u64, mtime: i64) {
+        let (was, at): (i64, i64) = self.db().query_row("SELECT size, mtime FROM files WHERE folder = ?1 AND rel = ?2", params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        self.carry_over(folder, rel, (was as u64, at), (size, mtime)).unwrap();
+    }
+
     /// Tests elsewhere: every gone file gone longer than a gone file waits, for `identify` to retire it.
     #[cfg(test)]
     pub fn gone_long_ago_for_tests(&self) {
@@ -3068,14 +3123,52 @@ impl Catalogue {
 
     /// The copies outside catalogue folder `main` sharing their blocks with an original kept in one of the folders `kept` (C41,
     /// the backup's list; T2b): present, and `SHARED_WITH` it. A copy whose original left, or was replaced or rewritten since
-    /// (T2), is its own, and is not listed. `main` none of the folders (-1): every shared copy, as room counts them. In folder and
-    /// path order. Blocking.
+    /// (T2), is its own, and is not listed. `main` none of the folders (-1): every copy the backup's rule covers, Music's too. In
+    /// folder and path order. Blocking.
     pub fn shared_copies(&self, main: i64, kept: &[i64]) -> Result<Vec<(i64, String)>> {
         let kept = serde_json::to_string(kept)?;
         let db = self.db();
         let mut st = db.prepare_cached(&format!("SELECT f.folder, f.rel FROM files f WHERE {PRESENT_F} AND f.folder <> :main AND {SHARED_WITH} ORDER BY f.folder, f.rel"))?;
         let rows = st.query_map(rusqlite::named_params! { ":main": main, ":kept": kept }, |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Room's rows (AL01, R.0), every account's at once (AL01.11): one statement, on a reader of its own where there is one (never
+    /// the writer's lock), naming no `analysis_shape`. The bytes of the present files in each own-music folder of `own` that are
+    /// not free of room (`FREE_OF_ROOM`, with the main libraries `main`), by folder; and each copy of the records `asked` in the
+    /// Incoming folders `incoming` (a record's present files in one folder of one library), with when its first file came and its
+    /// bytes. Blocking.
+    pub fn room_rows(&self, own: &[i64], main: &[i64], incoming: &[i64], asked: &[i64]) -> Result<RoomRows> {
+        let sql = format!(
+            "SELECT f.folder, NULL, NULL, sum(f.size) FROM files f
+               WHERE f.folder IN (SELECT value FROM json_each(:own)) AND {PRESENT_F} AND NOT ({FREE_OF_ROOM}) GROUP BY f.folder
+             UNION ALL
+             SELECT f.folder, t.record, min(f.came), sum(f.size) FROM files f JOIN tracks t ON t.id = f.track
+               WHERE f.folder IN (SELECT value FROM json_each(:incoming)) AND {PRESENT_F} AND t.record IN (SELECT value FROM json_each(:asked))
+               GROUP BY f.folder, t.record, rtrim(f.rel, replace(f.rel, '/', ''))"
+        );
+        let json = |ids: &[i64]| serde_json::to_string(ids);
+        let (own, main, incoming, asked) = (json(own)?, json(main)?, json(incoming)?, json(asked)?);
+        let read = |db: &Connection| -> Result<RoomRows> {
+            let mut st = db.prepare(&sql)?;
+            let params = rusqlite::named_params! { ":own": own, ":main": main, ":incoming": incoming, ":asked": asked };
+            let rows = st.query_map(params, |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?)))?;
+            let mut out = RoomRows::default();
+            for row in rows {
+                let (folder, record, came, bytes) = row?;
+                let bytes = bytes.max(0) as u64;
+                match record {
+                    None => out.own.push((folder, bytes)),
+                    Some(record) => out.copies.push(RoomCopy { record, came, bytes }),
+                }
+            }
+            Ok(out)
+        };
+        let apart = self.reader();
+        match &apart {
+            Some(c) => read(c),
+            None => read(&self.db()),
+        }
     }
 
     /// A copy's audio files (catalogue folder `folder`, under `dir`; all of it where `dir` is empty), present, each with its track
@@ -4702,8 +4795,9 @@ mod tests {
         assert_eq!(cat.other_edition_in(waiting, &[]).unwrap(), None);
     }
 
-    /// T2.4: one rule says whether a copy shares its blocks: it asks the original's size and time, and the backup's list reads it.
-    /// T2b: the original is one (not a copy), present, outside any trash, in a kept library.
+    /// T2.4: one rule says whether the backup's list covers a copy: it asks the original's size and time (`same_bytes!`, the one
+    /// test of the same bytes, which room's rule of its own reads too), and the backup's list reads it. T2b: the original is one
+    /// (not a copy), present, outside any trash, in a kept library.
     #[test]
     fn the_shared_rule_is_one() {
         assert!(SHARED_WITH.contains("o.size = f.size") && SHARED_WITH.contains("o.mtime = f.mtime"), "{SHARED_WITH}");
@@ -4711,7 +4805,7 @@ mod tests {
         let source = include_str!("mod.rs");
         let at = source.find("pub fn shared_copies").unwrap();
         let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
-        assert!(body.contains("{SHARED_WITH}") && !body.contains("f.shared ="), "shared_copies reads the one rule: {body}");
+        assert!(body.contains("{SHARED_WITH}") && !body.contains("f.shared ="), "shared_copies reads the backup's one rule: {body}");
     }
 
     /// M1: the pass's question of which files have no waveform in three bands reads `analysis_band_wave`'s index of forms

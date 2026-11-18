@@ -2799,6 +2799,145 @@ mod tests {
         }
     }
 
+    /// Files as the disk has them, every copy said to share its original's blocks, as on the NAS's btrfs (AL01's rooms).
+    struct CopyShares(Arc<dyn crate::ports::Files>);
+
+    impl crate::ports::Files for CopyShares {
+        fn trash(&self, folder: &std::path::Path, rel: &str, now_epoch: i64) -> anyhow::Result<String> {
+            self.0.trash(folder, rel, now_epoch)
+        }
+        fn restore(&self, folder: &std::path::Path, token: &str) -> anyhow::Result<String> {
+            self.0.restore(folder, token)
+        }
+        fn purge(&self, folder: &std::path::Path, now_epoch: i64, keep_days: u32) -> anyhow::Result<usize> {
+            self.0.purge(folder, now_epoch, keep_days)
+        }
+        fn can_write(&self, folder: &std::path::Path) -> bool {
+            self.0.can_write(folder)
+        }
+        fn move_all(&self, plan: &[crate::moves::Step]) -> anyhow::Result<()> {
+            self.0.move_all(plan)
+        }
+        fn move_back(&self, plan: &[crate::moves::Step]) -> anyhow::Result<()> {
+            self.0.move_back(plan)
+        }
+        fn clear_parts(&self, plan: &[crate::moves::Step]) {
+            self.0.clear_parts(plan)
+        }
+        fn copy_all(&self, plan: &[crate::moves::Step]) -> anyhow::Result<Vec<bool>> {
+            self.0.copy_all(plan).map(|copied| vec![true; copied.len()])
+        }
+        fn shares(&self, from: &std::path::Path, to: &std::path::Path) -> bool {
+            self.0.shares(from, to)
+        }
+    }
+
+    /// AL01.5's (e), read as the coordinator reads it (T1c: refused whole): root's Copy to of a 10-file album into bob's own music,
+    /// every copy sharing Music's blocks; a cover fix rewrote 3 of the copies since, and a file was added to the folder. Bob's room
+    /// counts the 3 rewritten (their own bytes now) and the added file, never the 7 still Music's bytes. Root's Undo is refused
+    /// whole: all ten copies and the added file in place, nothing in the trash, his room as it was. Never a short album left in
+    /// bob's music by the Undo.
+    #[tokio::test]
+    async fn a_copys_undo_refused_whole_leaves_room_counting_what_is_its_own() {
+        let (music, inc, own) = (folder("al01-undo-music"), folder("al01-undo-inc"), folder("al01-undo-bob"));
+        let svc = on_disk(&music, &inc).await;
+        let svc = IncomingService { files: Arc::new(CopyShares(crate::ports::disk())), ..svc };
+        let c = svc.lib.catalogue();
+        c.set_folders(vec![music.clone(), inc.clone(), own.clone()]).unwrap();
+        std::fs::create_dir_all(music.join("A/Album")).unwrap();
+        for n in 1..=10 {
+            std::fs::write(music.join(format!("A/Album/{n:02}.flac")), format!("track {n}")).unwrap();
+        }
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        let places = crate::app::room::Places { own: vec![(2, "bob".into())], main: vec![0], incoming: vec![1] };
+        let bobs = || crate::app::room::used_by(&c, &places, &std::collections::HashMap::new()).unwrap().get("bob").copied().unwrap_or(0);
+        assert_eq!(lying(&own.join("A/Album")).len(), 10, "the ten copies");
+        assert_eq!(bobs(), 0, "ten copies sharing Music's blocks: free");
+        for n in [2, 5, 9] {
+            std::fs::write(own.join(format!("A/Album/{n:02}.flac")), format!("track {n}, its cover fixed")).unwrap();
+        }
+        std::fs::write(own.join("A/Album/11.flac"), b"added since").unwrap();
+        c.walk_all();
+        let size = |n: &str| std::fs::metadata(own.join("A/Album").join(n)).unwrap().len();
+        let its_own: u64 = ["02.flac", "05.flac", "09.flac", "11.flac"].iter().map(|n| size(n)).sum();
+        assert_eq!(bobs(), its_own, "the rewritten three and the added file count; the seven still Music's bytes do not");
+        let e = svc.undo(&undo).await.unwrap_err().to_string();
+        assert!(e.contains("delete the copy"), "refused whole, saying so: {e}");
+        assert_eq!(lying(&own.join("A/Album")).len(), 11, "all ten copies and the added file in place: no short album");
+        assert!(lying(&own.join(crate::trash::TRASH_DIR)).is_empty(), "nothing in the trash");
+        assert_eq!(bobs(), its_own, "his room as before the Undo");
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// AL01.6 (INTERACTIONS top 10, I22): ann's room holds her own music and her arrival in Incoming, asked for by ann, then by bob.
+    /// Ann's Keep of it into her own music, through the service, leaves her room as it was (the same files, counted from her own
+    /// music now, no longer as an arrival); bob's room never counts the arrival, before or after. Never one copy in two accounts'
+    /// room, nor counted twice.
+    #[tokio::test]
+    async fn an_arrival_is_counted_once() {
+        use crate::app::requests::{APPROVED, requesters_in};
+        let (music, inc, ann, bob) = (folder("al01-once-music"), folder("al01-once-inc"), folder("al01-once-ann"), folder("al01-once-bob"));
+        let svc = on_disk(&music, &inc).await;
+        let c = svc.lib.catalogue();
+        c.set_folders(vec![music.clone(), inc.clone(), ann.clone(), bob.clone()]).unwrap();
+        std::fs::create_dir_all(ann.join("Mine")).unwrap();
+        std::fs::write(ann.join("Mine/1.flac"), "her own, held before").unwrap();
+        std::fs::create_dir_all(inc.join("B/Album")).unwrap();
+        std::fs::write(inc.join("B/Album/1.flac"), "arrived, one").unwrap();
+        std::fs::write(inc.join("B/Album/2.flac"), "arrived, two").unwrap();
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        assert!(c.track_of(1, "B/Album/1.flac").is_some(), "the arrival's tracks");
+        // Its record, as a build's record pass gives the arrival's tracks one.
+        let record = c.record_for_tests("Album", 0);
+        c.execute_for_tests(&format!("UPDATE tracks SET record = {record} WHERE id IN (SELECT track FROM files WHERE folder = 1)"));
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        for (user, at) in [("ann", 1), ("bob", 2)] {
+            let asked = crate::userdata::Request {
+                id: 0,
+                user: user.into(),
+                album_key: format!("k-{user}"),
+                artist_key: "b".into(),
+                release_group: None,
+                album: "Album".into(),
+                artist: "B".into(),
+                year: None,
+                cover: None,
+                at,
+                status: APPROVED.into(),
+                reason: None,
+                decided_by: None,
+                decided_at: None,
+                fetched: None,
+                record: Some(record),
+            };
+            ud.add_request(&asked).unwrap();
+        }
+        let kinds = [(0, settings::LibraryKind::Main), (1, settings::LibraryKind::Incoming), (2, settings::LibraryKind::Own), (3, settings::LibraryKind::Own)];
+        let places = crate::app::room::Places { own: vec![(2, "ann".into()), (3, "bob".into())], main: vec![0], incoming: vec![1] };
+        let rooms = || {
+            let used = crate::app::room::used_by(&c, &places, &requesters_in(&c, &ud, &kinds)).unwrap();
+            (used.get("ann").copied().unwrap_or(0), used.get("bob").copied().unwrap_or(0))
+        };
+        let size = |p: PathBuf| std::fs::metadata(p).unwrap().len();
+        let held = size(ann.join("Mine/1.flac")) + size(inc.join("B/Album/1.flac")) + size(inc.join("B/Album/2.flac"));
+        assert_eq!(rooms(), (held, 0), "her own music and her arrival; nothing of it bob's");
+        let at = svc.locate_listed("cratarr", copy_at(&format!("al-{record}"), 1, &inc.to_string_lossy(), "B/Album")).await.unwrap();
+        svc.move_located("cratarr", at, 2, settings::Quality::None, None).await.unwrap();
+        assert!(!inc.join("B/Album/1.flac").exists(), "kept into her own music");
+        assert_eq!(rooms(), (held, 0), "the same files, counted from her own music now: once");
+        for d in [music, inc, ann, bob] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     /// T1.2: the Undo of an old Copy to leaves a later album at the copy's place alone: Ann deleted the copy, a Keep of another
     /// edition landed there; the Undo is refused, the later album and its rows as they were, and its own Undo works after.
     #[tokio::test]

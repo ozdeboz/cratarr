@@ -5160,3 +5160,59 @@ async fn an_unknown_argument_starts_nothing_end_to_end() {
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// AL01.5, its room half (Q4: the trash gives room back at once; OQ-R5: a room in decimal GB): ann's room set by root just below
+/// what her own music holds, `/api/me` says it full; `/api/users` lists her room and none for the administrator, whose own
+/// `/api/me` has none. Her delete of "Both Shores" from her own music: the very next `/api/me` has her room down by the album's
+/// bytes and not full, its files in her own music's trash. Her Undo: full again. AL02 adds the Wants' half (one waiting for room
+/// while full, handed within a round once under, a new one waiting after the Undo).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn deleting_gives_room_back_at_once_and_its_undo_takes_it_end_to_end() {
+    let root = temp("al01-room");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let (music, incoming, own) = (library.join("music"), library.join("incoming"), library.join("own"));
+    let mine = own.join("ann");
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    // Read as nobody while there are no accounts.
+    let album = s.read_in("Both Shores", &mine).await;
+    s.read_in("Own Room", &mine).await;
+    for (name, admin) in [("root", true), ("ann", false)] {
+        s.ok(reqwest::Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    let ann = s.sign_in("ann", "ann pw").await;
+    let bytes = |dir: &Path| audio_under(dir).iter().map(|f| std::fs::metadata(dir.join(f)).unwrap().len()).sum::<u64>();
+    let (held, shores, tracks) = (bytes(&mine), bytes(&mine.join(SHORES)), audio_under(&mine.join(SHORES)).len());
+    assert!(shores > 0 && held > shores, "her two albums");
+    s.until("her own music counted", Duration::from_secs(120), || async { ann.get("/api/me").await["room"]["used"].as_u64() == Some(held) }).await;
+    s.ok(reqwest::Method::PUT, "/api/users/ann/room", json!({ "gb": (held - 1) as f64 / 1e9 })).await;
+    let room = ann.get("/api/me").await["room"].clone();
+    assert_eq!((room["size"].as_u64(), room["used"].as_u64(), room["full"].as_bool()), (Some(held - 1), Some(held), Some(true)), "full: {room}");
+    let users = s.get("/api/users").await;
+    let listed = |name: &str| users["users"].as_array().unwrap().iter().find(|u| u["name"] == name).map(|u| u["room"].clone()).unwrap();
+    assert!(listed("root").is_null(), "an administrator has no room");
+    assert_eq!(listed("ann")["size"].as_u64(), Some(held - 1), "hers, as set");
+    assert!(s.get("/api/me").await["room"].is_null(), "root's own: none, never full");
+
+    let gone = ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()), json!({ "from": id_of(&mine) })).await;
+    let room = ann.get("/api/me").await["room"].clone();
+    assert_eq!((room["used"].as_u64(), room["full"].as_bool()), (Some(held - shores), Some(false)), "at once, not when the trash is emptied: {room}");
+    assert!(!mine.join(SHORES).exists() && in_the_trash(&mine) == tracks, "its files in her own music's trash");
+
+    ann.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
+    assert_eq!(bytes(&mine.join(SHORES)), shores, "back");
+    s.until("full again", Duration::from_secs(60), || async {
+        let room = ann.get("/api/me").await["room"].clone();
+        room["used"].as_u64() == Some(held) && room["full"].as_bool() == Some(true)
+    })
+    .await;
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
