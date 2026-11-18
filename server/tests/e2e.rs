@@ -5046,3 +5046,117 @@ async fn a_replace_from_a_tagged_copy_over_an_untagged_one_keeps_the_record_end_
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// A data folder as 0.16.2 left it (FX01, `tests/fixtures/0.16`), as the server's own tests make it (`fixtures::data_0_16`).
+fn data_0_16(data: &Path) {
+    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/0.16");
+    std::fs::create_dir_all(data).unwrap();
+    for name in ["catalogue", "userdata"] {
+        let sql = std::fs::read_to_string(here.join(format!("{name}.sql"))).unwrap();
+        rusqlite::Connection::open(data.join(format!("{name}.sqlite"))).unwrap().execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;")).unwrap();
+    }
+    std::fs::copy(here.join("soulseek.json"), data.join("soulseek.json")).unwrap();
+}
+
+/// Every file under `dir`, hidden ones too, by its place in it: a database's `-wal` and `-shm` beside it as well.
+fn every_file(dir: &Path) -> Files {
+    fn walk(root: &Path, at: &Path, out: &mut Files) {
+        for e in std::fs::read_dir(at).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else {
+                out.insert(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read(&p).unwrap());
+            }
+        }
+    }
+    let mut out = Files::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// A free address on this machine, as the harness gives a server.
+fn free_bind() -> String {
+    format!("127.0.0.1:{}", std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port())
+}
+
+/// The binary with `args`, its data folder and address set as the harness sets them, given 5 seconds to end by itself: its
+/// exit code, what it printed and what it said. Still running then, it started a server: it is killed, and the test fails.
+fn briefly(args: &[&str], data: &Path, bind: &str) -> (Option<i32>, String, String) {
+    let mut child = Command::new(BIN)
+        .args(args)
+        .env("CRATARR_DATA_DIR", data)
+        .env("CRATARR_BIND", bind)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(5) {
+            child.kill().ok();
+            child.wait().ok();
+            panic!("{args:?} still running after 5 s: it started a server");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let (mut out, mut said) = (String::new(), String::new());
+    std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut said).unwrap();
+    (status.code(), out, said)
+}
+
+/// P4.1 (W4): `--version` prints "cratarr-server <version>", one line, and leaves at once: on a data folder 0.16.2 left, nothing
+/// opened, written or added there (no `-wal`, no `-shm`, no diagnostics), and the port never taken. Until 0.17 it started a
+/// second server on the data folder.
+#[test]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+fn the_version_flag_prints_and_starts_nothing_end_to_end() {
+    let root = temp("version-flag");
+    let data = root.join("data");
+    data_0_16(&data);
+    let (before, whole) = (as_it_lies(&data), every_file(&data));
+    let bind = free_bind();
+    let (code, out, said) = briefly(&["--version"], &data, &bind);
+    assert_eq!(code, Some(0), "{said}");
+    assert_eq!(out.lines().collect::<Vec<_>>(), [format!("cratarr-server {}", env!("CARGO_PKG_VERSION"))], "one line: {out}");
+    assert!(as_it_lies(&data) == before, "nothing in the data folder");
+    assert_eq!(every_file(&data).keys().collect::<Vec<_>>(), whole.keys().collect::<Vec<_>>(), "no file added: no -wal, -shm or diagnostics.sqlite");
+    assert!(every_file(&data) == whole, "every byte as it was");
+    std::net::TcpListener::bind(&bind).expect("the port was never taken");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// P4.2 (W4): an argument the server does not know starts nothing: it leaves with 2, naming it and the known flags, the data
+/// folder as it was and the port free. No argument at all starts the server, as the harness starts every server here.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_unknown_argument_starts_nothing_end_to_end() {
+    let root = temp("unknown-argument");
+    let data = root.join("data");
+    data_0_16(&data);
+    let (before, whole) = (as_it_lies(&data), every_file(&data));
+    for args in [&["--versoin"][..], &["-v"], &["version"], &["--version", "extra"], &["--version extra"]] {
+        let bind = free_bind();
+        let (code, _, said) = briefly(args, &data, &bind);
+        assert_eq!(code, Some(2), "{args:?}: {said}");
+        assert!(said.contains(&args.join(" ")), "{args:?} named: {said}");
+        for known in ["--version", "--healthcheck", "--new-api-key", "--make-fixtures", "--make-layout", "--analyse", "--signals", "--beats"] {
+            assert!(said.contains(known), "{args:?}: {known} among the known flags: {said}");
+        }
+        assert!(as_it_lies(&data) == before, "{args:?}: nothing in the data folder");
+        assert!(every_file(&data) == whole, "{args:?}: no file added, every byte as it was");
+        std::net::TcpListener::bind(&bind).unwrap_or_else(|e| panic!("{args:?}: the port was taken: {e}"));
+    }
+    let (music, fresh) = (root.join("music"), root.join("fresh"));
+    std::fs::create_dir_all(&music).unwrap();
+    std::fs::create_dir_all(&fresh).unwrap();
+    settings_0_15(&fresh, music.to_str().unwrap());
+    let s = Server::start(&fresh).await;
+    assert_eq!(s.send(reqwest::Method::GET, "/api/health", json!({})).await.0, 200, "no argument: the server");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
