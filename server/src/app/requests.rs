@@ -113,7 +113,9 @@ pub enum Fetching {
 /// A request's state (W5): `RequestState`, from the request as kept, how its record is held for its asker (`holding`), Lidarr's
 /// progress for its group, and Soulseek's word of its item. A request of an album the asker has, or that arrived, reads so whatever
 /// its answer was to be; one held only in another's own music is still wanted, for its asker's copy (I05). One waiting for room
-/// reads so (AL02.2), its numbers 0 till a view gives them (`views_of`); one waiting for space too (AL03). Pure.
+/// reads so (AL02.2), its numbers 0 till a view gives them (`views_of`); one waiting for space too (AL03); either of them before the
+/// album being done for its asker (RF17, the review of run 13, RM1: a Want the house meets waits for its asker's copy, though
+/// Music's is in everyone's view). Pure.
 pub fn request_state(r: &Request, held: Holding, lidarr: Option<&Progress>, soulseek: Option<&super::soulseek::Word>) -> RequestState {
     match r.status.as_str() {
         DECLINED => return RequestState::Declined,
@@ -123,11 +125,12 @@ pub fn request_state(r: &Request, held: Holding, lidarr: Option<&Progress>, soul
         _ => {}
     }
     match held {
-        Holding::Done => RequestState::Done,
+        Holding::Done if !(waits_for_room(r) || waits_for_space(r)) => RequestState::Done,
         Holding::Arrived => RequestState::Arrived,
         _ if r.status != APPROVED => RequestState::WaitingForApproval,
         _ if waits_for_room(r) => RequestState::WaitingForRoom { used: 0, room: 0 },
         _ if waits_for_space(r) => RequestState::WaitingForSpace,
+        Holding::Done => RequestState::Done,
         Holding::Partly { has, of } => RequestState::PartlyThere { has, of },
         Holding::None | Holding::Elsewhere => {
             let lidarr = lidarr.and_then(|p| match *p {
@@ -1259,7 +1262,9 @@ pub(crate) async fn deliver(serve: &Serve) -> Vec<Closed> {
 }
 
 /// [`deliver`] in the user data `ud` and the catalogue `cat`, each catalogue folder's library as `kinds` has it; with `record`, only
-/// the requests whose record it is or holds (a Keep's: OQ-D1). Each as it was, for an Undo (`undeliver`). Blocking.
+/// the requests whose record it is or holds (a Keep's: OQ-D1). Never one that waits for room or for space (RF17, the review of run
+/// 13, RM1): a Want the house meets waits for its asker's copy, though Music's copy makes the album done for everyone; it is
+/// delivered once its copy is made. Each as it was, for an Undo (`undeliver`). Blocking.
 pub(crate) fn deliver_in(ud: &crate::userdata::UserData, cat: &crate::catalogue::Catalogue, kinds: &[(i64, crate::settings::LibraryKind)], record: Option<i64>) -> Vec<Closed> {
     let approved = ud.requests(None, Some(APPROVED), usize::MAX).unwrap_or_default();
     let of = match records_held(cat, &approved, kinds) {
@@ -1272,6 +1277,9 @@ pub(crate) fn deliver_in(ud: &crate::userdata::UserData, cat: &crate::catalogue:
     let mut delivered = Vec::new();
     for (r, o) in approved.iter().zip(of) {
         let Some(o) = o.filter(|o| o.holding == Holding::Done) else { continue };
+        if waits_for_room(r) || waits_for_space(r) {
+            continue;
+        }
         if record.is_some_and(|n| o.record != n && o.holder != Some(n)) {
             continue;
         }
@@ -3556,6 +3564,67 @@ pub(crate) mod tests {
             assert_eq!(rows_of(&cat, BOB).len(), his.len() + files.len(), "shares {shares}: his copy's rows");
             assert!(strict.violations().is_empty(), "shares {shares}: {:?}", strict.violations());
         }
+    }
+
+    /// RF17 (the review of run 13, RM1): a Want the house meets that waits stays waiting through the requests' round. Music holds R
+    /// whole; bob is at 101 of 100 GB, so his Want of R waits for room, and it reads that it waits, not "In the library" (Music's copy
+    /// is in everyone's view). A round runs while he is still over: not delivered, its line and its state still the room's, no copy
+    /// made. Once he is under, the round makes his copy, and only then is it delivered. Never delivered before its copy is made.
+    #[tokio::test]
+    async fn a_want_met_from_the_house_waits_through_a_round_while_its_asker_is_over() {
+        const R: &str = "00000000-0000-4000-8000-000000000491";
+        let serve = room_shape();
+        with_accounts(&serve);
+        let cat = serve.catalogue().clone();
+        let (r, files) = held_in(&serve, "Two Rooms", 2, R, MUSIC, gb(1.0), 50);
+        put_file(&cat, BOB, "His/1.flac", None, gb(101.0), 10, false, 100);
+        let (strict, house) = (Strict::expecting_nothing(), Copies::of(&cat, &files, &[("bob", BOB)], false));
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &Roomy };
+        let bobs = acting("bob", false, ask_record_with(&h, &serve, "bob", r)).await.unwrap();
+        assert_eq!(now_of(&serve, bobs.id).fetched.as_deref(), Some(WAITS_FOR_ROOM), "his waits");
+        assert!(matches!(state_of(&serve, bobs.id).await, RequestState::WaitingForRoom { .. }), "it reads that it waits, not done");
+        let his = rows_of(&cat, BOB);
+        round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
+        let row = now_of(&serve, bobs.id);
+        assert_eq!((row.status.as_str(), row.fetched.as_deref()), (APPROVED, Some(WAITS_FOR_ROOM)), "a round on, still waiting: not delivered");
+        assert!(matches!(state_of(&serve, bobs.id).await, RequestState::WaitingForRoom { .. }), "still reads that it waits");
+        assert!(house.asked().is_empty() && rows_of(&cat, BOB) == his, "no copy made while he is over");
+        serve.users.set_room("bob", gb(200.0)).unwrap();
+        round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
+        assert_eq!(house.asked(), [("bob".to_string(), r)], "under: his copy made at the round");
+        assert_eq!(rows_of(&cat, BOB).len(), his.len() + files.len(), "its rows in his music");
+        assert_eq!(now_of(&serve, bobs.id).status, DELIVERED, "delivered once his copy is made");
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
+    }
+
+    /// RF17 (RM1), below the floor (AL03.1): ann, under her room, Wants a record Music holds whole where her copy would not share its
+    /// blocks: it waits for space, and reads so. A round below the floor leaves it waiting, not delivered, no copy made; once there is
+    /// space, the round makes her copy, then delivers it.
+    #[tokio::test]
+    async fn a_want_met_from_the_house_waits_through_a_round_below_the_floor() {
+        use crate::app::room::tests::Stand;
+        const M: &str = "00000000-0000-4000-8000-000000000492";
+        let serve = room_shape();
+        with_accounts(&serve);
+        let cat = serve.catalogue().clone();
+        let stand = Stand::of(&[(FOLDERS[1], 150.0), (FOLDERS[2], 150.0)]);
+        let (m, apart) = held_in(&serve, "Far Room", 2, M, MUSIC, gb(1.0), 50);
+        let (strict, house) = (Strict::expecting_nothing(), Copies::of(&cat, &apart, &[("ann", ANN)], false));
+        let h = Hands { lidarr: Some(&strict), soulseek: true, house: &house, disks: &stand };
+        let anns = acting("ann", false, ask_record_with(&h, &serve, "ann", m)).await.unwrap();
+        assert_eq!(now_of(&serve, anns.id).fetched.as_deref(), Some(WAITS_FOR_SPACE), "hers waits for space");
+        assert_eq!(state_of(&serve, anns.id).await, RequestState::WaitingForSpace, "it reads that it waits, not done");
+        let hers = rows_of(&cat, ANN);
+        round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
+        let row = now_of(&serve, anns.id);
+        assert_eq!((row.status.as_str(), row.fetched.as_deref()), (APPROVED, Some(WAITS_FOR_SPACE)), "a round below the floor: still waiting, not delivered");
+        assert_eq!(state_of(&serve, anns.id).await, RequestState::WaitingForSpace, "still reads that it waits");
+        assert_eq!(rows_of(&cat, ANN), hers, "no copy made");
+        let h = Hands { disks: &Roomy, ..h };
+        round_with(&h, &serve, super::super::moment::now_secs()).await.unwrap();
+        assert_eq!(rows_of(&cat, ANN).len(), hers.len() + apart.len(), "space again: her copy made at the round");
+        assert_eq!(now_of(&serve, anns.id).status, DELIVERED, "then delivered");
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
     }
 
     /// A server on a copy of `fixtures::data_0_16` with `more` run on its user data first (0.16's rows), 0.17's step run, and the

@@ -4034,7 +4034,8 @@ struct KeepInto {
     year: Option<String>,
 }
 
-/// Which copy moves (`from`), where it goes (decision 0034): a library's id, and the year when the album's tags lack it.
+/// Which copy moves (`from`), where it goes (decision 0034): a library's id, and the year when the album's tags lack it. A tap
+/// carries what its sheet showed (RF10): the folder where it goes, how many files, and the copy's own folder; a copy needs them.
 #[derive(Deserialize)]
 struct MoveTo {
     #[serde(default)]
@@ -4042,6 +4043,12 @@ struct MoveTo {
     to: String,
     #[serde(default)]
     year: Option<String>,
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    files: Option<usize>,
+    #[serde(default)]
+    from_dir: Option<String>,
 }
 
 async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
@@ -4060,7 +4067,11 @@ async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(
 }
 
 async fn move_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<MoveTo>) -> Result<Json<crate::app::KeepResult>, ApiError> {
-    Ok(Json(app.move_album(&source, &album, b.from.as_deref(), &b.to, b.year.as_deref()).await?))
+    let sheet = match (b.folder, b.files, b.from_dir) {
+        (Some(folder), Some(files), Some(from_dir)) => Some(crate::app::CopySheet { folder, files, from_dir }),
+        _ => None,
+    };
+    Ok(Json(app.move_album(&source, &album, b.from.as_deref(), &b.to, b.year.as_deref(), sheet).await?))
 }
 
 async fn keep_preview(
@@ -4112,6 +4123,9 @@ struct ReplaceBody {
     added: Option<usize>,
     #[serde(default)]
     files: Option<usize>,
+    /// Which own copy its sheet showed, by its folder (RF10).
+    #[serde(default)]
+    from_dir: Option<String>,
 }
 
 async fn replace_incoming(
@@ -4127,7 +4141,7 @@ async fn replace_incoming(
         (Some(folder), Some(tracks), Some(added), Some(files)) => Some(crate::app::ReplaceSheet { folder, tracks, added, files }),
         _ => None,
     };
-    let ask = crate::app::ReplaceAsk { from: b.from.as_deref(), to: b.to.as_deref(), year: b.year.as_deref(), cover: b.cover.as_deref(), carry: b.carry, sheet };
+    let ask = crate::app::ReplaceAsk { from: b.from.as_deref(), to: b.to.as_deref(), year: b.year.as_deref(), cover: b.cover.as_deref(), carry: b.carry, sheet, from_dir: b.from_dir.as_deref() };
     Ok(Json(app.replace_album(&source, &album, ask).await?))
 }
 
@@ -6862,11 +6876,6 @@ async fn put_runtime(ctx: Ctx, Json(c): Json<crate::app::runtime::Change>) -> Re
 
 // ---- The disk floor (AL03)
 
-#[derive(Deserialize)]
-struct FloorSize {
-    gb: f64,
-}
-
 /// The disk floor (AL03, 0084), as just read against the disks users' music lands on: the floor in GB, the lowest free space there in
 /// bytes (none where it cannot be read), and whether the server is short of space.
 async fn get_floor(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
@@ -6875,13 +6884,12 @@ async fn get_floor(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "gb": space.floor as f64 / crate::app::room::GB as f64, "free": space.free, "short": space.short })))
 }
 
-/// The disk floor set by an administrator: GB with decimals, kept in bytes (1 GB = 10^9), and read against the disks at once.
-async fn put_floor(ctx: Ctx, Json(b): Json<FloorSize>) -> Result<Json<serde_json::Value>, ApiError> {
-    if !b.gb.is_finite() || b.gb < 0.0 {
-        return Err(ToggleError::BadSettings("Give the floor in GB, from 0.".into()).into());
-    }
+/// The disk floor set by an administrator: GB with decimals, kept in bytes (1 GB = 10^9), and read against the disks at once. Anything
+/// but a number from 0 is refused with 400 (AL04.4, `room::gb_given`), the old floor kept.
+async fn put_floor(ctx: Ctx, Json(b): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(gb) = crate::app::room::gb_given(&b) else { return Err(ToggleError::BadSettings("Give the floor in GB, from 0.".into()).into()) };
     let serve = ctx.serve()?;
-    let bytes = (b.gb * crate::app::room::GB as f64).round() as u64;
+    let bytes = (gb * crate::app::room::GB as f64).round() as u64;
     tokio::task::spawn_blocking(move || crate::app::room::set_floor(&serve.userdata, bytes))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e}")))?

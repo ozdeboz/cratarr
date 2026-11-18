@@ -310,9 +310,10 @@ impl App {
 }
 
 /// The copy of a listed record that an action names, as its library alone would list it. `from` is a library: of two folders
-/// of one library the first, as the record's copies stand (Q2). A record of several copies must be told which: what is
-/// done to its files cannot be left to which of them plays. Another server's album is its one library's.
-fn named_copy(a: &source::Album, from: Option<&str>) -> Result<source::Album, ToggleError> {
+/// of one library the one at `dir`, the folder a tap's sheet showed (RF10, the review of runs 11 and 12, RA9), else the first, as
+/// the record's copies stand (Q2). A record of several copies must be told which: what is done to its files cannot be left to which
+/// of them plays. Another server's album is its one library's.
+fn named_copy(a: &source::Album, from: Option<&str>, dir: Option<&str>) -> Result<source::Album, ToggleError> {
     let elsewhere = || ToggleError::Refused("It has no copy in that library".into());
     if a.copies.is_empty() {
         return match from {
@@ -321,7 +322,7 @@ fn named_copy(a: &source::Album, from: Option<&str>) -> Result<source::Album, To
         };
     }
     match from {
-        Some(f) => a.copies.iter().find(|c| c.library == f).map(|c| a.as_copy(c)).ok_or_else(elsewhere),
+        Some(f) => a.copies.iter().find(|c| c.library == f && dir.is_none_or(|d| c.dir == d)).map(|c| a.as_copy(c)).ok_or_else(elsewhere),
         None => match a.copies.as_slice() {
             [only] => Ok(a.as_copy(only)),
             _ => Err(ToggleError::Refused("It is in several libraries: say which copy".into())),
@@ -361,6 +362,18 @@ fn own_off(on: &Active, folders: &crate::catalogue::InUse) -> Vec<i64> {
     on.libraries().into_iter().filter(|u| u.kind == LibraryKind::Own && u.owner.is_none()).filter_map(|u| folder_in(on, folders, &u.id)).collect()
 }
 
+/// The own copy Replace from someone's own music takes in catalogue folder `own` (RY01; RF10, the review's RA9), of a record's
+/// `copies` as copying judges them: the one at `dir`, the folder its tap names, as its preview showed it; else, asked by the library
+/// alone (a preview), the one Replace offers there against one of `mains` (`copies::replacing_copy`), else the first there. None: no
+/// copy there, or none at `dir`. Pure.
+fn own_named<'a>(copies: &'a [Copy], own: i64, dir: Option<&str>, mains: &[&Copy], off: &[i64]) -> Option<&'a Copy> {
+    let first = || copies.iter().find(|c| c.folder == own);
+    match dir {
+        Some(d) => copies.iter().find(|c| c.folder == own && c.dir == d),
+        None => mains.iter().find_map(|m| replacing_copy(copies, m, off)).filter(|o| o.folder == own).or_else(first),
+    }
+}
+
 /// Replace from someone's own music (RY01) as `App::own_offer` finds it: the record's title, the own copy listed alone, the main
 /// library's copy it would take the place of, and why not, where it is not offered.
 struct OwnOffer {
@@ -371,7 +384,7 @@ struct OwnOffer {
 }
 
 /// A Replace's tap (`App::replace_album`): the copies, the year where the tags lack it, the cover (`keep`, `new`), carry over, and
-/// (RY01) what its sheet showed.
+/// (RY01) what its sheet showed, the own copy named by its folder (`from_dir`, RF10).
 pub struct ReplaceAsk<'a> {
     pub from: Option<&'a str>,
     pub to: Option<&'a str>,
@@ -379,6 +392,7 @@ pub struct ReplaceAsk<'a> {
     pub cover: Option<&'a str>,
     pub carry: bool,
     pub sheet: Option<super::ReplaceSheet>,
+    pub from_dir: Option<&'a str>,
 }
 
 /// The one record's listing of the copy a Want copies (T5): its card with that copy alone, by its folder and place, in the library
@@ -664,19 +678,19 @@ impl App {
         }
     }
 
-    /// A listed album of a server (Music's or another library's), by id, as the viewer sees that server: the copy `from`
-    /// names (`named_copy`).
-    async fn listed_album(&self, source: &str, album: &str, from: Option<&str>) -> Result<(AlbumsSourceView, source::Album), ToggleError> {
+    /// A listed album of a server (Music's or another library's), by id, as the viewer sees that server: the copy `from` names, at
+    /// `dir` where a tap's sheet says which (`named_copy`).
+    async fn listed_album(&self, source: &str, album: &str, from: Option<&str>, dir: Option<&str>) -> Result<(AlbumsSourceView, source::Album), ToggleError> {
         let view = self.albums(Some(source)).await;
         let s = view.sources.into_iter().find(|s| s.id == source).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
         let a = s.albums.iter().find(|a| a.id == album).ok_or_else(|| ToggleError::Refused("that album is no longer listed".into()))?;
-        let a = named_copy(a, from)?;
+        let a = named_copy(a, from, dir)?;
         Ok((s, a))
     }
 
     /// Delete a copy the viewer may, into its library's trash (decision 0034). The record stays while another copy does.
     pub async fn delete_album(&self, source: &str, album: &str, from: Option<&str>) -> Result<super::DeleteResult, ToggleError> {
-        let (s, a) = self.listed_album(source, album, from).await?;
+        let (s, a) = self.listed_album(source, album, from, None).await?;
         if !may_delete_copy(&s.deletable, &a) {
             return Err(ToggleError::Refused("That isn't yours to delete".into()));
         }
@@ -769,7 +783,7 @@ impl App {
                 Err(e) => return WantCopy::Failed(format!("its own music could not be made: {e:#}")),
             }
         };
-        match self.incoming.copy_album(source, album, &to, None).await {
+        match self.incoming.copy_album(source, album, &to, None, None).await {
             Ok(_) => WantCopy::Made,
             Err(e) => WantCopy::Failed(e.to_string()),
         }
@@ -795,7 +809,7 @@ impl App {
     /// would take the place of, in `to`, else the first main library it beats. Offered only where that own copy is the one
     /// `copies::replacing_copy` takes, of the record's copies as copying judges them (S.1), own music switched off left out; else
     /// `refused` says why.
-    async fn own_offer(&self, source: &str, album: &str, from: &str, to: Option<&str>) -> Result<OwnOffer, ToggleError> {
+    async fn own_offer(&self, source: &str, album: &str, from: &str, to: Option<&str>, dir: Option<&str>) -> Result<OwnOffer, ToggleError> {
         let served = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open".into()))?;
         let record = crate::serve::ids::record_number(album).ok_or_else(|| ToggleError::Refused("that album is no longer listed".into()))?;
         let (own, target, off) = {
@@ -811,11 +825,11 @@ impl App {
             };
             (own, target, own_off(on, &folders))
         };
-        let (id, s) = (album.to_string(), served.clone());
+        let (id, s, dir) = (album.to_string(), served.clone(), dir.map(str::to_string));
         let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<OwnOffer, String>> {
             let copies = judged(&judged_copies(&s, &id, record)?);
-            let Some(mine) = copies.iter().find(|c| c.folder == own) else { return Ok(Err("It has no copy in that library".into())) };
             let mains: Vec<&Copy> = copies.iter().filter(|c| c.kind == LibraryKind::Main && target.is_none_or(|t| t == c.folder)).collect();
+            let Some(mine) = own_named(&copies, own, dir.as_deref(), &mains, &off) else { return Ok(Err("It has no copy in that library".into())) };
             let offered = mains.iter().copied().find(|m| replacing_copy(&copies, m, &off).is_some_and(|o| (o.folder, &o.dir) == (mine.folder, &mine.dir)));
             let Some(main) = offered.or_else(|| mains.first().copied()) else { return Ok(Err("It has no copy in a main library to replace".into())) };
             let refused = match offered {
@@ -843,7 +857,7 @@ impl App {
     /// the one offered. Changes nothing.
     pub async fn replace_preview(&self, source: &str, album: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>) -> Result<super::ReplacePreview, ToggleError> {
         let Some(own) = self.own_source(source, from) else { return self.incoming.replace_preview(source, album, from, to, year).await };
-        let offer = self.own_offer(source, album, &own, to).await?;
+        let offer = self.own_offer(source, album, &own, to, None).await?;
         match offer.refused {
             Some(why) => Ok(super::ReplacePreview::refused_from_copy(offer.title, offer.main.1, own, why)),
             None => self.incoming.replace_from_copy_preview(source, offer.copy, offer.main, year).await,
@@ -862,7 +876,9 @@ impl App {
             return Err(ToggleError::Refused("From someone's own music the copy goes in as it is: no cover is kept and nothing is carried over".into()));
         }
         let sheet = ask.sheet.ok_or_else(|| ToggleError::Refused("Say what Replace's sheet showed: its folder, tracks, added and files".into()))?;
-        let offer = self.own_offer(source, album, &own, ask.to).await?;
+        // Which copy its sheet showed, by its folder (RF10): of two in one library, that one, and none other.
+        let dir = ask.from_dir.ok_or_else(|| ToggleError::Refused("Say which copy Replace's sheet showed: its folder".into()))?;
+        let offer = self.own_offer(source, album, &own, ask.to, Some(dir)).await?;
         if let Some(why) = offer.refused {
             return Err(ToggleError::Refused(format!("Changed since you looked. {why}.")));
         }
@@ -872,7 +888,7 @@ impl App {
     /// Delete an album of someone's own music from the Users panel: an administrator's, only there (the owner, 2026-11-04:
     /// "not anywhere else than in a control panel").
     pub async fn delete_own_album(&self, source: &str, album: &str, from: Option<&str>) -> Result<super::DeleteResult, ToggleError> {
-        let (_, a) = self.listed_album(source, album, from).await?;
+        let (_, a) = self.listed_album(source, album, from, None).await?;
         let live = self.library.live();
         let own = a.library.as_deref().and_then(|l| live.iter().find(|x| x.cfg.id == source)?.kind_of(l)) == Some(LibraryKind::Own);
         if !own {
@@ -909,18 +925,23 @@ impl App {
         made.map(|m| (m, copy)).ok_or_else(|| ToggleError::Refused("no own-music folder is set".into()))
     }
 
-    /// Move a copy into another used library of its server (decision 0034).
-    pub async fn move_album(&self, source: &str, album: &str, from: Option<&str>, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
-        let (s, a) = self.listed_album(source, album, from).await?;
+    /// Move a copy into another used library of its server (decision 0034), the copy its sheet showed where the tap says (`sheet`'s
+    /// `from_dir`). A copy (C40) carries its sheet (RF10, the owner's "writes nothing the sheet doesn't show"): refused without one,
+    /// and where the copy would now be anything else.
+    pub async fn move_album(&self, source: &str, album: &str, from: Option<&str>, to: &str, year: Option<&str>, sheet: Option<super::CopySheet>) -> Result<KeepResult, ToggleError> {
+        let (s, a) = self.listed_album(source, album, from, sheet.as_ref().map(|s| s.from_dir.as_str())).await?;
         match self.move_target(source, &s, &a, to).await? {
-            (to, true) => self.incoming.copy_album(source, a, &to, year).await,
+            (to, true) => {
+                let sheet = sheet.ok_or_else(|| ToggleError::Refused("Say what Copy to's sheet showed: its folder, its files and the copy's folder".into()))?;
+                self.incoming.copy_album(source, a, &to, year, Some(&sheet)).await
+            }
             (to, false) => self.incoming.move_album(source, a, &to, year).await,
         }
     }
 
     /// What that move would do.
     pub async fn move_preview(&self, source: &str, album: &str, from: Option<&str>, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
-        let (s, a) = self.listed_album(source, album, from).await?;
+        let (s, a) = self.listed_album(source, album, from, None).await?;
         match self.move_target(source, &s, &a, to).await? {
             (to, true) => self.incoming.copy_preview(source, a, &to, year).await,
             (to, false) => self.incoming.move_preview(source, a, &to, year).await,
@@ -1312,7 +1333,7 @@ mod tests {
         waiting.copies[0].deletable = true;
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), waiting], &order(&[0, 2], 0));
         let deletable = ["al-1".to_string()];
-        let copy = |from: &str| named_copy(&folded[0], Some(from)).unwrap();
+        let copy = |from: &str| named_copy(&folded[0], Some(from), None).unwrap();
         assert!(!may_delete_copy(&deletable, &copy("music")), "the kept copy is not theirs");
         assert!(may_delete_copy(&deletable, &copy("incoming")), "their request is");
         let other = album("x", "jellyfin-music", "/m/x");
@@ -1325,21 +1346,21 @@ mod tests {
     fn a_named_copy_is_that_copy_and_not_the_one_that_plays() {
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), listed("al-1", 2, "incoming", "FLAC")], &order(&[0, 2], 0));
         assert_eq!(folded[0].library.as_deref(), Some("music"), "the card is the copy that plays");
-        let named = named_copy(&folded[0], Some("incoming")).unwrap();
+        let named = named_copy(&folded[0], Some("incoming"), None).unwrap();
         assert_eq!((named.library.as_deref(), named.path.as_deref()), (Some("incoming"), Some("incoming/A/Album")));
         assert_eq!(named.copies.iter().map(|c| (c.folder, c.library.as_str())).collect::<Vec<_>>(), [(2, "incoming")], "and nothing of the other");
-        assert!(matches!(named_copy(&folded[0], Some("second")), Err(ToggleError::Refused(_))), "no copy there");
+        assert!(matches!(named_copy(&folded[0], Some("second"), None), Err(ToggleError::Refused(_))), "no copy there");
     }
 
     /// Left to the copy that plays, an administrator's Delete would land on whatever plays for them today.
     #[test]
     fn a_record_of_several_copies_must_be_told_which() {
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), listed("al-1", 2, "incoming", "FLAC")], &order(&[0, 2], 0));
-        assert!(matches!(named_copy(&folded[0], None), Err(ToggleError::Refused(_))));
-        assert_eq!(named_copy(&listed("al-2", 0, "music", "FLAC"), None).unwrap().copies[0].folder, 0, "with one, there is nothing to tell");
+        assert!(matches!(named_copy(&folded[0], None, None), Err(ToggleError::Refused(_))));
+        assert_eq!(named_copy(&listed("al-2", 0, "music", "FLAC"), None, None).unwrap().copies[0].folder, 0, "with one, there is nothing to tell");
         let other = album("x", "jellyfin-music", "/m/x");
-        assert!(named_copy(&other, None).is_ok() && named_copy(&other, Some("jellyfin-music")).is_ok());
-        assert!(named_copy(&other, Some("music")).is_err(), "another server's album is its one library's");
+        assert!(named_copy(&other, None, None).is_ok() && named_copy(&other, Some("jellyfin-music"), None).is_ok());
+        assert!(named_copy(&other, Some("music"), None).is_err(), "another server's album is its one library's");
     }
 
     /// Q2: two folders of one library are two copies, and naming the library names the first as the record's copies stand.
@@ -1349,7 +1370,39 @@ mod tests {
         other.copies[0].dir = "B/Album".into();
         let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![(0, "B/Album".to_string()), (0, "A/Album".to_string())], plays: Some((0, "B/Album".to_string())), ..Default::default() })]);
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), other], &order);
-        assert_eq!(named_copy(&folded[0], Some("music")).unwrap().copies[0].dir, "B/Album");
+        assert_eq!(named_copy(&folded[0], Some("music"), None).unwrap().copies[0].dir, "B/Album");
+    }
+
+    /// RF10 (the review of runs 11 and 12, RA9): a tap names its copy by the folder its preview showed, so of two folders of one
+    /// library it takes the one named, and refuses a folder no copy is at now; with none named, the first, as before (Q2).
+    #[test]
+    fn a_tap_names_its_copy_by_the_folder_its_sheet_showed() {
+        let mut other = listed("al-1", 0, "music", "FLAC");
+        other.copies[0].dir = "B/Album".into();
+        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![(0, "B/Album".to_string()), (0, "A/Album".to_string())], plays: Some((0, "B/Album".to_string())), ..Default::default() })]);
+        let folded = fold(vec![listed("al-1", 0, "music", "MP3"), other], &order);
+        assert_eq!(named_copy(&folded[0], Some("music"), Some("A/Album")).unwrap().copies[0].dir, "A/Album", "the one its sheet showed");
+        assert_eq!(named_copy(&folded[0], Some("music"), Some("B/Album")).unwrap().copies[0].dir, "B/Album");
+        assert!(named_copy(&folded[0], Some("music"), Some("C/Album")).is_err(), "no copy there now: refused");
+        assert_eq!(named_copy(&folded[0], Some("music"), None).unwrap().copies[0].dir, "B/Album", "none named: the first");
+    }
+
+    /// RF10 (RA9): Bob's own music holds the record twice, an MP3 listed first and a FLAC that beats Music's MP3. Asked by his library
+    /// alone, Replace takes the FLAC, the copy it offers (not the first there, which every preview and tap then refused); a tap takes
+    /// the copy at the folder it names, and one naming a folder no copy is at takes none.
+    #[test]
+    fn replace_from_own_music_takes_the_copy_offered_or_the_one_named() {
+        let music = copy(MUSIC, "A/Album", LibraryKind::Main, "MP3", 1);
+        let mp3 = copy(BOB, "A/Album", LibraryKind::Own, "MP3", 2);
+        let flac = copy(BOB, "A/Album (FLAC)", LibraryKind::Own, "FLAC", 3);
+        let copies = [music.clone(), mp3.clone(), flac.clone()];
+        let mains = [&copies[0]];
+        assert_eq!(own_named(&copies, BOB, None, &mains, &[]), Some(&flac), "the copy offered");
+        assert_eq!(own_named(&copies, BOB, Some("A/Album (FLAC)"), &mains, &[]), Some(&flac));
+        assert_eq!(own_named(&copies, BOB, Some("A/Album"), &mains, &[]), Some(&mp3), "the one its tap names");
+        assert_eq!(own_named(&copies, BOB, Some("A/Gone"), &mains, &[]), None, "none at that folder");
+        assert_eq!(own_named(&copies, ANN, None, &mains, &[]), None, "none in that library");
+        assert_eq!(own_named(&[music.clone(), mp3.clone()], BOB, None, &mains, &[]), Some(&mp3), "none offered: the first there");
     }
 
     /// A conversion of the Incoming copy is not the kept copy's: by id alone the kept one's menu would show it, and two folders
@@ -1373,7 +1426,7 @@ mod tests {
     fn delete_own_finds_the_owners_copy_of_a_record_also_in_music() {
         let folded = fold(vec![listed("al-1", 0, "music", "FLAC"), listed("al-1", 3, "/own/ann", "MP3")], &order(&[0, 3], 0));
         assert_eq!(folded[0].library.as_deref(), Some("music"));
-        let named = named_copy(&folded[0], Some("/own/ann")).unwrap();
+        let named = named_copy(&folded[0], Some("/own/ann"), None).unwrap();
         assert_eq!((named.library.as_deref(), named.copies[0].folder), (Some("/own/ann"), 3));
     }
 

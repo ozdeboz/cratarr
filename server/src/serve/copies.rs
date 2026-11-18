@@ -98,8 +98,10 @@ pub fn copy_for<'a>(copies: &'a [Copy], viewer: Option<&Viewer>, off: &[i64]) ->
 
 /// An Incoming copy of a record kept elsewhere, against the copy that plays the record for most among its kept ones (C37a; the
 /// owner's OQ1: a record is one by its tracks, so a copy no better is the same record twice): whether it ranks above that copy in
-/// the one order copies are chosen in (a whole copy before one short of tracks, then quality), and that copy. None: not an
-/// Incoming copy, or the record is kept nowhere else.
+/// the one order copies are chosen in (a whole copy before one short of tracks, then quality), and that copy. Never a lossy copy
+/// above one lossless by its format, whatever is not read of it (RF14, the review of runs 11 and 12, RB8: RY01's guard, OQ-C): an
+/// unread bit depth ranks a FLAC last, and an MP3 is no upgrade of it. None: not an Incoming copy, or the record is kept nowhere
+/// else.
 pub fn against<'a>(copies: &'a [Copy], incoming: &Copy) -> Option<(bool, &'a Copy)> {
     if incoming.kind != Kind::Incoming {
         return None;
@@ -107,7 +109,7 @@ pub fn against<'a>(copies: &'a [Copy], incoming: &Copy) -> Option<(bool, &'a Cop
     let kept: Vec<Copy> = copies.iter().filter(|c| c.kind != Kind::Incoming).cloned().collect();
     let row = copy_for(&kept, None, &[])?;
     let row = copies.iter().find(|c| *c == row)?;
-    Some((above(incoming, row), row))
+    Some((above(incoming, row) && !(lossless(row) && !lossless(incoming)), row))
 }
 
 /// Whether copy `a` ranks above copy `b` in the one order copies are chosen in: a whole copy before one short of tracks, then
@@ -215,6 +217,23 @@ mod tests {
     }
 
     const ANYONE: &Viewer = &Viewer { from: None };
+
+    /// RF14 (the review of runs 11 and 12, RB8): a lossy Incoming copy never "upgrades" a lossless one whose bit depth was never read,
+    /// though the order alone ranks the unread FLAC last: no Upgrade, no better copy on Health, no Replace (RY01's guard, OQ-C). A
+    /// lossless copy over it still is better.
+    #[test]
+    fn a_lossy_copy_never_upgrades_a_lossless_one_of_unread_depth() {
+        let unread = copy(0, Kind::Main, "FLAC", 900, None, None);
+        let lossy = mp3(2, Kind::Incoming, 320);
+        assert!(rank(&lossy) > rank(&unread), "the order alone puts the MP3 above");
+        let both = [unread.clone(), lossy.clone()];
+        let (better, kept) = against(&both, &lossy).unwrap();
+        assert!(!better, "never better than a lossless copy");
+        assert_eq!(kept.folder, 0);
+        assert!(!replaces(better, kept.kind), "so Replace takes nothing");
+        let lossless = flac(2, Kind::Incoming);
+        assert_eq!(against(&[unread, lossless.clone()], &lossless).map(|(b, _)| b), Some(true), "a lossless copy over it is better");
+    }
 
     /// C37a: an Incoming copy of a kept record stands against the copy that plays it for most, by the order copies are chosen in:
     /// better where it ranks above it, the same record twice where not; a record kept nowhere else has nothing to stand against.

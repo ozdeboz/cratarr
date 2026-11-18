@@ -12,7 +12,9 @@
 //!   what the user data and the stores in the data folder name, as for an artist (`protected`, Z5). An artist is kept by a
 //!   record's credit, a reference by hand or confirmed, an id from before 0.16 (`Catalogue::forget_quiet_artists`), and by a
 //!   track's credit, anything the user data names them in (a favourite, plays, a rating, words) and the stores in the data
-//!   folder (every account's crates, their seeds and conditions; the queues): `protected_artists`.
+//!   folder (every account's crates, their seeds and conditions; the queues): `protected_artists`. A track's credit counts its
+//!   files out of the library's sight too, in a trash or a parked library (RF16, `credited_aside`): an Undo, or the library brought
+//!   back, finds its guests as themselves.
 //! - **Artists wait for the library** (W2): a track's credit is held in Cratarr's own library alone, so no artist is forgotten
 //!   until it has been built whole at its layout, and while it credits nobody though the catalogue holds live tracks
 //!   (`credits_kept`). One of another layout, or library.sqlite deleted as a repair, holds no credit until its first build ends;
@@ -105,12 +107,38 @@ fn credits_kept(served: &Serve) -> Result<Option<BTreeSet<i64>>> {
 }
 
 /// What keeps an artist with no record from outside the catalogue (RT01b): a track's credit (`credited`, what Cratarr's own library
-/// credits), anything the user data names them in (`UserData::artists_named`), and the stores in the data folder (`stores_name`).
-/// Blocking.
+/// credits, and what a live track's files out of its sight credit, `credited_aside`), anything the user data names them in
+/// (`UserData::artists_named`), and the stores in the data folder (`stores_name`). Blocking.
 fn protected_artists(served: &Serve, credited: BTreeSet<i64>) -> Result<BTreeSet<i64>> {
     let mut kept = served.userdata.artists_named()?;
     kept.extend(credited);
+    kept.extend(credited_aside(served)?);
     kept.extend(stores_name(served.data_dir.as_deref(), |text| crate::serve::ids::artists_named(text).collect())?);
+    Ok(kept)
+}
+
+/// The artists a live track's files out of the library's sight credit (RF16, the review of run 13, SA1): in a trash (an Undo can bring
+/// them back), in a parked library (it comes back as itself, A3), or gone a while; a build leaves them out, so the library's credits
+/// lack their guests. Each file's artists as the library credits them (`artists` else `artist`, `albumartists` else `albumartist`,
+/// through the rules' values), by their key. Blocking.
+fn credited_aside(served: &Serve) -> Result<BTreeSet<i64>> {
+    let files = served.catalogue().artist_tags_set_aside()?;
+    if files.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let (rules, known) = (served.rules(), served.catalogue().artist_ids()?);
+    let mut kept = BTreeSet::new();
+    for tags in &files {
+        let all = |key: &str| tags.iter().filter(|(k, _)| k == key).map(|(_, v)| v.clone()).collect::<Vec<String>>();
+        for (list, one) in [("artists", "artist"), ("albumartists", "albumartist")] {
+            let from = if all(list).is_empty() { one } else { list };
+            for name in rules.values(from, &all(from)) {
+                if let Some(id) = known.get(&crate::serve::ids::artist_key(&name)) {
+                    kept.insert(*id);
+                }
+            }
+        }
+    }
     Ok(kept)
 }
 
@@ -480,6 +508,117 @@ mod tests {
         }
         assert!(s.served.library.artists_credited().unwrap().contains(&s.ferro), "a track's credit");
         drop(s);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Both Shores' folder.
+    const BOTH_SHORES: &str = "Salt Meridian/Both Shores (2020)";
+    /// The MusicBrainz id Ferro Lane holds by his files (RF16): one forgetting him would delete.
+    const FERRO_ID: &str = "00000000-0000-4000-8000-000000000951";
+
+    /// Tide Tables by Glass Harbour, one file in catalogue folder `folder`: an album the library credits beside the guest's.
+    fn tide_tables(cat: &Catalogue, folder: i64) {
+        let rel = "Glass Harbour/Tide Tables (2012)/01 Ebb.flac";
+        cat.execute_for_tests(&format!(
+            "INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, came) VALUES ({folder}, '{rel}', 25000000, 1760000000, 1, 'FLAC', 900, 220000, 1760000000)"
+        ));
+        cat.tag_for_tests(folder, rel, &[("title", "Ebb"), ("artist", "Glass Harbour"), ("tracknumber", "1"), ("album", "Tide Tables"), ("albumartist", "Glass Harbour")]);
+        cat.identify().unwrap();
+    }
+
+    /// Both Shores' two files in catalogue folder `folder`, tagged as `shores` tags them: its second track featuring Ferro Lane.
+    fn both_shores_in(cat: &Catalogue, folder: i64) {
+        cat.execute_for_tests(&format!(
+            "INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, came) VALUES
+               ({folder}, '{}', 24000000, 1760000000, 1, 'FLAC', 900, 200000, 1760000000), ({folder}, '{}', 24001000, 1760000000, 1, 'FLAC', 900, 210000, 1760000000)",
+            SHORES[0], SHORES[1]
+        ));
+        let album = [("album", "Both Shores"), ("albumartist", "Salt Meridian")];
+        cat.tag_for_tests(folder, SHORES[0], &[("title", "Low Bank"), ("artist", "Salt Meridian"), ("tracknumber", "1"), album[0], album[1]]);
+        cat.tag_for_tests(
+            folder,
+            SHORES[1],
+            &[("title", "Far Bank"), ("artist", "Salt Meridian feat. Ferro Lane"), ("artists", "Salt Meridian"), ("artists", "Ferro Lane"), ("tracknumber", "2"), album[0], album[1]],
+        );
+        cat.identify().unwrap();
+    }
+
+    fn references(cat: &Catalogue, artist: i64) -> usize {
+        cat.references_of(&ids::artist(artist)).unwrap().len()
+    }
+
+    /// RF16 (the review of run 13, SA1): a guest's album in a trash. Music holds Both Shores (its second track featuring Ferro Lane,
+    /// credited nowhere else) and Tide Tables by Glass Harbour; Ferro Lane holds a MusicBrainz id by his files. Ann deletes Both Shores:
+    /// its files go into Music's trash, and the next build leaves them out while it still credits Glass Harbour, so the library's credits
+    /// are trusted. The day's pass keeps Ferro Lane and Salt Meridian, whom a live track's files in the trash credit (Nobody, with
+    /// nothing, still goes). The Undo brings the album back: the same artist ids, credited again, and no reference deleted.
+    #[test]
+    fn a_guest_of_an_album_in_the_trash_is_kept_for_its_undo() {
+        let dir = data_dir("guest-trash");
+        let s = shores(&dir, 95_600);
+        tide_tables(&s.cat, 0);
+        s.cat.set_reference(&ids::artist(s.ferro), &crate::catalogue::records::Ref::new("musicbrainz", "artist", FERRO_ID), "files").unwrap();
+        build(&s.served);
+        let refs = references(&s.cat, s.ferro);
+        assert_eq!(refs, 1);
+        let token = crate::trash::token(NOW, BOTH_SHORES);
+        assert!(s.cat.mark_trashed(0, BOTH_SHORES, &token).unwrap() > 0, "Both Shores into Music's trash");
+        build(&s.served);
+        let credited = s.served.library.artists_credited().unwrap();
+        assert!(!credited.contains(&s.ferro) && !credited.is_empty(), "the build leaves the trash out, and credits Glass Harbour: {credited:?}");
+        let (done, _) = logged_pass(&s.served, NOW);
+        assert!(!done.artists_wait && done.artists.contains(&s.nobody), "the pass forgets: {done:?}");
+        for (artist, name) in [(s.ferro, "Ferro Lane"), (s.salt, "Salt Meridian")] {
+            assert!(!done.artists.contains(&artist), "{name} kept: {done:?}");
+            assert!(s.cat.forgotten_at(&ids::artist(artist)).unwrap().is_none(), "{name}: no tombstone");
+        }
+        assert_eq!(references(&s.cat, s.ferro), refs, "no reference deleted");
+        assert!(s.cat.unmark_trashed(0, BOTH_SHORES, &token).unwrap() > 0, "the Undo");
+        build(&s.served);
+        let credited = s.served.library.artists_credited().unwrap();
+        assert!(credited.contains(&s.ferro) && credited.contains(&s.salt), "credited again: {credited:?}");
+        assert_eq!((s.cat.artist_of("Ferro Lane").unwrap(), s.cat.artist_of("Salt Meridian").unwrap()), (Some(s.ferro), Some(s.salt)), "the same ids");
+        assert_eq!(references(&s.cat, s.ferro), refs, "his reference with him");
+        drop(s);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// RF16 (SA1), a parked library (A3: it comes back as itself): Both Shores lies in a second library, taken out of use (out of
+    /// Settings, or not there at a start with its mount not up); Music, still built, credits Glass Harbour. The day's pass keeps Ferro
+    /// Lane and Salt Meridian, and the library brought back credits them as themselves, Ferro Lane's reference kept.
+    #[test]
+    fn a_guest_of_a_parked_library_is_kept_for_its_return() {
+        let dir = data_dir("guest-parked");
+        let (music, second) = (std::path::PathBuf::from("/music"), std::path::PathBuf::from("/second-rf16"));
+        let cat = Arc::new(Catalogue::open(None, vec![music.clone(), second.clone()]).unwrap());
+        cat.number_above(95_700).unwrap();
+        tide_tables(&cat, 0);
+        both_shores_in(&cat, 1);
+        let [salt, ferro, nobody] = ["Salt Meridian", "Ferro Lane", "Nobody"].map(|n| cat.artist_for(n).unwrap());
+        cat.db_for_tests().execute("UPDATE artists SET born = ?1", [BORN]).unwrap();
+        cat.set_reference(&ids::artist(ferro), &crate::catalogue::records::Ref::new("musicbrainz", "artist", FERRO_ID), "files").unwrap();
+        let served = Serve::open(Some(&dir), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.attach_catalogue(cat.clone());
+        served.library.set_kinds(vec![(0, crate::settings::LibraryKind::Main), (1, crate::settings::LibraryKind::Main)]);
+        build(&served);
+        assert!(served.library.artists_credited().unwrap().contains(&ferro));
+        cat.set_folders(vec![music.clone()]).unwrap();
+        build(&served);
+        let credited = served.library.artists_credited().unwrap();
+        assert!(!credited.contains(&ferro) && !credited.is_empty(), "parked: left out of the build, which credits Glass Harbour: {credited:?}");
+        let (done, _) = logged_pass(&served, NOW);
+        assert!(!done.artists_wait && done.artists.contains(&nobody), "the pass forgets: {done:?}");
+        for (artist, name) in [(ferro, "Ferro Lane"), (salt, "Salt Meridian")] {
+            assert!(!done.artists.contains(&artist), "{name} kept: {done:?}");
+            assert!(cat.forgotten_at(&ids::artist(artist)).unwrap().is_none(), "{name}: no tombstone");
+        }
+        assert_eq!(references(&cat, ferro), 1, "no reference deleted");
+        cat.set_folders(vec![music, second]).unwrap();
+        build(&served);
+        let credited = served.library.artists_credited().unwrap();
+        assert!(credited.contains(&ferro) && credited.contains(&salt), "back, credited as themselves: {credited:?}");
+        assert_eq!((cat.artist_of("Ferro Lane").unwrap(), cat.artist_of("Salt Meridian").unwrap()), (Some(ferro), Some(salt)), "the same ids");
+        drop((served, cat));
         std::fs::remove_dir_all(&dir).ok();
     }
 

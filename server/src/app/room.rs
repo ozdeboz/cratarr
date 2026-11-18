@@ -34,6 +34,12 @@ pub const GB: u64 = 1_000_000_000;
 /// A user's room where an administrator set none (0084).
 pub const ROOM: u64 = 100 * GB;
 
+/// The GB a room's or the floor's body gives (`{"gb": …}`, AL04.4): a number from 0, with decimals; none for anything else (text, `null`,
+/// none at all, a negative), which the routes refuse with 400 in their own words, never the 422 a typed body would get. Pure.
+pub fn gb_given(body: &serde_json::Value) -> Option<f64> {
+    body.get("gb").and_then(serde_json::Value::as_f64).filter(|gb| gb.is_finite() && *gb >= 0.0)
+}
+
 /// A user's room: its size and what counts against it, in bytes, and whether it is full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Room {

@@ -19,6 +19,8 @@ pub mod records;
 pub mod tags;
 pub mod walk;
 
+pub use artists::Opening;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1056,6 +1058,11 @@ pub struct Catalogue {
     poke: tokio::sync::Notify,
     /// Told when files were read again outside a pass (`reread`): the library is built from them at once.
     reread: tokio::sync::Notify,
+    /// How many times the rows were told changed, at each pass's end and each change outside one (`told`): what the library looks
+    /// again by (RF8). A count, as a second is not one: a change told in the second of the library's last look went unseen until the
+    /// next pass (run 12's close: RY01's Undo told at its first `set_tracks`, was looked at half done, and the rest was told in that
+    /// second).
+    told: AtomicU64,
     /// How much the passes have done since the server started (files read, folders walked, links made): what shows a
     /// long pass moving (0.9.7: a reader's reread of every file takes hours on the NAS, and Cratarr's own library
     /// looked stopped to the watch on the servers' scans).
@@ -1145,6 +1152,7 @@ impl Catalogue {
             progress: Mutex::default(),
             poke: Default::default(),
             reread: Default::default(),
+            told: Default::default(),
             worked: Default::default(),
             facts: Mutex::default(),
             facts_written,
@@ -1431,8 +1439,15 @@ impl Catalogue {
 
     /// Ask for a pass now.
     /// When the last background pass finished, epoch seconds.
+    #[cfg(test)]
     pub fn last_pass(&self) -> Option<i64> {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass
+    }
+
+    /// How many times the rows were told changed (a pass ended, or `changed_outside_pass`): a look that read a lower count has not
+    /// seen the change since (RF8).
+    pub fn told(&self) -> u64 {
+        self.told.load(Ordering::SeqCst)
     }
 
     /// What the background pass is doing now, if anything (see `Progress::doing`).
@@ -1614,6 +1629,7 @@ impl Catalogue {
     /// one by one: after the last), so the library never shows half of one.
     pub fn changed_outside_pass(&self) {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass = Some(now());
+        self.told.fetch_add(1, Ordering::SeqCst);
         self.reread.notify_one();
     }
 
@@ -2680,6 +2696,39 @@ impl Catalogue {
         let mut st = db.prepare_cached("SELECT id FROM tracks WHERE retired_at IS NULL")?;
         let rows = st.query_map([], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The artist tags of each file a live track keeps out of sight (RF16, the review of run 13, SA1): in a trash, in a parked
+    /// library, or gone a while, each file's `artist`, `artists`, `albumartist` and `albumartists` values in their order. What retention
+    /// keeps an artist by beside the library's credits, which leave those files out, so an Undo or a library brought back finds its
+    /// guests as themselves. On a reader where there is one. Blocking.
+    pub fn artist_tags_set_aside(&self) -> Result<Vec<Vec<(String, String)>>> {
+        let read = |db: &Connection| -> Result<Vec<Vec<(String, String)>>> {
+            let mut st = db.prepare(
+                "SELECT t.folder, t.rel, t.name, t.value FROM files f JOIN tracks k ON k.id = f.track AND k.retired_at IS NULL
+                 JOIN tags t ON t.folder = f.folder AND t.rel = f.rel
+                 WHERE NOT (f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) AND t.name IN ('artist', 'artists', 'albumartist', 'albumartists')
+                 ORDER BY t.folder, t.rel, t.n",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+            let mut out: Vec<Vec<(String, String)>> = Vec::new();
+            let mut at: Option<(i64, String)> = None;
+            for row in rows {
+                let (folder, rel, name, value) = row?;
+                if at.as_ref() != Some(&(folder, rel.clone())) {
+                    out.push(Vec::new());
+                    at = Some((folder, rel));
+                }
+                if let Some(file) = out.last_mut() {
+                    file.push((name, value));
+                }
+            }
+            Ok(out)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
     }
 
     /// Whether any track is not retired (W2): a library that credits nobody while there is one read no rows. Blocking.
@@ -4307,6 +4356,7 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
             p.last_pass = Some(now());
             p.problems = problems;
         }
+        cat.told.fetch_add(1, Ordering::SeqCst);
         tokio::select! {
             _ = tokio::time::sleep(PASS_EVERY) => {}
             _ = cat.poke.notified() => {}

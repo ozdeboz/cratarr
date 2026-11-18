@@ -105,6 +105,19 @@ pub struct KeepPreview {
     pub acquisition: bool,
     /// A copy (C40): the album stays where it is, and the copied files are all that is written.
     pub copy: bool,
+    /// The copy's own folder in its library, as this preview read it (RF10): Copy to's tap carries it back, so it takes the copy its
+    /// sheet showed.
+    pub from_dir: Option<String>,
+}
+
+/// What Copy to's sheet showed (RF10, the review of runs 11 and 12, RA10; the owner's "writes nothing the sheet doesn't show"): the
+/// copy's folder where it goes, how many files it writes, and the copy's own folder in its library (`KeepPreview::from_dir`). Its tap
+/// carries it, and is refused where the copy would now be anything else (`copying`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopySheet {
+    pub folder: String,
+    pub files: usize,
+    pub from_dir: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,14 +277,42 @@ fn waiting_copy<'a>(listed: impl Iterator<Item = &'a source::Album>, album_id: &
     }
 }
 
+/// The served library as `serve::instance` has it, or in a unit test the one it gave on its thread (`served_in_tests`): what Replace's
+/// guard of Music's folder reads (RF11, RY01.6 case 3), so its unit tests run it.
+pub(super) fn served() -> Option<Arc<crate::serve::Serve>> {
+    #[cfg(test)]
+    if let Some(s) = SERVED_IN_TESTS.with(|s| s.borrow().clone()) {
+        return Some(s);
+    }
+    crate::serve::instance()
+}
+
+#[cfg(test)]
+thread_local! {
+    // A unit test's served library, on its thread (`served`).
+    static SERVED_IN_TESTS: std::cell::RefCell<Option<Arc<crate::serve::Serve>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A unit test's served library for `served`, on its thread; none lets it go.
+#[cfg(test)]
+pub(super) fn served_in_tests(s: Option<Arc<crate::serve::Serve>>) {
+    SERVED_IN_TESTS.with(|t| *t.borrow_mut() = s);
+}
+
 /// Whether what lies under a copy's `dir` is that copy alone, as Delete and Move take the folder whole. `dir` is what its
 /// files share, so it can be a parent of other records' folders, or the library's root: an album in two artists' folders has
 /// the root for its `dir` (files A33). Blocking.
 fn whole_copy(album: &str, folder: i64, root: &std::path::Path, dir: &str) -> Result<bool> {
+    whole_copy_in(crate::serve::instance().as_deref(), album, folder, root, dir)
+}
+
+/// `whole_copy` as the served library `served` lists the copies (RF11: Replace's guard gives the one `served` reads); with none, the
+/// folder is taken as the copy's. Blocking.
+fn whole_copy_in(served: Option<&crate::serve::Serve>, album: &str, folder: i64, root: &std::path::Path, dir: &str) -> Result<bool> {
     if dir.is_empty() {
         return Ok(false);
     }
-    let Some(served) = crate::serve::instance() else { return Ok(true) };
+    let Some(served) = served else { return Ok(true) };
     let audio: Vec<String> = files_under(&root.join(dir)).into_iter().filter(|f| crate::catalogue::walk::is_audio(f)).map(|f| format!("{dir}/{f}")).collect();
     served.library.copy_holds_all(album, folder, dir, &audio)
 }
@@ -1263,8 +1304,8 @@ impl IncomingService {
         let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some();
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition, copy: false },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition, copy: false },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
         })
     }
 
@@ -1428,8 +1469,8 @@ impl IncomingService {
         let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some() && !self.lib.is_kept(at.dir.folder);
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition, copy: false },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition, copy: false },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition, copy: false, from_dir: Some(at.dir.dir.clone()) },
         })
     }
 
@@ -1438,7 +1479,7 @@ impl IncomingService {
     /// named as the target names its albums (`plan_move`), copied as it is whatever the target's quality limit (OQ4 (a): shared, and
     /// free), told on Health's list of changes as it goes, one Undo into the target's trash. Only the copied files are written:
     /// no cover or tag into or beside them, nor into the original (files.md CP2), nothing carried on, Lidarr not told.
-    pub async fn copy_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+    pub async fn copy_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>, sheet: Option<&CopySheet>) -> Result<KeepResult, ToggleError> {
         let at = self.locate_listed(source_id, album).await?;
         self.refuse_if_queued(&at.album.id, at.dir.folder)?;
         let (target, _) = self.target_of(source_id, to)?;
@@ -1447,7 +1488,7 @@ impl IncomingService {
         }
         let (what, title) = self.copied_named(source_id, target, &at.album.title);
         let run = super::file_runs::track(&self.journal, what, title);
-        let done = self.copying(&at, target, year).await;
+        let done = self.copying(&at, target, year, sheet).await;
         match &done {
             Ok(k) => run.moved(k.undo.clone(), self.read_in(&at, target)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
@@ -1462,21 +1503,28 @@ impl IncomingService {
         let (target, _) = self.target_of(source_id, to)?;
         let (_, plan) = self.plan_move(&at, target, year).await?;
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert: 0, acquisition: false, copy: true },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert: 0, acquisition: false, copy: true },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert: 0, acquisition: false, copy: true, from_dir: Some(at.dir.dir.clone()) },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert: 0, acquisition: false, copy: true, from_dir: Some(at.dir.dir.clone()) },
         })
     }
 
     /// Copy to's copying (`copy_album`): its plan, its intent in the journal first (`AlbumCopied`), the copies and their rows, then
     /// applied. What a failure made goes, and the intent is forgotten. One at a time of a record into a library, and none while an
     /// Undo or a Replace of its copy there goes on (RF15: `alone`).
-    async fn copying(&self, at: &Located, target: i64, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+    async fn copying(&self, at: &Located, target: i64, year: Option<&str>, sheet: Option<&CopySheet>) -> Result<KeepResult, ToggleError> {
         let _alone = self.alone(&at.album.id, target, &at.album.title, "being copied")?;
         let (root, plan) = self.plan_move(at, target, year).await?;
         let plan = plan.map_err(|r| match r {
             KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
             KeepRefused::Other(why) => ToggleError::Refused(why),
         })?;
+        // The tap carries what its sheet showed (RF10): a copy that would now be another, or written elsewhere or with more or fewer
+        // files, is refused with nothing written.
+        if let Some(s) = sheet
+            && (s.folder != plan.folder || s.files != plan.moves.len() || s.from_dir != at.dir.dir)
+        {
+            return Err(ToggleError::Refused(format!("Changed since you looked. {} would not be copied as its sheet showed: look again.", at.album.title)));
+        }
         if !self.can_write(&root).await {
             return Err(ToggleError::Refused("Cratarr cannot write in that library".into()));
         }
@@ -2524,7 +2572,7 @@ mod tests {
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
         const ACCOUNT: &str = "c40-copier";
         let who = crate::serve::who::Who { user: ACCOUNT.into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
-        let done = crate::serve::who::acting_as(who, svc.copying(&at, 2, None)).await.unwrap();
+        let done = crate::serve::who::acting_as(who, svc.copying(&at, 2, None, None)).await.unwrap();
         let tasks = crate::app::tasks::tasks().of(ACCOUNT);
         assert!(tasks.iter().any(|t| t.kind == "copy" && t.finished.is_some() && t.error.is_none()), "its progress a task of its account's: {} tasks", tasks.len());
         assert_eq!((done.folder.as_str(), done.queued), ("A/Album", false));
@@ -2550,7 +2598,7 @@ mod tests {
         let (svc, music, inc, own) = with_own_music("c40-undo").await;
         let before = lying(&music);
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        let undo = svc.copying(&at, 2, None, None).await.unwrap().undo.unwrap();
         assert_eq!(svc.undo(&undo).await.unwrap(), "Zebra", "its title");
         assert!(!own.join("A/Album").exists(), "the copy gone");
         assert_eq!(lying(&own.join(crate::trash::TRASH_DIR)).len(), 2, "into its library's trash");
@@ -2558,6 +2606,38 @@ mod tests {
         let c = svc.lib.catalogue();
         assert!(!c.has_row(2, "A/Album/1.flac") && c.has_row(0, "A/Album/1.flac"), "the copy's rows into the trash too");
         assert!(svc.undo(&undo).await.is_err(), "undone once");
+        for d in [music, inc, own] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// RF10 (the review of runs 11 and 12, RA10; the owner's "writes nothing the sheet doesn't show"): Copy to's tap carries what its
+    /// sheet showed, the copy's folder where it goes, how many files and the copy's own folder; it copies as shown. A tap that differs
+    /// is refused, with nothing written: another folder, another copy, another count, or a file come into Music's folder since (a
+    /// booklet: 3 files, not the sheet's 2).
+    #[tokio::test]
+    async fn a_copy_tap_carries_its_sheet_and_one_that_differs_is_refused() {
+        let (svc, music, inc, own) = with_own_music("rf10-sheet").await;
+        let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
+        let shown = CopySheet { folder: "A/Album".into(), files: 2, from_dir: "A/Album".into() };
+        let differing = [
+            (CopySheet { folder: "A/Other".into(), ..shown.clone() }, "another folder"),
+            (CopySheet { from_dir: "B/Album".into(), ..shown.clone() }, "another copy"),
+            (CopySheet { files: 3, ..shown.clone() }, "another count"),
+        ];
+        for (other, what) in differing {
+            let e = svc.copying(&at, 2, None, Some(&other)).await.expect_err(what);
+            assert!(e.to_string().contains("Changed since you looked"), "{what}: {e}");
+            assert!(!own.join("A").exists(), "{what}: nothing written");
+        }
+        std::fs::write(music.join("A/Album/booklet.pdf"), b"come since").unwrap();
+        let e = svc.copying(&at, 2, None, Some(&shown)).await.expect_err("a file come since");
+        assert!(e.to_string().contains("Changed since you looked"), "{e}");
+        assert!(!own.join("A").exists(), "nothing written");
+        std::fs::remove_file(music.join("A/Album/booklet.pdf")).unwrap();
+        let done = svc.copying(&at, 2, None, Some(&shown)).await.unwrap();
+        assert_eq!(done.folder, "A/Album");
+        assert_eq!(lying(&own.join("A/Album")).len(), 2, "as its sheet showed");
         for d in [music, inc, own] {
             std::fs::remove_dir_all(d).ok();
         }
@@ -3015,7 +3095,7 @@ mod tests {
             let (svc, music, inc, own) = with_own_music(&format!("rf9-copy{case}")).await;
             let before = lying(&music);
             let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-            let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+            let undo = svc.copying(&at, 2, None, None).await.unwrap().undo.unwrap();
             let svc = if case == 3 { IncomingService { files: Arc::new(MovesHalf), ..svc } } else { svc };
             let (id, stamp): (EventId, i64) = (undo.parse().unwrap(), 1_700_000_000);
             if case == 4 {
@@ -3170,7 +3250,7 @@ mod tests {
         let cat = svc.lib.catalogue();
         let svc = IncomingService { files: Arc::new(Held(cat, seen.clone())), ..svc };
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        let undo = svc.copying(&at, 2, None, None).await.unwrap().undo.unwrap();
         seen.lock().unwrap().clear();
         svc.undo(&undo).await.unwrap();
         let held = seen.lock().unwrap().clone();
@@ -3215,14 +3295,14 @@ mod tests {
         let (svc, music, inc, own) = with_own_music("rf15-taps").await;
         let listed = || copy_at("al-1", 0, &music.to_string_lossy(), "A/Album");
         let (a, b) = (svc.locate_listed("cratarr", listed()).await.unwrap(), svc.locate_listed("cratarr", listed()).await.unwrap());
-        let (x, y) = tokio::join!(svc.copying(&a, 2, None), svc.copying(&b, 2, None));
+        let (x, y) = tokio::join!(svc.copying(&a, 2, None, None), svc.copying(&b, 2, None, None));
         let (done, refused) = one_of_two(x, y);
         assert_eq!(refused, "Zebra is being copied", "(1) the other told what is going on");
         assert_eq!(svc.journal.album_events_since(0).unwrap().len(), 1, "(1) one entry");
         assert_eq!(lying(&own), lying(&music), "(1) one copy, the original's files alone");
         let key = done.undo.unwrap();
         let c = svc.locate_listed("cratarr", listed()).await.unwrap();
-        let (x, y) = tokio::join!(async { svc.undo(&key).await.map(|_| ()) }, async { svc.copying(&c, 2, None).await.map(|_| ()) });
+        let (x, y) = tokio::join!(async { svc.undo(&key).await.map(|_| ()) }, async { svc.copying(&c, 2, None, None).await.map(|_| ()) });
         let ((), refused) = one_of_two(x, y);
         assert!(refused == "Zebra is being undone" || refused == "Zebra is being copied", "(2) the other told what is going on: {refused}");
         assert_eq!(svc.journal.album_events_since(0).unwrap().len(), 1, "(2) no second entry");
@@ -3256,7 +3336,7 @@ mod tests {
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
         let c = svc.lib.catalogue();
         c.execute_for_tests("CREATE TEMP TRIGGER refuse BEFORE INSERT ON files WHEN NEW.folder = 2 BEGIN SELECT RAISE(ABORT, 'refused once'); END");
-        let e = svc.copying(&at, 2, None).await.unwrap_err();
+        let e = svc.copying(&at, 2, None, None).await.unwrap_err();
         assert!(e.to_string().contains("refused once"), "the tap fails with its reason: {e}");
         let intents: Vec<EventId> = svc.journal.intents().unwrap().into_iter().filter(|e| matches!(e.event, Event::AlbumCopied { .. })).map(|e| e.id).collect();
         assert_eq!(intents.len(), 1, "its intent kept");
@@ -3311,7 +3391,7 @@ mod tests {
         let (svc, music, inc, own) = with_own_music("t4-files").await;
         let svc = IncomingService { files: Arc::new(CopyFails(crate::ports::disk())), ..svc };
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-        assert!(svc.copying(&at, 2, None).await.is_err());
+        assert!(svc.copying(&at, 2, None, None).await.is_err());
         assert!(lying(&own).is_empty(), "nothing under the target, no part");
         assert!(svc.journal.intents().unwrap().is_empty(), "no intent");
         for d in [music, inc, own] {
@@ -3354,7 +3434,7 @@ mod tests {
         let (svc, music, inc, own) = with_own_music("t1-added").await;
         let before = lying(&music);
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        let undo = svc.copying(&at, 2, None, None).await.unwrap().undo.unwrap();
         std::fs::write(own.join("A/Album/cover.jpg"), b"jpg").unwrap();
         svc.undo(&undo).await.unwrap();
         assert_eq!(lying(&own.join("A/Album")).into_keys().collect::<Vec<_>>(), ["cover.jpg"], "what came since stays");
@@ -3383,7 +3463,7 @@ mod tests {
         let (svc, music, inc, own) = with_own_music("t1c-rewritten").await;
         let before = lying(&music);
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        let undo = svc.copying(&at, 2, None, None).await.unwrap().undo.unwrap();
         std::fs::write(own.join("A/Album/cover.jpg"), b"jpg").unwrap();
         std::fs::write(own.join("A/Album/2.flac"), b"two, retagged").unwrap();
         let c = svc.lib.catalogue();
@@ -3463,7 +3543,7 @@ mod tests {
         c.pretend_read_for_tests();
         c.identify().unwrap();
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        let undo = svc.copying(&at, 2, None, None).await.unwrap().undo.unwrap();
         let places = crate::app::room::Places { own: vec![(2, "bob".into())], main: vec![0], incoming: vec![1] };
         let bobs = || crate::app::room::used_by(&c, &places, &std::collections::HashMap::new()).unwrap().get("bob").copied().unwrap_or(0);
         assert_eq!(lying(&own.join("A/Album")).len(), 10, "the ten copies");
@@ -3657,7 +3737,7 @@ mod tests {
         // Root's Copy to of Music's album into her own music, while she is over.
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
         let root = crate::serve::who::Who { user: "root".into(), admin: true, scope: crate::serve::who::Scope::Full, home: true };
-        crate::serve::who::acting_as(root, svc.copying(&at, 2, None)).await.expect("root's copy, she over room");
+        crate::serve::who::acting_as(root, svc.copying(&at, 2, None, None)).await.expect("root's copy, she over room");
         assert_eq!(std::fs::read(ann.join("A/Album/1.flac")).unwrap(), b"A/Album 1", "made");
         let shared = c.writer_for_tests().query_row("SELECT min(shared) FROM files WHERE folder = 2 AND rel LIKE 'A/%'", [], |r| r.get::<_, i64>(0)).unwrap();
         let copied: u64 = ["1.flac", "2.flac"].iter().map(|n| std::fs::metadata(music.join("A/Album").join(n)).unwrap().len()).sum();
@@ -3709,7 +3789,7 @@ mod tests {
     async fn undo_of_an_old_copy_leaves_a_later_album_alone() {
         let (svc, music, inc, own) = with_own_music("t1-later").await;
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        let undo = svc.copying(&at, 2, None, None).await.unwrap().undo.unwrap();
         svc.delete_listed("cratarr", copy_at("al-1", 2, &own.to_string_lossy(), "A/Album")).await.unwrap();
         std::fs::create_dir_all(inc.join("A/Album")).unwrap();
         std::fs::write(inc.join("A/Album/1.flac"), b"another edition, one").unwrap();
@@ -3739,7 +3819,7 @@ mod tests {
     async fn an_undo_of_a_copy_cut_short_is_finished_by_a_second_tap() {
         let (svc, music, inc, own) = with_own_music("t1-short").await;
         let at = svc.locate_listed("cratarr", copy_at("al-1", 0, &music.to_string_lossy(), "A/Album")).await.unwrap();
-        let undo = svc.copying(&at, 2, None).await.unwrap().undo.unwrap();
+        let undo = svc.copying(&at, 2, None, None).await.unwrap().undo.unwrap();
         let (id, stamp): (EventId, i64) = (undo.parse().unwrap(), 1_700_000_000);
         svc.journal.done(id, UNCOPIED, stamp, &serde_json::json!({ "stamp": stamp, "tokens": [] })).unwrap();
         crate::trash::trash_file(&own, "A/Album/1.flac", stamp).unwrap();
@@ -3834,7 +3914,7 @@ mod tests {
             let theirs = lying(&bob);
             let at = svc.locate_listed("cratarr", copy_at("al-1", 3, &bob.to_string_lossy(), "A/Album")).await.unwrap();
             let (to, root) = if case == 1 { (0, music.clone()) } else { (2, ann.clone()) };
-            let done = svc.copying(&at, to, None).await.unwrap();
+            let done = svc.copying(&at, to, None, None).await.unwrap();
             let key = done.undo.clone().unwrap();
             let id: EventId = key.parse().unwrap();
             let copies: Vec<String> = files_under(&root.join(&done.folder)).into_iter().map(|f| format!("{}/{f}", done.folder)).collect();

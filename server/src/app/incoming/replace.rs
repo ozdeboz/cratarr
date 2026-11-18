@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::{EventId, IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayData, files_under, queue, whole_copy};
+use super::{EventId, IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayData, files_under, queue};
 use crate::app::ToggleError;
 use crate::app::library::epoch_now;
 use crate::incoming::{AlbumFile, ReplacePlan, ReplaceRefusal};
@@ -47,6 +47,9 @@ pub struct ReplacePreview {
     pub files: usize,
     /// The new copy's library: someone's own music for a Replace from it (RY01), whose copy it is; else its Incoming library.
     pub from: Option<String>,
+    /// The own copy's folder in its library, as this preview read it (RY01; RF10, the review of runs 11 and 12, RA9): its tap carries it
+    /// back, so it takes the copy its sheet showed, of two in one library. None for Replace from Incoming.
+    pub from_dir: Option<String>,
 }
 
 impl ReplacePreview {
@@ -67,6 +70,7 @@ impl ReplacePreview {
             carry: Vec::new(),
             files: 0,
             from: Some(from),
+            from_dir: None,
         }
     }
 }
@@ -488,15 +492,17 @@ impl IncomingService {
         let (music, name) = (self.root_of(main)?, self.library_name(&at.source, main));
         let (c, folder, dir, root, year, template) =
             (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string), self.lib.template());
+        // The served library the guard below reads (RF11): the running server's, or a unit test's (`incoming::served`).
+        let served = super::served();
         tokio::task::spawn_blocking(move || -> Result<Result<Planned, ReplaceRefused>> {
             // The old album's folder goes to the trash whole, so what else lies in it must not; at the library's root, the library
             // would go with it.
             if old_dir.is_empty() {
                 return Ok(Err(ReplaceRefused::Other("Cratarr cannot see that album's folder".into())));
             }
-            if let Some(served) = crate::serve::instance()
+            if let Some(served) = served.as_deref()
                 && let Some(old) = served.library.album_in(main, &old_dir)?
-                && !whole_copy(&old, main, &music, &old_dir)?
+                && !super::whole_copy_in(Some(served), &old, main, &music, &old_dir)?
             {
                 return Ok(Err(ReplaceRefused::Other("Cratarr cannot see that album's folder".into())));
             }
@@ -537,6 +543,7 @@ impl IncomingService {
         let acquisition = self.acquisition().is_some();
         // Two copies of a record have one id: each picture is asked of its library. Another server's has its own id.
         let own = !at.album.copies.is_empty();
+        let from_dir: Option<String> = None;
         let (new, kept) = (at.album.library.clone().filter(|_| own), self.library_at(source_id, main).filter(|_| own));
         let from = at.album.library.clone();
         Ok(match self.plan_replace(&at, into, year).await? {
@@ -558,6 +565,7 @@ impl IncomingService {
                     carry,
                     files: p.plan.moves.len(),
                     from,
+                    from_dir,
                 }
             }
             Err(r) => ReplacePreview {
@@ -575,6 +583,7 @@ impl IncomingService {
                 carry: Vec::new(),
                 files: 0,
                 from,
+                from_dir,
             },
         })
     }
@@ -621,7 +630,7 @@ impl IncomingService {
     /// Lidarr not told, how many files it writes, and whose copy it is (`from`). Changes nothing.
     pub async fn replace_from_copy_preview(&self, source_id: &str, album: crate::source::Album, main: (i64, String), year: Option<&str>) -> Result<ReplacePreview, ToggleError> {
         let at = self.locate_listed(source_id, album).await?;
-        let from = at.album.library.clone();
+        let (from, from_dir) = (at.album.library.clone(), Some(at.dir.dir.clone()));
         Ok(match self.plan_from_copy(&at, main.clone(), year).await? {
             Ok(p) => {
                 let pairs = pairs_of(&p.root, &p.old_dir, &at, &p.plan);
@@ -641,6 +650,7 @@ impl IncomingService {
                     carry: Vec::new(),
                     files: p.plan.moves.len(),
                     from,
+                    from_dir,
                 }
             }
             Err(r) => ReplacePreview {
@@ -658,6 +668,7 @@ impl IncomingService {
                 carry: Vec::new(),
                 files: 0,
                 from,
+                from_dir,
             },
         })
     }
@@ -1375,6 +1386,48 @@ mod tests {
         let tasks = crate::app::tasks::tasks().of(ACCOUNT);
         assert!(tasks.iter().any(|t| t.kind == "replace" && t.finished.is_some() && t.error.as_deref().is_some_and(|e| e.contains("is not there"))), "its task ended with the error: {tasks:?}");
         assert_eq!(lying(&bob), theirs, "Bob's files untouched");
+        for d in [music, inc, ann, bob] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// RF11 (the review of runs 11 and 12, RA18; RY01.6 case 3): Music's copy whose folder holds another record's copy inside it (a
+    /// subfolder of another album) is refused, "Cratarr cannot see that album's folder", and nothing moves: the old folder goes to the
+    /// trash whole, so what else lies in it must not. The guard reads the served library, which this test gives it on its thread
+    /// (`served_in_tests`); with none, as every RY01 unit test ran before, it was skipped and the case untested. Its folder its copy's
+    /// alone, the plan goes ahead.
+    #[tokio::test]
+    async fn replace_from_a_copy_refuses_a_music_folder_another_record_lies_in() {
+        use crate::settings::LibraryKind;
+        let (svc, music, inc, ann, bob) = with_three_own("rf11-nested", RY01_DIR, RY01_DIR, Some("2019"), 2, 2).await;
+        let c = svc.lib.catalogue();
+        let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.library.set_kinds(vec![(0, LibraryKind::Main), (1, LibraryKind::Incoming), (2, LibraryKind::Own), (3, LibraryKind::Own)]);
+        served.attach_catalogue(c.clone());
+        let build = || {
+            let rules = crate::catalogue::Rules::default();
+            let (_, print) = served.library.change(&c, &rules).unwrap();
+            served.library.build_from(&c, &rules, &print).unwrap();
+        };
+        build();
+        super::super::served_in_tests(Some(served.clone()));
+        let at = bobs_copy(&svc, &bob, RY01_DIR).await;
+        assert!(svc.plan_from_copy(&at, (0, RY01_DIR.into()), None).await.unwrap().is_ok(), "Music's folder its copy's alone: planned");
+        let bonus = format!("{RY01_DIR}/Bonus/01 B - Other.mp3");
+        std::fs::create_dir_all(music.join(RY01_DIR).join("Bonus")).unwrap();
+        std::fs::write(music.join(&bonus), b"another record").unwrap();
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.tag_for_tests(0, &bonus, &[("albumartist", "B"), ("artist", "B"), ("album", "Other"), ("title", "Other One"), ("tracknumber", "1")]);
+        c.identify().unwrap();
+        build();
+        let before = lying(&music);
+        let refused = svc.plan_from_copy(&at, (0, RY01_DIR.into()), None).await.unwrap().err();
+        let tapped = svc.replacing_from_copy(&at, (0, RY01_DIR.into()), None, None).await;
+        super::super::served_in_tests(None);
+        assert!(matches!(refused, Some(ReplaceRefused::Other(ref why)) if why.contains("cannot see that album's folder")), "{refused:?}");
+        assert!(tapped.is_err(), "the tap refused too");
+        assert_eq!(lying(&music), before, "nothing moved");
         for d in [music, inc, ann, bob] {
             std::fs::remove_dir_all(d).ok();
         }

@@ -99,9 +99,9 @@ pub struct Serve {
     built_at: RwLock<i64>,
     /// Told each time the library is built (its time): views kept from the built-in source can read it again.
     built: tokio::sync::watch::Sender<i64>,
-    /// What the last check was made from: (the catalogue's last pass, the rules and added dates). The same again: no
-    /// need to look at the catalogue.
-    checked: std::sync::Mutex<Option<(Option<i64>, String)>>,
+    /// What the last check was made from: (how many changes the catalogue had told, `Catalogue::told`; the rules and added
+    /// dates). The same again: no need to look at the catalogue.
+    checked: std::sync::Mutex<Option<(u64, String)>>,
     /// Resized covers on disk (`art`).
     art_cache: art::Cache,
     /// One cover resized at a time: a client asks for hundreds at once, and decoding one takes tens of megabytes.
@@ -431,10 +431,11 @@ impl Serve {
         let set = self.userdata.overrides_stamp(None)?;
         let mut incomplete: Vec<(String, String)> = self.userdata.albums_incomplete()?;
         incomplete.sort_unstable();
-        // The catalogue is only looked at after it finished a pass (or the rules, added dates or original years changed):
-        // reading its files' summary every minute kept its 200 MB file in memory for nothing.
+        // The catalogue is only looked at after it finished a pass or told of a change (or the rules, added dates or original
+        // years changed): reading its files' summary every minute kept its 200 MB file in memory for nothing. By how many it
+        // told, never by the second of the last (RF8): one told in the second of a look was taken for one that look had seen.
         let inputs = (
-            self.catalogue().last_pass(),
+            self.catalogue().told(),
             format!(
                 "{:?}|{}|{}|{}|{}|{}|{}|{}",
                 self.library.kinds(),
@@ -943,7 +944,7 @@ mod tests {
         cat.identify().unwrap();
     }
 
-    /// A check that finds something new: `last_pass` is in whole seconds, and a check at the second of the last sees nothing.
+    /// A check that finds something new, a second after the last: the walk reads a file's time in whole seconds.
     fn checked_again(serve: &Serve) {
         std::thread::sleep(Duration::from_millis(1100));
         serve.catalogue().changed_outside_pass();
@@ -1309,6 +1310,28 @@ mod tests {
         assert_eq!(off, others);
         drop(serve);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Run 12's close (RF8, the review of runs 11 and 12, RA5): a change told in the second of the library's last look is built at its
+    /// next look, not at the next pass five minutes on. RY01's Undo told the library at its first `set_tracks`, the library looked at
+    /// once at half of it, and the rest was told within that second: Music's MP3 never came back (`undo_puts_musics_copy_back_end_to_end`).
+    #[test]
+    fn a_change_told_in_the_second_of_the_last_look_is_built_at_the_next() {
+        let (roots, cat, serve) = on_two_folders("same-second");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One")]);
+        checked_again(&serve);
+        // At the start of a second, so the look, the change and its telling all fall in it.
+        let into = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_millis();
+        std::thread::sleep(Duration::from_millis(u64::from(1020 - into)));
+        let second = now();
+        cat.changed_outside_pass();
+        serve.refresh().unwrap();
+        add(&cat, &roots[1], 1, &[("B/01 Two.flac", "Two")]);
+        cat.changed_outside_pass();
+        assert_eq!(now(), second, "all in one second");
+        assert!(serve.refresh().unwrap(), "built at the next look");
+        assert!(serve.library.album_in(1, "B").unwrap().is_some(), "what was told is listed");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
     #[test]

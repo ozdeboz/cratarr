@@ -110,6 +110,33 @@ impl Drop for Whole {
     }
 }
 
+/// `body` put as JSON to `path` with that cookie: the answer as `Whole::send` gives it.
+async fn put(w: &Whole, cookie: &str, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    w.send(("cookie", cookie), Method::PUT, path, Body::from(body.to_string())).await
+}
+
+/// AL04.4 (the review of run 13, RM8): a room and the floor are a number of GB, from 0. A non-number (`"x"`, `null`, a number as text,
+/// none at all) or a negative is refused with 400 and the words the Users panel and Settings show, never axum's 422, and the old value
+/// is kept.
+#[tokio::test]
+async fn a_room_or_floor_must_be_a_number_of_gb() {
+    let w = Whole::open("gb").await;
+    let me = w.session("me");
+    w.served.users.create("ann", "ann pw", false).unwrap();
+    assert!(put(&w, &me, "/api/users/ann/room", serde_json::json!({ "gb": 50 })).await.0.is_success());
+    assert!(put(&w, &me, "/api/settings/floor", serde_json::json!({ "gb": 300 })).await.0.is_success());
+    for bad in [serde_json::json!({ "gb": "x" }), serde_json::json!({ "gb": null }), serde_json::json!({ "gb": "50" }), serde_json::json!({}), serde_json::json!({ "gb": -1 })] {
+        let (status, answer) = put(&w, &me, "/api/users/ann/room", bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "room {bad}: {answer}");
+        assert_eq!(answer["error"], "Give the room in GB, from 0.", "room {bad}: {answer}");
+        let (status, answer) = put(&w, &me, "/api/settings/floor", bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "floor {bad}: {answer}");
+        assert!(answer["error"].as_str().is_some_and(|e| e.starts_with("Give the floor in GB, from 0")), "floor {bad}: {answer}");
+    }
+    assert_eq!(w.served.users.get("ann").unwrap().room_bytes, Some(50 * crate::app::room::GB), "the old room kept");
+    assert_eq!(crate::app::room::floor(&w.served.userdata), 300 * crate::app::room::GB, "the old floor kept");
+}
+
 /// `body` posted as JSON to `path` with that cookie: the answer as `Whole::send` gives it.
 async fn post(w: &Whole, cookie: &str, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
     w.send(("cookie", cookie), Method::POST, path, Body::from(body.to_string())).await

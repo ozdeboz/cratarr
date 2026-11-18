@@ -255,33 +255,45 @@ fn opening(id: &str, name: &str) -> Result<Option<(String, String)>> {
     Ok(Some((id, name.to_string())))
 }
 
-/// How long the open waits for MusicBrainz's answer (T6): past it, as when MusicBrainz is away, the id is not the name's sure match.
+/// How long the open waits for MusicBrainz's answer (T6): past it, as when MusicBrainz is away, no answer came (RF13).
 const ASKED_FOR: Duration = Duration::from_secs(10);
 
 /// An artist opened (C57; T6, the review of run 10's finding 6): `open_artist`, the id taken as the name's sure match only where it
 /// is MusicBrainz's first sure match for the name, asked as the monthly read asks it (`discover::mb_artist_by_name`,
-/// `artist:"<name>"`): one question, whoever opens and whatever listed them (Beyond, a card, an administrator's name). MusicBrainz
-/// switched off (no question asked), away, or not answering within `ASKED_FOR`: not sure, so a new artist holds the id, which the
-/// monthly read gives the library's artist later where the name says so (OQ-K, T7). Nothing asked for an open that opens none.
+/// `artist:"<name>"`): one question, whoever opens and whatever listed them (Beyond, a card, an administrator's name), and only where
+/// its answer decides (RF13, the review of runs 11 and 12, RB6: `Catalogue::opening_of`): an id an artist holds opens them, and a name
+/// with no live id-less artist of its own, or two, makes a new artist, with nothing asked. Where it decides and no answer comes
+/// (MusicBrainz switched off, away, holding the open back, or not answering within `ASKED_FOR`): the artist of the name opened as they
+/// are, given no id, and no namesake made, a number that would be kept for life; the next open asks again, and the monthly read gives
+/// the id where the name says so (OQ-K, T7). Nothing asked for an open that opens none.
 pub async fn open_asking(cat: Arc<Catalogue>, id: &str, name: &str) -> Result<Option<i64>> {
+    use crate::catalogue::Opening;
     let Some((id, name)) = opening(id, name)? else { return Ok(None) };
-    let sure = sure_of(&id, &name).await;
+    let (c, r, n) = (cat.clone(), Ref::new("musicbrainz", "artist", &id), name.clone());
+    let sure = match tokio::task::spawn_blocking(move || c.opening_of(&r, &n)).await?? {
+        Opening::Held(artist) => return Ok(Some(artist)),
+        Opening::New => false,
+        Opening::Decides(artist) => match sure_of(&id, &name).await {
+            Some(sure) => sure,
+            None => return Ok(Some(artist)),
+        },
+    };
     tokio::task::spawn_blocking(move || open_artist(&cat, &id, &name, sure)).await?
 }
 
-/// Whether a MusicBrainz id is its first sure match for a name (T6): its answer to the name's one question. Any failure, or none in
-/// time: not sure, said in the log.
-async fn sure_of(id: &str, name: &str) -> bool {
+/// Whether a MusicBrainz id is its first sure match for a name (T6): its answer to the name's one question. None where no answer
+/// came: a failure, or none in time, said in the log.
+async fn sure_of(id: &str, name: &str) -> Option<bool> {
     let asked = async { super::discover::mb_artist_by_name(&super::discover::http()?, name).await };
     match tokio::time::timeout(ASKED_FOR, asked).await {
-        Ok(Ok(found)) => found.is_some_and(|f| mbid(&f) == id),
+        Ok(Ok(found)) => Some(found.is_some_and(|f| mbid(&f) == id)),
         Ok(Err(e)) => {
-            tracing::info!(target: "beyond", "{name} opened as not sure: MusicBrainz not asked who they are: {e:#}");
-            false
+            tracing::info!(target: "beyond", "{name} opened as they are: MusicBrainz not asked who they are: {e:#}");
+            None
         }
         Err(_) => {
-            tracing::info!(target: "beyond", "{name} opened as not sure: MusicBrainz did not answer in time");
-            false
+            tracing::info!(target: "beyond", "{name} opened as they are: MusicBrainz did not answer in time");
+            None
         }
     }
 }
@@ -797,8 +809,9 @@ mod tests {
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 3, "one question an open");
     }
 
-    /// T6.3 (OQ-K): MusicBrainz answering 503, or switched off (then asked nothing at all, though it would be sure): not sure.
-    /// "Grouch (2)" holds the rapper's id, the library's Grouch is untouched, and the open does not fail.
+    /// T6.3 (OQ-K), changed by RF13 (the review of runs 11 and 12, RB6): MusicBrainz answering 503 (holding the open back), or
+    /// switched off (then asked nothing at all, though it would be sure): no answer, so the library's id-less Grouch is opened as he is,
+    /// given no id, and no "Grouch (2)" is made, a number that would be kept for life; the open does not fail.
     #[tokio::test]
     async fn musicbrainz_away_at_open_is_never_sure() {
         use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
@@ -827,12 +840,103 @@ mod tests {
         assert_eq!((away_asked, off_asked), (1, 0), "away: asked once; switched off: no request at all");
         for (cat, grouch, had, opened) in [(&away, away_grouch, away_had, away_opened), (&off, off_grouch, off_had, off_opened)] {
             let opened = opened.expect("the open does not fail").expect("opened");
-            assert_ne!(opened, grouch, "not sure: never the library's Grouch");
-            assert_eq!(cat.artist_named(opened).unwrap().unwrap().number, Some(2), "Grouch (2)");
-            assert_eq!(holds(cat, opened), [(RAPPER.to_string(), "search".to_string())], "holding the rapper's id by search");
-            assert!(holds(cat, grouch).is_empty(), "the library's Grouch untouched");
+            assert_eq!(opened, grouch, "no answer: the library's Grouch, as he is");
+            assert_eq!(of_the_name(cat, "Grouch"), 1, "no Grouch (2)");
+            assert!(holds(cat, grouch).is_empty() && holders(cat, RAPPER).is_empty(), "no one given the rapper's id");
             assert_eq!(credits(cat, grouch), [had]);
         }
+    }
+
+    /// The live artists of a name (RF13): two where it made "Name (2)".
+    fn of_the_name(cat: &Catalogue, name: &str) -> i64 {
+        let sql = "SELECT count(*) FROM artists a WHERE a.key = ?1 AND NOT EXISTS (SELECT 1 FROM forgotten g WHERE g.subject = 'ar-' || a.id)";
+        cat.db_for_tests().query_row(sql, [ids::artist_key(name)], |r| r.get(0)).unwrap()
+    }
+
+    /// Who holds a MusicBrainz artist id (RF13), by subject.
+    fn holders(cat: &Catalogue, id: &str) -> Vec<String> {
+        let db = cat.db_for_tests();
+        let mut st = db.prepare("SELECT subject FROM \"references\" WHERE source = 'musicbrainz' AND kind = 'artist' AND value = ?1").unwrap();
+        st.query_map([id], |r| r.get::<_, String>(0)).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// RF13 (the review of runs 11 and 12, RB6): MusicBrainz slow, answering past `ASKED_FOR` (its one turn held back, a 503's wait):
+    /// the open waits no longer than that, opens the library's id-less Grouch as he is, gives no one the rapper's id, and makes no
+    /// "Grouch (2)", a number that would be kept for life. The answer is asked again at the next open, and the monthly read gives the id
+    /// where the name says so.
+    #[tokio::test]
+    async fn musicbrainz_slow_at_open_opens_the_artist_of_the_name_and_makes_no_namesake() {
+        use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const RAPPER: &str = "00000000-0000-4000-8000-000000000611";
+        let _one = TEST_STATE.lock().await;
+        let was = set_for_tests(MUSICBRAINZ, true);
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counted = asked.clone();
+        let slow = move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async {
+                tokio::time::sleep(ASKED_FOR + Duration::from_secs(3)).await;
+                axum::Json(serde_json::json!({ "artists": [found(RAPPER, "Grouch", 100)] }))
+            }
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(slow)).await.unwrap() });
+        let fake = crate::app::discover::FakeMusicBrainz::at(at);
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (grouch, had) = library_grouch(&cat);
+        let now = crate::app::moment::now_secs();
+        keep_listed(&[person(RAPPER, "Grouch")], now);
+        let started = std::time::Instant::now();
+        let opened = open_asking(cat.clone(), RAPPER, &may_open(RAPPER, "Grouch", false, now).expect("listed")).await;
+        let took = started.elapsed();
+        drop(fake);
+        set_for_tests(MUSICBRAINZ, was);
+        let opened = opened.expect("the open does not fail").expect("opened");
+        assert!(took < ASKED_FOR + Duration::from_secs(2), "waited no longer than the limit: {took:?}");
+        assert_eq!(asked.load(Ordering::SeqCst), 1, "asked once");
+        assert_eq!(opened, grouch, "the library's Grouch, as he is");
+        assert_eq!(of_the_name(&cat, "Grouch"), 1, "no Grouch (2)");
+        assert!(holds(&cat, grouch).is_empty() && holders(&cat, RAPPER).is_empty(), "no one given the rapper's id");
+        assert_eq!(credits(&cat, grouch), [had]);
+    }
+
+    /// RF13 (RB6): an open asks MusicBrainz only where its answer decides, the one live id-less artist of the name: never for an id an
+    /// artist holds already (that artist, opened again), nor where the name has no live artist, or two, or one holding another
+    /// MusicBrainz id (a new artist each, whatever MusicBrainz would say).
+    #[tokio::test]
+    async fn an_open_asks_musicbrainz_only_where_its_answer_decides() {
+        use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
+        const HELD: &str = "00000000-0000-4000-8000-000000000612";
+        const NEW: &str = "00000000-0000-4000-8000-000000000613";
+        const TWO: &str = "00000000-0000-4000-8000-000000000614";
+        const OTHER: &str = "00000000-0000-4000-8000-000000000615";
+        const TAKEN: &str = "00000000-0000-4000-8000-000000000616";
+        let _one = TEST_STATE.lock().await;
+        let was = set_for_tests(MUSICBRAINZ, true);
+        let sure = |id: &str, name: &str| serde_json::json!({ "artists": [found(id, name, 100)] });
+        let (fake, asked) =
+            fake_musicbrainz(vec![("Grouch", 200, sure(HELD, "Grouch")), ("Nobody Here", 200, sure(NEW, "Nobody Here")), ("Air", 200, sure(TWO, "Air")), ("Zero 7", 200, sure(OTHER, "Zero 7"))]).await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (grouch, _) = library_grouch(&cat);
+        cat.set_reference(&ids::artist(grouch), &Ref::new("musicbrainz", "artist", HELD), "files").unwrap();
+        let (air, air2) = (cat.artist_for("Air").unwrap(), cat.artist_apart("Air").unwrap());
+        let zero = cat.artist_for("Zero 7").unwrap();
+        cat.set_reference(&ids::artist(zero), &Ref::new("musicbrainz", "artist", TAKEN), "files").unwrap();
+        let now = crate::app::moment::now_secs();
+        keep_listed(&[person(HELD, "Grouch"), person(NEW, "Nobody Here"), person(TWO, "Air"), person(OTHER, "Zero 7")], now);
+        let held = open_listed(&cat, HELD, "Grouch", now).await;
+        let new = open_listed(&cat, NEW, "Nobody Here", now).await;
+        let two = open_listed(&cat, TWO, "Air", now).await;
+        let other = open_listed(&cat, OTHER, "Zero 7", now).await;
+        drop(fake);
+        set_for_tests(MUSICBRAINZ, was);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0, "no question where its answer decides nothing");
+        assert_eq!(held, grouch, "the artist who holds the id");
+        assert_eq!(holds(&cat, new), [(NEW.to_string(), "search".to_string())], "no one of the name: a new artist holding it");
+        assert!(![air, air2].contains(&two) && holds(&cat, two) == [(TWO.to_string(), "search".to_string())], "of two of the name: a new artist");
+        assert!(other != zero && holds(&cat, other) == [(OTHER.to_string(), "search".to_string())], "one holding another id: a new artist");
     }
 
     /// G5: an artist row names the artist who holds its id with their number for the name, and the catalogue gives each of a name

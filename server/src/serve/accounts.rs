@@ -346,18 +346,12 @@ async fn users(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response 
     axum::Json(json!({ "users": list })).into_response()
 }
 
-#[derive(serde::Deserialize)]
-struct RoomSize {
-    gb: f64,
-}
-
 /// An account's room, set by an administrator (AL01; 0084: per user, in the Users panel): GB with decimals (OQ-R5), kept in bytes
-/// (1 GB = 10^9). Kept on an administrator too, for when it is a user again (OQ-R3).
-async fn set_room(State(serve): State<Arc<Serve>>, Path(name): Path<String>, axum::Json(b): axum::Json<RoomSize>) -> Response {
-    if !b.gb.is_finite() || b.gb < 0.0 {
-        return refused(StatusCode::BAD_REQUEST, "Give the room in GB, from 0.");
-    }
-    match serve.users.set_room(&name, (b.gb * crate::app::room::GB as f64).round() as u64) {
+/// (1 GB = 10^9). Kept on an administrator too, for when it is a user again (OQ-R3). Anything but a number from 0 is refused with 400
+/// (AL04.4, `room::gb_given`), the old room kept.
+async fn set_room(State(serve): State<Arc<Serve>>, Path(name): Path<String>, axum::Json(b): axum::Json<serde_json::Value>) -> Response {
+    let Some(gb) = crate::app::room::gb_given(&b) else { return refused(StatusCode::BAD_REQUEST, "Give the room in GB, from 0.") };
+    match serve.users.set_room(&name, (gb * crate::app::room::GB as f64).round() as u64) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(r) => refusal(r),
     }

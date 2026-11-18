@@ -117,7 +117,7 @@ use serde::Serialize;
 pub use albums::{AlbumsView, ReplaceAsk};
 pub use collection::{CollectionService, CollectionView};
 pub use error::{ToggleError, plain};
-pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview, ReplaceSheet, shown_jobs as incoming_jobs_shown};
+pub use incoming::{AlbumFate, CopySheet, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview, ReplaceSheet, shown_jobs as incoming_jobs_shown};
 pub use insights::InsightsService;
 pub use library::{FreshIds, Library, SourceTab};
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};

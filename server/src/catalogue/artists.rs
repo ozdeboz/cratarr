@@ -97,7 +97,46 @@ pub(super) fn note_artists_moved(tx: &Connection) -> Result<usize> {
     Ok(noted)
 }
 
+/// Who an open of a source's id is before anything is asked (RF13, the review of runs 11 and 12, RB6): the artist who holds the id;
+/// else the one live artist of the name holding no id at that source, whom the id goes to only where it is the source's first sure
+/// match for the name: the one case its answer decides; else a new artist, whatever it would answer (no live artist of the name, two
+/// or more, or one holding another id there).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opening {
+    Held(i64),
+    Decides(i64),
+    New,
+}
+
+/// `Opening` as `db` reads it (a forgotten artist's row goes, RT01b, its tombstone kept).
+fn opening_in(db: &Connection, r: &super::records::Ref, name: &str) -> Result<Opening> {
+    let held: Vec<String> = db
+        .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?
+        .query_map(params![r.source, r.kind, r.value], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if let Some(artist) = held.iter().find_map(|s| ids::artist_number(s)) {
+        return Ok(Opening::Held(artist));
+    }
+    let named: Vec<(i64, bool)> = db
+        .prepare_cached(
+            "SELECT a.id, EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.source = ?2 AND f.kind = ?3)
+             FROM artists a WHERE a.key = ?1 AND NOT EXISTS (SELECT 1 FROM forgotten g WHERE g.subject = 'ar-' || a.id) ORDER BY a.id",
+        )?
+        .query_map(params![ids::artist_key(name), r.source, r.kind], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(match named.as_slice() {
+        [(only, false)] => Opening::Decides(*only),
+        _ => Opening::New,
+    })
+}
+
 impl Catalogue {
+    /// Who an open of a source's id and a name is, as the catalogue stands (`Opening`, RF13): what an open asks the source of, and
+    /// when not at all. Blocking.
+    pub fn opening_of(&self, r: &super::records::Ref, name: &str) -> Result<Opening> {
+        opening_in(&self.db(), r, name)
+    }
+
     /// The artist a name is, given an id if it has none: for a name that must have one, a heart on someone no file credits
     /// yet. Blocking.
     pub fn artist_for(&self, name: &str) -> Result<i64> {
@@ -125,28 +164,14 @@ impl Catalogue {
     pub fn artist_by_reference(&self, r: &super::records::Ref, name: &str, how: &str, sure: bool) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let held: Vec<String> = tx
-            .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?
-            .query_map(params![r.source, r.kind, r.value], |row| row.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        if let Some(artist) = held.iter().find_map(|s| ids::artist_number(s)) {
-            tx.commit()?;
-            return Ok(artist);
-        }
-        let key = ids::artist_key(name);
-        // The live artists of the name (a forgotten one's row goes, RT01b, its tombstone kept), and whether each holds an id at
-        // that source.
-        let named: Vec<(i64, bool)> = tx
-            .prepare_cached(
-                "SELECT a.id, EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.source = ?2 AND f.kind = ?3)
-                 FROM artists a WHERE a.key = ?1 AND NOT EXISTS (SELECT 1 FROM forgotten g WHERE g.subject = 'ar-' || a.id) ORDER BY a.id",
-            )?
-            .query_map(params![key, r.source, r.kind], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<rusqlite::Result<_>>()?;
         let at = now();
-        let artist = match named.as_slice() {
-            [(only, false)] if sure => *only,
-            _ => give_artist(&tx, &key, name, at)?,
+        let artist = match opening_in(&tx, r, name)? {
+            Opening::Held(artist) => {
+                tx.commit()?;
+                return Ok(artist);
+            }
+            Opening::Decides(only) if sure => only,
+            _ => give_artist(&tx, &ids::artist_key(name), name, at)?,
         };
         super::records::put_reference(&tx, &ids::artist(artist), r, how, at, false)?;
         tx.commit()?;
