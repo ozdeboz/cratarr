@@ -257,6 +257,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/spotify/cover/{kind}/{id}", get(spotify_cover))
         .route("/api/requests/watching", get(requests_watching))
         .route("/api/requests/decide", post(requests_decide))
+        .route("/api/requests/{id}", get(request_story))
         .route("/api/requests/{id}/cancel", post(requests_cancel))
         // One's own listening imported into one's own account (0.9.7, the owner: a personal concern; the account is the
         // session's, never a parameter). Another server's users' import stays the administrators' (serve::routes).
@@ -5533,6 +5534,21 @@ async fn requests_decide(ctx: Ctx, Json(b): Json<RequestsDecide>) -> Result<Json
     Ok(Json(json!(out.into_iter().map(|(id, said)| json!({ "id": id, "said": said })).collect::<Vec<_>>())))
 }
 
+/// What a request's story answers where there is none for the caller (RQ01.1): a request that does not exist, and another account's,
+/// alike.
+const NO_SUCH_REQUEST: &str = "There is no such request.";
+
+/// A request's story (RQ01): its asker's and the administrators'; anyone else is answered as for a request that does not exist.
+async fn request_story(ctx: Ctx, Path(id): Path<i64>) -> Result<Response, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
+    let story = crate::app::requests::story(&app, &serve, &account, id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(match story {
+        Some(s) => Json(s).into_response(),
+        None => refused(StatusCode::NOT_FOUND, NO_SUCH_REQUEST),
+    })
+}
+
 /// A request taken back.
 async fn requests_cancel(ctx: Ctx, Path(id): Path<i64>) -> Result<StatusCode, ApiError> {
     let app = ctx.app.clone();
@@ -7074,21 +7090,14 @@ async fn soulseek(State(app): State<Arc<App>>) -> Json<crate::app::soulseek::Vie
 }
 
 #[derive(Deserialize)]
-struct SoulseekPick {
-    id: String,
-    #[serde(default)]
-    folder: Option<usize>,
-}
-
-#[derive(Deserialize)]
 struct SoulseekApprove {
-    items: Vec<SoulseekPick>,
+    items: Vec<crate::app::soulseek::Pick>,
 }
 
-/// Found records approved (a folder given, else the best): fetched, gated and placed in turn.
-async fn soulseek_approve(State(app): State<Arc<App>>, Json(b): Json<SoulseekApprove>) -> Json<crate::app::soulseek::View> {
-    let picked: Vec<(String, Option<usize>)> = b.items.into_iter().map(|p| (p.id, p.folder)).collect();
-    Json(crate::app::soulseek::approve(&app, &picked))
+/// Found records approved (a folder given, else the best): fetched, gated and placed in turn. A tick from a request's story names its
+/// source too: one no longer at its place is refused (409, "That source is gone; look again"), nothing ticked (RQ01.8 (b)).
+async fn soulseek_approve(State(app): State<Arc<App>>, Json(b): Json<SoulseekApprove>) -> Result<Json<crate::app::soulseek::View>, ApiError> {
+    Ok(Json(crate::app::soulseek::approve(&app, &b.items).map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// A record searched now, whatever its wait.

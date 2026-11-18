@@ -135,9 +135,10 @@ pub fn request_state(r: &Request, held: Holding, lidarr: Option<&Progress>, soul
         Holding::None | Holding::Elsewhere => {
             let lidarr = lidarr.and_then(|p| match *p {
                 Progress::Looking => Some(Fetching::Looking),
-                Progress::Fetching { done } => Some(Fetching::Fetching { done }),
+                // Importing reads as fetching, as it did before Lidarr's step was read (RQ01.3: the story's part tells it).
+                Progress::Fetching { done } | Progress::Importing { done } => Some(Fetching::Fetching { done }),
                 Progress::Fetched { .. } => Some(Fetching::Fetching { done: 1.0 }),
-                Progress::Stuck => Some(Fetching::Stuck),
+                Progress::Stuck { .. } => Some(Fetching::Stuck),
                 Progress::NotWanted | Progress::Unknown => None,
             });
             RequestState::Wanted { lidarr, soulseek: soulseek.cloned() }
@@ -335,12 +336,23 @@ pub(crate) fn cover_kept(cover: &str) -> bool {
 }
 
 /// Views as a viewer may read them (W6): an administrator the fetchers' own words too; any other account the states alone, never
-/// Lidarr's text (its errors name its address).
+/// Lidarr's text (its errors name its address), Soulseek's whys in Cratarr's own words (OQ-RQ1 (a), `own_words`).
 fn shown_to(mut views: Vec<View>, administering: bool) -> Vec<View> {
     if !administering {
-        views.iter_mut().for_each(|v| v.request.fetched = None);
+        for v in &mut views {
+            v.request.fetched = None;
+            if let RequestState::Wanted { soulseek: Some(super::soulseek::Word::Waiting { why: Some(why) } | super::soulseek::Word::Stuck { why: Some(why) }), .. } = &mut v.state {
+                *why = own_words(why);
+            }
+        }
     }
     views
+}
+
+/// A why as a user reads it (OQ-RQ1 (a)): Cratarr's own words, up to its first ": ", where an error's own text (an address, a path)
+/// begins. Pure.
+fn own_words(why: &str) -> String {
+    why.split(": ").next().unwrap_or_default().to_string()
 }
 
 /// The record an album asked for by its names is (C49a): its names as a label's own account gives them sorted out first (S12,
@@ -1578,6 +1590,196 @@ async fn with_rooms(serve: &Serve, mut views: Vec<View>) -> Vec<View> {
     views
 }
 
+/// A request's story (RQ01, the owner's "a request's sheet tells its whole story"): its row as the Requests page gives it (W5's state,
+/// the words `shown_to` lets its viewer read), the record's page it opens (merges followed), when it was asked, when and where its
+/// asker's copy came, and where each fetcher is with it. Its asker's and the administrators' alone (`story`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Story {
+    #[serde(flatten)]
+    pub view: View,
+    /// The record's page, `al-<n>`, a merge followed; none where it names no record, or one gone.
+    pub opens: Option<String>,
+    /// When it was asked, epoch seconds.
+    pub asked_at: i64,
+    /// When its asker's copy came whole where it is (its last file's coming), epoch seconds; for one delivered with no copy left, when
+    /// it was delivered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivered_at: Option<i64>,
+    /// The library holding its asker's whole copy: Music, an Incoming library, their own music. None where there is none.
+    #[serde(rename = "where", skip_serializing_if = "Option::is_none")]
+    pub held_in: Option<Where>,
+    /// Where Lidarr is with it: none where Lidarr is not connected or is switched off, or the request is closed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lidarr: Option<LidarrPart>,
+    /// Soulseek's item of its record, whole (RQ01.4): none where the record has none, or the request is closed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soulseek: Option<super::soulseek::Part>,
+}
+
+/// The library holding a request's asker's copy (RQ01.6): its catalogue folder, and its name as the viewer reads it ("Your music"
+/// for their own).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Where {
+    pub library: i64,
+    pub name: String,
+}
+
+/// Lidarr's part of a story (RQ01.3): where Lidarr is with it, how far (0 to 1) while grabbed, and Lidarr's own words (its queue's
+/// warning or error, else what the hand-over said of Lidarr), which name its address and paths: administrators' alone (W6, OQ-RQ1).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LidarrPart {
+    pub step: Step,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
+}
+
+/// Where Lidarr is with a request (RQ01.3): looking for it, grabbed and downloading it, importing it (its queue's state says so),
+/// imported, stuck (its grab failed or stalls), or not handed over (or no longer known or wanted by it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Step {
+    Looking,
+    Grabbed,
+    Importing,
+    Imported,
+    Stuck,
+    NotHanded,
+}
+
+/// A request's story for `account` (RQ01): its asker's and the administrators' (OQ-RQ2 (a): "Manage requests" reads one's own alone);
+/// none for anyone else, as for a request that does not exist. Lidarr as it is connected; libraries named as the Library names them.
+pub async fn story(app: &super::App, serve: &Serve, account: &str, id: i64) -> Result<Option<Story>> {
+    let f = fetcher(app);
+    let named = |folder: i64| app.incoming.library_name(crate::source::cratarr::KIND.id, folder);
+    story_with(serve, f.as_deref(), account, id, &named).await
+}
+
+/// [`story`], Lidarr asked as `f`, a catalogue folder's library named by `named`.
+pub(crate) async fn story_with(serve: &Serve, f: Option<&dyn Fetcher>, account: &str, id: i64, named: &(dyn Fn(i64) -> String + Sync)) -> Result<Option<Story>> {
+    let administering = crate::serve::access::administering();
+    let Some(r) = serve.userdata.request(id)? else { return Ok(None) };
+    // Anyone but its asker and the administrators is answered as for a request that does not exist (RQ01.1).
+    if !administering && r.user != account {
+        return Ok(None);
+    }
+    let (cat, kinds, asked) = (serve.catalogue().clone(), serve.library.kinds(), r.clone());
+    let (of, copy) = tokio::task::spawn_blocking(move || held_for(&cat, &asked, &kinds)).await??;
+    let held = of.as_ref().map_or(Holding::None, |o| o.holding);
+    let shown = shown(r, of.as_ref());
+    let open = shown.status == PENDING || shown.status == APPROVED;
+    // Lidarr asked once, for its part and for the state (W5: what the Requests page asks it, read as the page reads it).
+    let (for_state, for_part) = (asks_lidarr(&shown, held), open && handed_to_lidarr(&shown));
+    let progress = match (f, shown.release_group.clone()) {
+        (Some(f), Some(group)) if for_state || for_part => f.statuses(std::slice::from_ref(&group)).await.ok().and_then(|mut p| {
+            let p = p.remove(&group)?;
+            Some((group, p))
+        }),
+        _ => None,
+    };
+    let lidarr = f.filter(|_| open).and_then(|_| lidarr_part(&shown, progress.as_ref().filter(|_| for_part).map(|(_, p)| p)));
+    // Its record's item (RQ01.4, RQ01.5: a second asker of the record reads the first's), for an open request alone (RQ01.7).
+    let soulseek = if open { super::soulseek::part_of(shown.id, shown.record, super::moment::now_secs()) } else { None };
+    let read: HashMap<String, Progress> = progress.filter(|_| for_state).into_iter().collect();
+    let Some(view) = with_rooms(serve, views_read(vec![(shown, held)], Some(&read))).await.pop() else { return Ok(None) };
+    let held_in = copy.map(|c| Where { library: c.folder, name: if c.own && view.request.user == account { crate::settings::YOUR_MUSIC.to_string() } else { named(c.folder) } });
+    let delivered = (view.request.status == DELIVERED).then_some(view.request.decided_at).flatten();
+    let story = Story {
+        opens: of.as_ref().map(|o| crate::serve::ids::record(o.record)),
+        asked_at: view.request.at,
+        delivered_at: copy.and_then(|c| c.came).or(delivered),
+        held_in,
+        lidarr,
+        soulseek,
+        view,
+    };
+    Ok(Some(story_shown_to(story, administering)))
+}
+
+/// A story as its viewer may read it (W6, OQ-RQ1 (a)): an administrator all of it; anyone else Cratarr's own words, never Lidarr's,
+/// and every why of Soulseek's (held, stuck, set aside) up to where an error's own text begins (`own_words`).
+fn story_shown_to(mut s: Story, administering: bool) -> Story {
+    if !administering {
+        s.view = shown_to(vec![s.view], false).remove(0);
+        if let Some(l) = s.lidarr.as_mut() {
+            l.said = None;
+        }
+        if let Some(p) = s.soulseek.as_mut() {
+            if let Some(h) = p.held.as_mut() {
+                h.why = own_words(&h.why);
+            }
+            p.stuck = p.stuck.as_deref().map(own_words);
+            for f in p.set_aside.iter_mut().flat_map(|a| a.files.iter_mut()) {
+                f.why = own_words(&f.why);
+            }
+        }
+    }
+    s
+}
+
+/// A request's asker's whole copy, as a story tells it (RQ01.6): the catalogue folder holding it, whether that is the asker's own
+/// music, and when it came whole there (its last file's coming; none where not known).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AskersCopy {
+    folder: i64,
+    own: bool,
+    came: Option<i64>,
+}
+
+/// What a story reads of a request's record (RQ01.6): the record as the views read it (`records_held`), and its asker's whole copy
+/// (`copy_folder`), with when it came there (`Catalogue::went_of`: its present files there). Blocking.
+fn held_for(cat: &crate::catalogue::Catalogue, r: &Request, kinds: &[(i64, crate::settings::LibraryKind)]) -> Result<(Option<RecordOf>, Option<AskersCopy>)> {
+    let of = records_held(cat, std::slice::from_ref(r), kinds)?.pop().flatten();
+    let Some((record, holder, holding)) = of.as_ref().and_then(|o| Some((o.record, o.holder?, o.holding))) else { return Ok((of, None)) };
+    let Some(q) = cat.requested(&[record])?.remove(&record) else { return Ok((of, None)) };
+    let places = super::room::Places::of(kinds, &cat.folders());
+    let own: Vec<i64> = places.own.iter().filter(|(_, account)| *account == r.user).map(|(folder, _)| *folder).collect();
+    let Some(folder) = copy_folder(&q, holding, |folder| crate::serve::library::kind_in(kinds, folder).0, &own) else { return Ok((of, None)) };
+    let went = cat.went_of(&[holder])?.remove(&holder).unwrap_or_default();
+    let came = went.iter().filter(|w| w.folder == folder && w.gone.is_none() && w.trashed.is_none()).filter_map(|w| w.came).max();
+    Ok((of, Some(AskersCopy { folder, own: own.contains(&folder), came })))
+}
+
+/// The catalogue folder holding a request's asker's copy whole (RQ01.6), as its holding reads it (W4, I05): their own music first,
+/// else a main library, where it is done for them; an Incoming library where it arrived; none else (partly there, not had, or held
+/// only in another's own music), nor for tracks no file holds. Pure.
+fn copy_folder(q: &crate::catalogue::records::Requested, holding: Holding, kind: impl Fn(i64) -> crate::settings::LibraryKind, own: &[i64]) -> Option<i64> {
+    use crate::settings::LibraryKind;
+    let whole = |n: usize| q.list.is_none_or(|l| n >= l);
+    let first = |pick: &dyn Fn(i64) -> bool| q.copies.iter().find(|(folder, n)| whole(*n) && pick(*folder)).map(|(folder, _)| *folder);
+    match holding {
+        Holding::Done => first(&|folder| own.contains(&folder)).or_else(|| first(&|folder| kind(folder) == LibraryKind::Main)),
+        Holding::Arrived => first(&|folder| kind(folder) == LibraryKind::Incoming),
+        _ => None,
+    }
+}
+
+/// Whether a request was handed to Lidarr (X1): its line names Lidarr, and not as one Lidarr did not take ("Not handed over").
+fn handed_to_lidarr(r: &Request) -> bool {
+    r.fetched.as_deref().is_some_and(|f| f.contains("Lidarr") && !f.starts_with("Not handed over"))
+}
+
+/// Lidarr's part of a request (RQ01.3), as Lidarr says of its group (`progress`; none: not asked, or no answer): one never handed
+/// over says so; one handed, where Lidarr is with it, none where Lidarr said nothing of it. Its words: the queue's, else what the
+/// request's line says of Lidarr. Pure.
+fn lidarr_part(r: &Request, progress: Option<&Progress>) -> Option<LidarrPart> {
+    let line = r.fetched.as_deref().map(|f| f.split("; ").filter(|s| s.contains("Lidarr")).collect::<Vec<_>>().join("; ")).filter(|s| !s.is_empty());
+    if !handed_to_lidarr(r) {
+        return Some(LidarrPart { step: Step::NotHanded, done: None, said: line });
+    }
+    let (step, done, said) = match progress? {
+        Progress::Looking => (Step::Looking, None, None),
+        Progress::Fetching { done } => (Step::Grabbed, Some(*done), None),
+        Progress::Importing { .. } => (Step::Importing, None, None),
+        Progress::Fetched { .. } => (Step::Imported, None, None),
+        Progress::Stuck { said } => (Step::Stuck, None, said.clone()),
+        // It knows the album no longer, or no longer wants it: it is not at it.
+        Progress::Unknown | Progress::NotWanted => (Step::NotHanded, None, None),
+    };
+    Some(LidarrPart { step, done, said: said.or(line) })
+}
+
 /// What Lidarr is looking for and fetching now (the page's "Lidarr is looking for these"); asked while the page is
 /// open, not watched.
 pub async fn watching(app: &super::App) -> Result<Option<crate::lidarr::Watching>> {
@@ -1948,19 +2150,26 @@ async fn views(serve: &Serve, f: Option<&dyn Fetcher>, rs: Vec<Request>) -> Vec<
 /// `views`, each request's record read (`of`, in the requests' order); a Want waiting for room with no numbers yet (`with_rooms`).
 async fn views_of(f: Option<&dyn Fetcher>, rs: Vec<Request>, of: &[Option<RecordOf>]) -> Vec<View> {
     let rs: Vec<(Request, Holding)> = rs.into_iter().zip(of).map(|(r, o)| (shown(r, o.as_ref()), o.as_ref().map_or(Holding::None, |o| o.holding))).collect();
-    let asked: Vec<String> = rs
-        .iter()
-        .filter(|(r, held)| !matches!(held, Holding::Arrived | Holding::Done | Holding::Elsewhere) && r.status == APPROVED && !waits_for_room(r) && !waits_for_space(r))
-        .filter_map(|(r, _)| r.release_group.clone())
-        .collect();
+    let asked: Vec<String> = rs.iter().filter(|(r, held)| asks_lidarr(r, *held)).filter_map(|(r, _)| r.release_group.clone()).collect();
     let progress = match f {
         Some(f) if !asked.is_empty() => f.statuses(&asked).await.ok(),
         _ => None,
     };
-    let soulseek = super::soulseek::item_words(&rs.iter().map(|(r, _)| r.id).collect::<Vec<_>>());
+    views_read(rs, progress.as_ref())
+}
+
+/// Whether a view asks Lidarr how far it is with a request (W5): approved, not had, and waiting neither for room nor for space.
+fn asks_lidarr(r: &Request, held: Holding) -> bool {
+    !matches!(held, Holding::Arrived | Holding::Done | Holding::Elsewhere) && r.status == APPROVED && !waits_for_room(r) && !waits_for_space(r)
+}
+
+/// `views_of`'s views, each request as shown with how its record is held, Lidarr's word of each group as it was read (`progress`),
+/// Soulseek's read now.
+fn views_read(rs: Vec<(Request, Holding)>, progress: Option<&HashMap<String, Progress>>) -> Vec<View> {
+    let soulseek = super::soulseek::item_words(&rs.iter().map(|(r, _)| (r.id, r.record)).collect::<Vec<_>>());
     rs.into_iter()
         .map(|(r, held)| {
-            let lidarr = r.release_group.as_deref().and_then(|g| progress.as_ref()?.get(g));
+            let lidarr = r.release_group.as_deref().and_then(|g| progress?.get(g));
             let state = request_state(&r, held, lidarr, soulseek.get(&r.id));
             View { album_state: album_state_of(&state), hand_over_again: matches!(state, RequestState::Wanted { .. }) && no_fetcher_spoke(&r), state, request: r }
         })
@@ -3423,6 +3632,378 @@ pub(crate) mod tests {
     /// A request's state as the Requests page reads it.
     async fn state_of(serve: &Serve, id: i64) -> RequestState {
         views(serve, None, vec![now_of(serve, id)]).await.pop().unwrap().state
+    }
+
+    // RQ01 (preview 1's fix batch): a request's story, its route's half (SCENARIOS-P1-FIX's RQ01.3, RQ01.6). The scenarios' alice is
+    // room_shape's ann here, whose own music it holds.
+
+    /// A catalogue folder's library named by the folder's last part, as Cratarr's own server names one given no name of its own.
+    fn last_part(serve: &Serve) -> impl Fn(i64) -> String + Sync + '_ {
+        move |folder| serve.catalogue().folders().get(folder).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    /// Request `id`'s story as `who` reads it, signed in (`admin`: as an administrator), Lidarr as `f`.
+    async fn told(serve: &Serve, f: Option<&dyn Fetcher>, who: &str, admin: bool, id: i64) -> Story {
+        let named = last_part(serve);
+        acting(who, admin, story_with(serve, f, who, id, &named)).await.unwrap().unwrap_or_else(|| panic!("{who} reads no story of request {id}"))
+    }
+
+    /// RQ01.3 (OQ-RQ1 (a), W6): ann's R1-R6 handed to Lidarr, which says of their groups: G1 monitored, in no queue row; G2 grabbed,
+    /// 42% downloaded; G3 waiting to import; G4 importing; G5 stuck, its warning naming a path and Lidarr's address; G6 imported, 11 of
+    /// 11. R7 not handed over (Lidarr out of reach then, its error naming its address). Each story says where Lidarr is with it, for ann
+    /// as for root; the request's one state (W5) is the row the Requests page gives, as before (fetching 0.42 for G2, stuck for G5).
+    /// Ann reads no word of Lidarr's own, nor its address or a path; root reads them. And RQ01.1's rule: bob, with Manage requests
+    /// too (OQ-RQ2 (a)), reads no story of hers, as none of a request that does not exist.
+    #[tokio::test]
+    async fn a_story_says_where_lidarr_is_and_its_words_are_the_administrators() {
+        const G: [&str; 7] = [
+            "00000000-0000-4000-8000-000000002811",
+            "00000000-0000-4000-8000-000000002812",
+            "00000000-0000-4000-8000-000000002813",
+            "00000000-0000-4000-8000-000000002814",
+            "00000000-0000-4000-8000-000000002815",
+            "00000000-0000-4000-8000-000000002816",
+            "00000000-0000-4000-8000-000000002817",
+        ];
+        const WARNING: &str = "warning: Import failed: /media/music not found on http://192.168.1.20:8686";
+        const AWAY: &str = "Not handed over to Lidarr: error sending request for url (http://192.168.1.20:8686/api/v1/album/lookup)";
+        const HANDED: &str = "Lidarr is looking for it; Soulseek searches for it";
+        let serve = room_shape();
+        with_accounts(&serve);
+        let titles = ["Night Ferry", "Quiet Lanes", "Signal", "Late Shift", "Two Rooms", "Far Room", "Low Tide"];
+        let ids: Vec<i64> = (0..7).map(|n| kept_request(&serve, "ann", not_had(&serve, titles[n], G[n]), G[n], 100 + n as i64, if n == 6 { AWAY } else { HANDED }).id).collect();
+        let strict = Strict::expecting_nothing().with_statuses(&[
+            (G[0], Progress::Looking),
+            (G[1], Progress::Fetching { done: 0.42 }),
+            (G[2], Progress::Importing { done: 1.0 }),
+            (G[3], Progress::Importing { done: 1.0 }),
+            (G[4], Progress::Stuck { said: Some(WARNING.into()) }),
+            (G[5], Progress::Fetched { tracks: 11, of: 11 }),
+        ]);
+        let f: Option<&dyn Fetcher> = Some(&strict);
+        let (mut anns, mut roots) = (Vec::new(), Vec::new());
+        for &id in &ids {
+            anns.push(told(&serve, f, "ann", false, id).await);
+            roots.push(told(&serve, f, "root", true, id).await);
+        }
+        let steps = |stories: &[Story]| stories.iter().map(|s| s.lidarr.as_ref().map(|l| l.step)).collect::<Vec<_>>();
+        let want = [Step::Looking, Step::Grabbed, Step::Importing, Step::Importing, Step::Stuck, Step::Imported, Step::NotHanded].map(Some).to_vec();
+        assert_eq!(steps(&anns), want, "ann's");
+        assert_eq!(steps(&roots), want, "root's");
+        assert!(anns[1].lidarr.as_ref().and_then(|l| l.done).is_some_and(|d| (d - 0.42).abs() < 1e-6), "grabbed, 42%: {:?}", anns[1].lidarr);
+        // W6: Lidarr's own words are the administrators'.
+        let said = |s: &Story| s.lidarr.as_ref().and_then(|l| l.said.clone());
+        assert_eq!((said(&anns[4]), said(&anns[6])), (None, None), "ann reads none of Lidarr's own words");
+        assert_eq!(said(&roots[4]).as_deref(), Some(WARNING), "root reads its queue's words");
+        assert_eq!(said(&roots[6]).as_deref(), Some(AWAY), "and what the hand-over said of it");
+        for s in &anns {
+            let json = serde_json::to_string(s).unwrap();
+            assert!(!json.contains("192.168.1.20") && !json.contains("/media/music") && !json.contains("Import failed"), "nothing of Lidarr's own in hers: {json}");
+        }
+        // W5: the request's one state, the row the Requests page gives, as before.
+        for (n, s) in anns.iter().enumerate() {
+            let row = shown_to(views(&serve, f, vec![now_of(&serve, ids[n])]).await, false).pop().unwrap();
+            assert_eq!(s.view, row, "R{}: its row as the Requests page gives it", n + 1);
+        }
+        assert!(matches!(anns[1].view.state, RequestState::Wanted { lidarr: Some(Fetching::Fetching { done }), .. } if (done - 0.42).abs() < 1e-6), "{:?}", anns[1].view.state);
+        assert!(matches!(anns[2].view.state, RequestState::Wanted { lidarr: Some(Fetching::Fetching { .. }), .. }), "importing reads fetching, as before: {:?}", anns[2].view.state);
+        assert!(matches!(anns[4].view.state, RequestState::Wanted { lidarr: Some(Fetching::Stuck), .. }), "{:?}", anns[4].view.state);
+        // RQ01.1's rule: bob, Manage requests or not, reads none of hers, as none of a request that does not exist.
+        let named = last_part(&serve);
+        for manages in [false, true] {
+            assert!(serve.users.set_permissions("bob", Permissions { manage_requests: manages, ..Permissions::default() }).unwrap());
+            for id in [ids[0], 999_999] {
+                assert!(acting("bob", false, story_with(&serve, f, "bob", id, &named)).await.unwrap().is_none(), "bob (manages: {manages}) reads no story of {id}");
+            }
+        }
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
+    }
+
+    /// RQ01.6: why ann's requests wait, and when and where each came. W waits for room, 130 of her 100 GB: the numbers /api/me's room
+    /// gives (`room::rooms`). S waits for space. D, asked at t1, came whole into Music at t2, and was delivered. I arrived in Soulseek's
+    /// Incoming. O is done in her own music. Each story says so, and where her copy is, by its library's id and name ("Your music" to
+    /// her, its own name to root). None for W, S, nor E, held only in bob's own music. Never room numbers but /api/me's, nor a "where"
+    /// with no copy of hers.
+    #[tokio::test]
+    async fn a_story_says_why_it_waits_and_when_and_where_it_came() {
+        use crate::app::room::tests::SOULSEEK;
+        const G: [&str; 6] = [
+            "00000000-0000-4000-8000-000000002821",
+            "00000000-0000-4000-8000-000000002822",
+            "00000000-0000-4000-8000-000000002823",
+            "00000000-0000-4000-8000-000000002824",
+            "00000000-0000-4000-8000-000000002825",
+            "00000000-0000-4000-8000-000000002826",
+        ];
+        const T1: i64 = 1_790_000_000;
+        const T2: i64 = T1 + 86_400;
+        let serve = room_shape();
+        with_accounts(&serve);
+        let cat = serve.catalogue().clone();
+        put_file(&cat, ANN, "Mine/1.flac", None, gb(130.0), 10, false, 100);
+        let w = kept_request(&serve, "ann", not_had(&serve, "Night Ferry", G[0]), G[0], 100, WAITS_FOR_ROOM);
+        let s = kept_request(&serve, "ann", not_had(&serve, "Signal", G[1]), G[1], 110, WAITS_FOR_SPACE);
+        let (d_record, _) = held_in(&serve, "Quiet Lanes", 2, G[2], MUSIC, 0, T2);
+        let d = kept_request(&serve, "ann", d_record, G[2], T1, SOULSEEK_SEARCHES);
+        let (i_record, _) = held_in(&serve, "Two Rooms", 2, G[3], SOULSEEK, 0, T1 + 600);
+        let i = kept_request(&serve, "ann", i_record, G[3], T1 + 100, SOULSEEK_SEARCHES);
+        let (o_record, _) = held_in(&serve, "Far Room", 2, G[4], ANN, 0, T1 + 700);
+        let o = kept_request(&serve, "ann", o_record, G[4], T1 + 200, SOULSEEK_SEARCHES);
+        let (e_record, _) = held_in(&serve, "Other Room", 2, G[5], BOB, 0, T1 + 800);
+        let e = kept_request(&serve, "ann", e_record, G[5], T1 + 300, SOULSEEK_SEARCHES);
+        let delivered = deliver_in(&serve.userdata, &cat, &serve.library.kinds(), Some(d_record));
+        assert_eq!(delivered.iter().map(|c| c.id).collect::<Vec<_>>(), [d.id], "D delivered");
+        let room = crate::app::room::rooms(&serve, &[serve.users.get("ann").unwrap()]).unwrap()["ann"];
+        assert_eq!((room.used, room.size), (gb(130.0), gb(100.0)), "her room as /api/me gives it");
+        // W and S: why each waits, with /api/me's numbers; no copy of hers, no where.
+        let ws = told(&serve, None, "ann", false, w.id).await;
+        assert_eq!(ws.view.state, RequestState::WaitingForRoom { used: room.used, room: room.size }, "130 of 100 GB");
+        assert_eq!((&ws.held_in, ws.delivered_at), (&None, None));
+        let ss = told(&serve, None, "ann", false, s.id).await;
+        assert_eq!(ss.view.state, RequestState::WaitingForSpace);
+        assert_eq!((&ss.held_in, ss.delivered_at), (&None, None));
+        // D: asked at t1, came whole into Music at t2, delivered.
+        let ds = told(&serve, None, "ann", false, d.id).await;
+        assert_eq!(ds.view.state, RequestState::Delivered);
+        assert_eq!((ds.asked_at, ds.delivered_at), (T1, Some(T2)), "asked at t1, came at t2: when its copy came, not when the round saw it");
+        assert_eq!(ds.held_in, Some(Where { library: MUSIC, name: "music".into() }), "Music, by its id and its name");
+        assert_eq!(ds.opens, Some(crate::serve::ids::record(d_record)), "it opens its record");
+        // I: in Soulseek's Incoming.
+        let is = told(&serve, None, "ann", false, i.id).await;
+        assert_eq!(is.view.state, RequestState::Arrived);
+        assert_eq!((is.held_in.clone(), is.delivered_at), (Some(Where { library: SOULSEEK, name: "soulseek".into() }), Some(T1 + 600)));
+        // O: in her own music, "Your music" to her, by its own name to root.
+        let os = told(&serve, None, "ann", false, o.id).await;
+        assert_eq!(os.view.state, RequestState::Done);
+        assert_eq!((os.held_in.clone(), os.delivered_at), (Some(Where { library: ANN, name: crate::settings::YOUR_MUSIC.into() }), Some(T1 + 700)));
+        let roots = told(&serve, None, "root", true, o.id).await;
+        assert_eq!(roots.held_in, Some(Where { library: ANN, name: "ann".into() }), "root reads her library by its own name");
+        // E: held only in bob's own music: still wanted for her, and no where.
+        let es = told(&serve, None, "ann", false, e.id).await;
+        assert!(matches!(es.view.state, RequestState::Wanted { .. }), "{:?}", es.view.state);
+        assert_eq!((&es.held_in, es.delivered_at), (&None, None), "no copy of hers, no where");
+    }
+
+    /// A Soulseek folder of `user`'s as a search finds one (RQ01.4).
+    #[allow(clippy::too_many_arguments)]
+    fn found_folder(user: &str, dir: &str, format: &str, lossless: bool, free_slot: bool, queue: i64, speed: i64, extra: usize) -> crate::app::soulseek::Folder {
+        crate::app::soulseek::Folder { user: user.into(), dir: dir.into(), format: format.into(), lossless, free_slot, queue, speed, extra, files: Vec::new(), unchecked: None }
+    }
+
+    /// `room_shape` on a data folder of its own whose requests are numbered above `floor`: Soulseek's list is one per test binary, so
+    /// a story test's items name requests no other test's do. Its folder, to remove after.
+    fn room_shape_above(tag: &str, floor: i64) -> (Arc<Serve>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("cratarr-requests-{tag}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        let serve = room_shape_in(Some(&dir.join("data")), None);
+        let db = rusqlite::Connection::open(dir.join("data").join("userdata.sqlite")).unwrap();
+        db.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('request', ?1)", [floor]).unwrap();
+        (serve, dir)
+    }
+
+    /// Request `id`'s Soulseek part as `who` reads it in its story (`admin`: as an administrator), and the story as sent.
+    async fn part_told(serve: &Serve, who: &str, admin: bool, id: i64) -> (crate::app::soulseek::Part, String) {
+        let s = told(serve, None, who, admin, id).await;
+        let json = serde_json::to_string(&s).unwrap();
+        (s.soulseek.unwrap_or_else(|| panic!("no Soulseek part in {json}")), json)
+    }
+
+    /// RQ01.4 (OQ-RQ1 (a)): ann's request R of record X; X's item through each of its states. Found, with peer-a's folder (FLAC, a free
+    /// slot, 2.1 MB/s) and peer-b's (MP3, 4 queued, an extra file); fetching from peer-a, 37%; ticked and held, slskd out of reach, for
+    /// five minutes; held at its check, AcoustID not asked, for ten; waiting, three misses, searched again tomorrow; stuck, no list of
+    /// it. Throughout, peer-c's folder set aside with why per file, and peer-d failed. Ann's story holds the item whole, each as given,
+    /// her whys Cratarr's own words (up to the first ": "), root's whole. Never the set-aside's path on the server, nor an address in
+    /// hers.
+    #[tokio::test]
+    async fn a_story_tells_soulseeks_whole_part_to_its_asker() {
+        use crate::app::soulseek::{Aside, AsideFile, Folder, Held, Part, SetAside, Source, State, change_for_tests, list_for_tests};
+        const G: &str = "00000000-0000-4000-8000-000000002831";
+        const ID: &str = "ss-rq01-4";
+        const SLSKD_AWAY: &str = "slskd could not be reached: error sending request for url (http://192.168.1.20:5030/api/v0/transfers/downloads)";
+        const ACOUSTID: &str = "AcoustID could not be asked: error sending request for url (http://192.168.1.20:8080/v2/lookup)";
+        const NO_LIST: &str = "MusicBrainz has no list of it: 503 from http://192.168.1.30:5000/ws/2/release";
+        let _state = crate::app::switches::TEST_STATE.lock().await;
+        let (serve, dir) = room_shape_above("rq01-4", 96_400);
+        with_accounts(&serve);
+        serve.catalogue().number_above(9_610).unwrap();
+        let x = not_had(&serve, "Night Ferry", G);
+        let r = kept_request(&serve, "ann", x, G, 100, SOULSEEK_SEARCHES);
+        let a = found_folder("peer-a", "@@a\\Music\\Glass Harbour\\Night Ferry", "flac", true, true, 0, 2_100_000, 0);
+        let b = found_folder("peer-b", "@@b\\shared\\Night Ferry (2019)", "mp3", false, false, 4, 600_000, 1);
+        let aside = SetAside {
+            user: "peer-c".into(),
+            path: "/data/soulseek-set-aside/ss-rq01-4 peer-c".into(),
+            why: [("01 Slack Water.flac".to_string(), "Clipping at 1:23".to_string()), ("02 Neap.flac".to_string(), "Too short".to_string())].into(),
+        };
+        list_for_tests(ID, x);
+        change_for_tests(ID, |i| (i.record.request, i.folders, i.failed, i.set_aside) = (r.id, vec![a.clone(), b.clone()], vec!["peer-d".into()], vec![aside]));
+        let source = |f: &Folder, folder: &str| Source {
+            user: f.user.clone(),
+            folder: folder.into(),
+            format: f.format.clone(),
+            lossless: f.lossless,
+            free_slot: f.free_slot,
+            queue: f.queue,
+            speed: f.speed,
+            extra: f.extra,
+            unchecked: None,
+        };
+        let files = vec![AsideFile { file: "01 Slack Water.flac".into(), why: "Clipping at 1:23".into() }, AsideFile { file: "02 Neap.flac".into(), why: "Too short".into() }];
+        let whole = |state: State| Part {
+            id: ID.into(),
+            state,
+            percent: None,
+            sources: vec![source(&a, "Night Ferry"), source(&b, "Night Ferry (2019)")],
+            chosen: None,
+            failed: vec!["peer-d".into()],
+            held: None,
+            stuck: None,
+            misses: 0,
+            next_search: None,
+            set_aside: vec![Aside { user: "peer-c".into(), files: files.clone() }],
+            off: false,
+        };
+        let clean = |json: &str| assert!(!json.contains("soulseek-set-aside") && !json.contains("192.168.1."), "nothing of the server's paths nor an address in hers: {json}");
+        // Found: two sources, waiting for a tick.
+        let (found, json) = part_told(&serve, "ann", false, r.id).await;
+        assert_eq!(found, whole(State::Found), "{json}");
+        clean(&json);
+        // Fetching from peer-a, 37%.
+        change_for_tests(ID, |i| (i.state, i.chosen, i.percent, i.batch) = (State::Fetching, Some(0), 37.0, Some("b-rq01-4".into())));
+        let (fetching, _) = part_told(&serve, "ann", false, r.id).await;
+        assert_eq!(fetching, Part { percent: Some(37.0), chosen: Some(0), ..whole(State::Fetching) });
+        assert_eq!(fetching.chosen.map(|c| fetching.sources[c].user.as_str()), Some("peer-a"), "peer-a's, the one fetching");
+        // Ticked and held: slskd out of reach, for five minutes.
+        let now = super::super::moment::now_secs();
+        change_for_tests(ID, |i| (i.state, i.percent, i.batch, i.why, i.due) = (State::Approved, 0.0, None, Some(SLSKD_AWAY.into()), now + 300));
+        let (held, json) = part_told(&serve, "ann", false, r.id).await;
+        assert_eq!(held, Part { chosen: Some(0), held: Some(Held { why: "slskd could not be reached".into(), until: now + 300 }), ..whole(State::Approved) }, "{json}");
+        clean(&json);
+        let (theirs, _) = part_told(&serve, "root", true, r.id).await;
+        assert_eq!(theirs.held, Some(Held { why: SLSKD_AWAY.into(), until: now + 300 }), "root reads it whole");
+        // Held at its check: AcoustID not asked, for ten minutes.
+        change_for_tests(ID, |i| (i.state, i.why, i.due) = (State::Checking, Some(ACOUSTID.into()), now + 600));
+        let (checking, json) = part_told(&serve, "ann", false, r.id).await;
+        assert_eq!(checking, Part { chosen: Some(0), held: Some(Held { why: "AcoustID could not be asked".into(), until: now + 600 }), ..whole(State::Checking) });
+        clean(&json);
+        // Waiting: three misses, searched again tomorrow.
+        change_for_tests(ID, |i| (i.state, i.chosen, i.why, i.misses, i.due) = (State::Waiting, None, None, 3, now + 86_400));
+        let (waiting, _) = part_told(&serve, "ann", false, r.id).await;
+        assert_eq!(waiting, Part { misses: 3, next_search: Some(now + 86_400), ..whole(State::Waiting) });
+        // Stuck: no list of it.
+        change_for_tests(ID, |i| (i.state, i.why, i.due) = (State::Stuck, Some(NO_LIST.into()), 0));
+        let (stuck, json) = part_told(&serve, "ann", false, r.id).await;
+        assert_eq!(stuck, Part { misses: 3, stuck: Some("MusicBrainz has no list of it".into()), ..whole(State::Stuck) }, "{json}");
+        clean(&json);
+        let (theirs, _) = part_told(&serve, "root", true, r.id).await;
+        assert_eq!(theirs.stuck.as_deref(), Some(NO_LIST), "root reads it whole");
+        drop(serve);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// RQ01.5 (kind 2): ann's R_a and bob's R_b of record X; X's one item names R_a (one item a record), fetching from peer-a at 60%.
+    /// Bob's story of R_b holds X's item, its source and 60%; his request reads Soulseek's word, fetching 60%, in his list as in his
+    /// story, as hers does. Nothing in his answers names ann or her request. Never his Wanted with no Soulseek word while X's item
+    /// fetches.
+    #[tokio::test]
+    async fn two_askers_of_one_record_each_see_its_soulseek_part() {
+        use crate::app::soulseek::{State, Word, change_for_tests, list_for_tests};
+        const G: &str = "00000000-0000-4000-8000-000000002841";
+        const ID: &str = "ss-rq01-5";
+        let (serve, dir) = room_shape_above("rq01-5", 96_500);
+        with_accounts(&serve);
+        serve.catalogue().number_above(9_630).unwrap();
+        let x = not_had(&serve, "Quiet Lanes", G);
+        let ra = kept_request(&serve, "ann", x, G, 100, SOULSEEK_SEARCHES);
+        let rb = kept_request(&serve, "bob", x, G, 200, SOULSEEK_SEARCHES);
+        list_for_tests(ID, x);
+        let a = found_folder("peer-a", "@@a\\Music\\Glass Harbour\\Quiet Lanes", "flac", true, true, 0, 2_100_000, 0);
+        change_for_tests(ID, |i| (i.record.request, i.state, i.folders, i.chosen, i.percent, i.batch) = (ra.id, State::Fetching, vec![a], Some(0), 60.0, Some("b-rq01-5".into())));
+        let fetching = RequestState::Wanted { lidarr: None, soulseek: Some(Word::Fetching { percent: 60.0 }) };
+        assert_eq!(state_of(&serve, rb.id).await, fetching, "his row reads Soulseek's word");
+        assert_eq!(state_of(&serve, ra.id).await, fetching, "as hers does");
+        let his = told(&serve, None, "bob", false, rb.id).await;
+        assert_eq!(his.view.state, fetching, "in his story too");
+        let part = his.soulseek.clone().expect("X's item in his story");
+        assert_eq!((part.id.as_str(), part.state, part.percent, part.chosen), (ID, State::Fetching, Some(60.0), Some(0)));
+        assert_eq!(part.sources.iter().map(|s| s.user.as_str()).collect::<Vec<_>>(), ["peer-a"]);
+        let hers = told(&serve, None, "ann", false, ra.id).await;
+        assert_eq!(hers.soulseek, Some(part), "the one item, for both");
+        let listed = shown_to(views(&serve, None, vec![now_of(&serve, rb.id)]).await, false);
+        for text in [serde_json::to_string(&his).unwrap(), serde_json::to_string(&listed).unwrap()] {
+            assert!(!text.contains("\"ann\"") && !text.contains("-ann") && !text.contains("\"request\""), "nothing of hers in his: {text}");
+        }
+        drop(serve);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// RQ01.7 (kind 3): what changed since a sheet was read. ann's R of X, handed to Lidarr and Soulseek, X's item fetching from peer-a.
+    /// (b) peer-a goes offline: the next story has peer-b chosen and peer-a failed. (c) Lidarr disconnected or switched off: no Lidarr
+    /// part, no Lidarr word in the state. (d) slskd switched off: the item as kept, `off`. (e) X merged into Y: the story names Y and
+    /// opens it, its item still its own. (a) ann takes R back while her sheet is open: closed, cancelled, with when, and neither part.
+    /// (f) One declined, one rejected: the same. Never a stale item for a closed request.
+    #[tokio::test]
+    async fn a_story_follows_what_changed() {
+        use crate::app::soulseek::{Part, State, change_for_tests, failed_for_tests, list_for_tests};
+        const G: [&str; 3] = ["00000000-0000-4000-8000-000000002851", "00000000-0000-4000-8000-000000002852", "00000000-0000-4000-8000-000000002853"];
+        const ID: &str = "ss-rq01-7";
+        const HANDED: &str = "Lidarr is looking for it; Soulseek searches for it";
+        let _state = crate::app::switches::TEST_STATE.lock().await;
+        let (serve, dir) = room_shape_above("rq01-7", 96_700);
+        with_accounts(&serve);
+        let cat = serve.catalogue().clone();
+        cat.number_above(9_650).unwrap();
+        let x = not_had(&serve, "Night Ferry", G[0]);
+        let r = kept_request(&serve, "ann", x, G[0], 100, HANDED);
+        list_for_tests(ID, x);
+        let folders = vec![found_folder("peer-a", "@@a\\Night Ferry", "flac", true, true, 0, 1_000_000, 0), found_folder("peer-b", "@@b\\Night Ferry", "flac", true, true, 0, 900_000, 0)];
+        change_for_tests(ID, |i| (i.record.request, i.state, i.folders, i.chosen, i.percent, i.batch) = (r.id, State::Fetching, folders, Some(0), 10.0, Some("b-rq01-7".into())));
+        let strict = Strict::expecting_nothing().with_statuses(&[(G[0], Progress::Looking)]);
+        let lidarr: Option<&dyn Fetcher> = Some(&strict);
+        let before = told(&serve, lidarr, "ann", false, r.id).await;
+        assert!(before.lidarr.is_some() && before.soulseek.as_ref().is_some_and(|p| p.chosen == Some(0) && p.sources[0].user == "peer-a"), "{before:?}");
+        // (b) The chosen peer goes offline.
+        failed_for_tests(ID, "peer-a");
+        let next = told(&serve, lidarr, "ann", false, r.id).await.soulseek.expect("its item");
+        assert_eq!((next.state, next.chosen), (State::Approved, Some(0)));
+        assert_eq!((next.sources.iter().map(|s| s.user.as_str()).collect::<Vec<_>>(), next.failed.clone()), (vec!["peer-b"], vec!["peer-a".to_string()]), "the next source chosen, the peer failed");
+        // (c) Lidarr disconnected or switched off.
+        let away = told(&serve, None, "ann", false, r.id).await;
+        assert_eq!(away.lidarr, None, "no Lidarr part");
+        assert!(matches!(away.view.state, RequestState::Wanted { lidarr: None, .. }), "no Lidarr word: {:?}", away.view.state);
+        // (d) slskd switched off: the item as kept, nothing moving.
+        let was = crate::app::switches::set_for_tests(crate::app::switches::SLSKD, false);
+        let off = told(&serve, lidarr, "ann", false, r.id).await.soulseek;
+        crate::app::switches::set_for_tests(crate::app::switches::SLSKD, was);
+        assert_eq!(off, Some(Part { off: true, ..next.clone() }), "as kept, slskd off");
+        // (e) X merged into Y.
+        let y = cat.record_for_tests("Night Ferry (Remastered)", 0);
+        cat.merge_records(x, y).unwrap();
+        let merged = told(&serve, None, "ann", false, r.id).await;
+        assert_eq!((merged.view.request.record, merged.opens.clone()), (Some(y), Some(crate::serve::ids::record(y))), "the merge's end, and it opens it");
+        assert_eq!(merged.soulseek.map(|p| p.id), Some(ID.to_string()), "its item still its own");
+        // (a) Taken back while the sheet is open.
+        acting("ann", false, cancel_with(None, &serve, "ann", r.id)).await.unwrap();
+        let back = told(&serve, lidarr, "ann", false, r.id).await;
+        assert_eq!((back.view.request.status.as_str(), &back.view.state), (CANCELLED, &RequestState::Cancelled));
+        assert!(back.view.request.decided_at.is_some(), "with when");
+        assert_eq!((&back.lidarr, &back.soulseek), (&None, &None), "neither part: no stale item for a closed request");
+        // (f) Declined, rejected: as taken back.
+        for (n, (to, why, state)) in [(DECLINED, Some("No"), RequestState::Declined), (REJECTED, Some(REJECTED_WHY), RequestState::Rejected)].into_iter().enumerate() {
+            let record = not_had(&serve, &format!("Signal {n}"), G[n + 1]);
+            let closed = kept_request(&serve, "ann", record, G[n + 1], 300 + n as i64, HANDED);
+            let id = format!("ss-rq01-7{n}");
+            list_for_tests(&id, record);
+            change_for_tests(&id, |i| i.record.request = closed.id);
+            assert!(serve.userdata.set_request_status(closed.id, APPROVED, to, why, Some("root")).unwrap());
+            let s = told(&serve, lidarr, "ann", false, closed.id).await;
+            assert_eq!(s.view.state, state);
+            assert_eq!((&s.lidarr, &s.soulseek), (&None, &None), "{to}: neither part");
+        }
+        assert!(strict.violations().is_empty(), "{:?}", strict.violations());
+        drop(serve);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// AL02.1 (the owner's "No approval per request"; production's shape: every user `request: true`, none with a yes of their own):

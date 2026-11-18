@@ -3715,6 +3715,139 @@ fn request_line(data: &Path, id: i64) -> Option<String> {
     db.query_row("SELECT fetched FROM request WHERE id = ?1", [id], |r| r.get(0)).unwrap()
 }
 
+/// RQ01.1 (OQ-RQ2 (a)): a request's story is its asker's and the administrators'. Alice reads her Want's story, its row as her list
+/// gives it; root reads it with the administrators' words (`fetched`); bob, a user, gets exactly what a request that does not exist
+/// gets, naming nothing of hers, and so does bob given "Manage requests"; nobody signed in is asked to sign in; bob's own list holds his
+/// request and none of hers. MusicBrainz off and no fetcher connected: her Want is approved and handed to none.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_requests_story_is_its_askers_and_the_administrators_end_to_end() {
+    use reqwest::Method;
+    let root = temp("request-story");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("alice", false), ("bob", false)] {
+        s.ok(Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    // The disk floor at nothing: a user's Want goes ahead whatever this disk holds free (AL03).
+    s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    let (alice, bob) = (s.sign_in("alice", "alice pw").await, s.sign_in("bob", "bob pw").await);
+    let asked = alice.ok(Method::POST, "/api/requests/want", json!({ "artist": "Kite Theory", "album": "Night Ferry" })).await;
+    let a = asked["request"]["id"].as_i64().expect("her request");
+    let his = bob.ok(Method::POST, "/api/requests/want", json!({ "artist": "Orbit Lane", "album": "Late Shift" })).await["request"]["id"].as_i64().expect("his request");
+    let path = format!("/api/requests/{a}");
+
+    // Alice: her story, her row as her list gives it, no fetcher's own words (W6), no Lidarr part (none is connected).
+    let (status, hers) = alice.send(Method::GET, &path, json!(null)).await;
+    assert_eq!(status, 200, "{hers}");
+    assert_eq!((hers["id"].as_i64(), hers["user"].as_str(), hers["album"].as_str(), hers["status"].as_str()), (Some(a), Some("alice"), Some("Night Ferry"), Some("approved")), "{hers}");
+    assert!(hers["opens"].as_str().is_some_and(|o| o.starts_with("al-")) && hers["asked_at"].is_i64() && hers["fetched"].is_null() && hers.get("lidarr").is_none() && hers.get("soulseek").is_none(), "{hers}");
+    let listed = alice.get("/api/requests").await;
+    let row = listed["mine"].as_array().unwrap().iter().find(|r| r["id"] == a).cloned().expect("her row");
+    assert_eq!((&hers["state"], &hers["album_state"], &hers["hand_over_again"]), (&row["state"], &row["album_state"], &row["hand_over_again"]), "one state (W5)");
+    let record = hers["opens"].as_str().unwrap().to_string();
+
+    // Bob: exactly what a request that does not exist gets, naming nothing of hers.
+    let none = bob.send(Method::GET, "/api/requests/999999", json!(null)).await;
+    assert_eq!(none.0, 404, "{}", none.1);
+    let (status, answer) = bob.send(Method::GET, &path, json!(null)).await;
+    assert_eq!((status, &answer), (none.0, &none.1), "as for a request that does not exist");
+    let text = answer.to_string();
+    for word in ["alice", "Night Ferry", "Kite Theory", record.as_str()] {
+        assert!(!text.contains(word), "{word} in {text}");
+    }
+
+    // Root: hers, with the administrators' words.
+    let (status, roots) = s.sign_in("root", "root pw").await.send(Method::GET, &path, json!(null)).await;
+    assert_eq!((status, roots["id"].as_i64()), (200, Some(a)), "{roots}");
+    assert!(roots["fetched"].as_str().is_some_and(|f| f.starts_with("Not handed over")), "the administrators' words: {roots}");
+
+    // Nobody signed in.
+    assert_eq!(s.anyone().send(Method::GET, &path, json!(null)).await.0, 401);
+
+    // Bob given "Manage requests" (OQ-RQ2 (a)): his own story still, and no one else's.
+    s.ok(Method::PUT, "/api/users/bob/permissions", json!({ "request": true, "manage_requests": true })).await;
+    let bob = s.sign_in("bob", "bob pw").await;
+    let (status, answer) = bob.send(Method::GET, &path, json!(null)).await;
+    assert_eq!((status, &answer), (none.0, &none.1), "Manage requests reads no one else's story");
+    assert_eq!(bob.send(Method::GET, &format!("/api/requests/{his}"), json!(null)).await.0, 200, "his own");
+
+    // Bob's list: his own request, none of hers.
+    let listed = bob.get("/api/requests").await;
+    let mine: Vec<i64> = listed["mine"].as_array().unwrap().iter().filter_map(|r| r["id"].as_i64()).collect();
+    assert_eq!(mine, [his], "his own alone: {listed}");
+    assert!(!listed["mine"].to_string().contains("alice"), "{listed}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// RQ01.2: only administrators act on a story. Alice's request A has an item of its record on Soulseek's list, Found with peer-a's
+/// and peer-b's folders, written into `soulseek.json` before the start (slskd unset, as on staging: nothing moves). Her tick, her
+/// Search now and her read of the whole list are refused (403), the list as it was; root's tick of peer-b's folder approves it, and
+/// her next story shows that source ticked. Never a user's tick or Search now taking effect, nor Soulseek's whole list read by one.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn only_administrators_act_on_a_story_end_to_end() {
+    use reqwest::Method;
+    let root = temp("story-acts");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    settings(&data, &[(&library.join("music"), "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    for (name, admin) in [("root", true), ("alice", false)] {
+        s.ok(Method::POST, "/api/users", json!({ "name": name, "password": format!("{name} pw"), "admin": admin })).await;
+        if name == "root" {
+            s.act_as("root", "root pw").await;
+        }
+    }
+    // The disk floor at nothing: a user's Want goes ahead whatever this disk holds free (AL03).
+    s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    let asked = s.sign_in("alice", "alice pw").await.ok(Method::POST, "/api/requests/want", json!({ "artist": "Kite Theory", "album": "Night Ferry" })).await;
+    let (a, record) = (asked["request"]["id"].as_i64().expect("her request"), asked["request"]["record"].as_i64().expect("its record"));
+    s.stop();
+    // Her record's item, Found with two users' folders, as the list keeps it.
+    let folder = |user: &str, dir: &str, format: &str| {
+        json!({ "user": user, "dir": dir, "format": format, "lossless": format == "flac", "free_slot": true, "queue": 0, "speed": 1_000_000, "extra": 0, "files": [] })
+    };
+    let item = json!({
+        "id": "ss-1", "record": { "record": record, "artist": "Kite Theory", "album": "Night Ferry", "request": a }, "state": "found", "tracks": [],
+        "folders": [folder("peer-a", "@@a\\Music\\Kite Theory\\Night Ferry", "flac"), folder("peer-b", "@@b\\Night Ferry", "mp3")],
+    });
+    std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&json!({ "next": 1, "items": [item] })).unwrap()).unwrap();
+    let s = Server::start(&data).await;
+    let (alice, admin) = (s.sign_in("alice", "alice pw").await, s.sign_in("root", "root pw").await);
+    let path = format!("/api/requests/{a}");
+    let story = alice.get(&path).await;
+    assert_eq!((story["soulseek"]["id"].as_str(), story["soulseek"]["state"].as_str(), story["soulseek"]["sources"].as_array().map(Vec::len)), (Some("ss-1"), Some("found"), Some(2)), "{story}");
+    let list = || serde_json::from_slice::<Value>(&std::fs::read(data.join("soulseek.json")).unwrap()).unwrap();
+    let before = list();
+    // Alice acts on none of it, nor reads the whole list.
+    assert_eq!(alice.send(Method::POST, "/api/soulseek/approve", json!({ "items": [{ "id": "ss-1", "folder": 1 }] })).await.0, 403);
+    assert_eq!(alice.send(Method::POST, "/api/soulseek/ss-1/now", json!({})).await.0, 403);
+    assert_eq!(alice.send(Method::GET, "/api/soulseek", json!(null)).await.0, 403);
+    let after = list();
+    assert_eq!(after, before, "the list as it was");
+    assert_eq!((after["items"][0]["state"].as_str(), after["items"][0].get("chosen")), (Some("found"), None), "found, nothing ticked: {after}");
+    // Root's tick of peer-b's folder.
+    admin.ok(Method::POST, "/api/soulseek/approve", json!({ "items": [{ "id": "ss-1", "folder": 1 }] })).await;
+    let ticked = list();
+    assert_eq!((ticked["items"][0]["state"].as_str(), ticked["items"][0]["chosen"].as_i64()), (Some("approved"), Some(1)), "{ticked}");
+    let story = alice.get(&path).await;
+    let part = &story["soulseek"];
+    assert_eq!((part["chosen"].as_i64(), part["sources"][1]["user"].as_str()), (Some(1), Some("peer-b")), "her story shows peer-b's source ticked: {story}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A track's own word goes into its file in every copy, by the track and not the file's name, and into no other track's. One
 /// Undo takes it out of them all.
 #[tokio::test(flavor = "multi_thread")]
