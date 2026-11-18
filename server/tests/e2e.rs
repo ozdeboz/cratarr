@@ -910,21 +910,15 @@ async fn a_labels_page_from_kept_rows_end_to_end() {
 
     let page = s.get(&format!("/api/labels/la-{label}")).await;
     assert_eq!((page["id"].as_str(), page["name"].as_str()), (Some(&*format!("la-{label}")), Some("Fixture Records")), "{page}");
-    let rows: Vec<(&str, Option<i64>, Option<&str>, bool, Option<&str>)> = page["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| (r["title"].as_str().unwrap(), r["year"].as_i64(), r["catno"].as_str(), r["had"].as_bool().unwrap(), r["record"].as_str()))
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("Signal", Some(2021), Some("FR-021"), true, Some(&*signal)),
-            ("Low Water Dub", Some(2016), Some("FR-016"), false, Some(&*dub)),
-            ("Tide Tables", Some(2012), None, true, Some(&*tide)),
-        ],
-        "by year, newest first: {page}"
-    );
+    // F10: what the house has apart from the rest, each by year, newest first.
+    let rows = |part: &Value| -> Vec<(String, Option<i64>, Option<String>, bool, Option<String>)> {
+        let row = |r: &Value| (r["title"].as_str().unwrap().to_string(), r["year"].as_i64(), r["catno"].as_str().map(str::to_string), r["had"].as_bool().unwrap(), r["record"].as_str().map(str::to_string));
+        part.as_array().unwrap().iter().map(row).collect()
+    };
+    let entry = |title: &str, year: i64, catno: Option<&str>, had: bool, record: &str| (title.to_string(), Some(year), catno.map(str::to_string), had, Some(record.to_string()));
+    assert_eq!(rows(&page["had"]), [entry("Signal", 2021, Some("FR-021"), true, &signal), entry("Tide Tables", 2012, None, true, &tide)], "what the house has: {page}");
+    assert_eq!(rows(&page["not_had"]), [entry("Low Water Dub", 2016, Some("FR-016"), false, &dub)], "the rest: {page}");
+    assert!(page.get("rows").is_none(), "two lists in place of one: {page}");
     assert_eq!((&page["looking"], &page["more"]), (&json!(false), &json!({ "musicbrainz": false, "discogs": false })), "nothing read elsewhere: {page}");
     for asked in ["/api/labels/la-999999", "/api/labels/al-1", "/api/labels/la-x"] {
         let (status, answer) = s.send(reqwest::Method::GET, asked, Value::Null).await;
@@ -945,8 +939,19 @@ async fn a_labels_page_from_kept_rows_end_to_end() {
     assert_eq!(s.send(reqwest::Method::POST, "/api/records/open", by_name).await.0, 409, "never by its names alone");
     let page = s.get(&format!("/api/labels/la-{label}")).await;
     // U10: a row the label never listed, opened with it, is made (above) but tied to no label: not one of its page's rows.
-    let row = page["rows"].as_array().unwrap().iter().find(|r| r["title"] == "Harbour Lights").cloned().unwrap_or(Value::Null);
+    let row = page["had"].as_array().unwrap().iter().chain(page["not_had"].as_array().unwrap()).find(|r| r["title"] == "Harbour Lights").cloned().unwrap_or(Value::Null);
     assert_eq!(row, Value::Null, "a made-up row ties nothing: {page}");
+
+    // F9: a label About shows, opened by its reference (by an administrator here: signing in is off): made once with it, the same
+    // when opened again, a label's page; never by a name alone.
+    let label_of = |answer: Value| answer["id"].as_str().unwrap().to_string();
+    let anthem = json!({ "source": "discogs", "id": "4401", "name": "International Anthem" });
+    let made = label_of(s.ok(reqwest::Method::POST, "/api/labels/open", anthem.clone()).await);
+    assert_ne!(made, format!("la-{label}"), "by its reference: a label of its own");
+    assert_eq!(label_of(s.ok(reqwest::Method::POST, "/api/labels/open", anthem).await), made, "opened again: the same label");
+    assert_eq!(s.get(&format!("/api/labels/{made}")).await["name"], "International Anthem");
+    let (status, _) = s.send(reqwest::Method::POST, "/api/labels/open", json!({ "name": "Fixture Records" })).await;
+    assert_eq!(status, 409, "never by a name alone");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

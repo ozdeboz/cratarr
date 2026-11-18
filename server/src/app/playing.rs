@@ -204,7 +204,8 @@ pub struct AlbumMore {
     /// The account's newest request of it, whatever its status, as the Requests page shows it (C54).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<super::requests::View>,
-    /// Its labels (C54), each by its id for life.
+    /// Its labels as About shows them (C54; F9, `labels::LabelOf`): a record's each by its id for life; a Bandcamp album's by its
+    /// name, the one label of it where exactly one has it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<LabelOf>,
     /// Its cover's address (C54): its own, else its release group's, else its Bandcamp page's (`cover_cache::addresses_of`).
@@ -216,20 +217,76 @@ pub struct AlbumMore {
     /// Its Bandcamp album page (Q34): its preview plays through the Bandcamp source, as before.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
+    /// Where it comes from (F7): its references About names, each opening its page at its source, the one whose list its rows are
+    /// marked (`sources_of`); a record not had's and an album had's alike.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceOf>,
 }
 
-/// A record's label as its page names it (C54): its id for life (`la-<n>`), its name, and its catalogue number there.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct LabelOf {
-    pub id: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub catno: Option<String>,
-}
+// A label as an album's view names it: as every label About shows (F9, `labels::LabelOf`).
+use super::labels::LabelOf;
 
-/// A record's labels as its view names them (C54, G4): a record not had's page and an owned album's alike. Blocking.
+/// A record's labels as its view names them (C54, G4): a record not had's page and an owned album's alike, each by its id for life
+/// (`la-<n>`), its name and its catalogue number there. Blocking.
 fn labels_of(cat: &crate::catalogue::Catalogue, record: i64) -> Result<Vec<LabelOf>> {
-    Ok(cat.record_labels(record)?.into_iter().map(|(l, catno)| LabelOf { id: crate::serve::ids::label(l.id), name: l.name, catno: Some(catno).filter(|c| !c.is_empty()) }).collect())
+    Ok(cat
+        .record_labels(record)?
+        .into_iter()
+        .map(|(l, catno)| LabelOf { name: l.name, catno: Some(catno).filter(|c| !c.is_empty()), id: Some(crate::serve::ids::label(l.id)), reference: None })
+        .collect())
+}
+
+/// One of a record's references as its About names it (F7): its source, its kind there ("release-group", "release", "master",
+/// "album"), its page there, and whether the record's rows are its list (`tracks`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SourceOf {
+    pub source: &'static str,
+    pub kind: &'static str,
+    pub url: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub tracks: bool,
+}
+
+/// A record's references as its About names them (F7): MusicBrainz's release and release group, Discogs' release and master,
+/// Bandcamp's album page, in the design's order (`identity::COUNTING_ORDER`), a source's release or album before its release group
+/// or master, as `references::main_ref` reads them; an AcoustID reference, a recording, an artist are not named. Each with its page
+/// at its source (`references::url_of`: a MusicBrainz id, a Discogs number; a Bandcamp page made plain by `bandcamp::album_page`),
+/// only where the guard for outside hosts lets that address through (`reach::Purpose::allows`: https, the source's own hosts by
+/// name) and it carries no name, key or query. The first of `listed`'s, the source whose list the record's rows are, marked
+/// `tracks`. Pure.
+fn sources_of(refs: &[(String, String, String)], listed: Option<&str>) -> Vec<SourceOf> {
+    use super::reach::Purpose;
+    const SHOWN: [(&str, &str); 5] = [("musicbrainz", "release"), ("musicbrainz", "release-group"), ("discogs", "release"), ("discogs", "master"), ("bandcamp", "album")];
+    let mut out: Vec<SourceOf> = Vec::new();
+    for (source, kind) in SHOWN {
+        for (_, _, value) in refs.iter().filter(|(s, k, _)| s == source && k == kind) {
+            let plain = match source {
+                "musicbrainz" => super::discogs::is_mbid(value),
+                "discogs" => !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()),
+                _ => true,
+            };
+            let page = super::references::url_of(&crate::catalogue::records::Ref::new(source, kind, value))
+                .filter(|_| plain)
+                .and_then(|p| if source == "bandcamp" { crate::bandcamp::album_page(&p) } else { Some(p) });
+            let guard = if source == "bandcamp" { Purpose::BandcampPages } else { Purpose::Metadata };
+            let Some(url) = page
+                .and_then(|p| reqwest::Url::parse(&p).ok())
+                .filter(|u| guard.allows(u) && u.username().is_empty() && u.password().is_none() && u.query().is_none() && u.fragment().is_none())
+            else {
+                continue;
+            };
+            let tracks = listed == Some(source) && !out.iter().any(|s| s.source == source);
+            out.push(SourceOf { source, kind, url: url.to_string(), tracks });
+        }
+    }
+    out
+}
+
+/// An album had's references as its About names them (F7, `sources_of`): its rows are its files, so none is marked as giving them.
+/// Blocking.
+fn record_sources(cat: &crate::catalogue::Catalogue, record: i64) -> Result<Vec<SourceOf>> {
+    let refs: Vec<(String, String, String)> = cat.references_of(&crate::serve::ids::record(record))?.into_iter().map(|(r, _)| (r.source, r.kind, r.value)).collect();
+    Ok(sources_of(&refs, None))
 }
 
 /// What Cratarr's album answers where the served library cannot read it (C54, `record_page`).
@@ -259,9 +316,11 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
     }
     cat.opened(q.row.id, at)?;
     let kept = cat.reference_tracks(q.row.id)?;
-    let listed = |source: &str| kept.iter().find(|(s, l)| s == source && !l.is_empty()).map(|(_, l)| l);
+    // The list and its source (F7: About marks it as giving the tracks).
+    let listed = |source: &str| kept.iter().find(|(s, l)| s == source && !l.is_empty()).map(|(s, l)| (s.as_str(), l));
     let list = q.row.counting.as_deref().and_then(listed).or_else(|| COUNTING_ORDER.iter().find_map(|&s| listed(s)));
     let rows: Vec<super::playlists::PlaylistRow> = list
+        .map(|(_, l)| l)
         .into_iter()
         .flatten()
         .map(|t| super::playlists::PlaylistRow {
@@ -282,6 +341,7 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
     // None kept: read where a reference may give it (`looking`); with no reference to read one from, said so (F1.4).
     let (looking, no_list) = (list.is_none() && referenced, (list.is_none() && !referenced).then(Vec::new));
     let labels = labels_of(cat, q.row.id)?;
+    let sources = sources_of(&q.refs, list.map(|(s, _)| s));
     let cover = super::cover_cache::addresses_of(q.row.cover.as_deref(), q.groups.first().map(String::as_str), q.bandcamp.as_deref()).into_iter().next();
     let id = q.row.id;
     let row = q.row;
@@ -310,6 +370,7 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
             cover,
             was_until: row.retired_at,
             bandcamp: crate::bandcamp::shown(q.bandcamp),
+            sources,
             ..AlbumMore::default()
         },
     }))))
@@ -920,13 +981,14 @@ impl PlayingService {
             }
         }
         let listening = s.album_listening(album_id).await.unwrap_or_default();
-        // Its labels (G4), as a record not had's page shows them: each a chip that opens the label's page.
-        let labels = match crate::serve::ids::record_number(album_id).filter(|_| source_id == crate::source::cratarr::KIND.id) {
+        // Its labels (G4), as a record not had's page shows them: each a chip that opens the label's page; and where it comes from
+        // (F7), its rows its files.
+        let (labels, sources) = match crate::serve::ids::record_number(album_id).filter(|_| source_id == crate::source::cratarr::KIND.id) {
             Some(record) => {
                 let c = self.lib.catalogue();
-                tokio::task::spawn_blocking(move || labels_of(&c, record)).await.ok().and_then(Result::ok).unwrap_or_default()
+                tokio::task::spawn_blocking(move || (labels_of(&c, record).unwrap_or_default(), record_sources(&c, record).unwrap_or_default())).await.unwrap_or_default()
             }
-            None => Vec::new(),
+            None => Default::default(),
         };
         // Its words, from the one store (decision 0097).
         let words = match crate::serve::instance() {
@@ -949,7 +1011,7 @@ impl PlayingService {
             added: listening.added,
             played: listening.played,
             plays: listening.plays,
-            more: AlbumMore { words, labels, ..AlbumMore::default() },
+            more: AlbumMore { words, labels, sources, ..AlbumMore::default() },
         })
     }
 
@@ -1488,5 +1550,81 @@ mod tests {
         assert_eq!((v.rows.len(), v.more.looking, v.more.no_list.clone()), (2, false, None), "the rows, not the old reason");
         assert_eq!(page(&cat, record).rows.len(), 2);
         assert_eq!(asked.lock().unwrap().len(), 1, "nothing read again");
+    }
+
+    // ---- F7 (preview 1's fix batch): About says where a record comes from
+
+    /// F7.1: a record's About names where it comes from (`sources`). A record not had (a MusicBrainz release group, a Bandcamp page)
+    /// names both in the design's order while its list is read, none marked; once its page read its list from MusicBrainz, MusicBrainz's
+    /// is marked as giving its tracks, Bandcamp's page not read. An album had (a MusicBrainz release) names its release, none marked:
+    /// its rows are its files; its AcoustID reference is not named. A record with no reference names none, and its answer has no
+    /// `sources`. Never an address the guard for outside hosts refuses (a page off Bandcamp's hosts, a name and key in it), a query
+    /// (a token), an id that is no id, or a reference of another kind (a recording).
+    #[tokio::test]
+    async fn a_records_about_says_where_it_comes_from() {
+        let _state = TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let (group, page_bc) = ("00000000-0000-4000-8000-000000000701", "https://kitetheory.bandcamp.com/album/answered");
+        let record = cat.record_for_tests("Answered", 0);
+        for r in [Ref::new("musicbrainz", "release-group", group), Ref::new("bandcamp", "album", page_bc)] {
+            assert!(cat.set_reference(&ids::record(record), &r, "link").unwrap());
+        }
+        let named = |v: &AlbumView| v.more.sources.iter().map(|s| (s.source, s.kind, s.url.clone(), s.tracks)).collect::<Vec<_>>();
+        let group_page = format!("https://musicbrainz.org/release-group/{group}");
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reads = asking(&asked, || Ok(Some((vec![track(1, "Lamplight"), track(2, "Morning")], None))));
+        let t = super::super::moment::now_secs();
+        let first = opened(&cat, record, t, reads.clone()).await;
+        assert!(first.more.looking, "its list being read");
+        assert_eq!(named(&first), [("musicbrainz", "release-group", group_page.clone(), false), ("bandcamp", "album", page_bc.to_string(), false)], "both, none marked yet");
+        page_read_settled(&cat, record).await;
+        let read = opened(&cat, record, t + 1, reads).await;
+        assert_eq!(read.rows.len(), 2, "its list, read from MusicBrainz");
+        assert_eq!(named(&read), [("musicbrainz", "release-group", group_page.clone(), true), ("bandcamp", "album", page_bc.to_string(), false)]);
+        assert_eq!(*asked.lock().unwrap(), ["musicbrainz:release-group"], "read from MusicBrainz alone");
+        assert_eq!(
+            serde_json::to_value(&read).unwrap()["sources"],
+            serde_json::json!([{ "source": "musicbrainz", "kind": "release-group", "url": group_page, "tracks": true }, { "source": "bandcamp", "kind": "album", "url": page_bc }])
+        );
+        // An album had: its release, nothing marked; its AcoustID reference not named.
+        let owned = cat.record_for_tests("Tide Tables", 2);
+        let release = "00000000-0000-4000-8000-000000000702";
+        for r in [Ref::new("musicbrainz", "release", release), Ref::new("acoustid", "track", "00000000-0000-4000-8000-000000000703")] {
+            assert!(cat.set_reference(&ids::record(owned), &r, "files").unwrap());
+        }
+        assert_eq!(
+            serde_json::to_value(record_sources(&cat, owned).unwrap()).unwrap(),
+            serde_json::json!([{ "source": "musicbrainz", "kind": "release", "url": format!("https://musicbrainz.org/release/{release}") }])
+        );
+        // No reference: none, and no `sources` in its answer.
+        let bare = cat.record_for_tests("Quiet Lanes", 0);
+        assert!(record_sources(&cat, bare).unwrap().is_empty());
+        let none = page(&cat, bare);
+        assert!(none.more.sources.is_empty());
+        assert!(serde_json::to_value(&none).unwrap().get("sources").is_none(), "no `sources`");
+        // Never an address the guard refuses, a query, a name and key, an id that is none, a recording; a master by its number.
+        let odd = cat.record_for_tests("Night Walks", 0);
+        for r in [
+            Ref::new("bandcamp", "album", "https://music.example.org/album/night-walks"),
+            Ref::new("bandcamp", "album", "https://user:key@kitetheory.bandcamp.com/album/night-walks-live"),
+            Ref::new("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks?token=secret"),
+            Ref::new("musicbrainz", "release-group", "not-an-id/../x?key=secret"),
+            Ref::new("musicbrainz", "recording", "00000000-0000-4000-8000-000000000704"),
+            Ref::new("discogs", "master", "4001"),
+            Ref::new("discogs", "release", "4002?token=secret"),
+            Ref::new("discogs", "release", "r4003"),
+        ] {
+            cat.set_reference(&ids::record(odd), &r, "link").unwrap();
+        }
+        let shown = named(&page(&cat, odd));
+        assert_eq!(
+            shown,
+            [("discogs", "master", "https://www.discogs.com/master/4001".to_string(), false), ("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks".to_string(), false)]
+        );
+        for (source, _, url, _) in shown {
+            let u = reqwest::Url::parse(&url).unwrap();
+            let guard = if source == "bandcamp" { super::super::reach::Purpose::BandcampPages } else { super::super::reach::Purpose::Metadata };
+            assert!(guard.allows(&u) && u.query().is_none() && u.username().is_empty() && u.password().is_none(), "{url}");
+        }
     }
 }

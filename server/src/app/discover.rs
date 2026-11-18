@@ -2024,12 +2024,13 @@ pub(crate) async fn reread_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &
     }
 }
 
-/// An artist's list at one source, as it stands: being read now; read (or known not to be there) at a time; failed at a time.
+/// An artist's list at one source, as it stands: being read now; read (or known not to be there) at a time; failed at a time, and
+/// how (F8: F1's outcomes, a page's section says it).
 #[derive(Debug, Clone, Copy)]
 enum Reading {
     Now,
     Done(i64),
-    Failed(i64),
+    Failed(i64, super::references::Outcome),
 }
 
 /// Who is being read where: by catalogue (its address), artist and source.
@@ -2043,7 +2044,7 @@ fn readings() -> &'static Readings {
 /// How long an artist's list at a source is good for, before it is read again (as a discography was).
 const LIST_FRESH_SECS: i64 = DISCOGRAPHY_FRESH_SECS;
 /// How long a source that did not answer (its bot check, out of reach, too slow) is left before it is asked again.
-const LIST_RETRY_SECS: i64 = 15 * 60;
+pub(super) const LIST_RETRY_SECS: i64 = 15 * 60;
 /// The longest a list's read may take: past it, it counts as not read, and `looking` ends.
 const LIST_READ_AT_MOST: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 300 });
 
@@ -2059,7 +2060,7 @@ struct Settles(Option<(usize, i64, &'static str)>, Option<Reading>);
 impl Drop for Settles {
     fn drop(&mut self) {
         if let Some(key) = self.0.take() {
-            let state = self.1.unwrap_or(Reading::Failed(super::moment::now_secs()));
+            let state = self.1.unwrap_or(Reading::Failed(super::moment::now_secs(), super::references::Outcome::Unanswered));
             readings().lock().unwrap_or_else(|p| p.into_inner()).insert(key, state);
         }
     }
@@ -2083,7 +2084,7 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
                     false
                 }
                 Some(Reading::Done(at)) => now - at > LIST_FRESH_SECS,
-                Some(Reading::Failed(at)) => now - at > LIST_RETRY_SECS,
+                Some(Reading::Failed(at, _)) => now - at > LIST_RETRY_SECS,
                 None => read_at.get(source.source()).is_none_or(|at| now - at > LIST_FRESH_SECS),
             };
             if !due {
@@ -2097,16 +2098,17 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
             let mut settles = Settles(Some(key), None);
             // Its source's one reader, in turn (O5): the cut counts from when it asks, not from its place in the line.
             let Ok(_turn) = turn_of(source.source()).acquire_owned().await else { return };
-            let at = |done: bool| if done { Reading::Done(super::moment::now_secs()) } else { Reading::Failed(super::moment::now_secs()) };
+            // How it failed (F8): F1's outcomes; past the cut, it did not answer.
+            let failed = |how| Reading::Failed(super::moment::now_secs(), how);
             settles.1 = Some(match tokio::time::timeout(LIST_READ_AT_MOST, read_one(&cat, &artist, source.as_ref())).await {
-                Ok(Ok(_)) => at(true),
+                Ok(Ok(_)) => Reading::Done(super::moment::now_secs()),
                 Ok(Err(e)) => {
                     tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: {e:#}");
-                    at(false)
+                    failed(super::references::Outcome::of(&e))
                 }
                 Err(_) => {
                     tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: no answer in time");
-                    at(false)
+                    failed(super::references::Outcome::Unanswered)
                 }
             });
         });
@@ -2137,25 +2139,68 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
     Ok(true)
 }
 
+/// An artist's records not had as their page's "Not in your library" asks for them (`missing_albums`; F8: what it reads and what could
+/// not be read, so the section never goes silent): the rows; whether a list is being read (`looking`), and from which source now
+/// (`reading`, the first in the sources' order); where none is, each source switched off and each whose last read failed (`no_list`,
+/// in F1's words: `references::Said`), in the order they are read; none where every source answered.
+#[derive(Debug, Default, PartialEq, Serialize)]
+pub struct ArtistMissing {
+    pub albums: Vec<Missing>,
+    pub looking: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_list: Option<Vec<super::references::Said>>,
+}
+
 /// An artist's records the library has none of (C53a), newest first: the rows kept, at once (`Catalogue::missing_of`: by the one
 /// had rule, a retired record per OQ16, each album once), while their lists at MusicBrainz, Discogs and Bandcamp are read in the
 /// background where old or never read, each kept as records not had; whether any is being read (`looking`), so the page asks
 /// again until none is. A source that does not answer is not read this time. No such artist, or one with no list of their own
-/// ("Various Artists", MusicBrainz's "[unknown]", Z1: 0.16's rule carried): no list, and none read.
-pub async fn missing_albums(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Result<(Vec<Missing>, bool)> {
+/// ("Various Artists", MusicBrainz's "[unknown]", Z1: 0.16's rule carried): no list, and none read. What the reads say with it (F8,
+/// `ArtistMissing`).
+pub async fn missing_albums(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Result<ArtistMissing> {
+    missing_at(cat, artist, sources, super::moment::now_secs()).await
+}
+
+/// `missing_albums` at `now`.
+async fn missing_at(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>], now: i64) -> Result<ArtistMissing> {
     let c = cat.clone();
-    let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { return Ok((Vec::new(), false)) };
+    let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { return Ok(ArtistMissing::default()) };
     let read_at: HashMap<String, i64> = refs.iter().filter(|(r, _)| r.kind == "artist").filter_map(|(r, row)| Some((r.source.clone(), row.read_at?))).collect();
     let asked = Arc::new(ArtistAsked { id: artist, name, refs: refs.into_iter().map(|(r, _)| r).collect() });
     if asked.listless() {
-        return Ok((Vec::new(), false));
+        return Ok(ArtistMissing::default());
     }
-    let looking = read_lists(&cat, &asked, &read_at, sources, super::moment::now_secs());
+    read_lists(&cat, &asked, &read_at, sources, now);
+    // What the reads say, at one look, before anything else runs (F8).
+    let (looking, reading, no_list) = lists_said(&cat, artist, sources, now);
     let c = cat.clone();
     let rows = tokio::task::spawn_blocking(move || c.missing_of(artist)).await??;
     let mut out: Vec<Missing> = rows.into_iter().map(Missing::of).collect();
     out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.title.cmp(&b.title)));
-    Ok((out, looking))
+    Ok(ArtistMissing { albums: out, looking, reading, no_list })
+}
+
+/// What an artist's list reads say at `now`, at one look (F8): whether one is being read (`looking`) and the first such in the
+/// sources' order (`reading`); where none is, each source switched off and each whose last read failed, in F1's words
+/// (`references::Said`), in the sources' order; none where every source answered.
+fn lists_said(cat: &Arc<crate::catalogue::Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>], now: i64) -> (bool, Option<&'static str>, Option<Vec<super::references::Said>>) {
+    use super::references::{Outcome, Said};
+    let all = readings().lock().unwrap_or_else(|p| p.into_inner());
+    let state = |source: &'static str| all.get(&(Arc::as_ptr(cat) as usize, artist, source)).copied();
+    if let Some(source) = sources.iter().filter(|s| s.on()).map(|s| s.source()).find(|&s| matches!(state(s), Some(Reading::Now))) {
+        return (true, Some(source), None);
+    }
+    let said: Vec<Said> = sources
+        .iter()
+        .filter_map(|s| match state(s.source()) {
+            _ if !s.on() => Some(Said::of(s.source(), Outcome::Off, now)),
+            Some(Reading::Failed(_, outcome)) => Some(Said::of(s.source(), outcome, now)),
+            _ => None,
+        })
+        .collect();
+    (false, None, (!said.is_empty()).then_some(said))
 }
 
 /// How long an album's page found on Bandcamp (or not found) is kept before it is looked for again.
@@ -2605,9 +2650,9 @@ mod missing_tests {
     /// The list once no read runs: `looking` must end (a test fails rather than waits for good).
     async fn settled(cat: &Arc<Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Vec<Missing> {
         for _ in 0..500 {
-            let (list, looking) = missing_albums(cat.clone(), artist, sources).await.unwrap();
-            if !looking {
-                return list;
+            let m = missing_albums(cat.clone(), artist, sources).await.unwrap();
+            if !m.looking {
+                return m.albums;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -2724,7 +2769,7 @@ mod missing_tests {
         let artists = [cat.artist_for("Glass Harbour").unwrap(), cat.artist_for("Kite Theory").unwrap()];
         let sources: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Slow)];
         for a in artists {
-            assert!(missing_albums(cat.clone(), a, &sources).await.unwrap().1, "asked");
+            assert!(missing_albums(cat.clone(), a, &sources).await.unwrap().looking, "asked");
         }
         for a in artists {
             settled(&cat, a, &sources).await;
@@ -2820,7 +2865,7 @@ mod missing_tests {
         assert_eq!(missing.into_iter().map(|m| m.title).collect::<Vec<_>>(), ["Missing 3"], "Discover's missing list: theirs alone");
         let sources: Vec<Arc<dyn ArtistList>> = vec![Arc::new(Counted)];
         for artist in [various, tagged, unknown] {
-            assert_eq!(missing_albums(cat.clone(), artist, &sources).await.unwrap(), (Vec::new(), false), "{artist}: nothing listed, nothing read");
+            assert_eq!(missing_albums(cat.clone(), artist, &sources).await.unwrap(), ArtistMissing::default(), "{artist}: nothing listed, nothing read");
         }
         assert_eq!(ASKED.load(SeqCst), 0, "no list of theirs asked for");
         assert_eq!(settled(&cat, own, &sources).await.into_iter().map(|m| m.title).collect::<Vec<_>>(), ["Missing 3"]);
@@ -2835,7 +2880,7 @@ mod missing_tests {
         let none: fn(&ArtistAsked) -> Result<ListRead> = |_| Ok(None);
         let sources: Vec<Arc<dyn ArtistList>> = ["musicbrainz", "discogs", "bandcamp"].into_iter().map(|s| Arc::new(Stub(s, none)) as Arc<dyn ArtistList>).collect();
         assert!(settled(&cat, artist, &sources).await.is_empty());
-        assert_eq!(missing_albums(cat.clone(), artist + 1000, &sources).await.unwrap(), (Vec::new(), false), "no such artist");
+        assert_eq!(missing_albums(cat.clone(), artist + 1000, &sources).await.unwrap(), ArtistMissing::default(), "no such artist");
     }
 
     /// C53a: a source answering with its bot check (Bandcamp's artist page) or not at all is not read this time: the list shows
@@ -2849,7 +2894,7 @@ mod missing_tests {
         let listed: Vec<String> = settled(&cat, artist, &sources).await.into_iter().map(|m| m.title).collect();
         assert_eq!(listed, ["After Hours"], "what is kept");
         assert!(cat.artist_known(artist).unwrap().unwrap().1.is_empty(), "no list read");
-        assert!(!missing_albums(cat.clone(), artist, &sources).await.unwrap().1, "not asked again at once");
+        assert!(!missing_albums(cat.clone(), artist, &sources).await.unwrap().looking, "not asked again at once");
     }
 
     // ---- F2: an album read from an artist's own list joins the record of its names
@@ -3186,6 +3231,96 @@ mod missing_tests {
         }
         drop(cat);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    // ---- F8 (preview 1's fix batch): an artist page's sections that wait on a read say so
+
+    /// A source of the test's own as the server's are: on or off as its connection is switched, keeping what it is asked, its answer
+    /// for every artist.
+    struct Asking(&'static str, Arc<std::sync::Mutex<Vec<&'static str>>>, fn() -> Result<ListRead>);
+
+    impl ArtistList for Asking {
+        fn source(&self) -> &'static str {
+            self.0
+        }
+
+        fn on(&self) -> bool {
+            use crate::app::switches::{BANDCAMP, DISCOGS, MUSICBRAINZ, is_on};
+            is_on(match self.0 {
+                "musicbrainz" => MUSICBRAINZ,
+                "discogs" => DISCOGS,
+                _ => BANDCAMP,
+            })
+        }
+
+        fn read<'a>(&'a self, _: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+            self.1.lock().unwrap().push(self.0);
+            let answer = (self.2)();
+            Box::pin(async move { answer })
+        }
+    }
+
+    /// The missing list asked at `now` once no read runs (a test fails rather than waits for good).
+    async fn ended_at(cat: &Arc<Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>], now: i64) -> ArtistMissing {
+        for _ in 0..500 {
+            let m = missing_at(cat.clone(), artist, sources, now).await.unwrap();
+            if !m.looking {
+                return m;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("still looking")
+    }
+
+    /// F8.1 (a), (b): an artist's "Not in your library" says it is being read while their lists are, naming the source read first
+    /// (`reading`), nothing failed yet; (a) the rows come with a later answer, no reload; (b) MusicBrainz and Bandcamp unanswered
+    /// (staging's 18:15: "Connection reset by peer") are named in F1's words, in the order read, beside Discogs' rows, and asked nothing
+    /// at the next open; a later open after the retry time reads those two again, not Discogs, whose list is fresh. A source switched
+    /// off is said so in its place, and not read.
+    #[tokio::test]
+    async fn an_artists_missing_list_says_what_it_reads_and_what_failed() {
+        use crate::app::switches::{DISCOGS, set_for_tests};
+        let _state = super::super::references::TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reset: fn() -> Result<ListRead> = || Err(anyhow::anyhow!("error sending request: Connection reset by peer (os error 104)"));
+        let discogs: fn() -> Result<ListRead> = || Ok(Some((Ref::new("discogs", "artist", "9101"), Some("search"), vec![listing("Undertow", &[("discogs", "master", "3101")])])));
+        let sources: Vec<Arc<dyn ArtistList>> =
+            vec![Arc::new(Asking("musicbrainz", asked.clone(), reset)), Arc::new(Asking("discogs", asked.clone(), discogs)), Arc::new(Asking("bandcamp", asked.clone(), reset))];
+        let asked_now = || {
+            let mut a = asked.lock().unwrap().clone();
+            a.sort_unstable();
+            a
+        };
+        let t = super::super::moment::now_secs();
+        let first = missing_at(cat.clone(), artist, &sources, t).await.unwrap();
+        assert_eq!((first.looking, first.reading, first.no_list.clone()), (true, Some("musicbrainz"), None), "being read, MusicBrainz first");
+        let shown = serde_json::to_value(&first).unwrap();
+        assert_eq!((&shown["looking"], &shown["reading"], shown.get("no_list")), (&serde_json::json!(true), &serde_json::json!("musicbrainz"), None), "{shown}");
+        // (a) the rows at a later answer; (b) the two that did not answer, in F1's words, in the order read.
+        let ended = ended_at(&cat, artist, &sources, t + 60).await;
+        assert_eq!(ended.albums.iter().map(|m| m.title.as_str()).collect::<Vec<_>>(), ["Undertow"], "Discogs' rows");
+        let shown = serde_json::to_value(&ended).unwrap();
+        assert_eq!(shown["no_list"], serde_json::json!([{ "source": "musicbrainz", "said": "unanswered" }, { "source": "bandcamp", "said": "unanswered" }]), "{shown}");
+        assert!(shown.get("reading").is_none() && shown["looking"] == false, "{shown}");
+        assert_eq!(asked_now(), ["bandcamp", "discogs", "musicbrainz"], "each asked once");
+        let again = missing_at(cat.clone(), artist, &sources, t + 120).await.unwrap();
+        assert_eq!((again.looking, &again.no_list), (false, &ended.no_list), "not asked again within the retry time");
+        assert_eq!(asked_now().len(), 3);
+        // A later open after the retry time: those two read again; Discogs' fresh list not.
+        let later = missing_at(cat.clone(), artist, &sources, t + LIST_RETRY_SECS + 60).await.unwrap();
+        assert_eq!((later.looking, later.reading, later.no_list.clone()), (true, Some("musicbrainz"), None), "read again");
+        ended_at(&cat, artist, &sources, t + 60).await;
+        assert_eq!(asked_now(), ["bandcamp", "bandcamp", "discogs", "musicbrainz", "musicbrainz"]);
+        // Discogs switched off: said so, in its place, and not read.
+        set_for_tests(DISCOGS, false);
+        let off = missing_at(cat.clone(), artist, &sources, t + 120).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&off).unwrap()["no_list"],
+            serde_json::json!([{ "source": "musicbrainz", "said": "unanswered" }, { "source": "discogs", "said": "off" }, { "source": "bandcamp", "said": "unanswered" }])
+        );
+        assert_eq!(asked_now().len(), 5, "Discogs not read");
     }
 }
 

@@ -109,7 +109,7 @@ pub fn ref_of_link(url: &str) -> Option<Ref> {
 }
 
 /// A reference's page at its source.
-fn url_of(r: &Ref) -> Option<String> {
+pub(crate) fn url_of(r: &Ref) -> Option<String> {
     Some(match (r.source.as_str(), r.kind.as_str()) {
         ("musicbrainz", "release" | "release-group") => format!("https://musicbrainz.org/{}/{}", r.kind, r.value),
         ("discogs", "release" | "master") => format!("https://www.discogs.com/{}/{}", r.kind, r.value),
@@ -210,7 +210,7 @@ where
 /// What a source said of a record's list where it gave none (F1): switched off, held back after Bandcamp's bot check, not
 /// answering (out of reach, or a page's read cut at `PAGE_READ_AT_MOST`), or no list of it (no such release, none with tracks).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Outcome {
+pub(crate) enum Outcome {
     Off,
     Held,
     Unanswered,
@@ -219,7 +219,7 @@ enum Outcome {
 
 impl Outcome {
     /// What a reader's failure says: a source switched off, Bandcamp's bot check, else no answer.
-    fn of(e: &anyhow::Error) -> Outcome {
+    pub(crate) fn of(e: &anyhow::Error) -> Outcome {
         if e.is::<SwitchedOff>() {
             Outcome::Off
         } else if crate::bandcamp::not_read(e) {
@@ -396,6 +396,14 @@ pub enum PageList {
     Said(Vec<Said>),
 }
 
+impl Said {
+    /// What `source` said at `now` (`Outcome`), as the pages word it: Bandcamp's hold until when. A record not had's page (F1) and an
+    /// artist's sections (F8) alike.
+    pub(crate) fn of(source: &'static str, outcome: Outcome, now: i64) -> Said {
+        Said { source, said: outcome.word(), until: if outcome == Outcome::Held { crate::bandcamp::held_until(now) } else { None } }
+    }
+}
+
 /// Where a page's read of a record's list stands (C54): being read, asking which source now (F6; before its first question, the
 /// first it will ask), or ended (when) without one, with what its sources said.
 enum PageReadState {
@@ -453,7 +461,7 @@ fn refused(source: &str, now: i64) -> Option<anyhow::Error> {
 
 /// Whether what a page's read said still stands at `now` (F1.6): each source it said was switched off still is, and Bandcamp still
 /// held back where it said so.
-fn still_said(said: &[(&'static str, Outcome)], now: i64) -> bool {
+pub(crate) fn still_said(said: &[(&'static str, Outcome)], now: i64) -> bool {
     said.iter().all(|(source, o)| match o {
         Outcome::Off => switched_off(source).is_some(),
         Outcome::Held => crate::bandcamp::held_until(now).is_some(),
@@ -465,7 +473,7 @@ fn still_said(said: &[(&'static str, Outcome)], now: i64) -> bool {
 fn page_words(said: &[(&'static str, Outcome)], now: i64) -> Vec<Said> {
     let at = |s: &str| identity::COUNTING_ORDER.iter().position(|o| *o == s).unwrap_or(usize::MAX);
     let mut words: Vec<Said> =
-        said.iter().map(|&(source, o)| Said { source, said: o.word(), until: if o == Outcome::Held { crate::bandcamp::held_until(now) } else { None } }).collect();
+        said.iter().map(|&(source, o)| Said::of(source, o, now)).collect();
     words.sort_by_key(|w| at(w.source));
     words
 }

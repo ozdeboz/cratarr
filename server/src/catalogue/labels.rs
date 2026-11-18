@@ -2,6 +2,10 @@
 //! row stays when nothing names the label any more, so it comes back to its id. Its records are `record_labels`, written by
 //! the record pass from what the files name, and by a row of its page once opened (C56).
 //!
+//! A label About shows by its Discogs id or its MBID (F9) is the label holding that reference, else one made with it when it is
+//! opened (`open_label`), by the reference alone: so two labels may share a name, as two artists may, and a label known by its
+//! name alone is the one of its name only where exactly one has it (`labels_shown`, X8).
+//!
 //! A label's lists at MusicBrainz and Discogs are a cache, not records (C56, Q33): their rows are kept in `label_rows` thirty days
 //! from when they were read, then let go of by RT01's daily pass, and a record is made of one only when it is opened.
 
@@ -123,6 +127,20 @@ pub(super) fn labels_in(tx: &Connection, names: &BTreeSet<String>, born: i64) ->
     Ok(known)
 }
 
+/// The label a label's reference names (F9): the label kept that holds it; none where none does. Blocking.
+fn holding_in(db: &Connection, r: &Ref) -> Result<Option<i64>> {
+    let subjects: Vec<String> = db
+        .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?
+        .query_map(params![r.source, r.kind, r.value], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for id in subjects.iter().filter_map(|s| ids::label_number(s)) {
+        if db.prepare_cached("SELECT 1 FROM labels WHERE id = ?1")?.exists([id])? {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
 impl Catalogue {
     /// The label a name is, given an id if it has none. Blocking.
     #[cfg_attr(not(test), allow(dead_code))] // a label's listing (C56)
@@ -215,6 +233,51 @@ impl Catalogue {
             Some(c) => read(&c),
             None => read(&self.db()),
         }
+    }
+
+    /// The labels About shows, as known (F9), in their order, on one reader: one with a reference, the label that holds it, by it
+    /// alone (a label of its name is not it); one with none, the one label of its name where exactly one has it (X8: a name two
+    /// share, or none has, is neither; no name, none). Blocking.
+    pub fn labels_shown(&self, asked: &[(Option<Ref>, String)]) -> Result<Vec<Option<i64>>> {
+        let read = |db: &Connection| -> Result<Vec<Option<i64>>> {
+            let mut out = Vec::with_capacity(asked.len());
+            for (r, name) in asked {
+                out.push(match r {
+                    Some(r) => holding_in(db, r)?,
+                    None if name.trim().is_empty() => None,
+                    None => {
+                        let of_name: Vec<i64> =
+                            db.prepare_cached("SELECT id FROM labels WHERE key = ?1 ORDER BY id LIMIT 2")?.query_map([key(name.trim())], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+                        match of_name[..] {
+                            [one] => Some(one),
+                            _ => None,
+                        }
+                    }
+                });
+            }
+            Ok(out)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// The label a label's reference names (F9: one About shows, opened): the one that holds it, else one made now with it, named
+    /// `name`, by the reference alone, never a label of its name; in one transaction, so two opens at once make one. Blocking.
+    pub fn open_label(&self, r: &Ref, name: &str) -> Result<i64> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        if let Some(id) = holding_in(&tx, r)? {
+            return Ok(id);
+        }
+        let at = now();
+        let id = give_label(&tx, &key(name.trim()), name.trim(), at)?;
+        if !super::records::put_reference(&tx, &ids::label(id), r, "link", at, false)?.kept() {
+            anyhow::bail!("Another holds {} {}.", r.source, r.value);
+        }
+        tx.commit()?;
+        Ok(id)
     }
 
     /// A label's rows read at a source (C56), kept at `at`, each by its reference (found again, as read now); and how far its list

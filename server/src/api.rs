@@ -226,9 +226,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/want", post(discover_want))
         .route("/api/requests/want", post(want_album))
         .route("/api/artists/missing", get(artist_missing))
-        // A label's page (C56), and a list's row opened: its record, made at open (Q33).
+        // A label's page (C56), and a list's row opened: its record, made at open (Q33); a label About shows, opened (F9).
         .route("/api/labels/{id}", get(label_page))
         .route("/api/records/open", post(open_record))
+        .route("/api/labels/open", post(open_label))
         .route("/api/artists/open", post(open_artist))
         .route("/api/discover/missing", get(discover_missing))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
@@ -1741,9 +1742,15 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
         }
         _ => None,
     };
+    // Its label as About shows it (F9): a chip opening the one label of its name, where exactly one has it.
+    let labels = match (ctx.served.clone(), a.label.clone()) {
+        (Some(s), Some(name)) => tokio::task::spawn_blocking(move || crate::app::labels::of_text(s.catalogue(), &name)).await.ok().and_then(Result::ok).unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let more = crate::app::AlbumMore {
         released: a.released.clone(),
         label: a.label.clone(),
+        labels,
         about: a.about.clone(),
         credits: a.credits.clone(),
         tags,
@@ -5167,9 +5174,10 @@ struct ArtistQuery {
     name: String,
 }
 
-/// An artist's records the library has none of (C53a): `{ albums, looking }`, the kept rows at once and `looking` while their
-/// lists are read in the background, so the page asks again until it is false.
-async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+/// An artist's records the library has none of (C53a): `{ albums, looking, reading?, no_list? }`, the kept rows at once and `looking`
+/// while their lists are read in the background, so the page asks again until it is false; the source read now, else the sources
+/// whose list could not be had (F8, `discover::ArtistMissing`).
+async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<crate::app::discover::ArtistMissing>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
     let cat = app.library.catalogue();
@@ -5180,21 +5188,21 @@ async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<s
             tokio::task::spawn_blocking(move || c.artist_of(&name)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?.map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         }
     };
-    let Some(artist) = artist else { return Ok(Json(json!({ "albums": [], "looking": false }))) };
-    let (mut albums, looking) = crate::app::discover::missing_albums(cat, artist, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let Some(artist) = artist else { return Ok(Json(Default::default())) };
+    let mut missing = crate::app::discover::missing_albums(cat, artist, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     // An artist forgotten (RT01b) says so, by their tombstone: asked where nothing is listed nor looked for, as for one unknown.
-    if albums.is_empty() && !looking {
+    if missing.albums.is_empty() && !missing.looking {
         let (c, id) = (app.library.catalogue(), crate::serve::ids::artist(artist));
         if let Ok(Some(gone)) = tokio::task::spawn_blocking(move || crate::app::retention::unknown_artist(&c, &id)).await {
             return Err(gone.into());
         }
     }
     if let Some(marks) = request_marks(&app, &serve).await {
-        for a in &mut albums {
+        for a in &mut missing.albums {
             a.request = crate::serve::ids::record_number(&a.record).and_then(|r| marks.of_record(r));
         }
     }
-    Ok(Json(json!({ "albums": albums, "looking": looking })))
+    Ok(Json(missing))
 }
 
 /// What a label's page asks for: the next hundred of one source's list (OQ10 (a)), `musicbrainz` or `discogs`.
@@ -5204,10 +5212,12 @@ struct LabelQuery {
     more: Option<String>,
 }
 
-/// A label's page (C56): `{ id, name, rows, looking, more: { musicbrainz, discogs }, musicbrainz?, discogs? }`. The kept rows at
-/// once, by year, newest first, each with its open request's mark; `looking` while its lists are read in the background, so the
-/// page asks again until it is false; `?more=<source>` reads the next hundred of that source's list. An id that is no label is
-/// refused; a label that never held anything is still a page.
+/// A label's page (C56, F10): `{ id, name, had, not_had, looking, reading?, no_list?, more: { musicbrainz, discogs }, musicbrainz?,
+/// discogs? }`. What the house has of it (`had`, the one had rule) apart from the rest (`not_had`), each by year, newest first, each
+/// row with its open request's mark; `had` at once from what is kept; `looking` while its lists are read in the background, so the
+/// page asks again until it is false, `reading` the source read now; once none is, `no_list` the sources whose list could not be
+/// had (F1's words); `?more=<source>` reads the next hundred of that source's list. An id that is no label is refused; a label that
+/// never held anything is still a page.
 async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery>) -> Result<Json<crate::app::labels::LabelPage>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
@@ -5220,7 +5230,7 @@ async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery
     let page = crate::app::labels::page(app.library.catalogue(), label, more, &crate::app::labels::sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     let mut page = page.ok_or_else(not_a_label)?;
     if let Some(marks) = request_marks(&app, &serve).await {
-        for row in &mut page.rows {
+        for row in page.had.iter_mut().chain(page.not_had.iter_mut()) {
             row.request = row.record.as_deref().and_then(crate::serve::ids::record_number).and_then(|r| marks.of_record(r));
         }
     }
@@ -5237,6 +5247,24 @@ async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Res
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .ok_or_else(|| ToggleError::Refused("An album is opened by what MusicBrainz or Discogs knows it by, and its title.".into()))?;
     Ok(Json(json!({ "record": crate::serve::ids::record(record) })))
+}
+
+/// A label About shows, opened (F9): `{ source: "discogs" | "musicbrainz", id, name }` answers `{ id: "la-<n>" }`, the label that
+/// holds that reference, else one made now with it (`labels::open_label`): only by a reference an album's labels were kept with, by
+/// that name, or by an administrator. Never by a name alone: no reference is refused (409); one nothing kept names, for one who is
+/// no administrator, too (403).
+async fn open_label(ctx: Ctx, Json(b): Json<crate::app::labels::LabelOpened>) -> Result<Json<serde_json::Value>, ApiError> {
+    use crate::app::labels::LabelOpen;
+    let (cat, served, administering) = (ctx.app.library.catalogue(), ctx.serve()?, crate::serve::access::administering());
+    let opened = tokio::task::spawn_blocking(move || crate::app::labels::open_label(&cat, &b, |r| crate::app::discogs_facts::label_named(&served, r), administering))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    match opened {
+        LabelOpen::Opened(id) => Ok(Json(json!({ "id": crate::serve::ids::label(id) }))),
+        LabelOpen::NoReference => Err(ToggleError::Refused("A label is opened by its Discogs id or its MusicBrainz id.".into()).into()),
+        LabelOpen::NotNamed => Err(ToggleError::Forbidden("Only a label an album names is made here, by that name; an administrator may make any.".into()).into()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -6503,21 +6531,16 @@ async fn open_artist(ctx: Ctx, Json(b): Json<ArtistOpened>) -> Result<Json<serde
 }
 
 /// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name or their id (C55): as last
-/// looked up, and whether a look runs now (started here when none was kept or it is old). An artist without a MusicBrainz id
-/// has none.
-async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+/// looked up, and whether a look runs now (started here when none was kept, it is old, or a source the last could not hear is due:
+/// F8), the source it asks now, else the sources it could not hear (`related::Answer`). An artist without a MusicBrainz id has none.
+async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<crate::app::related::Answer>, ApiError> {
     let serve = ctx.serve()?;
-    let Some(asked) = artist_asked(&serve, q.id.as_deref(), &q.name).await else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
-    let Some(mbid) = asked.mbid else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
-    let (s, key) = (serve.clone(), mbid.clone());
-    let (kept, due) = tokio::task::spawn_blocking(move || crate::app::related::kept(&s, &key))
+    let Some(asked) = artist_asked(&serve, q.id.as_deref(), &q.name).await else { return Ok(Json(Default::default())) };
+    let Some(mbid) = asked.mbid else { return Ok(Json(Default::default())) };
+    let mut answer = crate::app::related::answer(&serve, &asked.name, &mbid, crate::app::moment::now_secs(), crate::app::related::Services::new())
         .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    if due {
-        crate::app::related::start(serve, asked.name, mbid.clone());
-    }
-    let mut artists = kept.map(|f| f.artists).unwrap_or_default();
+    let mut artists = std::mem::take(&mut answer.artists);
     // No Bandcamp preview offered while Bandcamp is switched off (G1).
     for a in &mut artists {
         a.bandcamp = crate::bandcamp::shown(a.bandcamp.take());
@@ -6532,7 +6555,8 @@ async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<se
             a.number = a.id.as_deref().and_then(crate::serve::ids::artist_number).and_then(|n| numbers.get(&n).copied());
         }
     }
-    Ok(Json(json!({ "artists": artists, "looking": crate::app::related::is_looking(&mbid) })))
+    answer.artists = artists;
+    Ok(Json(answer))
 }
 
 /// An artist new to the library, for Discover's New to you (0069 amended, 0.9.1): TheAudioDB's description by name, as
@@ -6915,13 +6939,18 @@ async fn put_floor(ctx: Ctx, Json(b): Json<serde_json::Value>) -> Result<Json<se
 
 // ---- Discogs' facts (0.9.8)
 
-/// An album's facts on Discogs: its master's genres, styles and year, its main release's labels and catalogue numbers
-/// and its credits, its page; `{}` where Discogs has none. Asked now where not kept.
+/// An album's facts on Discogs: its master's genres, styles and year, its credits, its page; its labels as About shows them (F9:
+/// Discogs' main release's, then MusicBrainz's of the files' release of a name Discogs names none of, each `{ name, catno?, id?,
+/// ref? }`, `discogs_facts::answer`); `{}` where neither says anything. Asked now where not kept.
 async fn album_discogs(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
     own_album(&source)?;
     let served = ctx.serve()?;
     let facts = crate::app::discogs_facts::album(&served, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(facts.map_or(json!({}), |f| serde_json::to_value(f).unwrap_or_default())))
+    let answer = tokio::task::spawn_blocking(move || crate::app::discogs_facts::answer(&served, &album, facts.as_ref()))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(answer))
 }
 
 #[derive(Deserialize)]

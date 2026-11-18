@@ -576,6 +576,40 @@ pub(super) async fn release_group_of(http: &reqwest::Client, release: &str) -> R
     Ok(v["release-group"]["id"].as_str().map(str::to_string))
 }
 
+/// A label as a MusicBrainz release names it (F9): its name, its MBID, and the release's catalogue number there.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MbLabel {
+    pub name: String,
+    pub mbid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catno: Option<String>,
+}
+
+/// A MusicBrainz release's release group and its labels (F9): `release_group_of`'s one question, its labels with it (`+labels`).
+pub(super) async fn release_group_and_labels(http: &reqwest::Client, release: &str) -> Result<(Option<String>, Vec<MbLabel>)> {
+    let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups+labels&fmt=json")).asked().await?.error_for_status()?.json().await?;
+    Ok((v["release-group"]["id"].as_str().map(str::to_string), mb_labels_of(&v)))
+}
+
+/// A MusicBrainz release's labels (`label-info`, F9): each with its MBID as MusicBrainz writes it, its name and its catalogue number
+/// ("[none]" none), each once; one with no label or no id, and MusicBrainz's "[no label]", none. Pure.
+fn mb_labels_of(v: &Value) -> Vec<MbLabel> {
+    let mut out: Vec<MbLabel> = Vec::new();
+    for info in v["label-info"].as_array().into_iter().flatten() {
+        let (Some(id), Some(name)) = (info["label"]["id"].as_str(), info["label"]["name"].as_str()) else { continue };
+        let (mbid, name) = (id.trim().to_ascii_lowercase(), name.trim().to_string());
+        if !is_mbid(&mbid) || name.is_empty() || name.eq_ignore_ascii_case("[no label]") {
+            continue;
+        }
+        let catno = info["catalog-number"].as_str().map(str::trim).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("[none]")).map(str::to_string);
+        let label = MbLabel { name, mbid, catno };
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out
+}
+
 // ---- An artist's and a label's lists (0100, S11)
 
 /// A row of an artist's or a label's list at Discogs (S11): a master, or a release Discogs gives no master of (G5: a row of
@@ -1123,6 +1157,30 @@ mod facts_tests {
         let kept: Label = serde_json::from_str(r#"{"name":"Low Tide Records","catno":"LTR-012"}"#).unwrap();
         assert_eq!(kept.id, None);
         assert_eq!(id_in(&["https://www.discogs.com/label/23528-Low-Tide-Records".to_string()], "label"), Some(23528), "a label's page names its id");
+    }
+
+    /// F9.1 (e): a MusicBrainz release names its labels with their MBIDs (`+labels` on the question its release group is asked by):
+    /// each with its catalogue number ("[none]" none), each once, as MusicBrainz writes its ids; one with no label or no id, and
+    /// MusicBrainz's "[no label]", none.
+    #[test]
+    fn a_musicbrainz_release_names_its_labels_by_their_mbids() {
+        let (anthem, nonesuch) = ("00000000-0000-4000-8000-000000000901", "00000000-0000-4000-8000-000000000902");
+        let v = serde_json::json!({ "release-group": { "id": "00000000-0000-4000-8000-000000000900" }, "label-info": [
+            { "catalog-number": "IARC0041", "label": { "id": anthem.to_uppercase(), "name": "International Anthem Recording Company" } },
+            { "catalog-number": "[none]", "label": { "id": nonesuch, "name": "Nonesuch" } },
+            { "catalog-number": "X-1", "label": null },
+            { "catalog-number": "IARC0041", "label": { "id": anthem, "name": "International Anthem Recording Company" } },
+            { "catalog-number": null, "label": { "id": "157afde4-4bf5-4039-8ad2-5a15acc85176", "name": "[no label]" } },
+            { "catalog-number": "Y-1", "label": { "name": "No Id" } }
+        ] });
+        assert_eq!(
+            mb_labels_of(&v),
+            [
+                MbLabel { name: "International Anthem Recording Company".into(), mbid: anthem.into(), catno: Some("IARC0041".into()) },
+                MbLabel { name: "Nonesuch".into(), mbid: nonesuch.into(), catno: None },
+            ]
+        );
+        assert!(mb_labels_of(&serde_json::json!({})).is_empty());
     }
 
     #[test]
