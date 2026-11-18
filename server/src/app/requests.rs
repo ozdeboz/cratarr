@@ -707,21 +707,23 @@ pub async fn reject(lidarr: Option<&dyn Fetcher>, ud: &crate::userdata::UserData
     closed
 }
 
-/// A Delete of a copy in Incoming, for its requests (W4, Y4, V2, U5): those it closes (`closed_by`) closed as rejected (`reject`).
-/// Where it leaves an approved request of the record (`open`, read before the copy went: `open_of`) whose record it no longer holds,
-/// a fetcher goes on for it. Each one's status is read again now the copy has gone (U5): a pending one alone is no reason to fetch,
-/// and one cancelled meanwhile is not handed again.
+/// A Delete of a copy in Incoming, for its requests (W4, Y4, V2, U5, RF3): those it closes (`closed_by`) closed as rejected
+/// (`reject`). Where it leaves an approved request of the record (`open`, read before the copy went: `open_of`) whose record it no
+/// longer holds, the fetchers go on for it, Lidarr as Soulseek, whoever's copy it was (V2, the owner's default: "Lidarr keeps looking
+/// for them, and so does Soulseek"). Each one's status is read again now the copy has gone (U5): a pending one alone is no reason to
+/// fetch, and one cancelled meanwhile is not handed again.
 /// - A copy Lidarr brought first has its own grab marked failed in Lidarr's history (U5, T9: `whose`), and only that grab, whose
 ///   import is the deleted copy: Lidarr blocklists that release and looks for another, so the next asker is not handed the same bad
-///   rip. Where no such grab is found, the copy is no fetcher's known (dropped by hand), or Lidarr can't be told, Lidarr stays
-///   stopped: the closed ones tell it so (but where it is away: it was told when the copy arrived, and the Delete's own entry tells
-///   it again), and Soulseek alone looks for those left. A copy another fetcher brought (`copy`'s library names it) leaves Lidarr
-///   to go on.
-/// - Where Lidarr goes on, as when one of two requests is taken back (`tell_stopped`), it is not told to stop, and each one closed
-///   says so (`LIDARR_KEPT`).
+///   rip. A copy no fetcher's known (dropped by hand), one whose grab is not found (a manual import, a history cleaned), and another
+///   fetcher's mark none, and Lidarr goes on all the same (RF3).
+/// - Lidarr is not told to stop, as when one of two requests is taken back (`tell_stopped`), and each one closed says so
+///   (`LIDARR_KEPT`).
+/// - Lidarr away (`Whose::Unknown`): it is not asked again now. Each one left is Soulseek's meanwhile, saying Lidarr is asked again
+///   once it answers (`LIDARR_AWAY`), and the requests' round hands it to Lidarr then (`ask_lidarr_again`).
 ///
 /// Each one left is handed to the fetchers again (`hand_to`), its word that Lidarr was told to stop on the arrival gone. Whether
-/// Lidarr goes on: Incoming's handler then puts back what it stopped for the copy (`Incoming::keep_fetching`).
+/// Lidarr goes on (one is left): Incoming's handler then puts back what it stopped for the copy (`Incoming::keep_fetching`), where
+/// Lidarr is away once it answers (the handler is run again then: `Incoming::catch_up`).
 #[allow(clippy::too_many_arguments)]
 pub async fn deleted(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve, closing: &[Request], open: Vec<Request>, copy: Option<&DeletedCopy>, undo: Option<(&crate::journal::Journal, crate::journal::EventId)>) -> bool {
     // Approved now, as the copy has gone (U5).
@@ -737,26 +739,69 @@ pub async fn deleted(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve
         reject(lidarr, &serve.userdata, closing, undo).await;
         return false;
     }
-    // Whose the copy was (U5, T9): Lidarr's own grab of it failed first, by the group Lidarr was asked by; else Lidarr stays stopped
-    // and Soulseek looks. One another fetcher brought leaves Lidarr to go on.
+    // Whose the copy was (U5, T9): Lidarr's own grab of it marked failed first, by the group Lidarr was asked by. Whoever's it was,
+    // Lidarr goes on for those left (V2, RF3); away, it is asked again once it answers (one wait, and one warning).
     let was = match copy {
         Some(copy) => whose(lidarr, copy, left.iter().chain(closing).find_map(|r| r.release_group.as_deref())).await,
         None => Whose::Another,
     };
-    let goes_on = matches!(was, Whose::Another | Whose::Lidarr { failed: true });
-    // Lidarr away: not told again to stop, as it was when the copy arrived (one wait, and one warning).
-    let closed = reject(lidarr.filter(|_| !goes_on && was != Whose::Unknown), &serve.userdata, closing, undo).await;
-    if goes_on {
-        for r in closing.iter().filter(|r| closed.iter().any(|c| c.id == r.id)) {
-            if let Some(said) = r.fetched.as_deref().filter(|f| f.contains("Lidarr") && !f.starts_with("Not handed over")) {
-                let _ = serve.userdata.set_request_fetched(r.id, &format!("{said}; {LIDARR_KEPT}"));
-            }
+    let away = was == Whose::Unknown;
+    // Never told to stop while another asks for it.
+    let closed = reject(None, &serve.userdata, closing, undo).await;
+    for r in closing.iter().filter(|r| closed.iter().any(|c| c.id == r.id)) {
+        if let Some(said) = r.fetched.as_deref().filter(|f| f.contains("Lidarr") && !f.starts_with("Not handed over")) {
+            let _ = serve.userdata.set_request_fetched(r.id, &format!("{said}; {LIDARR_KEPT}"));
         }
     }
     for r in &left {
-        hand_to(lidarr.filter(|_| goes_on), soulseek, serve, r).await;
+        if away {
+            hand_while_away(soulseek, serve, r);
+        } else {
+            hand_to(lidarr, soulseek, serve, r).await;
+        }
     }
-    goes_on
+    true
+}
+
+/// What a request a Delete left says while Lidarr is away (RF3): not handed to it now, and handed to it once it answers (the requests'
+/// round: `ask_lidarr_again`). It begins as a hand-over Lidarr did not take, so every reader takes it as one Lidarr is not at
+/// (`stop_arrived`, `tell_stopped`, below the floor, Soulseek's first search).
+pub const LIDARR_AWAY: &str = "Not handed over to Lidarr: away, asked again once it answers";
+
+/// A request a Delete left while Lidarr is away (RF3): Soulseek's meanwhile, where it is connected (woken), its line saying Lidarr
+/// is asked again once it answers (`LIDARR_AWAY`).
+fn hand_while_away(soulseek: bool, serve: &Serve, r: &Request) {
+    let said = if soulseek {
+        super::soulseek::wake();
+        format!("{LIDARR_AWAY}; {SOULSEEK_SEARCHES}")
+    } else {
+        LIDARR_AWAY.to_string()
+    };
+    if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {
+        tracing::warn!("request {}: what the fetchers were told was not kept: {e:#}", r.id);
+    }
+}
+
+/// The approved requests a Delete left while Lidarr was away (RF3: `LIDARR_AWAY`), handed to Lidarr now it answers (`hand_to`, Soulseek
+/// with it), oldest first, each once. Where it is still away, the first one asked keeps its line for the next round, and the others are
+/// not asked this round (one wait a round). A request taken back meanwhile is not handed. Their ids handed.
+pub(crate) async fn ask_lidarr_again(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve) -> Result<Vec<i64>> {
+    let Some(f) = lidarr else { return Ok(Vec::new()) };
+    let mut waiting: Vec<Request> = serve.userdata.requests(None, Some(APPROVED), OPEN)?.into_iter().filter(|r| r.fetched.as_deref().is_some_and(|f| f.starts_with(LIDARR_AWAY))).collect();
+    waiting.sort_by_key(|r| (r.at, r.id));
+    let mut handed = Vec::new();
+    for r in waiting {
+        let said = hand_to(Some(f), soulseek, serve, &r).await;
+        if said.starts_with("Not handed over to Lidarr") {
+            // Still away: its line as it was, asked again at the next round.
+            if let Some(was) = r.fetched.as_deref() {
+                serve.userdata.set_request_fetched(r.id, was)?;
+            }
+            break;
+        }
+        handed.push(r.id);
+    }
+    Ok(handed)
 }
 
 /// A deleted Incoming copy, as its Delete tells its requests (U5, T9): the fetcher its library names (none: a library from before
@@ -767,16 +812,19 @@ pub struct DeletedCopy {
     pub folder: String,
 }
 
-/// Whose a deleted Incoming copy is, for the requests it leaves (T9).
+/// Whose a deleted Incoming copy is, for the requests it leaves (T9). Lidarr goes on for those left whichever it is (RF3), only later
+/// where it is away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Whose {
-    /// Another fetcher's, its library naming it (Soulseek's): Lidarr is not asked, and goes on for those left.
+    /// Another fetcher's, its library naming it (Soulseek's): Lidarr is not asked.
     Another,
     /// No fetcher's known: its library names none and Lidarr's history imported nothing into its folder (dropped there by hand).
     Nobody,
     /// Lidarr's, its library naming Lidarr or its history importing into the folder; `failed`: its own grab marked failed.
     Lidarr { failed: bool },
-    /// Not known: Lidarr not connected, no release group to ask by, or Lidarr away or answering wrongly.
+    /// Not asked: Lidarr not connected, or no release group to ask by.
+    NotAsked,
+    /// Not known: Lidarr away or answering wrongly. It is asked again for those left once it answers (`ask_lidarr_again`).
     Unknown,
 }
 
@@ -791,23 +839,23 @@ pub async fn whose(lidarr: Option<&dyn Fetcher>, copy: &DeletedCopy, group: Opti
     if named.is_some_and(|f| f != "lidarr") {
         return Whose::Another;
     }
-    let (Some(f), Some(group)) = (lidarr, group) else { return Whose::Unknown };
+    let (Some(f), Some(group)) = (lidarr, group) else { return Whose::NotAsked };
     match f.fail_grab(group, &copy.folder).await {
         Ok(Imported::Failed) => Whose::Lidarr { failed: true },
         Ok(Imported::Unmarked) => {
-            tracing::info!(target: "requests", group = %group, folder = %copy.folder, "a deleted copy's grab not marked: Lidarr's newest import of the album went elsewhere, or its grab is not in the history; Lidarr stays stopped, Soulseek looks");
+            tracing::info!(target: "requests", group = %group, folder = %copy.folder, "a deleted copy's grab not marked: Lidarr's newest import of the album went elsewhere, or its grab is not in the history; Lidarr goes on for those left");
             Whose::Lidarr { failed: false }
         }
         Ok(Imported::Not) if named.is_some() => {
-            tracing::info!(target: "requests", group = %group, folder = %copy.folder, "a deleted copy's grab is not in Lidarr's history: Lidarr stays stopped, Soulseek looks");
+            tracing::info!(target: "requests", group = %group, folder = %copy.folder, "a deleted copy's grab is not in Lidarr's history: Lidarr goes on for those left");
             Whose::Lidarr { failed: false }
         }
         Ok(Imported::Not) => {
-            tracing::info!(target: "requests", group = %group, folder = %copy.folder, "a deleted copy Lidarr never imported (dropped by hand): no grab marked, Lidarr stays stopped, Soulseek looks");
+            tracing::info!(target: "requests", group = %group, folder = %copy.folder, "a deleted copy Lidarr never imported (dropped by hand): no grab marked, Lidarr goes on for those left");
             Whose::Nobody
         }
         Err(e) => {
-            tracing::warn!(target: "requests", group = %group, reason = %format!("{e:#}"), "a deleted copy's grab not marked failed: Lidarr stays stopped, Soulseek looks");
+            tracing::warn!(target: "requests", group = %group, reason = %format!("{e:#}"), "a deleted copy's grab not marked failed: Lidarr away; Soulseek looks for those left, and Lidarr is asked again once it answers");
             Whose::Unknown
         }
     }
@@ -1021,6 +1069,7 @@ async fn round(app: &super::App, serve: &Serve, asked_at: &mut i64) -> Result<()
 /// - a request held whole only in another's own music has its asker's copy made, room and space permitting (`copy_for_askers`, I05:
 ///   the second asker's copy once the first adds);
 /// - an album now out handed to Lidarr, Soulseek's turn coming with it;
+/// - the requests a Delete left while Lidarr was away handed to it now it answers (`ask_lidarr_again`, RF3);
 /// - the first arrival stops the other fetcher, and the stops not told yet are told;
 /// - then each approved request done for its asker is delivered ((c)), the count in the log.
 pub(crate) async fn round_with(h: &Hands<'_>, serve: &Serve, now: i64) -> Result<()> {
@@ -1040,6 +1089,7 @@ pub(crate) async fn round_with(h: &Hands<'_>, serve: &Serve, now: i64) -> Result
             hand_with(h, serve, r).await;
         }
     }
+    ask_lidarr_again(h.lidarr, h.soulseek, serve).await?;
     stop_arrived(h.lidarr, serve).await;
     retry_stops(h.lidarr, serve).await;
     let delivered = deliver(serve).await;
@@ -2563,11 +2613,11 @@ pub(crate) mod tests {
         assert_eq!(now(bob.id).status, REJECTED);
     }
 
-    /// U5 (the review of 8c/8d, finding 5): Ann's Delete of a copy Lidarr brought, Bob's request left, and Lidarr's history holds no
-    /// grab of it: Lidarr stays stopped (told so for Ann's, never asked to want it again), and Soulseek alone looks for Bob's. A copy
-    /// Soulseek brought leaves Lidarr to go on, no grab asked after.
+    /// U5 (the review of 8c/8d, finding 5), changed by RF3 (the review of runs 11 and 12, RB3; V2): Ann's Delete of a copy Lidarr
+    /// brought, Bob's request left, and Lidarr's history holds no grab of it: no grab is marked, and Lidarr goes on for Bob's (never
+    /// told to stop, asked to want it again), Soulseek too. A copy Soulseek brought leaves Lidarr to go on, no grab asked after.
     #[tokio::test]
-    async fn a_lidarr_copy_whose_grab_is_not_found_leaves_lidarr_stopped() {
+    async fn a_lidarr_copy_whose_grab_is_not_found_leaves_lidarr_fetching() {
         let serve = served();
         let group = "00000000-0000-4000-8000-000000000312";
         let record = record_of_album(serve.catalogue(), Some(group), "Glass Harbour", "Two Rooms", None, None).unwrap();
@@ -2580,12 +2630,13 @@ pub(crate) mod tests {
         let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
         let lidarr = Wanting::default();
         lidarr.4.store(true, std::sync::atomic::Ordering::SeqCst);
-        assert!(!deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("ann")), open, Some(&lidarrs_copy()), None).await, "Lidarr stays stopped");
-        assert_eq!(*lidarr.3.lock().unwrap(), [format!("failed {group}")], "asked for its grab, never to want it");
-        assert_eq!(*lidarr.1.lock().unwrap(), [group.to_string()], "told to stop for Ann's");
+        assert!(deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("ann")), open, Some(&lidarrs_copy()), None).await, "Lidarr goes on");
+        assert_eq!(*lidarr.3.lock().unwrap(), [format!("failed {group}"), "want".to_string()], "asked for its grab (none found), then to want it for Bob's");
+        assert!(lidarr.1.lock().unwrap().is_empty(), "never told to stop while Bob asks");
         let now = |id: i64| serve.userdata.request(id).unwrap().unwrap();
         assert_eq!((now(ann.id).status, now(bob.id).status), (REJECTED.to_string(), APPROVED.to_string()));
-        assert_eq!(now(bob.id).fetched.unwrap(), SOULSEEK_SEARCHES, "Soulseek alone looks for Bob's");
+        assert!(now(ann.id).fetched.unwrap().ends_with(LIDARR_KEPT), "hers says Lidarr goes on");
+        assert_eq!(now(bob.id).fetched.unwrap(), format!("Lidarr added it and is looking for it; {SOULSEEK_SEARCHES}"), "Lidarr and Soulseek look for Bob's");
         // A copy Soulseek brought: Lidarr goes on for the one left, no grab asked after.
         let carol = ask("carol");
         let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
@@ -2699,7 +2750,8 @@ pub(crate) mod tests {
     /// whose tracks it imported into the copy's folder as its own container names it (`/data/music/...`; Cratarr's copy at
     /// `Salt Meridian/Both Shores (2018)` in a library naming no fetcher, OQ-J), and grab 52, D2's, newer and still downloading for
     /// Bob: exactly one grab is marked failed, 50, and Lidarr goes on for Bob. Lidarr away, answering 503 or not in time: no grab
-    /// marked, Lidarr stays stopped, Soulseek alone looks for Bob's, and the warning is logged once.
+    /// marked, Lidarr not asked again now, Soulseek looks for Bob's meanwhile, and the warning is logged once; the Delete says Lidarr
+    /// goes on, as it does once it answers (RF3: `lidarr_away_at_a_delete_is_asked_again_for_the_askers_left_once_it_answers`).
     #[tokio::test]
     async fn only_the_grab_whose_import_is_the_deleted_copy_is_marked_failed() {
         use crate::lidarr::fake;
@@ -2723,21 +2775,22 @@ pub(crate) mod tests {
             let writer = log.clone();
             let _logging = crate::diagnostics::log_here(tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).with_max_level(tracing::Level::INFO).finish());
             let lidarr = faked(&url, Some(std::time::Duration::from_millis(300)));
-            assert!(!deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("ann")), open, Some(&copy), None).await, "Lidarr stays stopped ({mode:?})");
+            assert!(deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("ann")), open, Some(&copy), None).await, "Lidarr goes on, once it answers ({mode:?})");
             assert!(seen.writes().is_empty(), "no grab marked, nothing wanted ({mode:?}): {:?}", seen.writes());
             assert_eq!((now(&serve, ann.id).status, now(&serve, bob.id).status), (REJECTED.to_string(), APPROVED.to_string()));
-            assert_eq!(now(&serve, bob.id).fetched.unwrap(), SOULSEEK_SEARCHES, "Soulseek alone looks for Bob's ({mode:?})");
+            assert_eq!(now(&serve, bob.id).fetched.unwrap(), format!("{LIDARR_AWAY}; {SOULSEEK_SEARCHES}"), "Soulseek looks for Bob's meanwhile ({mode:?})");
             let text = log.text();
             let warned: Vec<&str> = text.lines().filter(|l| l.contains("WARN")).collect();
             assert_eq!(warned.len(), 1, "the warning once ({mode:?}): {text}");
-            assert!(warned[0].contains("Lidarr stays stopped"), "{text}");
+            assert!(warned[0].contains("Lidarr is asked again once it answers"), "{text}");
         }
     }
 
     /// T9.2: files dropped by hand into Lidarr's library at `Salt Meridian/Both Shores (2018)`, Lidarr's history holding imports of the
-    /// album elsewhere only (a folder whose name begins alike, another artist's folder of that name): no grab marked, Lidarr stays
-    /// stopped, Soulseek looks for Bob's. Alike where the library names Lidarr and where it names no fetcher (staging's
-    /// `lidarr-music`).
+    /// album elsewhere only (a folder whose name begins alike, another artist's folder of that name): no grab marked, and, changed by
+    /// design (RF3, the review of runs 11 and 12, RB3; V2), Lidarr goes on for Bob's: never told to stop, his handed to it again, and
+    /// Soulseek looks too; Ann's says Lidarr goes on. Alike where the library names Lidarr (`Lidarr { failed: false }`) and where it
+    /// names no fetcher (staging's `lidarr-music`: `Nobody`).
     #[tokio::test]
     async fn a_hand_dropped_copy_marks_no_grab() {
         use crate::lidarr::fake;
@@ -2749,16 +2802,103 @@ pub(crate) mod tests {
                 fake::imports("D3", "/data/music/Other Artist/Both Shores (2018)", "2026-11-11"),
             ]
             .concat();
-            let (url, seen) = fake::lidarr(fake::Mode::Answers, elsewhere).await;
             let copy = DeletedCopy { fetcher: fetcher.map(str::to_string), folder: "Salt Meridian/Both Shores (2018)".into() };
-            assert!(!deleted(Some(&faked(&url, None)), true, &serve, &closed_by(arrived, false, Some("ann")), open, Some(&copy), None).await, "Lidarr stays stopped ({fetcher:?})");
-            assert!(seen.writes().is_empty(), "no POST, nothing wanted ({fetcher:?}): {:?}", seen.writes());
+            let is = whose(Some(&faked(&fake::lidarr(fake::Mode::Answers, elsewhere.clone()).await.0, None)), &copy, Some(fake::GROUP)).await;
+            assert_eq!(is, if fetcher.is_some() { Whose::Lidarr { failed: false } } else { Whose::Nobody }, "{fetcher:?}");
+            let (url, seen) = fake::lidarr(fake::Mode::Answers, elsewhere).await;
+            assert!(deleted(Some(&faked(&url, None)), true, &serve, &closed_by(arrived, false, Some("ann")), open, Some(&copy), None).await, "Lidarr goes on ({fetcher:?})");
+            assert_eq!(seen.writes(), ["monitor [7] true", "search [7]"], "no POST, never told to stop: Bob's handed to Lidarr again ({fetcher:?})");
             assert_eq!(seen.reads(), ["history 3"], "its imports read, no grab ({fetcher:?})");
             assert!(seen.refused().is_empty(), "{:?}", seen.refused());
             let now = |id: i64| serve.userdata.request(id).unwrap().unwrap();
             assert_eq!((now(ann.id).status, now(bob.id).status), (REJECTED.to_string(), APPROVED.to_string()));
-            assert_eq!(now(bob.id).fetched.unwrap(), SOULSEEK_SEARCHES, "Soulseek looks for Bob's ({fetcher:?})");
+            assert!(now(ann.id).fetched.unwrap().ends_with(LIDARR_KEPT), "hers says Lidarr goes on ({fetcher:?})");
+            assert_eq!(now(bob.id).fetched.unwrap(), format!("Lidarr is looking for it; {SOULSEEK_SEARCHES}"), "Lidarr and Soulseek look for Bob's ({fetcher:?})");
         }
+    }
+
+    /// RF3 (the review of runs 11 and 12, RB3; V2: "Lidarr keeps looking for them, and so does Soulseek"): Ann deletes her arrival,
+    /// Bob still asking, and Lidarr's history marks no grab of it (`Lidarr { failed: false }`): a manual import into the copy's folder
+    /// (its imports carry no `downloadId`), a download whose grab is not in the history, or, the library naming Lidarr, a history
+    /// cleaned of the album's imports. Each time Lidarr keeps fetching for Bob's: never told to stop, his handed to it again, Soulseek
+    /// too, and Ann's says Lidarr goes on. Never a grab marked.
+    #[tokio::test]
+    async fn a_delete_whose_grab_is_not_found_leaves_lidarr_fetching_for_the_askers_left() {
+        use crate::lidarr::fake;
+        let into = "/data/music/Salt Meridian/Both Shores (2018)";
+        let manual: Vec<serde_json::Value> = fake::imports("D1", into, "2026-11-10")
+            .into_iter()
+            .map(|mut i| {
+                i.as_object_mut().unwrap().remove("downloadId");
+                i
+            })
+            .collect();
+        let cases = [
+            ("a manual import", None, manual, vec!["history 3"]),
+            ("a grab not in the history", None, fake::imports("D9", into, "2026-11-10"), vec!["history 3", "history 1"]),
+            ("a history cleaned", Some("lidarr"), Vec::new(), vec!["history 3"]),
+        ];
+        for (case, fetcher, imports, reads) in cases {
+            let copy = DeletedCopy { fetcher: fetcher.map(str::to_string), folder: "Salt Meridian/Both Shores (2018)".into() };
+            let is = whose(Some(&faked(&fake::lidarr(fake::Mode::Answers, imports.clone()).await.0, None)), &copy, Some(fake::GROUP)).await;
+            assert_eq!(is, Whose::Lidarr { failed: false }, "{case}");
+            let serve = served();
+            let (ann, bob, arrived, open) = both_shores_asked(&serve).await;
+            let (url, seen) = fake::lidarr(fake::Mode::Answers, imports).await;
+            assert!(deleted(Some(&faked(&url, None)), true, &serve, &closed_by(arrived, false, Some("ann")), open, Some(&copy), None).await, "Lidarr goes on ({case})");
+            assert_eq!(seen.reads(), reads, "{case}");
+            assert_eq!(seen.writes(), ["monitor [7] true", "search [7]"], "no grab marked, never told to stop: Bob's handed to Lidarr again ({case})");
+            assert!(seen.refused().is_empty(), "{case}: {:?}", seen.refused());
+            let now = |id: i64| serve.userdata.request(id).unwrap().unwrap();
+            assert_eq!((now(ann.id).status, now(bob.id).status), (REJECTED.to_string(), APPROVED.to_string()), "{case}");
+            assert!(now(ann.id).fetched.unwrap().ends_with(LIDARR_KEPT), "hers says Lidarr goes on ({case})");
+            assert_eq!(now(bob.id).fetched.unwrap(), format!("Lidarr is looking for it; {SOULSEEK_SEARCHES}"), "Lidarr and Soulseek look for Bob's ({case})");
+        }
+    }
+
+    /// RF3 (RB3's last case: "Nothing puts Lidarr back when Lidarr returns"): Lidarr away at Ann's Delete (503 to everything), Bob
+    /// and Carol still asking. No grab is marked and Lidarr is not asked again now: Bob's and Carol's are Soulseek's meanwhile, each
+    /// line saying Lidarr is asked again once it answers, and the Delete says Lidarr goes on (its entry keeps Lidarr fetching, which
+    /// Incoming's handler puts back once Lidarr answers: `incoming`'s `a_delete_that_left_a_request_has_lidarr_go_on`). Carol takes
+    /// hers back. A round while Lidarr is still away hands nothing and keeps Bob's line; once it answers, the round hands Bob's to
+    /// Lidarr (it monitors the album again and searches), his line Lidarr's and Soulseek's; the next round asks nothing more. Never
+    /// Carol's, taken back, or Ann's, closed, handed; never a grab marked.
+    #[tokio::test]
+    async fn lidarr_away_at_a_delete_is_asked_again_for_the_askers_left_once_it_answers() {
+        use crate::lidarr::fake;
+        let serve = served();
+        let (ann, bob, _, _) = both_shores_asked(&serve).await;
+        let record = bob.record.unwrap();
+        let carol = {
+            let r = Request { id: 0, user: "carol".into(), album_key: "k-carol".into(), ..bob.clone() };
+            Request { id: serve.userdata.add_request(&r).unwrap(), ..r }
+        };
+        let (arrived, open) = (arrived_for(&serve, record, Some(200)).await, open_of(&serve, record).await);
+        assert_eq!((arrived.len(), open.len()), (3, 3), "it arrived for all three");
+        let copy = DeletedCopy { fetcher: None, folder: "Salt Meridian/Both Shores (2018)".into() };
+        let (url, seen) = fake::lidarr(fake::Mode::Away, fake::imports("D1", "/data/music/Salt Meridian/Both Shores (2018)", "2026-11-10")).await;
+        let lidarr = faked(&url, None);
+        assert!(deleted(Some(&lidarr), true, &serve, &closed_by(arrived, false, Some("ann")), open, Some(&copy), None).await, "Lidarr goes on, once it answers");
+        let line = |id: i64| now_of(&serve, id).fetched.unwrap();
+        let meanwhile = format!("{LIDARR_AWAY}; {SOULSEEK_SEARCHES}");
+        assert_eq!((line(bob.id), line(carol.id)), (meanwhile.clone(), meanwhile.clone()), "Soulseek's meanwhile, Lidarr asked again once it answers");
+        assert!(seen.writes().is_empty(), "no grab marked, nothing wanted while it is away: {:?}", seen.writes());
+        cancel_with(None, &serve, "carol", carol.id).await.unwrap();
+        let house = Copies::none();
+        let h = Hands { lidarr: Some(&lidarr), soulseek: true, house: &house, disks: &Roomy };
+        let at = super::super::moment::now_secs();
+        round_with(&h, &serve, at).await.unwrap();
+        assert!(seen.writes().is_empty(), "still away: nothing handed: {:?}", seen.writes());
+        assert_eq!(line(bob.id), meanwhile, "Bob's line kept for the next round");
+        seen.answers(fake::Mode::Answers);
+        round_with(&h, &serve, at).await.unwrap();
+        assert_eq!(seen.writes(), ["monitor [7] true", "search [7]"], "Bob's handed to Lidarr once it answers, Carol's never");
+        assert_eq!(line(bob.id), format!("Lidarr is looking for it; {SOULSEEK_SEARCHES}"), "his line Lidarr's and Soulseek's");
+        round_with(&h, &serve, at).await.unwrap();
+        assert_eq!(seen.writes().len(), 2, "the next round asks nothing more: {:?}", seen.writes());
+        assert!(seen.refused().is_empty(), "{:?}", seen.refused());
+        let status = |id: i64| now_of(&serve, id).status;
+        assert_eq!((status(ann.id), status(bob.id), status(carol.id)), (REJECTED.to_string(), APPROVED.to_string(), CANCELLED.to_string()));
     }
 
     /// T9.3: whose a deleted Incoming copy is. (a) Its library names Lidarr: Lidarr's whatever the history says (here it imported

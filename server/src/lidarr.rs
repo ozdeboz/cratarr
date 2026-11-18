@@ -628,15 +628,21 @@ pub(crate) mod fake {
         Slow,
     }
 
-    /// What it was asked, for the test to read after.
+    /// What it was asked, for the test to read after, and how it answers now (`answers`).
     #[derive(Clone, Default)]
     pub struct Seen {
         writes: Arc<Mutex<Vec<String>>>,
         reads: Arc<Mutex<Vec<String>>>,
         refused: Arc<Mutex<Vec<String>>>,
+        mode: Arc<Mutex<Option<Mode>>>,
     }
 
     impl Seen {
+        /// From now on it answers as `mode` says (RF3: away at a Delete, back at a later round).
+        pub fn answers(&self, mode: Mode) {
+            *self.mode.lock().unwrap() = Some(mode);
+        }
+
         /// Each write, in order: "failed 50", "monitor [7] true", "search [7]", else its method and path.
         pub fn writes(&self) -> Vec<String> {
             self.writes.lock().unwrap().clone()
@@ -667,10 +673,11 @@ pub(crate) mod fake {
     /// The fake at a local address, answering as `mode` says, `imports` in its history: its address, and what it is asked.
     pub async fn lidarr(mode: Mode, imports: Vec<Value>) -> (String, Seen) {
         let seen = Seen::default();
+        seen.answers(mode);
         let (s, imports) = (seen.clone(), Arc::new(imports));
         let app = axum::Router::new().fallback(move |method: Method, uri: Uri, headers: HeaderMap, body: Bytes| {
             let (s, imports) = (s.clone(), imports.clone());
-            async move { answer(mode, &s, &imports, &method, &uri, &headers, &body).await }
+            async move { answer(&s, &imports, &method, &uri, &headers, &body).await }
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -678,7 +685,7 @@ pub(crate) mod fake {
         (url, seen)
     }
 
-    async fn answer(mode: Mode, seen: &Seen, imports: &[Value], method: &Method, uri: &Uri, headers: &HeaderMap, body: &[u8]) -> Response {
+    async fn answer(seen: &Seen, imports: &[Value], method: &Method, uri: &Uri, headers: &HeaderMap, body: &[u8]) -> Response {
         let path = uri.path();
         let q: HashMap<String, String> = serde_urlencoded::from_str(uri.query().unwrap_or_default()).unwrap_or_default();
         let sent: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
@@ -692,6 +699,7 @@ pub(crate) mod fake {
             };
             seen.writes.lock().unwrap().push(what);
         }
+        let mode = (*seen.mode.lock().unwrap()).unwrap_or(Mode::Answers);
         match mode {
             Mode::Answers => {}
             Mode::Away => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
