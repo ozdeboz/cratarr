@@ -401,6 +401,7 @@ mod release_type_tests {
             library: None,
             copies: Vec::new(),
             artists: Vec::new(),
+            editions: None,
             release: Default::default(),
         };
         let typed = |mut a: crate::source::Album| {

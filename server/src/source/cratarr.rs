@@ -214,6 +214,7 @@ pub fn card(a: crate::serve::api::Album) -> Album {
         library: None,
         copies: Vec::new(),
         artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
+        editions: None,
         release: a.release,
         id: a.id,
     }
@@ -568,6 +569,7 @@ impl Source for CratarrSource {
                             library: None,
                             copies: vec![copy],
                             artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
+                            editions: None,
                             release: a.release,
                             id: a.id,
                         },

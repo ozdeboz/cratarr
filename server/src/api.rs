@@ -5229,6 +5229,9 @@ async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery
     };
     let page = crate::app::labels::page(app.library.catalogue(), label, more, &crate::app::labels::sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     let mut page = page.ok_or_else(not_a_label)?;
+    // F12.1 (the owner: "One card, 2 editions"): the editions of one album, one row, in each section.
+    crate::app::editions::fold_rows(&app.library, &mut page.had).await;
+    crate::app::editions::fold_rows(&app.library, &mut page.not_had).await;
     if let Some(marks) = request_marks(&app, &serve).await {
         for row in page.had.iter_mut().chain(page.not_had.iter_mut()) {
             row.request = row.record.as_deref().and_then(crate::serve::ids::record_number).and_then(|r| marks.of_record(r));

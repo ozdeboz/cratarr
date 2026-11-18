@@ -358,6 +358,10 @@ pub struct Album {
     /// Its release type (0.9.6): `type`, `type_from`, `secondary`.
     #[serde(flatten, default)]
     pub release: ReleaseType,
+    /// How many editions of one album this card stands for, its own among them (F12.1, the owner: "One card, 2 editions",
+    /// `app::editions`); none: one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editions: Option<u32>,
 }
 
 impl Album {

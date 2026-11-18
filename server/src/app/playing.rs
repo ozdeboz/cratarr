@@ -221,6 +221,10 @@ pub struct AlbumMore {
     /// marked (`sources_of`); a record not had's and an album had's alike.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<SourceOf>,
+    /// Its album's editions (F12.1, the owner: "One card, 2 editions"): each with its tracks and its copies, its own among them, in
+    /// the order the cards show them, each opening its record; none where it has no other.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub editions: Vec<super::editions::Edition>,
 }
 
 // A label as an album's view names it: as every label About shows (F9, `labels::LabelOf`).
@@ -998,6 +1002,14 @@ impl PlayingService {
             }
             _ => None,
         };
+        // Its album's editions (F12.1, the owner: "One card, 2 editions"), each with its tracks and copies.
+        let editions = match crate::serve::instance() {
+            Some(served) if source_id == crate::source::cratarr::KIND.id => {
+                let (lib, id) = (self.lib.clone(), album_id.to_string());
+                tokio::task::spawn_blocking(move || super::editions::of_record(&lib, &served, &id)).await.ok().and_then(Result::ok).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
         Ok(AlbumView {
             source: source_id.to_string(),
             id: album_id.to_string(),
@@ -1011,7 +1023,7 @@ impl PlayingService {
             added: listening.added,
             played: listening.played,
             plays: listening.plays,
-            more: AlbumMore { words, labels, sources, ..AlbumMore::default() },
+            more: AlbumMore { words, labels, sources, editions, ..AlbumMore::default() },
         })
     }
 
@@ -1117,6 +1129,11 @@ impl PlayingService {
             albums.retain(|a| !off(a));
             appears_on.retain(|a| !off(a));
             rows.retain(|r| r.album_id.as_ref().is_none_or(|a| !gone.contains(a)));
+        }
+        // F12.1 (the owner: "One card, 2 editions"): Cratarr's editions of one album, one card.
+        if own {
+            super::editions::fold_albums(&self.lib, &mut albums).await;
+            super::editions::fold_albums(&self.lib, &mut appears_on).await;
         }
         super::classical::tell(source_id, &mut albums).await;
         super::classical::tell(source_id, &mut appears_on).await;

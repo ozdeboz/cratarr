@@ -45,6 +45,7 @@ pub mod home;
 pub mod import;
 pub mod import_files;
 pub mod discover;
+pub mod editions;
 pub mod beyond;
 pub mod labels;
 pub mod excluded_artists;
