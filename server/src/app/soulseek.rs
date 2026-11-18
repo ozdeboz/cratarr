@@ -3585,12 +3585,76 @@ mod tests {
         assert!(matches!(state, RequestState::Wanted { soulseek: Some(Word::Waiting { .. }), .. }), "not fetching 100%: {state:?}");
     }
 
-    /// T8.3: a copy Soulseek placed and a pass read, its folder read since as another record (the files there rows on that record's
-    /// tracks), its own files gone: once the catalogue retires them, its item is let go and its request looked for again, as one
-    /// removed by hand; the other record holds the folder.
+    /// T8.3, rebuilt by RF4 (the review of runs 11 and 12, RB4): a copy Soulseek placed in Incoming and a pass read, then read as
+    /// another record's: retagged, its file rows keep their places and their tracks, and those tracks move on to the record their
+    /// album now is (`assign_records`: a track whose only file sits in another record's album). The placed record, every track of it
+    /// moved on, retires keeping where they lay: its item is let go and its request looked for again, never "fetching 100%"; the
+    /// other record holds the folder. Kept into Music first and retagged there, it is not looked for again (U7's rule). T8.3's first
+    /// shape stays: its own files gone, and new rows on the other record's tracks in the folder, once the catalogue retires them.
     #[test]
     fn a_placed_copy_read_as_another_record_frees_its_item() {
         use super::super::requests::{Holding, RequestState, request_state};
+        use crate::catalogue::{AlbumCopy, identity};
+        for (case, kept) in [("retagged in Incoming", false), ("kept into Music, retagged there", true)] {
+            let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+            let (placed, other) = (cat.record_for_tests("Two Rooms", 2), cat.record_for_tests("Other Shore", 3));
+            // Where the copy lies when it is retagged: Incoming (1), or Music (0) after a Keep; the other record's copy beside it.
+            let folder = if kept { 0 } else { 1 };
+            cat.copy_for_tests(placed, 1);
+            cat.copy_for_tests(other, folder);
+            let rs = [crate::userdata::Request { record: Some(placed), ..asked(1, None) }];
+            let mut k = Kept::default();
+            take_requests(&mut k, &rs, &[of(placed)], &[]);
+            (k.items[0].state, k.items[0].folders, k.items[0].chosen) = (State::Placed, vec![two_tracks("a")], Some(0));
+            let dir = format!("copy-{placed}");
+            if kept {
+                cat.move_files(1, &dir, 0, &dir).unwrap();
+            }
+            // A copy's rows as they lie: each one's path, track, and the track's record.
+            let rows = |record: i64| -> Vec<(String, i64, Option<i64>)> {
+                let db = cat.db_for_tests();
+                let mut st = db.prepare("SELECT f.rel, f.track, t.record FROM files f JOIN tracks t ON t.id = f.track WHERE f.rel LIKE ?1 ORDER BY f.rel").unwrap();
+                let rows: Vec<(String, i64, Option<i64>)> = st.query_map([format!("copy-{record}/%")], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
+                rows
+            };
+            let before = rows(placed);
+            assert!(before.len() == 2 && before.iter().all(|(_, _, r)| *r == Some(placed)), "{case}: {before:?}");
+            // Retagged as the other record's album: one album of its files and the placed copy's, where they lie.
+            let lying: Vec<(String, i64)> = rows(other).into_iter().chain(before.clone()).map(|(rel, track, _)| (rel, track)).collect();
+            let album = AlbumCopy {
+                facts: identity::RecordFacts {
+                    release: None,
+                    artist: identity::fold("Glass Harbour"),
+                    title: identity::fold("Other Shore"),
+                    tracks: (1..=lying.len()).map(|n| identity::Listed::of(&format!("Track {n}"), 200_000)).collect(),
+                },
+                title: "Other Shore".into(),
+                artist: "Glass Harbour".into(),
+                tracks: lying.iter().enumerate().map(|(n, (_, track))| (*track, Some(1), Some(n as u32 + 1))).collect(),
+                files: lying.iter().map(|(rel, _)| (folder, rel.clone())).collect(),
+                folder,
+                ..Default::default()
+            };
+            cat.assign_records(&[album]).unwrap();
+            let after = rows(placed);
+            let places = |rows: &[(String, i64, Option<i64>)]| rows.iter().map(|(rel, track, _)| (rel.clone(), *track)).collect::<Vec<_>>();
+            assert_eq!(places(&after), places(&before), "{case}: the same rows, on the same tracks");
+            assert!(after.iter().all(|(_, _, r)| *r == Some(other)), "{case}: their tracks the other record's now: {after:?}");
+            let read = round(&cat, &mut k, &rs);
+            if kept {
+                assert_eq!(read, [(Holding::None, false)], "{case}: its last copy went from Music");
+                assert_eq!(k.items.iter().map(|i| i.state).collect::<Vec<_>>(), [State::Placed], "{case}: never looked for again");
+                continue;
+            }
+            assert_eq!(read, [(Holding::None, true)], "{case}: its last copy went from Incoming");
+            assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record, i.state)).collect::<Vec<_>>(), [(1, placed, State::Waiting)], "{case}: let go, and looked for again");
+            let words = words_in(&k.items, &[1]);
+            let state = request_state(&rs[0], Holding::None, None, words.get(&1));
+            assert!(matches!(state, RequestState::Wanted { soulseek: Some(Word::Waiting { .. }), .. }), "{case}: not fetching 100%: {state:?}");
+            let theirs = [crate::userdata::Request { record: Some(other), ..asked(2, None) }];
+            assert_eq!(round(&cat, &mut Kept::default(), &theirs), [(Holding::Arrived, false)], "{case}: the other record holds the folder");
+        }
+        // T8.3's first shape.
         let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
         let (placed, other) = (cat.record_for_tests("Two Rooms", 2), cat.record_for_tests("Other Shore", 2));
         cat.copy_for_tests(placed, 1);

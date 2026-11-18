@@ -275,7 +275,8 @@ pub struct ReferenceRow {
 }
 
 /// A file of a record as `Catalogue::went_of` reads it (U7, T8): its catalogue folder, and when it came there, went (`gone_at`), or
-/// went into a trash (its token's time); for a track retired since, where its last file lay and when that went, as kept then.
+/// went into a trash (its token's time); for a track retired since, where its last file lay and when that went, as kept then; for a
+/// record retired as its tracks moved on to other records (RF4), each folder their files lay in, gone when they moved on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Went {
     pub folder: i64,
@@ -1604,7 +1605,9 @@ impl Catalogue {
     /// How these records' files went (U7, T8): each file of their tracks, where it lies and when it came there, went (`gone_at`) or
     /// went into a trash (its token's time); and each of their tracks retired since, where its last file lay and when that went, as
     /// kept as it retired (`was_folder`, `was_gone`; else when it retired). A file gone a while holds its record for its day, then
-    /// retires: what is read after is the track's. By record; a record with neither is not in the answer. On a reader. Blocking.
+    /// retires: what is read after is the track's. A record retired as its tracks moved on to other records (a retag: its files are
+    /// another record's), each folder they lay in, gone then (RF4: `records.was_folders`, `was_gone`). By record; a record with none
+    /// of these is not in the answer. On a reader. Blocking.
     pub fn went_of(&self, records: &[i64]) -> Result<std::collections::HashMap<i64, Vec<Went>>> {
         let read = |db: &Connection| -> Result<std::collections::HashMap<i64, Vec<Went>>> {
             let mut out: std::collections::HashMap<i64, Vec<Went>> = std::collections::HashMap::new();
@@ -1621,6 +1624,13 @@ impl Catalogue {
             }
             let mut st = db.prepare(&format!(
                 "SELECT record, was_folder, COALESCE(was_gone, retired_at) FROM tracks WHERE record IN ({ids}) AND retired_at IS NOT NULL AND was_folder IS NOT NULL"
+            ))?;
+            for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
+                let (record, folder, at) = row?;
+                out.entry(record).or_default().push(Went { folder, came: None, gone: Some(at), trashed: None });
+            }
+            let mut st = db.prepare(&format!(
+                "SELECT r.id, j.value, r.was_gone FROM records r, json_each(r.was_folders) j WHERE r.id IN ({ids}) AND r.retired_at IS NOT NULL AND r.was_gone IS NOT NULL"
             ))?;
             for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))? {
                 let (record, folder, at) = row?;

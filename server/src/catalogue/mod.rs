@@ -557,7 +557,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 44] = [
+const ADDED_COLUMNS: [(&str, &str); 46] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -643,6 +643,11 @@ const ADDED_COLUMNS: [(&str, &str); 44] = [
     // `Catalogue::keep_types`: what classes a had record for the had rule's names clause (`records::classes_of`). NULL until a
     // build typed it.
     ("records", "typed TEXT"),
+    // RF4 (the review of runs 11 and 12, RB4): a record retired as every track of it moved on to other records (its files retagged, or
+    // found to be another record's: the same rows, their tracks another record's now), where those tracks' files lay (a JSON list of
+    // catalogue folders) and when they moved on: what `Catalogue::went_of` reads for it. Written at that retirement only.
+    ("records", "was_folders TEXT"),
+    ("records", "was_gone INTEGER"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -3015,11 +3020,19 @@ impl Catalogue {
             [now],
         )?;
         // Every track moved on, none retired: nothing in the rows now tells this record from one not had, so it goes here,
-        // while the pass still knows it had them.
+        // while the pass still knows it had them. Where their files lay goes with it (RF4): those rows are another record's now, and
+        // a request of it reads where its copy went from this (`went_of`).
+        let mut lay_in: HashMap<i64, std::collections::BTreeSet<i64>> = HashMap::new();
+        for ((track, ..), (folder, _)) in albums.iter().flat_map(|a| a.tracks.iter().zip(&a.files)) {
+            if let Some(record) = held.record.get(track).filter(|r| left.contains(*r)) {
+                lay_in.entry(*record).or_default().insert(*folder);
+            }
+        }
         for record in &left {
+            let lay = lay_in.get(record).map(serde_json::to_string).transpose()?;
             tx.execute(
-                "UPDATE records SET retired_at = ?2 WHERE id = ?1 AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)",
-                params![record, now],
+                "UPDATE records SET retired_at = ?2, was_folders = ?3, was_gone = ?2 WHERE id = ?1 AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)",
+                params![record, now, lay],
             )?;
         }
         Ok((given, records))
@@ -6323,6 +6336,27 @@ mod tests {
         assert_ne!(record_of(&cat, 1), Some(old));
         let at: i64 = cat.db().query_row("SELECT retired_at FROM records WHERE id = ?1", [old], |r| r.get(0)).unwrap();
         assert_eq!(at, 5);
+    }
+
+    /// RF4 (the review of runs 11 and 12, RB4): a record every track of which moves on to another record's album (the same file rows,
+    /// retagged) retires keeping where their files lay, gone when they moved on: what `went_of` reads for it. A record living on
+    /// keeps nothing of the kind.
+    #[test]
+    fn a_record_whose_tracks_moved_on_keeps_where_they_lay() {
+        let cat = tracks(5);
+        let lying = |title: &str, dir: &str, ids: &[i64]| AlbumCopy { files: ids.iter().map(|t| (1, format!("{dir}/{t:02}.flac"))).collect(), folder: 1, ..album(title, ids) };
+        cat.assign_records(&[lying("First", "First", &[1, 2]), lying("Second", "Second", &[3, 4, 5])]).unwrap();
+        let (first, second) = (record_of(&cat, 1).unwrap(), record_of(&cat, 3).unwrap());
+        // Retagged: First's files, where they lie, are of Second's album now.
+        let mut retagged = lying("Second", "Second", &[3, 4, 5, 1, 2]);
+        retagged.files[3..].clone_from_slice(&[(1, "First/01.flac".to_string()), (1, "First/02.flac".to_string())]);
+        cat.assign_records(&[retagged]).unwrap();
+        assert_eq!((record_of(&cat, 1), record_of(&cat, 2)), (Some(second), Some(second)), "its tracks moved on");
+        assert!(record_retired(&cat, first) && !record_retired(&cat, second));
+        let at: i64 = cat.db().query_row("SELECT retired_at FROM records WHERE id = ?1", [first], |r| r.get(0)).unwrap();
+        let went = cat.went_of(&[first, second]).unwrap();
+        assert_eq!(went.get(&first).cloned(), Some(vec![records::Went { folder: 1, came: None, gone: Some(at), trashed: None }]), "where they lay, gone as they moved on");
+        assert!(!went.contains_key(&second), "a record living on: nothing kept");
     }
 
     /// `tracks.record` is for life but for this: a track whose only file went to another record's album.
