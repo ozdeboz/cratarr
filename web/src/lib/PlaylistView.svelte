@@ -106,7 +106,7 @@
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import { deleteServerPlaylist, isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
-  import { albumRowSub, notHadPage, type NotHadAction } from './recordNotHad';
+  import { albumRowSub, emptyLine, lookAgainAfter, notHadPage, type NotHadAction } from './recordNotHad';
   import Notice from './Notice.svelte';
   import { artistTitle, movedTo } from './artistIds';
   import { labelCovers, labelOf, type LabelPageOf } from './labelPage';
@@ -274,7 +274,7 @@
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   // The record's libraries, as dots before its details (0.9.3): where it lies, beside its year.
   const albumDots = $derived(album ? libraryDots(album.source, { id: album.id }) : []);
-  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'was_until' | 'bandcamp'> & { kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'was_until' | 'bandcamp' | 'looking' | 'no_list'> & { kbps: number | null } | null>(null);
   /** A record not had (C54, lib/recordNotHad): its page from the catalogue, of an album the library has no copy of. */
   const notHad = $derived(!!album && !!albumHead?.not_had);
   /** What its page shows of it: no heart or Resume, its header's Want or Requested and its preview's play, its lines. */
@@ -442,14 +442,14 @@
     }
   }
 
-  /** A record not had asked again while its list is read: this often, at most this many times for one opening. */
-  const LOOK_MS = 4000;
-  const LOOK_TRIES = 8;
+  /** A record not had asked again while the server reads its list (F1.12, lib/recordNotHad): soon at first, then seldom,
+   *  for as long as its answer says it reads and the page shows it; one ask waiting at a time. */
   let lookedFor = { subject: '', n: 0 };
-  function lookAgain(subject: string) {
-    if (lookedFor.subject !== subject) lookedFor = { subject, n: 0 };
-    if (lookedFor.n++ >= LOOK_TRIES) return;
-    setTimeout(() => id === subject && saved++, LOOK_MS);
+  let lookTimer: ReturnType<typeof setTimeout> | undefined;
+  function lookAgain(subject: string, reading: boolean) {
+    clearTimeout(lookTimer);
+    if (lookedFor.subject !== subject || !reading) lookedFor = { subject, n: 0 };
+    if (reading) lookTimer = setTimeout(() => id === subject && saved++, lookAgainAfter(lookedFor.n++));
   }
 
   // The rows: asked for when the playlist is viewed and again when it changes (its counts, from the shell's state).
@@ -518,9 +518,9 @@
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
-              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, was_until: r.was_until, bandcamp: r.bandcamp };
-            // A record not had whose list is being read (C54): asked again a little later, a few times, until its rows are in.
-            if (want === id && r.not_had && r.looking) lookAgain(want);
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, was_until: r.was_until, bandcamp: r.bandcamp, looking: r.looking, no_list: r.no_list };
+            // A record not had whose list is being read (C54, F1): asked again a little later, until the server has read it.
+            if (want === id && r.not_had) lookAgain(want, !!r.looking);
             return { ...r, total: r.rows.length };
           })
         : lb
@@ -2751,7 +2751,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if nothing}
         <NothingPopover anchor={nothing.anchor} said={nothing.said} chips={nothing.chips} onclearall={nothing.clearAll} more={nothing.more} />
       {:else}
-        <p class="empty">No tracks yet.</p>
+        <!-- A record not had says why it has none, or that its list is being read (F1, lib/recordNotHad). -->
+        <p class="empty">{emptyLine(notHad && albumHead ? albumHead : {})}</p>
       {/if}
     {:else if nothing && shown && !shown.length}
       <!-- What it holds, every track kept out by its words or its filter: why, at what did it (decision 0095). -->

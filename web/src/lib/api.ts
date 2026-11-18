@@ -2546,6 +2546,9 @@ export type KindWords = { kind: WordKind; hand: boolean; words: { word: string; 
 export type RecordWords = { kinds: KindWords[]; tracks: { id: string; kinds: KindWords[] }[] };
 /** A word's crate's word: its one spelling and every source that says it anywhere (its menu's header). */
 export type WordOf = { kind: WordKind; word: string; sources: WordSource[] };
+/** What a source said of a record not had's list (F1): switched off; held back (Bandcamp's bot check, `until` its end,
+ *  epoch seconds); no answer; or no list there. */
+export type NoList = { source: 'musicbrainz' | 'discogs' | 'bandcamp'; said: 'off' | 'held' | 'unanswered' | 'none'; until?: number };
 export type AlbumView = {
   /** As a listed album's (decision 0092). */
   files_state?: FilesState | null;
@@ -2580,6 +2583,9 @@ export type AlbumView = {
   not_had?: boolean;
   /** Its list is being read: none kept yet, its rows come when the page asks again. */
   looking?: boolean;
+  /** Why a record not had has no rows (F1): what each source it has a reference of said, in counting order; empty where
+   *  it has none to read one from. Absent while it is read, where it has rows, and on a record had. */
+  no_list?: NoList[];
   /** The record that has it by the one had rule, where it is another (`al-<n>`). */
   have?: string;
   /** The account's newest request of it, whatever its status, as the Requests page shows it. */

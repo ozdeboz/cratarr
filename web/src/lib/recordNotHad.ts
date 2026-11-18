@@ -1,7 +1,9 @@
 // A record not had (C54, W9): its page from the catalogue, of an album the library has no copy of. Its rows are its list's,
 // none of them playable; no heart, no Resume, nothing of a copy's. Want is in its header, or Requested while its request is
 // open; its Bandcamp preview plays from there where it has one (OQ14). One the library has through another record (`have`)
-// says so, and opens that one, with no Want. A retired one says until when it was in Music (OQ16). Pure.
+// says so, and opens that one, with no Want. A retired one says until when it was in Music (OQ16). One with no rows says
+// why (F1), and is asked again while the server reads its list. Pure.
+import type { NoList } from './api';
 import type { EntryId } from './menuTable';
 import { requestOpen, standing, type Asked } from './requestState';
 import { when } from './settings/when';
@@ -41,6 +43,38 @@ export function notHadPage(v: NotHad, said: (t: number) => string = when): NotHa
 /** Its menu: only what needs no copy of it (the album menu's own entries; Want is in its header). */
 export const NOT_HAD_ENTRIES: readonly EntryId[] = ['view', 'goArtist', 'share', 'webSearch', 'geniusSearch'];
 export const offeredNotHad = (e: EntryId) => NOT_HAD_ENTRIES.includes(e);
+
+/** The sources a record's list is read from, in the server's counting order (MusicBrainz, Discogs, Bandcamp), by name. */
+const SOURCES: Record<NoList['source'], string> = { musicbrainz: 'MusicBrainz', discogs: 'Discogs', bandcamp: 'Bandcamp' };
+const COUNTING_ORDER = Object.keys(SOURCES) as NoList['source'][];
+/** "A", "A and B", "A, B and C". */
+const names = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/** An empty album's line (F1): a record not had says why it has no tracks, from its view's `no_list`: its sources switched
+ *  off, held back until when, unanswered, then with none, each part's sources in counting order; "Reading its tracklist…"
+ *  while the server reads it. Anything else with no rows: "No tracks yet." as ever. */
+export function emptyLine(v: { not_had?: boolean; looking?: boolean; no_list?: NoList[] }, said: (t: number) => string = when): string {
+  if (!v.not_had) return 'No tracks yet.';
+  if (v.looking) return 'Reading its tracklist…';
+  const list = [...(v.no_list ?? [])].sort((a, b) => COUNTING_ORDER.indexOf(a.source) - COUNTING_ORDER.indexOf(b.source));
+  if (!list.length) return 'No tracklist: it has no reference to read one from';
+  const saying = (s: NoList['said']) => list.filter((x) => x.said === s);
+  const part = (s: NoList['said'], one: string, more: string) => {
+    const xs = saying(s).map((x) => SOURCES[x.source]);
+    return xs.length ? [`${names(xs)} ${xs.length > 1 ? more : one}`] : [];
+  };
+  const parts = [
+    ...part('off', 'is switched off', 'are switched off'),
+    ...saying('held').map((x) => `${SOURCES[x.source]} is held back${x.until ? ` until ${said(x.until)}` : ''}`),
+    ...part('unanswered', "didn't answer", "didn't answer"),
+    ...part('none', 'has none', 'have none'),
+  ];
+  return `No tracklist: ${parts.join('; ')}`;
+}
+
+/** How long a record not had waits to be asked again while the server reads its list (n: asks made for this opening):
+ *  soon at first, then seldom, with no last ask (the read is cut at the server's own limit, F1.9). */
+export const lookAgainAfter = (n: number): number => (n < 8 ? 4000 : 30000);
 
 /** A row's second line on an album's page: its own artist where it is another than the album's; a file gone, said so, but
  *  never on a record not had, whose rows have no files to lose. */
