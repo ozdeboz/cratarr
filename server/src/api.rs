@@ -5262,8 +5262,8 @@ async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Res
 }
 
 /// A label About shows, opened (F9): `{ source: "discogs" | "musicbrainz", id, name }` answers `{ id: "la-<n>" }`, the label that
-/// holds that reference, else one made now with it (`labels::open_label`): only by a reference an album's labels were kept with, by
-/// that name, or by an administrator. Never by a name alone: no reference is refused (409); one nothing kept names, for one who is
+/// holds that reference, else the one label of its name given it, or one made now with it (`labels::open_label`): only by a reference
+/// an album's labels were kept with, by that name, or by an administrator. Never by a name alone: no reference is refused (409); one nothing kept names, for one who is
 /// no administrator, too (403).
 async fn open_label(ctx: Ctx, Json(b): Json<crate::app::labels::LabelOpened>) -> Result<Json<serde_json::Value>, ApiError> {
     use crate::app::labels::LabelOpen;

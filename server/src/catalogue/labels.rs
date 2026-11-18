@@ -2,9 +2,10 @@
 //! row stays when nothing names the label any more, so it comes back to its id. Its records are `record_labels`, written by
 //! the record pass from what the files name, and by a row of its page once opened (C56).
 //!
-//! A label About shows by its Discogs id or its MBID (F9) is the label holding that reference, else one made with it when it is
-//! opened (`open_label`), by the reference alone: so two labels may share a name, as two artists may, and a label known by its
-//! name alone is the one of its name only where exactly one has it (`labels_shown`, X8).
+//! A label About shows by its Discogs id or its MBID (F9) is the label holding that reference, else, when it is opened
+//! (`open_label`), the one label of its name that holds none of that source's references (PB3: as an outside row joins the record the
+//! house has of its names, F11.2), else one made with it: so two labels may share a name, as two artists may (two ids at one source,
+//! or X8), and a label known by its name alone is the one of its name only where exactly one has it (`labels_shown`, X8).
 //!
 //! A label's lists at MusicBrainz and Discogs are a cache, not records (C56, Q33): their rows are kept in `label_rows` thirty days
 //! from when they were read, then let go of by RT01's daily pass, and a record is made of one only when it is opened.
@@ -142,6 +143,23 @@ fn holding_in(db: &Connection, r: &Ref) -> Result<Option<i64>> {
     Ok(None)
 }
 
+/// The one label of a name (X8: exactly one has it; none where none, or several, do). Blocking.
+fn one_of_name_in(db: &Connection, name: &str) -> Result<Option<i64>> {
+    let of_name: Vec<i64> = db.prepare_cached("SELECT id FROM labels WHERE key = ?1 ORDER BY id LIMIT 2")?.query_map([key(name.trim())], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(match of_name[..] {
+        [one] => Some(one),
+        _ => None,
+    })
+}
+
+/// The label a reference no label holds joins when it is opened (PB3, the review of preview 1's fixes): the one label of its name
+/// (X8), where it holds none of that source's references (one holding another id there is another label). Blocking.
+fn joined_by_name_in(db: &Connection, r: &Ref, name: &str) -> Result<Option<i64>> {
+    let Some(one) = one_of_name_in(db, name)? else { return Ok(None) };
+    let holds = db.prepare_cached("SELECT 1 FROM \"references\" WHERE subject = ?1 AND source = ?2 AND kind = ?3")?.exists(params![ids::label(one), r.source, r.kind])?;
+    Ok((!holds).then_some(one))
+}
+
 impl Catalogue {
     /// The label a name is, given an id if it has none. Blocking.
     #[cfg_attr(not(test), allow(dead_code))] // a label's listing (C56)
@@ -257,14 +275,7 @@ impl Catalogue {
                 out.push(match r {
                     Some(r) => holding_in(db, r)?,
                     None if name.trim().is_empty() => None,
-                    None => {
-                        let of_name: Vec<i64> =
-                            db.prepare_cached("SELECT id FROM labels WHERE key = ?1 ORDER BY id LIMIT 2")?.query_map([key(name.trim())], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
-                        match of_name[..] {
-                            [one] => Some(one),
-                            _ => None,
-                        }
-                    }
+                    None => one_of_name_in(db, name)?,
                 });
             }
             Ok(out)
@@ -275,8 +286,9 @@ impl Catalogue {
         }
     }
 
-    /// The label a label's reference names (F9: one About shows, opened): the one that holds it, else one made now with it, named
-    /// `name`, by the reference alone, never a label of its name; in one transaction, so two opens at once make one. Blocking.
+    /// The label a label's reference names (F9: one About shows, opened): the one that holds it; else the one label of its name that
+    /// holds none of that source's (`joined_by_name_in`, PB3: one real label, one page), given it; else one made now with it, named
+    /// `name`. In one transaction, so two opens at once make or join one. Blocking.
     pub fn open_label(&self, r: &Ref, name: &str) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -284,7 +296,10 @@ impl Catalogue {
             return Ok(id);
         }
         let at = now();
-        let id = give_label(&tx, &key(name.trim()), name.trim(), at)?;
+        let id = match joined_by_name_in(&tx, r, name)? {
+            Some(one) => one,
+            None => give_label(&tx, &key(name.trim()), name.trim(), at)?,
+        };
         if !super::records::put_reference(&tx, &ids::label(id), r, "link", at, false)?.kept() {
             anyhow::bail!("Another holds {} {}.", r.source, r.value);
         }

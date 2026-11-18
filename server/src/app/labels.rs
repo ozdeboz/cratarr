@@ -15,8 +15,9 @@
 //!   album is never among the rest for want of a reference. While a list is read, `reading` names its source; after, `no_list`
 //!   says which could not be had, in F1's words.
 //! - **Labels About shows (F9):** every one opens its page where it has a reference (`LabelOf`): the label holding its Discogs id
-//!   or MBID, else one made with it at the tap (`open_label`), never by a name alone; one known by its name alone opens the one
-//!   label of that name, where exactly one has it (X8).
+//!   or MBID, else at the tap (`open_label`) the one label of its name that holds none of that source's (PB3: one real label, one
+//!   page), else one made with it; never by a name alone; one known by its name alone opens the one label of that name, where exactly
+//!   one has it (X8).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -710,7 +711,7 @@ pub struct LabelOpened {
 /// What a label opened came to (F9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelOpen {
-    /// The label: found by its reference, or made now with it.
+    /// The label: found by its reference, else the one label of its name given it, else made now with it.
     Opened(i64),
     /// No reference a label is opened by (Discogs' id, a number; MusicBrainz's MBID): a name alone opens none.
     NoReference,
@@ -729,9 +730,9 @@ fn label_reference(source: &str, id: &str) -> Option<Ref> {
     }
 }
 
-/// A label About shows, opened (F9): the label that holds its reference, found by anyone; else one made now with it
-/// (`Catalogue::open_label`), only where the reference is one an album's labels were kept with (`named`: its name then), by that
-/// name, or by an administrator, by the name given; never by a name alone. Blocking.
+/// A label About shows, opened (F9): the label that holds its reference, found by anyone; else the one label of its name given it, or
+/// one made now with it (`Catalogue::open_label`), only where the reference is one an album's labels were kept with (`named`: its name
+/// then), by that name, or by an administrator, by the name given; never by a name alone. Blocking.
 pub fn open_label(cat: &Catalogue, o: &LabelOpened, named: impl FnOnce(&Ref) -> Result<Option<String>>, administering: bool) -> Result<LabelOpen> {
     let Some(r) = label_reference(&o.source, &o.id) else { return Ok(LabelOpen::NoReference) };
     if let Some(Some(id)) = cat.labels_shown(&[(Some(r.clone()), String::new())])?.first() {
@@ -1135,16 +1136,17 @@ mod tests {
     }
 
     /// F9.1 (b), (e): a label About shows by its Discogs id, or by its MBID, opens the label found by that reference, else one made now
-    /// with it, by the name it was kept with: opened twice, or by two at once, one label; never the label of its name (one the files
+    /// with it, by the name it was kept with: opened twice, or by two at once, one label; never a label of another name (one the files
     /// name, holding no reference); found by anyone, by any name. A later read of About names it by its id (nothing left to open); a
-    /// later read of its list reads it at that source by that reference, finding nothing by its name.
+    /// later read of its list reads it at that source by that reference, finding nothing by its name. (The one label of its name it
+    /// joins: `a_label_opened_by_its_reference_is_the_one_label_of_its_name`, RG9.)
     #[tokio::test]
     async fn a_label_is_found_or_made_by_its_reference_once() {
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
-        let files = cat.label_for("Low Tide Records").unwrap();
+        let files = cat.label_for("Quiet Pier").unwrap();
         let by_discogs = LabelOpened { source: "discogs".into(), id: "23528".into(), name: "Low Tide Records".into() };
         let LabelOpen::Opened(made) = open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap() else { panic!("not opened") };
-        assert_ne!(made, files, "by its reference alone: the label of its name is not it");
+        assert_ne!(made, files, "by its reference alone: a label of another name is not it");
         assert_eq!(open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(made), "opened again: the same label");
         let anyone = LabelOpened { id: " 23528 ".into(), name: "Something Else".into(), ..by_discogs.clone() };
         assert_eq!(open_label(&cat, &anyone, |_| Ok(None), false).unwrap(), LabelOpen::Opened(made), "found by its reference, by anyone, by any name");
@@ -1152,7 +1154,7 @@ mod tests {
         assert_eq!(cat.label(made).unwrap().map(|l| l.name), Some("Low Tide Records".to_string()));
         let refs = |id: i64| cat.references_of(&ids::label(id)).unwrap().into_iter().map(|(r, _)| r).collect::<Vec<_>>();
         assert_eq!(refs(made), [Ref::new("discogs", "label", "23528")]);
-        assert!(refs(files).is_empty(), "the label of its name is given nothing");
+        assert!(refs(files).is_empty(), "a label of another name is given nothing");
         // MusicBrainz's MBID, as MusicBrainz writes it.
         let by_mbid = LabelOpened { source: "musicbrainz".into(), id: LABEL_MBID.to_uppercase(), name: "Kite Records".into() };
         let LabelOpen::Opened(kite) = open_label(&cat, &by_mbid, named_as("Kite Records"), false).unwrap() else { panic!("not opened") };
@@ -1227,14 +1229,77 @@ mod tests {
         let old = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: None }];
         let at_discogs = |labels: &[crate::app::discogs::Label]| serde_json::to_value(about(&cat, labels, &[]).unwrap()).unwrap();
         assert_eq!(at_discogs(&old), serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012", "id": ids::label(low) }]), "kept with no id: by its name");
-        // (d) A second label of the name, made by its reference: the name opens neither.
-        let second = cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records").unwrap();
+        // (d) A second label of the name, made by its reference, the files' label holding another Discogs id (RG9: by the first, the
+        // files' label was joined): the name opens neither.
+        assert_eq!(cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records").unwrap(), low, "the one label of its name");
+        let second = cat.open_label(&Ref::new("discogs", "label", "777"), "Low Tide Records").unwrap();
         assert_ne!(second, low);
         assert_eq!(text("Low Tide Records"), serde_json::json!([{ "name": "Low Tide Records" }]), "(d) two labels of its name: text");
         assert_eq!(at_discogs(&old), serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012" }]));
         let self_released = [crate::app::discogs::Label { name: "Not On Label (Kite Theory Self-released)".into(), catno: None, id: Some(1818) }];
         assert_eq!(at_discogs(&self_released), serde_json::json!([{ "name": "Not On Label (Kite Theory Self-released)" }]), "no label: text");
         assert_eq!(labels_kept(&cat), 2, "nothing made by showing");
+    }
+
+    /// RG9 (PB3, the review of preview 1's fixes): a label opened by its Discogs id or its MBID that no label holds is the one label
+    /// of its name, where exactly one has it (X8) and it holds none of that source's references: it is given the reference, as an
+    /// outside row joins the record the house has of its names (F11.2). One real label never gets two pages: the files' label keeps
+    /// its albums and takes the Discogs id; a later About names it by that id, a name-only chip of its name (a Bandcamp album's) still
+    /// opens it, and a later read of its page reads Discogs' list by that id. Where the one label of its name holds another id of that
+    /// source, a label is made by the reference alone; where two labels have the name, it joins neither; never a second label for one
+    /// reference.
+    #[tokio::test]
+    async fn a_label_opened_by_its_reference_is_the_one_label_of_its_name() {
+        const MBID_2: &str = "00000000-0000-4000-8000-000000000569";
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let refs = |id: i64| cat.references_of(&ids::label(id)).unwrap().into_iter().map(|(r, _)| r).collect::<Vec<_>>();
+        // The files name Low Tide Records on an album: its label, with no reference yet.
+        let files = cat.label_for("Low Tide Records").unwrap();
+        let record = cat.record_for_tests("Night Walks", 2);
+        cat.tie_label(record, files, "LTR-012").unwrap();
+        // Its Discogs id, from a record not had's About: the files' label, given the id.
+        let by_discogs = LabelOpened { source: "discogs".into(), id: "23528".into(), name: "low tide records".into() };
+        assert_eq!(open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(files), "the one label of its name");
+        assert_eq!(refs(files), [Ref::new("discogs", "label", "23528")], "the files' label keeps the Discogs id");
+        assert_eq!(cat.label_records(files).unwrap(), [(record, "LTR-012".to_string())], "its page holds the files' albums");
+        assert_eq!(cat.label(files).unwrap().map(|l| l.name), Some("Low Tide Records".to_string()), "its name as it was");
+        assert_eq!(labels_kept(&cat), 1, "one real label, one page");
+        assert_eq!(open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(files), "opened again: the same");
+        // A later About names it by its id; a name-only chip of its name still opens it.
+        let at_discogs = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528) }];
+        assert_eq!(
+            serde_json::to_value(about(&cat, &at_discogs, &[]).unwrap()).unwrap(),
+            serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012", "id": ids::label(files) }])
+        );
+        assert_eq!(serde_json::to_value(of_text(&cat, "Low Tide Records").unwrap()).unwrap(), serde_json::json!([{ "name": "Low Tide Records", "id": ids::label(files) }]));
+        // A later read of its page: Discogs' list by that id, nothing found by its name.
+        let (musicbrainz, discogs) = (Asking::new("musicbrainz"), Asking::new("discogs"));
+        let sources: Vec<Arc<dyn LabelList>> = vec![musicbrainz, discogs.clone()];
+        let shown = settled(&cat, files, None, &sources).await;
+        assert_eq!(discogs.asked(), (vec!["23528".to_string()], 0), "Discogs' list read by its id");
+        assert_eq!(shown.discogs.as_deref(), Some("23528"));
+        // By its MBID: the one label of its name, which holds none of MusicBrainz's, given it beside its Discogs id.
+        let kite = cat.label_for("Kite Records").unwrap();
+        let by_mbid = LabelOpened { source: "musicbrainz".into(), id: LABEL_MBID.to_uppercase(), name: "Kite Records".into() };
+        assert_eq!(open_label(&cat, &by_mbid, named_as("Kite Records"), false).unwrap(), LabelOpen::Opened(kite));
+        let kite_discogs = LabelOpened { source: "discogs".into(), id: "4401".into(), name: "Kite Records".into() };
+        assert_eq!(open_label(&cat, &kite_discogs, named_as("Kite Records"), false).unwrap(), LabelOpen::Opened(kite));
+        assert_eq!(refs(kite), [Ref::new("discogs", "label", "4401"), Ref::new("musicbrainz", "label", LABEL_MBID)]);
+        assert_eq!(labels_kept(&cat), 2);
+        // Another Discogs id of Low Tide Records' name: the one of its name holds another of Discogs', so it is made by its reference.
+        let other = LabelOpened { source: "discogs".into(), id: "777".into(), name: "Low Tide Records".into() };
+        let LabelOpen::Opened(second) = open_label(&cat, &other, named_as("Low Tide Records"), false).unwrap() else { panic!("not opened") };
+        assert_ne!(second, files, "a label holding another id at that source is another label");
+        assert_eq!(open_label(&cat, &other, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(second), "never a second label for one reference");
+        assert_eq!((refs(files), refs(second)), (vec![Ref::new("discogs", "label", "23528")], vec![Ref::new("discogs", "label", "777")]));
+        assert_eq!(labels_kept(&cat), 3);
+        // Two labels of its name now (X8): its MBID joins neither, and its name opens neither.
+        let x8 = LabelOpened { source: "musicbrainz".into(), id: MBID_2.into(), name: "Low Tide Records".into() };
+        let LabelOpen::Opened(third) = open_label(&cat, &x8, named_as("Low Tide Records"), false).unwrap() else { panic!("not opened") };
+        assert!(third != files && third != second, "X8: a name two labels have joins neither");
+        assert_eq!((refs(files).len(), refs(second).len()), (1, 1), "each keeps its own");
+        assert_eq!(labels_kept(&cat), 4);
+        assert_eq!(serde_json::to_value(of_text(&cat, "Low Tide Records").unwrap()).unwrap(), serde_json::json!([{ "name": "Low Tide Records" }]));
     }
 
     // ---- F10 (preview 1's fix batch): a label page shows what the house has apart from what it doesn't
