@@ -16,6 +16,7 @@ import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk
 import type { PlaylistOp } from './playlistOps';
 import type { ChangesAnswer } from './changeLog';
 import type { RequestState } from './requestState';
+import type { Floor, Room } from './room';
 import { artistAsk } from './artistIds';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
@@ -1406,6 +1407,8 @@ export type Me = {
   app_password?: boolean;
   devices?: OwnDevice[];
   sessions?: UserSession[];
+  /** Their room (AL01): none for an administrator, or where it could not be read. */
+  room?: Room | null;
 };
 export const getMe = () => quietly<Me>('/api/me');
 /** A preference kept on the account (decision 0101 point 14, lib/accountPrefs): its value, and when it was changed
@@ -1459,7 +1462,8 @@ export const setAppPassword = (current: string, password: string) =>
   request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current, password }) });
 /** Every user, for the administrators' Users panel: their profile, permissions, devices, sign-ins. `directory`: an
  *  account from the directory (its name and role set there); else Cratarr's own (decision 0051, amended 2026-10-19). */
-export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[]; own_library?: string | null };
+/** `room`: theirs (AL01), none for an administrator or where it could not be read. */
+export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[]; own_library?: string | null; room?: Room | null };
 export const getUsers = () => request<{ users: User[] }>('/api/users').then((r) => r.users);
 const putJson = (url: string, body: unknown) => request<void>(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const userUrl = (name: string, what: string) => `/api/users/${encodeURIComponent(name)}/${what}`;
@@ -1469,6 +1473,8 @@ export const createUser = (name: string, password: string, admin: boolean) => po
 export const setUserRole = (name: string, admin: boolean) => putJson(userUrl(name, 'role'), { admin });
 /** A Cratarr account's new password, set by an administrator; its other sign-ins end. */
 export const setUserPassword = (name: string, password: string) => putJson(userUrl(name, 'password'), { password });
+/** A user's room in GB (AL01, OQ-R5: decimals taken, kept in bytes), set by an administrator. */
+export const setUserRoom = (name: string, gb: number) => putJson(userUrl(name, 'room'), { gb });
 /** A Cratarr account switched off (its data kept, its sign-ins ended) or on again. */
 export const setUserActive = (name: string, active: boolean) => putJson(userUrl(name, 'active'), { active });
 /** One's own password, for a Cratarr account (it is its OpenSubsonic one too). */
@@ -1584,6 +1590,11 @@ export const setSlskd = (s: { url: string; key?: string; folder: string }) =>
 /** Switched on or off, the key kept (0.9.8: off, slskd is asked nothing). */
 export const setSlskdEnabled = (enabled: boolean) =>
   request<SlskdSetting>('/api/settings/slskd', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+/** The disk floor (AL03; administrators'), as just read against the disks users' music lands on. */
+export const getFloor = () => request<Floor>('/api/settings/floor');
+/** The floor set, in GB from 0: the answer is the floor read again. */
+export const setFloor = (gb: number) =>
+  request<Floor>('/api/settings/floor', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gb }) });
 /** The server's AcoustID key (0.9.8: single-track replacement fingerprints what it fetched): set or not, never sent
  *  back; an empty one takes it away. */
 export type AcoustidSetting = { set: boolean };
@@ -2347,8 +2358,8 @@ export type AlbumRequest = {
   year: number | null;
   cover: string | null;
   at: number;
-  /** `rejected`: its arrival was deleted (W4). */
-  status: 'pending' | 'approved' | 'declined' | 'cancelled' | 'rejected';
+  /** `rejected`: its arrival was deleted (W4); `delivered`: done for its asker, and closed (AL02.8). */
+  status: 'pending' | 'approved' | 'declined' | 'cancelled' | 'rejected' | 'delivered';
   reason: string | null;
   decided_by: string | null;
   decided_at: number | null;

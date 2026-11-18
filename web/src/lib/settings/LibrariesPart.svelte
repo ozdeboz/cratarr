@@ -1,12 +1,15 @@
 <script lang="ts">
   // Libraries: each server library (Cratarr's own: each folder, decision 0044) a row with its use and where it is;
   // its own page behind it (`thing`: `lib:<server>:<library>`) with its use and, for a used one, its quality limit
-  // and dot (decision 0034); Music's names, how long deleted records are kept, the catalogue and tag splitting (its own
-  // page, `tags`). Saved as they change (the owner, 2026-11-02: no Unsaved changes bar).
+  // and dot (decision 0034); Music's names, how long deleted records are kept, the disk floor (AL03), the catalogue and tag
+  // splitting (its own page, `tags`). Saved as they change (the owner, 2026-11-02: no Unsaved changes bar).
   import ChoiceRow from './ChoiceRow.svelte';
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
   import { KIND_NAMES, readWords, words } from '../words.svelte';
   import { folderStatus, getCatalogue, getUsers, type Fetcher, type FolderStatus, type CatalogueKind, type ServerLibrary } from '../api';
+  import { floor, loadFloor, saveFloor } from '../floor.svelte';
+  import { reach } from '../reach.svelte';
+  import { floorRow } from '../room';
   import { ownMusicOff, withOwnMusic } from '../ownMusic';
   import MenuSheet from '../MenuSheet.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
@@ -212,6 +215,11 @@
     "Cratarr's own analysis of the music: waveforms, tempo, loudness and the visuals' signals.\n\nNew music: what comes in, once half the library has an analysis (the first pass made elsewhere, or all of it here). All: everything, here. Off: none here.";
   const BEAT_THIS_MORE =
     'Beats and downbeats as the Beat This! model hears them, for the visuals: heard here as new music comes in (about 650 MB while it hears). Off, they come from tools/beat_this_pass.py on another computer, or the visuals keep the beat grid of the analysis.';
+  // The disk floor (AL03): read as the part shows, set at once in its sheet; none out of reach (AL04.5).
+  loadFloor();
+  let flooring = $state(false);
+  const floorShown = $derived(floorRow(floor.value, reach.away));
+  const FLOOR_MORE = "Below this much free space where users' music lands, their new Wants wait. Administrators' go on.";
 </script>
 
 {#if open}
@@ -396,6 +404,14 @@
           })}
       />
   </Group>
+  {#if floorShown || (floor.error && !reach.away)}
+    <Group title="Disk space">
+      {#if floorShown}
+        <Item name="Floor" more={FLOOR_MORE} value={floorShown.value} line={floorShown.line} tone={floorShown.tone} onclick={() => (flooring = true)} />
+      {/if}
+      {#if floor.error}<Item lead="bad" name={floor.error} />{/if}
+    </Group>
+  {/if}
   <Group title="Catalogue">
     {#if ed.cat}
       {@const c = ed.catalogueLine(ed.cat)}
@@ -474,6 +490,18 @@
     max={t.type === 'number' ? 3650 : null}
     onsave={(v) => t.save(v)}
     onclose={() => (typing = null)}
+  />
+{/if}
+{#if flooring && floor.value}
+  <ValueSheet
+    title="Floor"
+    value={String(floor.value.gb)}
+    type="number"
+    suffix="GB"
+    min={0}
+    allowEmpty={false}
+    onsave={(v) => saveFloor(Number(v))}
+    onclose={() => (flooring = false)}
   />
 {/if}
 {#if naming !== null}

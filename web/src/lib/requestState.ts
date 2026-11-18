@@ -1,5 +1,6 @@
 // A request's state as the server works it out (W5: one state every view reads, `requests::RequestState`), never worked out
 // again here from its status, its album or what Lidarr said. Pure.
+import { GB, roomLine } from './room';
 
 /** What Lidarr says of a request it was handed: looking, fetching (how far, 0 to 1), or stuck (Soulseek's turn). */
 export type LidarrWord = { state: 'looking' } | { state: 'fetching'; done: number } | { state: 'stuck' };
@@ -11,16 +12,19 @@ export type SoulseekWord =
   | { state: 'fetching'; percent: number }
   | { state: 'waiting'; why?: string }
   | { state: 'stuck'; why?: string };
-/** Its status as kept first (waiting for approval, declined, taken back, rejected), then how its record is held (done,
- *  arrived, partly there), then what the fetchers say of one wanted. */
+/** Its status as kept first (waiting for approval, declined, taken back, rejected, delivered: done for its asker and closed),
+ *  then how its record is held (done, arrived, partly there), then a Want that waits (its asker over their room, with the room's
+ *  numbers in bytes, AL02; the server short of space, AL03), then what the fetchers say of one wanted. */
 export type RequestState =
-  | { state: 'waiting_for_approval' | 'declined' | 'cancelled' | 'rejected' | 'arrived' | 'done' }
+  | { state: 'waiting_for_approval' | 'declined' | 'cancelled' | 'rejected' | 'delivered' | 'arrived' | 'done' | 'waiting_for_space' }
+  | { state: 'waiting_for_room'; used: number; room: number }
   | { state: 'partly_there'; has: number; of: number }
   | { state: 'wanted'; lidarr?: LidarrWord; soulseek?: SoulseekWord };
 
-/** Still open: asked for and not in the library yet, nor closed by an answer. A closed one is wanted again by a new Want. */
-export const isOpen = (s: RequestState | null | undefined): boolean =>
-  !!s && (s.state === 'waiting_for_approval' || s.state === 'wanted' || s.state === 'partly_there' || s.state === 'arrived');
+/** Still open: asked for and not in the library yet, nor closed by an answer (a Want that waits is open, a delivered one is
+ *  not). A closed one is wanted again by a new Want. */
+const OPEN = new Set<RequestState['state']>(['waiting_for_approval', 'waiting_for_room', 'waiting_for_space', 'wanted', 'partly_there', 'arrived']);
+export const isOpen = (s: RequestState | null | undefined): boolean => !!s && OPEN.has(s.state);
 
 /** A request as the views read it: its state where the server worked one out (every list's), else (a request just made, Want's
  *  answer) its status as kept. */
@@ -30,6 +34,8 @@ export type Asked = {
   reason?: string | null;
   fetched?: string | null;
   at: number;
+  /** When it was answered, or delivered (seconds). */
+  decided_at?: number | null;
   hand_over_again?: boolean;
 };
 
@@ -51,6 +57,15 @@ export function standing(r: Asked, said: (t: number) => string): string {
   switch (s.state) {
     case 'waiting_for_approval':
       return `Waiting · ${said(r.at)}`;
+    case 'waiting_for_room': {
+      // Its room's numbers where the server read them (none: both 0, and only that it waits is said).
+      const line = s.used || s.room ? roomLine(s.used, s.room / GB) : null;
+      return line ? `Waits for room · ${line}` : 'Waits for room';
+    }
+    case 'waiting_for_space':
+      return 'Waits: the server is short of space';
+    case 'delivered':
+      return `Delivered · ${said(r.decided_at ?? r.at)}`;
     case 'declined':
       return r.reason ? `Declined: ${r.reason}` : 'Declined';
     case 'cancelled':

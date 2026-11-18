@@ -59,6 +59,30 @@ test('Hand over again only where the server says no fetcher spoke, for one who a
   assert.equal(standingTone(r({ state: 'wanted' })), null);
 });
 
+test('a Want that waits for room or for space, and a delivered one, in words: both waits open, delivered closed, none fills (AL04.3)', () => {
+  const room = r({ state: 'waiting_for_room', used: 101e9, room: 100e9 });
+  const space = r({ state: 'waiting_for_space' });
+  const delivered = r({ state: 'delivered' }, { status: 'delivered', decided_at: 9 });
+  assert.equal(standing(room, said), 'Waits for room · 101 of 100 GB');
+  assert.equal(standing(space, said), 'Waits: the server is short of space');
+  assert.equal(standing(delivered, said), 'Delivered · at 9');
+  assert.ok(isOpen(room.state) && isOpen(space.state), 'both waits are open');
+  assert.ok(!isOpen(delivered.state), 'delivered is not');
+  assert.ok(requestOpen(room) && !requestOpen(delivered));
+  for (const x of [room, space, delivered]) assert.equal(fillOf(x.state), null, x.state.state);
+  // Never the approval word for a Want that waits for room, nor a success notice for any of them.
+  for (const x of [room, space, delivered]) {
+    for (const words of [standing(x, said), cardStanding(x, said)]) {
+      assert.ok(!/^Waiting\b|Approved|Requested/.test(words), `${x.state.state}: ${words}`);
+      assert.equal(standingTone(x), null);
+    }
+  }
+  assert.deepEqual(markOfState(room), { state: 'wanted' }, 'still wanted on its cover');
+  assert.equal(markOfState(delivered), null);
+  // Its room's numbers not read (both 0): only that it waits.
+  assert.equal(standing(r({ state: 'waiting_for_room', used: 0, room: 0 }), said), 'Waits for room');
+});
+
 test("a record not had's page says where its open request stands", () => {
   assert.deepEqual(notHadPage({ request: r({ state: 'partly_there', has: 3, of: 9 }) }, said).lines, [{ kind: 'request', text: 'Partly there · 3 of 9' }]);
   assert.deepEqual(notHadPage({ request: r({ state: 'declined' }) }, said).lines, []);

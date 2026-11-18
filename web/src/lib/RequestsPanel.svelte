@@ -4,8 +4,9 @@
   // phone. Its bar: where it is (Requests › Your requests). Waiting for an answer (those who answer requests): each
   // answered from its row's menu, or many at once in the select mode every list has (the bar's icon starts it). Your
   // requests: each with where it stands, a waiting one taken back from its menu, or many at once in Select (the owner,
-  // 2026-10-27: what one has, several have). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
-  // fetches now (how far), then what it watches for and has not found yet.
+  // 2026-10-27: what one has, several have), over them one's room (AL01: a user's, none for an administrator or out of
+  // reach). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it fetches now (how far),
+  // then what it watches for and has not found yet.
   import ChoiceMark from './ChoiceMark.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { rowRoot } from './glassRow.svelte';
@@ -17,7 +18,9 @@
   import { everywhere } from './globalSearch.svelte';
   import { albumCoverUrl, cancelRequest, type AlbumRequest, type WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
-  import { me } from './me.svelte';
+  import { me, readRoom } from './me.svelte';
+  import { reach } from './reach.svelte';
+  import { lineOfRoom } from './room';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Notice from './Notice.svelte';
@@ -51,6 +54,11 @@
   });
 
   const view = $derived(requests.view);
+  // One's room over one's requests, read again as they show (it fills as music arrives).
+  $effect(() => {
+    if (list === 'mine') void readRoom();
+  });
+  const roomSaid = $derived(lineOfRoom(me.room, reach.away));
 
   // Soulseek (decision 0099): read while it shows, every few seconds while a search or a fetch is under way, else every
   // half minute (Lidarr's Wanted is read every six hours, a search may find something any time). Found records ticked
@@ -265,6 +273,7 @@
         {#if !slskItems.length}<Group><Item name="Nothing asked for" line="Requests you approve come here" /></Group>{/if}
       {/if}
     {:else if list === 'mine'}
+      {#if roomSaid}<Group><Item name="Room" value={roomSaid} /></Group>{/if}
       <Group>
         {#each mine as r (r.id)}{@render row(r, false, canTakeBack(r))}{:else}
           {#if !view.mine.length}<Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = hrefOf('discover'))} />{/if}

@@ -1,8 +1,8 @@
 // Whoever is signed in (decision 0051, several users): their name, whether they administer this server, what they may
-// do, their devices and sign-ins. Read at start (App) and again when the account part changes something. A server that
-// answers no /api/me (one from before several users, or sign-in switched off) has one user, its administrator. Until
-// the answer comes, nothing of the administrators' shows: a user never sees it flash. The app is told whose its things
-// are now (decision 0101), at once.
+// do, their devices and sign-ins, and their room (AL01). Read at start (App) and again when the account part changes
+// something; the room again where its line shows (`readRoom`). A server that answers no /api/me (one from before several
+// users, or sign-in switched off) has one user, its administrator. Until the answer comes, nothing of the administrators'
+// shows: a user never sees it flash. The app is told whose its things are now (decision 0101), at once.
 import { accountLearnt, signOutOwed } from './account';
 import { ApiError, getMe, type Me, type Permissions } from './api';
 import { toApp } from './app.svelte';
@@ -31,9 +31,20 @@ export async function loadMe() {
     void loadCapabilities();
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
-      Object.assign(me, { known: true, name: null, admin: true, permissions: ALL });
+      Object.assign(me, { known: true, name: null, admin: true, permissions: ALL, room: null });
       accountLearnt(null);
       toApp({ type: 'account', name: '' });
     }
+  }
+}
+
+/** The account's room read again (it fills as its music arrives): taken only for the account still signed in. */
+export async function readRoom() {
+  if (signOutOwed() || !me.known || !me.name) return;
+  try {
+    const answer = await getMe();
+    if (!signOutOwed() && answer.name === me.name) me.room = answer.room ?? null;
+  } catch {
+    // Not read: the line stays as it was read, and out of reach it shows none (lib/room).
   }
 }
