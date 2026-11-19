@@ -186,8 +186,8 @@ test('a record not had is asked again through lookAgainAfter while the server re
 const pageLoading = readFileSync(new URL('../src/lib/PageLoading.svelte', import.meta.url), 'utf8');
 
 test("a record not had's track list loader holds no panel: its header, Want and About show at once, only its track list waits", () => {
-  assert.match(pageLoading, /let \{ children, held = true \}: \{ children\?: import\('svelte'\)\.Snippet; held\?: boolean \} = \$props\(\);/);
-  assert.match(pageLoading, /if \(untrack\(\(\) => held\)\)\s*holdUntil\(/, 'it claims its place only where it loads a page or a panel whole');
+  assert.match(pageLoading, /let \{ children, held = true, row = false \}: \{ children\?: import\('svelte'\)\.Snippet; held\?: boolean; row\?: boolean \} = \$props\(\);/);
+  assert.match(pageLoading, /if \(untrack\(\(\) => held && !row\)\)\s*holdUntil\(/, 'it claims its place only where it loads a page or a panel whole');
   assert.equal(pageLoading.match(/holdUntil\(/g)?.length, 1, 'its one claim');
   assert.equal(view.match(/<PageLoading held=\{false\}>/g)?.length, 1, "the track list's loader alone: the page's own still hold it");
   assert.match(view, /\{#if 'reading' in place\}<PageLoading held=\{false\}><p class="opening">\{place\.reading\}<\/p><\/PageLoading>/);

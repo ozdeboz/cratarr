@@ -59,7 +59,7 @@
         <button class="chip" onclick={() => open(a)}><img src={photo(a)} alt="" onerror={none} />{artistLabel(a.name, a.number, artists.map((x) => x.name))}</button>
       {/each}
     </div>
-    {:else if 'reading' in place}<PageLoading><p class="opening">{place.reading}</p></PageLoading>{:else}<p class="empty">{place.line}</p>{/if}
+    {:else if 'reading' in place}<PageLoading row><p class="opening">{place.reading}</p></PageLoading>{:else}<p class="empty">{place.line}</p>{/if}
   </section>
 {/if}
 

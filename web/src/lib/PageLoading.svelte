@@ -6,7 +6,7 @@
   // 2026-11-02: the large one in a crate's panel, "we're using smaller kinds these days in smaller panels").
   import { untrack } from 'svelte';
   import MarkLoader from './MarkLoader.svelte';
-  import { loaderSizeIn } from './loader';
+  import { LOADER_SMALL, loaderSizeIn } from './loader';
   import { holdUntil } from './holdPlace.svelte';
   import { waitingFor } from './waiting.svelte';
 
@@ -16,13 +16,15 @@
    *  it is"). */
   /** `held`: false where it waits for one part of a page that is otherwise ready (a record not had's track list while its
    *  list is read, F6): the page shows at once, and only that part waits (the review of preview 1's fixes, PB1). */
-  let { children, held = true }: { children?: import('svelte').Snippet; held?: boolean } = $props();
+  /** `row`: a section that is always one horizontal row (the owner, 2026-11-19: "the loading message on the right"): the
+   *  small mark at the row's start, what it waits for to its right, the row's own height; it never holds the page. */
+  let { children, held = true, row = false }: { children?: import('svelte').Snippet; held?: boolean; row?: boolean } = $props();
 
   /** Its size where it is (lib/loader): known once it is placed (its mark shows from then). */
   let size = $state<number | null>(null);
 
   // A page or panel loading as a whole is not ready (lib/Hold): what it showed stays while this is here.
-  if (untrack(() => held))
+  if (untrack(() => held && !row))
     holdUntil(
       () => 0,
       () => false,
@@ -54,6 +56,10 @@
   // every frame against the window as scrolled, so it grew as it was scrolled and its mark chased the scroll a frame
   // late). As if scrolled to the top, so scrolling changes nothing: it fills the room left and the mark sits still.
   $effect(() => {
+    if (row) {
+      size = LOADER_SMALL;
+      return;
+    }
     let raf = 0;
     const measure = () => {
       raf = 0;
@@ -84,13 +90,18 @@
 
 <div
   class="page-loading"
-  class:fitted={fit !== null}
+  class:fitted={!row && fit !== null}
+  class:row
   bind:this={el}
-  style:height={fit ? `${fit.height}px` : null}
-  style:padding-top={fit ? `${fit.top}px` : null}
+  style:height={!row && fit ? `${fit.height}px` : null}
+  style:padding-top={!row && fit ? `${fit.top}px` : null}
 >
-  {#if size !== null}<MarkLoader {size} />{/if}
-  {#if children}<div class="under">{@render children()}</div>{:else if waitingFor()}<div class="under"><p class="opening">{waitingFor()}</p></div>{/if}
+  <!-- The mark is placed alone; what it waits for hangs under it (or beside it in a row) without moving it, so the line
+       coming or going shifts nothing (the owner, 2026-11-19). -->
+  <div class="mark">
+    {#if size !== null}<MarkLoader {size} />{/if}
+    {#if children}<div class="under">{@render children()}</div>{:else if waitingFor()}<div class="under"><p class="opening">{waitingFor()}</p></div>{/if}
+  </div>
 </div>
 
 <style>
@@ -100,10 +111,42 @@
     min-height: 40vh;
   }
 
+  .mark {
+    position: relative;
+    display: grid;
+    place-items: center;
+  }
+
   .under {
-    width: min(320px, 100%);
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    width: min(320px, calc(100vw - 32px));
     margin-top: 16px;
+    transform: translateX(-50%);
     text-align: center;
+  }
+
+  /* One row: the mark at its start, the words to its right, as tall as the row. */
+  .page-loading.row {
+    display: flex;
+    align-items: center;
+    min-height: 0;
+    padding: 4px 16px;
+  }
+
+  .row .mark {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .row .under {
+    position: static;
+    width: auto;
+    margin: 0;
+    transform: none;
+    text-align: start;
   }
 
   .opening {
@@ -120,6 +163,7 @@
   /* Measured: as high as the room left, the mark placed from the top. */
   .page-loading.fitted {
     align-items: start;
+    align-content: start;
     min-height: 0;
   }
 </style>

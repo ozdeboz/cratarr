@@ -238,7 +238,7 @@
         </li>
       {/each}
     </ul>
-    {:else if 'reading' in missingPlace}<PageLoading><p class="opening">{missingPlace.reading}</p></PageLoading>{:else}<p class="empty">{missingPlace.line}</p>{/if}
+    {:else if 'reading' in missingPlace}<PageLoading held={false}><p class="opening">{missingPlace.reading}</p></PageLoading>{:else}<p class="empty">{missingPlace.line}</p>{/if}
   </section>
 {/if}
 {#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}

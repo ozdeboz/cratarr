@@ -63,7 +63,7 @@ test('Not in your library: the loader naming the read, its rows, or why; asked a
   assert.match(body, /const missingPlace = \$derived\(searching \? \(missingShown\.length \? 'rows' : null\) : missing && sectionPlace\(missing, missingShown\.length\)\);/);
   assert.match(
     body,
-    /\{#if missingPlace\}\s*<section aria-label="Not in your library">\s*<SectionHead title="Not in your library" \/>\s*\{#if missingPlace === 'rows'\}[\s\S]*?\{:else if 'reading' in missingPlace\}<PageLoading><p class="opening">\{missingPlace\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{missingPlace\.line\}<\/p>\{\/if\}\s*<\/section>\s*\{\/if\}/,
+    /\{#if missingPlace\}\s*<section aria-label="Not in your library">\s*<SectionHead title="Not in your library" \/>\s*\{#if missingPlace === 'rows'\}[\s\S]*?\{:else if 'reading' in missingPlace\}<PageLoading held=\{false\}><p class="opening">\{missingPlace\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{missingPlace\.line\}<\/p>\{\/if\}\s*<\/section>\s*\{\/if\}/,
   );
   assert.match(body, /if \(r\.looking\) t = window\.setTimeout\(\(\) => ask\(n \+ 1\), lookAgainAfter\(n\)\);/);
   assert.match(body, /void ask\(0\);/);
@@ -75,7 +75,7 @@ test('the recommendations: the loader naming the read, their artists, or why; as
   assert.match(related, /const place = \$derived\(answer && sectionPlace\(answer, answer\.artists\.length\)\);/);
   assert.match(
     related,
-    /\{#if place\}\s*<section aria-label="Related artists to explore">\s*<SectionHead title="Related artists to explore" \/>\s*\{#if place === 'rows'\}[\s\S]*?\{:else if 'reading' in place\}<PageLoading><p class="opening">\{place\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{place\.line\}<\/p>\{\/if\}\s*<\/section>\s*\{\/if\}/,
+    /\{#if place\}\s*<section aria-label="Related artists to explore">\s*<SectionHead title="Related artists to explore" \/>\s*\{#if place === 'rows'\}[\s\S]*?\{:else if 'reading' in place\}<PageLoading row><p class="opening">\{place\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{place\.line\}<\/p>\{\/if\}\s*<\/section>\s*\{\/if\}/,
   );
   assert.match(related, /if \(r\.looking\) timer = setTimeout\(look, lookAgainAfter\(n\+\+\)\);/);
   assert.doesNotMatch(related, /TRIES|AGAIN_MS/, 'no last ask');
