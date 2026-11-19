@@ -467,9 +467,32 @@ fn mint_to_file(data_dir: &std::path::Path, name: &str, out: &std::path::Path) -
     Ok(())
 }
 
+/// Test helpers, for this module's tests and those moved up to the crates above (SPLIT-PLAN 3.2).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
+    use super::*;
+    use crate::catalogue::Rules;
+
+    pub fn served(required: bool) -> Arc<Serve> {
+        let s = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        s.users.set("me", "pw").unwrap();
+        s.sessions.set_required(required).unwrap();
+        s
+    }
+
+    /// The whole server's routes behind the requirement, as `main` has them.
+    pub fn app(s: &Arc<Serve>) -> Router {
+        super::super::routes::router(s.clone())
+            .route("/api/library", get(|| async { "the library" }))
+            .route("/", get(|| async { "the page" }))
+            .layer(axum::middleware::from_fn_with_state(s.clone(), require))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::testing::*;
     use crate::catalogue::Rules;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
@@ -500,21 +523,6 @@ mod tests {
         let later = u.query().unwrap().replace("exp=1000", "exp=9999");
         assert!(!link_ok(&secret, u.path(), Some(&later), 999), "a longer life is not signed");
         assert!(!link_ok(&secret, u.path(), None, 999));
-    }
-
-    fn served(required: bool) -> Arc<Serve> {
-        let s = Serve::open(None, Rules::default(), &|_| None).unwrap();
-        s.users.set("me", "pw").unwrap();
-        s.sessions.set_required(required).unwrap();
-        s
-    }
-
-    /// The whole server's routes behind the requirement, as `main` has them.
-    fn app(s: &Arc<Serve>) -> Router {
-        super::super::routes::router(s.clone())
-            .route("/api/library", get(|| async { "the library" }))
-            .route("/", get(|| async { "the page" }))
-            .layer(axum::middleware::from_fn_with_state(s.clone(), require))
     }
 
     async fn status(s: &Arc<Serve>, req: HttpRequest<Body>) -> (StatusCode, Option<String>) {
@@ -659,37 +667,6 @@ mod tests {
         // One who left the directory's group is no one.
         s.users.deactivate("ann").unwrap();
         assert_eq!(status(&s, signed_in("ann", "/api/library")).await.0, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn a_request_is_from_home_as_the_client_after_the_proxies_screen_is() {
-        let s = served(true);
-        let (token, _) = s.sessions.create("me", "d", now()).unwrap();
-        let app = || {
-            Router::new()
-                .route("/api/home", get(|| async { format!("{:?}", current().map(|w| w.home)) }))
-                .layer(axum::middleware::from_fn_with_state(s.clone(), require))
-                .layer(axum::middleware::from_fn(crate::api::request_ids))
-        };
-        let home = |peer: &str, forwarded: Option<&str>| {
-            let mut b = HttpRequest::get("/api/home").header("cookie", format!("{COOKIE}={token}"));
-            if let Some(f) = forwarded {
-                b = b.header("x-forwarded-for", f);
-            }
-            let mut req = b.body(Body::empty()).unwrap();
-            req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::new(peer.parse().unwrap(), 50000)));
-            let r = app().oneshot(req);
-            async move { String::from_utf8(axum::body::to_bytes(r.await.unwrap().into_body(), 64).await.unwrap().to_vec()).unwrap() }
-        };
-        assert_eq!(home("192.168.1.20", None).await, "Some(true)");
-        assert_eq!(home("203.0.113.9", None).await, "Some(false)");
-        assert_eq!(home("203.0.113.9", Some("192.168.1.20")).await, "Some(false)", "a peer not believed names no one");
-        assert_eq!(home("172.19.0.3", Some("203.0.113.9")).await, "Some(false)", "a local proxy names the client");
-        assert_eq!(home("172.19.0.3", Some("192.168.1.20")).await, "Some(true)");
-        assert_eq!(home("2001:db8:7::5", None).await, "Some(false)");
-        super::super::proxy::set_home(vec!["2001:db8:7::/48".parse().unwrap()]);
-        assert_eq!(home("2001:db8:7::5", None).await, "Some(true)", "a home network named");
-        super::super::proxy::set_home(Vec::new());
     }
 
     #[tokio::test]

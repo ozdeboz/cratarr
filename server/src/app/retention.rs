@@ -344,21 +344,29 @@ pub fn unknown_artist(cat: &Catalogue, id: &str) -> Option<ToggleError> {
     forgotten(cat, id).then(|| ToggleError::Gone(ARTIST_NO_LONGER_KNOWN.into()))
 }
 
-#[cfg(test)]
-mod tests {
+/// Test helpers, for this module's tests and those moved up to the crates above (SPLIT-PLAN 3.2).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
     use super::*;
-    use crate::serve::ids;
 
     /// RT01's clock in the tests: now, and a month.
-    const NOW: i64 = 1_800_000_000;
-    const MONTH: i64 = 30 * 86_400;
+    pub const NOW: i64 = 1_800_000_000;
+
+    pub const MONTH: i64 = 30 * 86_400;
 
     /// A record not had of `title`, last seen seven months before `NOW`.
-    fn unseen(cat: &Catalogue, title: &str) -> i64 {
+    pub fn unseen(cat: &Catalogue, title: &str) -> i64 {
         let record = cat.record_for_tests(title, 0);
         cat.db_for_tests().execute("UPDATE records SET seen_at = ?2 WHERE id = ?1", rusqlite::params![record, NOW - 7 * MONTH]).unwrap();
         record
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::testing::*;
+    use crate::serve::ids;
 
     /// Cratarr's own library, in `dir` where given (else in memory), its catalogue in memory with ids of its own above `floor`:
     /// Soulseek's list is one to the process, other tests' items on it.
@@ -816,19 +824,6 @@ mod tests {
         std::fs::write(dir.join("queues.json"), format!("{{\"ann\":[\"{}/1.1\"]}}", ids::record(queued))).unwrap();
         assert_eq!(cat.forget_quiet(NOW, &protected(&ud, Some(dir.as_path())).unwrap()).unwrap(), [other]);
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// RT01: Cratarr's album forgotten answers "no longer known" (410), by its tombstone; one never known, as before.
-    #[test]
-    fn a_forgotten_record_answers_no_longer_known() {
-        let cat = Catalogue::open(None, Vec::new()).unwrap();
-        let gone = unseen(&cat, "Undertow");
-        assert_eq!(cat.forget_quiet(NOW, &BTreeSet::new()).unwrap(), [gone]);
-        let answer = unknown_album(&cat, &ids::record(gone)).expect("no longer known");
-        assert_eq!(answer.to_string(), "This album is no longer known: nobody had opened it or seen it in a list for six months.");
-        let status = axum::response::IntoResponse::into_response(crate::api::ApiError::from(answer)).status();
-        assert_eq!(status, axum::http::StatusCode::GONE);
-        assert!(unknown_album(&cat, &ids::record(gone + 1)).is_none(), "never known: answered as before");
     }
 
     /// RT01: the pass runs once a day, by the catalogue's note of when it ran: never run, it runs; an hour later it does not; a

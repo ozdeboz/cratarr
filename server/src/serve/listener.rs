@@ -20,7 +20,7 @@ pub struct Listener {
     /// The library this one request asks to hear, whoever asks: an intake card's snippets are of the copy waiting, and a queue
     /// started from a copy asks for it on every stream. It lasts as long as the request.
     pub from: Option<i64>,
-    pub(super) library: Option<Arc<Library>>,
+    pub(crate) library: Option<Arc<Library>>,
 }
 
 impl Listener {
@@ -85,16 +85,16 @@ pub(crate) mod tests {
     use crate::serve::copies::Kind;
     use crate::source::cratarr::KIND;
 
-    const FLAC: &str = "A/01 One.flac";
-    const MP3: &str = "B/01 One.mp3";
+    pub const FLAC: &str = "A/01 One.flac";
+    pub const MP3: &str = "B/01 One.mp3";
 
     /// One track with a file in each of two folders, as the take leaves it: the catalogue gives both one track and the
     /// library's `copy_files` and `copies` name one album. Folder 0 holds a FLAC, folder 1 an MP3 with its own numbers.
-    struct Two {
+    pub struct Two {
         roots: [std::path::PathBuf; 2],
-        cat: Catalogue,
+        pub cat: Catalogue,
         lib: Arc<Library>,
-        song: String,
+        pub song: String,
     }
 
     impl Drop for Two {
@@ -105,7 +105,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn two(name: &str) -> Two {
+    pub fn two(name: &str) -> Two {
         let root = |n: u8| std::env::temp_dir().join(format!("cratarr-listener-{name}-{n}-{}", std::process::id()));
         let roots = [root(0), root(1)];
         for (r, rel) in roots.iter().zip([FLAC, MP3]) {
@@ -138,7 +138,7 @@ pub(crate) mod tests {
     }
 
     impl Two {
-        fn who(&self, account: Option<&str>, off: &[i64]) -> Listener {
+        pub fn who(&self, account: Option<&str>, off: &[i64]) -> Listener {
             Listener { account: account.map(str::to_string), off: off.to_vec(), library: Some(self.lib.clone()), ..Listener::default() }
         }
 
@@ -303,34 +303,4 @@ pub(crate) mod tests {
         let song = t.who(None, &[]).song(&t.cat, KIND.id, &t.song).unwrap();
         assert_eq!((song.suffix.as_str(), song.bit_rate, song.bpm), ("flac", Some(900), Some(120)));
     }
-
-    #[test]
-    fn the_waveform_is_the_file_that_plays() {
-        let t = two("wave");
-        for (folder, rel, level) in [(0, FLAC, 1u8), (1, MP3, 2)] {
-            let a = crate::analysis::Analysis {
-                version: crate::analysis::VERSION,
-                duration_secs: 200.0,
-                loudness_lufs: -14.0,
-                track_gain_db: -4.0,
-                track_peak: 0.9,
-                blocks: crate::analysis::Loudness(vec![(1, 40)]),
-                bpm: Some(120.0),
-                bpm_confidence: 0.9,
-                waveform: vec![level; crate::analysis::WAVEFORM_BINS],
-                complete: Some(true),
-                beats: None,
-                rhythm: None,
-            };
-            let (_, size, mtime) = t.cat.file_to_analyse(folder, rel).unwrap();
-            t.cat.store_analysis(folder, rel, size, mtime, &a).unwrap();
-        }
-        let wave = |who: &Listener, asked: Option<&str>| crate::api::waveform_for(&t.cat, who, KIND.id, &t.song, asked).unwrap();
-        let (row, other) = (t.who(None, &[]), t.who(Some("ann"), &[0]));
-        let (tag_row, bins_row) = wave(&row, None);
-        let (tag_other, bins_other) = wave(&other, None);
-        assert_eq!((bins_row.unwrap()[0], bins_other.unwrap()[0]), (1, 2));
-        assert_ne!(tag_row, tag_other, "a browser that kept one file's must not be told it is still good for the other");
-        assert_eq!(wave(&other, Some(&tag_other)).1, None, "not modified");
-        assert!(wave(&other, Some(&tag_row)).1.is_some());
-    }}
+}

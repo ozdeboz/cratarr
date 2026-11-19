@@ -107,6 +107,10 @@ fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -
 #[cfg(test)]
 mod whole_router;
 
+/// Tests moved up out of the modules bound for the crates below (SPLIT-PLAN 3.2).
+#[cfg(test)]
+mod moved_tests;
+
 /// What the arguments ask (W4): with none, the server; a known flag, its own work; anything else, nothing at all. So a flag
 /// mistyped, or one this version lacks (`--version` before 0.17), never starts a second server on a live data folder.
 #[derive(Debug, PartialEq, Eq)]

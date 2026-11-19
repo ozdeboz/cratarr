@@ -305,7 +305,8 @@ fn lines(db: &Connection, folders: &InUse) -> Result<HashMap<String, String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{copy, file_of_track, record_of, retired, tracks};
+    use super::super::testing::retired;
+    use super::super::tests::{copy, file_of_track, record_of, tracks};
     use super::*;
 
     const MAIN: (i64, Kind) = (0, Kind::Main);

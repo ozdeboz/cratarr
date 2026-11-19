@@ -4518,6 +4518,21 @@ pub fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: O
     cat.record_for_request(&wanted)
 }
 
+/// A data folder as 0.16.2 left it, for 0.17's step (FX01, `tests/fixtures/0.16`, from tag v0.16.2's schema, as 0093 keeps no
+/// binaries in git): the catalogue's records and their tracks, and what the user data and `soulseek.json` hold of them. Made up,
+/// each table in the shapes production's rows have (read 2026-11-16): requests with a release group and without, choices of
+/// every kind, discographies read before dates were kept and after, a row 0.16's first start could not move. Its ids are the
+/// records' own (`al-<record>`), as that start left them, and it is done in both. No library is behind it: nothing reads a file.
+#[cfg(any(test, feature = "test-support"))]
+pub fn data_0_16(data: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(data)?;
+    for (file, sql) in [("catalogue.sqlite", include_str!("../../tests/fixtures/0.16/catalogue.sql")), ("userdata.sqlite", include_str!("../../tests/fixtures/0.16/userdata.sql"))] {
+        rusqlite::Connection::open(data.join(file))?.execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;"))?;
+    }
+    std::fs::write(data.join("soulseek.json"), include_str!("../../tests/fixtures/0.16/soulseek.json"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5338,7 +5353,7 @@ mod tests {
     fn the_tables_open_on_a_0_16_catalogue() {
         let d = std::env::temp_dir().join(format!("cratarr-records-0-16-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
-        crate::fixtures::data_0_16(&d).unwrap();
+        crate::catalogue::records::data_0_16(&d).unwrap();
         let file = d.join("catalogue.sqlite");
         let rows = |db: &Connection| -> Vec<(i64, String, Option<i64>)> {
             db.prepare("SELECT id, title, retired_at FROM records ORDER BY id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()

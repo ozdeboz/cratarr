@@ -681,7 +681,7 @@ const FACTS_EVERY: Duration = Duration::from_secs(300);
 /// What the crates' facts take from elsewhere that no build brings them, as one stamp: the library's words (0.9.7,
 /// `app::words::stamp`), what Classical is made of (0.10), and Discogs' labels, which were only ever seen because the
 /// connection's change count moved all the same.
-fn said_stamp<S: crate::serve::view::ServeView + ?Sized>(s: &impl std::ops::Deref<Target = S>) -> i64 {
+pub fn said_stamp<S: crate::serve::view::ServeView + ?Sized>(s: &impl std::ops::Deref<Target = S>) -> i64 {
     let said = s.words_stamp().wrapping_mul(31).wrapping_add(s.classical_stamp());
     said.wrapping_mul(31).wrapping_add(s.userdata().discogs_albums_stamp().unwrap_or(0))
 }
@@ -4922,9 +4922,35 @@ pub fn served_fingerprint(db: &Connection) -> Result<String> {
     Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders} covers {covers}/{cover_size}/{cover_mtime} analysis {analysed}/{at}/{read}"))
 }
 
+/// Test helpers, for this module's tests and those moved up to the crates above (SPLIT-PLAN 3.2).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
+    use super::*;
+
+    pub fn music() -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("cratarr-cat-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(d.join("A - B (2020)")).unwrap();
+        std::fs::write(d.join("A - B (2020)/01 One.mp3"), b"not really an mp3").unwrap();
+        std::fs::write(d.join("A - B (2020)/02 Two.flac"), b"nor a flac").unwrap();
+        d
+    }
+
+    /// Pretend the tags of every file waiting were read: a length (the test files are not audio).
+    pub fn read_as_audio(cat: &Catalogue) {
+        cat.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
+    }
+
+    pub fn retired(cat: &Catalogue, track: i64) -> bool {
+        cat.db().query_row("SELECT retired_at FROM tracks WHERE id = ?1", [track], |r| r.get::<_, Option<i64>>(0)).unwrap().is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::testing::*;
 
     /// A file of track 7 in catalogue folder 0, read, its tags and analysis kept (C39).
     fn read_file_in(cat: &Catalogue) {
@@ -5184,16 +5210,6 @@ mod tests {
         assert_eq!(shared("C/1.flac"), 0, "walked with another size: its own file");
     }
 
-    fn music() -> PathBuf {
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let d = std::env::temp_dir().join(format!("cratarr-cat-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(d.join("A - B (2020)")).unwrap();
-        std::fs::write(d.join("A - B (2020)/01 One.mp3"), b"not really an mp3").unwrap();
-        std::fs::write(d.join("A - B (2020)/02 Two.flac"), b"nor a flac").unwrap();
-        d
-    }
-
     #[test]
     fn the_write_ahead_log_is_cut_back_after_a_burst() {
         let d = music();
@@ -5258,11 +5274,6 @@ mod tests {
         let s = cat.status().unwrap();
         assert_eq!((s.files, s.tags_pending), (1, 1));
         std::fs::remove_dir_all(&d).ok();
-    }
-
-    /// Pretend the tags of every file waiting were read: a length (the test files are not audio).
-    fn read_as_audio(cat: &Catalogue) {
-        cat.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
     }
 
     fn an_analysis(gain: f32, bin: u16) -> crate::analysis::Analysis {
@@ -5644,10 +5655,6 @@ mod tests {
         assert_eq!(blocks_from(ValueRef::Text(b"[[500,40]]")).0, vec![(500, 40)]);
         assert!(blocks_from(ValueRef::Blob(&[9, 1, 2, 3, 4, 5, 6])).0.is_empty(), "an unknown format reads as none");
         assert!(blocks_from(ValueRef::Null).0.is_empty());
-    }
-
-    pub(super) fn retired(cat: &Catalogue, track: i64) -> bool {
-        cat.db().query_row("SELECT retired_at FROM tracks WHERE id = ?1", [track], |r| r.get::<_, Option<i64>>(0)).unwrap().is_some()
     }
 
     #[test]
@@ -6584,8 +6591,6 @@ mod tests {
         assert_eq!(records_made(&cat), made);
     }
 
-    // ---- The take: a copy takes the record's tracks (0101).
-
     /// A record of three tracks, on these ids.
     fn three(ids: [i64; 3]) -> AlbumCopy {
         copy(None, "A", "Three", &[(ids[0], "One", 200_000), (ids[1], "Two", 200_000), (ids[2], "Three", 200_000)])
@@ -7393,7 +7398,6 @@ mod tests {
         assert!(cat.assign_records(&[kept, left]).unwrap() > 0, "read with none open, what is apart is apart");
     }
 
-
     /// What stays of two copies' analyses must not hang on a map's order.
     #[test]
     fn of_two_copies_taken_at_once_the_older_id_keeps_its_audiomuse_row() {
@@ -7659,35 +7663,6 @@ mod tests {
         assert_eq!(cat.track_of(1, rel), Some(one), "back, the same track");
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
-    }
-
-    #[test]
-    fn trashed_files_keep_their_ids_until_the_trash_is_emptied() {
-        let d = music();
-        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
-        cat.walk_all();
-        read_as_audio(&cat);
-        cat.identify().unwrap();
-        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
-        let token = crate::trash::trash(&d, "A - B (2020)", 1_000).unwrap();
-        assert_eq!(cat.mark_trashed(0, "A - B (2020)", &token).unwrap(), 2);
-        cat.walk_all();
-        cat.identify().unwrap();
-        assert_eq!(cat.status().unwrap().files, 0, "trashed files are not counted");
-        assert_eq!(cat.file_of(one), None);
-        assert!(!retired(&cat, one), "still in the trash: not retired");
-        // Undo: back, same ids.
-        crate::trash::restore(&d, &token).unwrap();
-        assert_eq!(cat.unmark_trashed(0, "A - B (2020)", &token).unwrap(), 2);
-        cat.walk_all();
-        assert_eq!(cat.file_of(one), Some((0, "A - B (2020)/01 One.mp3".to_string())));
-        // Trashed again and the trash emptied: retired.
-        let token = crate::trash::trash(&d, "A - B (2020)", 2_000).unwrap();
-        cat.mark_trashed(0, "A - B (2020)", &token).unwrap();
-        crate::trash::purge(&d, 2_000 + 30 * 86_400, 1).unwrap();
-        cat.identify().unwrap();
-        assert!(retired(&cat, one));
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -8065,15 +8040,6 @@ mod tests {
         cat.replace_audiomuse(&[]).unwrap();
         assert!(written() > before, "the whole table emptied");
         std::fs::remove_dir_all(&d).ok();
-    }
-
-    #[test]
-    fn a_label_from_discogs_reads_the_crate_facts_again_as_a_word_does() {
-        let s = crate::serve::Serve::open(None, Rules::default(), &|_| None).unwrap();
-        let before = said_stamp(&s);
-        assert_eq!(said_stamp(&s), before, "nothing said: nothing to read");
-        s.userdata.set_discogs_facts("album:a", Some(r#"{"labels":[{"name":"Warp"}]}"#), 1).unwrap();
-        assert_ne!(said_stamp(&s), before);
     }
 
     #[test]
@@ -8631,25 +8597,6 @@ mod tests {
         assert_eq!(cat.track_of(0, rel), Some(one));
         assert!(cat.analysis_of(0, rel).is_some(), "nothing to analyse again");
         std::fs::remove_dir_all(&d).ok();
-    }
-
-    #[test]
-    fn a_library_keep_and_delete_emptied_is_no_problem() {
-        let (a, b, c) = (music(), music(), music());
-        let cat = Catalogue::open(None, vec![a.clone(), b.clone(), c.clone()]).unwrap();
-        cat.walk_all();
-        read_as_audio(&cat);
-        cat.identify().unwrap();
-        // Keep of a's last album: the files and the rows go together.
-        std::fs::rename(a.join("A - B (2020)"), b.join("C - D (2021)")).unwrap();
-        cat.move_files(0, "A - B (2020)", 1, "C - D (2021)").unwrap();
-        // Delete of c's: into its trash, the rows marked.
-        let token = crate::trash::trash(&c, "A - B (2020)", 100).unwrap();
-        cat.mark_trashed(2, "A - B (2020)", &token).unwrap();
-        assert_eq!(cat.walk_all(), Vec::<String>::new());
-        for d in [a, b, c] {
-            std::fs::remove_dir_all(d).ok();
-        }
     }
 
     #[test]

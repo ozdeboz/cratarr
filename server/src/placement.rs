@@ -176,11 +176,48 @@ fn under_root(playlist_dir: &Path, root: &str, path: &str) -> bool {
         .is_some_and(|rel| safe_relative(&rel) && playlist_dir.join(rel).is_file())
 }
 
-#[cfg(test)]
-mod tests {
+/// Test helpers, for this module's tests and those moved up to the crates above (SPLIT-PLAN 3.2).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
     use super::*;
     use crate::source::{Fut, Playing, PlaylistEvent, Status, Track};
     use std::collections::BTreeMap;
+
+    /// A source with fixed libraries and samples, and (optionally) each library's own folder.
+    pub struct Fake(pub Vec<(Library, Vec<String>)>, pub Vec<(String, String)>);
+
+    impl Source for Fake {
+        fn status(&self) -> Fut<'_, Status> {
+            Box::pin(async { Ok(Status::default()) })
+        }
+        fn options(&self) -> Fut<'_, BTreeMap<String, Vec<crate::source::Choice>>> {
+            Box::pin(async { Ok(BTreeMap::new()) })
+        }
+        fn libraries(&self) -> Fut<'_, Vec<Library>> {
+            Box::pin(async { Ok(self.0.iter().map(|(l, _)| l.clone()).collect()) })
+        }
+        fn sample_paths<'a>(&'a self, id: &'a str, n: usize) -> Fut<'a, Vec<String>> {
+            Box::pin(async move { Ok(self.0.iter().find(|(l, _)| l.id == id).map(|(_, s)| s.iter().take(n).cloned().collect()).unwrap_or_default()) })
+        }
+        fn library_roots<'a>(&'a self, id: &'a str) -> Fut<'a, Vec<String>> {
+            Box::pin(async move { Ok(self.1.iter().filter(|(l, _)| l == id).map(|(_, r)| r.clone()).collect()) })
+        }
+        fn now_playing(&self) -> Fut<'_, Option<Playing>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn track<'a>(&'a self, _id: &'a str) -> Fut<'a, Track> {
+            Box::pin(async { anyhow::bail!("no tracks") })
+        }
+        fn playlists_changed(&self, _e: Vec<PlaylistEvent>) -> Fut<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::testing::*;
 
     fn music() -> std::path::PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -233,36 +270,6 @@ mod tests {
         assert_eq!(p.playlist_path("/music", "Chill").as_deref(), Some("/data/media/Music/Chill.m3u"));
     }
 
-    /// A source with fixed libraries and samples, and (optionally) each library's own folder.
-    struct Fake(Vec<(Library, Vec<String>)>, Vec<(String, String)>);
-
-    impl Source for Fake {
-        fn status(&self) -> Fut<'_, Status> {
-            Box::pin(async { Ok(Status::default()) })
-        }
-        fn options(&self) -> Fut<'_, BTreeMap<String, Vec<crate::source::Choice>>> {
-            Box::pin(async { Ok(BTreeMap::new()) })
-        }
-        fn libraries(&self) -> Fut<'_, Vec<Library>> {
-            Box::pin(async { Ok(self.0.iter().map(|(l, _)| l.clone()).collect()) })
-        }
-        fn sample_paths<'a>(&'a self, id: &'a str, n: usize) -> Fut<'a, Vec<String>> {
-            Box::pin(async move { Ok(self.0.iter().find(|(l, _)| l.id == id).map(|(_, s)| s.iter().take(n).cloned().collect()).unwrap_or_default()) })
-        }
-        fn library_roots<'a>(&'a self, id: &'a str) -> Fut<'a, Vec<String>> {
-            Box::pin(async move { Ok(self.1.iter().filter(|(l, _)| l == id).map(|(_, r)| r.clone()).collect()) })
-        }
-        fn now_playing(&self) -> Fut<'_, Option<Playing>> {
-            Box::pin(async { Ok(None) })
-        }
-        fn track<'a>(&'a self, _id: &'a str) -> Fut<'a, Track> {
-            Box::pin(async { anyhow::bail!("no tracks") })
-        }
-        fn playlists_changed(&self, _e: Vec<PlaylistEvent>) -> Fut<'_, ()> {
-            Box::pin(async { Ok(()) })
-        }
-    }
-
     fn lib(id: &str) -> Library {
         Library { id: id.into(), name: id.to_uppercase(), paths: vec![] }
     }
@@ -289,24 +296,6 @@ mod tests {
         assert_eq!(found, vec![("incoming", vec![folders[1].clone()]), ("music", vec![folders[0].clone()]), ("empty", vec![])]);
         std::fs::remove_dir_all(&m).ok();
         std::fs::remove_dir_all(&inc).ok();
-    }
-
-    #[tokio::test]
-    async fn an_empty_folder_of_cratarrs_own_is_where_it_is_and_another_servers_is_nowhere() {
-        let empty = std::env::temp_dir().join(format!("cratarr-empty-{}", std::process::id()));
-        std::fs::create_dir_all(&empty).unwrap();
-        let path = empty.display().to_string();
-        let gone = format!("{path}-gone");
-        let values: crate::source::Values = [("folders".to_string(), serde_json::json!([path, gone]))].into();
-        let own = (crate::source::cratarr::KIND.connect)(&values, false).unwrap();
-        let p = place(&*own, std::slice::from_ref(&path), &Default::default()).await.unwrap();
-        assert_eq!(p.libraries[0].folders, std::slice::from_ref(&path), "nothing in it yet: music can be added to it");
-        assert_eq!(p.root(&path), Some(format!("{path}/").as_str()));
-        assert!(p.libraries[1].folders.is_empty(), "a folder that is not there stays unseen");
-        let library = Library { id: "l".into(), name: "L".into(), paths: vec![path.clone()] };
-        let other = Fake(vec![(library, vec![])], vec![("l".into(), path.clone())]);
-        assert!(place(&other, std::slice::from_ref(&path), &Default::default()).await.unwrap().libraries[0].folders.is_empty());
-        std::fs::remove_dir_all(&empty).ok();
     }
 
     #[tokio::test]

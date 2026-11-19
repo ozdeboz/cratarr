@@ -145,7 +145,7 @@ fn cover_changes(before: &std::collections::HashMap<String, String>, now: &std::
     out
 }
 
-fn now() -> i64 {
+pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 

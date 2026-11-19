@@ -359,68 +359,9 @@ pub(crate) fn audio_of(b: &[u8], kind: Kind) -> Option<&[u8]> {
     }
 }
 
-/// Small real tracks to write to, for this module's tests and the covers'.
+/// Small real tracks to write to: in `catalogue::tags`, below the gate (SPLIT-PLAN 3.2).
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) mod fixtures {
-    use std::path::{Path, PathBuf};
-
-    pub fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("cratarr-{name}-{}", std::process::id()));
-        std::fs::remove_dir_all(&d).ok();
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
-    /// A second of a tone as a 16-bit stereo WAV.
-    pub fn wav(path: &Path) {
-        let rate = 44_100u32;
-        let n = rate as usize;
-        let mut data = Vec::with_capacity(n * 4);
-        for i in 0..n {
-            let s = ((i as f64 * 440.0 * std::f64::consts::TAU / rate as f64).sin() * 8000.0) as i16;
-            data.extend_from_slice(&s.to_le_bytes());
-            data.extend_from_slice(&s.to_le_bytes());
-        }
-        let mut b = Vec::new();
-        b.extend_from_slice(b"RIFF");
-        b.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
-        b.extend_from_slice(b"WAVEfmt ");
-        b.extend_from_slice(&16u32.to_le_bytes());
-        b.extend_from_slice(&1u16.to_le_bytes());
-        b.extend_from_slice(&2u16.to_le_bytes());
-        b.extend_from_slice(&rate.to_le_bytes());
-        b.extend_from_slice(&(rate * 4).to_le_bytes());
-        b.extend_from_slice(&4u16.to_le_bytes());
-        b.extend_from_slice(&16u16.to_le_bytes());
-        b.extend_from_slice(b"data");
-        b.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        b.extend_from_slice(&data);
-        std::fs::write(path, b).unwrap();
-    }
-
-    pub fn flac(dir: &Path, name: &str) -> PathBuf {
-        let w = dir.join(format!("{name}.wav"));
-        wav(&w);
-        let f = dir.join(format!("{name}.flac"));
-        crate::convert::to_cd_flac(&w, &f).unwrap();
-        std::fs::remove_file(&w).unwrap();
-        f
-    }
-
-    /// Twenty MPEG-1 Layer III frames (128 kb/s, 44.1 kHz, silence), with an ID3v1 tag at the end.
-    pub fn mp3(path: &Path) {
-        let mut b = Vec::new();
-        for _ in 0..20 {
-            b.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
-            b.extend(std::iter::repeat_n(0u8, 417 - 4));
-        }
-        let mut v1 = vec![0u8; 128];
-        v1[..3].copy_from_slice(b"TAG");
-        v1[3..8].copy_from_slice(b"Title");
-        b.extend_from_slice(&v1);
-        std::fs::write(path, b).unwrap();
-    }
-}
+pub(crate) use crate::catalogue::tags::fixtures;
 
 #[cfg(test)]
 mod tests {

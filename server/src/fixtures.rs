@@ -393,20 +393,9 @@ pub fn make_layout(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(made)
 }
 
-/// A data folder as 0.16.2 left it, for 0.17's step (FX01, `tests/fixtures/0.16`, from tag v0.16.2's schema, as 0093 keeps no
-/// binaries in git): the catalogue's records and their tracks, and what the user data and `soulseek.json` hold of them. Made up,
-/// each table in the shapes production's rows have (read 2026-11-16): requests with a release group and without, choices of
-/// every kind, discographies read before dates were kept and after, a row 0.16's first start could not move. Its ids are the
-/// records' own (`al-<record>`), as that start left them, and it is done in both. No library is behind it: nothing reads a file.
+/// A data folder as 0.16.2 left it (FX01): in `catalogue::records`, below the app, for its tests too (SPLIT-PLAN 3.2).
 #[cfg(any(test, feature = "test-support"))]
-pub fn data_0_16(data: &Path) -> Result<()> {
-    std::fs::create_dir_all(data)?;
-    for (file, sql) in [("catalogue.sqlite", include_str!("../tests/fixtures/0.16/catalogue.sql")), ("userdata.sqlite", include_str!("../tests/fixtures/0.16/userdata.sql"))] {
-        rusqlite::Connection::open(data.join(file))?.execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;"))?;
-    }
-    std::fs::write(data.join("soulseek.json"), include_str!("../tests/fixtures/0.16/soulseek.json"))?;
-    Ok(())
-}
+pub use crate::catalogue::records::data_0_16;
 
 /// The folder of bob's own music in the tests of FX01 tagged (`tag_0_16_shapes`).
 #[cfg(any(test, feature = "test-support"))]

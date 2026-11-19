@@ -28,8 +28,10 @@ fn named_routes() -> Vec<(String, Vec<Method>)> {
     let mut out = Vec::new();
     for f in files {
         let text = std::fs::read_to_string(&f).unwrap();
-        // The tests' own routers are not the server's.
-        let text = text.split("#[cfg(test)]").next().unwrap_or("");
+        // The tests' own routers are not the server's, nor the routers of the helpers shared with the tests of the crates
+        // above (`test-support`, SPLIT-PLAN 5.4), which stand where test modules do.
+        let cut = ["#[cfg(test)]", "#[cfg(any(test, feature = \"test-support\"))]"].iter().filter_map(|m| text.find(m)).min().unwrap_or(text.len());
+        let text = &text[..cut];
         let mut rest = text;
         while let Some(at) = rest.find(".route(\"") {
             rest = &rest[at + 8..];

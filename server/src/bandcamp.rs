@@ -31,9 +31,9 @@ const PACE: Duration = Duration::from_secs(1);
 /// How long Bandcamp is left alone after it says "too many" (429) or "unavailable" (503) without saying how long.
 const BACK_OFF: Duration = Duration::from_secs(60);
 /// How long Bandcamp is left alone after its bot check (O4): a day, nothing done to get past it.
-const CHECK_HOLD_SECS: i64 = 86_400;
+pub const CHECK_HOLD_SECS: i64 = 86_400;
 /// Until when it is left alone so (epoch s; 0: it is not).
-static HELD_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+pub static HELD_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 /// Where that is kept across a restart (Y8): the user data's server choices, epoch seconds.
 const HELD_CHOICE: &str = "bandcamp:held_until";
 
@@ -63,7 +63,7 @@ pub fn held_until(now: i64) -> Option<i64> {
 
 /// Bandcamp left alone for a day after its bot check, or a search answer that is no JSON (O4): said in the log once, a failure for
 /// Health's connections, nothing done to get past it. Kept in the server's user data (Y8).
-fn hold() {
+pub fn hold() {
     hold_in(crate::serve::view::get().as_deref().map(|s| &**s.userdata()));
 }
 
@@ -715,7 +715,6 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::QueueTracks as _;
 
     #[test]
     fn a_previews_id_holds_its_album_and_number() {
@@ -850,36 +849,6 @@ mod tests {
         let played = bc.stream(page, 1, None).await.map(|_| ());
         crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, was);
         assert_eq!(played.unwrap_err().to_string(), "Bandcamp is switched off");
-    }
-
-    /// O4: after its bot check Bandcamp is left alone for a day, said on Health as a connection failing; a search is not read then,
-    /// never "nothing found". An album's page is read alone: a track with no stream on it is read from its own page only as it is
-    /// played.
-    #[tokio::test]
-    async fn a_bot_check_holds_bandcamp_for_a_day() {
-        let _one = crate::app::switches::TEST_STATE.lock().await;
-        let was = HELD_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
-        let now = crate::app::moment::now_secs();
-        hold();
-        let until = held_until(now);
-        let bc = Bandcamp::new().unwrap();
-        let searched = bc.search("Glass Harbour", "Two Rooms").await;
-        let page = "https://glassharbour.bandcamp.com/album/two-rooms";
-        let track = |n: u32, stream: bool| Track { n, title: format!("Room {n}"), artist: None, duration_secs: None, stream: stream.then(|| format!("https://t4.bcbits.com/stream/{n}")), page: (!stream).then(|| format!("https://glassharbour.bandcamp.com/track/room-{n}")) };
-        bc.keep(Album { url: page.into(), title: "Two Rooms".into(), artist: "Glass Harbour".into(), cover: None, tracks: vec![track(1, true), track(2, false)], released: None, label: None, account: None, about: None, credits: None, tags: Vec::new() });
-        let listed = bc.album(page).await.unwrap().queue_tracks().len();
-        let played = bc.stream(page, 2, None).await;
-        let found: Vec<crate::app::health::Finding> = crate::app::health::check_connections(now).into_iter().filter(|f| f.key == "connections:bandcamp-check").collect();
-        let said: Vec<String> = found.iter().map(|f| f.title.clone()).collect();
-        HELD_UNTIL.store(was, std::sync::atomic::Ordering::Relaxed);
-        let opens = found.iter().map(|f| f.open.as_ref().map(|o| (o.page, o.thing))).collect::<Vec<_>>();
-        assert_eq!(opens, [Some(("settings", Some("bandcamp")))], "G9: opens Bandcamp's page in Settings");
-        assert!(said.len() == 1 && said[0].starts_with("Bandcamp asked for a browser check; Cratarr stopped asking until "), "{said:?}");
-        assert!(until.is_some_and(|u| u >= now + CHECK_HOLD_SECS), "{until:?}");
-        assert!(searched.is_err_and(|e| not_read(&e)), "not read, not nothing found");
-        assert!(crate::app::reach::state("bandcamp").failures > 0, "a failure for Health's connections");
-        assert_eq!(listed, 2, "the track with its own page plays too");
-        assert!(played.is_err_and(|e| not_read(&e)), "its own page asked for only now, as it is played");
     }
 
     /// Y8: the day's hold after the check survives a restart: kept in the user data as it is set, taken up again at start.
