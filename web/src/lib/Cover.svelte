@@ -1,14 +1,15 @@
 <script module lang="ts">
   // Covers that failed to load (an album without art answers 404, as does Android's /__device/cover for an album it
   // has none for): every place that shows one shows the stand-in at once, without asking again. Blurred backdrops
-  // check it too, and leave themselves out. Those that failed while Cratarr was out of reach are asked again when it is
-  // back (lib/coverFailures).
-  import { failures } from './coverFailures.svelte';
+  // check it too, and leave themselves out. Only that 404 is kept: one that failed for another reason is asked again after
+  // a pause, and those that failed while Cratarr was out of reach when it is back (lib/coverFailures).
+  import { answered, failures } from './coverFailures.svelte';
   const misses = failures();
   const failed = misses.failed;
   export const coverBroken = (src: string | null | undefined) => !src || !!failed[src];
-  export const coverBroke = (src: string | null | undefined) => {
-    if (src) misses.note(src);
+  /** `why`: what it answered, where known; left out, the browser is asked. */
+  export const coverBroke = (src: string | null | undefined, why?: number | null) => {
+    if (src) misses.note(src, why);
   };
   /** A mosaic's covers as drawn: four while four of them load, else one (the first that loads, or the stand-in), so
    *  failed covers never make a grid of stand-ins. */
@@ -62,9 +63,11 @@
   function fail(e: Event) {
     const at = (e.currentTarget as HTMLImageElement).getAttribute('src');
     if (!at) return;
-    // As the place that draws it knows it: a record with no cover has none at any size.
-    if (src) coverBroke(src);
-    coverBroke(at);
+    // As the place that draws it knows it: a record with no cover has none at any size. What the asked size answered says
+    // which (lib/coverFailures).
+    const why = answered(at);
+    if (src) coverBroke(src, why);
+    coverBroke(at, why);
     onfail?.(src ?? at);
     onready?.();
   }

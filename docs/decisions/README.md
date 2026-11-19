@@ -318,3 +318,18 @@ by a later record that says so in its header. A new decision takes the next numb
   server through a peer account and its key, its catalogue mirrored with its analysis, its streams relayed; read-only,
   dimmed while away, your plays and favourites kept by your own ids. Reverses "modes only" for Cratarr peers; Jellyfin
   and Navidrome stay modes. Then playlists, offline, a bounded cache and a record shown once; iroh after a trial.
+- [0104: The domain core](0104-the-domain-core.md): accepted, for 0.18. One home per object; the request, the Soulseek
+  item and the arrival each move by one pure `next()`; facts keep their sources; one `can()` on the server; one view per
+  object with its actions and a version; one sheet per object kind, its state deciding the sections and the opening
+  place adding only its context; one command path with one Undo; one identity matcher; live updates per object.
+- [0105: No source ranks above another](0105-no-source-ranks-above-another.md): accepted, 0.17 in part. The counting
+  order only says who is asked first; a busy source is passed over, never an answer; disagreeing sources are versions,
+  none chosen; the hand, then the files, then the services as equals; Bandcamp only through MusicBrainz's link.
+- [0106: The server crate split](0106-the-server-crate-split.md): accepted, 0.18's first change. Nine crates in a graph
+  with no cycles, moves only, each step green with the same test counts; `app` cut by area with the domain core.
+- [0107: Pictures are facts, with one picker](0107-pictures-are-facts-with-one-picker.md): accepted, for 0.18. Covers,
+  artists' photos and lists' pictures keep every source's candidate; the hand's pick wins, kept by the object's id, with
+  one Undo; one picker for every kind.
+- [0108: A request loop never reaches the server](0108-a-request-loop-never-reaches-the-server.md): accepted, 0.17.
+  One guard holds back a GET sent over 60 times in 10 s, for as long as a loop keeps asking; a page test fails a new
+  effect that reads and writes one state; a failure is never read as "nothing".

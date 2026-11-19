@@ -52,6 +52,38 @@ const MISSING_KEEP: Duration = Duration::from_secs(60);
 /// How long an account's crates, with their tracks, are kept for search: a query is asked again as it is typed, and
 /// making every crate is the Crates page's work.
 const CRATES_KEEP: Duration = Duration::from_secs(60);
+/// Past this age, where the last making behind failed, a kept list is made again inline (M6): a refresh that keeps failing never
+/// serves the old list for good, while an idle while's first search is still served at once.
+const KEPT_MOST: Duration = Duration::from_secs(10 * 60);
+
+/// What a search does with a kept list (M6): serves it; serves it and makes it again behind; makes it again inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeptUse {
+    Serve,
+    Behind,
+    Inline,
+}
+
+/// `KeptUse` of a list `age` old, kept `keep`, whose last making behind failed or not.
+fn kept_use(age: Duration, keep: Duration, last_failed: bool) -> KeptUse {
+    if age >= KEPT_MOST && last_failed {
+        KeptUse::Inline
+    } else if age >= keep {
+        KeptUse::Behind
+    } else {
+        KeptUse::Serve
+    }
+}
+
+/// Runs its closure when dropped, however a making ends, a panic too (M6): a making's mark is never left set, so its list is made
+/// again; `std::thread::panicking` says a panic ended it.
+struct OnDrop<F: FnMut()>(F);
+
+impl<F: FnMut()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        (self.0)()
+    }
+}
 
 type Members = Arc<Vec<(String, String, Vec<String>)>>;
 
@@ -575,23 +607,56 @@ async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::dis
     type Kept = Option<(Instant, Arc<Vec<crate::app::discover::Missing>>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
     static MAKING: AtomicBool = AtomicBool::new(false);
+    static FAILED: AtomicBool = AtomicBool::new(false);
     let kept = KEPT.get_or_init(Default::default);
-    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone() {
-        if at.elapsed() >= MISSING_KEEP && !MAKING.swap(true, Ordering::AcqRel) {
-            let cat = app.library.catalogue();
-            crate::run::spawn(async move {
-                match crate::app::discover::all_missing(cat).await {
-                    Ok((m, _)) => *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), Arc::new(m))),
-                    Err(e) => tracing::debug!("search: the missing albums not made again: {e:#}"),
+    let old = kept.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    if let Some((at, m)) = &old {
+        match kept_use(at.elapsed(), MISSING_KEEP, FAILED.load(Ordering::Acquire)) {
+            KeptUse::Serve => return Ok(m.clone()),
+            KeptUse::Behind => {
+                if !MAKING.swap(true, Ordering::AcqRel) {
+                    let cat = app.library.catalogue();
+                    crate::run::spawn(async move {
+                        // M6: the mark let go of however the making ends; a panic is a failure.
+                        let _making = OnDrop(|| {
+                            if std::thread::panicking() {
+                                FAILED.store(true, Ordering::Release);
+                            }
+                            MAKING.store(false, Ordering::Release);
+                        });
+                        match crate::app::discover::all_missing(cat).await {
+                            Ok((m, _)) => {
+                                *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), Arc::new(m)));
+                                FAILED.store(false, Ordering::Release);
+                            }
+                            Err(e) => {
+                                FAILED.store(true, Ordering::Release);
+                                tracing::warn!(target: "search", "the missing albums not made again: {e:#}");
+                            }
+                        }
+                    });
                 }
-                MAKING.store(false, Ordering::Release);
-            });
+                return Ok(m.clone());
+            }
+            KeptUse::Inline => {}
         }
-        return Ok(m);
     }
-    let m = Arc::new(crate::app::discover::all_missing(app.library.catalogue()).await?.0);
-    *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
-    Ok(m)
+    match crate::app::discover::all_missing(app.library.catalogue()).await {
+        Ok((m, _)) => {
+            let m = Arc::new(m);
+            *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
+            FAILED.store(false, Ordering::Release);
+            Ok(m)
+        }
+        // Made again inline and failing: the old list rather than no search.
+        Err(e) => match old {
+            Some((_, m)) => {
+                tracing::warn!(target: "search", "the missing albums not made again: {e:#}");
+                Ok(m)
+            }
+            None => Err(e),
+        },
+    }
 }
 
 /// The asking account's crates with their tracks. Made once per account and libraries switched off; then the last answer comes at
@@ -601,27 +666,61 @@ async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<M
     type Key = (Option<String>, Vec<String>);
     static KEPT: OnceLock<Mutex<HashMap<Key, (Instant, Members)>>> = OnceLock::new();
     static MAKING: OnceLock<Mutex<std::collections::HashSet<Key>>> = OnceLock::new();
+    static FAILED: OnceLock<Mutex<std::collections::HashSet<Key>>> = OnceLock::new();
     let account = (app.playlists.asking_account(), without.to_vec());
     let kept = KEPT.get_or_init(Default::default);
-    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned() {
-        let making = MAKING.get_or_init(Default::default);
-        if at.elapsed() >= CRATES_KEEP && making.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone()) {
-            let (playlists, key) = (app.playlists.clone(), account.clone());
-            crate::run::spawn(crate::serve::who::carried(async move {
-                match playlists.crate_members(&key.1).await {
-                    Ok(m) => {
-                        kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), (Instant::now(), Arc::new(m)));
-                    }
-                    Err(e) => tracing::debug!("search: the crates not made again: {e}"),
+    let failed = FAILED.get_or_init(Default::default);
+    let old = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned();
+    if let Some((at, m)) = &old {
+        let last_failed = failed.lock().unwrap_or_else(|p| p.into_inner()).contains(&account);
+        match kept_use(at.elapsed(), CRATES_KEEP, last_failed) {
+            KeptUse::Serve => return Ok(m.clone()),
+            KeptUse::Behind => {
+                let making = MAKING.get_or_init(Default::default);
+                if making.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone()) {
+                    let (playlists, key) = (app.playlists.clone(), account.clone());
+                    crate::run::spawn(crate::serve::who::carried(async move {
+                        // M6: the mark let go of however the making ends; a panic is a failure.
+                        let gone = key.clone();
+                        let _making = OnDrop(move || {
+                            if std::thread::panicking() {
+                                failed.lock().unwrap_or_else(|p| p.into_inner()).insert(gone.clone());
+                            }
+                            making.lock().unwrap_or_else(|p| p.into_inner()).remove(&gone);
+                        });
+                        match playlists.crate_members(&key.1).await {
+                            Ok(m) => {
+                                kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), (Instant::now(), Arc::new(m)));
+                                failed.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
+                            }
+                            Err(e) => {
+                                failed.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone());
+                                tracing::warn!(target: "search", "the crates not made again: {e}");
+                            }
+                        }
+                    }));
                 }
-                making.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
-            }));
+                return Ok(m.clone());
+            }
+            KeptUse::Inline => {}
         }
-        return Ok(m);
     }
-    let m: Members = Arc::new(app.playlists.crate_members(without).await?);
-    kept.lock().unwrap_or_else(|p| p.into_inner()).insert(account, (Instant::now(), m.clone()));
-    Ok(m)
+    match app.playlists.crate_members(without).await {
+        Ok(m) => {
+            let m: Members = Arc::new(m);
+            kept.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone(), (Instant::now(), m.clone()));
+            failed.lock().unwrap_or_else(|p| p.into_inner()).remove(&account);
+            Ok(m)
+        }
+        // Made again inline and failing: the old list rather than no search.
+        Err(e) => match old {
+            Some((_, m)) => {
+                tracing::warn!(target: "search", "the crates not made again: {e}");
+                Ok(m)
+            }
+            None => Err(e.into()),
+        },
+    }
 }
 
 /// Each stage of a search and how long it took (F45): one line in the log when the whole took more than `SLOW_SEARCH`, so a slow
@@ -1060,6 +1159,34 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M6 (the review of 1.2): a kept list is served while fresh, served and made again behind once older, and made again inline
+    /// past ten minutes only where the last making behind failed (an idle while's first search still served at once); a making that
+    /// panics lets go of its mark and counts as failed.
+    #[test]
+    fn a_search_list_that_keeps_failing_is_made_again_never_served_stale_for_good() {
+        let (keep, min) = (Duration::from_secs(60), Duration::from_secs(60));
+        assert_eq!(kept_use(Duration::from_secs(10), keep, false), KeptUse::Serve);
+        assert_eq!(kept_use(Duration::from_secs(10), keep, true), KeptUse::Serve);
+        assert_eq!(kept_use(2 * min, keep, false), KeptUse::Behind);
+        assert_eq!(kept_use(2 * min, keep, true), KeptUse::Behind);
+        assert_eq!(kept_use(11 * min, keep, false), KeptUse::Behind, "idle, not failing: served at once");
+        assert_eq!(kept_use(11 * min, keep, true), KeptUse::Inline, "failing past ten minutes: made inline");
+        static MAKING: AtomicBool = AtomicBool::new(true);
+        static FAILED: AtomicBool = AtomicBool::new(false);
+        let ended = std::panic::catch_unwind(|| {
+            let _making = OnDrop(|| {
+                if std::thread::panicking() {
+                    FAILED.store(true, Ordering::Release);
+                }
+                MAKING.store(false, Ordering::Release);
+            });
+            panic!("a making that panics");
+        });
+        assert!(ended.is_err());
+        assert!(!MAKING.load(Ordering::Acquire), "the mark let go of");
+        assert!(FAILED.load(Ordering::Acquire), "a panic is a failure");
+    }
 
     /// An artist found by a word with tracks and no album of their own (the owner, testing 0.16.0: "C Cat Trance" said "0
     /// albums") says no count.

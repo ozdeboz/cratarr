@@ -5974,6 +5974,9 @@ async fn a_want_of_an_album_whose_copy_went_is_fetched_end_to_end() {
     std::fs::create_dir_all(&data).unwrap();
     make_layout(&library);
     let music = library.join("music");
+    // The Given: the album's one copy is Music's. The layout keeps a second in ann's own music, a library too, which would hold
+    // the record had (A3.1) and keep its files present at the same relative path (the review's H1).
+    std::fs::remove_dir_all(library.join("own").join("ann").join(SHORES)).unwrap();
     settings(&data, &[(&music, "main")], &library.join("own"));
     let s = Server::start(&data).await;
     s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -5985,12 +5988,15 @@ async fn a_want_of_an_album_whose_copy_went_is_fetched_end_to_end() {
     let admin = s.sign_in(ANN.0, ANN.1).await;
     std::fs::remove_dir_all(music.join(SHORES)).unwrap();
     // The catalogue looks when asked, as an app's scan asks it (else at its next pass, minutes on), and marks the copy's files
-    // gone. The Library list may hold the album the day a gone file is kept for; "had" reads present files alone.
+    // gone. The Library list may hold the album the day a gone file is kept for; "had" reads present files alone. Music's
+    // files alone are counted: another library's copy at the same relative path is another copy.
     let gone = || {
         let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
         db.busy_timeout(Duration::from_secs(10)).unwrap();
-        let sql = format!("SELECT COALESCE(SUM(gone_at IS NOT NULL), 0), COALESCE(SUM(gone_at IS NULL), 0) FROM files WHERE rel LIKE '{SHORES}/%'");
-        let (went, here): (i64, i64) = db.query_row(&sql, [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let sql = "SELECT COALESCE(SUM(f.gone_at IS NOT NULL), 0), COALESCE(SUM(f.gone_at IS NULL), 0) FROM files f \
+                   JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE ?2";
+        let at = [music.to_string_lossy().to_string(), format!("{SHORES}/%")];
+        let (went, here): (i64, i64) = db.query_row(sql, at, |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         went > 0 && here == 0
     };
     s.until("the catalogue to see its copy go", Duration::from_secs(120), || async {

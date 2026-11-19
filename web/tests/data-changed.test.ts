@@ -1,6 +1,6 @@
 // What the page shows is read again when the server says it changed (lib/dataChanges; the owner, 2026-11-03: after a
 // fix the level above showed what was before). The server's word, not each action's own reload.
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { changesOn } = await import('../src/lib/dataChanges.ts');
@@ -51,3 +51,25 @@ test("a change of words (decision 0097) reads what shows words again, and nothin
   offFiles();
 });
 
+
+test('a steady stream of changes reads at most once a second, and always once more after its last (M7: a busy intake)', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  try {
+    const reads: number[] = [];
+    const off = whenChanged(['incoming'], () => reads.push(Date.now()));
+    let lastChange = 0;
+    for (let i = 0; i < 40; i++) {
+      lastChange = Date.now();
+      emit('changed', { area: 'incoming' });
+      mock.timers.tick(250);
+    }
+    mock.timers.tick(5000);
+    off();
+    assert.ok(reads.length >= 9 && reads.length <= 11, `10 s of changes, about ten reads: ${reads.length}`);
+    for (let i = 1; i < reads.length; i++) assert.ok(reads[i] - reads[i - 1] >= 1000, `a second apart: ${reads[i] - reads[i - 1]} ms`);
+    assert.ok(reads[reads.length - 1] > lastChange, 'a read after the last change');
+    assert.equal(reads[0] - 1_000_000, 250, 'the first as soon as before');
+  } finally {
+    mock.timers.reset();
+  }
+});

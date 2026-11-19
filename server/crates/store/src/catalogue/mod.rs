@@ -3547,6 +3547,11 @@ impl Catalogue {
         track_of_source(&self.db(), source, item)
     }
 
+    /// `track_of_source`, a failure to read said (M4: a cover's route answers it apart from "no cover"). Blocking.
+    pub fn track_of_source_read(&self, source: &str, item: &str) -> Result<Option<i64>> {
+        Ok(track_of_source_in(&self.db(), source, item)?)
+    }
+
     /// The file a server's item names (decision 0012): for another server its link says one file, whichever copy that is;
     /// Cratarr's own ids name a track, so any present file. Blocking.
     pub fn place_of_source(&self, source: &str, item: &str) -> Option<(i64, String)> {
@@ -4159,6 +4164,11 @@ impl Catalogue {
 
     pub fn file_of(&self, track: i64) -> Option<(i64, String)> {
         file_of(&self.db(), track)
+    }
+
+    /// `file_of`, a failure to read said (M4). Blocking.
+    pub fn file_of_read(&self, track: i64) -> Result<Option<(i64, String)>> {
+        Ok(file_of_in(&self.db(), track)?)
     }
 
     /// A note the catalogue keeps (its `meta` table), by key.
@@ -4799,25 +4809,30 @@ fn album_gains_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Has
 
 /// See `Catalogue::track_of_source`; on the catalogue's connection, held (`files_of_sources` asks for many at once).
 fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
+    track_of_source_in(db, source, item).ok().flatten()
+}
+
+/// `track_of_source`, its failures said.
+fn track_of_source_in(db: &Connection, source: &str, item: &str) -> rusqlite::Result<Option<i64>> {
     if source == crate::source::CRATARR {
         // An id a take retired stands for the track that took it: a queue, an export or a crate can name it long after.
-        let track = taken_by(db, crate::serve::ids::track_of(item)?).ok()?;
+        let Some(asked) = crate::serve::ids::track_of(item) else { return Ok(None) };
+        let track = taken_by(db, asked)?;
         let present = format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}");
-        return db.query_row(&present, [track], |_| Ok(())).optional().ok().flatten().map(|()| track);
+        return Ok(db.query_row(&present, [track], |_| Ok(())).optional()?.map(|()| track));
     }
-    db.query_row(
-        &format!(
-            "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
+    Ok(db
+        .query_row(
+            &format!(
+                "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
              WHERE s.source = ?1 AND s.track_id = ?2 AND {}",
-            PRESENT_F
-        ),
-        params![source, item],
-        |r| r.get(0),
-    )
-    .optional()
-    .ok()
-    .flatten()
-    .flatten()
+                PRESENT_F
+            ),
+            params![source, item],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten())
 }
 
 /// A file's item on a source. Cratarr's own item is the track, whichever copy the file is: its links come from `songs`, which
@@ -4838,10 +4853,12 @@ fn row_line_of(folders: &InUse, files: &[Place], row: Option<&Place>) -> Option<
 
 /// See `Catalogue::file_of`.
 fn file_of(db: &Connection, track: i64) -> Option<(i64, String)> {
-    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT} ORDER BY folder, rel LIMIT 1"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()
-        .ok()
-        .flatten()
+    file_of_in(db, track).ok().flatten()
+}
+
+/// `file_of`, its failures said.
+fn file_of_in(db: &Connection, track: i64) -> rusqlite::Result<Option<(i64, String)>> {
+    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT} ORDER BY folder, rel LIMIT 1"), [track], |r| Ok((r.get(0)?, r.get(1)?))).optional()
 }
 
 /// See `Catalogue::files_of`.

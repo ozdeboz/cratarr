@@ -1155,24 +1155,54 @@ async fn artist_search(name: &str) -> Result<Option<Value>> {
     get(&format!("/database/search?{}", q.query().unwrap_or_default())).await
 }
 
-/// An artist's Discogs id and how it was found (`artist_id_of`): by MusicBrainz's link from their id, else Discogs' search by their
-/// name, asked only where MusicBrainz links none.
-pub async fn artist_found(mbid: Option<&str>, name: &str) -> Result<Option<(u64, &'static str)>> {
-    let links = match mbid {
-        Some(m) => mb_links("artist", m).await?,
-        None => Vec::new(),
-    };
-    if let Some(found) = artist_id_of(&links, None, name) {
-        return Ok(Some(found));
-    }
-    Ok(artist_id_of(&links, artist_search(name).await?.as_ref(), name))
+/// An artist's Discogs id as `artist_found` found it: the id and how (`artist_id_of`), none where no way names one; and whether
+/// MusicBrainz's links of them could not be had this time (F47: busy, failed), so the link is to be asked again later.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ArtistFound {
+    pub id: Option<(u64, &'static str)>,
+    pub link_unread: bool,
 }
 
-/// An artist's facts: by MusicBrainz's link from their id, else Discogs' search by name, by the one rule (`name_match`).
-pub async fn artist_facts(mbid: Option<&str>, name: &str) -> Result<Option<ArtistFacts>> {
-    let Some((id, _)) = artist_found(mbid, name).await? else { return Ok(None) };
-    let Some(v) = get(&format!("/artists/{id}")).await? else { return Ok(None) };
-    Ok(Some(artist_of(id, &v)))
+/// An artist's Discogs id and how it was found (`artist_id_of`): by MusicBrainz's link from their id, else Discogs' search by their
+/// name, asked only where MusicBrainz links none. A busy MusicBrainz never stops it (F47): its search by the name stands in, and the
+/// link is to be asked again later (`link_unread`).
+pub async fn artist_found(mbid: Option<&str>, name: &str) -> Result<ArtistFound> {
+    artist_found_with(mbid, name, |m| async move { mb_links("artist", &m).await }, |n| async move { artist_search(&n).await }).await
+}
+
+/// `artist_found` with its two questions: MusicBrainz's links of an id (`links`), Discogs' search for a name (`search`). MusicBrainz
+/// switched off is not asked. Its question failing (busy, a 503) is no answer of Discogs': the search by the name stands in, by the
+/// one rule (A1.8 strict), and `link_unread` says to ask for the link again later (F47).
+async fn artist_found_with<L, LF, S, SF>(mbid: Option<&str>, name: &str, links: L, search: S) -> Result<ArtistFound>
+where
+    L: FnOnce(String) -> LF,
+    LF: std::future::Future<Output = Result<Vec<String>>>,
+    S: FnOnce(String) -> SF,
+    SF: std::future::Future<Output = Result<Option<Value>>>,
+{
+    let (links, link_unread) = match mbid.filter(|_| super::switches::is_on(super::switches::MUSICBRAINZ)) {
+        Some(m) => match links(m.to_string()).await {
+            Ok(links) => (links, false),
+            Err(e) => {
+                tracing::info!(target: "discover", "an artist's MusicBrainz links not read, Discogs searched by their name: {e:#}");
+                (Vec::new(), true)
+            }
+        },
+        None => (Vec::new(), false),
+    };
+    if let Some(found) = artist_id_of(&links, None, name) {
+        return Ok(ArtistFound { id: Some(found), link_unread });
+    }
+    Ok(ArtistFound { id: artist_id_of(&links, search(name.to_string()).await?.as_ref(), name), link_unread })
+}
+
+/// An artist's facts: by MusicBrainz's link from their id, else Discogs' search by name, by the one rule (`name_match`); and whether
+/// MusicBrainz's link could not be had this time (F47), so they are asked again soon.
+pub async fn artist_facts(mbid: Option<&str>, name: &str) -> Result<(Option<ArtistFacts>, bool)> {
+    let found = artist_found(mbid, name).await?;
+    let Some((id, _)) = found.id else { return Ok((None, found.link_unread)) };
+    let Some(v) = get(&format!("/artists/{id}")).await? else { return Ok((None, found.link_unread)) };
+    Ok((Some(artist_of(id, &v)), found.link_unread))
 }
 
 /// Discogs' genres and styles of a release or master MusicBrainz links (0.10, `app::works`: `release:<id>`,
@@ -1238,6 +1268,31 @@ mod facts_tests {
         assert_eq!(artist_id_of(&[], Some(&serde_json::json!({ "results": [{ "title": "Coma", "id": 12 }] })), "Coma"), Some((12, "search")));
         assert_eq!(artist_id_of(&[], Some(&serde_json::json!({ "results": [{ "title": "Coma (2)", "id": 11 }, { "title": "Coma", "id": 12 }] })), "Coma"), None);
         assert_eq!(artist_id_of(&[], None, "Coma"), None, "no search, no link: none");
+    }
+
+    /// F47 (the owner, 2026-11-19): an artist holding a MusicBrainz id, MusicBrainz busy (a 503) for their links. Discogs is never
+    /// stopped by it: its own search by the name stands in, by the one rule (A1.8 strict: a namesake-marked answer stays none), and the
+    /// link is to be asked again later (`link_unread`). MusicBrainz answering with a link: that one, `link`, and no search asked.
+    #[tokio::test]
+    async fn a_busy_musicbrainz_never_stops_discogs_finding_an_artist() {
+        let _state = crate::app::references::TestState::set().await;
+        let m = "00000000-0000-4000-8000-000000000f47";
+        let busy = |_: String| std::future::ready(Err::<Vec<String>, _>(anyhow::anyhow!("MusicBrainz answered 503")));
+        let answer = |v: serde_json::Value| move |_: String| std::future::ready(Ok::<_, anyhow::Error>(Some(v)));
+        let one = serde_json::json!({ "results": [{ "title": "Kite Theory", "id": 12 }] });
+        let found = artist_found_with(Some(m), "Kite Theory", busy, answer(one.clone())).await.expect("never stopped by MusicBrainz");
+        assert_eq!(found, ArtistFound { id: Some((12, "search")), link_unread: true });
+        let marked = serde_json::json!({ "results": [{ "title": "Kite Theory (2)", "id": 11 }, { "title": "Kite Theory", "id": 12 }] });
+        let found = artist_found_with(Some(m), "Kite Theory", busy, answer(marked)).await.expect("never stopped by MusicBrainz");
+        assert_eq!(found, ArtistFound { id: None, link_unread: true }, "A1.8 strict, as ever");
+        let searched = std::sync::atomic::AtomicUsize::new(0);
+        let linked = |_: String| std::future::ready(Ok::<_, anyhow::Error>(vec!["https://www.discogs.com/artist/700001-Kite-Theory".to_string()]));
+        let counted = |_: String| {
+            searched.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(Ok::<_, anyhow::Error>(Some(one.clone())))
+        };
+        assert_eq!(artist_found_with(Some(m), "Kite Theory", linked, counted).await.unwrap(), ArtistFound { id: Some((700001, "link")), link_unread: false });
+        assert_eq!(searched.load(std::sync::atomic::Ordering::SeqCst), 0, "no search where MusicBrainz links one");
     }
 
     #[test]

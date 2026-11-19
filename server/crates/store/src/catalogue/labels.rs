@@ -261,6 +261,20 @@ impl Catalogue {
         }
     }
 
+    /// A record's credited artists with their names, in credit order, on a reader (a record's page never waits on the writer). M8,
+    /// M9. Blocking.
+    pub fn record_credits_named(&self, record: i64) -> Result<Vec<(i64, String)>> {
+        let read = |db: &Connection| -> Result<Vec<(i64, String)>> {
+            let mut st = db.prepare_cached("SELECT a.id, a.name FROM record_artists r JOIN artists a ON a.id = r.artist WHERE r.record = ?1 ORDER BY r.position, a.id")?;
+            let rows = st.query_map([record], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
     /// A record's artists, in order. Blocking.
     #[cfg_attr(not(test), allow(dead_code))] // an artist's page and a record's (C54, C55)
     pub fn record_artists(&self, record: i64) -> Result<Vec<i64>> {

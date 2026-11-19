@@ -924,9 +924,15 @@ impl Serve {
         self.library.roots().into_iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| f)
     }
 
-    /// The record a song is in; none for a song not held. Blocking.
+    /// Tests: the record a song is in; none for a song not held. Blocking.
+    #[cfg(test)]
     pub fn album_of_song(&self, song: &str) -> Option<String> {
-        self.library.songs_by_id(&[song.to_string()]).ok()?.pop().map(|s| s.album_id)
+        self.album_of_song_read(song).ok().flatten()
+    }
+
+    /// `album_of_song`, a failure to read said (M4: a cover's route answers it apart from "no cover"). Blocking.
+    pub fn album_of_song_read(&self, song: &str) -> Result<Option<String>> {
+        Ok(self.library.songs_by_id(&[song.to_string()])?.pop().map(|s| s.album_id))
     }
 
     /// A record's cover at most `size` pixels on its longer side, for a list or a grid (finding 86; the player and a panel keep the

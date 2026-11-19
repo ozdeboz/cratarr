@@ -2666,6 +2666,9 @@ export type AlbumView = {
   request?: AlbumRequest;
   /** Its labels, each by its id for life where it has a row, else by its reference (F9). */
   labels?: LabelOf[];
+  /** Its artists one by one, in the credit's order, each by their id for life where Cratarr has them (the review of 1.2, M8 and
+   *  M9: the chips, a record not had's too); absent from an answer before it, and from another server's. */
+  artists?: import('./artistIds').ArtistOf[];
   /** Its cover's address: its own, else its release group's, else its Bandcamp page's. */
   cover?: string;
   /** A retired record's: when it went from Music (epoch seconds, OQ16). */

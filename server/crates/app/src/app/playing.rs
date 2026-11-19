@@ -208,6 +208,10 @@ pub struct AlbumMore {
     /// name, the one label of it where exactly one has it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<LabelOf>,
+    /// Its credited artists in credit order, each by their id for life (`ar-<n>`): the page opens and pictures each by it, never by
+    /// a name (M8, M9: the second "Coma" is never the first's). A record had's and a record not had's alike.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<ArtistOf>,
     /// Its cover's address (C54): its own, else its release group's, else its Bandcamp page's (`cover_cache::addresses_of`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cover: Option<String>,
@@ -229,6 +233,18 @@ pub struct AlbumMore {
 
 // A label as an album's view names it: as every label About shows (F9, `labels::LabelOf`).
 use super::labels::LabelOf;
+
+/// A credited artist as an album's view names them (M8, M9): their name and their id for life (`ar-<n>`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArtistOf {
+    pub name: String,
+    pub id: String,
+}
+
+/// A record's credited artists as its view names them, in credit order (M8, M9), on a reader. Blocking.
+fn artists_of(cat: &crate::catalogue::Catalogue, record: i64) -> Result<Vec<ArtistOf>> {
+    Ok(cat.record_credits_named(record)?.into_iter().map(|(artist, name)| ArtistOf { name, id: crate::serve::ids::artist(artist) }).collect())
+}
 
 /// A record's labels as its view names them (C54, G4): a record not had's page and an owned album's alike, each by its id for life
 /// (`la-<n>`), its name and its catalogue number there. Blocking.
@@ -364,6 +380,7 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
     // None kept: read where a reference may give it (`looking`); with no reference to read one from, said so (F1.4).
     let (looking, no_list) = (list.is_none() && referenced, (list.is_none() && !referenced).then(Vec::new));
     let labels = labels_of(cat, q.row.id)?;
+    let artists = artists_of(cat, q.row.id)?;
     let sources = sources_of(&q.refs, list.map(|(s, _)| s));
     // F16.1: its own address, which tries each of its pictures.
     let cover = Some(super::cover_cache::record_address(q.row.id));
@@ -391,6 +408,7 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
             no_list,
             have: q.holder.filter(|h| *h != id).map(ids::record),
             labels,
+            artists,
             cover,
             was_until: row.retired_at,
             bandcamp: crate::bandcamp::shown(q.bandcamp),
@@ -1010,10 +1028,12 @@ impl PlayingService {
         let listening = s.album_listening(album_id).await.unwrap_or_default();
         // Its labels (G4), as a record not had's page shows them: each a chip that opens the label's page; and where it comes from
         // (F7), its rows its files.
-        let (labels, sources) = match crate::serve::ids::record_number(album_id).filter(|_| source_id == crate::source::cratarr::KIND.id) {
+        let (labels, sources, credited) = match crate::serve::ids::record_number(album_id).filter(|_| source_id == crate::source::cratarr::KIND.id) {
             Some(record) => {
                 let c = self.lib.catalogue();
-                crate::run::spawn_blocking(move || (labels_of(&c, record).unwrap_or_default(), record_sources(&c, record).unwrap_or_default())).await.unwrap_or_default()
+                crate::run::spawn_blocking(move || (labels_of(&c, record).unwrap_or_default(), record_sources(&c, record).unwrap_or_default(), artists_of(&c, record).unwrap_or_default()))
+                    .await
+                    .unwrap_or_default()
             }
             None => Default::default(),
         };
@@ -1046,7 +1066,7 @@ impl PlayingService {
             added: listening.added,
             played: listening.played,
             plays: listening.plays,
-            more: AlbumMore { words, labels, sources, editions, ..AlbumMore::default() },
+            more: AlbumMore { words, labels, artists: credited, sources, editions, ..AlbumMore::default() },
         })
     }
 
@@ -1245,7 +1265,8 @@ impl PlayingService {
     }
 
     /// The cover of the album that holds the given track. `NotFound` when the source or track is unknown, the track
-    /// is not in a library in use, or there is no cover. The ids are only lookup keys, never paths.
+    /// is not in a library in use, or there is no cover; `Unread` where the catalogue could not be read now (M4). The ids are
+    /// only lookup keys, never paths.
     pub async fn cover(&self, source_id: &str, id: &str, if_none_match: Option<&str>) -> crate::covers::Outcome {
         use crate::covers::{Outcome, resolve, valid_item_id};
         if !valid_item_id(id) {
@@ -1254,15 +1275,23 @@ impl PlayingService {
         // Where the catalogue has the track: in any of its folders, and for Cratarr's own ids without the source
         // connected (decision 0032).
         let (cat, source, item) = (self.lib.catalogue(), source_id.to_string(), id.to_string());
-        let place = crate::run::spawn_blocking(move || {
-            let (folder, rel) = cat.file_of(cat.track_of_source(&source, &item)?)?;
-            Some((cat.folders().get(folder)?.clone(), rel))
+        let place = crate::run::spawn_blocking(move || -> anyhow::Result<Option<(std::path::PathBuf, String)>> {
+            let Some(track) = cat.track_of_source_read(&source, &item)? else { return Ok(None) };
+            let Some((folder, rel)) = cat.file_of_read(track)? else { return Ok(None) };
+            Ok(cat.folders().get(folder).cloned().map(|root| (root, rel)))
         })
-        .await
-        .ok()
-        .flatten();
-        if let Some((root, rel)) = place {
-            return resolve(&root, &rel, if_none_match).await;
+        .await;
+        match place {
+            Ok(Ok(Some((root, rel)))) => return resolve(&root, &rel, if_none_match).await,
+            Ok(Ok(None)) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(target: "library", track = %id, reason = %format!("{e:#}"), "a cover not read now");
+                return Outcome::Unread;
+            }
+            Err(e) => {
+                tracing::warn!(target: "library", track = %id, reason = %e, "a cover not read now");
+                return Outcome::Unread;
+            }
         }
         let Some((a, s)) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id) else { return Outcome::NotFound };
         let Ok(track) = s.track(id).await else { return Outcome::NotFound };
@@ -1453,6 +1482,23 @@ mod tests {
             serde_json::Value::Array(labels),
             serde_json::json!([{ "id": ids::label(kite), "name": "Kite Records" }, { "id": ids::label(low), "name": "Low Tide Records", "catno": "LTR-007" }])
         );
+    }
+
+    /// M8, M9 (the review of 1.2): a record's view names its credited artists in credit order, each by their id for life, a record
+    /// not had's and a had one's alike: the second "Coma" by their own id, never the first's by the name.
+    #[test]
+    fn a_records_view_names_its_artists_by_id_in_credit_order() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let (kite, coma) = (cat.artist_for("Kite Theory").unwrap(), cat.artist_for("Coma").unwrap());
+        let second = cat.artist_apart("Coma").unwrap();
+        let (wanted, owned) = (cat.record_for_tests("Viaggio", 0), cat.record_for_tests("Tide Tables", 2));
+        for (record, artist, at) in [(wanted, second, 1), (wanted, kite, 0), (owned, coma, 0)] {
+            cat.db_for_tests().execute("INSERT OR REPLACE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')", rusqlite::params![record, artist, at]).unwrap();
+        }
+        let shown = serde_json::to_value(&page(&cat, wanted).more).unwrap();
+        assert_eq!(shown["artists"], serde_json::json!([{ "name": "Kite Theory", "id": ids::artist(kite) }, { "name": "Coma", "id": ids::artist(second) }]));
+        let had = artists_of(&cat, owned).unwrap();
+        assert!(had.contains(&ArtistOf { name: "Coma".into(), id: ids::artist(coma) }), "{had:?}");
     }
 
     /// C54 (R13): a record not had that another record has by the one had rule (here by its artist and title, nothing
