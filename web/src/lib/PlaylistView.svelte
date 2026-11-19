@@ -66,6 +66,7 @@
     type PlaylistRow,
     tasteFits,
     getRecordHealth,
+    type RecordFinding,
   } from './api';
   import {
     builderOf,
@@ -132,6 +133,8 @@
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
+  import RecordProblemSheet from './RecordProblemSheet.svelte';
+  import { sheetFor } from './healthTools';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -174,7 +177,7 @@
   import { serverPlaylistOf } from './panel.svelte';
   import { keepsPlace } from './keepsPlace';
   import { whenChanged } from './dataChanged';
-  import { albumMoved, albumOf, albumSubject, artistMoved, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
+  import { albumMoved, albumOf, albumSubject, artistMoved, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
   import { wordRows } from './wordRows';
   import { openRadio } from './radioAsk.svelte';
@@ -378,25 +381,41 @@
   const filesLine = $derived(album ? stateLine(filesState ?? listedHere?.a.files_state) : null);
   // Its own Health problems (the owner, 2026-11-02: "on its page", a line each under its title; its missing tracks one
   // of them): an administrator's, as Health is; a tap opens that problem narrowed to this record, Back returns here.
-  let recordHealth = $state.raw<{ for: string; lines: ReturnType<typeof recordProblem>[] } | null>(null);
+  let recordHealth = $state.raw<{ for: string; findings: RecordFinding[]; lines: ReturnType<typeof recordProblem>[]; failed: string | null } | null>(null);
+  /** Read again after something was done in its sheet (F28.5), or Try again there. */
+  let healthAgain = $state(0);
   $effect(() => {
     const a = album;
     void health.findings;
     void saved;
     void undos.n;
+    void healthAgain;
     if (!a || offServer || !me.admin) return void (recordHealth = null);
     const key = `${a.source}/${a.id}`;
     if (untrack(() => recordHealth?.for) !== key) recordHealth = null;
     let gone = false;
     getRecordHealth(a.source, a.id).then(
-      (h) => !gone && (recordHealth = { for: key, lines: h.findings.map(recordProblem) }),
-      () => !gone && (recordHealth = { for: key, lines: [] }),
+      (h) => !gone && (recordHealth = { for: key, findings: h.findings, lines: h.findings.map(recordProblem), failed: null }),
+      // Read before: kept, its sheet saying why (F28.5 (c)); never read: no lines.
+      (e) => !gone && (recordHealth = untrack(() => recordHealth?.for === key ? { ...recordHealth!, failed: e instanceof Error ? e.message : 'Unexpected error' } : { for: key, findings: [], lines: [], failed: null })),
     );
     return () => (gone = true);
   });
   const healthLines = $derived(album && recordHealth?.for === `${album.source}/${album.id}` ? recordHealth.lines : []);
-  /** Its problem narrowed to it, over it (Back returns to it). */
-  const openRecordProblem = (key: string) => album && viewOver(`${HEALTH}${key}/${encodeURIComponent(albumSubject(album.source, album.id))}`);
+  // Its line opened in place (F28): a sheet over the page, the panel where it is. The first tap wins (F28.6); the finding read again
+  // without its key closes it (F28.5), and another record shown too.
+  let problemOpen = $state<{ key: string; title: string; for: string } | null>(null);
+  const problemFinding = $derived(
+    album && problemOpen?.for === `${album.source}/${album.id}` ? sheetFor(recordHealth?.findings, problemOpen.key, (f) => recordProblem(f).key) : null,
+  );
+  $effect(() => {
+    if (problemOpen && !problemFinding) untrack(() => (problemOpen = null));
+  });
+  const lineText = (l: ReturnType<typeof recordProblem>) => {
+    const whole = l.key === 'library:incomplete' ? listedHere?.a.whole_tracks : null;
+    return whole ? `${listedHere!.a.tracks} of ${plural(whole, 'track')}` : l.missing ? `${plural(l.missing, 'track')} missing` : l.text;
+  };
+  const openRecordProblem = (l: ReturnType<typeof recordProblem>) => album && (problemOpen ??= { key: l.key, title: lineText(l), for: `${album.source}/${album.id}` });
 
   // The album's artist chips: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
   // their own panel's chip). One chip per credited artist, in the credit's order (the owner, 2026-11-19, F39: "This shows
@@ -2601,7 +2620,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
               disabled={!l.act}
               onclick={() => (l.act === 'review' ? openReview('types', album.id) : l.act === 'undo' && run ? void undoRun(run, [album.id]) : undefined)}
               ><Icon name={l.tone === 'warn' ? 'bang' : l.act === 'undo' ? 'check' : l.act === 'review' ? 'pencil' : 'save'} size={14} /><span
-                >{l.text}{#if l.act === 'review'} · <b class="act">Review</b>{:else if l.act === 'undo'} · <b class="act">Undo</b>{/if}</span
+                >{l.text}{#if l.say} · <b class="act">{l.say}</b>{/if}</span
               >{#if l.progress !== null}<span class="files-meter"><i style:width={`${l.progress * 100}%`}></i></span>{/if}</button
             >
           {/if}
@@ -2618,11 +2637,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
                where they can't be looked for here, only said. -->
           {#if album && me.admin && !offServer && !notHad}
             {#each healthLines as l (l.key)}
-              {@const whole = l.key === 'library:incomplete' ? listedHere?.a.whole_tracks : null}
-              <button class="details left-out" class:warn={l.urgent} onclick={() => openRecordProblem(l.key)}
-                ><Icon name={l.key === 'library:incomplete' ? 'search' : 'bang'} size={14} /><span
-                  >{whole ? `${listedHere!.a.tracks} of ${plural(whole, 'track')}` : l.missing ? `${plural(l.missing, 'track')} missing` : l.text}</span
-                ></button
+              <button class="details left-out" class:warn={l.urgent} onclick={() => openRecordProblem(l)}
+                ><Icon name={l.key === 'library:incomplete' ? 'search' : 'bang'} size={14} /><span>{lineText(l)}</span></button
               >
             {/each}
           {:else if album && listedHere?.a.whole_tracks}<span class="details left-out"><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></span>{/if}
@@ -3167,6 +3183,19 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {/if}
 {#if bandcampMenuOpen && album && albumHead}
   <BandcampAlbumMenu album={{ id: album.id, title: albumHead.title, artist: albumHead.artist }} tracks={tracksOf((rows ?? []).filter((r) => r.id && !r.missing), BANDCAMP)} onclose={() => (bandcampMenuOpen = false)} />
+{/if}
+{#if problemOpen && problemFinding && album}
+  <!-- Its health line opened in place (F28): mounted here, as its menu is. -->
+  <RecordProblemSheet
+    finding={problemFinding}
+    problem={problemOpen.key}
+    title={problemOpen.title}
+    here={album.id}
+    failed={recordHealth?.failed ?? null}
+    onretry={() => healthAgain++}
+    onclose={() => (problemOpen = null)}
+    onchanged={() => healthAgain++}
+  />
 {/if}
 {#if albumMenuOpen && album}
   <AlbumMenu

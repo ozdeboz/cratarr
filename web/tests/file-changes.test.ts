@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { asideOf, changeOf, fieldLabel, rowLabel, runGroups, runLine, stateLine, withRun } = await import('../src/lib/fileChangeRules.ts');
+const { asideOf, changeOf, fieldLabel, fromWords, lackWords, planSheetTitle, rowLabel, runGroups, runLine, stateLine, withRun } = await import('../src/lib/fileChangeRules.ts');
 
 const run = (o: Record<string, unknown>) => ({ id: 'r1', what: 'types', title: 'Types into files', state: 'done', done: 0, of: 0, failed: [], undone: false, albums: 1, ...o }) as never;
 
@@ -13,7 +13,7 @@ test('a change: added, taken away, or one for another', () => {
   assert.deepEqual(changeOf({ before: ['Live'], after: [] }), { gone: ['Live'], came: [], kind: 'remove' });
   assert.deepEqual(changeOf({ before: ['Album'], after: ['EP'] }), { gone: ['Album'], came: ['EP'], kind: 'set' });
   assert.deepEqual(changeOf({ before: ['Jazz', 'Rock'], after: ['Jazz', 'Classical'] }), { gone: ['Rock'], came: ['Classical'], kind: 'set' }, 'a value kept is no change');
-  assert.equal(fieldLabel('releasetype'), 'Type');
+  assert.equal(fieldLabel('releasetype'), 'Release type', "F27.2 (changed by design): the sheet's and the state line's name");
   assert.equal(fieldLabel('date'), 'Date');
   assert.equal(fieldLabel('mood'), 'Mood');
 });
@@ -47,7 +47,7 @@ test('a kept run takes the place of its live one; news replaces by id', () => {
 
 test("the record's state line: its words and what a tap does", () => {
   assert.equal(stateLine(null), null);
-  assert.deepEqual(stateLine({ state: 'differs' }), { text: 'Its files differ from Cratarr', tone: null, act: 'review', progress: null });
+  assert.deepEqual(stateLine({ state: 'differs' }), { text: 'Not in its files yet', tone: null, act: 'review', say: 'Write', progress: null }, 'F27.1 (changed by design)');
   assert.equal(stateLine({ state: 'writing', done: 2, of: 4 })?.progress, 0.5);
   assert.equal(stateLine({ state: 'written', run: 'r3' })?.act, 'undo');
   assert.equal(stateLine({ state: 'written' })?.act, null, 'no run: nothing to undo');
@@ -119,4 +119,39 @@ test("the sheet names its rows by that rule, from the Library's list, read there
   assert.doesNotMatch(sheet, /f\.track \?\? fieldLabel/);
   assert.match(sheet, /const libraries = \$derived\(library\.view\?\.sources\.find\(\(s\) => s\.id === OWN\)\?\.library_info \?\? \[\]\);/);
   assert.match(sheet, /if \(!library\.view\) readLibrary\(false\)/);
+});
+
+test("F27.1: the record's state line names what its files lack, and Write", () => {
+  const line = (s: object) => {
+    const l = stateLine(s as never);
+    return l && `${l.text}${l.say ? ` · ${l.say}` : ''}`;
+  };
+  assert.equal(line({ state: 'differs', facts: [{ field: 'releasetype', values: ['album'] }] }), 'Not in its files yet: release type album · Write');
+  assert.equal(line({ state: 'differs', facts: [{ field: 'releasetype', values: ['album'] }, { field: 'date', values: ['2019'] }] }), 'Not in its files yet: release type, date · Write');
+  assert.equal(line({ state: 'changed' }), 'A file changed since it was planned · Review');
+  assert.equal(line({ state: 'written', run: 'r3' }), 'Its files written · Undo');
+  assert.equal(stateLine({ state: 'differs', facts: [{ field: 'date', values: ['2019'] }] } as never)?.act, 'review', 'a tap opens the review sheet, as today');
+  const view = readFileSync(new URL('../src/lib/PlaylistView.svelte', import.meta.url), 'utf8');
+  assert.match(view, /\{l\.text\}\{#if l\.say\} · <b class="act">\{l\.say\}<\/b>\{\/if\}/, 'the line draws its word');
+  assert.doesNotMatch(view, /Its files differ from Cratarr|<b class="act">Review<\/b>|<b class="act">Undo<\/b>/);
+});
+
+test('F27.2: the sheet says what it does: its title, the field row, the button and the line under it', () => {
+  assert.equal(planSheetTitle('types:al-42'), 'Write into the files');
+  assert.deepEqual(['run:r3', 'intake:al-1', 'renumber:al-2', 'fix:files-short', null].map(planSheetTitle), ['Written to files', 'Before adding', 'Renumber', 'Review the fixes', 'Review the fixes']);
+  assert.equal(fromWords('the release type rule'), '(by the release type rule)');
+  assert.equal(fromWords('set by hand'), '(set by hand)');
+  const sheet = readFileSync(new URL('../src/lib/FileChanges.svelte', import.meta.url), 'utf8');
+  assert.doesNotMatch(sheet, /<span class="to">\+<\/span>/, 'no bare "+"');
+  assert.match(sheet, /\{#if c\.kind === 'set'\}<span class="to">→<\/span>\{\/if\}/, 'a changed value keeps its struck old value and the arrow');
+  assert.match(sheet, /<span class="from">\{fromWords\(f\.from\)\}/);
+  assert.match(sheet, /action=\{`Write \$\{plural\(filesTicked, 'file'\)\}`\}/, '"Write 10 files", for one record and for many');
+  assert.match(sheet, /<p class="muted undoable">You can undo this\.<\/p>/);
+  assert.match(readFileSync(new URL('../src/lib/ReviewSheet.svelte', import.meta.url), 'utf8'), /planSheetTitle\(review\.thing\)/);
+});
+
+test("F27.4: the line's facts are the sheet's rows: the same fields, the same names and values", () => {
+  const facts = [{ field: 'releasetype', values: ['album'] }];
+  const rows = [{ field: 'releasetype', before: [], after: ['album'] }];
+  assert.equal(lackWords(facts), rows.map((r) => `${fieldLabel(r.field).toLowerCase()} ${r.after.join(', ')}`).join(', '));
 });

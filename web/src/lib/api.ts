@@ -1300,7 +1300,15 @@ export type FileRun = {
   albums: number;
 };
 /** A record's files against Cratarr (`done` of `of` files while writing; `written` for a day). */
-export type FilesState = { state: 'differs' | 'waiting' | 'writing' | 'written' | 'changed'; done?: number; of?: number; run?: string; at?: number };
+export type FilesState = {
+  state: 'differs' | 'waiting' | 'writing' | 'written' | 'changed';
+  done?: number;
+  of?: number;
+  run?: string;
+  at?: number;
+  /** Where it differs (F27): each field its files lack, with what it gets, as its plan's rows name them. */
+  facts?: { field: string; values: string[] }[];
+};
 const posting = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 export const getFilePlan = (kind: string, albums?: string[]) =>
   request<FilePlan>(`/api/file-changes/plans/${encodeURIComponent(kind)}${albums?.length ? `?albums=${albums.map(encodeURIComponent).join(',')}` : ''}`);

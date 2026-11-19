@@ -8,7 +8,7 @@
   import { albumCoverUrl, getFilePlan, getFileRun, type FileChosen, type FileField, type FilePlan, type FileRecord, type FileRun } from './api';
   import GenrePick from './GenrePick.svelte';
   import Asking from './Asking.svelte';
-  import { asideOf, changeOf, fieldLabel, rowLabel, runGroups, runLine, type SetAside } from './fileChangeRules';
+  import { asideOf, changeOf, fieldLabel, fromWords, rowLabel, runGroups, runLine, type SetAside } from './fileChangeRules';
   import { library, readLibrary } from './albums.svelte';
   import { apply, changesView, fileRuns, keptOf, keptRun, loadRuns, openRun, sent, undoRun } from './fileRuns.svelte';
   import { plural } from './insights.svelte';
@@ -198,9 +198,9 @@
             <img class="pic" src={f.after[0]} alt="" />
           {:else}
             {#if f.track}<span class="what">{fieldLabel(f.field)}</span>{/if}
-            {#each c.gone as g (g)}<s>{g}</s>{/each}{#if c.kind === 'set'}<span class="to">→</span>{:else if c.kind === 'add'}<span class="to">+</span>{/if}{#each c.came as n (n)}<b>{n}</b>{/each}
+            {#each c.gone as g (g)}<s>{g}</s>{/each}{#if c.kind === 'set'}<span class="to">→</span>{/if}{#each c.came as n (n)}<b>{n}</b>{/each}
           {/if}
-          <span class="from">{f.from}{#if f.certainty === 'likely'} · likely{/if}</span>
+          <span class="from">{fromWords(f.from)}{#if f.certainty === 'likely'} · likely{/if}</span>
         </dd>
       {/each}
     </dl>
@@ -226,12 +226,13 @@
       {#if plan.records.length > showing}<Item name={`${(plan.records.length - showing).toLocaleString()} more`} onclick={() => (showing += STEP)} />{/if}
     </Group>
     <SaveBar
-      label={many ? `${ticked.length.toLocaleString()} of ${plan.records.length.toLocaleString()} ticked · ${plural(filesTicked, 'file')}` : plural(filesTicked, 'file')}
-      action={many ? `Write ${ticked.length.toLocaleString()}` : 'Write'}
+      label={many ? `${ticked.length.toLocaleString()} of ${plan.records.length.toLocaleString()} ticked` : ''}
+      action={`Write ${plural(filesTicked, 'file')}`}
       saving={writing}
       canSave={ticked.length > 0 && !nonePicked}
       onsave={() => void write()}
     />
+    <p class="muted undoable">You can undo this.</p>
   {/if}
 {:else if v.view === 'run' && v.id.startsWith('l')}
   <!-- Under way: its meter, what the sheet sent, what is set aside so far. -->
@@ -354,8 +355,9 @@
     font-size: 12.5px;
   }
 
-  .from::before {
-    content: '· ';
+  .undoable {
+    margin: 6px 0 0;
+    font-size: 12.5px;
   }
 
   .tick {
