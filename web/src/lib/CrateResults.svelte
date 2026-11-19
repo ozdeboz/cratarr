@@ -255,7 +255,7 @@
     {/if}
   {/if}
   {#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
-  {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><Asking size={40} now room="given" /></div>{/if}
+  {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><Asking size={40} now room="given" said={`Reading more tracks: ${preview.rows.length.toLocaleString()} of ${preview.total.toLocaleString()}`} /></div>{/if}
 {:else if conditions.length}
   <!-- Its first answer on its way: the one loading rule's spinner (the owner, 2026-10-31: a grabbed crate showed
        nothing, no spinner either). A later change keeps the list shown until its answer. -->

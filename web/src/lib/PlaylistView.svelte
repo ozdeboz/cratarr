@@ -2886,7 +2886,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {/if}
       </ol>
       {/if}
-      {#if crate && rows.length < total}<div class="loading" bind:this={more}><Asking size={40} now room="given" /></div>{/if}
+      {#if crate && rows.length < total}<div class="loading" bind:this={more}><Asking size={40} now room="given" said={`Reading more tracks: ${rows.length.toLocaleString()} of ${total.toLocaleString()}`} /></div>{/if}
       <!-- Each list's own kind of similar ones at its foot (the owner, 2026-10-23); a crate's once all its rows are in. -->
       <!-- One's own playlist: tracks to add to it (lib/SuggestedTracks; the owner, 2026-10-23). -->
       {#if !own}

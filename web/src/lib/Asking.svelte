@@ -14,7 +14,9 @@
   // `page`: a list that is a page's whole content (Playlists, Crates, the Library, everywhere's results): the mark in the middle of
   // the room the page has left, as a page's loader (lib/PageLoading), not at the list's top (the owner, 2026-11-19: "On page lists,
   // the loading spinner should be vertically centered").
-  let { size = 48, now = false, room = 'own' }: { size?: number; now?: boolean; room?: 'own' | 'given' | 'inline' | 'page' } = $props();
+  // `said`: what this wait is for, where the wait is this list's own (more of a crate coming); else what the app waits for (lib/waiting).
+  let { size = 48, now = false, room = 'own', said = null }: { size?: number; now?: boolean; room?: 'own' | 'given' | 'inline' | 'page'; said?: string | null } = $props();
+  const line = $derived(said ?? waitingFor());
 
   let el = $state<HTMLElement>();
   /** The most a loader is where this is. */
@@ -28,7 +30,7 @@
 </script>
 
 {#if room === 'page'}<PageLoading held={false} shown={now || due} />{:else}<svelte:element this={room === 'inline' ? 'span' : 'div'} class={room === 'inline' ? 'inline' : 'asking'} class:given={room === 'given'} aria-busy="true" bind:this={el}>
-  {#if now || due}<MarkLoader size={Math.min(size, most)} />{#if waitingFor()}{#if room === 'inline'}<span>{waitingFor()}</span>{:else}<p class="for">{waitingFor()}</p>{/if}{/if}{/if}
+  {#if now || due}<MarkLoader size={Math.min(size, most)} />{#if line}{#if room === 'inline'}<span>{line}</span>{:else}<p class="for">{line}</p>{/if}{/if}{/if}
 </svelte:element>{/if}
 
 <style>
