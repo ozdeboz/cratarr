@@ -5963,7 +5963,7 @@ async fn a_record_not_had_says_its_sources_are_off_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// A3.1.1: an album whose one copy's folder was removed on disk, outside Cratarr: once the library has seen it go, a Want of it is no
+/// A3.1.1: an album whose one copy's folder was removed on disk, outside Cratarr: once the catalogue has seen it go, a Want of it is no
 /// Want of an album held: handed on, never "Already in the library", and a requests' round on it is neither done nor delivered.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
@@ -5977,14 +5977,27 @@ async fn a_want_of_an_album_whose_copy_went_is_fetched_end_to_end() {
     settings(&data, &[(&music, "main")], &library.join("own"));
     let s = Server::start(&data).await;
     s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
-    s.ok(Method::POST, "/api/users", json!({ "name": "root", "password": "root pw", "admin": true })).await;
-    s.act_as("root", "root pw").await;
+    s.ok(Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    s.act_as(ANN.0, ANN.1).await;
     s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
     let album = s.read_in("Both Shores", &music).await;
     let id = album["id"].as_str().unwrap().to_string();
+    let admin = s.sign_in(ANN.0, ANN.1).await;
     std::fs::remove_dir_all(music.join(SHORES)).unwrap();
-    s.until("the library to see its copy go", Duration::from_secs(120), || async { listed(&s, "Both Shores").await == 0 }).await;
-    let admin = s.sign_in("root", "root pw").await;
+    // The catalogue looks when asked, as an app's scan asks it (else at its next pass, minutes on), and marks the copy's files
+    // gone. The Library list may hold the album the day a gone file is kept for; "had" reads present files alone.
+    let gone = || {
+        let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        let sql = format!("SELECT COALESCE(SUM(gone_at IS NOT NULL), 0), COALESCE(SUM(gone_at IS NULL), 0) FROM files WHERE rel LIKE '{SHORES}/%'");
+        let (went, here): (i64, i64) = db.query_row(&sql, [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        went > 0 && here == 0
+    };
+    s.until("the catalogue to see its copy go", Duration::from_secs(120), || async {
+        ask(&admin, "startScan", "").await;
+        gone()
+    })
+    .await;
     let asked = admin.ok(Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Both Shores" })).await;
     let request = asked["request"]["id"].as_i64().expect("the request");
     assert_ne!(request_line(&data, request).as_deref(), Some("Already in the library"), "handed on, not had: {asked}");
