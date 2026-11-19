@@ -22,6 +22,12 @@ test('GOTO.2: a track row brings its record\'s type to its menu', () => {
   assert.match(src('generated/QueueTrack.ts'), /album_type\?: string, album_secondary\?: Array<string>/, 'as ts-rs writes it');
 });
 
+test('GOTO.4 (a): a track queued from a row keeps the row\'s type', () => {
+  assert.match(src('localPlayer.svelte.ts'), /album_type\?: string \| null;\n  album_secondary\?: string\[\];/, 'LocalTrack carries the pair');
+  assert.ok(src('PlaylistView.svelte').includes('album_type: x.album_type ?? null,\n      album_secondary: x.album_secondary ?? [],'), 'tracksOf');
+  assert.ok(src('CrateResults.svelte').includes('album_type: r.album_type ?? null,\n        album_secondary: r.album_secondary ?? [],'), 'localOf');
+});
+
 test("GOTO.3: a record's menu in a list names its rows' type", () => {
   assert.match(src('SelectionMenu.svelte'), /label=\{goToName\(albumType, albumSecondary\)\}/);
   assert.match(src('PlaylistView.svelte'), /albumType=\{rs\.find\(\(r\) => r\.album_type\)\?\.album_type \?\? null\}/);

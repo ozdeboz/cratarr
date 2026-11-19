@@ -149,7 +149,19 @@
     album_secondary: r.album_secondary ?? [],
   });
   const localOf = (rows: PlaylistRow[]): LocalTrack[] =>
-    rows.filter((r) => r.id && !r.missing).map((r) => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
+    rows
+      .filter((r) => r.id && !r.missing)
+      .map((r) => ({
+        source: preview?.source ?? 'cratarr',
+        id: r.id!,
+        name: r.name ?? r.file,
+        artist: r.artist,
+        album: r.album,
+        album_id: r.album_id ?? null,
+        album_type: r.album_type ?? null,
+        album_secondary: r.album_secondary ?? [],
+        duration_secs: r.duration_secs,
+      }));
   const openTrackMenu = (r: PlaylistRow) => r.id && !r.missing && (trackMenu = menuTrackOf(r));
   const openRecord = $derived(view === 'records' && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
   $effect(() => {
