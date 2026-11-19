@@ -7,6 +7,7 @@
 //! a weight per kind (Meilisearch's federated search).
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -567,14 +568,25 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
     out
 }
 
-/// Every missing album of the library's artists, kept a minute (`MISSING_KEEP`): the same for every account.
+/// Every missing album of the library's artists: the same for every account. Made once; then the last answer comes at once and,
+/// older than `MISSING_KEEP`, is made again behind it, one making at a time (the owner, 2026-11-19, F45: a search waited 8.7 s
+/// while this list of every missing record was made again inside it).
 async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::discover::Missing>>> {
     type Kept = Option<(Instant, Arc<Vec<crate::app::discover::Missing>>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
+    static MAKING: AtomicBool = AtomicBool::new(false);
     let kept = KEPT.get_or_init(Default::default);
-    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone()
-        && at.elapsed() < MISSING_KEEP
-    {
+    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+        if at.elapsed() >= MISSING_KEEP && !MAKING.swap(true, Ordering::AcqRel) {
+            let cat = app.library.catalogue();
+            tokio::spawn(async move {
+                match crate::app::discover::all_missing(cat).await {
+                    Ok((m, _)) => *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), Arc::new(m))),
+                    Err(e) => tracing::debug!("search: the missing albums not made again: {e:#}"),
+                }
+                MAKING.store(false, Ordering::Release);
+            });
+        }
         return Ok(m);
     }
     let m = Arc::new(crate::app::discover::all_missing(app.library.catalogue()).await?.0);
@@ -582,14 +594,29 @@ async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::dis
     Ok(m)
 }
 
-/// The asking account's crates with their tracks, kept a minute (`CRATES_KEEP`).
+/// The asking account's crates with their tracks. Made once per account and libraries switched off; then the last answer comes at
+/// once and, older than `CRATES_KEEP`, is made again behind it as that account, one making at a time (F45: making every crate
+/// inside a search is not cheap).
 async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<Members> {
-    static KEPT: OnceLock<Mutex<HashMap<(Option<String>, Vec<String>), (Instant, Members)>>> = OnceLock::new();
+    type Key = (Option<String>, Vec<String>);
+    static KEPT: OnceLock<Mutex<HashMap<Key, (Instant, Members)>>> = OnceLock::new();
+    static MAKING: OnceLock<Mutex<std::collections::HashSet<Key>>> = OnceLock::new();
     let account = (app.playlists.asking_account(), without.to_vec());
     let kept = KEPT.get_or_init(Default::default);
-    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned()
-        && at.elapsed() < CRATES_KEEP
-    {
+    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned() {
+        let making = MAKING.get_or_init(Default::default);
+        if at.elapsed() >= CRATES_KEEP && making.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone()) {
+            let (playlists, key) = (app.playlists.clone(), account.clone());
+            tokio::spawn(crate::serve::who::carried(async move {
+                match playlists.crate_members(&key.1).await {
+                    Ok(m) => {
+                        kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), (Instant::now(), Arc::new(m)));
+                    }
+                    Err(e) => tracing::debug!("search: the crates not made again: {e}"),
+                }
+                making.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
+            }));
+        }
         return Ok(m);
     }
     let m: Members = Arc::new(app.playlists.crate_members(without).await?);
@@ -597,10 +624,41 @@ async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<M
     Ok(m)
 }
 
+/// Each stage of a search and how long it took (F45): one line in the log when the whole took more than `SLOW_SEARCH`, so a slow
+/// search says where its time went (the words' count only: what was searched is the account's own).
+const SLOW_SEARCH: Duration = Duration::from_secs(1);
+struct Laps {
+    start: Instant,
+    last: Instant,
+    laps: Vec<(&'static str, u128)>,
+}
+
+impl Laps {
+    fn new() -> Self {
+        let now = Instant::now();
+        Laps { start: now, last: now, laps: Vec::new() }
+    }
+
+    fn lap(&mut self, stage: &'static str) {
+        let now = Instant::now();
+        self.laps.push((stage, now.duration_since(self.last).as_millis()));
+        self.last = now;
+    }
+
+    fn said(&self, q: &str) {
+        let total = self.start.elapsed();
+        if total >= SLOW_SEARCH {
+            let stages = self.laps.iter().map(|(s, ms)| format!("{s} {ms} ms")).collect::<Vec<_>>().join(", ");
+            tracing::warn!(words = q.split_whitespace().count(), ms = total.as_millis() as u64, %stages, "slow search");
+        }
+    }
+}
+
 /// Answers a query for the asking account (its playlists and crates): every kind asked for (`kinds`, all when empty).
 /// `without`: the libraries switched off (`source/library` keys): a word's albums and a crate's tracks are counted, and
 /// found, in those switched on, as what they open shows them (the owner, 2026-11-02).
 pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
+    let mut laps = Laps::new();
     let w = words(q);
     let mut answer = Answer { q: q.to_string(), ..Answer::default() };
     if w.is_empty() {
@@ -624,6 +682,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         }
         _ => None,
     };
+    laps.lap("classical");
     if wants("work")
         && let Some(c) = &classical
     {
@@ -772,6 +831,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .collect(),
         );
     }
+    laps.lap("library");
     // The library's words (0.9.7, `app::words`): a group per kind, each word opening its crate (`crate:<kind>:<word>`),
     // by how many albums carry it among equals. In place of the library's genres where they can be read.
     // The labels the same way (0.11, quick crates), each opening its crate (`crate:label:<label>`).
@@ -819,8 +879,10 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             Err(e) => tracing::debug!("search: the library's words not read: {e:#}"),
         }
     }
+    laps.lap("words");
     // Playlists and crates by their names, and by the tracks in them (a track's title, artist or album).
     let deep = if wants("playlist") || wants("crate") { found_lines(app.served.clone(), &w).await? } else { HashMap::new() };
+    laps.lap("tracks in lists");
     if wants("playlist") {
         let lines: HashMap<String, Vec<String>> =
             if deep.is_empty() { HashMap::new() } else { app.playlists.visible_lines().await?.into_iter().map(|(id, _, l)| (id, l)).collect() };
@@ -861,6 +923,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         lists.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("playlist", lists);
     }
+    laps.lap("playlists");
     if wants("crate") {
         // By name from the names alone; by tracks only where a track was found (making every crate is not cheap).
         let members = if deep.is_empty() { None } else { Some(crate_members(app, without).await?) };
@@ -882,6 +945,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);
     }
+    laps.lap("crates");
     // What is not in the library (point 7): only from Cratarr's own library; the exclusions an account's own.
     if let Some(served) = app.served.clone() {
         if wants("missing") {
@@ -956,6 +1020,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             }
         }
     }
+    laps.lap("missing, requests, Spotify, suggested");
     once_known(&mut groups);
     // An artist's number for their name (G5), read once for the artists found: the page shows "Name (n)" where it lists two.
     if let Some(artists) = groups.get_mut("artist") {
@@ -987,6 +1052,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     top.sort_by(|a, b| b.score.total_cmp(&a.score));
     top.truncate(TOP);
     answer.top = top;
+    laps.lap("the rest");
+    laps.said(q);
     Ok(answer)
 }
 
