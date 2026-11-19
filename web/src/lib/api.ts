@@ -1,3 +1,4 @@
+import { loopHeld } from './loopGuard';
 import { accountKey, signOutOwed } from './account';
 import { track } from './progress.svelte';
 import { keepAndTry, later as outbox, laterKey } from './later.svelte';
@@ -216,6 +217,7 @@ function watched(path: string, init?: RequestInit): Promise<Response> {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  if (loopHeld(path, init)) throw new ApiError('Asked too often', true);
   // A sign-out owed (lib/account): nothing is asked under a session that is over, what one taps either.
   if (signOutOwed()) {
     unreached();
