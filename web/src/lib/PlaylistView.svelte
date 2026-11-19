@@ -1375,6 +1375,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
     requested: { icon: 'inbox', label: 'Requested' },
   };
   let wanting = $state(false);
+  /** The header's Want or Requested, in its ⋮ menu too (F36). */
+  const menuWant = $derived(
+    notHadShown?.actions.includes('requested')
+      ? { requested: true, disabled: false, run: () => void notHadAct('requested') }
+      : notHadShown?.actions.includes('want')
+        ? { requested: false, disabled: wanting, run: () => void notHadAct('want') }
+        : null,
+  );
   async function notHadAct(k: NotHadAction) {
     if (k === 'requested') return void (location.hash = hrefOf('requests'));
     if (k === 'want') return wantNotHad();
@@ -3146,6 +3154,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     genres={listGenres}
     viewable={false}
     {notHad}
+    want={menuWant}
     onresumegone={() => (resumeAt = null)}
     onclose={() => (albumMenuOpen = false)}
   />
@@ -3526,6 +3535,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     border: 0;
     background: none;
     font: inherit;
+    /* A button centres its text; a line that wraps reads from the left as the page's other lines do (F36). */
+    text-align: start;
     cursor: pointer;
   }
 

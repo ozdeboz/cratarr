@@ -70,6 +70,7 @@
   import { DEVICE } from './deviceMusic.svelte';
   import Asking from './Asking.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
@@ -101,6 +102,7 @@
     genres: givenGenres = null,
     viewable = true,
     notHad = false,
+    want = null,
     start = 'menu',
     onresumegone,
     ongone,
@@ -118,6 +120,9 @@
     viewable?: boolean;
     /** A record not had (W9, lib/recordNotHad): only what needs no copy of it; no heart, no large actions. */
     notHad?: boolean;
+    /** A record not had's Want, or its Requested, as its page's header offers them (W9; the owner, 2026-11-19, F36: "Why
+     *  does it not offer want?"), first in the menu; the menu closes as it runs. */
+    want?: { requested: boolean; disabled: boolean; run: () => void } | null;
     /** The step it opens on: the entries, or straight at the playlists. */
     /** 'cover': straight on Change cover (Health's albums without one). */
     start?: 'menu' | 'lists' | 'cover';
@@ -603,6 +608,23 @@
   {#if coverProgress}{#if coverProgress.value !== null}<Meter label={coverProgress.line} value={coverProgress.value} />{:else}<span class="look-line">{coverProgress.line}</span>{/if}{/if}
 {/snippet}
 
+<!-- A record not had's Want or Requested, on its own card first, as Discover's card draws them (F36). -->
+{#snippet wantCard()}
+  {#if notHad && want}
+    <MenuGroup label="Want">
+      <MenuEntry
+        icon={want.requested ? 'inbox' : 'circlePlus'}
+        label={want.requested ? 'Requested' : 'Want'}
+        disabled={want.disabled}
+        onclick={() => {
+          want.run();
+          onclose();
+        }}
+      />
+    </MenuGroup>
+  {/if}
+{/snippet}
+
 <!-- Missing tracks (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
 {#snippet entry(e: EntryId)}
   {#if notHad && !offeredNotHad(e)}
@@ -860,8 +882,8 @@
       </div>
     </div>
   {:else if step === 'menu'}
-    <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
-    <MenuTable kind="album" {entry}>
+    <!-- The shared groups, in the table's order (decision 0058, lib/menuTable); a record not had's Want first. -->
+    <MenuTable kind="album" {entry} lead={wantCard}>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
     </MenuTable>
   {:else}

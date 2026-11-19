@@ -10,11 +10,13 @@
   import { cardsOf, offeredAway, OWN_CARD, type EntryId, type MenuKind } from './menuTable';
   import { reach } from './reach.svelte';
 
-  let { kind, entry, children }: { kind: MenuKind; entry: Snippet<[EntryId]>; children?: Snippet } = $props();
+  // `lead`: a card of the menu's own before the table's (a record not had's Want, F36).
+  let { kind, entry, lead, children }: { kind: MenuKind; entry: Snippet<[EntryId]>; lead?: Snippet; children?: Snippet } = $props();
   const shown = (entries: readonly EntryId[]) => entries.filter((e) => offeredAway(e, reach.away));
 </script>
 
 <MenuCards>
+  {@render lead?.()}
   {#each cardsOf(kind) as card (card.group)}
     {#if card.entries.every((e) => OWN_CARD.includes(e))}
       {#each shown(card.entries) as e (e)}{@render entry(e)}{/each}
