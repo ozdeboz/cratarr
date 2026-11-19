@@ -73,19 +73,19 @@ pub async fn import(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, acc
     let read = read(name, bytes)?;
     progress("Matching", 0, None);
     let (s, account2) = (serve.clone(), account.to_string());
-    let songs = tokio::task::spawn_blocking(move || Matcher::read(&Path::new(&dir).join("library.sqlite"))).await??;
+    let songs = crate::run::spawn_blocking(move || Matcher::read(&Path::new(&dir).join("library.sqlite"))).await??;
     match read {
         Read::Spotify { listens, library } => {
             // Its play history off (0.9.5): the library still, the listens not.
             let history = if listens.is_empty() || (!preview && !serve.userdata.tracking(account)) {
                 None
             } else {
-                Some(tokio::task::spawn_blocking(move || into_history(&s, &songs, &account2, &context("spotify"), "Spotify", &listened("spotify", &listens), preview)).await??)
+                Some(crate::run::spawn_blocking(move || into_history(&s, &songs, &account2, &context("spotify"), "Spotify", &listened("spotify", &listens), preview)).await??)
             };
             let library = match library {
                 Some(lists) => {
                     let (account, file) = (account.to_string(), name.to_string());
-                    Some(tokio::task::spawn_blocking(move || super::spotify::take_export(&account, &file, lists, preview)).await??)
+                    Some(crate::run::spawn_blocking(move || super::spotify::take_export(&account, &file, lists, preview)).await??)
                 }
                 None => None,
             };
@@ -96,7 +96,7 @@ pub async fn import(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, acc
             anyhow::bail!("Play history is off for this account (Settings › Tracking).")
         }
         Read::History { from, listens } => {
-            let tally = tokio::task::spawn_blocking(move || into_history(&s, &songs, &account2, &context(from), from_name(from), &listened(from, &listens), preview)).await??;
+            let tally = crate::run::spawn_blocking(move || into_history(&s, &songs, &account2, &context(from), from_name(from), &listened(from, &listens), preview)).await??;
             Ok(Brought::History { from, tally })
         }
         Read::Playlist { name, entries } => {

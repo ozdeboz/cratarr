@@ -1,4 +1,4 @@
-use cratarr_api::{analysis, api, app, bandcamp, catalogue, config, diagnostics, fixtures, idempotent, mcp, memwatch, serve, settings, snapcast, source};
+use cratarr_api::{analysis, api, app, bandcamp, catalogue, config, diagnostics, fixtures, idempotent, mcp, memwatch, run, serve, settings, snapcast, source};
 // What the route sweep's tests (whole_router.rs) name besides.
 #[cfg(test)]
 use cratarr_api::{journal, playlists, search};
@@ -268,7 +268,7 @@ async fn main() -> Result<()> {
                 snapcast::Snapcast::set_instance(snap.clone());
                 let _ = app.snapcast.set(snap.clone());
                 app.play_on.serve_sync_play(port, snapcast::BUFFER_MS, snapcast_host);
-                tokio::spawn(snap.serve(listener));
+                crate::run::spawn(snap.serve(listener));
                 tracing::info!("sync play on {bind}");
             }
             Err(e) => tracing::warn!("sync play is off: cannot listen on {bind}: {e}"),
@@ -281,7 +281,7 @@ async fn main() -> Result<()> {
 
     // The catalogue fills and follows itself in the background (decision 0008).
     let linker = app.clone();
-    tokio::spawn(catalogue::run(app.library.catalogue(), move || linker.library.connected_sources()));
+    crate::run::spawn(catalogue::run(app.library.catalogue(), move || linker.library.connected_sources()));
 
     // Decision 0035: the NAS keeps the analysis up to date (after the ThinkBook's first pass, or all of it).
     memwatch::start();
@@ -291,15 +291,15 @@ async fn main() -> Result<()> {
 
     // The crates' favourites are asked for once at start, as the media server may take a minute (decision 0024).
     let warm = app.clone();
-    tokio::spawn(async move { warm.playlists.warm_favourites().await });
+    crate::run::spawn(async move { warm.playlists.warm_favourites().await });
     app.collection.follow(&app.journal);
     // A run of file changes a stop cut off: read now, before anything can write what it was to write.
-    tokio::spawn(app::file_runs::settle_cut_off(app.journal.clone()));
+    crate::run::spawn(app::file_runs::settle_cut_off(app.journal.clone()));
 
     // One background pass keeps Cratarr in step with the sources and the library (see `App::sync`); the first runs
     // at once, so the incoming lists are ready soon after start.
     let syncer = app.clone();
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(app::SYNC_SECS));
         let mut pass: u64 = 0;
         loop {

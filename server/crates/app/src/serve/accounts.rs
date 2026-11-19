@@ -95,7 +95,7 @@ fn view(serve: &Serve, u: &User, current: Option<&str>, room: Option<&Room>) -> 
 /// not be read (said in the log).
 async fn rooms_of(serve: &Arc<Serve>, users: &[User]) -> HashMap<String, Room> {
     let (s, us) = (serve.clone(), users.to_vec());
-    match tokio::task::spawn_blocking(move || crate::app::room::rooms(&s, &us)).await.map_err(anyhow::Error::from).and_then(|r| r) {
+    match crate::run::spawn_blocking(move || crate::app::room::rooms(&s, &us)).await.map_err(anyhow::Error::from).and_then(|r| r) {
         Ok(rooms) => rooms,
         Err(e) => {
             tracing::warn!("the accounts' rooms were not read: {e:#}");
@@ -183,7 +183,7 @@ async fn forget_device(State(serve): State<Arc<Serve>>, Path((name, id)): Path<(
 async fn forget_own_history(State(serve): State<Arc<Serve>>) -> Response {
     let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
     let ud = serve.userdata.clone();
-    match tokio::task::spawn_blocking(move || ud.forget_history(&me)).await {
+    match crate::run::spawn_blocking(move || ud.forget_history(&me)).await {
         Ok(Ok(removed)) => axum::Json(json!({ "removed": removed })).into_response(),
         Ok(Err(e)) => refused(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
         Err(e) => refused(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -405,7 +405,7 @@ pub async fn check_directory(serve: &Serve) {
 
 /// Runs the check every hour (the owner: "it will hardly ever happen. Maybe every hour is fine").
 pub fn watch_directory(serve: Arc<Serve>) {
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let mut every = tokio::time::interval(std::time::Duration::from_secs(3600));
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {

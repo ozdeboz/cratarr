@@ -388,7 +388,7 @@ async fn own_album_files<'a>(source: &str, files: impl Iterator<Item = &'a Facts
         return HashMap::new();
     }
     let Some(served) = crate::serve::instance() else { return HashMap::new() };
-    let Ok(Ok(album_of)) = tokio::task::spawn_blocking(move || served.library.song_album_map()).await else { return HashMap::new() };
+    let Ok(Ok(album_of)) = crate::run::spawn_blocking(move || served.library.song_album_map()).await else { return HashMap::new() };
     by_album(files, &album_of)
 }
 
@@ -408,7 +408,7 @@ fn by_album<'a>(files: impl Iterator<Item = &'a Facts>, album_of: &HashMap<Strin
 /// id), none for one it cannot place.
 async fn row_lines(app: &Arc<App>, source: &str, rows: Vec<super::playlists::PlaylistRow>) -> Vec<(String, Option<String>)> {
     let (c, sid, ids) = (app.library.catalogue(), source.to_string(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
-    let lines: Vec<Option<String>> = tokio::task::spawn_blocking(move || {
+    let lines: Vec<Option<String>> = crate::run::spawn_blocking(move || {
         ids.iter().map(|id| c.track_of_source(&sid, id).and_then(|t| c.row_line(t))).collect()
     })
     .await

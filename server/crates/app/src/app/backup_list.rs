@@ -65,7 +65,7 @@ pub fn write_for(served: &Serve) -> Result<usize> {
 /// The list written anew in the background, after a copy is made or undone; a failure goes to the log.
 pub fn refresh() {
     let Some(served) = crate::serve::instance() else { return };
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         if let Err(e) = write_for(&served) {
             tracing::warn!(target: "library", "the backup's list of shared copies was not written: {e:#}");
         }

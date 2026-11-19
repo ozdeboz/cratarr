@@ -373,7 +373,7 @@ pub async fn get(serve: &Arc<Serve>, user: &User, by_index: bool) -> Result<Answ
         by: q.client,
     });
     let (catalogue, whose, on) = (serve.catalogue().clone(), crate::app::whose_players(), serve.play_on().cloned());
-    let player = tokio::task::spawn_blocking(move || latest_player_queue(on, &catalogue, whose.as_deref())).await.map_err(|e| Failed(0, e.to_string()))?;
+    let player = crate::run::spawn_blocking(move || latest_player_queue(on, &catalogue, whose.as_deref())).await.map_err(|e| Failed(0, e.to_string()))?;
     let Some(mut q) = saved.chain(player).max_by_key(|q| q.changed) else {
         return Ok(Answer::Json(json!({})));
     };

@@ -247,7 +247,7 @@ impl App {
         if let Some(served) = &served {
             let mut built = served.subscribe_built();
             let (collection, incoming) = (collection.clone(), incoming.clone());
-            tokio::spawn(async move {
+            crate::run::spawn(async move {
                 while built.changed().await.is_ok() {
                     incoming.forget_lists().await;
                     collection.refresh().await;
@@ -260,7 +260,7 @@ impl App {
         {
             let (visuals, play_on) = (visuals.clone(), play_on.clone());
             let mut changed = play_on.subscribe();
-            tokio::spawn(async move {
+            crate::run::spawn(async move {
                 loop {
                     let groups = play_on.list().into_iter().flat_map(|p| [Some(p.name), p.group]).flatten().collect();
                     visuals.keep_only(&groups);
@@ -325,7 +325,7 @@ impl App {
     async fn audiomuse(&self) {
         let Some(dir) = self.library.data_dir() else { return };
         let (cat, path) = (self.library.catalogue(), std::path::Path::new(&dir).join(audiomuse::FILE));
-        match tokio::task::spawn_blocking(move || audiomuse::import_if_changed(&cat, &path)).await {
+        match crate::run::spawn_blocking(move || audiomuse::import_if_changed(&cat, &path)).await {
             Ok(Ok(Some(c))) => tracing::info!("audiomuse: {} tracks taken in, {} not in the library, {} unreadable lines", c.kept, c.unknown, c.bad),
             Ok(Ok(None)) => {}
             Ok(Err(e)) => tracing::warn!("audiomuse: {e:#}"),
@@ -338,7 +338,7 @@ impl App {
     async fn beat_this(&self) {
         let Some(dir) = self.library.data_dir() else { return };
         let (cat, dir) = (self.library.catalogue(), std::path::Path::new(&dir).to_path_buf());
-        let done = tokio::task::spawn_blocking(move || {
+        let done = crate::run::spawn_blocking(move || {
             let counts = beat_this::import_waiting(&cat, &dir)?;
             let wanted = beat_this::write_wanted(&cat, &dir)?;
             anyhow::Ok((counts, wanted))
@@ -376,7 +376,7 @@ impl App {
         if pass % 30 == 0 {
             // On its own: half a minute of reading must not hold up the pass.
             let collection = self.collection.clone();
-            tokio::spawn(async move { collection.refresh().await });
+            crate::run::spawn(async move { collection.refresh().await });
         }
         if pass % 120 == 0 {
             self.incoming.purge_trash().await;

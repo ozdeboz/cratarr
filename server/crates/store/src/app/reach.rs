@@ -418,7 +418,7 @@ pub mod testing {
     pub async fn fake(app: axum::Router) -> u16 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         port
     }
 }
@@ -591,7 +591,7 @@ mod tests {
         let askers: Vec<_> = (0..5)
             .map(|_| {
                 let p = p.clone();
-                tokio::spawn(async move {
+                crate::run::spawn(async move {
                     p.turn().await;
                     tokio::time::Instant::now()
                 })

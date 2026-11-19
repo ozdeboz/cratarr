@@ -278,18 +278,18 @@ fn now() -> i64 {
 /// One pass over the queue: each account's due plays to each of its services, a batch at a time.
 async fn pass(serve: &Arc<Serve>) -> Result<()> {
     let ud = serve.userdata.clone();
-    for (user, target) in tokio::task::spawn_blocking(move || ud.keys_sent()).await?? {
+    for (user, target) in crate::run::spawn_blocking(move || ud.keys_sent()).await?? {
         tracing::info!(target: "scrobble", user = %user, to = %target, "scrobbling moved to the devices: the queue sent, the keys gone");
     }
     let ud = serve.userdata.clone();
-    let due: Vec<Queued> = tokio::task::spawn_blocking(move || ud.due_scrobbles(now(), 500)).await??;
+    let due: Vec<Queued> = crate::run::spawn_blocking(move || ud.due_scrobbles(now(), 500)).await??;
     if due.is_empty() {
         return Ok(());
     }
     // No songs is a library being built (a new layout drops them all at the first start), not every song gone: its plays
     // wait, or the ones kept safe through an outage would go here unsent. A device's plays name themselves.
     let lib = serve.library.clone();
-    let building = tokio::task::spawn_blocking(move || lib.counts()).await??.0 == 0;
+    let building = crate::run::spawn_blocking(move || lib.counts()).await??.0 == 0;
     let mut groups: BTreeMap<(String, String), Vec<Queued>> = BTreeMap::new();
     for q in due.into_iter().filter(|q| !building || q.named.is_some()) {
         groups.entry((q.user.clone(), q.target.clone())).or_default().push(q);
@@ -297,7 +297,7 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
     for ((user, target), rows) in groups {
         // Queued before the account switched its play history off (0.9.5): never sent.
         let (ud, u) = (serve.userdata.clone(), user.clone());
-        if tokio::task::spawn_blocking(move || -> Result<bool> {
+        if crate::run::spawn_blocking(move || -> Result<bool> {
             let off = !ud.tracking(&u);
             if off {
                 ud.forget_scrobbles(&u)?;
@@ -309,11 +309,11 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
             continue;
         }
         let (ud, u, t) = (serve.userdata.clone(), user.clone(), target.clone());
-        let Some(secret) = tokio::task::spawn_blocking(move || ud.scrobble_secret(&u, &t)).await?? else { continue };
+        let Some(secret) = crate::run::spawn_blocking(move || ud.scrobble_secret(&u, &t)).await?? else { continue };
         let secret: Secret = serde_json::from_str(&secret).unwrap_or_default();
         for chunk in rows.chunks(BATCH) {
             let (lib, ids) = (serve.library.clone(), chunk.iter().filter(|q| q.named.is_none()).map(|q| q.song.clone()).collect::<Vec<_>>());
-            let songs = tokio::task::spawn_blocking(move || lib.songs_by_id(&ids)).await??;
+            let songs = crate::run::spawn_blocking(move || lib.songs_by_id(&ids)).await??;
             let by: std::collections::HashMap<&str, &crate::serve::api::Song> = songs.iter().map(|s| (s.id.as_str(), s)).collect();
             // Another server's play carries its names; a song gone from the library since has nothing to name it by,
             // so it goes, as does a handed-over play whose names no longer read.
@@ -355,11 +355,11 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
             match sent {
                 Ok(()) => {
                     tracing::info!(target: "scrobble", user = %user, to = %target, plays = plays.len(), "scrobbled");
-                    tokio::task::spawn_blocking(move || ud.scrobbled(&ids)).await??;
+                    crate::run::spawn_blocking(move || ud.scrobbled(&ids)).await??;
                 }
                 Err(Failed::Later(why)) => {
                     tracing::warn!(target: "scrobble", user = %user, to = %target, reason = %why, "scrobbles wait");
-                    tokio::task::spawn_blocking(move || {
+                    crate::run::spawn_blocking(move || {
                         ud.scrobbled(&gone)?;
                         ud.scrobbles_wait(&ids, now() + later(tries), &why)
                     })
@@ -368,7 +368,7 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
                 }
                 Err(Failed::Login(why)) => {
                     tracing::warn!(target: "scrobble", user = %user, to = %target, reason = %why, "scrobbling stopped until connected again");
-                    tokio::task::spawn_blocking(move || ud.scrobble_broken(&u, &t, &why)).await??;
+                    crate::run::spawn_blocking(move || ud.scrobble_broken(&u, &t, &why)).await??;
                     break;
                 }
             }
@@ -380,12 +380,12 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
 /// "Now playing" to `user`'s connected services: best effort, never queued (it is stale a minute later).
 async fn now_playing(serve: Arc<Serve>, user: String, song: String) -> Result<()> {
     let (ud, u) = (serve.userdata.clone(), user.clone());
-    let secrets = tokio::task::spawn_blocking(move || secrets_of(&ud, &u)).await??;
+    let secrets = crate::run::spawn_blocking(move || secrets_of(&ud, &u)).await??;
     if secrets.is_empty() {
         return Ok(());
     }
     let (lib, ids) = (serve.library.clone(), vec![song]);
-    let Some(s) = tokio::task::spawn_blocking(move || lib.songs_by_id(&ids)).await??.into_iter().next() else { return Ok(()) };
+    let Some(s) = crate::run::spawn_blocking(move || lib.songs_by_id(&ids)).await??.into_iter().next() else { return Ok(()) };
     let play = Play { at: now(), artist: s.artist, title: s.title, album: s.album, length_secs: s.duration, album_artist: None, mbid: None };
     send_now_playing(&user, secrets, &play).await
 }
@@ -396,9 +396,9 @@ pub fn now_playing_named(serve: Arc<Serve>, user: String, named: crate::userdata
     type Sending = std::sync::Mutex<std::collections::HashMap<String, tokio::task::AbortHandle>>;
     static SENDING: std::sync::OnceLock<Sending> = std::sync::OnceLock::new();
     let who = user.clone();
-    let task = tokio::spawn(async move {
+    let task = crate::run::spawn(async move {
         let (ud, u) = (serve.userdata.clone(), user.clone());
-        let Ok(Ok(secrets)) = tokio::task::spawn_blocking(move || secrets_of(&ud, &u)).await else { return };
+        let Ok(Ok(secrets)) = crate::run::spawn_blocking(move || secrets_of(&ud, &u)).await else { return };
         if let Err(e) = send_now_playing(&user, secrets, &Play::named(now(), named)).await {
             tracing::debug!(target: "scrobble", user = %user, reason = %format!("{e:#}"), "now playing failed");
         }
@@ -471,7 +471,7 @@ pub fn run(serve: Arc<Serve>) {
     let wake = WAKE.get_or_init(|| Arc::new(tokio::sync::Notify::new())).clone();
     let (w, s) = (wake.clone(), serve.clone());
     let mut events = super::listening::subscribe();
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         use super::listening::Event;
         use tokio::sync::broadcast::error::RecvError;
         loop {
@@ -479,7 +479,7 @@ pub fn run(serve: Arc<Serve>) {
                 Ok(Event::Heard { counted: true, .. }) => w.notify_one(),
                 Ok(Event::Started { user, song, .. }) => {
                     let s = s.clone();
-                    tokio::spawn(async move {
+                    crate::run::spawn(async move {
                         if let Err(e) = now_playing(s, user, song).await {
                             tracing::debug!(target: "scrobble", reason = %format!("{e:#}"), "now playing failed");
                         }
@@ -492,7 +492,7 @@ pub fn run(serve: Arc<Serve>) {
             }
         }
     });
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         loop {
             if let Err(e) = pass(&serve).await {
                 tracing::warn!(target: "scrobble", reason = %format!("{e:#}"), "scrobble pass failed");

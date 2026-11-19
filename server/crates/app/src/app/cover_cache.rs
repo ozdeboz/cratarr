@@ -98,7 +98,7 @@ where
     Fut: std::future::Future<Output = Result<Option<Vec<u8>>>>,
 {
     let record = crate::serve::ids::record_number(album)?;
-    let read = tokio::task::spawn_blocking(move || -> Result<Option<(i64, Vec<Picture>)>> {
+    let read = crate::run::spawn_blocking(move || -> Result<Option<(i64, Vec<Picture>)>> {
         let Some(row) = cat.record(record)?.filter(|r| !r.had) else { return Ok(None) };
         let refs: Vec<(String, String, String)> = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().map(|(r, _)| (r.source, r.kind, r.value)).collect();
         Ok(Some((row.id, pictures_of(row.cover.as_deref(), &refs))))
@@ -118,7 +118,7 @@ where
     let file = keep.map(|k| k.join(named(&format!("rec:{id}"))));
     let fresh = |f: Option<PathBuf>| async move {
         let f = f?;
-        tokio::task::spawn_blocking(move || kept(&f)).await.ok().flatten()
+        crate::run::spawn_blocking(move || kept(&f)).await.ok().flatten()
     };
     if let Some(b) = fresh(file.clone()).await {
         return Some(sniffed(b));
@@ -135,7 +135,7 @@ where
             Ok(Some(b)) if !b.is_empty() => {
                 if let Some(f) = file.clone() {
                     let kept = b.clone();
-                    let wrote = tokio::task::spawn_blocking(move || -> Result<()> {
+                    let wrote = crate::run::spawn_blocking(move || -> Result<()> {
                         std::fs::create_dir_all(f.parent().context("no folder")?)?;
                         let part = f.with_extension("part");
                         std::fs::write(&part, &kept)?;
@@ -205,13 +205,13 @@ fn kept(file: &std::path::Path) -> Option<Vec<u8>> {
 pub async fn cover(of: &Of) -> Result<Option<(Vec<u8>, &'static str)>> {
     let file = file_of(of).context("Cratarr's data folder is needed")?;
     let f = file.clone();
-    if let Some(b) = tokio::task::spawn_blocking(move || kept(&f)).await? {
+    if let Some(b) = crate::run::spawn_blocking(move || kept(&f)).await? {
         return Ok(Some(sniffed(b)));
     }
     let _turn = FETCHING.acquire().await?;
     // Fetched by another meanwhile.
     let f = file.clone();
-    if let Some(b) = tokio::task::spawn_blocking(move || kept(&f)).await? {
+    if let Some(b) = crate::run::spawn_blocking(move || kept(&f)).await? {
         return Ok(Some(sniffed(b)));
     }
     let bytes = match fetch(of).await {
@@ -224,7 +224,7 @@ pub async fn cover(of: &Of) -> Result<Option<(Vec<u8>, &'static str)>> {
         },
     };
     let b = bytes.clone();
-    tokio::task::spawn_blocking(move || -> Result<()> {
+    crate::run::spawn_blocking(move || -> Result<()> {
         std::fs::create_dir_all(file.parent().context("no folder")?)?;
         let part = file.with_extension("part");
         std::fs::write(&part, &b)?;
@@ -299,9 +299,9 @@ pub fn warm(covers: Vec<String>) {
     if wanted.is_empty() || WARMING.swap(true, Ordering::SeqCst) {
         return;
     }
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         if let Some(dir) = crate::serve::instance().and_then(|s| s.data_dir.clone()).map(|d| d.join(FOLDER)) {
-            let _ = tokio::task::spawn_blocking(move || forget_old(&dir)).await;
+            let _ = crate::run::spawn_blocking(move || forget_old(&dir)).await;
         }
         let mut fetched = 0;
         for of in &wanted {

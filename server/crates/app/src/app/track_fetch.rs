@@ -76,7 +76,7 @@ fn served() -> Result<Arc<crate::serve::Serve>> {
 
 async fn slskd() -> Result<(Slskd, PathBuf)> {
     let ud = served()?.userdata.clone();
-    let set = tokio::task::spawn_blocking(move || slskd_set(&ud)).await??.context("slskd is not set up: Settings › Server")?;
+    let set = crate::run::spawn_blocking(move || slskd_set(&ud)).await??.context("slskd is not set up: Settings › Server")?;
     if !super::switches::is_on(super::switches::SLSKD) {
         bail!("slskd is switched off");
     }
@@ -215,7 +215,7 @@ pub async fn release_by_id(id: &str) -> Result<ReleaseView> {
 pub async fn release(album: &str) -> Result<ReleaseView> {
     let s = served()?;
     let a = album.to_string();
-    let (id, files) = tokio::task::spawn_blocking(move || -> Result<_> { Ok((release_id_of(&s, &a)?, super::renumber::tracks_of(&a)?.0)) }).await??;
+    let (id, files) = crate::run::spawn_blocking(move || -> Result<_> { Ok((release_id_of(&s, &a)?, super::renumber::tracks_of(&a)?.0)) }).await??;
     let id = id.context("This album has no MusicBrainz release yet")?;
     let http = super::discover::http()?;
     let v: Value = http
@@ -349,7 +349,7 @@ pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Re
         j.searches.insert(id.clone(), SearchJob { wanted, view: SearchView { state: Searching::Searching, candidates: Vec::new(), bandcamp, why: None } });
     });
     let job = id.clone();
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let found = async {
             let sid = slskd.search(&text).await?;
             let started = std::time::Instant::now();
@@ -395,7 +395,7 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
         j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None, no_verdict: false }, staged: None });
     });
     let job = id.clone();
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let set = |f: &dyn Fn(&mut FetchJob)| {
             let changed = jobs(|j| j.fetches.get_mut(&job).map(|x| {
                 let before = (x.view.state.clone(), x.view.percent.round());
@@ -516,7 +516,7 @@ async fn follow(slskd: &Slskd, c: &Candidate, batch: &str, folder: &Path, stage:
     let dir = folder.join(crate::slskd::FOLDER).join(batch);
     let name = crate::slskd::base_name(&c.file).to_string();
     let (dir2, stage2) = (dir.clone(), stage.to_path_buf());
-    let staged = tokio::task::spawn_blocking(move || -> Result<PathBuf> {
+    let staged = crate::run::spawn_blocking(move || -> Result<PathBuf> {
         let from = std::fs::read_dir(&dir2)
             .with_context(|| format!("slskd's folder {} cannot be read", dir2.display()))?
             .flatten()
@@ -597,7 +597,7 @@ pub async fn slskd_ready() -> Result<(Slskd, PathBuf)> {
 /// What AcoustID knows of a file, asked with the server's key.
 async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid::Found>> {
     let ud = served()?.userdata.clone();
-    let key = tokio::task::spawn_blocking(move || acoustid_key(&ud)).await??.context("AcoustID is not set up: Settings › Server")?;
+    let key = crate::run::spawn_blocking(move || acoustid_key(&ud)).await??.context("AcoustID is not set up: Settings › Server")?;
     crate::acoustid::lookup(&key, &print).await
 }
 
@@ -622,7 +622,7 @@ where
     Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
 {
     let f = file.to_path_buf();
-    let print = tokio::task::spawn_blocking(move || crate::acoustid::print(&f)).await??;
+    let print = crate::run::spawn_blocking(move || crate::acoustid::print(&f)).await??;
     refused_for(&print, track.length_ms)?;
     // A list with no recordings (Discogs', Bandcamp's, C51b): no recording to hold the file against, so AcoustID's check is
     // skipped and the file passes on its sound and length, as its folder was judged by titles and lengths (OQ9 (a), Q29).
@@ -797,7 +797,7 @@ fn by_words(files: &mut [TrackFile], q: &str) {
 /// The files in Cratarr's slskd folder a track can be taken from; with `q`, best match first.
 pub async fn files(q: Option<String>) -> Result<Vec<TrackFile>> {
     let ud = served()?.userdata.clone();
-    tokio::task::spawn_blocking(move || -> Result<Vec<TrackFile>> {
+    crate::run::spawn_blocking(move || -> Result<Vec<TrackFile>> {
         let mut files = files_in(&files_folder(&ud)?);
         if let Some(q) = q {
             by_words(&mut files, &q);
@@ -813,7 +813,7 @@ pub async fn files(q: Option<String>) -> Result<Vec<TrackFile>> {
 pub async fn fetch_file(album: &str, recording: &str, replace: Option<String>, rel: &str) -> Result<String> {
     let s = served()?;
     let (ud, rel) = (s.userdata.clone(), rel.to_string());
-    let from = tokio::task::spawn_blocking(move || file_in(&files_folder(&ud)?, &rel)).await??;
+    let from = crate::run::spawn_blocking(move || file_in(&files_folder(&ud)?, &rel)).await??;
     let wanted = want(album, recording, replace).await?;
     let staging = Path::new(s.data_dir.as_deref().context("Cratarr's data folder is needed")?).join("track-fetch");
     tidy(&staging);
@@ -825,7 +825,7 @@ pub async fn fetch_file(album: &str, recording: &str, replace: Option<String>, r
     });
     tell(&id);
     let job = id.clone();
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let verdict = take(&from, &to, &wanted.track, looked_up).await;
         jobs(|j| {
             if let Some(f) = j.fetches.get_mut(&job) {
@@ -847,7 +847,7 @@ where
     Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
 {
     let (f, t) = (from.to_path_buf(), to.to_path_buf());
-    tokio::task::spawn_blocking(move || -> Result<()> {
+    crate::run::spawn_blocking(move || -> Result<()> {
         std::fs::create_dir_all(t.parent().context("no folder")?)?;
         std::fs::copy(&f, &t).with_context(|| format!("copying {} into staging", f.display()))?;
         Ok(())

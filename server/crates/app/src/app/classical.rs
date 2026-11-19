@@ -1084,7 +1084,7 @@ pub async fn tell(source: &str, albums: &mut [crate::source::Album]) {
         return;
     }
     let Some(served) = crate::serve::instance() else { return };
-    match tokio::task::spawn_blocking(move || index(&served)).await {
+    match crate::run::spawn_blocking(move || index(&served)).await {
         Ok(Ok(ix)) => albums.iter_mut().for_each(|a| decorate(&ix, a)),
         Ok(Err(e)) => tracing::warn!("classical: not read: {e:#}"),
         Err(e) => tracing::warn!("classical: not read: {e}"),

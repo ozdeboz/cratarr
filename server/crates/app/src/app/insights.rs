@@ -84,7 +84,7 @@ impl InsightsService {
         let since = period.since(epoch_now());
         // The account's own crates' tracks (Listed); none where they cannot be worked out.
         let crated = self.playlists.crated_lines(want, without).await.unwrap_or_default();
-        let report = tokio::task::spawn_blocking(move || -> Result<Insights> {
+        let report = crate::run::spawn_blocking(move || -> Result<Insights> {
             // When each file's album came (Cratarr's own library), for the period.
             let arrivals = match &served {
                 Some(s) => Some(s.library.album_arrivals()?),

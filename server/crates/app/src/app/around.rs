@@ -103,7 +103,7 @@ fn shown_with(shown: &[String], group: &[(String, String)]) -> Vec<String> {
 /// The account's own artists and what the library has; none where it keeps no play history (its seeds are its plays).
 async fn own(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<Option<(super::discover::Have, Vec<super::discover::OwnArtist>)>> {
     let (ud, a) = (serve.userdata.clone(), account.to_string());
-    if !tokio::task::spawn_blocking(move || ud.tracking(&a)).await? {
+    if !crate::run::spawn_blocking(move || ud.tracking(&a)).await? {
         return Ok(None);
     }
     Ok(Some(super::discover::own(serve, app.library.catalogue(), account).await?))
@@ -114,7 +114,7 @@ pub async fn showing(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, ac
     let Some((_, artists)) = own(app, serve, account).await? else { return Ok(Default::default()) };
     let pool = pool(&artists);
     let (s, a) = (serve.clone(), account.to_string());
-    let (st, _) = tokio::task::spawn_blocking(move || {
+    let (st, _) = crate::run::spawn_blocking(move || {
         change(&s, &a, |st| {
             if st.seeds.is_empty() {
                 let group = pick(&pool, &st.shown, &[]);
@@ -136,7 +136,7 @@ pub async fn next(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, accou
     let Some((_, artists)) = own(app, serve, account).await? else { return Ok(Default::default()) };
     let pool = pool(&artists);
     let (s, a) = (serve.clone(), account.to_string());
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         change(&s, &a, |st| {
             // The one looked up ahead, unless a seed of it is no longer the account's (its plays deleted).
             let ahead = std::mem::take(&mut st.next);
@@ -149,7 +149,7 @@ pub async fn next(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, accou
     let until = tokio::time::Instant::now() + WAIT;
     loop {
         let (s, a) = (serve.clone(), account.to_string());
-        let st = tokio::task::spawn_blocking(move || kept(&s, &a)).await??;
+        let st = crate::run::spawn_blocking(move || kept(&s, &a)).await??;
         if st.albums.is_some() || tokio::time::Instant::now() >= until {
             return answered(serve, account, st).await;
         }
@@ -162,7 +162,7 @@ pub async fn next(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, accou
 async fn answered(serve: &Arc<crate::serve::Serve>, account: &str, st: State) -> Result<(Vec<String>, Vec<Suggestion>, bool)> {
     let making = st.albums.is_none() && !st.seeds.is_empty();
     let (ud, a) = (serve.userdata.clone(), account.to_string());
-    let (answered, no_artists, everywhere) = tokio::task::spawn_blocking(move || super::discover::leaves_out(&ud, &a)).await??;
+    let (answered, no_artists, everywhere) = crate::run::spawn_blocking(move || super::discover::leaves_out(&ud, &a)).await??;
     let mut albums = st.albums.unwrap_or_default();
     albums.retain(|s| !answered.contains(&s.key) && !no_artists.contains(&s.artist_key) && !super::discover::excluded_everywhere(s, &everywhere));
     Ok((st.seeds.into_iter().map(|(name, _)| name).collect(), albums, making))
@@ -179,7 +179,7 @@ fn make(app: Arc<super::App>, serve: Arc<crate::serve::Serve>, account: String) 
     if !claim(&MAKING, &account) {
         return;
     }
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let until = tokio::time::Instant::now() + AHEAD_WAIT;
         while busy(&AHEAD, &account) && tokio::time::Instant::now() < until {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -194,19 +194,19 @@ fn make(app: Arc<super::App>, serve: Arc<crate::serve::Serve>, account: String) 
 
 async fn make_now(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, account: &str) -> Result<()> {
     let (s, a) = (serve.clone(), account.to_string());
-    let seeds = tokio::task::spawn_blocking(move || kept(&s, &a)).await??.seeds;
+    let seeds = crate::run::spawn_blocking(move || kept(&s, &a)).await??.seeds;
     if seeds.is_empty() {
         return Ok(());
     }
     let Some((have, _)) = own(app, serve, account).await? else { return Ok(()) };
     let candidates = super::discover::from_related(serve, &super::discover::http()?, &seeds, &|_, _, _| {}).await;
     let (ud, a) = (serve.userdata.clone(), account.to_string());
-    let (answered, no_artists, everywhere) = tokio::task::spawn_blocking(move || super::discover::leaves_out(&ud, &a)).await??;
+    let (answered, no_artists, everywhere) = crate::run::spawn_blocking(move || super::discover::leaves_out(&ud, &a)).await??;
     let mut albums = super::discover::one_list(candidates, &|c| have.has(c), &have.known, &answered, &no_artists);
     albums.retain(|s| !super::discover::excluded_everywhere(s, &everywhere));
     super::cover_cache::warm(albums.iter().filter_map(|s| s.cover.clone()).collect());
     let (s, a) = (serve.clone(), account.to_string());
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         change(&s, &a, |st| {
             // Kept for the group it was made for only (another Refresh may have moved on meanwhile).
             if st.seeds == seeds {
@@ -224,12 +224,12 @@ fn ahead(app: Arc<super::App>, serve: Arc<crate::serve::Serve>, account: String)
     if busy(&MAKING, &account) || !claim(&AHEAD, &account) {
         return;
     }
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let looked = async {
             let Some((_, artists)) = own(&app, &serve, &account).await? else { return Ok(()) };
             let pool = pool(&artists);
             let (s, a) = (serve.clone(), account.clone());
-            let (st, _) = tokio::task::spawn_blocking(move || {
+            let (st, _) = crate::run::spawn_blocking(move || {
                 change(&s, &a, |st| {
                     if st.next.is_empty() {
                         st.next = pick(&pool, &st.shown, &st.seeds);

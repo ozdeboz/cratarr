@@ -301,7 +301,7 @@ async fn slskd_downloads() -> Option<Arc<Vec<(String, Vec<String>)>>> {
     }
     let served = crate::serve::instance()?;
     let ud = served.userdata.clone();
-    let set = tokio::task::spawn_blocking(move || super::track_fetch::slskd_set(&ud)).await.ok()?.ok()??;
+    let set = crate::run::spawn_blocking(move || super::track_fetch::slskd_set(&ud)).await.ok()?.ok()??;
     let d = Arc::new(crate::slskd::Slskd::new(&set.url, &set.key).ok()?.downloads().await.ok()?);
     *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), d.clone()));
     Some(d)
@@ -375,7 +375,7 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
     let (s, a2, at2) = (served.clone(), a.clone(), at.clone());
     #[allow(clippy::type_complexity)]
     let (tracks, artist, title, tags, waves, heard, discogs): (Vec<Track>, String, String, Vec<crate::catalogue::tags::FileTags>, Vec<Vec<u8>>, Option<Heard>, Option<super::discogs::AlbumFacts>) =
-        tokio::task::spawn_blocking(move || -> Result<_> {
+        crate::run::spawn_blocking(move || -> Result<_> {
             let (tracks, artist, title) = tracks_of(&a2, at2.as_ref())?;
             let tags = tracks.iter().map(|t| crate::catalogue::tags::read(&t.path).map(|(f, _)| f).unwrap_or_default()).collect();
             let cat = s.catalogue();
@@ -403,7 +403,7 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
     }
     let (kept, edition) = {
         let (s, a, at, mains) = (served.clone(), album.to_string(), at.clone(), app.library.main_folders());
-        tokio::task::spawn_blocking(move || stands_of(&s, &a, at.as_ref(), &mains)).await??
+        crate::run::spawn_blocking(move || stands_of(&s, &a, at.as_ref(), &mains)).await??
     };
     let name = |folder: i64| app.incoming.library_name(crate::source::cratarr::KIND.id, folder);
     checks.push(in_library(kept.as_ref().map(|(better, folder, why)| (*better, name(*folder), why.as_str())), edition.map(name)));
@@ -473,7 +473,7 @@ pub async fn waiting(app: &super::App) -> Vec<Waiting> {
     if let Some(served) = app.served.clone() {
         use crate::serve::copies::replaces;
         let mains = app.library.main_folders();
-        let stands = tokio::task::spawn_blocking(move || {
+        let stands = crate::run::spawn_blocking(move || {
             let found: Vec<Option<(String, crate::serve::copies::Copy)>> = places
                 .iter()
                 .map(|(id, at)| {
@@ -511,20 +511,20 @@ pub fn hear(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>) {
     }
     let album = album.to_string();
     let _ = super::tasks::spawn(KIND, &account, false, move |h| async move {
-        let (tracks, ..) = tokio::task::spawn_blocking({
+        let (tracks, ..) = crate::run::spawn_blocking({
             let (a, at) = (album.clone(), at.clone());
             move || tracks_of(&a, at.as_ref())
         })
         .await??;
         let ud = served.userdata.clone();
-        let key = tokio::task::spawn_blocking(move || super::track_fetch::acoustid_key(&ud)).await??;
+        let key = crate::run::spawn_blocking(move || super::track_fetch::acoustid_key(&ud)).await??;
         let mut heard = Heard { no_acoustid: key.is_none(), ..Heard::default() };
         let total = tracks.len() as u64;
         for (i, t) in tracks.iter().enumerate() {
             h.step("Hearing the record's tracks", i as u64, Some(total));
             let path = t.path.clone();
             let mut one = HeardTrack { file: t.file.clone(), ..HeardTrack::default() };
-            match tokio::task::spawn_blocking(move || crate::acoustid::print(&path)).await? {
+            match crate::run::spawn_blocking(move || crate::acoustid::print(&path)).await? {
                 Ok(print) => {
                     one.damaged = print.damaged;
                     one.flaw = print.flaws.why();
@@ -542,7 +542,7 @@ pub fn hear(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>) {
         }
         let (ud, json, a) = (served.userdata.clone(), serde_json::to_string(&heard)?, album.clone());
         let folder = at.map(|p| p.0);
-        tokio::task::spawn_blocking(move || ud.set_intake_heard(&a, folder, super::moment::now_secs(), &json)).await??;
+        crate::run::spawn_blocking(move || ud.set_intake_heard(&a, folder, super::moment::now_secs(), &json)).await??;
         anyhow::Ok(())
     });
 }

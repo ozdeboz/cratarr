@@ -53,14 +53,14 @@ fn failed(e: impl std::fmt::Display) -> Response {
 
 /// Blocking work off the async threads.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, Response> {
-    tokio::task::spawn_blocking(f).await.map_err(failed)?.map_err(failed)
+    crate::run::spawn_blocking(f).await.map_err(failed)?.map_err(failed)
 }
 
 /// 200 with counts when both databases answer within `HEALTH_TIMEOUT`, else 503: a running process with a stuck
 /// database must not look healthy.
 async fn health(State(serve): State<Arc<Serve>>) -> Response {
     let s = serve.clone();
-    let check = tokio::task::spawn_blocking(move || -> anyhow::Result<(u64, u64)> {
+    let check = crate::run::spawn_blocking(move || -> anyhow::Result<(u64, u64)> {
         let counts = s.library.health()?;
         s.userdata.health()?;
         Ok(counts)

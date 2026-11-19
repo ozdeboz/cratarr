@@ -874,7 +874,7 @@ pub fn stream(plan: Plan, o: Options, work: PathBuf, now_unix: u64) -> (Option<u
     let len = (o.format == Format::Original || !o.tracks).then(|| length(&plan, &layout(&plan, &o)));
     let (tx, rx) = tokio::sync::mpsc::channel::<Chunk>(4);
     let rt = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let send = |b: Vec<u8>| tx.blocking_send(Ok(axum::body::Bytes::from(b))).is_ok();
         let fail = |e: std::io::Error| {
             let _ = tx.blocking_send(Err(e));
@@ -1106,7 +1106,7 @@ mod tests {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
         let (t, work, h) = (t.clone(), work.to_path_buf(), rt.handle().clone());
         rt.block_on(async move {
-            let (len, mut rx) = tokio::task::spawn_blocking(move || send_track(&t, how, &work, &h)).await.unwrap()?;
+            let (len, mut rx) = crate::run::spawn_blocking(move || send_track(&t, how, &work, &h)).await.unwrap()?;
             let mut all = Vec::new();
             while let Some(c) = rx.recv().await {
                 all.extend_from_slice(&c?);

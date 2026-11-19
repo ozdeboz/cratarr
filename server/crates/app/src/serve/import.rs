@@ -529,7 +529,7 @@ fn added_page(
 
 /// Runs blocking work with what it needs moved in and back out.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("the import stopped: {e}"))?
+    crate::run::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("the import stopped: {e}"))?
 }
 
 /// A page from the source, asked again after each of `pace.retries` while it fails.
@@ -654,7 +654,7 @@ pub async fn sources(State(serve): State<Arc<Serve>>) -> Response {
         let (users, mine) = tokio::join!(s.users(), s.sync_account());
         let (ud, key) = (serve.userdata.clone(), id.clone());
         let last: Option<Request> =
-            tokio::task::spawn_blocking(move || ud.import_choice(&key)).await.ok().and_then(Result::ok).flatten().and_then(|c| serde_json::from_str(&c).ok());
+            crate::run::spawn_blocking(move || ud.import_choice(&key)).await.ok().and_then(Result::ok).flatten().and_then(|c| serde_json::from_str(&c).ok());
         match users {
             Ok(users) => {
                 let user = last.as_ref().map(|l| l.user.clone()).filter(|u| users.iter().any(|(i, _)| i == u)).or(mine.ok());
@@ -668,7 +668,7 @@ pub async fn sources(State(serve): State<Arc<Serve>>) -> Response {
     // The Subsonic servers imported from before (decision 0067): their address, login and choices; the password is
     // asked for again each run.
     let ud = serve.userdata.clone();
-    let kept = tokio::task::spawn_blocking(move || ud.import_choices(SUBSONIC)).await.ok().and_then(Result::ok).unwrap_or_default();
+    let kept = crate::run::spawn_blocking(move || ud.import_choices(SUBSONIC)).await.ok().and_then(Result::ok).unwrap_or_default();
     for (id, choice) in kept {
         let Ok(last) = serde_json::from_str::<Request>(&choice) else { continue };
         let account = Some(last.account.clone()).filter(|a| accounts.contains(a));
@@ -723,11 +723,11 @@ pub async fn start(State(serve): State<Arc<Serve>>, axum::Json(req): axum::Json<
     };
     // The choices are offered again next time.
     let (ud, choice) = (serve.userdata.clone(), Request { preview: false, ..req.clone() });
-    let kept = tokio::task::spawn_blocking(move || -> Result<()> { ud.set_import_choice(&choice.source, &serde_json::to_string(&choice)?) }).await;
+    let kept = crate::run::spawn_blocking(move || -> Result<()> { ud.set_import_choice(&choice.source, &serde_json::to_string(&choice)?) }).await;
     if let Ok(Err(e)) = kept {
         tracing::warn!(target: "imports", reason = %format!("{e:#}"), "import choices not kept");
     }
-    tokio::spawn(run(serve.clone(), source, req, Pace::default()));
+    crate::run::spawn(run(serve.clone(), source, req, Pace::default()));
     (StatusCode::ACCEPTED, axum::Json(json!({ "job": job }))).into_response()
 }
 
@@ -746,7 +746,7 @@ pub async fn undo(State(serve): State<Arc<Serve>>, axum::Json(w): axum::Json<Who
         return (StatusCode::CONFLICT, axum::Json(json!({ "error": "An import is running." }))).into_response();
     }
     let s = serve.clone();
-    let done = tokio::task::spawn_blocking(move || {
+    let done = crate::run::spawn_blocking(move || {
         let key = ImportKey { account: &w.account, source: &w.source, server_user: &w.user };
         s.userdata.undo_import(key, |song| s.library.play_targets(song).ok().flatten().map(|(_, album, artists)| (album, artists)))
     })

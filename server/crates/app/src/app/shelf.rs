@@ -87,7 +87,7 @@ impl Shelves {
         let kept = self.lib.kept_folders();
         // By catalogue folder and album directory (relative to it): two libraries can hold one directory, and with a record
         // in both that is the likely case, each with its own format. A server's path is matched by its longest such ending.
-        let seen: Seen = tokio::task::spawn_blocking(move || {
+        let seen: Seen = crate::run::spawn_blocking(move || {
             let folders: Vec<i64> = c.folders().ids().filter(|id| kept.contains(id) == matches!(shelf, Shelf::Music)).collect();
             let mut out = Seen::new();
             for folder in folders {

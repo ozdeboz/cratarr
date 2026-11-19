@@ -99,7 +99,7 @@ impl CollectionService {
         use tokio::sync::broadcast::error::RecvError;
         let (mut done, mut undone) = (journal.subscribe(), journal.subscribe_undone());
         let me = self.clone();
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             loop {
                 let heard = tokio::select! {
                     r = done.recv() => r,

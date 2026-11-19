@@ -295,7 +295,7 @@ impl ArtistInfo {
     /// The builder: one artist due every `EVERY`, the library's in turn, until it is stopped with the server.
     pub fn build_slowly(self: &Arc<Self>) {
         let me = self.clone();
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             loop {
                 tokio::time::sleep(EVERY).await;
                 // The background reading paused (O5).
@@ -304,7 +304,7 @@ impl ArtistInfo {
                 }
                 let Some(served) = crate::serve::instance() else { continue };
                 let lib = served.library.clone();
-                let Ok(Ok(artists)) = tokio::task::spawn_blocking(move || lib.artist_names()).await else { continue };
+                let Ok(Ok(artists)) = crate::run::spawn_blocking(move || lib.artist_names()).await else { continue };
                 let now = epoch_now();
                 let next = artists.into_iter().find(|(name, mbid)| !crate::crates::various(name) && me.due(&key(name, mbid.as_deref()), now));
                 let Some((name, mbid)) = next else {

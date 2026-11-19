@@ -401,21 +401,21 @@ pub fn takes_gzip(headers: &HeaderMap) -> bool {
 /// `GET /api/index`: the whole index `account` can see, every library it can see in it, as `Index::save` writes it.
 pub async fn read(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
     let libraries = app.library.index_libraries(&serve);
-    let bytes = tokio::task::spawn_blocking(move || Bytes::of(whole(&serve, libraries, account.as_deref())?.save(), takes_gzip));
+    let bytes = crate::run::spawn_blocking(move || Bytes::of(whole(&serve, libraries, account.as_deref())?.save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 /// `GET /api/index/changes?since=<rev>`: what `account` lacks at `since`.
 pub async fn changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
     let libraries = app.library.index_libraries(&serve);
-    let found = tokio::task::spawn_blocking(move || feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
+    let found = crate::run::spawn_blocking(move || feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 /// `GET /api/index/sounds`: the sounds of every track `account` can see, as `Sounds::save` writes them.
 pub async fn sounds(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, takes_gzip: bool) -> Result<Bytes, ToggleError> {
     let libraries = app.library.index_libraries(&serve);
-    let bytes = tokio::task::spawn_blocking(move || {
+    let bytes = crate::run::spawn_blocking(move || {
         let (index, facts) = whole_of(&serve, &libraries, account.as_deref())?;
         Bytes::of(sounds_of(&facts, &index).save(), takes_gzip)
     });
@@ -425,7 +425,7 @@ pub async fn sounds(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, 
 /// `GET /api/index/sounds/changes?since=<rev>`: what of the sounds `account` lacks at `since`.
 pub async fn sound_changes(app: &Arc<App>, serve: Arc<Serve>, account: Option<String>, since: i64, takes_gzip: bool) -> Result<Feed, ToggleError> {
     let libraries = app.library.index_libraries(&serve);
-    let found = tokio::task::spawn_blocking(move || sounds_feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
+    let found = crate::run::spawn_blocking(move || sounds_feed(&serve, &libraries, account.as_deref(), since, takes_gzip));
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
@@ -458,14 +458,14 @@ pub async fn own(app: &Arc<App>, account: Option<String>, takes_gzip: bool) -> R
     let user = account.ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
     let (fits, skipped, uses) = (app.playlists.taste_fits(&user, &[]).await?, app.playlists.skipped_fits(&user, &[]).await?, app.playlists.uses_by_track(&user).await?);
     let rest = serde_json::to_string(&app.playlists.device_own(&user).await?).map_err(|e| anyhow!("{e}"))?;
-    let bytes = tokio::task::spawn_blocking(move || Bytes::of(index::Marks::build(super::moment::now_secs(), &marks_of(&fits, &skipped, &uses)).with_own(rest).save(), takes_gzip));
+    let bytes = crate::run::spawn_blocking(move || Bytes::of(index::Marks::build(super::moment::now_secs(), &marks_of(&fits, &skipped, &uses)).with_own(rest).save(), takes_gzip));
     Ok(bytes.await.map_err(|e| anyhow!("{e}"))??)
 }
 
 /// `/api/changes`' word on the index, for a device at `since`.
 pub async fn stands(app: &Arc<App>, serve: Arc<Serve>, since: Option<i64>) -> Result<IndexStands, ToggleError> {
     let libraries = app.library.index_libraries(&serve);
-    let found = tokio::task::spawn_blocking(move || stands_for(&serve, &libraries, since));
+    let found = crate::run::spawn_blocking(move || stands_for(&serve, &libraries, since));
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 

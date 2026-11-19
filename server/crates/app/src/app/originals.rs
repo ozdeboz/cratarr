@@ -24,7 +24,7 @@ const BUSY: Duration = Duration::from_secs(3);
 
 /// The background asker, from the server's start (a few minutes in, after its own work) until it stops.
 pub fn start() {
-    tokio::spawn(async {
+    crate::run::spawn(async {
         tokio::time::sleep(Duration::from_secs(300)).await;
         loop {
             // Switched off (0.9.6): looked at again later.
@@ -74,7 +74,7 @@ async fn pass() -> Result<usize> {
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
     // (release, its year wanted): those without a year not asked yet, then those whose types are not asked yet.
-    let due: Vec<(String, bool)> = tokio::task::spawn_blocking(move || -> Result<Vec<(String, bool)>> {
+    let due: Vec<(String, bool)> = crate::run::spawn_blocking(move || -> Result<Vec<(String, bool)>> {
         let asked = ud.original_years_asked(now - AGAIN_SECS)?;
         let typed = ud.release_types_asked("mb:", now - AGAIN_SECS)?;
         let years: std::collections::HashSet<String> = lib.releases_without_original()?.into_iter().filter(|r| !asked.contains(r)).collect();
@@ -108,7 +108,7 @@ async fn pass() -> Result<usize> {
     }
     let n = types.len();
     let ud = served.userdata.clone();
-    tokio::task::spawn_blocking(move || -> Result<()> {
+    crate::run::spawn_blocking(move || -> Result<()> {
         let at = super::moment::now_secs();
         ud.set_original_years(&found, at)?;
         ud.set_release_types(&types, at)

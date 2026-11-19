@@ -289,7 +289,7 @@ async fn search(State(p): State<Portal>, Extension(Client(addr)): Extension<Clie
         return Json(json!({ "albums": [], "tracks": [] })).into_response();
     }
     let lib = p.serve.library.clone();
-    let found = tokio::task::spawn_blocking(move || lib.search(&text, (0, 0), (FOUND_MOST, 0), (FOUND_MOST, 0), None)).await;
+    let found = crate::run::spawn_blocking(move || lib.search(&text, (0, 0), (FOUND_MOST, 0), (FOUND_MOST, 0), None)).await;
     let Ok(Ok((_, albums, songs))) = found else { return refused(StatusCode::INTERNAL_SERVER_ERROR, "The library cannot be searched now.") };
     let albums: Vec<Value> = albums.iter().map(album_view).collect();
     let tracks: Vec<Value> = songs.into_iter().map(|s| track_view(&own_track(s))).collect();
@@ -306,7 +306,7 @@ async fn album(State(p): State<Portal>, Extension(Client(addr)): Extension<Clien
         return too_many(&why);
     }
     let lib = p.serve.library.clone();
-    match tokio::task::spawn_blocking(move || lib.album(&id)).await {
+    match crate::run::spawn_blocking(move || lib.album(&id)).await {
         Ok(Ok(Some(a))) => {
             let mut v = album_view(&a);
             v["tracks"] = a.song.unwrap_or_default().into_iter().map(|s| track_view(&own_track(s))).collect::<Vec<Value>>().into();
@@ -339,7 +339,7 @@ async fn ask(State(p): State<Portal>, Extension(Client(addr)): Extension<Client>
     };
     // The library's own facts of it, not the guest's words.
     let (lib, id) = (p.serve.library.clone(), b.track.id.clone());
-    let track = match tokio::task::spawn_blocking(move || lib.songs_by_id(&[id])).await {
+    let track = match crate::run::spawn_blocking(move || lib.songs_by_id(&[id])).await {
         Ok(Ok(mut songs)) => match songs.pop() {
             Some(s) => own_track(s),
             None => return refused(StatusCode::NOT_FOUND, "No such track."),

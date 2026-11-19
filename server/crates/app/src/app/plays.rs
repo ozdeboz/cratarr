@@ -119,7 +119,7 @@ impl Plays {
         // Those not in the cache asked of the user data at once: counted before a restart, they are not counted again.
         let unknown: Vec<String> = events.iter().filter(|e| !seen.contains_key(&e.id)).map(|e| e.id.clone()).collect();
         if let (Some(ud), false) = (self.kept.clone(), unknown.is_empty()) {
-            match tokio::task::spawn_blocking(move || ud.plays_seen(&unknown)).await {
+            match crate::run::spawn_blocking(move || ud.plays_seen(&unknown)).await {
                 Ok(Ok(found)) => seen.extend(found.into_iter().map(|id| (id, now))),
                 // Not known whether they were counted: none of them is, the player sends them again later.
                 failed => {
@@ -148,7 +148,7 @@ impl Plays {
         if !counted.is_empty() {
             seen.retain(|_, at| now - *at < KEEP_SECS);
             if let Some(ud) = self.kept.clone() {
-                let saved = tokio::task::spawn_blocking(move || ud.add_plays_seen(&counted)).await;
+                let saved = crate::run::spawn_blocking(move || ud.add_plays_seen(&counted)).await;
                 if !matches!(saved, Ok(Ok(()))) {
                     tracing::warn!("the plays counted could not be kept: a play sent again after a restart may count twice");
                 }

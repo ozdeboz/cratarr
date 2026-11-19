@@ -107,11 +107,11 @@ pub struct ArtistView {
 /// longer known where it was forgotten (`retention::unknown_artist`), else no artist.
 async fn own_artist(served: &Arc<crate::serve::Serve>, account: &str, id: Option<&str>, name: &str) -> Result<Option<(super::related::Asked, source::ArtistWorks)>, ToggleError> {
     let (s, i, n) = (served.clone(), id.map(str::to_string), name.to_string());
-    let asked = tokio::task::spawn_blocking(move || super::related::asked(&s, i.as_deref(), &n)).await.map_err(anyhow::Error::from).and_then(|r| r).map_err(ToggleError::from)?;
+    let asked = crate::run::spawn_blocking(move || super::related::asked(&s, i.as_deref(), &n)).await.map_err(anyhow::Error::from).and_then(|r| r).map_err(ToggleError::from)?;
     let Some(asked) = asked else {
         let Some(id) = id else { return Ok(None) };
         let (c, i) = (served.catalogue().clone(), id.to_string());
-        let gone = tokio::task::spawn_blocking(move || super::retention::unknown_artist(&c, &i)).await.ok().flatten();
+        let gone = crate::run::spawn_blocking(move || super::retention::unknown_artist(&c, &i)).await.ok().flatten();
         return Err(gone.unwrap_or_else(|| ToggleError::Refused("That is not an artist.".into())));
     };
     let works = crate::source::cratarr::artist_works_of(served, account, &asked.id).await.map_err(|e| {
@@ -409,7 +409,7 @@ where
     F: std::future::Future<Output = Result<Option<super::references::Read>>> + Send + 'static,
 {
     let c = cat.clone();
-    let mut page = tokio::task::spawn_blocking(move || record_page(&c, record, now)).await??;
+    let mut page = crate::run::spawn_blocking(move || record_page(&c, record, now)).await??;
     if let Some(RecordPage::NotHad(view)) = &mut page {
         let end = crate::serve::ids::record_number(&view.id).unwrap_or(record);
         if view.more.looking {
@@ -630,7 +630,7 @@ impl PlayingService {
             // queue: its play counts in Cratarr's own library, by the file the catalogue links it to.
             Err(gone) => {
                 let (cat, src, item) = (self.lib.catalogue(), source_id.to_string(), id.to_string());
-                let own = tokio::task::spawn_blocking(move || cat.track_of_source(&src, &item)).await.ok().flatten().ok_or(gone)?;
+                let own = crate::run::spawn_blocking(move || cat.track_of_source(&src, &item)).await.ok().flatten().ok_or(gone)?;
                 let own = crate::serve::ids::song(own);
                 let (_, s, _) = self.find(crate::source::cratarr::KIND.id, &own).await?;
                 (s, own)
@@ -659,7 +659,7 @@ impl PlayingService {
         } else {
             let (cat, src, item) = (self.lib.catalogue(), e.source.clone(), e.track.clone());
             let gone = self.find(&e.source, &e.track).await.is_err();
-            if gone { tokio::task::spawn_blocking(move || cat.track_of_source(&src, &item)).await.ok().flatten().map(crate::serve::ids::song) } else { None }
+            if gone { crate::run::spawn_blocking(move || cat.track_of_source(&src, &item)).await.ok().flatten().map(crate::serve::ids::song) } else { None }
         };
         let Some(song) = own else {
             // A server switched off or removed, its track not linked to a file of Cratarr's own: nowhere to count it,
@@ -953,7 +953,7 @@ impl PlayingService {
             Err(e) => {
                 if source_id == crate::source::cratarr::KIND.id {
                     let (c, id) = (self.lib.catalogue(), album_id.to_string());
-                    if let Ok(Some(gone)) = tokio::task::spawn_blocking(move || super::retention::unknown_album(&c, &id)).await {
+                    if let Ok(Some(gone)) = crate::run::spawn_blocking(move || super::retention::unknown_album(&c, &id)).await {
                         return Err(gone);
                     }
                     // A record not had is no album of the library: its page answers from the catalogue (C54, `record_view`).
@@ -970,7 +970,7 @@ impl PlayingService {
         let (title, artist, year) =
             (first.and_then(|t| t.album.clone()).unwrap_or_default(), first.and_then(|t| t.album_artist.clone()), first.and_then(|t| t.year));
         let (c, sid, ids) = (self.lib.catalogue(), source_id.to_string(), tracks.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
-        let per_track = tokio::task::spawn_blocking(move || c.genres_of_ids(&sid, &ids)).await.unwrap_or_default();
+        let per_track = crate::run::spawn_blocking(move || c.genres_of_ids(&sid, &ids)).await.unwrap_or_default();
         let genres = crate::crates::top_genres(per_track.iter().map(|g| g.as_slice()), GENRES_SHOWN);
         // What the source knows of the files (Cratarr's own library does; a source that cannot say leaves them out).
         let details = s.album_summary(album_id).await.ok().flatten();
@@ -997,7 +997,7 @@ impl PlayingService {
         // its movements.
         if source_id == crate::source::cratarr::KIND.id
             && let Some(served) = crate::serve::instance()
-            && let Ok(Ok(ix)) = tokio::task::spawn_blocking(move || super::classical::index(&served)).await
+            && let Ok(Ok(ix)) = crate::run::spawn_blocking(move || super::classical::index(&served)).await
         {
             for r in rows.iter_mut() {
                 let Some(id) = r.id.as_deref() else { continue };
@@ -1013,7 +1013,7 @@ impl PlayingService {
         let (labels, sources) = match crate::serve::ids::record_number(album_id).filter(|_| source_id == crate::source::cratarr::KIND.id) {
             Some(record) => {
                 let c = self.lib.catalogue();
-                tokio::task::spawn_blocking(move || (labels_of(&c, record).unwrap_or_default(), record_sources(&c, record).unwrap_or_default())).await.unwrap_or_default()
+                crate::run::spawn_blocking(move || (labels_of(&c, record).unwrap_or_default(), record_sources(&c, record).unwrap_or_default())).await.unwrap_or_default()
             }
             None => Default::default(),
         };
@@ -1021,7 +1021,7 @@ impl PlayingService {
         let words = match crate::serve::instance() {
             Some(served) if source_id == crate::source::cratarr::KIND.id => {
                 let id = album_id.to_string();
-                tokio::task::spawn_blocking(move || super::words::stored(&served).map(|s| s.records.get(&id).cloned())).await.ok().and_then(Result::ok).flatten()
+                crate::run::spawn_blocking(move || super::words::stored(&served).map(|s| s.records.get(&id).cloned())).await.ok().and_then(Result::ok).flatten()
             }
             _ => None,
         };
@@ -1029,7 +1029,7 @@ impl PlayingService {
         let editions = match crate::serve::instance() {
             Some(served) if source_id == crate::source::cratarr::KIND.id => {
                 let (lib, id) = (self.lib.clone(), album_id.to_string());
-                tokio::task::spawn_blocking(move || super::editions::of_record(&lib, &served, &id)).await.ok().and_then(Result::ok).unwrap_or_default()
+                crate::run::spawn_blocking(move || super::editions::of_record(&lib, &served, &id)).await.ok().and_then(Result::ok).unwrap_or_default()
             }
             _ => Vec::new(),
         };
@@ -1127,7 +1127,7 @@ impl PlayingService {
             .collect();
         // Their tempo (decision 0035), as a playlist's rows have it: the catalogue's (the BPM tag, else the analysis').
         let (c, sid, ids) = (self.lib.catalogue(), source_id.to_string(), rows.iter().filter_map(|r| r.id.clone()).collect::<Vec<_>>());
-        if let Ok(Ok(facts)) = tokio::task::spawn_blocking(move || c.source_rows(&sid, &ids)).await {
+        if let Ok(Ok(facts)) = crate::run::spawn_blocking(move || c.source_rows(&sid, &ids)).await {
             for (row, f) in rows.iter_mut().filter(|r| r.id.is_some()).zip(facts) {
                 row.bpm = f.bpm;
             }
@@ -1140,7 +1140,7 @@ impl PlayingService {
         if !without.is_empty() {
             // Cratarr's own records by their copies: its list names the copy that plays, and that one can be the library off.
             let held = match self.playlists.served() {
-                Some(served) if source_id == crate::source::cratarr::KIND.id => tokio::task::spawn_blocking(move || served.library.album_folders()).await.ok().and_then(Result::ok).unwrap_or_default(),
+                Some(served) if source_id == crate::source::cratarr::KIND.id => crate::run::spawn_blocking(move || served.library.album_folders()).await.ok().and_then(Result::ok).unwrap_or_default(),
                 _ => Default::default(),
             };
             let folders_off: std::collections::HashSet<i64> = self.lib.folders_off(without).into_iter().collect();
@@ -1194,7 +1194,7 @@ impl PlayingService {
     pub async fn artist_favorite(&self, source_id: &str, name: &str, id: Option<&str>, on: bool) -> Result<bool, ToggleError> {
         let (_, s) = self.source(source_id)?;
         if let Some((served, account, id)) = self.own_artist_id(source_id, id)? {
-            let set = tokio::task::spawn_blocking(move || crate::source::cratarr::set_artist_favorite_of(&served, &account, &id, on));
+            let set = crate::run::spawn_blocking(move || crate::source::cratarr::set_artist_favorite_of(&served, &account, &id, on));
             return set.await.map_err(anyhow::Error::from).and_then(|r| r).map_err(|e| ToggleError::CannotPlay(format!("{e:#}")));
         }
         s.set_artist_favorite(name.trim(), on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
@@ -1205,7 +1205,7 @@ impl PlayingService {
     pub async fn artist_is_favorite(&self, source_id: &str, name: &str, id: Option<&str>) -> Result<Option<bool>, ToggleError> {
         let (_, s) = self.source(source_id)?;
         if let Some((served, account, id)) = self.own_artist_id(source_id, id)? {
-            let read = tokio::task::spawn_blocking(move || crate::source::cratarr::artist_favorite_of(&served, &account, &id));
+            let read = crate::run::spawn_blocking(move || crate::source::cratarr::artist_favorite_of(&served, &account, &id));
             return read.await.map_err(anyhow::Error::from).and_then(|r| r).map(Some).map_err(|e| ToggleError::CannotPlay(format!("{e:#}")));
         }
         s.artist_favorite(name.trim()).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
@@ -1254,7 +1254,7 @@ impl PlayingService {
         // Where the catalogue has the track: in any of its folders, and for Cratarr's own ids without the source
         // connected (decision 0032).
         let (cat, source, item) = (self.lib.catalogue(), source_id.to_string(), id.to_string());
-        let place = tokio::task::spawn_blocking(move || {
+        let place = crate::run::spawn_blocking(move || {
             let (folder, rel) = cat.file_of(cat.track_of_source(&source, &item)?)?;
             Some((cat.folders().get(folder)?.clone(), rel))
         })

@@ -58,7 +58,7 @@ async fn groups_of(lib: &Library, records: Vec<i64>, off: &[i64]) -> Vec<Vec<i64
         return Vec::new();
     }
     let (cat, mains, off) = (lib.catalogue(), lib.main_folders(), off.to_vec());
-    match tokio::task::spawn_blocking(move || cat.edition_groups(&records, &mains, &off)).await {
+    match crate::run::spawn_blocking(move || cat.edition_groups(&records, &mains, &off)).await {
         Ok(Ok(groups)) => groups,
         Ok(Err(e)) => {
             tracing::debug!("editions not read: {e:#}");

@@ -458,7 +458,7 @@ impl IncomingService {
         }
         let (mains, id, place) = (self.lib.main_folders(), at.album.id.clone(), (at.dir.folder, at.dir.dir.clone()));
         let found = match crate::serve::instance() {
-            Some(served) => tokio::task::spawn_blocking(move || -> Result<Option<(i64, String)>> {
+            Some(served) => crate::run::spawn_blocking(move || -> Result<Option<(i64, String)>> {
                 let copies = served.library.copies_of(&id)?;
                 let own = copies
                     .iter()
@@ -494,7 +494,7 @@ impl IncomingService {
             (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string), self.lib.template());
         // The served library the guard below reads (RF11): the running server's, or a unit test's (`incoming::served`).
         let served = super::served();
-        tokio::task::spawn_blocking(move || -> Result<Result<Planned, ReplaceRefused>> {
+        crate::run::spawn_blocking(move || -> Result<Result<Planned, ReplaceRefused>> {
             // The old album's folder goes to the trash whole, so what else lies in it must not; at the library's root, the library
             // would go with it.
             if old_dir.is_empty() {
@@ -549,7 +549,7 @@ impl IncomingService {
         Ok(match self.plan_replace(&at, into, year).await? {
             Ok(p) => {
                 let pairs = pairs_of(&p.root, &p.old_dir, &at, &p.plan);
-                let (diff, lost, carry) = tokio::task::spawn_blocking(move || compare(&pairs, true)).await.unwrap_or_default();
+                let (diff, lost, carry) = crate::run::spawn_blocking(move || compare(&pairs, true)).await.unwrap_or_default();
                 ReplacePreview {
                     covers: covers_of(source_id, album_id, new.as_deref(), p.main, kept.as_deref(), &p.old_dir),
                     title: at.album.title,
@@ -610,7 +610,7 @@ impl IncomingService {
         }
         // Every file of the own copy there to copy, and none of them in Music already as it is (a tap a moment after another's).
         let (from, to, moves) = (at.root.join(&at.dir.dir), planned.root.clone(), planned.plan.moves.clone());
-        let looked = tokio::task::spawn_blocking(move || -> Option<String> {
+        let looked = crate::run::spawn_blocking(move || -> Option<String> {
             if let Some((rel, _)) = moves.iter().find(|(rel, _)| !from.join(rel).is_file()) {
                 return Some(format!("{} is no longer there", name(rel)));
             }
@@ -634,7 +634,7 @@ impl IncomingService {
         Ok(match self.plan_from_copy(&at, main.clone(), year).await? {
             Ok(p) => {
                 let pairs = pairs_of(&p.root, &p.old_dir, &at, &p.plan);
-                let (diff, lost, _) = tokio::task::spawn_blocking(move || compare(&pairs, false)).await.unwrap_or_default();
+                let (diff, lost, _) = crate::run::spawn_blocking(move || compare(&pairs, false)).await.unwrap_or_default();
                 ReplacePreview {
                     title: at.album.title,
                     old: p.old_dir,
@@ -796,7 +796,7 @@ impl IncomingService {
         // Each own file as it is now, at the intent: what a copy of it is told by from then on (RF6).
         let sources: Vec<PathBuf> = copies.iter().map(|m| at.root.join(&m.from.1)).collect();
         let stamps: Vec<Option<(u64, i64)>> =
-            tokio::task::spawn_blocking(move || sources.iter().map(|p| super::stamp_of(p)).collect()).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            crate::run::spawn_blocking(move || sources.iter().map(|p| super::stamp_of(p)).collect()).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let event = Event::AlbumReplacedFromCopy {
             source: at.source.clone(),
             album_id: at.album.id.clone(),
@@ -848,7 +848,7 @@ impl IncomingService {
         let mut out = self.steps(event).ok_or_else(|| after(anyhow::anyhow!("the folders are not in use any more")))?;
         let ins = out.split_off(replaced.len().min(out.len()));
         let (files, stamps) = (self.files.clone(), stamps.clone());
-        let copied = tokio::task::spawn_blocking(move || -> Result<(Vec<bool>, Vec<Option<(u64, i64)>>), (bool, anyhow::Error)> {
+        let copied = crate::run::spawn_blocking(move || -> Result<(Vec<bool>, Vec<Option<(u64, i64)>>), (bool, anyhow::Error)> {
             let _held = held;
             // An old file in the trash under this token already went (a try cut short): a copy may lie at its name by now.
             let left: Vec<crate::moves::Step> = out.iter().filter(|s| !s.to.0.join(&s.to.1).exists()).cloned().collect();
@@ -881,7 +881,7 @@ impl IncomingService {
         };
         self.journal.done(id, super::COPIED, epoch_now(), &serde_json::json!(made)).map_err(after)?;
         let (c, written) = (self.lib.catalogue(), event.clone());
-        tokio::task::spawn_blocking(move || rows_of_copy(&c, &written, &shared)).await.map_err(|e| after(anyhow::anyhow!("{e}")))?.map_err(after)?;
+        crate::run::spawn_blocking(move || rows_of_copy(&c, &written, &shared)).await.map_err(|e| after(anyhow::anyhow!("{e}")))?.map_err(after)?;
         super::tell_moved(&self.lib, title, &moved_pairs(event, false), if hold_gone { super::Told::Came } else { super::Told::Both }).await;
         Ok(())
     }
@@ -915,7 +915,7 @@ impl IncomingService {
         let name = |rel: &str| rel.rsplit('/').next().unwrap_or(rel).to_string();
         // How each copy lies, and whether every old file can come back, before anything moves.
         let (r, p, t, library) = (root.clone(), plan.clone(), title.clone(), self.library_name(source, to_dir.0));
-        let looked = tokio::task::spawn_blocking(move || -> Result<Vec<super::Lies>, String> {
+        let looked = crate::run::spawn_blocking(move || -> Result<Vec<super::Lies>, String> {
             use super::Lies;
             let trashed = |at: i64, rel: &str| r.join(crate::trash::TRASH_DIR).join(crate::trash::token(at, rel));
             let lies: Vec<Lies> = p
@@ -994,7 +994,7 @@ impl IncomingService {
             .map(|((rel, _), _)| (rel.clone(), crate::trash::token(stamp, rel)))
             .collect();
         let (r, files, rels, held) = (root.clone(), self.files.clone(), plan.iter().map(|(rel, _)| rel.clone()).collect::<Vec<_>>(), moving.clone());
-        let moved = tokio::task::spawn_blocking(move || -> Result<()> {
+        let moved = crate::run::spawn_blocking(move || -> Result<()> {
             let _held = held;
             files.move_all(&steps)?;
             super::prune_up_to(&r, &rels);
@@ -1008,7 +1008,7 @@ impl IncomingService {
             return Err(ToggleError::Refused(format!("{e:#}")));
         }
         let (c, event, kept) = (catalogue.clone(), entry.event.clone(), taken.clone());
-        let followed = tokio::task::spawn_blocking(move || rows_back_of_copy(&c, &event, &kept)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r);
+        let followed = crate::run::spawn_blocking(move || rows_back_of_copy(&c, &event, &kept)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r);
         if let Err(e) = followed {
             tracing::warn!("catalogue: could not put back the files of {title}: {e:#}");
         }
@@ -1044,14 +1044,14 @@ impl IncomingService {
         // moves in with it (a conversion's tracks get it inside again from the cover file).
         if keep {
             let (old, new) = (music.join(&planned.old_dir), at.root.join(&at.dir.dir));
-            if let Err(e) = tokio::task::spawn_blocking(move || keep_cover(&old, &new)).await {
+            if let Err(e) = crate::run::spawn_blocking(move || keep_cover(&old, &new)).await {
                 tracing::warn!("covers: {e}");
             }
         }
         // What Cratarr knows of the album carried into the new copy (0.9.7, "Replace and carry over").
         if carry {
             let pairs = pairs_of(&music, &planned.old_dir, &at, &planned.plan);
-            if let Err(e) = tokio::task::spawn_blocking(move || carry_over(&pairs)).await {
+            if let Err(e) = crate::run::spawn_blocking(move || carry_over(&pairs)).await {
                 tracing::warn!("replace: {e}");
             }
         }
@@ -1190,7 +1190,7 @@ impl IncomingService {
         }
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let (files, held) = (self.files.clone(), underway.clone());
-        let moved = tokio::task::spawn_blocking(move || {
+        let moved = crate::run::spawn_blocking(move || {
             let _held = held;
             files.move_all(&steps)
         })
@@ -1217,7 +1217,7 @@ impl IncomingService {
     pub(super) async fn finish_replace(&self, event: &Event, back: bool, hold_gone: bool) {
         let Event::AlbumReplaced { moves, replaced, token, title, .. } = event else { return };
         let (c, moves_, replaced_, token) = (self.lib.catalogue(), moves.clone(), replaced.clone(), token.clone());
-        let done = tokio::task::spawn_blocking(move || rows_follow(&c, &moves_, &replaced_, &token, back))
+        let done = crate::run::spawn_blocking(move || rows_follow(&c, &moves_, &replaced_, &token, back))
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
         .and_then(|r| r);
@@ -1241,7 +1241,7 @@ impl IncomingService {
         let steps = self.undo_steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let moving = self.lib.catalogue().copies_moving();
         let (files, held) = (self.files.clone(), moving.clone());
-        tokio::task::spawn_blocking(move || {
+        crate::run::spawn_blocking(move || {
             let _held = held;
             files.move_all(&steps)
         })

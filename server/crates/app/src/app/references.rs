@@ -261,7 +261,7 @@ where
 {
     let answered = |answer: std::result::Result<Judging, String>| Judged { answer, said: Vec::new(), stop: None, off: None };
     let c = cat.clone();
-    let Some((row, refs, kept, short)) = tokio::task::spawn_blocking(move || -> Result<_> {
+    let Some((row, refs, kept, short)) = crate::run::spawn_blocking(move || -> Result<_> {
         let Some(row) = c.record(record)? else { return Ok(None) };
         let refs = c.references_of(&ids::record(row.id))?;
         let kept = c.reference_tracks(row.id)?;
@@ -277,7 +277,7 @@ where
     let keep = |source: &'static str, list: Vec<RefTrack>, release: Option<Ref>, count: bool, read: Option<(Ref, ReadMore)>| {
         let (c, id, had) = (cat.clone(), row.id, row.had);
         async move {
-            tokio::task::spawn_blocking(move || -> Result<()> {
+            crate::run::spawn_blocking(move || -> Result<()> {
                 c.set_reference_tracks(id, source, &list)?;
                 // The release a release group's list was read from (R25, N6): kept, as found, so the record knows which edition
                 // its list is, and a release its files name later is told from it.
@@ -641,7 +641,7 @@ where
             }
         }
     };
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let mut ends = PageRead(key, None);
         match judge(&cat, record, asking, true).await {
             Ok(j) => {
@@ -793,7 +793,7 @@ where
 {
     let waiting = {
         let cat = cat.clone();
-        tokio::task::spawn_blocking(move || cat.lists_to_read(n)).await??
+        crate::run::spawn_blocking(move || cat.lists_to_read(n)).await??
     };
     let mut read_n = 0;
     for (record, release) in waiting {
@@ -807,7 +807,7 @@ where
             // This release's question failed: counted against it, and the rest go on (R7).
             Err(e) => {
                 let cat = cat.clone();
-                if tokio::task::spawn_blocking(move || cat.list_failed(record, LIST_TRIES)).await?? {
+                if crate::run::spawn_blocking(move || cat.list_failed(record, LIST_TRIES)).await?? {
                     tracing::info!(target: "library", "the lists 0.17's step left: record {record} let go of after {LIST_TRIES} tries: {e:#}");
                 }
                 continue;
@@ -815,7 +815,7 @@ where
         };
         read_n += 1;
         let (cat, files) = (cat.clone(), files.clone());
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        crate::run::spawn_blocking(move || -> Result<()> {
             if let Some(list) = list.filter(|l| !l.is_empty())
                 && cat.subject_of(&Ref::new("musicbrainz", "release", &release))? == [ids::record(record)]
             {
@@ -1069,7 +1069,7 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
     let served = app.served.clone().context("Cratarr's own library is not open")?;
     let record = ids::record_number(album).context("No such album in Cratarr's own library")?;
     let (s, a) = (served.clone(), album.to_string());
-    let k = tokio::task::spawn_blocking(move || kept(&s, &a, record)).await??;
+    let k = crate::run::spawn_blocking(move || kept(&s, &a, record)).await??;
     let mut read: Vec<(String, Vec<RefTrack>)> = Vec::new();
     for source in ["musicbrainz", "discogs"] {
         if k.lists.iter().any(|(s, l)| s == source && !l.is_empty()) {
@@ -1104,7 +1104,7 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
     }
     let found = page.filter(|_| kept_page.is_none());
     let (s, a) = (served.clone(), album.to_string());
-    let k = tokio::task::spawn_blocking(move || -> Result<Kept> {
+    let k = crate::run::spawn_blocking(move || -> Result<Kept> {
         let cat = s.catalogue();
         if let Some(p) = &found {
             cat.set_reference(&a, &Ref::new("bandcamp", "album", p), "search")?;
@@ -1175,7 +1175,7 @@ pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<Ref
     let served = app.served.clone().context("Cratarr's own library is not open")?;
     let record = ids::record_number(album).context("No such album in Cratarr's own library")?;
     let (s, a) = (served.clone(), album.to_string());
-    tokio::task::spawn_blocking(move || choose_in(&s, &a, record, &c)).await??;
+    crate::run::spawn_blocking(move || choose_in(&s, &a, record, &c)).await??;
     app.collection.refresh().await;
     app.collection.tell_changed();
     of(app, album).await
@@ -1494,7 +1494,7 @@ mod tests {
         let app = axum::Router::new().fallback(move || async move { axum::http::StatusCode::from_u16(status).unwrap() });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/ws/2/release/r1", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         url
     }
 

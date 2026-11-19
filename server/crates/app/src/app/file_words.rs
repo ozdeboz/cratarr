@@ -133,7 +133,7 @@ fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind:
 /// Health's findings: per kind set to Write, the records whose files differ (`words:<kind>`), each opening its record.
 pub async fn findings(served: &Arc<crate::serve::Serve>) -> Result<Vec<(Kind, Vec<RunRecord>)>> {
     let s = served.clone();
-    tokio::task::spawn_blocking(move || -> Result<Vec<(Kind, Vec<RunRecord>)>> {
+    crate::run::spawn_blocking(move || -> Result<Vec<(Kind, Vec<RunRecord>)>> {
         let mut out = Vec::new();
         for kind in super::words::store::KINDS {
             if !super::words::catalogue::writes(&s, kind.name()) {
@@ -157,7 +157,7 @@ fn kind_of(plan: &str) -> Result<Kind> {
 pub async fn plan(plan: &str, albums: Option<Vec<String>>) -> Result<file_runs::PlanView> {
     let kind = kind_of(plan)?;
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let p = tokio::task::spawn_blocking(move || proposal(&served, kind, albums.as_deref())).await??;
+    let p = crate::run::spawn_blocking(move || proposal(&served, kind, albums.as_deref())).await??;
     Ok(file_runs::view(&p.kind, &p.title, &p.records, &p.files, false))
 }
 
@@ -169,7 +169,7 @@ pub async fn apply(app: &Arc<super::App>, plan: &str, albums: Vec<String>, stamp
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
     let name = format!("{PREFIX}{}", kind.name());
     anyhow::ensure!(!file_runs::busy(&app.journal, &name), "Already writing");
-    let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
+    let p = crate::run::spawn_blocking(move || -> Result<Proposal> {
         if !super::words::catalogue::writes(&served, kind.name()) {
             bail!("Writing {}s into the files is switched off", kind.name());
         }

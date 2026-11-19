@@ -90,7 +90,7 @@ impl SyncService {
         let journal = self.follow.journal();
         for (mut rx, undone) in [(journal.subscribe(), false), (journal.subscribe_undone(), true)] {
             let me = Arc::downgrade(self);
-            tokio::spawn(async move {
+            crate::run::spawn(async move {
                 loop {
                     match rx.recv().await {
                         Ok(id) => {
@@ -294,7 +294,7 @@ impl SyncService {
             return;
         }
         let me = self.clone();
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             // A burst of edits makes one pass.
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             me.pass().await;
@@ -668,7 +668,7 @@ fn with_unknown(mut ids: Vec<String>, unknown: &[(usize, String)]) -> Vec<String
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("{e}"))
+    crate::run::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Whether a listing that lost most of what is linked can be believed: not when four or more are linked and more

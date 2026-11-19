@@ -189,7 +189,7 @@ pub async fn status() -> Result<Status> {
     let (asked, works, of) = match crate::serve::view::get() {
         Some(s) => {
             let (lib, ud) = (s.library().clone(), s.userdata().clone());
-            tokio::task::spawn_blocking(move || -> Result<(usize, usize, usize)> {
+            crate::run::spawn_blocking(move || -> Result<(usize, usize, usize)> {
                 let releases = lib.album_releases()?;
                 let typed = ud.release_types_asked("mb:", 0)?;
                 let read = ud.mb_releases_asked(0, 0)?;
@@ -230,7 +230,7 @@ mod tests {
         let _one = TEST_STATE.lock().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
         let ask = || reqwest::Client::new().get(&url).asked();
         let was = set_for_tests(BACKGROUND, false);
         let pass = behind(ask()).await;

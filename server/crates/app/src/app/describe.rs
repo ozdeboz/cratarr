@@ -118,7 +118,7 @@ pub async fn describe(asked: Vec<Asked>, account: Option<String>) -> Result<Vec<
     let mut out = match crate::serve::instance() {
         Some(serve) => {
             let p = pairs.clone();
-            tokio::task::spawn_blocking(move || ours(&serve, &p, account.as_deref())).await??
+            crate::run::spawn_blocking(move || ours(&serve, &p, account.as_deref())).await??
         }
         None => vec![None; pairs.len()],
     };

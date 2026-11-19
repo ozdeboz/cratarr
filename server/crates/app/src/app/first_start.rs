@@ -34,7 +34,7 @@ pub(super) struct FirstStart {
 impl FirstStart {
     /// Off the runtime: at a real library's size it takes a while.
     pub async fn run(self) -> Result<()> {
-        tokio::task::spawn_blocking(move || self.steps(&|_| Ok(()))).await.context("it stopped")?
+        crate::run::spawn_blocking(move || self.steps(&|_| Ok(()))).await.context("it stopped")?
     }
 
     /// What a step found: kept from an earlier start, or found now and kept. A stop inside a step goes over it again, and what it

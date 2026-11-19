@@ -408,7 +408,7 @@ impl IncomingService {
             && let Some(root) = self.lib.catalogue().folders().get(job.folder).cloned()
         {
             let dir = job.dir.clone();
-            let _ = tokio::task::spawn_blocking(move || clear_staging(&root, &dir)).await;
+            let _ = crate::run::spawn_blocking(move || clear_staging(&root, &dir)).await;
         }
         Ok(())
     }
@@ -416,7 +416,7 @@ impl IncomingService {
     /// Work through the queue, one job at a time, for as long as Cratarr runs.
     pub(in crate::app) fn work(self: &std::sync::Arc<Self>) {
         let me = std::sync::Arc::downgrade(self);
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             loop {
                 let Some(svc) = me.upgrade() else { return };
                 match svc.queue.next() {
@@ -470,12 +470,12 @@ impl IncomingService {
                 for (i, rel) in job.files.iter().enumerate().skip(job.done) {
                     if self.queue.get(job.id).is_none() {
                         let (r, d) = (root.clone(), job.dir.clone());
-                        let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
+                        let _ = crate::run::spawn_blocking(move || clear_staging(&r, &d)).await;
                         return Outcome::Cancelled;
                     }
                     let (input, output, limit) = (root.join(&job.dir).join(rel), root.join(staged(&job.dir, rel)), job.limit);
                     let (tell, mut told) = tokio::sync::watch::channel(0f32);
-                    let mut work = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                    let mut work = crate::run::spawn_blocking(move || -> anyhow::Result<()> {
                         // Written whole or not at all, and the same input gives the same bytes: one already there is done.
                         if !output.is_file() {
                             crate::moves::create_dirs_like_parent(output.parent().unwrap_or(Path::new(".")))?;
@@ -498,7 +498,7 @@ impl IncomingService {
                     };
                     if let Err(e) = converted {
                         let (r, d) = (root.clone(), job.dir.clone());
-                        let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
+                        let _ = crate::run::spawn_blocking(move || clear_staging(&r, &d)).await;
                         return Outcome::Failed(format!("{rel} could not be converted: {e:#}"));
                     }
                     self.queue.update(job.id, |j| {
@@ -508,7 +508,7 @@ impl IncomingService {
                 }
                 if self.queue.get(job.id).is_none() {
                     let (r, d) = (root.clone(), job.dir.clone());
-                    let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
+                    let _ = crate::run::spawn_blocking(move || clear_staging(&r, &d)).await;
                     return Outcome::Cancelled;
                 }
                 let s = epoch_now();
@@ -522,7 +522,7 @@ impl IncomingService {
         let moving = self.lib.catalogue().copies_moving();
         let (files, held) = (self.files.clone(), moving.clone());
         let swap = steps.clone();
-        let swapped = tokio::task::spawn_blocking(move || {
+        let swapped = crate::run::spawn_blocking(move || {
             let _held = held;
             files.move_all(&swap)
         })
@@ -531,7 +531,7 @@ impl IncomingService {
         .and_then(|r| r);
         if let Err(e) = swapped {
             let (r, d) = (root.clone(), job.dir.clone());
-            let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
+            let _ = crate::run::spawn_blocking(move || clear_staging(&r, &d)).await;
             return Outcome::Failed(format!("the converted files could not take the originals' place: {e:#}"));
         }
         self.rename_rows(job.folder, &converted, false).await;
@@ -555,7 +555,7 @@ impl IncomingService {
                 // The album stays in Incoming as it was: the originals back, the converted files dropped.
                 let files = self.files.clone();
                 let back = steps.clone();
-                let undone = tokio::task::spawn_blocking(move || files.move_back(&back)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r);
+                let undone = crate::run::spawn_blocking(move || files.move_back(&back)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r);
                 match undone {
                     Ok(()) => self.rename_rows(job.folder, &converted, true).await,
                     Err(b) => tracing::error!("could not put the originals of {} back: {b:#}", job.album.title),
@@ -564,7 +564,7 @@ impl IncomingService {
             }
         };
         let (r, d) = (root, job.dir.clone());
-        let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
+        let _ = crate::run::spawn_blocking(move || clear_staging(&r, &d)).await;
         self.lib.catalogue().poke();
         outcome
     }
@@ -572,7 +572,7 @@ impl IncomingService {
     /// The rows of renamed files (a WAV became FLAC) follow the swap, or go back (`back`); track ids kept.
     async fn rename_rows(&self, folder: i64, converted: &[Converted], back: bool) {
         let (c, converted) = (self.lib.catalogue(), converted.to_vec());
-        let done = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let done = crate::run::spawn_blocking(move || -> anyhow::Result<()> {
             for v in converted.iter().filter(|v| v.converted != v.original) {
                 let (from, to) = if back { (&v.converted, &v.original) } else { (&v.original, &v.converted) };
                 if !c.has_row(folder, to) {

@@ -653,7 +653,7 @@ pub fn space_again() {
 /// administrator's, or one whose asker is not known, goes on.
 async fn below_floor(request: i64) -> bool {
     let Some(serve) = crate::serve::instance() else { return false };
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let asker = serve.userdata.request(request).ok().flatten().map(|r| r.user);
         asker.is_some_and(|a| serve.users.get(&a).is_some_and(|u| !u.admin)) && super::room::short_on(&serve, &super::room::TheDisks)
     })
@@ -1087,7 +1087,7 @@ pub fn start(app: &Arc<super::App>) {
         }
     });
     let round_app = app.clone();
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let app = round_app;
         loop {
             // Nothing searched until an Incoming library takes Soulseek's records (soularr may still be at work).
@@ -1110,7 +1110,7 @@ pub fn start(app: &Arc<super::App>) {
             }
         }
     });
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         // Hidden folders placings left (Y12): swept once, before this start's first fetch, so none of its own is taken.
         sweep_at_start().await;
         loop {
@@ -1128,7 +1128,7 @@ pub fn start(app: &Arc<super::App>) {
 async fn sweep_at_start() {
     let Ok(lib) = library() else { return };
     let items = kept(|k| k.items.clone());
-    let gone = tokio::task::spawn_blocking(move || sweep_hidden(&lib, &items)).await.unwrap_or_default();
+    let gone = crate::run::spawn_blocking(move || sweep_hidden(&lib, &items)).await.unwrap_or_default();
     if !gone.is_empty() {
         tracing::info!(target: "soulseek", count = gone.len(), "hidden folders placings left behind removed");
     }
@@ -1165,7 +1165,7 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
         && now() - SWEPT.load(std::sync::atomic::Ordering::Relaxed) >= 3600
     {
         SWEPT.store(now(), std::sync::atomic::Ordering::Relaxed);
-        tokio::task::spawn_blocking(move || sweep_set_asides(&data, now())).await.ok();
+        crate::run::spawn_blocking(move || sweep_set_asides(&data, now())).await.ok();
     }
     let (ud, cat, kinds) = (served.userdata.clone(), served.catalogue().clone(), served.library.kinds());
     // Placed for a record retired meanwhile (X4, D17): its request follows the record its album joined or made, once its folder is
@@ -1173,7 +1173,7 @@ async fn read_requests(served: &Arc<crate::serve::Serve>, app: &Arc<super::App>)
     let placed: Vec<(String, i64, i64, String, i64)> = kept(|k| {
         k.items.iter().filter(|i| i.state == State::Placed && i.record.record != 0).filter_map(|i| Some((i.id.clone(), i.record.request, i.record.record, i.placed.clone()?, i.placed_at))).collect()
     });
-    let (approved, of, (moved, read)) = tokio::task::spawn_blocking(move || -> Result<_> {
+    let (approved, of, (moved, read)) = crate::run::spawn_blocking(move || -> Result<_> {
         let moved = repoint(&ud, &cat, &placed)?;
         let (approved, of) = requests_taken(&ud, &cat, &kinds)?;
         Ok((approved, of, moved))
@@ -2032,7 +2032,7 @@ impl std::error::Error for LeftTheList {}
 /// picture (Y3, `large_cover`), never the cover cache's thumbnail; none where it has none, or it cannot be had now.
 async fn cover_for(record: i64) -> Option<Vec<u8>> {
     let cat = crate::serve::instance()?.catalogue().clone();
-    let q = tokio::task::spawn_blocking(move || cat.requested(&[record])).await.ok()?.ok()?.remove(&record)?;
+    let q = crate::run::spawn_blocking(move || cat.requested(&[record])).await.ok()?.ok()?.remove(&record)?;
     let of = cover_source(q.row.cover.as_deref(), &q.groups)?;
     // The covers' hosts only, each answer read in pieces to its cap (O1).
     let http = super::reach::client(super::reach::Purpose::Covers).timeout(Duration::from_secs(30)).build().ok()?;
@@ -2076,7 +2076,7 @@ where
     for url in addresses {
         match get(url.clone()).await {
             // Read on a blocking thread (V7): a large original's decode is seconds of work.
-            Ok(Some(b)) => match tokio::task::spawn_blocking(move || cover_jpg(b)).await.ok().flatten() {
+            Ok(Some(b)) => match crate::run::spawn_blocking(move || cover_jpg(b)).await.ok().flatten() {
                 Some(jpg) => return Some(jpg),
                 None => tracing::warn!(target: "soulseek", url = %url, "a cover that is no picture Cratarr can read, or too large to read"),
             },
@@ -2384,7 +2384,7 @@ mod tests {
     async fn slskd_at(app: axum::Router) -> Slskd {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Slskd::new(&url, "key").unwrap()
     }
 

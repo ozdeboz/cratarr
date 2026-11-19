@@ -59,7 +59,7 @@ pub fn credentials(ud: &UserData) -> Result<Option<(String, String)>> {
 /// The key and secret as saved now; none without Cratarr's own library.
 async fn saved() -> Option<(String, String)> {
     let ud = crate::serve::instance()?.userdata.clone();
-    tokio::task::spawn_blocking(move || credentials(&ud)).await.ok()?.ok()?
+    crate::run::spawn_blocking(move || credentials(&ud)).await.ok()?.ok()?
 }
 
 fn client() -> Result<&'static reqwest::Client> {
@@ -121,7 +121,7 @@ pub fn none_kept(kept: Option<(i64, Option<String>)>, now: i64) -> bool {
 pub async fn kept_without_cover(rg: &str) -> bool {
     let Some(served) = crate::serve::instance() else { return false };
     let (ud, key) = (served.userdata.clone(), rg.to_string());
-    let kept = tokio::task::spawn_blocking(move || ud.rg_cover(&key)).await.ok().and_then(Result::ok).flatten();
+    let kept = crate::run::spawn_blocking(move || ud.rg_cover(&key)).await.ok().and_then(Result::ok).flatten();
     none_kept(kept, super::moment::now_secs())
 }
 
@@ -426,7 +426,7 @@ pub async fn release_group_cover(rg: &str) -> Result<Option<String>> {
     let Some(served) = crate::serve::instance() else { return Ok(None) };
     let now = super::moment::now_secs();
     let (ud, key) = (served.userdata.clone(), rg.to_string());
-    if let Some((at, url)) = tokio::task::spawn_blocking(move || ud.rg_cover(&key)).await??
+    if let Some((at, url)) = crate::run::spawn_blocking(move || ud.rg_cover(&key)).await??
         && now - at <= if url.is_some() { COVER_FOUND_SECS } else { COVER_NONE_SECS }
     {
         return Ok(url);
@@ -441,14 +441,14 @@ pub async fn release_group_cover(rg: &str) -> Result<Option<String>> {
         }
     };
     let (ud, key, url) = (served.userdata.clone(), rg.to_string(), found.clone());
-    tokio::task::spawn_blocking(move || ud.set_rg_cover(&key, url.as_deref(), now)).await??;
+    crate::run::spawn_blocking(move || ud.set_rg_cover(&key, url.as_deref(), now)).await??;
     Ok(found)
 }
 
 /// The background asker for albums whose files carry no genre (the owner: fill gaps only, files never written):
 /// their master's genres and styles, kept by album; the library is built with them (`Library::set_extra_genres`).
 pub fn start() {
-    tokio::spawn(async {
+    crate::run::spawn(async {
         tokio::time::sleep(Duration::from_secs(600)).await;
         loop {
             // The background reading paused (O5): looked at again in a while.
@@ -491,7 +491,7 @@ async fn types_pass() -> Result<()> {
     let Some(served) = crate::serve::instance() else { return Ok(()) };
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let due: Vec<(String, String, String, String, usize, u64)> = tokio::task::spawn_blocking(move || -> Result<_> {
+    let due: Vec<(String, String, String, String, usize, u64)> = crate::run::spawn_blocking(move || -> Result<_> {
         let asked = ud.release_types_asked("dc:", now - GENRES_AGAIN_SECS)?;
         let mb = ud.release_types_asked("mb:", 0)?;
         Ok(lib
@@ -528,7 +528,7 @@ async fn types_pass() -> Result<()> {
     }
     let n = found.len();
     let ud = served.userdata.clone();
-    tokio::task::spawn_blocking(move || ud.set_release_types(&found, super::moment::now_secs())).await??;
+    crate::run::spawn_blocking(move || ud.set_release_types(&found, super::moment::now_secs())).await??;
     tracing::info!("discogs: release types asked for {n} albums");
     Ok(())
 }
@@ -537,7 +537,7 @@ async fn genres_pass() -> Result<()> {
     let Some(served) = crate::serve::instance() else { return Ok(()) };
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let due: Vec<(String, String, String, String)> = tokio::task::spawn_blocking(move || -> Result<_> {
+    let due: Vec<(String, String, String, String)> = crate::run::spawn_blocking(move || -> Result<_> {
         let asked = ud.discogs_genres_asked(now - GENRES_AGAIN_SECS)?;
         Ok(lib.albums_without_genres()?.into_iter().filter(|a| !asked.contains(&a.0)).take(GENRES_BATCH).collect())
     })
@@ -561,7 +561,7 @@ async fn genres_pass() -> Result<()> {
     }
     let n = found.len();
     let ud = served.userdata.clone();
-    tokio::task::spawn_blocking(move || ud.set_discogs_genres(&found, super::moment::now_secs())).await??;
+    crate::run::spawn_blocking(move || ud.set_discogs_genres(&found, super::moment::now_secs())).await??;
     if n > 0 {
         tracing::info!("discogs: {n} albums without genres asked");
     }

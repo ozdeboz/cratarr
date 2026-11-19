@@ -95,7 +95,7 @@ impl OpusCopies {
     /// A kept copy as a file; served now, so it is the last to go.
     async fn send_kept(&self, kept: &Path, headers: &HeaderMap) -> Response {
         let k = kept.to_path_buf();
-        let _ = tokio::task::spawn_blocking(move || std::fs::File::options().write(true).open(&k).and_then(|f| f.set_modified(SystemTime::now()))).await;
+        let _ = crate::run::spawn_blocking(move || std::fs::File::options().write(true).open(&k).and_then(|f| f.set_modified(SystemTime::now()))).await;
         crate::serve::files::serve_file(kept, headers, false).await
     }
 
@@ -105,7 +105,7 @@ impl OpusCopies {
             return Some(made.clone());
         }
         let probe = path.clone();
-        let lossless = tokio::task::spawn_blocking(move || crate::convert::Source::open(&probe).ok().flatten().is_some()).await.ok()?;
+        let lossless = crate::run::spawn_blocking(move || crate::convert::Source::open(&probe).ok().flatten().is_some()).await.ok()?;
         if !lossless {
             return None;
         }
@@ -128,13 +128,13 @@ impl OpusCopies {
             ((tx, file), made)
         };
         let (me, key) = (self.clone(), key.to_string());
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let (tx, file) = begun;
             let permit = crate::opus_copy::COPIES.acquire().await;
             let (p, k) = (part.clone(), me.dir.join(format!("{key}.{ext}")));
             let tx = Arc::new(tx);
             let progress = tx.clone();
-            let done = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+            let done = crate::run::spawn_blocking(move || -> anyhow::Result<bool> {
                 let out = Progress { file, written: 0, tx: progress };
                 let made = make(out)?;
                 if made {
@@ -155,7 +155,7 @@ impl OpusCopies {
             me.making.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
             if ok {
                 let me = me.clone();
-                let _ = tokio::task::spawn_blocking(move || me.prune()).await;
+                let _ = crate::run::spawn_blocking(move || me.prune()).await;
             }
         });
         Some(made)
@@ -324,7 +324,7 @@ async fn follow(part: PathBuf, mut made: watch::Receiver<Made>) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
     // Opened now: it keeps reading once the copy is moved to its kept name.
     let file = tokio::fs::File::open(&part).await;
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let Ok(mut file) = file else {
             let _ = tx.send(Err(std::io::Error::other("the copy went"))).await;
             return;
@@ -473,7 +473,7 @@ mod tests {
         let (tx, made) = watch::channel(Made::Writing(0));
         let r = follow(part.clone(), made).await;
         assert!(r.headers().get(header::CONTENT_LENGTH).is_none(), "no length while it is made");
-        let writer = tokio::spawn(async move {
+        let writer = crate::run::spawn(async move {
             let mut f = std::fs::File::options().append(true).open(&part).unwrap();
             for piece in [&b"OggS one "[..], b"two ", b"three"] {
                 tokio::time::sleep(Duration::from_millis(30)).await;

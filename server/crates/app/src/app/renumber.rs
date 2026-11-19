@@ -439,7 +439,7 @@ pub(super) fn copy_tracks(lib: &crate::serve::library::Library, cat: &crate::cat
 
 async fn look(album: &str, progress: &(dyn Fn(&str, u64, Option<u64>) + Send + Sync)) -> Result<Preview> {
     let a = album.to_string();
-    let (tracks, release, artist, name) = tokio::task::spawn_blocking(move || tracks_of(&a)).await??;
+    let (tracks, release, artist, name) = crate::run::spawn_blocking(move || tracks_of(&a)).await??;
     if tracks.is_empty() {
         bail!("That album has no tracks");
     }
@@ -487,7 +487,7 @@ pub fn start(account: &str, album: &str) -> Result<super::tasks::Task, String> {
             && let Some(serve) = crate::serve::instance()
         {
             let (ud, album) = (serve.userdata.clone(), a.clone());
-            tokio::task::spawn_blocking(move || ud.set_renumber_matched(&album, super::moment::now_secs())).await??;
+            crate::run::spawn_blocking(move || ud.set_renumber_matched(&album, super::moment::now_secs())).await??;
         }
         Ok(preview)
     })
@@ -580,7 +580,7 @@ pub async fn plan(account: &str, album: &str) -> Result<super::file_runs::PlanVi
         return Ok(super::file_runs::PlanView { kind: format!("{KIND}:{album}"), title: "Renumber".into(), records: Vec::new(), making: true });
     };
     let (a, served) = (album.to_string(), crate::serve::instance().context("Cratarr's own library is not open")?);
-    let p = tokio::task::spawn_blocking(move || proposal(&served, &a, &preview)).await??;
+    let p = crate::run::spawn_blocking(move || proposal(&served, &a, &preview)).await??;
     Ok(super::file_runs::view(&p.kind, &p.title, &p.records, &p.files, false))
 }
 
@@ -591,7 +591,7 @@ pub async fn apply_plan(app: &std::sync::Arc<super::App>, account: &str, album: 
     anyhow::ensure!(!super::file_runs::busy(&app.journal, &kind), "Already writing");
     let preview = looked(account, album)?.context("The release is still being looked up")?;
     let (a, served) = (album.to_string(), crate::serve::instance().context("Cratarr's own library is not open")?);
-    let p = tokio::task::spawn_blocking(move || -> Result<super::file_runs::Proposal> { Ok(super::file_runs::ticked(proposal(&served, &a, &preview)?, &[a.clone()], stamps.as_ref())) }).await??;
+    let p = crate::run::spawn_blocking(move || -> Result<super::file_runs::Proposal> { Ok(super::file_runs::ticked(proposal(&served, &a, &preview)?, &[a.clone()], stamps.as_ref())) }).await??;
     anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Its numbers are as the release has them already");
     Ok(super::file_runs::start(app, p))
 }

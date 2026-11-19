@@ -843,7 +843,7 @@ impl App {
         // Each item about a record of Cratarr's own with its type (GOTO.S1, F31.1: its Go to names it), one read for them all.
         if let Some(served) = self.served.clone() {
             let ids = own_albums(findings.iter().flat_map(|f| &f.items));
-            let types = tokio::task::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
+            let types = crate::run::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
             for i in findings.iter_mut().flat_map(|f| &mut f.items) {
                 typed(i, &types);
             }
@@ -861,13 +861,13 @@ impl App {
         // Its files' problems: only the own library's records have files Cratarr read.
         if let Some(served) = self.served.clone().filter(|_| source == crate::source::cratarr::KIND.id) {
             let id = album.to_string();
-            wrong = tokio::task::spawn_blocking(move || files_wrong(&served, &id)).await??;
+            wrong = crate::run::spawn_blocking(move || files_wrong(&served, &id)).await??;
         }
         let mut health = record(&found, &(source.to_string(), album.to_string()), &wrong);
         // Its items with their record's type (GOTO.S1, F31.1).
         if let Some(served) = self.served.clone() {
             let ids = own_albums(health.findings.iter().flat_map(|f| &f.items));
-            let types = tokio::task::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
+            let types = crate::run::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
             for i in health.findings.iter_mut().flat_map(|f| &mut f.items) {
                 typed(i, &types);
             }
@@ -879,13 +879,13 @@ impl App {
     async fn check_missing(&self) -> anyhow::Result<Vec<Finding>> {
         let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
         let (c, ud) = (self.library.catalogue(), served.userdata.clone());
-        let (missing, held) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((c.missing()?, ud.songs_held()?)) }).await??;
+        let (missing, held) = crate::run::spawn_blocking(move || -> anyhow::Result<_> { Ok((c.missing()?, ud.songs_held()?)) }).await??;
         Ok(missing_list(missing, &held).into_iter().collect())
     }
 
     async fn check_files(&self) -> anyhow::Result<Vec<Finding>> {
         let c = self.library.catalogue();
-        let status = tokio::task::spawn_blocking(move || c.status()).await??;
+        let status = crate::run::spawn_blocking(move || c.status()).await??;
         let mut out = files(&status.issues);
         out.extend(self.check_short().await?);
         Ok(out)
@@ -902,7 +902,7 @@ impl App {
     async fn check_short(&self) -> anyhow::Result<Vec<Finding>> {
         let c = self.library.catalogue();
         let served = self.served.clone();
-        let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(&'static str, Item, i64)>> {
+        let found = crate::run::spawn_blocking(move || -> anyhow::Result<Vec<(&'static str, Item, i64)>> {
             let mut out = Vec::new();
             for (folder, rel, path, given, heard) in c.shorter_than_heard(SHORT_SLACK_MS)? {
                 let cause = short_cause(&path, heard);
@@ -948,7 +948,7 @@ impl App {
     async fn check_library(&self) -> anyhow::Result<Vec<Finding>> {
         let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
-        let (rows, numbering, matched, released) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let (rows, numbering, matched, released) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
             Ok((lib.lacking()?, lib.numbering()?, ud.renumber_matched()?, ud.album_discs()?))
         })
         .await??;
@@ -980,11 +980,11 @@ impl App {
         }
         // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
         let s = served.clone();
-        let ruled = tokio::task::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
+        let ruled = crate::run::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
         if !ruled.is_empty() {
             let count = ruled.len() as u64;
             let s = served.clone();
-            let items = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Item>> {
+            let items = crate::run::spawn_blocking(move || -> anyhow::Result<Vec<Item>> {
                 let mut items = Vec::new();
                 for a in &ruled {
                     if let Some((_, artist, name)) = s.library.album_names(a)? {
@@ -1006,7 +1006,7 @@ impl App {
     /// library in use's (the owner, 2026-11-02).
     async fn check_incomplete(&self, served: &std::sync::Arc<crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
         let s = served.clone();
-        let (found, gaps) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let (found, gaps) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
             let mut found: Vec<(String, String, String, super::incomplete::Incomplete)> = Vec::new();
             // A row that no longer fits its album (A3.4: tracks replaced or added since its look) is not read: the pass looks again.
             for (album, i) in super::incomplete::still_short(&s)? {
@@ -1067,7 +1067,7 @@ impl App {
     /// sources, one to choose, a link to paste, or checked by hand (`app::references`).
     async fn check_references(&self, served: &std::sync::Arc<crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
         let s = served.clone();
-        let found = tokio::task::spawn_blocking(move || super::references::unreferenced(&s)).await??;
+        let found = crate::run::spawn_blocking(move || super::references::unreferenced(&s)).await??;
         if found.is_empty() {
             return Ok(Vec::new());
         }
@@ -1130,7 +1130,7 @@ impl App {
     /// How far AudioMuse has heard the library (decision 0054): while it has not heard all of it.
     async fn check_analysis(&self) -> anyhow::Result<Vec<Finding>> {
         let cat = self.library.catalogue();
-        let facts = tokio::task::spawn_blocking(move || cat.crate_facts()).await??;
+        let facts = crate::run::spawn_blocking(move || cat.crate_facts()).await??;
         let tracks = facts.iter().filter(|f| f.track.is_some()).count() as u64;
         let heard = facts.iter().filter(|f| f.track.is_some() && f.sound.is_some()).count() as u64;
         if tracks == 0 || heard >= tracks {

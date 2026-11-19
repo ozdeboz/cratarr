@@ -687,7 +687,7 @@ const RELATED_DISCOGRAPHY_SECS: i64 = 7 * 86_400;
 async fn related_discography(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, mbid: &str, today: &str) -> Vec<Group> {
     let now = super::moment::now_secs();
     let (ud, key) = (serve.userdata.clone(), mbid.to_string());
-    let kept = tokio::task::spawn_blocking(move || ud.discography(&key)).await.ok().and_then(Result::ok).flatten();
+    let kept = crate::run::spawn_blocking(move || ud.discography(&key)).await.ok().and_then(Result::ok).flatten();
     if let Some(groups) = kept.filter(|(at, _)| now - at <= RELATED_DISCOGRAPHY_SECS).and_then(|(_, json)| serde_json::from_str::<Vec<Group>>(&json).ok()) {
         return groups;
     }
@@ -695,7 +695,7 @@ async fn related_discography(serve: &Arc<crate::serve::Serve>, http: &reqwest::C
         Ok(groups) => {
             if let Ok(json) = serde_json::to_string(&groups) {
                 let (ud, key) = (serve.userdata.clone(), mbid.to_string());
-                if let Ok(Err(e)) = tokio::task::spawn_blocking(move || ud.set_discography(&key, now, &json)).await {
+                if let Ok(Err(e)) = crate::run::spawn_blocking(move || ud.set_discography(&key, now, &json)).await {
                     tracing::warn!("discover: a related artist's albums not kept: {e:#}");
                 }
             }
@@ -889,7 +889,7 @@ pub(super) async fn mb_label_releases(http: &reqwest::Client, label: &str, offse
 async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, artists: &[OwnArtist], progress: &Progress) -> Result<Vec<Candidate>> {
     let ids: Vec<String> = artists.iter().filter_map(|a| a.mbid.clone()).collect();
     let ud = serve.userdata.clone();
-    let mut kept: HashMap<String, (i64, Vec<Group>)> = tokio::task::spawn_blocking(move || -> Result<_> {
+    let mut kept: HashMap<String, (i64, Vec<Group>)> = crate::run::spawn_blocking(move || -> Result<_> {
         let mut out = HashMap::new();
         for id in ids {
             if let Some((at, json)) = ud.discography(&id)? {
@@ -912,7 +912,7 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
         match mb_discography(http, &id, &today).await {
             Ok(groups) => {
                 let (ud, json, key) = (serve.userdata.clone(), serde_json::to_string(&groups)?, id.clone());
-                tokio::task::spawn_blocking(move || ud.set_discography(&key, now, &json)).await??;
+                crate::run::spawn_blocking(move || ud.set_discography(&key, now, &json)).await??;
                 kept.insert(id, (now, groups));
             }
             Err(e) => tracing::info!("discover: {}'s albums could not be read from MusicBrainz: {e:#}", a.name),
@@ -1557,7 +1557,7 @@ pub async fn look(
     // ListenBrainz or Last.fm picks from the account's listening (the server's Last.fm key still asks for nothing).
     let (ud, a) = (serve.userdata.clone(), account.to_string());
     let general;
-    let who = if tokio::task::spawn_blocking(move || ud.tracking(&a)).await? {
+    let who = if crate::run::spawn_blocking(move || ud.tracking(&a)).await? {
         who
     } else {
         general = Who { listenbrainz: None, lastfm: None, server_lastfm: who.server_lastfm.clone() };
@@ -1614,7 +1614,7 @@ pub async fn look(
     }
     progress("Leaving out what you have", 0, None);
     let (ud, a) = (serve.userdata.clone(), account.to_string());
-    let (answered, no_artists, everywhere) = tokio::task::spawn_blocking(move || leaves_out(&ud, &a)).await??;
+    let (answered, no_artists, everywhere) = crate::run::spawn_blocking(move || leaves_out(&ud, &a)).await??;
     let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.known, &answered, &no_artists);
     albums.retain(|s| !excluded_everywhere(s, &everywhere));
     weigh(&mut albums, &artists.iter().map(|a| (loose(&a.name), a.plays)).collect());
@@ -1657,7 +1657,7 @@ pub async fn look(
     // the pick of the day, which plays, went while a sync ran, until the pages were found again; and Bandcamp is asked
     // less).
     let (sv, acc) = (serve.clone(), account.to_string());
-    let before: HashMap<String, String> = tokio::task::spawn_blocking(move || kept(&sv, &acc))
+    let before: HashMap<String, String> = crate::run::spawn_blocking(move || kept(&sv, &acc))
         .await
         .ok()
         .and_then(|r| r.ok())
@@ -1772,7 +1772,7 @@ fn artist_plays(ud: &crate::userdata::UserData, account: &str) -> Result<HashMap
 pub(super) async fn own(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, account: &str) -> Result<(Have, Vec<OwnArtist>)> {
     let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
     let (lib, ud, a) = (serve.library.clone(), serve.userdata.clone(), account.to_string());
-    tokio::task::spawn_blocking(move || -> Result<(Have, Vec<OwnArtist>)> {
+    crate::run::spawn_blocking(move || -> Result<(Have, Vec<OwnArtist>)> {
         let rows = lib.artist_albums()?;
         let plays = artist_plays(&ud, &a)?;
         let mut by_id: HashMap<&str, OwnArtist> = HashMap::new();
@@ -1803,7 +1803,7 @@ const KEEP_EVERY: usize = 10;
 /// What a look found, kept for the account (`kept` reads it).
 async fn keep_found(serve: &Arc<crate::serve::Serve>, account: &str, found: &Found) -> Result<()> {
     let (ud, a, json, at) = (serve.userdata.clone(), account.to_string(), serde_json::to_string(found)?, found.at);
-    tokio::task::spawn_blocking(move || ud.set_discover_found(&a, at, &json)).await??;
+    crate::run::spawn_blocking(move || ud.set_discover_found(&a, at, &json)).await??;
     Ok(())
 }
 
@@ -2170,7 +2170,7 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
     // that artist's lists are this page's (`held_by`), and nothing is read or kept under this one at the other sources.
     let first = if artist.at("musicbrainz").is_none() { due.iter().position(|(_, s)| s.source() == "musicbrainz").map(|i| due.remove(i)) } else { None };
     let (cat, artist) = (cat.clone(), artist.clone());
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         if let Some((settles, source)) = first {
             read_settled(&cat, &artist, settles, source).await;
         }
@@ -2184,7 +2184,7 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
                 continue;
             }
             let (cat, artist) = (cat.clone(), artist.clone());
-            tokio::spawn(async move { read_settled(&cat, &artist, settles, source).await });
+            crate::run::spawn(async move { read_settled(&cat, &artist, settles, source).await });
         }
     });
     looking
@@ -2194,13 +2194,13 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
 /// (a MusicBrainz id the read before found among them).
 async fn with_links(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>) -> Arc<ArtistAsked> {
     let (c, id) = (cat.clone(), artist.id);
-    let now = match tokio::task::spawn_blocking(move || c.artist_known(id)).await {
+    let now = match crate::run::spawn_blocking(move || c.artist_known(id)).await {
         Ok(Ok(Some((name, refs)))) => ArtistAsked::of(id, name, refs),
         _ => return artist.clone(),
     };
     let links = artist_links(cat, &now).await;
     let (c, id) = (cat.clone(), artist.id);
-    match tokio::task::spawn_blocking(move || c.artist_known(id)).await {
+    match crate::run::spawn_blocking(move || c.artist_known(id)).await {
         Ok(Ok(Some((name, refs)))) => Arc::new(ArtistAsked { links, ..ArtistAsked::of(id, name, refs) }),
         _ => Arc::new(ArtistAsked { links, ..now }),
     }
@@ -2227,7 +2227,7 @@ async fn artist_links(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsk
         }
     };
     let (c, id) = (cat.clone(), artist.id);
-    let kept = tokio::task::spawn_blocking(move || -> Result<()> {
+    let kept = crate::run::spawn_blocking(move || -> Result<()> {
         let subject = crate::serve::ids::artist(id);
         c.let_go_searched(&subject, "bandcamp", "artist")?;
         if let Some(page) = own_bandcamp(&urls) {
@@ -2264,13 +2264,13 @@ where
         return Ok(0);
     }
     let c = cat.clone();
-    let due = tokio::task::spawn_blocking(move || c.masters_to_type(now - MASTER_AGAIN_SECS, MASTERS_A_PASS)).await??;
+    let due = crate::run::spawn_blocking(move || c.masters_to_type(now - MASTER_AGAIN_SECS, MASTERS_A_PASS)).await??;
     let mut typed = 0;
     for master in due {
         let _turn = turn_of("discogs").acquire_owned().await?;
         // Typed meanwhile by another pass (the monthly re-read and a page's read at once, A1.1.6): each master read once.
         let c = cat.clone();
-        if !tokio::task::spawn_blocking(move || c.master_untyped(master, now - MASTER_AGAIN_SECS)).await?? {
+        if !crate::run::spawn_blocking(move || c.master_untyped(master, now - MASTER_AGAIN_SECS)).await?? {
             continue;
         }
         let said = match read(master).await {
@@ -2278,7 +2278,7 @@ where
             Ok(None) | Err(_) => None,
         };
         let c = cat.clone();
-        tokio::task::spawn_blocking(move || c.master_typed(master, said, now)).await??;
+        crate::run::spawn_blocking(move || c.master_typed(master, said, now)).await??;
         typed += 1;
     }
     Ok(typed)
@@ -2331,7 +2331,7 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
     let Some((known, how, listings)) = source.read(artist).await? else { return Ok(false) };
     let (c, id, name) = (cat.clone(), artist.id, artist.name.clone());
     let sees_bandcamp_only = source.source() != "bandcamp";
-    let holder = tokio::task::spawn_blocking(move || -> Result<Option<i64>> {
+    let holder = crate::run::spawn_blocking(move || -> Result<Option<i64>> {
         let cat = c;
         // A2.1.3, A2.2.2: an id found now that another artist holds is theirs: no list is read or kept under this artist by it.
         if let Some(how) = how
@@ -2361,7 +2361,7 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
     // holds it), the records of their own made.
     if !cfg!(test) && source.source() == "discogs" && holder.is_none() && !super::switches::background_paused() {
         let cat = cat.clone();
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let read = |m: u64| async move { super::discogs::master_format(m).await };
             if let Err(e) = type_masters(&cat, read, super::moment::now_secs()).await {
                 tracing::info!(target: "discover", "Discogs' masters not typed: {e:#}");
@@ -2426,7 +2426,7 @@ async fn missing_by_name_at(cat: Arc<crate::catalogue::Catalogue>, name: &str, s
     use super::references::{Outcome, Said};
     let name = name.trim().to_string();
     let (c, n) = (cat.clone(), name.clone());
-    if let Some(artist) = tokio::task::spawn_blocking(move || c.artist_of(&n)).await?? {
+    if let Some(artist) = crate::run::spawn_blocking(move || c.artist_of(&n)).await?? {
         let mut found = missing_at(cat, artist, sources, now).await?;
         found.artist.get_or_insert_with(|| crate::serve::ids::artist(artist));
         return Ok(found);
@@ -2451,7 +2451,7 @@ async fn missing_by_name_at(cat: Arc<crate::catalogue::Catalogue>, name: &str, s
             Ok(Some((r, sure))) => {
                 name_failures().lock().unwrap_or_else(|p| p.into_inner()).remove(&key(s));
                 let (c, n) = (cat.clone(), name.clone());
-                let artist = tokio::task::spawn_blocking(move || c.artist_by_reference(&r, &n, "search", sure)).await??;
+                let artist = crate::run::spawn_blocking(move || c.artist_by_reference(&r, &n, "search", sure)).await??;
                 let mut found = missing_at(cat, artist, sources, now).await?;
                 found.artist = Some(crate::serve::ids::artist(artist));
                 return Ok(found);
@@ -2472,7 +2472,7 @@ async fn missing_by_name_at(cat: Arc<crate::catalogue::Catalogue>, name: &str, s
 /// `missing_albums` at `now`.
 async fn missing_at(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>], now: i64) -> Result<ArtistMissing> {
     let c = cat.clone();
-    let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { return Ok(ArtistMissing::default()) };
+    let Some((name, refs)) = crate::run::spawn_blocking(move || c.artist_known(artist)).await?? else { return Ok(ArtistMissing::default()) };
     let read_at: HashMap<String, i64> = refs.iter().filter(|(r, _)| r.kind == "artist").filter_map(|(r, row)| Some((r.source.clone(), row.read_at?))).collect();
     let asked = Arc::new(ArtistAsked::of(artist, name, refs));
     if asked.listless() {
@@ -2488,7 +2488,7 @@ async fn missing_at(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources:
     // What the reads say, at one look, before anything else runs (F8).
     let (looking, reading, no_list) = lists_said(&cat, artist, sources, now);
     let c = cat.clone();
-    let rows = tokio::task::spawn_blocking(move || c.missing_of(artist)).await??;
+    let rows = crate::run::spawn_blocking(move || c.missing_of(artist)).await??;
     let mut out: Vec<Missing> = rows.into_iter().map(Missing::of).collect();
     out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.title.cmp(&b.title)));
     Ok(ArtistMissing { albums: out, looking, reading, no_list, artist: None })
@@ -2531,14 +2531,14 @@ async fn remembered(serve: &Arc<crate::serve::Serve>, artist: &str, album: &str,
     let album_key = release_group.filter(|g| !g.is_empty()).map_or_else(|| format!("{}|{}", key(artist), key(album)), str::to_string);
     let now = super::moment::now_secs();
     let (ud, k) = (serve.userdata.clone(), album_key.clone());
-    if let Some((at, page)) = tokio::task::spawn_blocking(move || ud.bandcamp_found(&k)).await??
+    if let Some((at, page)) = crate::run::spawn_blocking(move || ud.bandcamp_found(&k)).await??
         && now - at <= BANDCAMP_FOUND_SECS
     {
         return Ok(page);
     }
     let page = look.await?;
     let (ud, p) = (serve.userdata.clone(), page.clone());
-    tokio::task::spawn_blocking(move || ud.set_bandcamp_found(&album_key, now, p.as_deref())).await??;
+    crate::run::spawn_blocking(move || ud.set_bandcamp_found(&album_key, now, p.as_deref())).await??;
     Ok(page)
 }
 
@@ -2555,7 +2555,7 @@ async fn look_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>
 /// Every record not had of the library's artists (Insights › Discovery › Missing albums, 0.9.3; C53b: one query,
 /// `Catalogue::missing_everywhere`), newest first, as their pages list them; and how many of those artists have a list read.
 pub async fn all_missing(cat: Arc<crate::catalogue::Catalogue>) -> Result<(Vec<Missing>, usize)> {
-    let (rows, artists) = tokio::task::spawn_blocking(move || cat.missing_everywhere()).await??;
+    let (rows, artists) = crate::run::spawn_blocking(move || cat.missing_everywhere()).await??;
     let mut out: Vec<Missing> = rows.into_iter().map(|(_, q)| Missing::of(q)).collect();
     out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.artist.cmp(&b.artist)).then_with(|| a.title.cmp(&b.title)));
     Ok((out, artists))
@@ -2754,7 +2754,7 @@ pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate
     let dir = serve.data_dir.clone().context("Cratarr's data folder is needed")?;
     let lib = serve.library.clone();
     let (albums_in, artists_in) = (albums.clone(), artists.clone());
-    let (have_albums, have_artists) = tokio::task::spawn_blocking(move || -> Result<(Vec<bool>, Vec<bool>)> {
+    let (have_albums, have_artists) = crate::run::spawn_blocking(move || -> Result<(Vec<bool>, Vec<bool>)> {
         let rows = lib.artist_albums()?;
         let mbids: HashSet<String> = rows.iter().filter_map(|r| r.2.clone()).collect();
         let names: HashSet<String> = rows.iter().map(|r| loose(&r.1)).collect();
@@ -3047,7 +3047,7 @@ mod missing_tests {
         // A page's read of the source, under way.
         let page = turn_of("reread").acquire_owned().await.unwrap();
         let c = cat.clone();
-        let reread = tokio::spawn(async move { reread_one(&c, &artist, &Counted).await });
+        let reread = crate::run::spawn(async move { reread_one(&c, &artist, &Counted).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(!ASKED.load(SeqCst), "it waits for the page's read");
         drop(page);
@@ -3917,7 +3917,7 @@ mod links_tests {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
         (FakeMusicBrainz::at(at), asked)
     }
 

@@ -283,7 +283,7 @@ fn data_dir() -> Option<String> {
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
-    tokio::task::spawn_blocking(f).await?
+    crate::run::spawn_blocking(f).await?
 }
 
 fn annotation_json(a: &Annotation) -> serde_json::Value {
@@ -777,7 +777,7 @@ impl Source for CratarrSource {
             let s = server()?;
             let o = owner(&s)?;
             let ids = s.userdata.starred(&o, Item::Artist)?;
-            tokio::task::spawn_blocking(move || Ok(ids.iter().filter_map(|id| s.library.artist(id).ok().flatten()).map(|a| a.name).collect())).await?
+            crate::run::spawn_blocking(move || Ok(ids.iter().filter_map(|id| s.library.artist(id).ok().flatten()).map(|a| a.name).collect())).await?
         })
     }
 

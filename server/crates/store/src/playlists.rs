@@ -347,7 +347,7 @@ impl Store {
     pub async fn in_music(db: Arc<UserData>, cat: Arc<Catalogue>, music: impl Into<PathBuf>, out: Option<PathBuf>) -> Result<Self> {
         let music = music.into();
         let (d, c, m, o) = (db.clone(), cat.clone(), music.clone(), out.clone());
-        tokio::task::spawn_blocking(move || import(&d, &c, &m, o.as_deref())).await??;
+        crate::run::spawn_blocking(move || import(&d, &c, &m, o.as_deref())).await??;
         Ok(Self::open(db, cat, None, music, out))
     }
 
@@ -387,7 +387,7 @@ impl Store {
     /// The database's answer, its work done off the async threads.
     async fn ask<T: Send + 'static>(&self, f: impl FnOnce(&UserData, &str) -> Result<T> + Send + 'static) -> Result<T> {
         let (db, owner) = (self.db.clone(), self.owner());
-        tokio::task::spawn_blocking(move || f(&db, &owner)).await?
+        crate::run::spawn_blocking(move || f(&db, &owner)).await?
     }
 
     /// Whether there is such a playlist.
@@ -411,7 +411,7 @@ impl Store {
         let mut out: HashMap<String, usize> = known.iter().map(|(id, (_, n))| (id.clone(), *n)).collect();
         if !stale.is_empty() {
             let cat = self.cat.clone();
-            let counted = tokio::task::spawn_blocking(move || {
+            let counted = crate::run::spawn_blocking(move || {
                 stale.into_iter().map(|(id, print, lines)| (id, print, dead_count(&cat, &lines))).collect::<Vec<_>>()
             })
             .await
@@ -465,7 +465,7 @@ impl Store {
         self.follow_tracks().await;
         let Ok(lists) = self.all().await else { return };
         let cat = self.cat.clone();
-        let counted = tokio::task::spawn_blocking(move || {
+        let counted = crate::run::spawn_blocking(move || {
             lists.into_iter().map(|(p, lines)| (p.id, fingerprint(&text_of(&lines)), dead_count(&cat, &lines))).collect::<Vec<_>>()
         })
         .await
@@ -484,7 +484,7 @@ impl Store {
     async fn follow_tracks(&self) {
         let _one_writer = self.write.lock().await;
         let (db, cat, owner) = (self.db.clone(), self.cat.clone(), self.owner());
-        let done = tokio::task::spawn_blocking(move || -> Result<Vec<(String, Vec<String>)>> {
+        let done = crate::run::spawn_blocking(move || -> Result<Vec<(String, Vec<String>)>> {
             let given: Vec<(String, String, String)> = db
                 .untracked_entries(&owner)?
                 .into_iter()
@@ -708,7 +708,7 @@ impl Store {
     pub async fn repairs(&self) -> Result<Repairs> {
         let snapshot: Vec<(String, Vec<String>)> = self.all().await?.into_iter().map(|(p, lines)| (p.name, lines)).collect();
         let dir = self.base.clone();
-        let mut found = tokio::task::spawn_blocking(move || {
+        let mut found = crate::run::spawn_blocking(move || {
             let mut listings: HashMap<String, Vec<String>> = HashMap::new();
             let mut out = Repairs::default();
             for (playlist, lines) in snapshot {
@@ -946,7 +946,7 @@ impl Store {
             None => out.clone(),
         };
         let (name, text) = (name.to_string(), lines.map(text_of));
-        let done = tokio::task::spawn_blocking(move || -> Result<()> {
+        let done = crate::run::spawn_blocking(move || -> Result<()> {
             let path = dir.join(format!("{name}.m3u"));
             let Some(text) = text else {
                 return match std::fs::remove_file(&path) {

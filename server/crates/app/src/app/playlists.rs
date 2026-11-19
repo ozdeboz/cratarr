@@ -82,7 +82,7 @@ async fn like_crate(served: Option<Arc<crate::serve::Serve>>, id: &str, item: &s
         let since = now - crates::WEEK_SECS;
         // The history's week (decision 0064): how often and how lately each was heard; skipped ones left out too. Until
         // the log reaches back a week: the songs last played within it, alike.
-        let week = tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32)>> {
+        let week = crate::run::spawn_blocking(move || -> Result<Vec<(String, f32)>> {
             if let Some(heard) = super::history::since(&served.userdata, &me, since, now)? {
                 return Ok(heard);
             }
@@ -102,7 +102,7 @@ async fn like_crate(served: Option<Arc<crate::serve::Serve>>, id: &str, item: &s
         return Ok(crates::moment_crate(id, &m.name, m.target, count));
     }
     let item = item.to_string();
-    let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<String>)>> {
+    let found = crate::run::spawn_blocking(move || -> Result<Option<(String, Vec<String>)>> {
         if crate::serve::ids::track_of(&item).is_some() {
             return Ok(served.library.songs_by_id(std::slice::from_ref(&item))?.pop().map(|s| (s.title, vec![s.id])));
         }
@@ -1393,7 +1393,7 @@ fn asking_user(served: Option<&crate::serve::Serve>) -> Option<String> {
 async fn favourite_album_lines(served: Option<Arc<crate::serve::Serve>>, cat: Arc<crate::catalogue::Catalogue>) -> Option<HashSet<String>> {
     let serve = served?;
     let me = serve.current_user()?;
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let albums: HashSet<String> = serve.userdata.starred(&me, crate::userdata::Kind::Album).ok()?.into_iter().collect();
         if albums.is_empty() {
             return Some(HashSet::new());
@@ -1413,7 +1413,7 @@ async fn tracks_of_albums(served: Option<Arc<crate::serve::Serve>>, cat: Arc<cra
         return HashMap::new();
     }
     let Some(serve) = served else { return HashMap::new() };
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let mut tracks: HashMap<String, Vec<String>> = HashMap::new();
         for s in songs_by_line(&serve, &cat).into_values() {
             if albums.contains(&s.album) {
@@ -1477,7 +1477,7 @@ async fn library_albums(served: Option<Arc<crate::serve::Serve>>, ids: Vec<Strin
         return Ok(Vec::new());
     }
     let serve = served.ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    Ok(tokio::task::spawn_blocking(move || serve.library.albums_by_id(&ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+    Ok(crate::run::spawn_blocking(move || serve.library.albums_by_id(&ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
 }
 
 /// An album left out of a crate, for its editor's list: its title and artist none once it is gone from the library.
@@ -1611,7 +1611,7 @@ impl FavouritesKept {
     async fn save(&self, source: &str, user: Option<String>, lines: &Arc<HashSet<String>>) {
         let Some(file) = self.file.clone() else { return };
         let body = KeptFile { source: source.to_string(), user, lines: lines.iter().cloned().collect() };
-        let written = tokio::task::spawn_blocking(move || -> Result<()> {
+        let written = crate::run::spawn_blocking(move || -> Result<()> {
             let tmp = file.with_extension("json.tmp");
             std::fs::write(&tmp, serde_json::to_vec(&body)?)?;
             std::fs::rename(&tmp, &file)?;
@@ -1634,7 +1634,7 @@ impl FavouritesKept {
         let lines = match from.favorite_tracks().await {
             Ok(ids) => {
                 let s = source.to_string();
-                match tokio::task::spawn_blocking(move || c.lines_of(&s, &ids)).await {
+                match crate::run::spawn_blocking(move || c.lines_of(&s, &ids)).await {
                     Ok(Ok(lines)) => Some(Arc::new(lines)),
                     Ok(Err(e)) => {
                         tracing::warn!("favourites for the crates: {e:#}");
@@ -1676,7 +1676,7 @@ impl FavouritesKept {
             return Some((*lines).clone());
         }
         let s = kept.source;
-        let lines = tokio::task::spawn_blocking(move || {
+        let lines = crate::run::spawn_blocking(move || {
             let mut lines = (*lines).clone();
             for (track, on) in changes {
                 let of = c.lines_of(&s, std::slice::from_ref(&track))?;
@@ -1720,7 +1720,7 @@ impl PlaylistService {
         let s = serve.clone();
         // Read here: the blocking task does not carry the request's account.
         let me = serve.current_user();
-        let key_and_owner = tokio::task::spawn_blocking(move || {
+        let key_and_owner = crate::run::spawn_blocking(move || {
             let plays = me.as_ref().and_then(|me| s.userdata.plays_print(me).ok());
             (format!("{stamps}|{}|{plays:?}", s.built_at()), me)
         })
@@ -1733,7 +1733,7 @@ impl PlaylistService {
             return Ok(kept.clone());
         }
         let cat = self.lib.catalogue();
-        let worked = tokio::task::spawn_blocking(move || {
+        let worked = crate::run::spawn_blocking(move || {
             let songs = songs_by_line(&serve, &cat);
             let plays = me.and_then(|me| serve.userdata.song_plays(&me).ok());
             lists.into_iter().map(|(id, changed, lines)| (id, playlist_stats(&lines, &songs, plays.as_ref(), changed))).collect::<std::collections::BTreeMap<_, _>>()
@@ -1918,7 +1918,7 @@ impl PlaylistService {
             Change::ArtistOut { user, key, name, out } => {
                 let serve = self.served.clone().ok_or_else(changed)?;
                 let (u, k, n) = (user.clone(), key.clone(), name.clone());
-                tokio::task::spawn_blocking(move || -> Result<(), ToggleError> {
+                crate::run::spawn_blocking(move || -> Result<(), ToggleError> {
                     if serve.userdata.excluded_artists(&u)?.contains(&k) != out {
                         return Err(changed());
                     }
@@ -1939,7 +1939,7 @@ impl PlaylistService {
                     return Err(ToggleError::Forbidden("Adjusting a track's BPM is for administrators.".into()));
                 }
                 let cat = self.lib.catalogue();
-                let back = tokio::task::spawn_blocking(move || -> Result<Vec<super::tempo::TempoChange>, ToggleError> {
+                let back = crate::run::spawn_blocking(move || -> Result<Vec<super::tempo::TempoChange>, ToggleError> {
                     for t in &tracks {
                         let (_, _, path) = super::tempo::place(&cat, &t.source, &t.id).ok_or_else(changed)?;
                         let now = crate::retag::bpm(&path).and_then(|v| v.trim().parse::<f64>().ok()).map(|b| b.round() as u32);
@@ -2192,7 +2192,7 @@ impl PlaylistService {
         if crates.is_empty() {
             return;
         }
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let mut suggestions = 0;
             for (store, old, new) in crates {
                 let moved = async {
@@ -2288,7 +2288,7 @@ impl PlaylistService {
             .cloned()
             .ok_or_else(|| ToggleError::CannotPlay("no server is connected".into()))?;
         let c = self.lib.catalogue();
-        let status = tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok);
+        let status = crate::run::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok);
         Ok(match status {
             Some(st) if st.linked.get(&active.cfg.id).copied().unwrap_or(0) < st.files => format!(
                 "Cratarr is still matching your music with {} ({} of {} tracks); try again in a few minutes",
@@ -2333,7 +2333,7 @@ impl PlaylistService {
                 .filter_map(|(i, _)| Some((i, tracks.get(i)?.as_deref()?.strip_prefix(crate::serve::ids::SONG)?.parse().ok()?)))
                 .collect();
             let cat = self.lib.catalogue();
-            let found = tokio::task::spawn_blocking(move || wanted.into_iter().filter_map(|(i, t)| Some((i, cat.remembered(t)?))).collect::<Vec<_>>())
+            let found = crate::run::spawn_blocking(move || wanted.into_iter().filter_map(|(i, t)| Some((i, cat.remembered(t)?))).collect::<Vec<_>>())
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             for (i, was) in found {
@@ -2347,7 +2347,7 @@ impl PlaylistService {
             && let Some(me) = serve.current_user()
         {
             let rs = rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>();
-            let plays = tokio::task::spawn_blocking(move || serve.userdata.play_stats(&me, &rs).unwrap_or_default())
+            let plays = crate::run::spawn_blocking(move || serve.userdata.play_stats(&me, &rs).unwrap_or_default())
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             for row in rows.iter_mut() {
@@ -2377,7 +2377,7 @@ impl PlaylistService {
     /// `rows_of`, each entry read at the line beside it in `at` (`Store::led_entries`): the entry stays what an edit names.
     async fn rows_as(&self, entries: Vec<String>, at: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
         let (c, sid, served) = (self.lib.catalogue(), source.to_string(), self.served.clone());
-        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<PlaylistRow>> {
+        let rows = crate::run::spawn_blocking(move || -> Result<Vec<PlaylistRow>> {
             let facts = c.line_rows(&sid, &at)?;
             // Cratarr's own tracks with their album, as the library has it (the app's downloads are told it, and find
             // their album and its cover by it).
@@ -2429,7 +2429,7 @@ impl PlaylistService {
         .map_err(|e| anyhow::anyhow!("{e}"))??;
         // Each track with its record's type (GOTO.S1).
         let Some(serve) = self.served() else { return Ok(rows) };
-        let rows = tokio::task::spawn_blocking(move || {
+        let rows = crate::run::spawn_blocking(move || {
             let mut rows = rows;
             serve.with_types(&mut rows);
             rows
@@ -2452,7 +2452,7 @@ impl PlaylistService {
             lists.push((r.name.clone(), r.store.entries(&r.name).await?));
         }
         let (c, who) = (self.lib.catalogue(), who.clone());
-        let plan = tokio::task::spawn_blocking(move || {
+        let plan = crate::run::spawn_blocking(move || {
             let folders = c.folders();
             let file_of_line = |line: &str| {
                 let (folder, rel) = c.place_of_line(line)?;
@@ -2502,7 +2502,7 @@ impl PlaylistService {
     ) -> Result<crate::export::Plan, ToggleError> {
         let c = self.lib.catalogue();
         let name = name.to_string();
-        let plan = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::export::Plan> {
+        let plan = crate::run::spawn_blocking(move || -> anyhow::Result<crate::export::Plan> {
             let folders = c.folders();
             let (labels, places): (Vec<String>, Vec<Option<(i64, String)>>) = places(&*c).into_iter().unzip();
             let rows = c.place_rows(&places)?;
@@ -2621,7 +2621,7 @@ impl PlaylistService {
         let songs_played = match self.served.clone() {
             Some(serve) => {
                 let (me, c) = (serve.current_user(), self.lib.catalogue());
-                tokio::task::spawn_blocking(move || {
+                crate::run::spawn_blocking(move || {
                 let songs = songs_by_line(&serve, &c);
                 let played = me.and_then(|me| serve.userdata.played(&me).ok());
                 (songs, played)
@@ -2685,7 +2685,7 @@ impl PlaylistService {
         self.may_picture(id)?;
         let Some(dir) = self.crate_images() else { return Err(ToggleError::SettingsReadOnly) };
         let file = dir.join(crates::image_file(id));
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        crate::run::spawn_blocking(move || -> Result<()> {
             let jpeg = crate::serve::art::jpeg_within(&data, 800)?;
             std::fs::create_dir_all(&dir)?;
             let tmp = file.with_extension("jpg.tmp");
@@ -2702,7 +2702,7 @@ impl PlaylistService {
     pub async fn crate_image(&self, id: &str) -> Option<(Vec<u8>, std::time::SystemTime)> {
         self.crate_def(id).await.ok()?;
         let file = self.crate_images()?.join(crates::image_file(id));
-        tokio::task::spawn_blocking(move || {
+        crate::run::spawn_blocking(move || {
             let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok()?;
             Some((std::fs::read(&file).ok()?, modified))
         })
@@ -2798,7 +2798,7 @@ impl PlaylistService {
     async fn like_now(&self, id: &str) -> Option<String> {
         let (seed, _) = crates::like_of(id)?;
         let (catalogue, old) = (self.lib.catalogue(), seed.to_string());
-        let now = tokio::task::spawn_blocking(move || catalogue.named_now(&old)).await.ok()??;
+        let now = crate::run::spawn_blocking(move || catalogue.named_now(&old)).await.ok()??;
         Some(id.replacen(seed, &now, 1))
     }
 
@@ -2808,7 +2808,7 @@ impl PlaylistService {
     pub async fn condition_names(&self, conditions: &[crates::Condition]) -> Result<std::collections::BTreeMap<String, crates::Named>, ToggleError> {
         let ids = crates::named_ids(conditions);
         let Some(serve) = self.served.clone().filter(|_| !ids.is_empty()) else { return Ok(Default::default()) };
-        let found = tokio::task::spawn_blocking(move || serve.library.names_of(&ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let found = crate::run::spawn_blocking(move || serve.library.names_of(&ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         Ok(found
             .into_iter()
             .filter_map(|(id, name)| {
@@ -2862,7 +2862,7 @@ impl PlaylistService {
         } else {
             ("Grave digging", self.digging(None, &[]).await?.graves.into_iter().map(|g| g.id).collect())
         };
-        let lines = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        let lines = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
             let cat = serve.catalogue();
             let mut lines = Vec::new();
             for id in &albums {
@@ -2880,7 +2880,7 @@ impl PlaylistService {
     async fn playlist_like(&self, id: &str, list: &str, count: usize) -> Result<CrateDef, ToggleError> {
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let lines = self.entries(list).await?;
-        let songs = tokio::task::spawn_blocking(move || {
+        let songs = crate::run::spawn_blocking(move || {
             let cat = serve.catalogue();
             lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(cat, l)).collect::<Vec<_>>()
         })
@@ -2905,7 +2905,7 @@ impl PlaylistService {
         let album_tracks = tracks_of_albums(self.served.clone(), self.lib.catalogue(), left.albums.iter().cloned().collect()).await;
         let down: HashSet<String> = left.tracks.into_iter().chain(album_tracks.into_values().flatten()).collect();
         let lib = self.crate_library(None, false, false, &[]).await?;
-        let traits = tokio::task::spawn_blocking(move || {
+        let traits = crate::run::spawn_blocking(move || {
             let all: Vec<&crates::Facts> = lib.files.iter().collect();
             let turned: Vec<&crates::Facts> = all.iter().copied().filter(|f| f.song().is_some_and(|s| down.contains(&s))).collect();
             (crates::learned(&turned, &all), turned.len())
@@ -3018,7 +3018,7 @@ impl PlaylistService {
             && let Some(served) = self.served.clone()
         {
             let (kind, name) = (kind.to_string(), name.trim().to_string());
-            page.word = tokio::task::spawn_blocking(move || super::words::stored(&served).ok().and_then(|s| s.word(&kind, &name))).await.ok().flatten();
+            page.word = crate::run::spawn_blocking(move || super::words::stored(&served).ok().and_then(|s| s.word(&kind, &name))).await.ok().flatten();
         }
         Ok(page)
     }
@@ -3061,7 +3061,7 @@ impl PlaylistService {
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let cat = self.lib.catalogue();
         let c = cat.clone();
-        let files = tokio::task::spawn_blocking(move || c.crate_facts()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let files = crate::run::spawn_blocking(move || c.crate_facts()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let track_of_line: HashMap<&str, i64> = files.iter().filter_map(|f| Some((f.track?, f))).flat_map(|(t, f)| f.every_line().map(move |l| (l, t))).collect();
         let tracks_of = |lines: &[String]| -> Vec<i64> { lines.iter().filter_map(|l| track_of_line.get(l.as_str()).copied()).collect() };
         let numbers = |songs: &[String]| -> Vec<i64> { songs.iter().filter_map(|s| crate::serve::ids::track_of(s)).collect() };
@@ -3121,7 +3121,7 @@ impl PlaylistService {
         let excluded = numbers(&store.excluded().await?);
         let artists_out = self.artists_out_of(Some(user.to_string())).await?.into_iter().collect();
         let (s, who) = (serve.clone(), user.to_string());
-        let (albums, recent, libraries) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let (albums, recent, libraries) = crate::run::spawn_blocking(move || -> Result<_> {
             let albums = s.userdata.starred(&who, crate::userdata::Kind::Album)?;
             Ok((albums, super::radio::recent_of(&s, &who)?, super::radio::folders_of(&s, &who)))
         })
@@ -3213,7 +3213,7 @@ impl PlaylistService {
     /// The keys of the artists `user` excluded everywhere; none without Cratarr's own library or an account.
     async fn artists_out_of(&self, user: Option<String>) -> Result<HashSet<String>, ToggleError> {
         let (Some(serve), Some(user)) = (self.served.clone(), user) else { return Ok(HashSet::new()) };
-        Ok(tokio::task::spawn_blocking(move || serve.userdata.excluded_artists(&user)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+        Ok(crate::run::spawn_blocking(move || serve.userdata.excluded_artists(&user)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
     }
 
     /// The account the everywhere list is the asking one's of, and Cratarr's own library: refused without either.
@@ -3235,7 +3235,7 @@ impl PlaylistService {
             return Err(ToggleError::Refused("Which artist?".into()));
         }
         let (u, k, n) = (user.clone(), key.clone(), name.clone());
-        let (new, listed) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let (new, listed) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
             let new = serve.userdata.exclude_artist(&u, &k, &n)?;
             Ok((new, serve.userdata.excluded_artist_list(&u)?.into_iter().find(|a| a.key == k)))
         })
@@ -3252,7 +3252,7 @@ impl PlaylistService {
         let (serve, user) = self.artist_lister()?;
         let key = super::excluded_artists::key(key);
         let (u, k) = (user.clone(), key.clone());
-        let gone = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let gone = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
             let was = serve.userdata.excluded_artist_list(&u)?.into_iter().find(|a| a.key == k);
             serve.userdata.include_artist(&u, &k)?;
             Ok(was)
@@ -3266,7 +3266,7 @@ impl PlaylistService {
     /// The asking account's everywhere list, the newest first (Settings › Listening).
     pub async fn excluded_artist_list(&self) -> Result<Vec<crate::userdata::ExcludedArtist>, ToggleError> {
         let (serve, user) = self.artist_lister()?;
-        Ok(tokio::task::spawn_blocking(move || serve.userdata.excluded_artist_list(&user)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+        Ok(crate::run::spawn_blocking(move || serve.userdata.excluded_artist_list(&user)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
     }
 
     /// Tracks taken out of a crate by hand, or put back (`out` false), by their ids on a server, and whole albums by
@@ -3318,14 +3318,14 @@ impl PlaylistService {
             Some(track) => Some(crate::serve::ids::song(track)),
             None => crate::serve::ids::track_of(id).filter(|_| !going).map(crate::serve::ids::song),
         };
-        Ok(tokio::task::spawn_blocking(move || ids.iter().filter_map(song).collect()).await.map_err(|e| anyhow::anyhow!("{e}"))?)
+        Ok(crate::run::spawn_blocking(move || ids.iter().filter_map(song).collect()).await.map_err(|e| anyhow::anyhow!("{e}"))?)
     }
 
     /// Tracks as rows on a server, in the order given: the lists of what is left out and excluded. A track whose file went
     /// shows what it was and keeps its song id, so it can be put back.
     async fn track_rows(&self, songs: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
         let (cat, ids) = (self.lib.catalogue(), songs.clone());
-        let (lines, gone) = tokio::task::spawn_blocking(move || {
+        let (lines, gone) = crate::run::spawn_blocking(move || {
             let of = |song: &String| crate::serve::playlists::line_of_song(&cat, song);
             let lines: Vec<String> = ids.iter().map(|song| of(song).unwrap_or_else(|| song.clone())).collect();
             let gone: HashMap<String, crate::catalogue::Remembered> =
@@ -3377,7 +3377,7 @@ impl PlaylistService {
     /// gone are left out.
     pub async fn song_rows(&self, ids: Vec<String>) -> Result<Vec<PlaylistRow>, ToggleError> {
         let cat = self.lib.catalogue();
-        let lines = tokio::task::spawn_blocking(move || ids.iter().filter_map(|id| crate::serve::playlists::line_of_song(&cat, id)).collect::<Vec<_>>())
+        let lines = crate::run::spawn_blocking(move || ids.iter().filter_map(|id| crate::serve::playlists::line_of_song(&cat, id)).collect::<Vec<_>>())
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         self.rows_of(lines, crate::source::cratarr::KIND.id).await
@@ -3395,7 +3395,7 @@ impl PlaylistService {
             return Ok(songs);
         }
         let cat = self.lib.catalogue();
-        Ok(tokio::task::spawn_blocking(move || -> Result<HashSet<String>> {
+        Ok(crate::run::spawn_blocking(move || -> Result<HashSet<String>> {
             songs.extend(songs_crediting(&cat.crate_facts()?, &artists));
             Ok(songs)
         })
@@ -3563,7 +3563,7 @@ impl PlaylistService {
         let Some(serve) = self.served.clone() else { return };
         let Some(me) = serve.current_user() else { return };
         let (c, lines) = (self.lib.catalogue(), rows.iter().map(|r| r.entry.clone()).collect::<Vec<_>>());
-        let plays = tokio::task::spawn_blocking(move || {
+        let plays = crate::run::spawn_blocking(move || {
             let songs: Vec<Option<String>> = lines.iter().map(|l| crate::serve::playlists::song_of_line(&c, l)).collect();
             let known: Vec<String> = songs.iter().flatten().cloned().collect();
             let stats = serve.userdata.play_stats(&me, &known).unwrap_or_default();
@@ -3653,7 +3653,7 @@ impl PlaylistService {
         let excluded: HashSet<String> = self.own_crates()?.excluded().await?.into_iter().collect();
         let artists = self.artists_out().await?;
         let (of, weights, lib, conditions) = (of.to_vec(), weights.to_vec(), Arc::new(lib), conditions.to_vec());
-        tokio::task::spawn_blocking(move || {
+        crate::run::spawn_blocking(move || {
             // Its own left out as the crate leaves them (`crates::resolved`): fresh, its track and album seeds; an
             // artist seed's own tracks unless `own` keeps them.
             let out = crates::SeedsOut::of(&of, fresh, own, lib.alike());
@@ -3676,7 +3676,7 @@ impl PlaylistService {
     /// Tracks' tempo as Adjust BPM shows it (app::tempo): each one's BPM now and Cratarr's measure.
     pub async fn tempo_of(&self, source: &str, ids: &[String]) -> Result<Vec<super::tempo::TrackTempo>, ToggleError> {
         let (cat, source, ids) = (self.lib.catalogue(), source.to_string(), ids.to_vec());
-        Ok(tokio::task::spawn_blocking(move || ids.iter().filter_map(|id| super::tempo::tempo_of(&cat, &source, id)).collect())
+        Ok(crate::run::spawn_blocking(move || ids.iter().filter_map(|id| super::tempo::tempo_of(&cat, &source, id)).collect())
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?)
     }
@@ -3690,7 +3690,7 @@ impl PlaylistService {
         }
         debug_assert!(source != crate::source::cratarr::KIND.id, "Cratarr's own tracks' tempo is a run: tempo_run");
         let (cat, src, list) = (self.lib.catalogue(), source.to_string(), ids.to_vec());
-        let changes = tokio::task::spawn_blocking(move || -> Result<Vec<super::tempo::TempoChange>, ToggleError> {
+        let changes = crate::run::spawn_blocking(move || -> Result<Vec<super::tempo::TempoChange>, ToggleError> {
             let mut changes = Vec::new();
             for id in &list {
                 let Some(now) = super::tempo::tempo_of(&cat, &src, id) else { continue };
@@ -3718,7 +3718,7 @@ impl PlaylistService {
             return Err(ToggleError::Forbidden("Adjusting a track's BPM is for administrators.".into()));
         }
         let (served, list) = (crate::serve::instance().ok_or_else(|| anyhow::anyhow!("Cratarr's own library is not open"))?, ids.to_vec());
-        let (p, tempos) = tokio::task::spawn_blocking(move || super::tempo::proposal(&served, &list, how)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let (p, tempos) = crate::run::spawn_blocking(move || super::tempo::proposal(&served, &list, how)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let run = (!p.files.is_empty()).then(|| super::file_runs::start(app, p));
         Ok((tempos, run))
     }
@@ -3746,7 +3746,7 @@ impl PlaylistService {
         let favourite_albums = if albums { favourite_album_lines(self.served.clone(), self.lib.catalogue()).await } else { None };
         let c = self.lib.catalogue();
         let switched_off = self.lib.folders_off(without).into_iter().collect();
-        let files = tokio::task::spawn_blocking(move || c.crate_facts()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let files = crate::run::spawn_blocking(move || c.crate_facts()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
         for (name, lines, _) in self.own_store()?.snapshot().await? {
             for line in lines {
@@ -3757,7 +3757,7 @@ impl PlaylistService {
         let uses = match asking_user(self.served.as_deref()) {
             Some(user) => {
                 let (files, served) = (files.clone(), self.served.clone());
-                tokio::task::spawn_blocking(move || uses_of(served.as_deref(), &user, &files)).await.map_err(|e| anyhow::anyhow!("{e}"))?.ok()
+                crate::run::spawn_blocking(move || uses_of(served.as_deref(), &user, &files)).await.map_err(|e| anyhow::anyhow!("{e}"))?.ok()
             }
             None => None,
         };
@@ -3778,7 +3778,7 @@ impl PlaylistService {
                 {
                     let (f, c, s, from) = (f.clone(), self.lib.catalogue(), sid.to_string(), source.clone());
                     // For the account asking: their favourites.
-                    tokio::spawn(crate::serve::who::carried(async move {
+                    crate::run::spawn(crate::serve::who::carried(async move {
                         let _turn = turn;
                         f.ask(c, &s, &from).await;
                     }));
@@ -3812,7 +3812,7 @@ impl PlaylistService {
             .cloned()
             .ok_or_else(|| ToggleError::CannotPlay("no server is connected".into()))?;
         let (c, sid) = (self.lib.catalogue(), active.cfg.id.clone());
-        let found = tokio::task::spawn_blocking(move || c.line_track_ids(&sid, &entries))
+        let found = crate::run::spawn_blocking(move || c.line_track_ids(&sid, &entries))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))??;
         let unknown = found.iter().filter(|f| f.is_none()).count();
@@ -3879,7 +3879,7 @@ impl PlaylistService {
         let Some(music) = self.lib.music().map(PathBuf::from) else { return Ok(Vec::new()) };
         let stores = self.lib.all_stores();
         let dir = music.clone();
-        let folders: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        let folders: Vec<String> = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
             Ok(std::fs::read_dir(&dir)?
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
@@ -3893,7 +3893,7 @@ impl PlaylistService {
             let mut albums = Vec::new();
             for folder in &group {
                 let (m, f) = (music.clone(), folder.clone());
-                let (files, cover) = tokio::task::spawn_blocking(move || read_folder(&m, &f)).await??;
+                let (files, cover) = crate::run::spawn_blocking(move || read_folder(&m, &f)).await??;
                 let mut known = Default::default();
                 for (a, s) in &sources {
                     match s.album_details(folder).await {
@@ -4027,7 +4027,7 @@ impl PlaylistService {
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let lib = self.crate_library(want, false, false, without).await?;
         let excluded = self.own_crates()?.excluded().await?;
-        tokio::task::spawn_blocking(move || -> Result<super::taste::TasteView, ToggleError> {
+        crate::run::spawn_blocking(move || -> Result<super::taste::TasteView, ToggleError> {
             let alike = lib.alike();
             let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
             let ud = &serve.userdata;
@@ -4063,7 +4063,7 @@ impl PlaylistService {
     pub async fn heard_albums(&self, ids: Vec<String>) -> Result<Vec<String>, ToggleError> {
         let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::Refused("What was heard is an account's own: sign in.".into()))?;
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
+        crate::run::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
             let plays = serve.userdata.own_song_plays(&user)?;
             let mut heard = Vec::new();
             for id in ids {
@@ -4087,7 +4087,7 @@ impl PlaylistService {
         let user = asking_user(self.served.as_deref());
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let artists = self.artists_out().await?;
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
+        crate::run::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
             let plays = match &user {
                 Some(user) => serve.userdata.own_song_plays(user)?,
                 None => HashMap::new(),
@@ -4126,7 +4126,7 @@ impl PlaylistService {
         // Neither shows what credits an artist excluded everywhere (decision 0083): a track by its credits, an album by
         // its album artist.
         let artists = self.artists_out().await?;
-        tokio::task::spawn_blocking(move || -> Result<Digging, ToggleError> {
+        crate::run::spawn_blocking(move || -> Result<Digging, ToggleError> {
             let alike = lib.alike();
             let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
             // Grave digging is of every library, whatever is switched off: its crate is Home's (the owner's one exception,
@@ -4216,7 +4216,7 @@ impl PlaylistService {
         let m = super::moment::now();
         let lib = self.crate_library(want, false, false, without).await?;
         let artists_out = self.artists_out().await?;
-        tokio::task::spawn_blocking(move || -> Result<MomentView, ToggleError> {
+        crate::run::spawn_blocking(move || -> Result<MomentView, ToggleError> {
             let alike = lib.alike();
             let scales = crates::Scales::of(&lib.files().collect::<Vec<_>>());
             let off = |song: &str| {
@@ -4297,7 +4297,7 @@ impl PlaylistService {
     /// line, for a device to count on when it cannot ask (0101's point 18).
     pub async fn uses_by_track(&self, user: &str) -> Result<HashMap<i64, crates::Use>, ToggleError> {
         let (serve, cat, user) = (self.served.clone(), self.lib.catalogue(), user.to_string());
-        tokio::task::spawn_blocking(move || -> Result<HashMap<i64, crates::Use>, ToggleError> {
+        crate::run::spawn_blocking(move || -> Result<HashMap<i64, crates::Use>, ToggleError> {
             let files = cat.crate_facts()?;
             let by_line = uses_of(serve.as_deref(), &user, &files)?;
             Ok(files.iter().filter_map(|f| Some((f.track?, *by_line.get(&f.rel)?))).collect())
@@ -4332,7 +4332,7 @@ impl PlaylistService {
         let lib = self.crate_library(None, false, false, without).await?;
         let excluded = self.own_crates()?.excluded().await?;
         let user = user.to_string();
-        tokio::task::spawn_blocking(move || -> Result<HashMap<String, f64>, ToggleError> {
+        crate::run::spawn_blocking(move || -> Result<HashMap<String, f64>, ToggleError> {
             let taste = profile(&lib, &serve.userdata, &user, &excluded)?;
             let alike = lib.alike();
             Ok(lib.files.iter().enumerate().filter(|(i, _)| lib.on(*i)).filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), alike.fit(&taste, i, lib.by())?))).collect())
@@ -4351,7 +4351,7 @@ impl PlaylistService {
         let lib = self.crate_library(None, false, false, without).await?;
         let excluded = self.own_crates()?.excluded().await?;
         let name = name.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
+        crate::run::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
             let taste = taste_in(&lib, &serve.userdata, &user, &excluded)?;
             let alike = lib.alike();
             let mut fit: Vec<(String, f64)> = lib
@@ -4376,7 +4376,7 @@ impl PlaylistService {
         let Some(serve) = self.served.clone() else { return Ok(Vec::new()) };
         let lists = self.visible_lines().await?;
         let id = id.to_string();
-        let (seed, candidates) = tokio::task::spawn_blocking(move || {
+        let (seed, candidates) = crate::run::spawn_blocking(move || {
             let cat = serve.catalogue();
             let songs = |lines: &[String]| lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(cat, l)).collect::<Vec<_>>();
             let mut seed = Vec::new();
@@ -4514,7 +4514,7 @@ pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>
             .iter()
             .map(|(name, change)| PlaylistEvent { name: name.clone(), path: a.placement.playlist_path(&music, name), change: *change })
             .collect();
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             if let Err(e) = s.playlists_changed(events).await {
                 tracing::warn!("source {}: could not pass on playlist changes: {e:#}", a.cfg.id);
             }

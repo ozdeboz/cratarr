@@ -1741,7 +1741,7 @@ impl PlayOn {
             if cfg.name.trim().is_empty() || cfg.url.trim().is_empty() || cfg.stream_from.trim().is_empty() {
                 continue;
             }
-            running.push(tokio::spawn(super::kodi::drive(Arc::downgrade(self), cfg)).abort_handle());
+            running.push(crate::run::spawn(super::kodi::drive(Arc::downgrade(self), cfg)).abort_handle());
         }
     }
 
@@ -1859,7 +1859,7 @@ impl PlayOn {
     fn find_album_id(self: &Arc<Self>, name: &str, t: QueueTrack) {
         let Some(source) = self.lib.connected_sources().into_iter().find(|(id, _)| *id == t.source).map(|(_, s)| s) else { return };
         let (me, name) = (Arc::downgrade(self), name.to_string());
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let Ok(found) = source.track(&t.id).await else { return };
             let (Some(album), Some(me)) = (found.album_id, me.upgrade()) else { return };
             if let Some(e) = me.entries().get_mut(&name) {
@@ -1873,7 +1873,7 @@ impl PlayOn {
     fn watch_leases(self: Arc<Self>) {
         let me = Arc::downgrade(&self);
         drop(self);
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let mut was: HashMap<String, bool> = HashMap::new();
             loop {
                 tokio::time::sleep(Duration::from_secs(15)).await;
@@ -1924,7 +1924,7 @@ impl PlayOn {
         let Some(file) = self.queues_file.clone() else { return };
         let me = Arc::downgrade(&self);
         drop(self);
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let mut last = String::new();
             loop {
                 let Some(notified) = me.upgrade() else { return };
@@ -1949,7 +1949,7 @@ impl PlayOn {
                     continue;
                 }
                 let (f, b) = (file.clone(), body.clone());
-                match tokio::task::spawn_blocking(move || write_private(&f, &b)).await {
+                match crate::run::spawn_blocking(move || write_private(&f, &b)).await {
                     Ok(Ok(())) => last = body,
                     Ok(Err(e)) => {
                         let error = format!("{e:#}");
@@ -2217,7 +2217,7 @@ impl PlayOn {
     /// every answer. Whole, so its steps and its holds of the players' lock stay as they are.
     pub async fn report_off(self: &Arc<Self>, name: String, report: Report) -> Result<(), ToggleError> {
         let (me, who, span) = (Arc::clone(self), crate::serve::who::current(), tracing::Span::current());
-        tokio::task::spawn_blocking(move || span.in_scope(|| crate::serve::who::acting_as_blocking(who, || me.report(&name, report))))
+        crate::run::spawn_blocking(move || span.in_scope(|| crate::serve::who::acting_as_blocking(who, || me.report(&name, report))))
             .await
             .map_err(|e| ToggleError::Upstream(anyhow::Error::from(e)))?
     }
@@ -3224,7 +3224,7 @@ impl PlayOn {
             return tracks;
         }
         let (cat, sent) = (self.lib.catalogue(), tracks.clone());
-        let named = tokio::task::spawn_blocking(move || {
+        let named = crate::run::spawn_blocking(move || {
             let mut tracks = tracks;
             let mut by_source: HashMap<String, Vec<usize>> = HashMap::new();
             for (i, t) in tracks.iter().enumerate().filter(|(_, t)| t.name.is_empty() && t.source != bc) {
@@ -3291,7 +3291,7 @@ impl PlayOn {
         }
         let saved = PlayOnSettings { webhooks, delays: before.delays, grouped: before.grouped, kodi };
         let body = serde_json::to_string_pretty(&saved).map_err(anyhow::Error::from)?;
-        tokio::task::spawn_blocking(move || write_private(&file, &body)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        crate::run::spawn_blocking(move || write_private(&file, &body)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         *self.settings.lock().unwrap_or_else(|p| p.into_inner()) = saved;
         self.start_kodis();
         self.changed();
@@ -3351,7 +3351,7 @@ impl PlayOn {
         };
         let (Some(saved), Some(file)) = (saved, self.file.clone()) else { return };
         let Ok(body) = serde_json::to_string_pretty(&saved) else { return };
-        if let Err(e) = tokio::task::spawn_blocking(move || write_private(&file, &body)).await.map_err(anyhow::Error::from).and_then(|r| r) {
+        if let Err(e) = crate::run::spawn_blocking(move || write_private(&file, &body)).await.map_err(anyhow::Error::from).and_then(|r| r) {
             tracing::warn!(target: "playon", "the grouped players were not kept: {e:#}");
         }
     }
@@ -3380,7 +3380,7 @@ impl PlayOn {
         };
         if let Some(file) = self.file.clone() {
             let body = serde_json::to_string_pretty(&saved).map_err(anyhow::Error::from)?;
-            tokio::task::spawn_blocking(move || write_private(&file, &body)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            crate::run::spawn_blocking(move || write_private(&file, &body)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         }
         self.changed();
         Ok(ms)
@@ -3391,7 +3391,7 @@ impl PlayOn {
         let mut rx = self.changed.subscribe();
         let me = Arc::downgrade(&self);
         drop(self);
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             // Never a redirect (O1).
             let http = super::reach::lan_client().timeout(WEBHOOK_TIMEOUT).build().expect("a plain client builds");
             // Each webhook's failures in a row, so the log shows when a bad spell began, why, and when it ended.
@@ -3578,7 +3578,7 @@ async fn own_album(served: Option<Arc<crate::serve::Serve>>, from: &PlayFrom) ->
         return Ok(Some(a.queue_tracks()));
     }
     let Some(served) = served else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
-    let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
+    let songs = crate::run::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
         Ok(served.library.album(&album)?.and_then(|a| a.song).unwrap_or_default())
     })
     .await

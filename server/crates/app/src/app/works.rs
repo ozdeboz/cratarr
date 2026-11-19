@@ -384,7 +384,7 @@ async fn releases_pass() -> Result<usize> {
     let Some(served) = crate::serve::instance() else { return Ok(0) };
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let due: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+    let due: Vec<String> = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
         let asked = ud.mb_releases_asked(now - AGAIN_SECS, now - NONE_AGAIN_SECS)?;
         let without_parents = ud.mb_releases_without_parents()?;
         let all = lib.album_releases()?;
@@ -418,7 +418,7 @@ async fn releases_pass() -> Result<usize> {
             works.push((w.mbid.clone(), w.title.clone(), serde_json::to_string(&w.composers)?, parent));
         }
         let (ud, key) = (served.userdata.clone(), r.clone());
-        tokio::task::spawn_blocking(move || ud.set_mb_release(&key, facts.as_deref(), &works, super::moment::now_secs())).await??;
+        crate::run::spawn_blocking(move || ud.set_mb_release(&key, facts.as_deref(), &works, super::moment::now_secs())).await??;
         n += 1;
         tokio::time::sleep(PAUSE).await;
     }
@@ -432,7 +432,7 @@ async fn artists_pass() -> Result<usize> {
     let Some(served) = crate::serve::instance() else { return Ok(0) };
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let due: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+    let due: Vec<String> = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
         let asked = ud.artists_asked(now - AGAIN_SECS)?;
         let releases = ud.mb_releases()?;
         let works = ud.mb_works()?;
@@ -479,7 +479,7 @@ async fn artists_pass() -> Result<usize> {
         let persons = v.as_ref().map(|v| persons_of(id, v)).unwrap_or_default();
         let discogs = v.as_ref().and_then(|v| super::discogs::id_in(&urls_of(&v["relations"]), "artist"));
         let (ud, key) = (served.userdata.clone(), id.clone());
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        crate::run::spawn_blocking(move || -> Result<()> {
             ud.add_persons(&persons)?;
             ud.set_artist_asked(&key, discogs, super::moment::now_secs())
         })
@@ -502,7 +502,7 @@ pub async fn discogs_pass() -> Result<()> {
     let Some(served) = crate::serve::instance() else { return Ok(()) };
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let (links, artists): (Vec<String>, Vec<u64>) = tokio::task::spawn_blocking(move || -> Result<(Vec<String>, Vec<u64>)> {
+    let (links, artists): (Vec<String>, Vec<u64>) = crate::run::spawn_blocking(move || -> Result<(Vec<String>, Vec<u64>)> {
         let asked = ud.discogs_links_asked(now - AGAIN_SECS)?;
         let releases = ud.mb_releases()?;
         let mut links: Vec<String> = Vec::new();
@@ -539,7 +539,7 @@ pub async fn discogs_pass() -> Result<()> {
             }
         };
         let ud = served.userdata.clone();
-        tokio::task::spawn_blocking(move || ud.set_discogs_link_genres(&link, &genres, super::moment::now_secs())).await??;
+        crate::run::spawn_blocking(move || ud.set_discogs_link_genres(&link, &genres, super::moment::now_secs())).await??;
     }
     for id in super::discogs::until_paused(artists, "works: Discogs' names") {
         let (real, aliases) = match super::discogs::artist_names(id).await {
@@ -550,7 +550,7 @@ pub async fn discogs_pass() -> Result<()> {
             }
         };
         let ud = served.userdata.clone();
-        tokio::task::spawn_blocking(move || ud.set_discogs_names(id, real.as_deref(), &aliases, super::moment::now_secs())).await??;
+        crate::run::spawn_blocking(move || ud.set_discogs_names(id, real.as_deref(), &aliases, super::moment::now_secs())).await??;
     }
     Ok(())
 }

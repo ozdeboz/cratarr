@@ -535,7 +535,7 @@ async fn on_player(app: &Arc<App>, name: &str, tracks: Vec<QueueTrack>, index: u
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ToggleError> {
-    Ok(tokio::task::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+    Ok(crate::run::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("{e}"))??)
 }
 
 #[cfg(test)]

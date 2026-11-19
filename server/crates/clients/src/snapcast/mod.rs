@@ -230,7 +230,7 @@ impl Snapcast {
             match listener.accept().await {
                 Ok((sock, peer)) => {
                     let me = self.clone();
-                    tokio::spawn(async move {
+                    crate::run::spawn(async move {
                         if let Err(e) = me.connection(sock).await {
                             let (client, error) = (peer.ip().to_string(), e.to_string());
                             tracing::debug!(target: "syncplay", client, error, "connection failed");
@@ -256,7 +256,7 @@ impl Snapcast {
         let s = Arc::new(Stream::new(self.buffer_ms));
         streams.insert(leader.to_string(), s.clone());
         let (me, stream, leader) = (Arc::downgrade(self), Arc::downgrade(&s), leader.to_string());
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_millis(5));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -358,7 +358,7 @@ impl Snapcast {
         // Read on its own (a read cut off halfway would lose the connection's place): the time requests come through here.
         let (asked_tx, mut asked) = mpsc::channel::<proto::Header>(64);
         let clock = self.clone();
-        let reading = tokio::spawn(async move {
+        let reading = crate::run::spawn(async move {
             while let Ok((h, _)) = proto::read(&mut reader, || clock.now()).await {
                 if h.kind == proto::TIME && asked_tx.send(h).await.is_err() {
                     return;
@@ -519,7 +519,7 @@ mod tests {
         assert_eq!(named("p1"), ("", "p1"), "an app from before: no secret");
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(Snapcast::new(Arc::new(Kept), 1000).serve(listener));
+        crate::run::spawn(Snapcast::new(Arc::new(Kept), 1000).serve(listener));
         let hello = |id: &str| proto::message(proto::HELLO, 0, 0, 0, &proto::json(&serde_json::json!({ "ID": id })));
         // What the server answers first, or nothing (closed).
         async fn first(port: u16, m: Vec<u8>) -> usize {
@@ -565,7 +565,7 @@ mod tests {
             }
         }
         let snap = Snapcast::new(Arc::new(One), 1000);
-        tokio::spawn(snap.clone().serve(TcpListener::bind("0.0.0.0:17040").await.unwrap()));
+        crate::run::spawn(snap.clone().serve(TcpListener::bind("0.0.0.0:17040").await.unwrap()));
         let mut src = TcpStream::connect("127.0.0.1:17040").await.unwrap();
         let msg = |kind, payload: &[u8]| proto::message(kind, 0, 0, 0, payload);
         src.write_all(&msg(proto::SOURCE, &proto::json(&serde_json::json!({ "player": "lead" })))).await.unwrap();

@@ -57,7 +57,7 @@ const JUNK: [&str; 24] = [
 
 /// The harvest's rounds, in the background.
 pub fn start() {
-    tokio::spawn(async {
+    crate::run::spawn(async {
         tokio::time::sleep(START_AFTER).await;
         loop {
             // Its questions to MusicBrainz behind any page's, as the background asker's (R7): no one waits for a round.
@@ -76,7 +76,7 @@ pub fn start() {
 async fn round() -> Result<()> {
     let Some(served) = crate::serve::instance() else { return Ok(()) };
     let lib = served.library.clone();
-    let (albums, artists) = tokio::task::spawn_blocking(move || -> Result<_> { Ok((lib.album_subjects()?, lib.artist_subjects()?)) }).await??;
+    let (albums, artists) = crate::run::spawn_blocking(move || -> Result<_> { Ok((lib.album_subjects()?, lib.artist_subjects()?)) }).await??;
     let http = super::discover::http()?;
     // MusicBrainz: albums with a release, artists with an id.
     for (subject, a) in due(&served, "musicbrainz", albums.iter().filter(|a| super::discogs::is_mbid(&a.1)).map(|a| (format!("album:{}", a.0), a)), MB_AGAIN).await? {
@@ -113,7 +113,7 @@ async fn round() -> Result<()> {
     }
     // Last.fm, with the server's own key: albums by their names, artists by theirs.
     let ud = served.userdata.clone();
-    let Some(key) = tokio::task::spawn_blocking(move || super::discover::server_lastfm_key(&ud)).await?? else { return Ok(()) };
+    let Some(key) = crate::run::spawn_blocking(move || super::discover::server_lastfm_key(&ud)).await?? else { return Ok(()) };
     let auth = super::lastfm::Auth { key, signed: None };
     for (subject, a) in due(&served, "lastfm", albums.iter().map(|a| (format!("album:{}", a.0), a)), LASTFM_AGAIN).await? {
         let said = super::discover::fm(&http, &auth, "album.gettoptags", &[("artist", &a.2), ("album", &a.3), ("autocorrect", "1")]).await.map(|v| lastfm_words(&v, &a.2));
@@ -129,7 +129,7 @@ async fn round() -> Result<()> {
 /// The batch of `subjects` due at a source: those never asked, in the library's order, then those asked longest ago.
 async fn due<'a, T: 'a>(served: &std::sync::Arc<crate::serve::Serve>, source: &'static str, subjects: impl Iterator<Item = (String, &'a T)>, again: i64) -> Result<Vec<(String, &'a T)>> {
     let ud = served.userdata.clone();
-    let asked: HashMap<String, i64> = tokio::task::spawn_blocking(move || ud.words_asked_at(source)).await??;
+    let asked: HashMap<String, i64> = crate::run::spawn_blocking(move || ud.words_asked_at(source)).await??;
     let now = super::moment::now_secs();
     let mut due: Vec<(i64, String, &T)> = subjects.filter_map(|(s, t)| {
         let at = asked.get(&s).copied();
@@ -146,7 +146,7 @@ async fn keep(served: &std::sync::Arc<crate::serve::Serve>, subject: &str, sourc
         tracing::debug!("harvest: {source} on {subject}: {e:#}");
     }
     let (ud, subject, words) = (served.userdata.clone(), subject.to_string(), said.unwrap_or_default());
-    tokio::task::spawn_blocking(move || ud.set_words(&subject, source, &words, ok, super::moment::now_secs())).await??;
+    crate::run::spawn_blocking(move || ud.set_words(&subject, source, &words, ok, super::moment::now_secs())).await??;
     Ok(())
 }
 

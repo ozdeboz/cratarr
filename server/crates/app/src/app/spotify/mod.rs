@@ -135,7 +135,7 @@ pub fn start(data_dir: Option<&str>) {
             return;
         }
     }
-    tokio::spawn(async {
+    crate::run::spawn(async {
         // After the catalogue has caught up.
         tokio::time::sleep(Duration::from_secs(120)).await;
         loop {
@@ -187,7 +187,7 @@ pub async fn read_live(account: String) {
         let _ = s.synced(&account, now, result.err().map(|e| format!("{e:#}")).as_deref());
     }
     reading().get_or_insert_with(HashSet::new).remove(&account);
-    tokio::spawn(ask_musicbrainz());
+    crate::run::spawn(ask_musicbrainz());
 }
 
 async fn read_live_inner(account: &str) -> Result<()> {
@@ -206,7 +206,7 @@ async fn read_live_inner(account: &str) -> Result<()> {
         return Ok(());
     }
     let (s2, a2) = (s.clone(), account.to_string());
-    tokio::task::spawn_blocking(move || s2.put_lists(&a2, LIVE, crate::app::moment::now_secs(), None, &lists)).await??;
+    crate::run::spawn_blocking(move || s2.put_lists(&a2, LIVE, crate::app::moment::now_secs(), None, &lists)).await??;
     Ok(())
 }
 
@@ -229,7 +229,7 @@ pub async fn ask_musicbrainz() {
 async fn ask_musicbrainz_inner() -> Result<()> {
     let s = store()?;
     let s2 = s.clone();
-    let (lists, kept) = tokio::task::spawn_blocking(move || -> Result<_> { Ok((s2.all_lists()?, s2.all_mb()?)) }).await??;
+    let (lists, kept) = crate::run::spawn_blocking(move || -> Result<_> { Ok((s2.all_lists()?, s2.all_mb()?)) }).await??;
     let mut ask: Vec<String> = lists.iter().flat_map(marks::questions).filter(|q| !kept.contains_key(q)).collect();
     ask.sort();
     ask.dedup();
@@ -250,7 +250,7 @@ async fn ask_musicbrainz_inner() -> Result<()> {
             }
         };
         let (s2, q2) = (s.clone(), q.clone());
-        tokio::task::spawn_blocking(move || s2.put_mb(&q2, &answer, crate::app::moment::now_secs())).await??;
+        crate::run::spawn_blocking(move || s2.put_mb(&q2, &answer, crate::app::moment::now_secs())).await??;
         tokio::time::sleep(MB_PACE).await;
     }
     Ok(())
@@ -530,7 +530,7 @@ pub async fn come_back(state: &str, code: Option<&str>, error: Option<&str>) -> 
     .await;
     match result {
         Ok(()) => {
-            tokio::spawn(read_live(p.account));
+            crate::run::spawn(read_live(p.account));
             (app, None)
         }
         Err(e) => (app, Some(format!("{e:#}"))),

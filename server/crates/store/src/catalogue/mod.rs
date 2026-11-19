@@ -4295,7 +4295,7 @@ pub async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source
             let items = page.items;
             // Resolving touches the database; keep it off the async threads.
             let mut moved_roots = std::mem::take(&mut roots);
-            moved_roots = tokio::task::spawn_blocking(move || -> Result<Roots> {
+            moved_roots = crate::run::spawn_blocking(move || -> Result<Roots> {
                 let links: Vec<(String, i64, String)> =
                     items.into_iter().filter_map(|(tid, path)| moved_roots.locate(&cat2, &path).map(|(f, r)| (tid, f, r))).collect();
                 cat2.record_links(&source_id, &library, &links, started)?;
@@ -4313,7 +4313,7 @@ pub async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source
         }
         if full {
             let (cat2, sid, lid) = (cat.clone(), id.to_string(), lib.id.clone());
-            tokio::task::spawn_blocking(move || cat2.forget_unseen(&sid, &lid, began)).await??;
+            crate::run::spawn_blocking(move || cat2.forget_unseen(&sid, &lid, began)).await??;
             if let Some(next) = libraries.get(i + 1) {
                 cat.set_meta(&progress, &format!("{} 0 {began}", next.id));
             }
@@ -4334,14 +4334,14 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
         let mut problems = Vec::new();
         cat.set_doing(Some("walking the folders".into()));
         let c = cat.clone();
-        match tokio::task::spawn_blocking(move || c.walk_all()).await {
+        match crate::run::spawn_blocking(move || c.walk_all()).await {
             Ok(p) => problems.extend(p),
             Err(e) => problems.push(format!("walk: {e}")),
         }
         cat.set_doing(Some("reading tags".into()));
         loop {
             let c = cat.clone();
-            match tokio::task::spawn_blocking(move || c.read_tags_batch(TAG_BATCH)).await {
+            match crate::run::spawn_blocking(move || c.read_tags_batch(TAG_BATCH)).await {
                 Ok(Ok(0)) => break,
                 Ok(Ok(_)) => tokio::task::yield_now().await,
                 Ok(Err(e)) => {
@@ -4355,7 +4355,7 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
             }
         }
         let c = cat.clone();
-        match tokio::task::spawn_blocking(move || c.identify()).await {
+        match crate::run::spawn_blocking(move || c.identify()).await {
             Ok(Ok((moved, _))) if moved > 0 => tracing::info!("catalogue: recognised {moved} moved file(s)"),
             Ok(Ok(_)) => {}
             Ok(Err(e)) => problems.push(format!("track ids: {e:#}")),

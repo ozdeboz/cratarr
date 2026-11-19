@@ -99,7 +99,7 @@ pub async fn list(app: &super::App, q: &str, order: &str, down: bool, without: &
         Some(user) if order == "bestMatch" => app.playlists.taste_fits(user, without).await?,
         _ => HashMap::new(),
     };
-    tokio::task::spawn_blocking(move || -> Result<Listed> {
+    crate::run::spawn_blocking(move || -> Result<Listed> {
         let mut rows = served.library.track_rows(&words, &off)?;
         let all = rows.len();
         let ratings = match &user {

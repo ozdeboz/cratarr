@@ -461,7 +461,7 @@ async fn known_at(cat: &Arc<Catalogue>, label: &LabelAsked, source: &dyn LabelLi
     let one = finding(cat, label.id);
     let _one = one.lock().await;
     let (c, subject) = (cat.clone(), ids::label(label.id));
-    let refs: Vec<Ref> = tokio::task::spawn_blocking(move || c.references_of(&subject)).await??.into_iter().map(|(r, _)| r).collect();
+    let refs: Vec<Ref> = crate::run::spawn_blocking(move || c.references_of(&subject)).await??.into_iter().map(|(r, _)| r).collect();
     if let Some(id) = label_id_at(&refs, source.source()) {
         return Ok(Some(id));
     }
@@ -469,7 +469,7 @@ async fn known_at(cat: &Arc<Catalogue>, label: &LabelAsked, source: &dyn LabelLi
     let (c, subject, source_name) = (cat.clone(), ids::label(label.id), source.source());
     // A2.4.3: only an id the label could keep is read by: one another label holds is theirs, and nothing is read or kept under this
     // one from that source (the log names the holder).
-    tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+    crate::run::spawn_blocking(move || -> Result<Option<String>> {
         let mut id = None;
         for (r, how) in &found {
             let kept = c.set_reference(&subject, r, how)?;
@@ -495,7 +495,7 @@ async fn read_page(cat: &Arc<Catalogue>, label: &LabelAsked, source: &dyn LabelL
         None => (Vec::new(), None),
     };
     let (c, id, name, at) = (cat.clone(), label.id, source.source(), super::moment::now_secs());
-    tokio::task::spawn_blocking(move || c.keep_label_rows(id, name, &rows, next, from.is_none(), at)).await?
+    crate::run::spawn_blocking(move || c.keep_label_rows(id, name, &rows, next, from.is_none(), at)).await?
 }
 
 /// A page of the label's list at `source` read in a task of its own (C56), unless one is being read (one at a time) or one failed
@@ -512,7 +512,7 @@ fn start_read(cat: &Arc<Catalogue>, label: &Arc<LabelAsked>, source: &Arc<dyn La
         all.insert(key, Reading::Now);
     }
     let (cat, label, source) = (cat.clone(), label.clone(), source.clone());
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let mut settles = Settles(Some(key), false);
         match tokio::time::timeout(READ_AT_MOST, read_page(&cat, &label, source.as_ref(), from)).await {
             Ok(Ok(())) => settles.1 = true,
@@ -530,7 +530,7 @@ fn start_read(cat: &Arc<Catalogue>, label: &Arc<LabelAsked>, source: &Arc<dyn La
 /// whether each source's reads on. None: no such label.
 pub async fn page(cat: Arc<Catalogue>, label: i64, more: Option<&str>, sources: &[Arc<dyn LabelList>]) -> Result<Option<LabelPage>> {
     let c = cat.clone();
-    let Some(kept) = tokio::task::spawn_blocking(move || c.label_kept(label)).await?? else { return Ok(None) };
+    let Some(kept) = crate::run::spawn_blocking(move || c.label_kept(label)).await?? else { return Ok(None) };
     let asked = Arc::new(LabelAsked { id: label, name: kept.label.name.clone() });
     let now = super::moment::now_secs();
     let (mut looking, mut reading, mut no_list) = (false, None, Vec::new());
@@ -561,7 +561,7 @@ pub async fn page(cat: Arc<Catalogue>, label: i64, more: Option<&str>, sources: 
     }
     // Its rows read once the reads' states are known: a read that ended before is in them; one ending now is still `looking`.
     let c = cat.clone();
-    let read = tokio::task::spawn_blocking(move || -> Result<Option<(LabelKept, Vec<LabelEntry>, Vec<LabelEntry>)>> {
+    let read = crate::run::spawn_blocking(move || -> Result<Option<(LabelKept, Vec<LabelEntry>, Vec<LabelEntry>)>> {
         let Some(kept) = c.label_kept(label)? else { return Ok(None) };
         let (had, not_had) = split(&c, &kept)?;
         Ok(Some((kept, had, not_had)))

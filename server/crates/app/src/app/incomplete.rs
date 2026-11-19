@@ -136,7 +136,7 @@ fn beyond(files: &[(String, i64)], r: &super::renumber::Release, used: &HashSet<
 /// looked at first, then those looked at longest ago.
 pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::Client) -> Result<()> {
     let (s, now) = (served.clone(), super::moment::now_secs());
-    let due: Vec<(String, String)> = tokio::task::spawn_blocking(move || due_albums(&s, now)).await??;
+    let due: Vec<(String, String)> = crate::run::spawn_blocking(move || due_albums(&s, now)).await??;
     for (album, release) in due {
         // One album failing is set aside (`FAILED_WAIT`), never the end of the pass.
         if let Err(e) = look(served, http, &album, &release).await {
@@ -186,13 +186,13 @@ async fn look(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::Clie
         None => (Vec::new(), String::new()),
     };
     let a = album.to_string();
-    let tracks = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a)).await??.0;
+    let tracks = crate::run::spawn_blocking(move || super::renumber::tracks_of(&a)).await??.0;
     let files: Vec<(String, i64)> = tracks.iter().map(|t| (t.title.clone(), i64::from(t.secs))).collect();
     let found = check(&files, &releases).map(|i| serde_json::to_string(&Incomplete { release_group: Some(rg.clone()).filter(|g| !g.is_empty()), ..i })).transpose()?;
     // The discs Renumber would put its tracks on (0.13, Health's Disc numbers).
     let on = super::renumber::discs_from(&tracks, &releases);
     let (ud, album) = (served.userdata.clone(), album.to_string());
-    tokio::task::spawn_blocking(move || ud.set_album_complete(&album, found.as_deref(), on, super::moment::now_secs())).await??;
+    crate::run::spawn_blocking(move || ud.set_album_complete(&album, found.as_deref(), on, super::moment::now_secs())).await??;
     Ok(())
 }
 

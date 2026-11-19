@@ -89,7 +89,7 @@ pub async fn read(app: &Arc<App>, serve: Arc<crate::serve::Serve>, since: Option
     let folder = app.playlists.own_folder();
     let index = if asks_index(kinds) { Some(super::device_index::stands(app, serve.clone(), index_since).await?) } else { None };
     let kinds = kinds_of(kinds);
-    let found = tokio::task::spawn_blocking(move || serve.userdata.changes_since(since, &user, &folder, &kinds, MOST))
+    let found = crate::run::spawn_blocking(move || serve.userdata.changes_since(since, &user, &folder, &kinds, MOST))
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))??;
     Ok(match found {

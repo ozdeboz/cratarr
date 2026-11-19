@@ -176,7 +176,7 @@ impl App {
         let admin = crate::serve::access::administering();
         // Read beside the async workers (R16, F5): one catalogue reader, never a build's lock.
         let asked = match self.served.clone() {
-            Some(s) => tokio::task::spawn_blocking(move || super::requests::requesters(&s)).await.unwrap_or_default(),
+            Some(s) => crate::run::spawn_blocking(move || super::requests::requesters(&s)).await.unwrap_or_default(),
             None => Default::default(),
         };
         let requester = |al: &source::Album| requester_of(&asked, al);
@@ -600,7 +600,7 @@ impl App {
         }
         let who = served.listener(viewer);
         let off = self.own_music_off();
-        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<HashMap<String, PlayOrder>> {
+        let read = crate::run::spawn_blocking(move || -> anyhow::Result<HashMap<String, PlayOrder>> {
             let mut out = HashMap::new();
             for (id, places) in listed {
                 // Only what is listed can stand for the record: a copy read since the list was has no entry here yet.
@@ -653,7 +653,7 @@ impl App {
         }
         let mains = self.library.main_folders();
         type Stood = Vec<(String, (i64, String), Option<(bool, Copy, Copy)>)>;
-        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Stood> {
+        let read = crate::run::spawn_blocking(move || -> anyhow::Result<Stood> {
             let mut asked: Vec<(String, Copy)> = Vec::new();
             for (id, (folder, dir)) in &waiting {
                 if let Some(c) = served.library.copies_of(id)?.into_iter().find(|c| c.folder == *folder && &c.dir == dir) {
@@ -745,7 +745,7 @@ impl App {
         };
         let id = crate::serve::ids::record(record);
         let s = served.clone();
-        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<(source::Album, Option<std::path::PathBuf>), Chosen>> {
+        let read = crate::run::spawn_blocking(move || -> anyhow::Result<Result<(source::Album, Option<std::path::PathBuf>), Chosen>> {
             let chosen = want_copy(&judged_copies(&s, &id, record)?, asker, &off);
             let Chosen::From(folder, dir) = chosen else { return Ok(Err(chosen)) };
             let card = s.library.albums_by_id(std::slice::from_ref(&id))?.pop().ok_or_else(|| anyhow::anyhow!("its record is not listed"))?;
@@ -767,7 +767,7 @@ impl App {
             let to = if target.is_dir() { Some(target) } else { target.parent().map(std::path::Path::to_path_buf) };
             let incoming = self.incoming.clone();
             let shares = match (from, to) {
-                (Some(from), Some(to)) => tokio::task::spawn_blocking(move || incoming.shares(&from, &to)).await.unwrap_or(false),
+                (Some(from), Some(to)) => crate::run::spawn_blocking(move || incoming.shares(&from, &to)).await.unwrap_or(false),
                 _ => false,
             };
             if !shares {
@@ -826,7 +826,7 @@ impl App {
             (own, target, own_off(on, &folders))
         };
         let (id, s, dir) = (album.to_string(), served.clone(), dir.map(str::to_string));
-        let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<OwnOffer, String>> {
+        let read = crate::run::spawn_blocking(move || -> anyhow::Result<Result<OwnOffer, String>> {
             let copies = judged(&judged_copies(&s, &id, record)?);
             let mains: Vec<&Copy> = copies.iter().filter(|c| c.kind == LibraryKind::Main && target.is_none_or(|t| t == c.folder)).collect();
             let Some(mine) = own_named(&copies, own, dir.as_deref(), &mains, &off) else { return Ok(Err("It has no copy in that library".into())) };

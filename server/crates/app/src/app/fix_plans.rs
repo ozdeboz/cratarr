@@ -56,7 +56,7 @@ fn title_of(kind: &str) -> String {
 async fn copy_of(app: &super::App, kind: &str, from: Option<&str>) -> Result<Option<(i64, String)>> {
     let Some((INTAKE, album)) = kind.split_once(':') else { return Ok(None) };
     let (served, album, from) = (app.served.clone().context("Cratarr's own library is not open")?, album.to_string(), from.map(str::to_string));
-    tokio::task::spawn_blocking(move || served.waiting_copy(&album, from.as_deref())).await?
+    crate::run::spawn_blocking(move || served.waiting_copy(&album, from.as_deref())).await?
 }
 
 /// The fixes a plan proposes (`at`: for this copy alone), and whether more are still being looked for (a match with
@@ -187,7 +187,7 @@ pub async fn plan(app: &super::App, kind: &str, from: Option<&str>) -> Result<Pl
     let at = copy_of(app, kind, from).await?;
     let (fixes, making) = fixes_of(app, kind, at.clone()).await?;
     let (k, served) = (kind.to_string(), app.served.clone().context("Cratarr's own library is not open")?);
-    let (p, notes) = tokio::task::spawn_blocking(move || proposal(&served, &k, &fixes, at.as_ref())).await??;
+    let (p, notes) = crate::run::spawn_blocking(move || proposal(&served, &k, &fixes, at.as_ref())).await??;
     let mut view = file_runs::view(&p.kind, &p.title, &p.records, &p.files, false);
     for r in &mut view.records {
         for f in &mut r.fields {
@@ -218,7 +218,7 @@ pub async fn apply(app: &Arc<super::App>, kind: &str, from: Option<&str>, albums
     }
     let (k, served, copy) = (kind.to_string(), app.served.clone().context("Cratarr's own library is not open")?, at.clone());
     let s = served.clone();
-    let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
+    let p = crate::run::spawn_blocking(move || -> Result<Proposal> {
         let (p, _) = proposal(&s, &k, &fixes, copy.as_ref())?;
         let mut p = file_runs::ticked(p, &albums, stamps.as_ref());
         choose(&mut p, &chosen);

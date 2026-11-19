@@ -114,12 +114,12 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
     let served = app.served.clone().context("Cratarr's own library is not open")?;
     if key.starts_with("files:") {
         let k = key.to_string();
-        return tokio::task::spawn_blocking(move || super::length_fixes::of_finding(&served, &k)).await?;
+        return crate::run::spawn_blocking(move || super::length_fixes::of_finding(&served, &k)).await?;
     }
     let (s, k) = (served.clone(), key.to_string());
     // Year and genre from what is kept; album artist and MusicBrainz ids from a match (`matching`), its albums here.
     // Every library in use's albums, as Health finds them (the owner, 2026-11-02).
-    let (mut fixes, to_match) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Vec<String>)> {
+    let (mut fixes, to_match) = crate::run::spawn_blocking(move || -> Result<(Vec<Fix>, Vec<String>)> {
         let lacking: Vec<crate::serve::library::Lacks> = s.library.lacking()?;
         let ids = |pick: fn(&crate::serve::library::Lacks) -> bool| lacking.iter().filter(|r| pick(r)).map(|r| r.id.clone()).collect::<Vec<_>>();
         Ok(match k.as_str() {
@@ -139,7 +139,7 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
     // says shows the next time the fixes are read.
     if matches!(key, "library:genre" | "library:year") {
         let (s, k, have) = (served.clone(), key.to_string(), fixes.iter().map(|f| f.album.clone()).collect::<std::collections::HashSet<_>>());
-        let lacking = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        let lacking = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
             Ok(s.library.lacking()?.into_iter().filter(|l| if k == "library:genre" { l.genre } else { l.year }).map(|l| l.id).filter(|a| !have.contains(a)).collect())
         })
         .await??;
@@ -322,7 +322,7 @@ async fn of_album_only(app: &super::App, album: &str, fields: Option<&[&str]>, a
     let served = app.served.clone().context("Cratarr's own library is not open")?;
     let (s, a, place) = (served.clone(), album.to_string(), at.clone());
     let (rule, year, genre) = (wants("rule"), wants("year"), wants("genre"));
-    let lacks = tokio::task::spawn_blocking(move || match &place {
+    let lacks = crate::run::spawn_blocking(move || match &place {
         Some((folder, dir)) => s.lacks_at(&a, *folder, dir),
         None => s.library.lacks_of(&a),
     })
@@ -335,7 +335,7 @@ async fn of_album_only(app: &super::App, album: &str, fields: Option<&[&str]>, a
         tracing::debug!("discogs: {album}: {e:#}");
     }
     let (s, a, place) = (served.clone(), album.to_string(), at.clone());
-    let (mut fixes, lacks) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Option<crate::serve::library::Lacks>)> {
+    let (mut fixes, lacks) = crate::run::spawn_blocking(move || -> Result<(Vec<Fix>, Option<crate::serve::library::Lacks>)> {
         let Some(l) = lacks else { return Ok((Vec::new(), None)) };
         let mut out: Vec<Fix> = if rule { rule_fix(&s, &a, place.as_ref())?.into_iter().collect() } else { Vec::new() };
         if year && l.year {

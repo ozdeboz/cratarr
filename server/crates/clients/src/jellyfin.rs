@@ -1438,11 +1438,11 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let seen: Arc<Mutex<(HashMap<String, usize>, usize, usize)>> = Arc::default();
         let s = seen.clone();
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             loop {
                 let (mut conn, _) = listener.accept().await.unwrap();
                 let s = s.clone();
-                tokio::spawn(async move {
+                crate::run::spawn(async move {
                     let mut head = Vec::new();
                     let mut buf = [0u8; 1024];
                     while !head.windows(4).any(|w| w == b"\r\n\r\n") {

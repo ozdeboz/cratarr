@@ -585,7 +585,7 @@ impl RunEntry {
 async fn turn(journal: &Arc<Journal>) -> tokio::sync::MutexGuard<'static, ()> {
     let turn = LOCK.lock().await;
     let journal = journal.clone();
-    if let Err(e) = tokio::task::spawn_blocking(move || settle(&journal)).await.map_err(anyhow::Error::from).and_then(|r| r) {
+    if let Err(e) = crate::run::spawn_blocking(move || settle(&journal)).await.map_err(anyhow::Error::from).and_then(|r| r) {
         tracing::warn!(target: "library", reason = %format!("{e:#}"), "a run cut off not read");
     }
     turn
@@ -649,7 +649,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
     tell(app.journal.key(), &status);
     let (app, first) = (app.clone(), status.clone());
     let account = crate::serve::who::current().map(|w| w.user);
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let _turn = turn(&app.journal).await;
         status.state = "writing";
         tell(app.journal.key(), &status);
@@ -660,7 +660,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
             let of = files.len();
             set_state(&album, FilesState { facts: None, state: "writing".into(), done: Some(0), of: Some(of), run: Some(id.clone()), at: None });
             let (keep, noted) = (kept_dir(&id), entry.clone());
-            let done = tokio::task::spawn_blocking(move || {
+            let done = crate::run::spawn_blocking(move || {
                 let mut ok = Vec::new();
                 let mut failed = Vec::new();
                 let mut seen = Vec::new();
@@ -736,7 +736,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
 /// proposal of what it wrote (its files as written). Returns the run's status, its Undo the kept run's.
 pub async fn made(app: &Arc<super::App>, work: impl FnOnce() -> Result<Proposal> + Send + 'static) -> Result<Status> {
     let _turn = turn(&app.journal).await;
-    let p = tokio::task::spawn_blocking(work).await??;
+    let p = crate::run::spawn_blocking(work).await??;
     let at = super::moment::now_secs();
     let account = crate::serve::who::current().map(|w| w.user);
     let keep = i64::from(app.incoming.trash_days()) * 86_400;
@@ -844,7 +844,7 @@ impl Tracked {
         self.status.state = "adding";
         self.status.done = 1;
         tell(self.journal, &self.status);
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let started = std::time::Instant::now();
             while started.elapsed() < ADDING_MOST && !added().await {
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -899,7 +899,7 @@ pub async fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
                 // A delete keeps no list of its files: they are those of its folder in the trash, or back in its place once undone.
                 let lies = folders.get(*folder).map(|root| if entry.undone { root.join(dir) } else { root.join(crate::trash::TRASH_DIR).join(token) });
                 let files = match lies {
-                    Some(at) => tokio::task::spawn_blocking(move || super::incoming::files_under(&at).len()).await?,
+                    Some(at) => crate::run::spawn_blocking(move || super::incoming::files_under(&at).len()).await?,
                     None => 0,
                 };
                 (album_id, title, vec![place(&(*folder, dir.clone()))], vec!["the trash".to_string()], files)
@@ -917,7 +917,7 @@ pub async fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
     // Cut off and not read yet (`settle`): its entry names more than it wrote, so the files say.
     if !run.planned.is_empty() {
         let files: Vec<FileWrite> = run.files.iter().filter(|f| run.planned.contains(&f.album)).cloned().collect();
-        let wrote = tokio::task::spawn_blocking(move || files.into_iter().filter(|f| reached(f).unwrap_or(false)).map(|f| f.album).collect::<Vec<_>>()).await?;
+        let wrote = crate::run::spawn_blocking(move || files.into_iter().filter(|f| reached(f).unwrap_or(false)).map(|f| f.album).collect::<Vec<_>>()).await?;
         for r in sheet.records.iter_mut().filter(|r| run.planned.contains(&r.album)) {
             r.written = Some(wrote.iter().filter(|a| **a == r.album).count());
         }
@@ -960,7 +960,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
     }
     tell(app.journal.key(), &status);
     let (app, token, first) = (app.clone(), token.to_string(), status.clone());
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let _turn = turn(&app.journal).await;
         // Read again under the lock: another Undo may have taken some of it meanwhile, a run cut off been held to what it
         // wrote. Its files by their place in this reading, so an album's are found here and not before.
@@ -971,7 +971,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
             let files: Vec<(usize, FileWrite)> = run.files.iter().enumerate().filter(|(_, f)| f.album == album && !f.undone).map(|(i, f)| (i, f.clone())).collect();
             let of = files.len();
             set_state(&album, FilesState { facts: None, state: "writing".into(), done: Some(0), of: Some(of), run: Some(token.clone()), at: None });
-            let results = tokio::task::spawn_blocking(move || {
+            let results = crate::run::spawn_blocking(move || {
                 files
                     .into_iter()
                     .map(|(i, f)| {
@@ -1060,7 +1060,7 @@ async fn reread(paths: &[PathBuf]) {
     let Some(served) = crate::serve::view::get() else { return };
     // Files only: a cover's run names its folder (its tracks read again by `covers`).
     let paths: Vec<PathBuf> = paths.iter().filter(|p| !p.is_dir()).cloned().collect();
-    let _ = tokio::task::spawn_blocking(move || served.reread(&paths)).await;
+    let _ = crate::run::spawn_blocking(move || served.reread(&paths)).await;
 }
 
 #[cfg(test)]

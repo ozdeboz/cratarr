@@ -133,7 +133,7 @@ pub async fn read(app: &Arc<App>, serve: Option<Arc<crate::serve::Serve>>) -> Re
         ..Configured::default()
     };
     let ud = serve.map(|s| s.userdata.clone());
-    let on = tokio::task::spawn_blocking(move || -> Result<Configured> {
+    let on = crate::run::spawn_blocking(move || -> Result<Configured> {
         let mut on = on;
         on.musicbrainz = switches::is_on(switches::MUSICBRAINZ);
         on.discogs = switches::is_on(switches::DISCOGS);

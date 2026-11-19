@@ -187,7 +187,7 @@ type Found = (Match, Vec<RefTrack>, bool);
 /// artist finds (certain before likely, the first found among equals).
 async fn find(http: &reqwest::Client, album: &str) -> Result<Option<Found>> {
     let a = album.to_string();
-    let (tracks, release, artist, name) = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a)).await??;
+    let (tracks, release, artist, name) = crate::run::spawn_blocking(move || super::renumber::tracks_of(&a)).await??;
     let files: Vec<(String, String, i64)> = tracks.iter().map(|t| (t.file.clone(), t.title.clone(), i64::from(t.secs))).collect();
     if let Some(r) = release {
         let read = lookup(http, &r).await?;
@@ -235,7 +235,7 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
 async fn kept_or_find_by(served: &std::sync::Arc<crate::serve::Serve>, albums: Vec<String>, finder: Finder) -> Result<Vec<(String, Match)>> {
     let ud = served.userdata.clone();
     let wanted = albums.clone();
-    let kept = tokio::task::spawn_blocking(move || ud.album_matches(&wanted)).await??;
+    let kept = crate::run::spawn_blocking(move || ud.album_matches(&wanted)).await??;
     let now = super::moment::now_secs();
     let due: Vec<String> = albums.iter().filter(|a| kept.get(a.as_str()).is_none_or(|(at, _)| now - at >= AGAIN)).cloned().collect();
     if !due.is_empty()
@@ -271,7 +271,7 @@ async fn match_each(h: std::sync::Arc<super::tasks::Handle>, due: Vec<String>, u
             }
         };
         let (ud, s, json) = (ud.clone(), served.clone(), found.as_ref().map(|(m, ..)| serde_json::to_string(m)).transpose()?);
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        crate::run::spawn_blocking(move || -> Result<()> {
             ud.set_album_match(&album, json.as_deref(), super::moment::now_secs())?;
             // In the references too (C43b), with the release's own list.
             if let Some((m, list, named)) = &found {
@@ -289,7 +289,7 @@ async fn match_each(h: std::sync::Arc<super::tasks::Handle>, due: Vec<String>, u
 pub async fn fixes(served: &std::sync::Arc<crate::serve::Serve>, finding: &str, albums: Vec<String>, at: Option<(i64, String)>) -> Result<Vec<Fix>> {
     let matched = kept_or_find(served, albums).await?;
     let (finding, served) = (finding.to_string(), served.clone());
-    tokio::task::spawn_blocking(move || -> Result<Vec<Fix>> {
+    crate::run::spawn_blocking(move || -> Result<Vec<Fix>> {
         let mut out = Vec::new();
         for (album, m) in matched {
             out.extend(fix_of(&served, &finding, &album, &m, at.as_ref())?);
@@ -397,7 +397,7 @@ mod tests {
         let _one = TEST_STATE.lock().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
         let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
         const ACCOUNT: &str = "matching-while-paused";
@@ -437,7 +437,7 @@ mod tests {
         let _one = TEST_STATE.lock().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
         let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
         const ACCOUNT: &str = "a-findings-matching-while-paused";
@@ -479,7 +479,7 @@ mod tests {
         let _one = TEST_STATE.lock().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         *AT.lock().unwrap() = format!("http://{}/ws/2/release", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().route("/ws/2/release", axum::routing::get(|| async { "{}" }))).await.unwrap() });
         let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
         const ACCOUNT: &str = "a-findings-last-album-while-paused";

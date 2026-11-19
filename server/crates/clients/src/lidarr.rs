@@ -703,7 +703,7 @@ pub mod fake {
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (url, seen)
     }
 
@@ -832,7 +832,7 @@ mod tests {
             .route("/api/v1/artist", artists);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (Lidarr::new(&url, "key").unwrap(), calls)
     }
 
@@ -969,7 +969,7 @@ mod tests {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let groups: Vec<String> = (1..=7).map(|n| format!("g{n}")).collect();
         let p = Lidarr::new(&url, "key").unwrap().progress(&groups).await.unwrap();
         assert_eq!(p["g1"], Progress::Looking, "looked for");

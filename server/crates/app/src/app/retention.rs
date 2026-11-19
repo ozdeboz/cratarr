@@ -191,11 +191,11 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
     static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _one = ONE.lock().await;
     let c = cat.clone();
-    let batch = tokio::task::spawn_blocking(move || c.rereads_due(now)).await??;
+    let batch = crate::run::spawn_blocking(move || c.rereads_due(now)).await??;
     let mut done = Reread::default();
     for (artist, due_at) in batch {
         let c = cat.clone();
-        let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { continue };
+        let Some((name, refs)) = crate::run::spawn_blocking(move || c.artist_known(artist)).await?? else { continue };
         let asked = ArtistAsked::of(artist, name, refs);
         // Whether a list read now knew them, and whether one did not (Z4).
         let (mut known, mut unknown) = (false, false);
@@ -219,7 +219,7 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
                 None => false,
             };
             let c = cat.clone();
-            tokio::task::spawn_blocking(move || -> Result<()> {
+            crate::run::spawn_blocking(move || -> Result<()> {
                 if !read {
                     c.artist_records_seen(artist, now)?;
                 }
@@ -232,7 +232,7 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
         // only Bandcamp knows keeps what their page's Bandcamp list showed. One a list knows had them seen by it.
         if unknown && !known {
             let c = cat.clone();
-            tokio::task::spawn_blocking(move || c.bandcamp_only_seen(artist, now)).await??;
+            crate::run::spawn_blocking(move || c.bandcamp_only_seen(artist, now)).await??;
         }
     }
     Ok(done)
@@ -251,13 +251,13 @@ pub async fn pass(served: Arc<Serve>, now: i64) -> Result<Option<Passed>> {
 async fn pass_reading(served: Arc<Serve>, now: i64, sources: &[Arc<dyn ArtistList>], paused: fn() -> bool) -> Result<Option<Passed>> {
     let cat = served.catalogue().clone();
     let c = cat.clone();
-    if !tokio::task::spawn_blocking(move || due(&c, now)).await? {
+    if !crate::run::spawn_blocking(move || due(&c, now)).await? {
         return Ok(None);
     }
     let c = cat.clone();
-    let waits = tokio::task::spawn_blocking(move || forgetting_waits(&c, now)).await?;
+    let waits = crate::run::spawn_blocking(move || forgetting_waits(&c, now)).await?;
     let reread = reread(&cat, sources, paused, now).await?;
-    let done = tokio::task::spawn_blocking(move || -> Result<Passed> {
+    let done = crate::run::spawn_blocking(move || -> Result<Passed> {
         let cat = served.catalogue();
         let kept = protected(&served.userdata, served.data_dir.as_deref())?;
         let records = if waits { Vec::new() } else { cat.forget_quiet(now, &kept)? };
@@ -309,7 +309,7 @@ pub fn start(served: Arc<Serve>) {
     if STARTED.set(()).is_err() {
         return;
     }
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let every = std::time::Duration::from_secs(3600);
         let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + std::time::Duration::from_secs(600), every);
         loop {

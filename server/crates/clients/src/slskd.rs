@@ -413,7 +413,7 @@ mod tests {
             .route("/api/v0/application", axum::routing::get(move || std::future::ready(axum::Json(state.clone()))));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Slskd::new(&url, "key").unwrap()
     }
 
@@ -430,7 +430,7 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Slskd::new(&url, "key").unwrap().search("Air Moon Safari").await.unwrap();
         assert_eq!(sent.lock().unwrap()["searchTimeout"], 15_000);
     }

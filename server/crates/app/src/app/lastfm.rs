@@ -461,7 +461,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
             let n = spool.items.len();
             let partial: Vec<Scrobble> = spool.items;
             let (serve, account) = (serve.clone(), account.to_string());
-            tokio::task::spawn_blocking(move || -> Result<Tally> {
+            crate::run::spawn_blocking(move || -> Result<Tally> {
                 let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
                 let listens: Vec<Listened> = partial.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s), player: None }).collect();
                 into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, false)
@@ -475,7 +475,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
     // library, from Last.fm's track info. An album found also matches the library's track by album and title, under
     // whichever artist it was loved.
     let at = dir.clone();
-    let (songs, mut loved, scrobbles, asks) = tokio::task::spawn_blocking(move || -> Result<(Matcher, Vec<Scrobble>, Vec<Scrobble>, Vec<usize>)> {
+    let (songs, mut loved, scrobbles, asks) = crate::run::spawn_blocking(move || -> Result<(Matcher, Vec<Scrobble>, Vec<Scrobble>, Vec<usize>)> {
         let songs = Matcher::read(&Path::new(&at).join("library.sqlite"))?;
         let mut loved = loved;
         fill_albums(&mut loved, &scrobbles);
@@ -494,7 +494,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
     }
     progress("Matching", 0, None);
     let (serve, account, user) = (serve.clone(), account.to_string(), user.to_string());
-    tokio::task::spawn_blocking(move || -> Result<Imported> {
+    crate::run::spawn_blocking(move || -> Result<Imported> {
         let listens: Vec<Listened> = scrobbles.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s), player: None }).collect();
         // The scrobbles only when chosen (they are still read: the loved tracks' albums come from them).
         let scrobbled = if choice.scrobbles { into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, preview)? } else { Tally::default() };

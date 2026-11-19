@@ -641,7 +641,7 @@ impl PlayOn {
         }
         let (me, leader) = (Arc::downgrade(self), leader.to_string());
         let settle = Duration::from_millis(SETTLE_MS as u64);
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let mut wait = settle;
             loop {
                 tokio::time::sleep(wait).await;

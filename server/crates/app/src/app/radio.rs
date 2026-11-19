@@ -356,7 +356,7 @@ fn mix_elsewhere(index: &Index, req: &Ask, picks: &[usize], elsewhere: &[Elsewhe
 async fn with_elsewhere(index: &Index, req: &Ask, picks: &[usize], mut tracks: Vec<QueueTrack>, account: &str, lane: &str) -> Vec<QueueTrack> {
     let Some(served) = crate::serve::instance() else { return tracks };
     let (s, a) = (served.clone(), account.to_string());
-    let (found, artist_ids) = match tokio::task::spawn_blocking(move || anyhow::Ok((super::discover::kept(&s, &a)?, s.artist_ids()?))).await {
+    let (found, artist_ids) = match crate::run::spawn_blocking(move || anyhow::Ok((super::discover::kept(&s, &a)?, s.artist_ids()?))).await {
         Ok(Ok((Some(f), artist_ids))) => (f.albums, artist_ids),
         _ => return tracks,
     };
@@ -427,7 +427,7 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
     let library = dir.join("library.sqlite");
     let built_from = {
         let library = library.clone();
-        tokio::task::spawn_blocking(move || built_from(&library)).await.map_err(|e| anyhow::anyhow!("{e}"))??
+        crate::run::spawn_blocking(move || built_from(&library)).await.map_err(|e| anyhow::anyhow!("{e}"))??
     };
     if let Some(c) = CACHE.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
         && c.built_from == built_from
@@ -441,7 +441,7 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
         None => Vec::new(),
     };
     let (served2, dir) = (served.clone(), dir.to_path_buf());
-    let index = tokio::task::spawn_blocking(move || -> Result<Index> {
+    let index = crate::run::spawn_blocking(move || -> Result<Index> {
         let cat = served2.catalogue();
         let mut member: HashMap<String, Vec<u32>> = HashMap::new();
         for (n, (_, lines, _)) in lines.iter().enumerate() {
@@ -658,7 +658,7 @@ fn listener_weights() -> Weights {
 pub async fn similar_albums(album: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
     let (index, _) = ready().await?;
     let (album, weights) = (album.to_string(), listener_weights());
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let seed: Vec<usize> = (0..index.songs.len()).filter(|&i| index.songs[i].album_id == album).collect();
         let own = seed.first().map(|&i| index.songs[i].album_n);
         // An album's own artist: those on every one of its songs (its album artist is among each song's artists). An
@@ -686,7 +686,7 @@ pub async fn similar_albums(album: &str, count: usize) -> Result<Vec<(String, f6
 pub async fn similar_lists(seed: Vec<String>, candidates: Vec<(String, Vec<String>)>, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
     let (index, _) = ready().await?;
     let weights = listener_weights();
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let seed = index.find(&seed);
         let candidates = candidates.into_iter().map(|(id, songs)| (id, index.find(&songs))).collect();
         closest_lists(&index, &seed, candidates, &weights, count)
@@ -724,7 +724,7 @@ async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
         None => HashSet::new(),
     };
     let (recent, starred) = match user {
-        Some(user) => tokio::task::spawn_blocking(move || -> Result<_> {
+        Some(user) => crate::run::spawn_blocking(move || -> Result<_> {
             let userdata = dir.join("userdata.sqlite");
             // Its play history off (0.9.5): what it played is not learned from.
             let keeps = crate::serve::instance().is_none_or(|s| s.userdata.tracking(&user));

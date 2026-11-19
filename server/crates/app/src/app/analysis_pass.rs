@@ -99,7 +99,7 @@ pub fn run(cat: Arc<Catalogue>) {
     if super::runtime::now().analysis == Mode::Off {
         tracing::info!("analysis: the pass is off (Settings, or CRATARR_ANALYSIS=off)");
     }
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         tokio::time::sleep(FIRST_LOOK).await;
         // Files that could not be analysed, or their beats heard, as they were: not tried again until Cratarr starts
         // again.
@@ -116,7 +116,7 @@ pub fn run(cat: Arc<Catalogue>) {
                 continue;
             }
             let c = cat.clone();
-            let counts = tokio::task::spawn_blocking(move || c.analysis_counts()).await.ok().and_then(|r| r.ok());
+            let counts = crate::run::spawn_blocking(move || c.analysis_counts()).await.ok().and_then(|r| r.ok());
             if mode == Mode::Keep && counts.is_some_and(|(done, all)| all > 0 && done * 100 < all * STARTED_AT) {
                 if !waiting_said {
                     let (done, all) = counts.unwrap_or_default();
@@ -127,7 +127,7 @@ pub fn run(cat: Arc<Catalogue>) {
                 continue;
             }
             let c = cat.clone();
-            let batch = tokio::task::spawn_blocking(move || c.unanalysed(50)).await.ok().and_then(|r| r.ok()).unwrap_or_default();
+            let batch = crate::run::spawn_blocking(move || c.unanalysed(50)).await.ok().and_then(|r| r.ok()).unwrap_or_default();
             let batch: Vec<_> = batch.into_iter().filter(|(f, r, _, s, m)| !failed.contains(&(*f, r.clone(), *s, *m))).collect();
             if batch.is_empty() {
                 // Nothing to analyse: new music's beats, one file, then a look again (where this server hears them).
@@ -135,7 +135,7 @@ pub fn run(cat: Arc<Catalogue>) {
                 let next = if !hear_beats {
                     None
                 } else {
-                    tokio::task::spawn_blocking(move || crate::app::beat_this::new_music(&c, limit))
+                    crate::run::spawn_blocking(move || crate::app::beat_this::new_music(&c, limit))
                         .await
                         .ok()
                         .and_then(|r| r.ok())
@@ -147,7 +147,7 @@ pub fn run(cat: Arc<Catalogue>) {
                     // No beats to hear either: the next file's waveform in three bands, of a batch taken at once (M1), else a
                     // rest.
                     let (c, mut queue, failed) = (cat.clone(), std::mem::take(&mut banding), unbanded.clone());
-                    let (queue, next) = tokio::task::spawn_blocking(move || {
+                    let (queue, next) = crate::run::spawn_blocking(move || {
                         let next = queue.next(&failed, |limit| c.without_band_wave(limit).unwrap_or_default());
                         (queue, next)
                     })
@@ -171,7 +171,7 @@ pub fn run(cat: Arc<Catalogue>) {
                 let started = Instant::now();
                 let c = cat.clone();
                 let r = rel.clone();
-                match tokio::task::spawn_blocking(move || {
+                match crate::run::spawn_blocking(move || {
                     let _turn = turn;
                     let _job = crate::memwatch::job(format!("Beat this!: {r}"));
                     crate::app::beat_this::hear_and_keep(&c, folder, &r, &path, size, mtime)
@@ -200,7 +200,7 @@ pub fn run(cat: Arc<Catalogue>) {
                 let started = Instant::now();
                 let c = cat.clone();
                 let r = rel.clone();
-                let done = tokio::task::spawn_blocking(move || {
+                let done = crate::run::spawn_blocking(move || {
                     let _turn = turn;
                     let _job = crate::memwatch::job(format!("analysis: {r}"));
                     let genres = c.genres_of_file(folder, &r);
@@ -252,7 +252,7 @@ impl Banded {
 /// room and no rest. Else it is worked out by `decode`, with room for it and on the one turn (`HEAVY`).
 async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): Work, decode: fn(&std::path::Path) -> anyhow::Result<BandWave>) -> Banded {
     let (c, r) = (cat.clone(), rel.clone());
-    match tokio::task::spawn_blocking(move || c.copy_kept_band_wave(folder, &r, size, mtime)).await {
+    match crate::run::spawn_blocking(move || c.copy_kept_band_wave(folder, &r, size, mtime)).await {
         Ok(Ok(true)) => return Banded::Copied,
         Ok(Ok(false)) => {}
         Ok(Err(e)) => tracing::warn!("band waveform: {rel}: the one kept not copied: {e:#}"),
@@ -263,7 +263,7 @@ async fn band_wave_item(cat: &Arc<Catalogue>, (folder, rel, path, size, mtime): 
     let started = Instant::now();
     let c = cat.clone();
     let r = rel.clone();
-    let done = tokio::task::spawn_blocking(move || {
+    let done = crate::run::spawn_blocking(move || {
         let _turn = turn;
         // Taken with its batch, a while ago maybe: still there as it was, or passed over.
         if c.file_to_analyse(folder, &r).is_none_or(|(_, s, m)| (s, m) != (size, mtime)) {
@@ -314,7 +314,7 @@ pub async fn wind_turn(within: Duration) -> Option<tokio::sync::SemaphorePermit<
 /// track plays. `None`: the file cannot be decoded, or it took too long (`DECODE`; it is still kept when it comes).
 pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<BandWave> {
     let (c, r) = (cat.clone(), rel.clone());
-    let kept = tokio::task::spawn_blocking(move || c.band_wave_of(folder, &r)).await.ok().flatten();
+    let kept = crate::run::spawn_blocking(move || c.band_wave_of(folder, &r)).await.ok().flatten();
     match kept {
         Some(Some(w)) if w.current() => return Some(w),
         // Tried before and failed, the file as it is now.
@@ -325,7 +325,7 @@ pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<
     if !crate::memwatch::room() {
         return None;
     }
-    let work = tokio::task::spawn_blocking(move || -> anyhow::Result<BandWave> {
+    let work = crate::run::spawn_blocking(move || -> anyhow::Result<BandWave> {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("band wave when asked for: {rel}"));
         // Kept while this one waited.
@@ -366,7 +366,7 @@ pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<
 /// so it is not tried again until it changes), or it took too long (`DECODE`; it is still kept when it comes).
 pub async fn spectrum(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Spectrum> {
     let (c, r) = (cat.clone(), rel.clone());
-    let kept = tokio::task::spawn_blocking(move || c.spectrum_of(folder, &r)).await.ok().flatten();
+    let kept = crate::run::spawn_blocking(move || c.spectrum_of(folder, &r)).await.ok().flatten();
     match kept {
         Some(Some(s)) if s.current() => return Some(s),
         Some(Some(s)) if s.failed() => return None,
@@ -376,7 +376,7 @@ pub async fn spectrum(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<S
     if !crate::memwatch::room() {
         return None;
     }
-    let work = tokio::task::spawn_blocking(move || -> anyhow::Result<Spectrum> {
+    let work = crate::run::spawn_blocking(move || -> anyhow::Result<Spectrum> {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("spectrum when asked for: {rel}"));
         // Kept while this one waited.
@@ -452,7 +452,7 @@ async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_signals: boo
     let enough = move |k: &(Option<Beats>, Option<Signals>)| k.0.is_some() && (!with_signals || k.1.is_some());
     let c = cat.clone();
     let r = rel.clone();
-    let k = tokio::task::spawn_blocking(move || kept(&c, folder, &r)).await.ok()?;
+    let k = crate::run::spawn_blocking(move || kept(&c, folder, &r)).await.ok()?;
     if enough(&k) {
         return Some((k.0.unwrap_or_default(), k.1.unwrap_or_default()));
     }
@@ -461,7 +461,7 @@ async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_signals: boo
     if !crate::memwatch::room() {
         return None;
     }
-    let work = tokio::task::spawn_blocking(move || {
+    let work = crate::run::spawn_blocking(move || {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("visuals when asked for: {rel}"));
         work_out(&cat, folder, &rel, with_signals)
@@ -528,7 +528,7 @@ const AHEAD: usize = 2;
 /// settles first) and once a minute; only on a free turn, as a page waiting for a decode comes first, and with room for
 /// one: what finds none waits for the next look.
 pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>, served: Option<Arc<crate::serve::Serve>>) {
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let mut changes = play_on.subscribe();
         loop {
             if let Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) = tokio::time::timeout(Duration::from_secs(60), changes.recv()).await {
@@ -548,7 +548,7 @@ pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>,
                 let who = served.as_ref().map_or_else(Default::default, |s| s.listener(owner.as_deref()));
                 for (source, id) in upcoming(&[(index, tracks)]) {
                     let (c, w) = (cat.clone(), who.clone());
-                    let Ok(Some((folder, rel))) = tokio::task::spawn_blocking(move || w.place(&c, &source, &id)).await else {
+                    let Ok(Some((folder, rel))) = crate::run::spawn_blocking(move || w.place(&c, &source, &id)).await else {
                         continue;
                     };
                     ahead(cat.clone(), folder, rel).await;
@@ -576,7 +576,7 @@ fn upcoming(queues: &[(i64, Vec<(String, String)>)]) -> Vec<(String, String)> {
 /// there is room for one: the log saw this decode start at 500 MB resident, where every other path refuses.
 async fn ahead(cat: Arc<Catalogue>, folder: i64, rel: String) {
     let (c, r) = (cat.clone(), rel.clone());
-    let Ok((beats, signals)) = tokio::task::spawn_blocking(move || kept(&c, folder, &r)).await else { return };
+    let Ok((beats, signals)) = crate::run::spawn_blocking(move || kept(&c, folder, &r)).await else { return };
     if beats.is_some() && signals.is_some() {
         return;
     }
@@ -585,7 +585,7 @@ async fn ahead(cat: Arc<Catalogue>, folder: i64, rel: String) {
         return;
     }
     let r = rel.clone();
-    match tokio::task::spawn_blocking(move || {
+    match crate::run::spawn_blocking(move || {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("visuals ahead: {rel}"));
         work_out(&cat, folder, &rel, true)
@@ -795,9 +795,9 @@ mod tests {
     async fn a_decode_keeps_its_turn_when_the_page_stops_waiting() {
         // As `visual` takes it, on a gate of the test's own.
         static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-        let asked = tokio::spawn(async {
+        let asked = crate::run::spawn(async {
             let turn = GATE.acquire().await.unwrap();
-            tokio::task::spawn_blocking(move || {
+            crate::run::spawn_blocking(move || {
                 let _turn = turn;
                 std::thread::sleep(Duration::from_millis(400));
             })

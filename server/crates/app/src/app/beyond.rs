@@ -373,7 +373,7 @@ pub async fn open_asking(cat: Arc<Catalogue>, id: &str, name: &str) -> Result<Op
     use crate::catalogue::Opening;
     let Some((id, name)) = opening(id, name)? else { return Ok(None) };
     let (c, r, n) = (cat.clone(), Ref::new("musicbrainz", "artist", &id), name.clone());
-    let sure = match tokio::task::spawn_blocking(move || c.opening_of(&r, &n)).await?? {
+    let sure = match crate::run::spawn_blocking(move || c.opening_of(&r, &n)).await?? {
         Opening::Held(artist) => return Ok(Some(artist)),
         Opening::New => false,
         Opening::Decides(artist) => match sure_of(&id, &name).await {
@@ -381,7 +381,7 @@ pub async fn open_asking(cat: Arc<Catalogue>, id: &str, name: &str) -> Result<Op
             None => return Ok(Some(artist)),
         },
     };
-    tokio::task::spawn_blocking(move || open_artist(&cat, &id, &name, sure)).await?
+    crate::run::spawn_blocking(move || open_artist(&cat, &id, &name, sure)).await?
 }
 
 /// Whether a MusicBrainz id is its first sure match for a name (T6): its answer to the name's one question. None where no answer
@@ -514,7 +514,7 @@ mod tests {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
         (crate::app::discover::FakeMusicBrainz::at(at), asked)
     }
 
@@ -530,7 +530,7 @@ mod tests {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
         (crate::app::discover::FakeMusicBrainz::at(at), asked)
     }
 
@@ -1055,7 +1055,7 @@ mod tests {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(slow)).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, axum::Router::new().fallback(slow)).await.unwrap() });
         let fake = crate::app::discover::FakeMusicBrainz::at(at);
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let (grouch, had) = library_grouch(&cat);

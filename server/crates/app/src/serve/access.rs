@@ -222,7 +222,7 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
     // answer while the disk was slow.
     let decided = {
         let (serve, method, headers, path, query) = (Arc::clone(&serve), method.clone(), request.headers().clone(), uri.path().to_string(), uri.query().map(str::to_string));
-        tokio::task::spawn_blocking(move || identify(&serve, &method, &headers, &path, query.as_deref(), home)).await
+        crate::run::spawn_blocking(move || identify(&serve, &method, &headers, &path, query.as_deref(), home)).await
     };
     let Ok(decided) = decided else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
     match decided {

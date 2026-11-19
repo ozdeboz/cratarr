@@ -11,6 +11,8 @@ pub mod naming;
 #[allow(dead_code)] // the playlist sync uses it (decision 0012)
 pub mod playlist_merge;
 pub mod playlist_ops;
+/// One spawn for every task, its future boxed (the owner's decision 1).
+pub mod run;
 pub mod search;
 pub mod serve;
 pub mod similarity;

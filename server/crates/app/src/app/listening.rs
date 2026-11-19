@@ -63,7 +63,7 @@ pub fn heard_blocking(serve: &Serve, user: &str, song: &str, h: &Heard) -> anyho
 /// As [`heard_blocking`], from async code.
 pub async fn heard(serve: &Arc<Serve>, user: &str, song: &str, h: &Heard) -> anyhow::Result<bool> {
     let (s, u, id, h) = (serve.clone(), user.to_string(), song.to_string(), h.clone());
-    tokio::task::spawn_blocking(move || heard_blocking(&s, &u, &id, &h)).await?
+    crate::run::spawn_blocking(move || heard_blocking(&s, &u, &id, &h)).await?
 }
 
 /// A track began on `player` for `user`: told once per change of song on that player (players report often).

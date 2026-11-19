@@ -63,7 +63,7 @@ pub fn state_of(serve: &Serve, album: &str, waiting: Option<i64>, in_incoming: b
 /// The album as the library has it: (name, album artist, its catalogue folder, its folder path).
 async fn find(serve: &Arc<Serve>, id: &str) -> Result<Option<(String, String, i64, String)>, Response> {
     let (s, id) = (serve.clone(), id.to_string());
-    tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<_> {
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
         // What is reviewed is what waits in Incoming, whatever else holds the record.
         let copies = s.library.copies_of(&id)?;
@@ -200,7 +200,7 @@ struct IncomingQuery {
 /// reviewed ones.
 async fn incoming(State(serve): State<Arc<Serve>>, Query(q): Query<IncomingQuery>) -> Response {
     let s = serve.clone();
-    let read = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((s.library.incoming_albums()?, s.library.waiting_copies()?)) }).await;
+    let read = crate::run::spawn_blocking(move || -> anyhow::Result<_> { Ok((s.library.incoming_albums()?, s.library.waiting_copies()?)) }).await;
     let (albums, waiting) = match read {
         Ok(Ok(a)) => a,
         Ok(Err(e)) => return failed(e),

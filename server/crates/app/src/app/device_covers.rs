@@ -101,7 +101,7 @@ pub struct Bundle {
 impl IntoResponse for Bundle {
     fn into_response(self) -> Response {
         let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<Vec<u8>>>(8);
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let mut head = MAGIC.to_vec();
             head.extend(VERSION.to_le_bytes());
             head.extend(self.rev.to_le_bytes());
@@ -198,7 +198,7 @@ fn keep(dir: &Path, record: i64, stamp: &str, picture: &[u8], was: Option<&PathB
 pub async fn make(serve: &Arc<Serve>) -> Result<usize> {
     let Some(dir) = folder_of(serve) else { return Ok(0) };
     let (me, at) = (serve.clone(), dir.clone());
-    let (stamps, held) = tokio::task::spawn_blocking(move || -> Result<_> {
+    let (stamps, held) = crate::run::spawn_blocking(move || -> Result<_> {
         std::fs::create_dir_all(&at)?;
         Ok((stamps_of(&me), held_in(&at)))
     })
@@ -235,7 +235,7 @@ fn warm(serve: &Arc<Serve>) {
         return;
     }
     let serve = serve.clone();
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         match make(&serve).await {
             Ok(0) => {}
             Ok(made) => tracing::info!(target: "library", made, "small covers made"),
@@ -248,13 +248,13 @@ fn warm(serve: &Arc<Serve>) {
 /// `GET /api/index/covers`: every small cover made so far, and the rev to go on from.
 pub async fn read(serve: Arc<Serve>) -> Result<Bundle, ToggleError> {
     warm(&serve);
-    Ok(tokio::task::spawn_blocking(move || whole(&serve)).await.map_err(|e| anyhow!("{e}"))??)
+    Ok(crate::run::spawn_blocking(move || whole(&serve)).await.map_err(|e| anyhow!("{e}"))??)
 }
 
 /// `GET /api/index/covers/changes?since=<rev>`: what changed of them, what was made since among it.
 pub async fn changes(serve: Arc<Serve>, since: i64) -> Result<Feed, ToggleError> {
     warm(&serve);
-    Ok(tokio::task::spawn_blocking(move || feed(&serve, since)).await.map_err(|e| anyhow!("{e}"))??)
+    Ok(crate::run::spawn_blocking(move || feed(&serve, since)).await.map_err(|e| anyhow!("{e}"))??)
 }
 
 #[cfg(test)]

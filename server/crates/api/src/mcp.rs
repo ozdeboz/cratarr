@@ -215,7 +215,7 @@ impl Cratarr {
         `works` (one composer's works, by key), or `work` (a work's recordings and movements, by its MusicBrainz id).")]
     async fn classical(&self, Parameters(a): Parameters<ClassicalArgs>) -> Result<CallToolResult, McpError> {
         let serve = crate::serve::instance().ok_or_else(|| failed("Cratarr's own library is not open."))?;
-        let ix = tokio::task::spawn_blocking(move || crate::app::classical::index(&serve)).await.map_err(failed)?.map_err(failed)?;
+        let ix = crate::run::spawn_blocking(move || crate::app::classical::index(&serve)).await.map_err(failed)?.map_err(failed)?;
         let key = || a.key.as_deref().ok_or_else(|| asked("Give the composer's key (from `composers`)."));
         match a.action.as_str() {
             "composers" => answer(&ix.composers),

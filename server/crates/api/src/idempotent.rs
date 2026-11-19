@@ -132,7 +132,7 @@ pub async fn once(State(kept): State<Option<Arc<UserData>>>, request: Request, n
     // Made before the memory forgot it (a restart, a day since): its first answer, from the user data.
     if let Some(ud) = kept.clone() {
         let (user, key) = id.clone();
-        if let Ok(Ok(Some(k))) = tokio::task::spawn_blocking(move || ud.kept_answer(&user, &key)).await {
+        if let Ok(Ok(Some(k))) = crate::run::spawn_blocking(move || ud.kept_answer(&user, &key)).await {
             if k.asked != asked {
                 return sent_with_another();
             }
@@ -166,7 +166,7 @@ pub async fn once(State(kept): State<Option<Arc<UserData>>>, request: Request, n
             kind: kind.as_ref().and_then(|k| k.to_str().ok()).map(str::to_string),
             body: body.to_vec(),
         };
-        match tokio::task::spawn_blocking(move || ud.keep_answer(&user, &key, &a)).await {
+        match crate::run::spawn_blocking(move || ud.keep_answer(&user, &key, &a)).await {
             Ok(Ok(())) => {}
             failed => tracing::warn!("a change's answer not kept past a restart: {failed:?}"),
         }
@@ -279,7 +279,7 @@ mod tests {
     async fn a_change_cut_off_half_way_is_made_when_sent_again_and_stalls_nothing() {
         let made = Arc::new(AtomicUsize::new(0));
         let app = cut_off_once(made.clone());
-        let first = tokio::spawn(app.clone().oneshot(ask("/api/x", Some("k-cut-1"))));
+        let first = crate::run::spawn(app.clone().oneshot(ask("/api/x", Some("k-cut-1"))));
         while made.load(Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
         }

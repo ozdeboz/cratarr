@@ -48,7 +48,7 @@ impl PlayerWatch {
         let rx = self.tell.subscribe();
         if self.tell.receiver_count() == 1 {
             let (tell, app) = (self.tell.clone(), Arc::downgrade(app));
-            tokio::spawn(async move {
+            crate::run::spawn(async move {
                 let mut last: Vec<Option<String>> = Vec::new();
                 while tell.receiver_count() > 0 {
                     let Some(app) = app.upgrade() else { return };
@@ -94,7 +94,7 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     // The library's words as they change, by any way (0.15, decision 0097).
     let mut words = super::words::subscribe();
     let app = app.clone();
-    tokio::spawn(crate::serve::who::carried(async move {
+    crate::run::spawn(crate::serve::who::carried(async move {
         // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
         let account = app.served.as_ref().and_then(|s| s.current_user());
         for t in account.as_deref().map(|a| super::tasks::tasks().of(a)).unwrap_or_default() {

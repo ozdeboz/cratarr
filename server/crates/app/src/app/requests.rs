@@ -284,7 +284,7 @@ pub(crate) async fn ask_record_with(h: &Hands<'_>, serve: &Serve, account: &str,
 /// The request for `record` (`asked_of`), asked for and gone ahead (`ask_for`).
 async fn asked_record(h: &Hands<'_>, serve: &Serve, account: &str, record: i64, key: Option<String>, asked: Option<String>) -> Result<Request> {
     let cat = serve.catalogue().clone();
-    let asked = tokio::task::spawn_blocking(move || asked_of(&cat, record, key, asked)).await??;
+    let asked = crate::run::spawn_blocking(move || asked_of(&cat, record, key, asked)).await??;
     ask_for(h, serve, account, asked).await
 }
 
@@ -360,7 +360,7 @@ async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist
     let group = release_group.filter(|g| !g.is_empty());
     let (page, known) = {
         let (cat, ud, group, artist, album) = (cat.clone(), ud.clone(), group.clone(), artist.to_string(), album.to_string());
-        tokio::task::spawn_blocking(move || -> Result<(Option<String>, bool)> {
+        crate::run::spawn_blocking(move || -> Result<(Option<String>, bool)> {
             let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
             let page = match page.filter(|p| !p.is_empty()) {
                 Some(page) => Some(page),
@@ -382,7 +382,7 @@ async fn record_of_album_in(serve: &Serve, release_group: Option<String>, artist
     let named = crate::bandcamp::named_by_page(read.as_ref(), artist, album);
     // Its credit split as the record pass splits a file's (W6, the library's rules).
     let artists = serve.rules().values("albumartist", std::slice::from_ref(&named.artist));
-    tokio::task::spawn_blocking(move || -> Result<i64> {
+    crate::run::spawn_blocking(move || -> Result<i64> {
         let found = |key: &str| -> Result<Option<String>> { Ok(ud.bandcamp_found(key)?.and_then(|(_, page)| page)) };
         let record = record_of_album_paged(&cat, group.as_deref(), named, artists, year, cover, page.clone())?;
         if page.is_none() {
@@ -537,7 +537,7 @@ async fn rooms_now(serve: &Serve, accounts: &[String]) -> HashMap<String, super:
         return HashMap::new();
     }
     let (cat, ud, kinds) = (serve.catalogue().clone(), serve.userdata.clone(), serve.library.kinds());
-    let read = tokio::task::spawn_blocking(move || super::room::rooms_in(&cat, &kinds, &requesters_in(&cat, &ud, &kinds), &users)).await;
+    let read = crate::run::spawn_blocking(move || super::room::rooms_in(&cat, &kinds, &requesters_in(&cat, &ud, &kinds), &users)).await;
     match read.map_err(anyhow::Error::from).and_then(|r| r) {
         Ok(rooms) => rooms,
         Err(e) => {
@@ -969,7 +969,7 @@ async fn hand_to_as(lidarr: Option<&dyn Fetcher>, soulseek: bool, serve: &Serve,
                     let (cat, group) = (serve.catalogue().clone(), handed.release_group.to_ascii_lowercase());
                     // Lidarr's guess, by names, goes only onto a record no reference speaks for at all (X3): over a Bandcamp page or a
                     // Discogs release it would become the list Soulseek judges by.
-                    let kept = tokio::task::spawn_blocking(move || -> Result<bool> {
+                    let kept = crate::run::spawn_blocking(move || -> Result<bool> {
                         let subject = crate::serve::ids::record(record);
                         if !cat.references_of(&subject)?.is_empty() {
                             return Ok(false);
@@ -1014,7 +1014,7 @@ pub fn start(app: &std::sync::Arc<super::App>) {
     }
     let Some(serve) = crate::serve::instance() else { return };
     let app = app.clone();
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let mut asked_at = 0;
         loop {
             if let Err(e) = round(&app, &serve, &mut asked_at).await {
@@ -1243,7 +1243,7 @@ pub(crate) async fn deliver(serve: &Serve) -> Vec<Closed> {
         return Vec::new();
     }
     let (cat, ud, kinds) = (serve.catalogue().clone(), serve.userdata.clone(), serve.library.kinds());
-    tokio::task::spawn_blocking(move || deliver_in(&ud, &cat, &kinds, None)).await.unwrap_or_else(|e| {
+    crate::run::spawn_blocking(move || deliver_in(&ud, &cat, &kinds, None)).await.unwrap_or_else(|e| {
         tracing::warn!(target: "requests", "the requests done were not delivered: {e}");
         Vec::new()
     })
@@ -1654,7 +1654,7 @@ pub(crate) async fn story_with(serve: &Serve, f: Option<&dyn Fetcher>, account: 
         return Ok(None);
     }
     let (cat, kinds, asked) = (serve.catalogue().clone(), serve.library.kinds(), r.clone());
-    let (of, copy) = tokio::task::spawn_blocking(move || held_for(&cat, &asked, &kinds)).await??;
+    let (of, copy) = crate::run::spawn_blocking(move || held_for(&cat, &asked, &kinds)).await??;
     let held = of.as_ref().map_or(Holding::None, |o| o.holding);
     let shown = shown(r, of.as_ref());
     let open = shown.status == PENDING || shown.status == APPROVED;
@@ -2107,7 +2107,7 @@ pub fn went_from_incoming(files: &[crate::catalogue::records::Went], incoming: i
 /// `records_of` from an async caller; none for each where the catalogue cannot be read (logged).
 async fn named(serve: &Serve, rs: &[Request]) -> Vec<Option<RecordOf>> {
     let (cat, rs2, kinds) = (serve.catalogue().clone(), rs.to_vec(), serve.library.kinds());
-    match tokio::task::spawn_blocking(move || records_held(&cat, &rs2, &kinds)).await {
+    match crate::run::spawn_blocking(move || records_held(&cat, &rs2, &kinds)).await {
         Ok(Ok(of)) => of,
         Ok(Err(e)) => {
             tracing::debug!("the requests' records not read: {e:#}");

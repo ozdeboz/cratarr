@@ -64,7 +64,7 @@ async fn open(data: &Path) -> (Arc<App>, Arc<Serve>) {
 /// The library built from the catalogue, where it is not yet: a build of another layout starts with an empty one.
 async fn built(served: &Arc<Serve>) {
     let s = served.clone();
-    tokio::task::spawn_blocking(move || s.refresh()).await.unwrap().unwrap();
+    crate::run::spawn_blocking(move || s.refresh()).await.unwrap().unwrap();
 }
 
 fn who(served: &Serve, account: &str) -> Who {
@@ -269,7 +269,7 @@ async fn a_data_folder_of_the_fixture_library() {
     let (app, served) = open(&data).await;
     let cat = app.library.catalogue();
     let c = cat.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         assert_eq!(c.walk_all(), Vec::<String>::new());
         while c.read_tags_batch(100).unwrap() > 0 {}
         c.identify().unwrap();
@@ -297,7 +297,7 @@ async fn a_data_folder_of_the_fixture_library() {
 async fn device_of(app: &Arc<App>, served: &Arc<Serve>, account: &str) -> Device {
     let libraries = app.library.index_libraries(served);
     let (s, a) = (served.clone(), account.to_string());
-    let (index, facts) = tokio::task::spawn_blocking(move || crate::app::device_index::whole_of(&s, &libraries, Some(&a))).await.unwrap().unwrap();
+    let (index, facts) = crate::run::spawn_blocking(move || crate::app::device_index::whole_of(&s, &libraries, Some(&a))).await.unwrap().unwrap();
     let own = crate::app::device_index::own(app, Some(account.to_string()), false).await.unwrap();
     let marks = Marks::load(&own.bytes).unwrap();
     let heard: HashMap<i64, Arc<[f32]>> = facts.iter().filter_map(|f| Some((f.track?, f.sound.clone()?))).collect();

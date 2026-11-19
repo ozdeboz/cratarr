@@ -134,7 +134,7 @@ pub fn start(account: &str, album: &str) -> Result<super::tasks::Task, String> {
 async fn look(album: &str, w: &Watch<'_>) -> Result<Covers> {
     let progress = w.progress;
     let a = album.to_string();
-    let p = tokio::task::spawn_blocking(move || place(&a)).await??;
+    let p = crate::run::spawn_blocking(move || place(&a)).await??;
     let current = crate::serve::art::cover_file(&p.dir).map(|file| {
         let (width, height) = image::image_dimensions(&file).map_or((None, None), |(w, h)| (Some(w), Some(h)));
         Current { url: format!("/api/albums/{}/{album}/cover", crate::source::cratarr::KIND.id), width, height }
@@ -338,7 +338,7 @@ pub async fn run(app: &std::sync::Arc<super::App>, album: &str, url: Option<&str
     };
     let a = album.to_string();
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let p = tokio::task::spawn_blocking(move || proposal(&served, &a, &data, from)).await??;
+    let p = crate::run::spawn_blocking(move || proposal(&served, &a, &data, from)).await??;
     Ok(super::file_runs::start(app, p))
 }
 
@@ -367,7 +367,7 @@ pub(super) fn proposal(served: &crate::serve::Serve, album: &str, data: &[u8], f
 pub async fn prepared(served: &std::sync::Arc<crate::serve::Serve>, album: &str, url: &str, at: Option<&(i64, String)>) -> Result<(Vec<(PathBuf, PathBuf)>, String)> {
     let data = fetch(url).await?;
     let (served, a, at) = (served.clone(), album.to_string(), at.cloned());
-    tokio::task::spawn_blocking(move || prepare(&served, &copies(&served, &a, at.as_ref())?, &data)).await?
+    crate::run::spawn_blocking(move || prepare(&served, &copies(&served, &a, at.as_ref())?, &data)).await?
 }
 
 /// A picture's type and its cover file's extension; refused where it is no image Cratarr can use (its header read

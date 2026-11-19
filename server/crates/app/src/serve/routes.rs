@@ -199,7 +199,7 @@ fn json_response(v: Value) -> Response {
 
 /// Runs blocking library work off the async threads.
 pub(super) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, Failed> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| Failed(0, e.to_string()))?.map_err(Failed::from)
+    crate::run::spawn_blocking(f).await.map_err(|e| Failed(0, e.to_string()))?.map_err(Failed::from)
 }
 
 /// The music folder a request limits itself to (`musicFolderId`: Cratarr's folder number plus one).
@@ -687,7 +687,7 @@ fn hold_emptying(serve: &Arc<Serve>, service: &Arc<crate::app::PlaylistService>,
     let Ok(key) = held_key(service, name) else { return };
     let ticket = serve.held.hold(&key, before, after);
     let (serve, service, name) = (serve.clone(), service.clone(), name.to_string());
-    tokio::spawn(super::who::carried(async move {
+    crate::run::spawn(super::who::carried(async move {
         tokio::time::sleep(super::playlists::REFILL_WAIT).await;
         write_held(&service, &name, serve.held.take_ticket(&key, ticket)).await;
     }));

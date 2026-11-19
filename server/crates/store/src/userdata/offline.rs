@@ -357,13 +357,13 @@ impl UserData {
 
 /// What offline writes keep, pruned once an hour in the background (the first a minute after the start).
 pub fn prune_in_background(ud: Arc<UserData>) {
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let every = std::time::Duration::from_secs(3600);
         let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + std::time::Duration::from_secs(60), every);
         loop {
             tick.tick().await;
             let ud = ud.clone();
-            match tokio::task::spawn_blocking(move || ud.forget_old_offline(now())).await {
+            match crate::run::spawn_blocking(move || ud.forget_old_offline(now())).await {
                 Ok(Ok(n)) if n > 0 => tracing::debug!("offline writes: {n} kept rows past their time forgotten"),
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => tracing::warn!("offline writes: what is kept could not be pruned: {e:#}"),

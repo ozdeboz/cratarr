@@ -233,7 +233,7 @@ impl Snapcast {
         let listener = Arc::new(Listener::default());
         self.listeners.lock().unwrap_or_else(|p| p.into_inner()).insert(name.clone(), listener.clone());
         let lag = i64::from(self.buffer_ms.saturating_sub(delay_ms)) * 1000;
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let _listed = Listed { me: me.clone(), name, listener: listener.clone() };
             let mut out = stream.out.subscribe();
             let Some(f) = format_of(&stream, &mut out, &tx).await else { return };
@@ -315,7 +315,7 @@ impl Snapcast {
     pub fn frames(self: &Arc<Self>, leader: &str, name: &str, delay_ms: u32) -> mpsc::Receiver<Result<axum::body::Bytes, std::io::Error>> {
         let (tx, rx) = mpsc::channel(64);
         let (me, stream, name, leader) = (self.clone(), self.stream(leader), name.to_string(), leader.to_string());
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             let mut out = stream.out.subscribe();
             let mut muted = stream.muted.subscribe();
             let Some(f) = format_of(&stream, &mut out, &tx).await else { return };

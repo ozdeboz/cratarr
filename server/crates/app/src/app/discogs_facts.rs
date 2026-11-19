@@ -141,7 +141,7 @@ fn label_names(labels: &[super::discogs::Label]) -> Vec<String> {
 /// its artist and name).
 pub async fn album(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Option<AlbumFacts>> {
     let (s, a) = (served.clone(), album.to_string());
-    let (subject, kept, names) = tokio::task::spawn_blocking(move || -> Result<_> {
+    let (subject, kept, names) = crate::run::spawn_blocking(move || -> Result<_> {
         let subject = album_subject(&a);
         Ok((subject.clone(), s.userdata.discogs_facts(&subject)?, s.library.album_names(&a)?))
     })
@@ -169,7 +169,7 @@ pub async fn album(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Opt
         .collect();
     let (s, json, a, kept) = (served.clone(), facts.as_ref().map(serde_json::to_string).transpose()?, album.to_string(), facts.clone());
     let labels = musicbrainz.as_ref().map(serde_json::to_string).transpose()?;
-    tokio::task::spawn_blocking(move || -> Result<()> {
+    crate::run::spawn_blocking(move || -> Result<()> {
         // The release's labels at MusicBrainz, kept beside its facts (F9), where MusicBrainz answered.
         if let Some(labels) = &labels {
             s.userdata.set_discogs_facts(&musicbrainz_subject(&a), Some(labels), now)?;
@@ -190,14 +190,14 @@ pub async fn album(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Opt
 pub async fn artist(served: &Arc<crate::serve::Serve>, name: &str, mbid: Option<&str>) -> Result<Option<ArtistFacts>> {
     let subject = format!("artist:{}", super::words::key(name));
     let (ud, key) = (served.userdata.clone(), subject.clone());
-    let kept = tokio::task::spawn_blocking(move || ud.discogs_facts(&key)).await??;
+    let kept = crate::run::spawn_blocking(move || ud.discogs_facts(&key)).await??;
     let now = super::moment::now_secs();
     if !due(kept.as_ref(), now) {
         return Ok(parse(kept));
     }
     let facts = super::discogs::artist_facts(mbid.filter(|m| super::discogs::is_mbid(m)), name).await?;
     let (ud, json) = (served.userdata.clone(), facts.as_ref().map(serde_json::to_string).transpose()?);
-    tokio::task::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), now)).await??;
+    crate::run::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), now)).await??;
     Ok(facts)
 }
 
@@ -205,14 +205,14 @@ pub async fn artist(served: &Arc<crate::serve::Serve>, name: &str, mbid: Option<
 pub async fn release_group(served: &Arc<crate::serve::Serve>, group: &str) -> Result<Option<AlbumFacts>> {
     let subject = format!("rg:{group}");
     let (ud, key) = (served.userdata.clone(), subject.clone());
-    let kept = tokio::task::spawn_blocking(move || ud.discogs_facts(&key)).await??;
+    let kept = crate::run::spawn_blocking(move || ud.discogs_facts(&key)).await??;
     let now = super::moment::now_secs();
     if !due(kept.as_ref(), now) {
         return Ok(parse(kept));
     }
     let facts = super::discogs::release_group_facts(group).await?;
     let (ud, json) = (served.userdata.clone(), facts.as_ref().map(serde_json::to_string).transpose()?);
-    tokio::task::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), now)).await??;
+    crate::run::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), now)).await??;
     Ok(facts)
 }
 
@@ -223,9 +223,9 @@ pub fn fill(served: Arc<crate::serve::Serve>, albums: Vec<String>) {
     if albums.is_empty() || RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let s = served.clone();
-        let todo = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        let todo = crate::run::spawn_blocking(move || -> Result<Vec<String>> {
             let now = super::moment::now_secs();
             let mut out = Vec::new();
             for a in albums {

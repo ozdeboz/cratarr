@@ -158,7 +158,7 @@ impl SettingsService {
             return Ok(albums.clone());
         }
         let c = self.lib.catalogue();
-        let albums = tokio::task::spawn_blocking(move || -> Result<Vec<crate::naming::Album>> {
+        let albums = crate::run::spawn_blocking(move || -> Result<Vec<crate::naming::Album>> {
             use crate::naming::{Album, Tags, Track};
             let mut albums: Vec<Album> = Vec::new();
             for (rel, tags) in c.folder_tags(0, &crate::naming::TAGS)? {
@@ -193,7 +193,7 @@ impl SettingsService {
             return;
         }
         let a = albums.clone();
-        if let Ok(found) = tokio::task::spawn_blocking(move || crate::naming::infer(&a)).await {
+        if let Ok(found) = crate::run::spawn_blocking(move || crate::naming::infer(&a)).await {
             tracing::info!(
                 "naming: Music follows {} ({} of {} folders)",
                 found.template,
@@ -216,7 +216,7 @@ impl SettingsService {
             self.infer_naming().await;
         }
         let template = draft.unwrap_or_else(|| self.lib.template());
-        let view = tokio::task::spawn_blocking(move || {
+        let view = crate::run::spawn_blocking(move || {
             let measured = crate::naming::check(&template, &albums);
             NamingView {
                 template: template.to_string(),
@@ -292,7 +292,7 @@ impl SettingsService {
         match placed {
             Ok(p) => {
                 let (files, own) = (self.files.clone(), cfg.own_music());
-                view.server_libraries = tokio::task::spawn_blocking(move || {
+                view.server_libraries = crate::run::spawn_blocking(move || {
                     let mut libs = p.libraries;
                     // Own music is no setting of a library: its folder's (0101 point 9).
                     libs.retain(|l| own.is_none() || std::path::Path::new(&l.id).parent() != own.as_deref());
@@ -355,7 +355,7 @@ impl SettingsService {
             trash_days: self.incoming.trash_days(),
             catalogue: {
                 let c = self.lib.catalogue();
-                tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok)
+                crate::run::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok)
             },
             naming: self.lib.templates().0.map(|t| t.to_string()),
             palette: &crate::settings::PALETTE,
@@ -471,7 +471,7 @@ impl SettingsService {
             trash_days,
             naming: naming.as_ref().map(|t| t.to_string()),
         };
-        tokio::task::spawn_blocking(move || settings::save(&path, &to_save))
+        crate::run::spawn_blocking(move || settings::save(&path, &to_save))
             .await
             .map_err(|e| anyhow::anyhow!("saving settings: {e}"))??;
         self.lib.set_tag_rules(tag_rules);

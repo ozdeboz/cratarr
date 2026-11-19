@@ -201,7 +201,7 @@ where
     let task = tasks().of(account).into_iter().find(|t| t.id == handle.id()).ok_or("The task went missing.")?;
     let fut = work(handle.clone());
     // As the account that asked (a playlist an import makes is its own).
-    tokio::spawn(crate::serve::who::carried(async move {
+    crate::run::spawn(crate::serve::who::carried(async move {
         let result = fut.await;
         match Arc::try_unwrap(handle) {
             Ok(h) => h.finish(result),

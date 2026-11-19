@@ -153,7 +153,7 @@ pub async fn preview(serve: &Arc<crate::serve::Serve>, account: &str, user: &str
     spool.finish();
     progress("Matching", 0, None);
     let (serve, account) = (serve.clone(), account.to_string());
-    tokio::task::spawn_blocking(move || -> Result<Tally> {
+    crate::run::spawn_blocking(move || -> Result<Tally> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
         into_log(&serve, &songs, &account, &listens, true)
     })
@@ -180,7 +180,7 @@ pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str,
     }
     progress("Matching", 0, None);
     let (serve, account) = (serve.clone(), account.to_string());
-    let tally = tokio::task::spawn_blocking(move || -> Result<Tally> {
+    let tally = crate::run::spawn_blocking(move || -> Result<Tally> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
         into_log(&serve, &songs, &account, &listens, false)
     })

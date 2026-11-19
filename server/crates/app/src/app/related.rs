@@ -215,7 +215,7 @@ pub fn kept(serve: &crate::serve::Serve, mbid: &str, now: i64) -> Result<(Option
 /// look of the same artist runs, what is kept (possibly nothing).
 pub async fn kept_or_look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Result<Found> {
     let (s, key) = (serve.clone(), mbid.to_string());
-    let (found, due) = tokio::task::spawn_blocking(move || kept(&s, &key, super::moment::now_secs())).await??;
+    let (found, due) = crate::run::spawn_blocking(move || kept(&s, &key, super::moment::now_secs())).await??;
     if !due || !begins(mbid) {
         // A1.2.3: marked as the library is now.
         let mut found = found.unwrap_or_default();
@@ -231,7 +231,7 @@ pub fn start(serve: Arc<crate::serve::Serve>, name: String, mbid: String, lists:
     if !begins(&mbid) {
         return;
     }
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let _ends = Ends(mbid.clone());
         if let Err(e) = looked(&serve, &name, &mbid, lists.as_ref()).await {
             tracing::info!("related artists of {name}: {e:#}");
@@ -257,7 +257,7 @@ async fn looked(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str, lists:
     if heard {
         let (ud, key, json) = (serve.userdata.clone(), mbid.to_string(), serde_json::to_string(&found)?);
         let at = found.at;
-        tokio::task::spawn_blocking(move || ud.set_related_artists(&key, at, &json)).await??;
+        crate::run::spawn_blocking(move || ud.set_related_artists(&key, at, &json)).await??;
     }
     Ok(found)
 }
@@ -277,7 +277,7 @@ pub struct Answer {
 
 pub async fn answer(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str, now: i64, lists: Arc<dyn Lists>) -> Result<Answer> {
     let (s, key) = (serve.clone(), mbid.to_string());
-    let (found, due) = tokio::task::spawn_blocking(move || kept(&s, &key, now)).await??;
+    let (found, due) = crate::run::spawn_blocking(move || kept(&s, &key, now)).await??;
     if due {
         start(serve.clone(), name.to_string(), mbid.to_string(), lists);
     }
@@ -310,7 +310,7 @@ fn said_now(mbid: &str, now: i64) -> (bool, Option<&'static str>, Option<Vec<sup
 /// gained since is marked at once.
 async fn marked(serve: &Arc<crate::serve::Serve>, mut artists: Vec<Related>) -> Result<Vec<Related>> {
     let cat = serve.catalogue().clone();
-    tokio::task::spawn_blocking(move || -> Result<Vec<Related>> {
+    crate::run::spawn_blocking(move || -> Result<Vec<Related>> {
         for r in artists.iter_mut() {
             r.id = cat.library_artist_of(r.mbid.as_deref(), &r.name)?.map(crate::serve::ids::artist);
         }
@@ -445,7 +445,7 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str, lists: &
             }
             if !persons.is_empty() {
                 let ud = serve.userdata.clone();
-                if let Err(e) = tokio::task::spawn_blocking(move || ud.add_persons(&persons)).await.map_err(anyhow::Error::from).and_then(|r| r) {
+                if let Err(e) = crate::run::spawn_blocking(move || ud.add_persons(&persons)).await.map_err(anyhow::Error::from).and_then(|r| r) {
                     tracing::info!("related artists of {name}: who is who not kept: {e:#}");
                 }
             }

@@ -204,7 +204,7 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
 /// The Settings row's and Health's view: whether it is on and how many records' files differ.
 pub async fn view() -> Result<View> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let on = is_on(&served);
         let differ = if on { proposal(&served, None)?.records.len() } else { 0 };
         Ok(View { on, differ })
@@ -215,7 +215,7 @@ pub async fn view() -> Result<View> {
 /// The review sheet: every record whose files differ (only `albums` where given).
 pub async fn plan(albums: Option<Vec<String>>) -> Result<file_runs::PlanView> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let p = tokio::task::spawn_blocking(move || proposal(&served, albums.as_deref())).await??;
+    let p = crate::run::spawn_blocking(move || proposal(&served, albums.as_deref())).await??;
     Ok(file_runs::view(&p.kind, &p.title, &p.records, &p.files, false))
 }
 
@@ -225,7 +225,7 @@ pub async fn apply(app: &Arc<super::App>, albums: Vec<String>, stamps: Option<Ha
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
     anyhow::ensure!(!file_runs::busy(&app.journal, KIND), "Already writing");
-    let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
+    let p = crate::run::spawn_blocking(move || -> Result<Proposal> {
         anyhow::ensure!(is_on(&served), "Writing into files is switched off");
         Ok(file_runs::ticked(proposal(&served, Some(&albums))?, &albums, stamps.as_ref()))
     })
@@ -250,7 +250,7 @@ pub fn tell(source: &str, albums: &mut [crate::source::Album]) {
     if differ.as_ref().is_none_or(|(at, _)| *at != built) {
         // Counted again for the next answer, not this one.
         let s = served.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::run::spawn_blocking(move || {
             if let Err(e) = proposal(&s, None) {
                 tracing::debug!(target: "library", reason = %format!("{e:#}"), "records whose files differ not counted");
             }

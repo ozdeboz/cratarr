@@ -50,6 +50,8 @@ pub fn acting_as_blocking<R>(who: Option<Who>, f: impl FnOnce() -> R) -> R {
 /// `f` as the running request's account, for a task of its own that works for the request (a live channel's).
 pub fn carried<F: Future>(f: F) -> impl Future<Output = F::Output> {
     let who = current();
+    // Boxed: the future it carries is large (48 KB, lane 3's b8), and each task would hold it inline (decision 1).
+    let f = Box::pin(f);
     async move {
         match who {
             Some(w) => acting_as(w, f).await,
@@ -67,8 +69,8 @@ mod tests {
         let ann = Who { user: "ann".into(), admin: false, scope: Scope::Full, home: true };
         assert_eq!(current(), None);
         let (inside, spawned, carried) = acting_as(ann.clone(), async {
-            let spawned = tokio::spawn(async { current() }).await.unwrap();
-            let carried = tokio::spawn(super::carried(async { current() })).await.unwrap();
+            let spawned = crate::run::spawn(async { current() }).await.unwrap();
+            let carried = crate::run::spawn(super::carried(async { current() })).await.unwrap();
             (current(), spawned, carried)
         })
         .await;
@@ -81,7 +83,7 @@ mod tests {
     async fn work_handed_to_a_thread_of_its_own_is_for_the_account_it_is_given() {
         let bo = Who { user: "bo".into(), admin: false, scope: Scope::Control, home: false };
         let given = Some(bo.clone());
-        let (on_it, without) = tokio::task::spawn_blocking(move || (acting_as_blocking(given, current), acting_as_blocking(None, current))).await.unwrap();
+        let (on_it, without) = crate::run::spawn_blocking(move || (acting_as_blocking(given, current), acting_as_blocking(None, current))).await.unwrap();
         assert_eq!(on_it, Some(bo));
         assert_eq!(without, None);
     }

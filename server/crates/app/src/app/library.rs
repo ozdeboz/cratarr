@@ -417,7 +417,7 @@ impl Library {
         // from the one that failed. Its credits part makes the albums as the library's builds will (the kinds, the tag rules).
         if !catalogue.ids_lost() {
             let (cat, ud, rules) = (catalogue.clone(), playlists_db.clone(), tag_rules.clone());
-            tokio::task::spawn_blocking(move || super::step_017::run(&cat, &ud, &kinds, &rules)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
+            crate::run::spawn_blocking(move || super::step_017::run(&cat, &ud, &kinds, &rules)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
         }
         follow_paths(&catalogue, &playlists_db).context("following the libraries' paths")?;
         if !catalogue.ids_lost() {
@@ -678,7 +678,7 @@ impl Library {
         if let Some(serve) = crate::serve::instance() {
             let others: Vec<String> = serve.users.names().into_iter().filter(|n| n != account).collect();
             let db = self.playlists_db.clone();
-            tokio::task::spawn_blocking(move || db.switch_library_off(&others, std::slice::from_ref(&key))).await??;
+            crate::run::spawn_blocking(move || db.switch_library_off(&others, std::slice::from_ref(&key))).await??;
         }
         Ok(Some(id))
     }
@@ -758,9 +758,9 @@ impl Library {
             tracing::info!("music folder {:?}, incoming folders {:?}", folders.music, folders.incoming);
             let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&folders));
             let lines_were = lines_folder(&self.catalogue, &old);
-            tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            crate::run::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
             let (c, db) = (self.catalogue.clone(), self.playlists_db.clone());
-            tokio::task::spawn_blocking(move || follow_paths(&c, &db)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            crate::run::spawn_blocking(move || follow_paths(&c, &db)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
             let lines_from = lines_folder(&self.catalogue, &folders);
             let store = if lines_from != lines_were {
                 Some(music_store(&self.playlists_db, &self.catalogue, self.data_dir.as_deref(), lines_from.as_deref()).await)

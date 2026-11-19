@@ -127,7 +127,7 @@ impl PlaylistService {
         let _one = ONE_AT_A_TIME.lock().await;
         let ids: Vec<String> = ops.iter().map(|o| o.op_id().to_string()).collect();
         let (ud, who) = (serve.userdata.clone(), me.clone());
-        let applied = tokio::task::spawn_blocking(move || ud.ops_applied(&who, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let applied = crate::run::spawn_blocking(move || ud.ops_applied(&who, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         // Read, merged and written while the playlist is as read; changed meanwhile (another edit), read again.
         let mut tries = 0;
         let entries = loop {
@@ -184,7 +184,7 @@ impl PlaylistService {
         };
         let (entries, refused) = entries;
         let ud = serve.userdata.clone();
-        let rev = tokio::task::spawn_blocking(move || ud.change_rev()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let rev = crate::run::spawn_blocking(move || ud.change_rev()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let source = self.rows_source(want);
         let rows = self.rows_of(entries.lines(), &source).await?;
         let entries = entries

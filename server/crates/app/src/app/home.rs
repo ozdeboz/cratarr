@@ -111,7 +111,7 @@ fn now() -> i64 {
 async fn coverless(served: Option<&crate::serve::Serve>) -> HashSet<String> {
     let Some(served) = served else { return HashSet::new() };
     let lib = served.library.clone();
-    tokio::task::spawn_blocking(move || lib.coverless()).await.ok().and_then(Result::ok).unwrap_or_default()
+    crate::run::spawn_blocking(move || lib.coverless()).await.ok().and_then(Result::ok).unwrap_or_default()
 }
 
 /// New for you's albums (`picks`, by id) from `albums`, in the picks' order; one `albums` lacks is left out.
@@ -243,7 +243,7 @@ impl App {
         let late: Vec<source::Album> = match (&self.served, unlisted.is_empty()) {
             (Some(served), false) => {
                 let lib = served.library.clone();
-                let found = tokio::task::spawn_blocking(move || lib.albums_by_id(&unlisted)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+                let found = crate::run::spawn_blocking(move || lib.albums_by_id(&unlisted)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
                 found.into_iter().map(crate::source::cratarr::card).collect()
             }
             _ => Vec::new(),
@@ -305,7 +305,7 @@ impl App {
             let found = match self.served.clone() {
                 Some(served) => {
                     let lib = served.library.clone();
-                    tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                    crate::run::spawn_blocking(move || -> anyhow::Result<_> {
                         let albums_of = lib.albums_of(&ids)?;
                         let album_ids: Vec<String> = albums_of.values().cloned().collect::<HashSet<_>>().into_iter().collect();
                         let albums: HashMap<String, crate::serve::api::Album> = lib.albums_by_id(&album_ids)?.into_iter().map(|a| (a.id.clone(), a)).collect();

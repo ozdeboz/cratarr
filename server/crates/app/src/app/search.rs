@@ -192,7 +192,7 @@ fn word_hits<'a>(index: &'a [(&'static str, String, usize)], kind: &str, w: &[St
 pub async fn genre_aliases(app: &super::App) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
     let Some(served) = app.served.clone() else { return Ok(BTreeMap::new()) };
     let cat = app.library.catalogue();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<BTreeMap<String, Vec<String>>> {
         let mut genres: Vec<String> = served.library.genres()?.into_iter().map(|(g, _, _)| g).collect();
         match super::words::search_index(&served, &cat, &std::collections::HashSet::new()) {
             Ok(index) => genres.extend(index.iter().filter(|(kind, ..)| *kind == "genre").map(|(_, g, _)| g.clone())),
@@ -215,7 +215,7 @@ fn matched(h: &crate::serve::read::Hit) -> Vec<Matched> {
 async fn found_lines(served: Option<Arc<crate::serve::Serve>>, w: &[String]) -> anyhow::Result<HashMap<String, Entry>> {
     let Some(served) = served else { return Ok(HashMap::new()) };
     let words = w.to_vec();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<HashMap<String, Entry>> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<HashMap<String, Entry>> {
         let cat = served.catalogue();
         Ok(served
             .library
@@ -579,7 +579,7 @@ async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::dis
     if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone() {
         if at.elapsed() >= MISSING_KEEP && !MAKING.swap(true, Ordering::AcqRel) {
             let cat = app.library.catalogue();
-            tokio::spawn(async move {
+            crate::run::spawn(async move {
                 match crate::app::discover::all_missing(cat).await {
                     Ok((m, _)) => *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), Arc::new(m))),
                     Err(e) => tracing::debug!("search: the missing albums not made again: {e:#}"),
@@ -607,7 +607,7 @@ async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<M
         let making = MAKING.get_or_init(Default::default);
         if at.elapsed() >= CRATES_KEEP && making.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone()) {
             let (playlists, key) = (app.playlists.clone(), account.clone());
-            tokio::spawn(crate::serve::who::carried(async move {
+            crate::run::spawn(crate::serve::who::carried(async move {
                 match playlists.crate_members(&key.1).await {
                     Ok(m) => {
                         kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), (Instant::now(), Arc::new(m)));
@@ -678,7 +678,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     // decision 0086: works reachable) the works.
     let classical = match app.served.clone() {
         Some(s) if ["album", "artist", "track", "genre", "work"].iter().any(|k| wants(k)) => {
-            tokio::task::spawn_blocking(move || super::classical::index(&s)).await?.inspect_err(|e| tracing::debug!("search: Classical not read: {e:#}")).ok()
+            crate::run::spawn_blocking(move || super::classical::index(&s)).await?.inspect_err(|e| tracing::debug!("search: Classical not read: {e:#}")).ok()
         }
         _ => None,
     };
@@ -692,7 +692,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         && let Some(served) = app.served.clone()
     {
         let (lib, words_) = (served.library.clone(), w.clone());
-        let found = tokio::task::spawn_blocking(move || lib.find(&words_, reach)).await??;
+        let found = crate::run::spawn_blocking(move || lib.find(&words_, reach)).await??;
         let t = found.totals;
         totals.extend([("album", t.albums), ("artist", t.artists), ("track", t.tracks), ("genre", t.genres)]);
         let n = found.albums.len();
@@ -840,7 +840,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     {
         let (s, cat) = (served.clone(), app.library.catalogue());
         let off: std::collections::HashSet<i64> = app.library.folders_off(without).into_iter().collect();
-        match tokio::task::spawn_blocking(move || super::words::search_index(&s, &cat, &off)).await? {
+        match crate::run::spawn_blocking(move || super::words::search_index(&s, &cat, &off)).await? {
             Ok(index) => {
                 for kind in super::words::KINDS.into_iter().chain(["label"]).filter(|k| wants(k)) {
                     let hits = word_hits(&index, kind, &w);
@@ -956,7 +956,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             && let Some(account) = served.current_user()
         {
             let s = served.clone();
-            let (albums, artists, everywhere) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let (albums, artists, everywhere) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
                 let (albums, artists) = crate::app::discover::exclusions(&s, &account)?;
                 Ok((albums, artists, s.userdata.excluded_artist_list(&account)?))
             })
@@ -970,7 +970,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             let marks = super::requests::marks(app, &served).await.ok();
             if wants("requested") {
                 let (s, a) = (served.clone(), account.clone());
-                let open: Vec<crate::userdata::Request> = tokio::task::spawn_blocking(move || s.userdata.requests(Some(&a), None, 1000))
+                let open: Vec<crate::userdata::Request> = crate::run::spawn_blocking(move || s.userdata.requests(Some(&a), None, 1000))
                     .await??
                     .into_iter()
                     .filter(|r| r.status == super::requests::PENDING || r.status == super::requests::APPROVED)
@@ -987,7 +987,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             }
             if wants("spotify") {
                 let a = account.clone();
-                let albums = tokio::task::spawn_blocking(move || super::spotify::albums(&a, None, None)).await?.unwrap_or_default();
+                let albums = crate::run::spawn_blocking(move || super::spotify::albums(&a, None, None)).await?.unwrap_or_default();
                 let albums: Vec<_> = albums.into_iter().filter(|x| x.status != super::spotify::marks::IN).collect();
                 let n = albums.len();
                 let items = albums
@@ -1003,7 +1003,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             }
             if wants("suggested") {
                 let (s, a) = (served.clone(), account.clone());
-                let found = tokio::task::spawn_blocking(move || crate::app::discover::kept(&s, &a)).await?.ok().flatten();
+                let found = crate::run::spawn_blocking(move || crate::app::discover::kept(&s, &a)).await?.ok().flatten();
                 let albums = found.map(|f| f.albums).unwrap_or_default();
                 let n = albums.len();
                 let items = albums
@@ -1027,7 +1027,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         let ids: Vec<i64> = artists.iter().filter_map(|i| i.id.as_deref().and_then(crate::serve::ids::artist_number)).collect();
         let cat = app.library.catalogue();
         if !ids.is_empty()
-            && let Ok(Ok(numbers)) = tokio::task::spawn_blocking(move || cat.artist_numbers(&ids)).await
+            && let Ok(Ok(numbers)) = crate::run::spawn_blocking(move || cat.artist_numbers(&ids)).await
         {
             for i in artists.iter_mut() {
                 i.number = i.id.as_deref().and_then(crate::serve::ids::artist_number).and_then(|a| numbers.get(&a).copied());

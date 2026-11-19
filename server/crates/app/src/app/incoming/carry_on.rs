@@ -84,7 +84,7 @@ impl IncomingService {
             let Some(at) = order.iter().position(|t| *t == after) else { continue };
             let who = listening_on(p.player.as_deref());
             let (cat, heard, asked, item, files) = (c.clone(), who.clone(), source.clone(), p.track.id.clone(), leaving.to_vec());
-            if !tokio::task::spawn_blocking(move || heard.hears_one_of(&cat, &asked, &item, &files)).await.unwrap_or(true) {
+            if !crate::run::spawn_blocking(move || heard.hears_one_of(&cat, &asked, &item, &files)).await.unwrap_or(true) {
                 continue;
             }
             let progress = p.progress.as_ref();
@@ -137,7 +137,7 @@ pub(super) fn carry_on(lib: Arc<Library>, p: Playing, event: &Event) {
         Event::AlbumReplacedFromCopy { title, .. } => (title.clone(), super::replace::moved_pairs(event, false)),
         Event::AlbumRejected { .. } | Event::AlbumCopied { .. } => (String::new(), Vec::new()),
     };
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         follow(&lib, &p).await;
         tell_moved(&lib, &title, &moved, Told::Gone).await;
     });

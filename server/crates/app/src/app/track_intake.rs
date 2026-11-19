@@ -294,7 +294,7 @@ fn run() {
     if !start {
         return;
     }
-    tokio::spawn(async {
+    crate::run::spawn(async {
         loop {
             let next = queue(|q| {
                 let n = next_of(&q.items, now());

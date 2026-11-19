@@ -96,7 +96,7 @@ pub async fn serve_file(path: &Path, headers: &HeaderMap, download: bool) -> Res
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         let mut left = count;
         let mut buf = vec![0u8; PIECE];
         while left > 0 {

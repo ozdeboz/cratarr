@@ -370,7 +370,7 @@ impl Directory {
     async fn remember(&self, name: &str, password: &str, now: i64) {
         let Ok(_one) = self.hashing.acquire().await else { return };
         let password = password.to_string();
-        let Ok(Ok(hash)) = tokio::task::spawn_blocking(move || hash(&password)).await else { return };
+        let Ok(Ok(hash)) = crate::run::spawn_blocking(move || hash(&password)).await else { return };
         self.verifiers.lock().unwrap_or_else(|p| p.into_inner()).insert(key(name), Verifier { name: name.to_string(), hash, at: now });
         self.save_verifiers();
     }
@@ -391,7 +391,7 @@ impl Directory {
         }
         let _one = self.hashing.acquire().await.ok()?;
         let (hash, password) = (v.hash, password.to_string());
-        tokio::task::spawn_blocking(move || verify(&hash, &password)).await.unwrap_or(false).then_some(v.name)
+        crate::run::spawn_blocking(move || verify(&hash, &password)).await.unwrap_or(false).then_some(v.name)
     }
 
     fn save_verifiers(&self) {

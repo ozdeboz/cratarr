@@ -757,7 +757,7 @@ impl Serve {
     /// empty.
     pub fn follow(self: &Arc<Self>) {
         let me = self.clone();
-        tokio::spawn(async move {
+        crate::run::spawn(async move {
             // An empty library (the first start, or a new layout) is built at once: until then the built-in source
             // has no albums to show.
             if me.library.counts().map(|(songs, _, _)| songs > 0).unwrap_or(true) {
@@ -766,7 +766,7 @@ impl Serve {
             let mut first = true;
             loop {
                 let s = me.clone();
-                match tokio::task::spawn_blocking(move || s.refresh()).await {
+                match crate::run::spawn_blocking(move || s.refresh()).await {
                     Ok(Err(e)) => tracing::error!(target: "library", reason = %format!("{e:#}"), "library not built"),
                     Err(e) => tracing::error!(target: "library", reason = %e, "library build stopped"),
                     // Once ready after a start, the catalogue links the built-in source's ids without waiting for its
@@ -806,7 +806,7 @@ impl Serve {
     /// The file of a song, as it plays for `account`.
     pub async fn song_path(self: &Arc<Self>, song: &str, account: Option<&str>) -> Result<Option<PathBuf>> {
         let (me, id, who) = (self.clone(), song.to_string(), self.listener(account));
-        let found = tokio::task::spawn_blocking(move || me.file_for(&id, &who)).await??;
+        let found = crate::run::spawn_blocking(move || me.file_for(&id, &who)).await??;
         let folders = self.catalogue().folders();
         Ok(found.and_then(|(folder, rel)| folders.get(folder).map(|root| root.join(rel))))
     }
@@ -856,7 +856,7 @@ impl Serve {
     /// An album's cover image as it is: (content type, bytes); `None` when it has none.
     pub async fn cover_bytes(self: &Arc<Self>, album: &str) -> Result<Option<(String, Vec<u8>)>> {
         let (me, album) = (self.clone(), album.to_string());
-        Ok(tokio::task::spawn_blocking(move || me.art_of(&album)).await??.map(|(ct, bytes, _)| (ct, bytes)))
+        Ok(crate::run::spawn_blocking(move || me.art_of(&album)).await??.map(|(ct, bytes, _)| (ct, bytes)))
     }
 
     /// A record's cover made small for a device (`art::jpeg_at`), a decode at a time as `cover`'s are; none where it has none or
@@ -864,13 +864,13 @@ impl Serve {
     pub async fn small_cover(self: &Arc<Self>, album: &str, side: u32, quality: u8) -> Result<Option<Vec<u8>>> {
         let Some((_, bytes)) = self.cover_bytes(album).await? else { return Ok(None) };
         let _turn = self.resizing.acquire().await?;
-        Ok(tokio::task::spawn_blocking(move || art::jpeg_at(&bytes, side, quality)).await?.ok())
+        Ok(crate::run::spawn_blocking(move || art::jpeg_at(&bytes, side, quality)).await?.ok())
     }
 
     /// The cover of a record's copy in `library`, as `cover_bytes` has it; none where it has no copy there.
     pub async fn copy_cover_bytes(self: &Arc<Self>, album: &str, library: &str) -> Result<Option<(String, Vec<u8>)>> {
         let (me, album, library) = (self.clone(), album.to_string(), library.to_string());
-        tokio::task::spawn_blocking(move || {
+        crate::run::spawn_blocking(move || {
             let Some(folder) = me.folder_of_library(&library) else { return Ok(None) };
             let Some(copy) = me.library.copies_of(&album)?.into_iter().find(|c| c.folder == folder) else { return Ok(None) };
             let first = me.library.first_file_of(&album, folder, &copy.dir)?;
@@ -944,7 +944,7 @@ impl Serve {
             return Ok(Some(("image/jpeg".to_string(), small)));
         }
         let (me, album) = (self.clone(), album.to_string());
-        tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<u8>)>> {
+        crate::run::spawn_blocking(move || -> Result<Option<(String, Vec<u8>)>> {
             let Some((ct, bytes, _)) = me.art_of(&album)? else { return Ok(None) };
             // A picture the resizer cannot read, or one small enough already, goes as it is.
             Ok(Some(match art::resize(&bytes, size).ok().flatten() {
@@ -964,7 +964,7 @@ impl Serve {
     /// the current fingerprint may be kept for good; any other is to be checked again (Navidrome's rule, see `art`).
     pub async fn cover(self: &Arc<Self>, id: &str, size: Option<u32>, headers: &HeaderMap) -> Result<Response> {
         let (me, want) = (self.clone(), id.to_string());
-        let (album, asked) = tokio::task::spawn_blocking(move || me.art_album(&want)).await??;
+        let (album, asked) = crate::run::spawn_blocking(move || me.art_album(&want)).await??;
         let Some(album) = album else { return Ok(StatusCode::NOT_FOUND.into_response()) };
         // The library's word on its print: a 304 costs no read of the picture (finding 87).
         let print = self.cover_stamps().get(&album).cloned().unwrap_or_default();

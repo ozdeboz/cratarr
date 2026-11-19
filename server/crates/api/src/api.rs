@@ -429,7 +429,7 @@ fn route_of(method: &axum::http::Method, matched: Option<&str>, path: &str) -> S
 /// The diagnostics log (decision 0045), off the async threads; refused while it is not open.
 async fn with_log<T: Send + 'static>(f: impl FnOnce(&crate::diagnostics::Diagnostics) -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
     let Some(d) = crate::diagnostics::get() else { return Err(ToggleError::Refused("The diagnostics log is not open.".into()).into()) };
-    let done = tokio::task::spawn_blocking(move || f(&d)).await.map_err(anyhow::Error::from).and_then(|r| r);
+    let done = crate::run::spawn_blocking(move || f(&d)).await.map_err(anyhow::Error::from).and_then(|r| r);
     done.map_err(|e| ToggleError::Upstream(e).into())
 }
 
@@ -568,7 +568,7 @@ async fn health(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let n = app.playlists.count().await.map_err(ToggleError::from)?;
     let instance = ctx.served.as_ref().and_then(|s| s.sessions.instance_id().ok());
     let short = match ctx.served.clone() {
-        Some(s) => tokio::task::spawn_blocking(move || crate::app::room::short_on(&s, &crate::app::room::TheDisks)).await.unwrap_or(false),
+        Some(s) => crate::run::spawn_blocking(move || crate::app::room::short_on(&s, &crate::app::room::TheDisks)).await.unwrap_or(false),
         None => false,
     };
     Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance, "web": crate::web::page_build(), "short_of_space": short })))
@@ -612,7 +612,7 @@ async fn players_events(
     // settings; behind, every group's as it is now.
     let mut visuals = app.visuals.subscribe();
     let (out, rx) = tokio::sync::mpsc::channel::<(&'static str, String)>(8);
-    tokio::spawn(crate::serve::who::carried(async move {
+    crate::run::spawn(crate::serve::who::carried(async move {
         let mut sent = String::new();
         loop {
             // With the account's queue requests' version (decision 0079): a request of theirs answered, or one to them,
@@ -976,7 +976,7 @@ async fn cover(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Q
         && id.starts_with(crate::serve::ids::SONG)
     {
         let (s, song) = (served.clone(), id.clone());
-        let Some(album) = tokio::task::spawn_blocking(move || s.album_of_song(&song)).await.ok().flatten() else {
+        let Some(album) = crate::run::spawn_blocking(move || s.album_of_song(&song)).await.ok().flatten() else {
             return (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response();
         };
         let etag = format!("\"{}-{size}\"", served.cover_stamps().get(&album).map_or("", String::as_str));
@@ -1033,7 +1033,7 @@ fn turned_down(gain: Option<f64>, peak: Option<f64>) -> Option<f64> {
 /// the file that plays for them.
 async fn served_song(app: &App, who: &Listener, source: &str, id: &str) -> Option<crate::serve::api::Song> {
     let (cat, who, source, id) = (app.library.catalogue(), who.clone(), source.to_string(), id.to_string());
-    tokio::task::spawn_blocking(move || who.song(&cat, &source, &id)).await.ok().flatten()
+    crate::run::spawn_blocking(move || who.song(&cat, &source, &id)).await.ok().flatten()
 }
 
 /// A track's ReplayGain as Cratarr's library serves it (its analysis, else its file's tags), of the file that plays for
@@ -1056,7 +1056,7 @@ async fn track_info(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
 
 /// Classical's index (0.10), off the request's thread.
 async fn classical_index(served: Arc<crate::serve::Serve>) -> Result<Arc<crate::app::classical::Index>, ToggleError> {
-    tokio::task::spawn_blocking(move || crate::app::classical::index(&served))
+    crate::run::spawn_blocking(move || crate::app::classical::index(&served))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))
@@ -1073,7 +1073,7 @@ async fn classical_composers(ctx: Ctx, RawQuery(raw): RawQuery) -> Result<Json<V
     if off.is_empty() {
         return Ok(Json(ix.composers.clone()));
     }
-    let folders = tokio::task::spawn_blocking(move || served.library.album_folders()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?.map_err(ToggleError::from)?;
+    let folders = crate::run::spawn_blocking(move || served.library.album_folders()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?.map_err(ToggleError::from)?;
     let on = |album: &String| folders.get(album).is_none_or(|held| crate::crates::on_for(held, &off));
     let composers = ix
         .composers
@@ -1153,7 +1153,7 @@ async fn mark_classical(ctx: Ctx, Path((source, album)): Path<(String, String)>,
         Some(m) => Some(Mark::of(m).ok_or_else(|| ToggleError::BadSettings("A mark is classical or not.".into()))?),
     };
     let s = ctx.serve()?;
-    let (classical, kept) = tokio::task::spawn_blocking(move || -> anyhow::Result<(bool, Option<&'static str>)> {
+    let (classical, kept) = crate::run::spawn_blocking(move || -> anyhow::Result<(bool, Option<&'static str>)> {
         anyhow::ensure!(s.library.has_album(&album)?, "That record is not in the library.");
         s.userdata.set_classical_mark(&album, mark.map(Mark::as_str), crate::app::moment::now_secs())?;
         let ix = crate::app::classical::index(&s)?;
@@ -1202,7 +1202,7 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
         // By a sign-in, as a key acts for no one's own music.
         let mine = ctx.account().filter(|_| crate::serve::access::signed_in()).and_then(|a| ctx.app.library.own_folder(&a));
         let (s, albums) = (s.clone(), albums.clone());
-        let may = tokio::task::spawn_blocking(move || albums.iter().try_fold(true, |all, album| Ok::<bool, anyhow::Error>(all && may_change(&s, album, mine)?)))
+        let may = crate::run::spawn_blocking(move || albums.iter().try_fold(true, |all, album| Ok::<bool, anyhow::Error>(all && may_change(&s, album, mine)?)))
             .await
             .map_err(|e| ToggleError::Refused(format!("{e}")))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -1210,7 +1210,7 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
             return Err(ToggleError::Forbidden("This record is the administrators'.".into()).into());
         }
     }
-    let set = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
+    let set = crate::run::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
         for album in &albums {
             anyhow::ensure!(s.library.has_album(album)?, "That record is not in the library.");
         }
@@ -1248,7 +1248,7 @@ async fn reconnect_track(ctx: Ctx, Json(b): Json<Reconnect>) -> Result<Json<serd
     let (Some(goes), Some(stays)) = (crate::serve::ids::track_of(&b.track), crate::serve::ids::track_of(&b.to)) else {
         return Err(ToggleError::BadSettings("Name two tracks.".into()).into());
     };
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         cat.reconnect(goes, stays)?;
         serve.refresh()?;
         Ok(())
@@ -1289,7 +1289,7 @@ async fn albums(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<cr
 /// switched off): an ETag of when the analysis was made and of the file, asked again each time.
 async fn track_waveform(ctx: Ctx, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
     let (cat, who) = (ctx.app.library.catalogue(), ctx.listener());
-    let found = tokio::task::spawn_blocking(move || waveform_for(&cat, &who, &source, &id, headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()))).await.ok().flatten();
+    let found = crate::run::spawn_blocking(move || waveform_for(&cat, &who, &source, &id, headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()))).await.ok().flatten();
     let Some((etag, bins)) = found else { return StatusCode::NOT_FOUND.into_response() };
     let mut res = match bins {
         None => StatusCode::NOT_MODIFIED.into_response(),
@@ -1332,7 +1332,7 @@ pub(crate) fn waveform_for(cat: &crate::catalogue::Catalogue, who: &Listener, so
 async fn track_band_wave(ctx: Ctx, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
     let (cat, who) = (ctx.app.library.catalogue(), ctx.listener());
     let c = cat.clone();
-    let Some((folder, rel)) = tokio::task::spawn_blocking(move || who.place(&c, &source, &id)).await.ok().flatten() else {
+    let Some((folder, rel)) = crate::run::spawn_blocking(move || who.place(&c, &source, &id)).await.ok().flatten() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(wave) = crate::app::analysis_pass::band_wave(cat, folder, rel).await else {
@@ -1347,7 +1347,7 @@ async fn track_band_wave(ctx: Ctx, Path((source, id)): Path<(String, String)>, h
 async fn track_spectrum(ctx: Ctx, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
     let (cat, who) = (ctx.app.library.catalogue(), ctx.listener());
     let c = cat.clone();
-    let Some((folder, rel)) = tokio::task::spawn_blocking(move || who.place(&c, &source, &id)).await.ok().flatten() else {
+    let Some((folder, rel)) = crate::run::spawn_blocking(move || who.place(&c, &source, &id)).await.ok().flatten() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(spectrum) = crate::app::analysis_pass::spectrum(cat, folder, rel).await else {
@@ -1422,13 +1422,13 @@ async fn track_bands(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query
 async fn for_visuals(ctx: Ctx, source: String, id: String, headers: HeaderMap, bands: bool, stored: bool) -> Response {
     let (cat, who) = (ctx.app.library.catalogue(), ctx.listener());
     let c = cat.clone();
-    let file = tokio::task::spawn_blocking(move || who.place(&c, &source, &id)).await.ok().flatten();
+    let file = crate::run::spawn_blocking(move || who.place(&c, &source, &id)).await.ok().flatten();
     let Some((folder, rel)) = file else { return StatusCode::NOT_FOUND.into_response() };
     let named = file_stamp(folder, &rel);
     // Only what is kept: none is a 404, not a decode.
     if stored {
         let (c, r) = (cat.clone(), rel.clone());
-        let kept = tokio::task::spawn_blocking(move || crate::app::analysis_pass::kept(&c, folder, &r)).await.unwrap_or((None, None));
+        let kept = crate::run::spawn_blocking(move || crate::app::analysis_pass::kept(&c, folder, &r)).await.unwrap_or((None, None));
         let kept = if bands { kept.1.map(|s| s.0) } else { kept.0.map(|b| b.0) };
         if kept.is_none() {
             return StatusCode::NOT_FOUND.into_response();
@@ -1442,7 +1442,7 @@ async fn for_visuals(ctx: Ctx, source: String, id: String, headers: HeaderMap, b
     };
     let Some(bytes) = got else { return StatusCode::SERVICE_UNAVAILABLE.into_response() };
     let (stamp, final_beats) =
-        tokio::task::spawn_blocking(move || (cat.analysis_stamp(folder, &rel), cat.beats_are_beat_this(folder, &rel))).await.unwrap_or_default();
+        crate::run::spawn_blocking(move || (cat.analysis_stamp(folder, &rel), cat.beats_are_beat_this(folder, &rel))).await.unwrap_or_default();
     // The bands' form in theirs: a copy kept from another form never answers for this one; nor one from before Beat
     // this!'s beats (decision 0049, amended).
     let kind = if bands { format!("s{}", crate::analysis::signals::FORMAT) } else { "b".to_string() };
@@ -1483,7 +1483,7 @@ async fn analysis_import(
     let flush = |lines: Vec<Vec<u8>>, counts: ImportCounts| {
         let cat = cat.clone();
         async move {
-            tokio::task::spawn_blocking(move || {
+            crate::run::spawn_blocking(move || {
                 let mut counts = counts;
                 import_batch(&cat, folder, &lines, &mut counts).map(|_| counts)
             })
@@ -1526,7 +1526,7 @@ async fn track_details(ctx: Ctx, Path((source, id)): Path<(String, String)>, Que
     let cat = app.library.catalogue();
     // Whose plays these are: the listener's (read here, as the blocking work below has no request of its own).
     let listener = ctx.served.clone().and_then(|s| ctx.account().map(|u| (s, u)));
-    let read = tokio::task::spawn_blocking(move || -> Option<serde_json::Value> {
+    let read = crate::run::spawn_blocking(move || -> Option<serde_json::Value> {
         let track = cat.track_of_source(&source, &id)?;
         let (folder, rel) = who.place(&cat, &source, &id)?;
         let root = cat.folders().get(folder)?.clone();
@@ -1698,7 +1698,7 @@ fn seen_by_viewer(ctx: &Ctx, mut v: crate::app::AlbumView) -> crate::app::AlbumV
 /// What an id from before 0.16 is now (`Catalogue::named_now`).
 async fn moved_to(app: &Arc<App>, old: &str) -> Option<String> {
     let (catalogue, old) = (app.library.catalogue(), old.to_string());
-    tokio::task::spawn_blocking(move || catalogue.named_now(&old)).await.ok().flatten()
+    crate::run::spawn_blocking(move || catalogue.named_now(&old)).await.ok().flatten()
 }
 
 /// A Bandcamp album in the panel (decision 0071, the owner 2026-10-25: "I don't see why not"): its tracks as its page
@@ -1710,7 +1710,7 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
     let known = match ctx.served.clone().and_then(|s| ctx.account().map(|a| (s, a))) {
         Some((s, account)) => {
             let page = a.url.clone();
-            tokio::task::spawn_blocking(move || crate::app::discover::suggestion_on_bandcamp(&s, &account, &page)).await.ok().and_then(Result::ok).flatten()
+            crate::run::spawn_blocking(move || crate::app::discover::suggestion_on_bandcamp(&s, &account, &page)).await.ok().and_then(Result::ok).flatten()
         }
         None => None,
     };
@@ -1728,7 +1728,7 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
     let (record, release_group) = match ctx.served.clone() {
         Some(s) => {
             let page = a.url.clone();
-            tokio::task::spawn_blocking(move || {
+            crate::run::spawn_blocking(move || {
                 let record = s.catalogue().record_named_by(None, Some(&page)).ok().flatten();
                 let group = if record.is_none() { s.userdata.bandcamp_found_group(&page).ok().flatten() } else { None };
                 (record.map(crate::serve::ids::record), group)
@@ -1751,7 +1751,7 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
     };
     // Its label as About shows it (F9): a chip opening the one label of its name, where exactly one has it.
     let labels = match (ctx.served.clone(), a.label.clone()) {
-        (Some(s), Some(name)) => tokio::task::spawn_blocking(move || crate::app::labels::of_text(s.catalogue(), &name)).await.ok().and_then(Result::ok).unwrap_or_default(),
+        (Some(s), Some(name)) => crate::run::spawn_blocking(move || crate::app::labels::of_text(s.catalogue(), &name)).await.ok().and_then(Result::ok).unwrap_or_default(),
         _ => Vec::new(),
     };
     let more = crate::app::AlbumMore {
@@ -2161,7 +2161,7 @@ async fn export_prepare(ctx: Ctx, Json(e): Json<Export>) -> Result<Json<serde_js
     let app = ctx.app.clone();
     let o = e.options()?;
     let plan = e.plan(&app, &ctx.listener()).await?;
-    let name = tokio::task::spawn_blocking(move || crate::export::download(&plan, &o, |t| crate::export::kind_of(&t.path)).name().to_string())
+    let name = crate::run::spawn_blocking(move || crate::export::download(&plan, &o, |t| crate::export::kind_of(&t.path)).name().to_string())
         .await
         .map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     let token = crate::export::new_token();
@@ -2239,7 +2239,7 @@ async fn export_download(ctx: Ctx, axum::extract::RawQuery(q): axum::extract::Ra
 async fn export_response(app: &App, plan: crate::export::Plan, o: crate::export::Options) -> Result<Response, ApiError> {
     use crate::export::Download;
     let joined = |e: tokio::task::JoinError| ToggleError::Upstream(anyhow::anyhow!("{e}"));
-    let (plan, o, download) = tokio::task::spawn_blocking(move || {
+    let (plan, o, download) = crate::run::spawn_blocking(move || {
         let d = crate::export::download(&plan, &o, |t| crate::export::kind_of(&t.path));
         (plan, o, d)
     })
@@ -2254,7 +2254,7 @@ async fn export_response(app: &App, plan: crate::export::Plan, o: crate::export:
         Download::Text { name, body } => (download_headers(&name, Some(body.len() as u64)), body).into_response(),
         Download::Track { at, how, name } => {
             let (t, rt) = (plan.tracks[at].clone(), tokio::runtime::Handle::current());
-            match tokio::task::spawn_blocking(move || crate::export::send_track(&t, how, &work, &rt)).await.map_err(joined)? {
+            match crate::run::spawn_blocking(move || crate::export::send_track(&t, how, &work, &rt)).await.map_err(joined)? {
                 Ok((len, rx)) => {
                     (download_headers(&name, Some(len)), axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
                 }
@@ -3063,7 +3063,7 @@ async fn file(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Qu
     who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
     let source_id = (source.clone(), id.clone());
     let listener = who.clone();
-    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &listener, &source, &id)).await.ok().flatten();
+    let found = crate::run::spawn_blocking(move || crate::stream::locate(&cat, &listener, &source, &id)).await.ok().flatten();
     let Some((path, _, _)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
@@ -3145,7 +3145,7 @@ async fn offline_file(app: &App, who: &Listener, t: &TrackRefOf, form: OfflineAs
     }
     let (cat, listener) = (app.library.catalogue(), who.clone());
     let (source, id) = (t.source.clone(), t.id.clone());
-    let Some((path, kind, _)) = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &listener, &source, &id)).await.ok().flatten() else {
+    let Some((path, kind, _)) = crate::run::spawn_blocking(move || crate::stream::locate(&cat, &listener, &source, &id)).await.ok().flatten() else {
         return json!({ "source": t.source, "id": t.id, "offline": false, "error": "That track is not in the library." });
     };
     let opus = match form {
@@ -3231,7 +3231,7 @@ async fn offline_facts(ctx: Ctx, Json(b): Json<OfflineTracks>) -> Result<Json<se
     let form = b.form();
     let own: Vec<String> = b.tracks.iter().filter(|t| t.source == crate::source::cratarr::KIND.id).map(|t| t.id.clone()).collect();
     let (rows, stamps) = match ctx.served.clone() {
-        Some(served) => tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        Some(served) => crate::run::spawn_blocking(move || -> anyhow::Result<_> {
             let mut rows = served.library.track_rows_by_id(&own)?;
             if let Some(user) = served.current_user() {
                 crate::app::tracks::of_account(&served, &user, &mut rows)?;
@@ -3272,13 +3272,13 @@ async fn offline_facts(ctx: Ctx, Json(b): Json<OfflineTracks>) -> Result<Json<se
 async fn opus_copy(path: std::path::PathBuf, gain: Option<crate::serve::api::ReplayGain>) -> Option<Response> {
     let gains = gain.map_or((None, None), |g| (g.track_gain, g.album_gain));
     let probe = path.clone();
-    let lossless = tokio::task::spawn_blocking(move || crate::convert::Source::open(&probe).ok().flatten().is_some()).await.ok()?;
+    let lossless = crate::run::spawn_blocking(move || crate::convert::Source::open(&probe).ok().flatten().is_some()).await.ok()?;
     if !lossless {
         return None;
     }
     let permit = crate::opus_copy::COPIES.acquire().await.ok()?;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let failed = tx.clone();
         let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
         if let Err(e) = crate::opus_copy::copy(&path, out, gains) {
@@ -3340,7 +3340,7 @@ async fn stream(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): 
     }
     let (cat, mut who) = (app.library.catalogue(), ctx.listener());
     who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
-    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &who, &source, &id)).await.ok().flatten();
+    let found = crate::run::spawn_blocking(move || crate::stream::locate(&cat, &who, &source, &id)).await.ok().flatten();
     let Some((path, kind, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
@@ -3372,7 +3372,7 @@ async fn stream(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): 
     match kind {
         Kind::Flac => {
             let from = q.from_ms;
-            let opened = tokio::task::spawn_blocking(move || FlacToMp4::open(&path, from)).await;
+            let opened = crate::run::spawn_blocking(move || FlacToMp4::open(&path, from)).await;
             let mut flac = match opened {
                 Ok(Ok(f)) => f,
                 Ok(Err(e)) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": format!("{e:#}") }))).into_response(),
@@ -3384,7 +3384,7 @@ async fn stream(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): 
             if let Some(total) = info.total_samples {
                 headers.insert("x-total-samples", HeaderValue::from(total));
             }
-            tokio::task::spawn_blocking(move || {
+            crate::run::spawn_blocking(move || {
                 if tx.blocking_send(Ok(flac.init().into())).is_err() {
                     return;
                 }
@@ -3413,7 +3413,7 @@ async fn stream(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): 
             // connection); its LAME header frame comes first, as the page trims by it. Asked to start later
             // (`mp3_from`): at the frame near that moment, its time said, not after every byte before it.
             let (p, from) = (path.clone(), (q.mp3_from == Some(1) && q.from_ms > 0).then_some(q.from_ms));
-            let (skip, start) = tokio::task::spawn_blocking(move || {
+            let (skip, start) = crate::run::spawn_blocking(move || {
                 let skip = crate::analysis::after_id3(&p);
                 (skip, from.and_then(|ms| crate::stream::mp3_from(&p, skip, ms)))
             })
@@ -3423,7 +3423,7 @@ async fn stream(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): 
                 headers.insert("x-start-ms", HeaderValue::from(ms));
                 byte
             });
-            tokio::spawn(async move {
+            crate::run::spawn(async move {
                 use tokio::io::{AsyncReadExt, AsyncSeekExt};
                 let Ok(mut file) = tokio::fs::File::open(&path).await else { return };
                 if skip > 0 && file.seek(std::io::SeekFrom::Start(skip)).await.is_err() {
@@ -3488,7 +3488,7 @@ async fn stream_form(path: &std::path::Path, kind: Option<crate::stream::Kind>, 
     use crate::opus_copies::Form;
     use crate::stream::Kind;
     let p = path.to_path_buf();
-    let lossless = || async move { tokio::task::spawn_blocking(move || crate::convert::Source::open(&p).ok().flatten().is_some()).await.unwrap_or(false) };
+    let lossless = || async move { crate::run::spawn_blocking(move || crate::convert::Source::open(&p).ok().flatten().is_some()).await.unwrap_or(false) };
     let made = match wanted {
         Lossless::Original => None,
         Lossless::Opus => Some(Form::Opus { lossy_too: false }),
@@ -3531,7 +3531,7 @@ async fn whole_stream(app: &App, path: std::path::PathBuf, kind: Option<crate::s
 async fn lossless_as(path: std::path::PathBuf, from_ms: u64, mp3: bool) -> Option<Response> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(2);
     let (said, heard) = tokio::sync::oneshot::channel::<crate::stream_forms::Head>();
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let failed = tx.clone();
         let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
         let told = |h| {
@@ -3590,7 +3590,7 @@ async fn stream_rewind(ctx: Ctx, Path((source, id)): Path<(String, String)>, Que
     }
     let (cat, mut who) = (app.library.catalogue(), ctx.listener());
     who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
-    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &who, &source, &id)).await.ok().flatten();
+    let found = crate::run::spawn_blocking(move || crate::stream::locate(&cat, &who, &source, &id)).await.ok().flatten();
     let Some((path, _, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
@@ -3604,7 +3604,7 @@ async fn stream_rewind(ctx: Ctx, Path((source, id)): Path<(String, String)>, Que
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<axum::body::Bytes, std::io::Error>>();
     let (said, heard) = tokio::sync::oneshot::channel();
     let what2 = what.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("tape rewind: {}", path.display()));
         let what = what2;
@@ -3792,7 +3792,7 @@ async fn stream_wind(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query
     let (cat, mut who) = (app.library.catalogue(), ctx.listener());
     who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
     let listener = who.clone();
-    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &listener, &source, &id)).await.ok().flatten();
+    let found = crate::run::spawn_blocking(move || crate::stream::locate(&cat, &listener, &source, &id)).await.ok().flatten();
     let Some((path, _, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
@@ -3804,13 +3804,13 @@ async fn stream_wind(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query
     let joins: Vec<(std::path::PathBuf, Option<u64>)> = if through.is_empty() {
         Vec::new()
     } else {
-        tokio::task::spawn_blocking(move || crate::stream::locate_through(&cat, &who, &through)).await.unwrap_or_default()
+        crate::run::spawn_blocking(move || crate::stream::locate_through(&cat, &who, &through)).await.unwrap_or_default()
     };
     let joined = since();
     // The plan alone (0.9.13, `map=1`): where each moment of the stream stands in the queue's tracks, its speed and length;
     // read from the files' headers, nothing decoded.
     if q.map == Some(1) {
-        let plan = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let plan = crate::run::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
             let first = crate::analysis::Reading::open(&path)?;
             // The tracks in the way planned at the stream's rate (their own does not change the plan, `Wind::at_rate`).
             let mut tracks = vec![(first.rate(), first.channels(), duration_ms)];
@@ -3846,7 +3846,7 @@ async fn stream_wind(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
     let (said, heard) = tokio::sync::oneshot::channel();
     let what2 = what.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("wind: {}", path.display()));
         let sound = match crate::analysis::Reading::open(&path) {
@@ -3959,7 +3959,7 @@ async fn stream_wind(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query
 async fn opus_stream(path: std::path::PathBuf, from_ms: u64, lossy_too: bool) -> Option<Response> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(2);
     let (said, heard) = tokio::sync::oneshot::channel();
-    tokio::task::spawn_blocking(move || {
+    crate::run::spawn_blocking(move || {
         let failed = tx.clone();
         let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
         let told = |h| {
@@ -4213,7 +4213,7 @@ async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Qu
 async fn cover_stamps(ctx: Ctx) -> Json<serde_json::Value> {
     let app = ctx.app.clone();
     let Some(serve) = ctx.served.clone() else { return Json(json!({})) };
-    let stamps = tokio::task::spawn_blocking(move || serve.cover_stamps()).await.unwrap_or_default();
+    let stamps = crate::run::spawn_blocking(move || serve.cover_stamps()).await.unwrap_or_default();
     let mut out = serde_json::Map::new();
     for source in app.library.own_sources() {
         for (album, v) in stamps.iter() {
@@ -4483,7 +4483,7 @@ async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Json<serde_json:
             let (serve, account) = discoverer(&ctx)?;
             let t = token.clone();
             redo.push(
-                tokio::task::spawn_blocking(move || crate::app::discover::undo(&serve, &account, &t))
+                crate::run::spawn_blocking(move || crate::app::discover::undo(&serve, &account, &t))
                     .await
                     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
                     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?,
@@ -4642,7 +4642,7 @@ struct FolderAt {
 
 /// The folder browser (decision 0044): what Cratarr can see at a place, to add a folder.
 async fn browse_folders(Query(q): Query<FolderAt>) -> Response {
-    match tokio::task::spawn_blocking(move || crate::folders::browse(q.path.as_deref(), &crate::folders::roots())).await {
+    match crate::run::spawn_blocking(move || crate::folders::browse(q.path.as_deref(), &crate::folders::roots())).await {
         Ok(Ok(listing)) => Json(listing).into_response(),
         Ok(Err(why)) => (StatusCode::BAD_REQUEST, Json(json!({ "error": why }))).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -4653,7 +4653,7 @@ async fn browse_folders(Query(q): Query<FolderAt>) -> Response {
 /// (decision 0044): the browser's suggestions.
 async fn suggested_folders(State(app): State<Arc<App>>) -> Response {
     let chosen = app.library.chosen_folders();
-    match tokio::task::spawn_blocking(move || crate::source::cratarr::suggested_folders(&chosen)).await {
+    match crate::run::spawn_blocking(move || crate::source::cratarr::suggested_folders(&chosen)).await {
         Ok(found) => Json(json!({ "folders": found.iter().map(|p| p.display().to_string()).collect::<Vec<_>>() })).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -4665,7 +4665,7 @@ async fn folder_status(State(app): State<Arc<App>>, Query(q): Query<FolderAt>) -
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Which folder?" }))).into_response();
     };
     let cat = app.library.catalogue();
-    let looked = tokio::task::spawn_blocking(move || {
+    let looked = crate::run::spawn_blocking(move || {
         let roots = crate::folders::roots();
         // A folder that is gone is still told about (its row says so); one outside the mounts is not looked at.
         let there = crate::folders::inside(&path, &roots);
@@ -4686,7 +4686,7 @@ async fn folder_status(State(app): State<Arc<App>>, Query(q): Query<FolderAt>) -
 
 async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::catalogue::Status>, ApiError> {
     let c = app.library.catalogue();
-    let status = tokio::task::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    let status = crate::run::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(status.map_err(ToggleError::from)?))
 }
 
@@ -4695,7 +4695,7 @@ async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::cat
 /// goes by what one copy was known by, the form a link or a reference holds.
 async fn migration_moved(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
     let catalogue = app.library.catalogue();
-    let moved = tokio::task::spawn_blocking(move || catalogue.moved()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?.map_err(ToggleError::from)?;
+    let moved = crate::run::spawn_blocking(move || catalogue.moved()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?.map_err(ToggleError::from)?;
     let of = |prefix: &str| moved.ids.iter().filter(|(old, _)| old.starts_with(prefix)).collect::<std::collections::BTreeMap<_, _>>();
     use crate::serve::ids::{ALBUM, ARTIST, SONG};
     Ok(Json(json!({ "albums": of(ALBUM), "artists": of(ARTIST), "tracks": of(SONG) })))
@@ -4705,7 +4705,7 @@ async fn migration_moved(State(app): State<Arc<App>>) -> Result<Json<serde_json:
 /// each when it ran (epoch s) and what it found (its `tables`, its `unmatched`, its own fields). None ran: no parts.
 async fn migration_report(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
     let Some(serve) = app.served.clone() else { return Ok(Json(json!({ "parts": {} }))) };
-    let parts = tokio::task::spawn_blocking(move || serve.userdata.migration_report()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    let parts = crate::run::spawn_blocking(move || serve.userdata.migration_report()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     let parts: serde_json::Map<String, serde_json::Value> = parts
         .map_err(ToggleError::from)?
         .into_iter()
@@ -4722,14 +4722,14 @@ async fn migration_report(State(app): State<Arc<App>>) -> Result<Json<serde_json
 /// Lost track ids started afresh (`Library::fresh_track_ids`): where the new ids begin and what still names old tracks.
 async fn catalogue_fresh_ids(State(app): State<Arc<App>>) -> Result<Json<crate::app::FreshIds>, ApiError> {
     let lib = app.library.clone();
-    let fresh = tokio::task::spawn_blocking(move || lib.fresh_track_ids()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    let fresh = crate::run::spawn_blocking(move || lib.fresh_track_ids()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(fresh.map_err(ToggleError::from)?))
 }
 
 /// The files with a problem: 500 of each kind at most (`Catalogue::problems`), so each kind's Health panel lists its own.
 async fn catalogue_problems(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::catalogue::Problem>>, ApiError> {
     let c = app.library.catalogue();
-    let list = tokio::task::spawn_blocking(move || c.problems(500)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    let list = crate::run::spawn_blocking(move || c.problems(500)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(list.map_err(ToggleError::from)?))
 }
 
@@ -4879,7 +4879,7 @@ async fn ids_moved(State(app): State<Arc<App>>, Json(b): Json<MovedBody>) -> Res
         return Err(ToggleError::Refused(format!("At most {} ids at once.", crate::app::describe::MOST)).into());
     }
     let catalogue = app.library.catalogue();
-    let now = tokio::task::spawn_blocking(move || catalogue.named_now_all(&b.ids)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    let now = crate::run::spawn_blocking(move || catalogue.named_now_all(&b.ids)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(json!(now)))
 }
 
@@ -4921,7 +4921,7 @@ async fn listenbrainz_kept(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let ud = serve.userdata.clone();
-    let user = tokio::task::spawn_blocking(move || ud.import_choice(&listenbrainz_choice(&account))).await.ok().and_then(Result::ok).flatten();
+    let user = crate::run::spawn_blocking(move || ud.import_choice(&listenbrainz_choice(&account))).await.ok().and_then(Result::ok).flatten();
     Ok(Json(json!({ "user": user })))
 }
 
@@ -4964,7 +4964,7 @@ fn preferrer(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), ApiError> 
 /// it holds.
 async fn my_preferences(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = preferrer(&ctx)?;
-    let values = tokio::task::spawn_blocking(move || serve.userdata.preferences(&account))
+    let values = crate::run::spawn_blocking(move || serve.userdata.preferences(&account))
         .await
         .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
         .map_err(ToggleError::from)?;
@@ -4985,7 +4985,7 @@ async fn set_my_preference(ctx: Ctx, Path(key): Path<String>, Json(b): Json<Pref
         return Err(ToggleError::BadSettings(why).into());
     }
     let (serve, account) = preferrer(&ctx)?;
-    let kept = tokio::task::spawn_blocking(move || serve.userdata.set_preference(&account, &key, &b.value, b.changed))
+    let kept = crate::run::spawn_blocking(move || serve.userdata.set_preference(&account, &key, &b.value, b.changed))
         .await
         .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
         .map_err(ToggleError::from)?;
@@ -5004,7 +5004,7 @@ async fn discover(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
     let (s, a) = (serve.clone(), account.clone());
-    let (found, who) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((crate::app::discover::kept(&s, &a)?, crate::app::discover::who(&s, &a)?)) })
+    let (found, who) = crate::run::spawn_blocking(move || -> anyhow::Result<_> { Ok((crate::app::discover::kept(&s, &a)?, crate::app::discover::who(&s, &a)?)) })
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5053,7 +5053,7 @@ async fn discover_refresh(ctx: Ctx) -> Result<(StatusCode, Json<serde_json::Valu
     let app = ctx.app.clone();
     let (serve, account) = discoverer(&ctx)?;
     let (s, a) = (serve.clone(), account.clone());
-    let who = tokio::task::spawn_blocking(move || crate::app::discover::who(&s, &a))
+    let who = crate::run::spawn_blocking(move || crate::app::discover::who(&s, &a))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5201,7 +5201,7 @@ async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<c
     // An artist forgotten (RT01b) says so, by their tombstone: asked where nothing is listed nor looked for, as for one unknown.
     if missing.albums.is_empty() && !missing.looking {
         let (c, id) = (app.library.catalogue(), crate::serve::ids::artist(artist));
-        if let Ok(Some(gone)) = tokio::task::spawn_blocking(move || crate::app::retention::unknown_artist(&c, &id)).await {
+        if let Ok(Some(gone)) = crate::run::spawn_blocking(move || crate::app::retention::unknown_artist(&c, &id)).await {
             return Err(gone.into());
         }
     }
@@ -5254,7 +5254,7 @@ async fn label_page(ctx: Ctx, Path(id): Path<String>, Query(q): Query<LabelQuery
 /// as merged now, else one made now with it. Never by its names alone: a row with no reference is refused.
 async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Result<Json<serde_json::Value>, ApiError> {
     let cat = ctx.app.library.catalogue();
-    let record = tokio::task::spawn_blocking(move || crate::app::labels::open_record(&cat, &b))
+    let record = crate::run::spawn_blocking(move || crate::app::labels::open_record(&cat, &b))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -5269,7 +5269,7 @@ async fn open_record(ctx: Ctx, Json(b): Json<crate::app::labels::Opened>) -> Res
 async fn open_label(ctx: Ctx, Json(b): Json<crate::app::labels::LabelOpened>) -> Result<Json<serde_json::Value>, ApiError> {
     use crate::app::labels::LabelOpen;
     let (cat, served, administering) = (ctx.app.library.catalogue(), ctx.serve()?, crate::serve::access::administering());
-    let opened = tokio::task::spawn_blocking(move || crate::app::labels::open_label(&cat, &b, |r| crate::app::discogs_facts::label_named(&served, r), administering))
+    let opened = crate::run::spawn_blocking(move || crate::app::labels::open_label(&cat, &b, |r| crate::app::discogs_facts::label_named(&served, r), administering))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5307,7 +5307,7 @@ async fn discover_missing(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError>
     // None by an artist the account excluded everywhere (decision 0083).
     if let Some(account) = ctx.account() {
         let s = serve.clone();
-        let out = tokio::task::spawn_blocking(move || s.userdata.excluded_artists(&account))
+        let out = crate::run::spawn_blocking(move || s.userdata.excluded_artists(&account))
             .await
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5324,7 +5324,7 @@ async fn discover_missing(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError>
 /// The account's Discover exclusions (Insights › Discovery › Discovery exclusions, 0.9.3): albums and artists.
 async fn discover_excluded(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = discoverer(&ctx)?;
-    let (albums, artists) = tokio::task::spawn_blocking(move || crate::app::discover::exclusions(&serve, &account))
+    let (albums, artists) = crate::run::spawn_blocking(move || crate::app::discover::exclusions(&serve, &account))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5342,7 +5342,7 @@ struct TakeBack {
 /// An exclusion taken back, any time: an album suggested again, or an artist.
 async fn discover_take_back(ctx: Ctx, Query(q): Query<TakeBack>) -> Result<StatusCode, ApiError> {
     let (serve, account) = discoverer(&ctx)?;
-    tokio::task::spawn_blocking(move || crate::app::discover::take_back(&serve, &account, q.key.as_deref(), q.artist.as_deref()))
+    crate::run::spawn_blocking(move || crate::app::discover::take_back(&serve, &account, q.key.as_deref(), q.artist.as_deref()))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5492,7 +5492,7 @@ async fn bandcamp_relay(id: &str, range: Option<&str>, from_ms: u64) -> Response
         }
     }
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
-    tokio::spawn(async move {
+    crate::run::spawn(async move {
         if !head.is_empty() && tx.send(Ok(axum::body::Bytes::from(head))).await.is_err() {
             return;
         }
@@ -5601,7 +5601,7 @@ async fn requests_cancel(ctx: Ctx, Path(id): Path<i64>) -> Result<StatusCode, Ap
 /// A suggestion not wanted: it never comes back. Its undo token.
 async fn discover_no(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = discoverer(&ctx)?;
-    let undo = tokio::task::spawn_blocking(move || crate::app::discover::not_interested(&serve, &account, &b.key))
+    let undo = crate::run::spawn_blocking(move || crate::app::discover::not_interested(&serve, &account, &b.key))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5612,7 +5612,7 @@ async fn discover_no(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serde_
 /// undo token.
 async fn discover_artist_not(ctx: Ctx, Path(name): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = discoverer(&ctx)?;
-    let undo = tokio::task::spawn_blocking(move || crate::app::discover::artist_not_interested(&serve, &account, &name))
+    let undo = crate::run::spawn_blocking(move || crate::app::discover::artist_not_interested(&serve, &account, &name))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5622,7 +5622,7 @@ async fn discover_artist_not(ctx: Ctx, Path(name): Path<String>) -> Result<Json<
 /// A suggestion hidden: it leaves the list, its artist not held against it. Its undo token.
 async fn discover_hide(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = discoverer(&ctx)?;
-    let undo = tokio::task::spawn_blocking(move || crate::app::discover::hide(&serve, &account, &b.key))
+    let undo = crate::run::spawn_blocking(move || crate::app::discover::hide(&serve, &account, &b.key))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -5645,7 +5645,7 @@ fn scrobble_refused(e: impl std::fmt::Display) -> ApiError {
 /// keys go).
 async fn scrobble_targets(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
-    let (targets, way) = tokio::task::spawn_blocking(move || anyhow::Ok((serve.userdata.scrobble_targets(&account)?, serve.userdata.scrobble_way(&account)?)))
+    let (targets, way) = crate::run::spawn_blocking(move || anyhow::Ok((serve.userdata.scrobble_targets(&account)?, serve.userdata.scrobble_way(&account)?)))
         .await
         .map_err(scrobble_refused)?
         .map_err(|e| scrobble_refused(format!("{e:#}")))?;
@@ -5686,7 +5686,7 @@ async fn scrobbles_handed(ctx: Ctx, Json(b): Json<Handed>) -> Result<Json<crate:
         return Err(scrobble_refused(format!("At most {} plays at a time.", crate::userdata::scrobbles::MOST)));
     }
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-    let handed = tokio::task::spawn_blocking(move || {
+    let handed = crate::run::spawn_blocking(move || {
         hand_over_allowed(&serve, &account)?;
         serve.userdata.hand_over(&account, &b.plays, now).map_err(|e| scrobble_refused(format!("{e:#}")))
     })
@@ -5705,7 +5705,7 @@ async fn scrobbles_now(ctx: Ctx, Json(b): Json<crate::userdata::scrobbles::Named
         return Err(scrobble_refused("Now playing needs the artist and the title."));
     }
     let (s, a) = (serve.clone(), account.clone());
-    tokio::task::spawn_blocking(move || hand_over_allowed(&s, &a)).await.map_err(scrobble_refused)??;
+    crate::run::spawn_blocking(move || hand_over_allowed(&s, &a)).await.map_err(scrobble_refused)??;
     crate::app::scrobble::now_playing_named(serve, account, b);
     Ok(StatusCode::ACCEPTED)
 }
@@ -5723,7 +5723,7 @@ async fn scrobble_listenbrainz(ctx: Ctx, Json(b): Json<ListenBrainzToken>) -> Re
     let name = crate::app::scrobble::listenbrainz_user(&token).await.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     let secret = serde_json::to_string(&crate::app::scrobble::Secret { token: Some(token), ..Default::default() }).map_err(scrobble_refused)?;
     let n = name.clone();
-    tokio::task::spawn_blocking(move || serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LISTENBRAINZ, &n, &secret))
+    crate::run::spawn_blocking(move || serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LISTENBRAINZ, &n, &secret))
         .await
         .map_err(scrobble_refused)?
         .map_err(|e| scrobble_refused(format!("{e:#}")))?;
@@ -5753,7 +5753,7 @@ async fn scrobble_lastfm(ctx: Ctx, Json(b): Json<LastFmKeys>) -> Result<Json<ser
     let callback = format!("{}/{code}", b.callback.trim_end_matches('/'));
     let url = crate::app::scrobble::lastfm_sign_in(&key, &callback).map_err(|e| scrobble_refused(format!("{e:#}")))?;
     let kept = serde_json::to_string(&crate::app::scrobble::Secret { api_key: Some(key), api_secret: Some(secret), ..Default::default() }).map_err(scrobble_refused)?;
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LASTFM, "", &kept)?;
         serve.userdata.scrobble_broken(&account, crate::app::scrobble::LASTFM, "Not signed in at Last.fm yet")
     })
@@ -5789,7 +5789,7 @@ async fn scrobble_lastfm_callback(ctx: Ctx, Path(code): Path<String>, Query(q): 
     let Some(serve) = ctx.served.clone() else { return back(Some("Cratarr's own library is not open".into())) };
     let account = pending.account;
     let (ud, a) = (serve.userdata.clone(), account.clone());
-    let kept = tokio::task::spawn_blocking(move || ud.scrobble_secret_any(&a, crate::app::scrobble::LASTFM)).await.ok().and_then(Result::ok).flatten();
+    let kept = crate::run::spawn_blocking(move || ud.scrobble_secret_any(&a, crate::app::scrobble::LASTFM)).await.ok().and_then(Result::ok).flatten();
     let Some(mut secret) = kept.and_then(|k| serde_json::from_str::<crate::app::scrobble::Secret>(&k).ok()) else {
         return back(Some("Give Last.fm's API key first".into()));
     };
@@ -5798,7 +5798,7 @@ async fn scrobble_lastfm_callback(ctx: Ctx, Path(code): Path<String>, Query(q): 
         Ok((session, name)) => {
             secret.session = Some(session);
             let Ok(kept) = serde_json::to_string(&secret) else { return back(Some("Could not keep the sign-in".into())) };
-            let ok = tokio::task::spawn_blocking(move || serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LASTFM, &name, &kept)).await;
+            let ok = crate::run::spawn_blocking(move || serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LASTFM, &name, &kept)).await;
             back(match ok {
                 Ok(Ok(())) => None,
                 _ => Some("Could not keep the sign-in".into()),
@@ -5819,7 +5819,7 @@ fn spotify_account(ctx: &Ctx) -> Result<String, ApiError> {
 /// Blocking Spotify work for the account, its failure one short line.
 async fn spotify_blocking<T: Send + 'static>(ctx: &Ctx, work: impl FnOnce(String) -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
     let account = spotify_account(ctx)?;
-    tokio::task::spawn_blocking(move || work(account))
+    crate::run::spawn_blocking(move || work(account))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")).into())
@@ -5898,7 +5898,7 @@ async fn spotify_disconnect(ctx: Ctx) -> Result<Json<crate::app::spotify::State>
 /// Reads the account's live lists again now; answers at once.
 async fn spotify_sync(ctx: Ctx) -> Result<Json<crate::app::spotify::State>, ApiError> {
     let account = spotify_account(&ctx)?;
-    tokio::spawn(crate::app::spotify::read_live(account.clone()));
+    crate::run::spawn(crate::app::spotify::read_live(account.clone()));
     // The read marks itself running at once; a moment for it to.
     tokio::task::yield_now().await;
     Ok(Json(spotify_blocking(&ctx, |a| crate::app::spotify::state(&a)).await?))
@@ -5982,7 +5982,7 @@ struct SwitchedOn {
 /// A listening service switched on or off, its sign-in kept.
 async fn scrobble_on(ctx: Ctx, Path(target): Path<String>, Json(b): Json<SwitchedOn>) -> Result<StatusCode, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
-    let found = tokio::task::spawn_blocking(move || serve.userdata.set_scrobble_on(&account, &target, b.on))
+    let found = crate::run::spawn_blocking(move || serve.userdata.set_scrobble_on(&account, &target, b.on))
         .await
         .map_err(scrobble_refused)?
         .map_err(|e| scrobble_refused(format!("{e:#}")))?;
@@ -5992,7 +5992,7 @@ async fn scrobble_on(ctx: Ctx, Path(target): Path<String>, Json(b): Json<Switche
 /// A listening service disconnected, with what waited for it.
 async fn scrobble_forget(ctx: Ctx, Path(target): Path<String>) -> Result<StatusCode, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
-    tokio::task::spawn_blocking(move || serve.userdata.forget_scrobble_target(&account, &target)).await.map_err(scrobble_refused)?.map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    crate::run::spawn_blocking(move || serve.userdata.forget_scrobble_target(&account, &target)).await.map_err(scrobble_refused)?.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -6030,7 +6030,7 @@ async fn lastfm_who(ctx: &Ctx, b: LastFmImport) -> Result<(Arc<crate::serve::Ser
     }
     let (ud, choice) = (serve.userdata.clone(), lastfm_choice(&account));
     let given = b.key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
-    let key = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+    let key = crate::run::spawn_blocking(move || -> anyhow::Result<Option<String>> {
         let kept = ud.import_choice(&choice)?.and_then(|c| serde_json::from_str::<LastFmKept>(&c).ok()).map(|k| k.key);
         let key = given.or(kept);
         if let Some(k) = &key {
@@ -6042,7 +6042,7 @@ async fn lastfm_who(ctx: &Ctx, b: LastFmImport) -> Result<(Arc<crate::serve::Ser
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     let (ud, a) = (serve.userdata.clone(), account.clone());
-    let signed = tokio::task::spawn_blocking(move || ud.scrobble_secret(&a, crate::app::scrobble::LASTFM))
+    let signed = crate::run::spawn_blocking(move || ud.scrobble_secret(&a, crate::app::scrobble::LASTFM))
         .await
         .ok()
         .and_then(Result::ok)
@@ -6064,7 +6064,7 @@ async fn lastfm_kept(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let ud = serve.userdata.clone();
-    let kept = tokio::task::spawn_blocking(move || ud.import_choice(&lastfm_choice(&account)))
+    let kept = crate::run::spawn_blocking(move || ud.import_choice(&lastfm_choice(&account)))
         .await
         .ok()
         .and_then(Result::ok)
@@ -6101,7 +6101,7 @@ async fn undo_lastfm(ctx: Ctx, Json(b): Json<LastFmImport>) -> Result<Json<crate
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let user = b.user.trim().to_string();
-    let undone = tokio::task::spawn_blocking(move || crate::app::lastfm::undo(&serve, &account, &user))
+    let undone = crate::run::spawn_blocking(move || crate::app::lastfm::undo(&serve, &account, &user))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -6138,7 +6138,7 @@ async fn undo_file(ctx: Ctx, Query(q): Query<FileUndo>) -> Result<Json<serde_jso
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: an import is an account's own.".into()))?;
     let context = crate::app::import_files::context(&q.from);
-    let removed = tokio::task::spawn_blocking(move || serve.userdata.forget_heard(&account, &context))
+    let removed = crate::run::spawn_blocking(move || serve.userdata.forget_heard(&account, &context))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -6149,7 +6149,7 @@ async fn undo_file(ctx: Ctx, Query(q): Query<FileUndo>) -> Result<Json<serde_jso
 async fn undo_listenbrainz(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
-    let removed = tokio::task::spawn_blocking(move || crate::app::listenbrainz::undo(&serve, &account))
+    let removed = crate::run::spawn_blocking(move || crate::app::listenbrainz::undo(&serve, &account))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -6263,7 +6263,7 @@ async fn home_artists(ctx: Ctx, Query(q): Query<TasteQuery>) -> Result<Json<serd
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let on = app.insights.folders_on(q.source.as_deref(), &without);
     let lib = served.library.clone();
-    let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    let rows = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
         // Home shows no album without a cover (the owner, 2026-10-24).
         let coverless = lib.coverless()?;
         Ok(lib.artist_albums()?.into_iter().filter(|r| !coverless.contains(&r.3)).collect::<Vec<_>>())
@@ -6358,7 +6358,7 @@ async fn library_find(ctx: Ctx, Query(q): Query<FindQuery>) -> Result<Json<serde
     let app = ctx.app.clone();
     let served = ctx.serve()?;
     let (lib, cat, query, line) = (served.library.clone(), app.library.catalogue(), q.q.clone(), q.line.clone());
-    let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
+    let found = crate::run::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
         let songs = match &line {
             Some(line) => {
                 use crate::app::refind;
@@ -6422,7 +6422,7 @@ struct AboutQuery {
 /// The artist an artist page asks about (C55, `related::asked`): by id, that one, though another has the name; by name, the first.
 async fn artist_asked(served: &Arc<crate::serve::Serve>, id: Option<&str>, name: &str) -> Option<crate::app::related::Asked> {
     let (s, id, name) = (served.clone(), id.map(str::to_string), name.to_string());
-    match tokio::task::spawn_blocking(move || crate::app::related::asked(&s, id.as_deref(), &name)).await {
+    match crate::run::spawn_blocking(move || crate::app::related::asked(&s, id.as_deref(), &name)).await {
         Ok(Ok(asked)) => asked,
         Ok(Err(e)) => {
             tracing::debug!("an artist asked about: {e:#}");
@@ -6502,7 +6502,7 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
     let discogs = discogs.unwrap_or_default();
     let (cat, a, d, p) = (app.library.catalogue(), mb_albums.clone(), discogs.clone(), artists.clone());
     // What is here, by reference: where it cannot be read, nothing is marked, and nothing said not had (A1.3).
-    let known = tokio::task::spawn_blocking(move || crate::app::beyond::known(&cat, &a, &d, &p)).await.map_err(anyhow::Error::from).and_then(|k| k);
+    let known = crate::run::spawn_blocking(move || crate::app::beyond::known(&cat, &a, &d, &p)).await.map_err(anyhow::Error::from).and_then(|k| k);
     if let Err(e) = &known {
         tracing::info!("beyond: what is here not read: {e:#}");
     }
@@ -6555,7 +6555,7 @@ async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<cr
     let ids: Vec<i64> = artists.iter().filter_map(|a| a.id.as_deref().and_then(crate::serve::ids::artist_number)).collect();
     let cat = ctx.app.library.catalogue();
     if !ids.is_empty()
-        && let Ok(Ok(numbers)) = tokio::task::spawn_blocking(move || cat.artist_numbers(&ids)).await
+        && let Ok(Ok(numbers)) = crate::run::spawn_blocking(move || cat.artist_numbers(&ids)).await
     {
         for a in &mut artists {
             a.number = a.id.as_deref().and_then(crate::serve::ids::artist_number).and_then(|n| numbers.get(&n).copied());
@@ -6572,7 +6572,7 @@ async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<cr
 async fn library_mbid(app: &App, name: &str) -> Option<String> {
     let lib = app.served.as_ref()?.library.clone();
     let name = name.to_string();
-    tokio::task::spawn_blocking(move || lib.artist_by_name(&name)).await.ok()?.ok()??.1.filter(|m| !m.is_empty())
+    crate::run::spawn_blocking(move || lib.artist_by_name(&name)).await.ok()?.ok()??.1.filter(|m| !m.is_empty())
 }
 
 async fn discover_artist(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
@@ -6697,7 +6697,7 @@ async fn history_listening(ctx: Ctx, Query(q): Query<ListeningQuery>, RawQuery(r
     // Back far enough for its taste over time (further than the period), whatever the time zone.
     let since = period.reaches_back(now);
     let on = app.insights.folders_on(q.source.as_deref(), &without_of(raw.as_deref()));
-    let listening = tokio::task::spawn_blocking(move || -> anyhow::Result<history::Listening> {
+    let listening = crate::run::spawn_blocking(move || -> anyhow::Result<history::Listening> {
         let (mut rows, log_from) = history::heard(&served.userdata, &user, since)?;
         if let Some(on) = on {
             let mut ids: Vec<String> = rows.iter().map(|r| r.song.clone()).collect();
@@ -6791,7 +6791,7 @@ struct LastfmKey {
 async fn get_lastfm_key(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
-    let (saved, used) = tokio::task::spawn_blocking(move || -> anyhow::Result<(bool, bool)> {
+    let (saved, used) = crate::run::spawn_blocking(move || -> anyhow::Result<(bool, bool)> {
         let saved = ud.import_choice(crate::app::discover::SERVER_LASTFM)?.is_some_and(|k| !k.trim().is_empty());
         Ok((saved, crate::app::discover::server_lastfm_key(&ud)?.is_some()))
     })
@@ -6809,7 +6809,7 @@ async fn put_lastfm_key(ctx: Ctx, Json(b): Json<LastfmKey>) -> Result<Json<serde
     }
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         if let Some(key) = key {
             ud.set_import_choice(crate::app::discover::SERVER_LASTFM, &key)?;
         }
@@ -6828,7 +6828,7 @@ async fn put_lastfm_key(ctx: Ctx, Json(b): Json<LastfmKey>) -> Result<Json<serde
 async fn get_discogs_keys(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
-    let set = tokio::task::spawn_blocking(move || crate::app::discogs::credentials(&ud))
+    let set = crate::run::spawn_blocking(move || crate::app::discogs::credentials(&ud))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -6863,7 +6863,7 @@ async fn put_discogs_keys(ctx: Ctx, Json(b): Json<DiscogsKeys>) -> Result<Json<s
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     let enabled = b.enabled;
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         if let Some((key, secret)) = keys {
             ud.set_import_choice(crate::app::discogs::KEY, &key)?;
             ud.set_import_choice(crate::app::discogs::SECRET, &secret)?;
@@ -6896,7 +6896,7 @@ async fn get_runtime(ctx: Ctx) -> Result<Json<crate::app::runtime::View>, ApiErr
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     Ok(Json(
-        tokio::task::spawn_blocking(move || crate::app::runtime::view(&ud))
+        crate::run::spawn_blocking(move || crate::app::runtime::view(&ud))
             .await
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?,
@@ -6909,7 +6909,7 @@ async fn put_runtime(ctx: Ctx, Json(c): Json<crate::app::runtime::Change>) -> Re
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     let host_changed = c.snapcast_host.is_some();
-    let r = tokio::task::spawn_blocking(move || crate::app::runtime::save(&ud, &c))
+    let r = crate::run::spawn_blocking(move || crate::app::runtime::save(&ud, &c))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(ToggleError::Refused)?;
@@ -6926,7 +6926,7 @@ async fn put_runtime(ctx: Ctx, Json(c): Json<crate::app::runtime::Change>) -> Re
 /// bytes (none where it cannot be read), and whether the server is short of space.
 async fn get_floor(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
-    let space = tokio::task::spawn_blocking(move || crate::app::room::space_on(&serve, &crate::app::room::TheDisks)).await.map_err(|e| ToggleError::Refused(format!("{e}")))?;
+    let space = crate::run::spawn_blocking(move || crate::app::room::space_on(&serve, &crate::app::room::TheDisks)).await.map_err(|e| ToggleError::Refused(format!("{e}")))?;
     Ok(Json(json!({ "gb": space.floor as f64 / crate::app::room::GB as f64, "free": space.free, "short": space.short })))
 }
 
@@ -6936,7 +6936,7 @@ async fn put_floor(ctx: Ctx, Json(b): Json<serde_json::Value>) -> Result<Json<se
     let Some(gb) = crate::app::room::gb_given(&b) else { return Err(ToggleError::BadSettings("Give the floor in GB, from 0.".into()).into()) };
     let serve = ctx.serve()?;
     let bytes = (gb * crate::app::room::GB as f64).round() as u64;
-    tokio::task::spawn_blocking(move || crate::app::room::set_floor(&serve.userdata, bytes))
+    crate::run::spawn_blocking(move || crate::app::room::set_floor(&serve.userdata, bytes))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -6952,7 +6952,7 @@ async fn album_discogs(ctx: Ctx, Path((source, album)): Path<(String, String)>) 
     own_album(&source)?;
     let served = ctx.serve()?;
     let facts = crate::app::discogs_facts::album(&served, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    let answer = tokio::task::spawn_blocking(move || crate::app::discogs_facts::answer(&served, &album, facts.as_ref()))
+    let answer = crate::run::spawn_blocking(move || crate::app::discogs_facts::answer(&served, &album, facts.as_ref()))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -7032,7 +7032,7 @@ async fn track_fetch(Path(id): Path<String>) -> Result<Json<crate::app::track_fe
 }
 
 async fn drop_track_fetch(Path(id): Path<String>) -> StatusCode {
-    tokio::task::spawn_blocking(move || crate::app::track_fetch::drop_fetch(&id)).await.ok();
+    crate::run::spawn_blocking(move || crate::app::track_fetch::drop_fetch(&id)).await.ok();
     StatusCode::NO_CONTENT
 }
 
@@ -7160,7 +7160,7 @@ async fn track_intake_clear() -> StatusCode {
 async fn get_slskd(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
-    let (url, key, folder) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    let (url, key, folder) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
         use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
         Ok((ud.import_choice(SLSKD_URL)?.unwrap_or_default(), ud.import_choice(SLSKD_KEY)?.unwrap_or_default(), ud.import_choice(SLSKD_FOLDER)?.unwrap_or_default()))
     })
@@ -7207,7 +7207,7 @@ async fn put_slskd(ctx: Ctx, Json(b): Json<SlskdChoices>) -> Result<Json<serde_j
     }
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
         for (k, v) in [(SLSKD_URL, b.url), (SLSKD_KEY, b.key), (SLSKD_FOLDER, b.folder)] {
             if let Some(v) = v {
@@ -7229,7 +7229,7 @@ async fn put_slskd(ctx: Ctx, Json(b): Json<SlskdChoices>) -> Result<Json<serde_j
 async fn get_acoustid(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
-    let set = tokio::task::spawn_blocking(move || crate::app::track_fetch::acoustid_key(&ud))
+    let set = crate::run::spawn_blocking(move || crate::app::track_fetch::acoustid_key(&ud))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -7251,7 +7251,7 @@ async fn put_acoustid(ctx: Ctx, Json(b): Json<AcoustidKey>) -> Result<Json<serde
     }
     let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
-    tokio::task::spawn_blocking(move || ud.set_import_choice(crate::app::track_fetch::ACOUSTID_KEY, &key))
+    crate::run::spawn_blocking(move || ud.set_import_choice(crate::app::track_fetch::ACOUSTID_KEY, &key))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -7380,7 +7380,7 @@ pub static RESTART: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// `docker stop` stops it (`main`'s graceful stop); Docker's restart policy (unless-stopped) brings it back.
 async fn restart_server() -> (StatusCode, Json<serde_json::Value>) {
     tracing::info!(target: "server", "restart asked from Settings");
-    tokio::spawn(async {
+    crate::run::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         RESTART.notify_one();
     });
@@ -7395,7 +7395,7 @@ struct Switched {
 /// MusicBrainz switched on or off (0.9.6): off, Cratarr asks it nothing (the background pass waits; Find more music
 /// and Renumber say so).
 async fn musicbrainz_switch(Json(b): Json<Switched>) -> Result<Json<crate::app::musicbrainz::Status>, ApiError> {
-    tokio::task::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::MUSICBRAINZ, b.enabled))
+    crate::run::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::MUSICBRAINZ, b.enabled))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -7414,7 +7414,7 @@ async fn background_status() -> Json<serde_json::Value> {
 
 /// The background reading paused or let go on (O5).
 async fn background_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
-    tokio::task::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::BACKGROUND, b.enabled))
+    crate::run::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::BACKGROUND, b.enabled))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -7423,7 +7423,7 @@ async fn background_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::V
 
 /// Bandcamp switched on or off (O4); switched on again, its bot check's hold lifted (V8).
 async fn bandcamp_switch(Json(b): Json<Switched>) -> Result<Json<serde_json::Value>, ApiError> {
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    crate::run::spawn_blocking(move || -> anyhow::Result<()> {
         crate::app::switches::set_on(crate::app::switches::BANDCAMP, b.enabled)?;
         crate::bandcamp::switched(crate::serve::instance().as_deref().map(|s| &*s.userdata), b.enabled);
         Ok(())
@@ -7455,7 +7455,7 @@ fn words_refused(e: anyhow::Error) -> ApiError {
 /// The Catalogue sheet: every kind of word, whether it is written to the files, its sources on or off, its aliases.
 async fn words_catalogue(ctx: Ctx) -> Result<Json<crate::app::words::catalogue::Catalogue>, ApiError> {
     let s = ctx.serve()?;
-    let out = tokio::task::spawn_blocking(move || crate::app::words::catalogue::view(&s)).await.map_err(|e| words_refused(e.into()))?.map_err(words_refused)?;
+    let out = crate::run::spawn_blocking(move || crate::app::words::catalogue::view(&s)).await.map_err(|e| words_refused(e.into()))?.map_err(words_refused)?;
     Ok(Json(out))
 }
 
@@ -7468,7 +7468,7 @@ struct KindSet {
 /// A kind's writing and sources set: the kind as it is now (type and year are one switch). The store is built again.
 async fn words_catalogue_set(ctx: Ctx, Path(kind): Path<String>, Json(b): Json<KindSet>) -> Result<Json<crate::app::words::catalogue::KindRow>, ApiError> {
     let s = ctx.serve()?;
-    let out = tokio::task::spawn_blocking(move || crate::app::words::catalogue::set_kind(&s, &kind, b.write, b.sources.as_ref())).await.map_err(|e| words_refused(e.into()))?.map_err(words_refused)?;
+    let out = crate::run::spawn_blocking(move || crate::app::words::catalogue::set_kind(&s, &kind, b.write, b.sources.as_ref())).await.map_err(|e| words_refused(e.into()))?.map_err(words_refused)?;
     ctx.app.collection.tell_changed();
     crate::app::words::tell_changed();
     Ok(Json(out))
@@ -7525,7 +7525,7 @@ async fn track_words_set(ctx: Ctx, Path((source, id)): Path<(String, String)>, J
         set.push((kind, list));
     }
     let s = ctx.serve()?;
-    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+    let out = crate::run::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
         for (kind, list) in &set {
             s.userdata.set_track_words(&id, kind, list.as_deref())?;
         }
@@ -7544,7 +7544,7 @@ async fn track_words_set(ctx: Ctx, Path((source, id)): Path<(String, String)>, J
 /// Switched on or off: it only decides what Health offers (decision 0092: nothing is written by itself).
 async fn file_facts_switch(Json(b): Json<SwitchedOn>) -> Result<Json<crate::app::file_facts::View>, ApiError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    tokio::task::spawn_blocking(move || crate::app::file_facts::set_on(&served, b.on))
+    crate::run::spawn_blocking(move || crate::app::file_facts::set_on(&served, b.on))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -7920,7 +7920,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let stream = format!("http://{}/s", listener.local_addr().unwrap());
         crate::bandcamp::fake_media_at(&stream);
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::run::spawn(async move { axum::serve(listener, app).await.unwrap() });
         crate::bandcamp::Bandcamp::get().keep(crate::bandcamp::Album {
             url: page.into(),
             title: "Fake".into(),
