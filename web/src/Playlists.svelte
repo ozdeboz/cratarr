@@ -285,7 +285,7 @@ ${prefs.playlistOrder}`,
     <PageLoading />
   {:else if listed.shows === 'asking'}
     <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
-    <Asking now={kept.loader} />
+    <Asking now={kept.loader} room="page" />
   {:else if listed.shows === 'failed'}
     <!-- None by name, the server's search failed: said so, never "No playlists match." (lib/search listShows). -->
     <Notice text={deepOf.error() ?? "The playlists couldn't be searched."} onretry={deepOf.again} away="Searching their tracks needs Cratarr." />

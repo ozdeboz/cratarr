@@ -554,7 +554,7 @@
       <p class="error" role="alert">{s.error}</p>
     {:else if listShows(albums.length, pageView.query, deepFor, deepFailed?.q) === 'asking'}
       <!-- Searching: the server's finds not in yet, so nothing said before the answer (lib/search listShows). -->
-      <Asking now={kept.loader} />
+      <Asking now={kept.loader} room="page" />
     {:else if listShows(albums.length, pageView.query, deepFor, deepFailed?.q) === 'failed' && deepFailed}
       <Notice text={deepFailed.text} onretry={() => ((deepFailed = null), deepAgain++)} away="Searching their tracks needs Cratarr." />
     {:else if albums.length === 0}

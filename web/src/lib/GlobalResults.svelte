@@ -237,7 +237,7 @@
   </section>
 {:else if q}
   <!-- Nothing yet, the server's answer for these words not in: the wait, not "nothing" (lib/search listShows). -->
-  <Asking now={kept.loader} />
+  <Asking now={kept.loader} room="page" />
 {/if}
 {#if menu?.kind === 'track'}
   <TrackMenu track={menu.track} onclose={() => (menu = null)} />

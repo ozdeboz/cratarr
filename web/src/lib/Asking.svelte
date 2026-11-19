@@ -7,25 +7,29 @@
   // is this one, so each says what it waits for the same way (lib/waiting, 0.17). `room`: its own (a list's place), the one the
   // place around it gives (where more of a list is coming, the panel's swap), or a line of text (a count still counting).
   import MarkLoader from './MarkLoader.svelte';
+  import PageLoading from './PageLoading.svelte';
   import { waitingFor } from './waiting.svelte';
   import { LOADER_AFTER_MS, LOADER_LARGE, loaderSizeIn } from './loader';
 
-  let { size = 48, now = false, room = 'own' }: { size?: number; now?: boolean; room?: 'own' | 'given' | 'inline' } = $props();
+  // `page`: a list that is a page's whole content (Playlists, Crates, the Library, everywhere's results): the mark in the middle of
+  // the room the page has left, as a page's loader (lib/PageLoading), not at the list's top (the owner, 2026-11-19: "On page lists,
+  // the loading spinner should be vertically centered").
+  let { size = 48, now = false, room = 'own' }: { size?: number; now?: boolean; room?: 'own' | 'given' | 'inline' | 'page' } = $props();
 
-  let el: HTMLElement;
+  let el = $state<HTMLElement>();
   /** The most a loader is where this is. */
   let most = $state(LOADER_LARGE);
   let due = $state(false);
   $effect(() => {
-    most = loaderSizeIn(el);
+    if (el) most = loaderSizeIn(el);
     const t = setTimeout(() => (due = true), LOADER_AFTER_MS);
     return () => clearTimeout(t);
   });
 </script>
 
-<svelte:element this={room === 'inline' ? 'span' : 'div'} class={room === 'inline' ? 'inline' : 'asking'} class:given={room === 'given'} aria-busy="true" bind:this={el}>
+{#if room === 'page'}<PageLoading held={false} shown={now || due} />{:else}<svelte:element this={room === 'inline' ? 'span' : 'div'} class={room === 'inline' ? 'inline' : 'asking'} class:given={room === 'given'} aria-busy="true" bind:this={el}>
   {#if now || due}<MarkLoader size={Math.min(size, most)} />{#if waitingFor()}{#if room === 'inline'}<span>{waitingFor()}</span>{:else}<p class="for">{waitingFor()}</p>{/if}{/if}{/if}
-</svelte:element>
+</svelte:element>{/if}
 
 <style>
   .asking {

@@ -17,8 +17,9 @@
   /** `held`: false where it waits for one part of a page that is otherwise ready (a record not had's track list while its
    *  list is read, F6): the page shows at once, and only that part waits (the review of preview 1's fixes, PB1). */
   /** `row`: a section that is always one horizontal row (the owner, 2026-11-19: "the loading message on the right"): the
-   *  small mark at the row's start, what it waits for to its right, the row's own height; it never holds the page. */
-  let { children, held = true, row = false }: { children?: import('svelte').Snippet; held?: boolean; row?: boolean } = $props();
+   *  small mark at the row's start, what it waits for to its right, the row's own height; it never holds the page.
+   *  `shown`: its room is there from the start, its mark only once due (lib/Asking's `page`, the one rule's 300 ms). */
+  let { children, held = true, row = false, shown = true }: { children?: import('svelte').Snippet; held?: boolean; row?: boolean; shown?: boolean } = $props();
 
   /** Its size where it is (lib/loader): known once it is placed (its mark shows from then). */
   let size = $state<number | null>(null);
@@ -107,8 +108,8 @@
   <!-- The mark is placed alone; what it waits for hangs under it (or beside it in a row) without moving it, so the line
        coming or going shifts nothing (the owner, 2026-11-19). -->
   <div class="mark">
-    {#if size !== null}<MarkLoader {size} />{/if}
-    {#if children}<div class="under">{@render children()}</div>{:else if waitingFor()}<div class="under"><p class="opening">{waitingFor()}</p></div>{/if}
+    {#if size !== null && shown}<MarkLoader {size} />{/if}
+    {#if !shown}{:else if children}<div class="under">{@render children()}</div>{:else if waitingFor()}<div class="under"><p class="opening">{waitingFor()}</p></div>{/if}
   </div>
 </div>
 
