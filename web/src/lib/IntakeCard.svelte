@@ -54,11 +54,6 @@
   /** Its length against the reference's: said where they differ by more than two seconds. */
   const off = (t: IntakeTrack) => !!t.length_ms && !!t.reference_ms && Math.abs(t.length_ms - t.reference_ms) > 2000;
   const number = (t: IntakeTrack, discs: boolean) => (t.position ? `${discs && t.disc ? `${t.disc}-` : ''}${String(t.position).padStart(2, '0')}` : '');
-  const PARTS = [
-    ['start', 'Start'],
-    ['middle', 'Middle'],
-    ['end', 'End'],
-  ] as const;
 </script>
 
 {#if failed && !card}
@@ -85,20 +80,18 @@
           <span class="num">{number(t, discs)}</span>
           <span class="name">{t.title}</span>
           <span class="len" class:off={off(t)}
-            >{time(t.length_ms)}{#if t.reference_ms && off(t)}<small> · ref {time(t.reference_ms)}</small>{/if}</span
+            >{time(t.length_ms)}{#if t.reference_ms && off(t)}<small> · MusicBrainz says {time(t.reference_ms)}</small>{/if}</span
           >
           {#if t.peaks?.length}
             <svg class="peaks" viewBox="0 0 {t.peaks.length} 255" preserveAspectRatio="none" aria-hidden="true">
               {#each t.peaks as p, i (i)}<rect x={i + 0.15} y={(255 - p) / 2} width="0.7" height={Math.max(p, 6)} />{/each}
             </svg>
           {/if}
+          <!-- One play a track, from its middle (the owner, 2026-11-19: three unnamed buttons a track were "just weird"). -->
           <span class="parts">
-            {#each PARTS as [part, label] (part)}
-              {@const on = snippetAtOn(heard, t.snippets[part])}
-              <button aria-label={`${label} of ${t.title}`} title={label} onclick={() => toggleSnippetAt(heard, t.snippets[part])}
-                ><SnippetMark open={on} share={on ? heardShare() : 0} size={26} /></button
-              >
-            {/each}
+            <button aria-label={`Hear ${t.title}`} title="Hear it" onclick={() => toggleSnippetAt(heard, t.snippets.middle)}
+              ><SnippetMark open={snippetAtOn(heard, t.snippets.middle)} share={snippetAtOn(heard, t.snippets.middle) ? heardShare() : 0} size={26} /></button
+            >
           </span>
         </li>
       {/each}
