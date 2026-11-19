@@ -1,0 +1,58 @@
+[package]
+name = "cratarr-app"
+description = "Cratarr's app: playing, crates and playlists, discovery, requests, intake, the served library's routes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-gate/test-support"]
+
+[dependencies]
+cratarr-gate.workspace = true
+cratarr-rules.workspace = true
+alac-encoder.workspace = true
+anyhow.workspace = true
+argon2.workspace = true
+axum.workspace = true
+base64.workspace = true
+flacenc.workspace = true
+flate2.workspace = true
+getrandom.workspace = true
+image.workspace = true
+ipnet.workspace = true
+ldap3.workspace = true
+libc.workspace = true
+lofty.workspace = true
+md-5.workspace = true
+mp3lame-encoder.workspace = true
+opusic-sys.workspace = true
+realfft.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+sha2.workspace = true
+symphonia.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tract-onnx.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+# Radio's modes are among the page's types the tests write, and live in the rules.
+cratarr-rules = { workspace = true, features = ["ts", "made-up", "device"] }
+cratarr-gate = { workspace = true, features = ["test-support"] }
+tower.workspace = true
+ts-rs.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,0 +1,41 @@
+[package]
+name = "cratarr-store"
+description = "Cratarr's stores: the catalogue, the user data, the journal, crates and playlists, the served library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-core/test-support", "cratarr-media/test-support", "dep:ts-rs"]
+
+[dependencies]
+cratarr-core.workspace = true
+cratarr-media.workspace = true
+cratarr-rules.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+lofty.workspace = true
+md-5.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# The page's types: the app's hold `source::ComposerRef` (test-support only, as a dev-dependency today).
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+cratarr-core = { workspace = true, features = ["test-support"] }
+cratarr-media = { workspace = true, features = ["test-support"] }
+ts-rs.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

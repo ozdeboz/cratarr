@@ -5810,13 +5810,13 @@ async fn short_of_space_is_a_flag_and_a_health_item_end_to_end() {
     let report = s.get("/api/health/report").await;
     assert!(!report["findings"].as_array().unwrap().iter().any(|f| f["key"] == "server:short-of-space"), "the finding gone: {report}");
     // Cratarr calls no one for it (Q6): no Home Assistant address, token or outbound purpose where the floor and the outbound guard are.
-    for (file, text) in [("app/reach.rs", include_str!("../src/app/reach.rs")), ("settings.rs", include_str!("../src/settings.rs")), ("app/room.rs", include_str!("../src/app/room.rs"))] {
+    for (file, text) in [("app/reach.rs", include_str!("../crates/store/src/app/reach.rs")), ("settings.rs", include_str!("../crates/store/src/settings.rs")), ("app/room.rs", include_str!("../crates/app/src/app/room.rs"))] {
         let text = text.to_lowercase();
         for word in ["home assistant", "homeassistant", "hass", ":8123", "long-lived"] {
             assert!(!text.contains(word), "{file} names {word}");
         }
     }
-    let room = include_str!("../src/app/room.rs");
+    let room = include_str!("../crates/app/src/app/room.rs");
     assert!(!room.contains("reqwest") && !room.contains("reach::"), "the floor asks nothing outside");
     s.stop();
     std::fs::remove_dir_all(&root).ok();

@@ -13,9 +13,19 @@ cd "$(dirname "$0")/.."
 
 plain() { printf '%s' "$1" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 
+# The server's packages, as the lock names them: cratarr-server and its crates (server/crates/*). The lock lists each at
+# the one version (SPLIT-PLAN 6.6), or `--locked` fails after a bump; the rules keep their own.
+server_packages() {
+  printf 'cratarr-server\n'
+  for d in server/crates/*/; do [ -f "$d/Cargo.toml" ] && printf 'cratarr-%s\n' "$(basename "$d")"; done
+}
+
 copies() {
+  # [workspace.package]'s version, the first in the file.
   printf 'server/Cargo.toml %s\n' "$(sed -n 's/^version = "\(.*\)"$/\1/p' server/Cargo.toml | head -1)"
-  printf 'server/Cargo.lock %s\n' "$(sed -n '/^name = "cratarr-server"$/{n;s/^version = "\(.*\)"$/\1/p;}' server/Cargo.lock)"
+  for p in $(server_packages); do
+    printf 'server/Cargo.lock %s %s\n' "$p" "$(sed -n "/^name = \"$p\"\$/{n;s/^version = \"\(.*\)\"\$/\1/p;}" server/Cargo.lock)"
+  done
   for f in web/package.json desktop/package.json; do
     printf '%s %s\n' "$f" "$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$f" | head -1)"
   done
@@ -24,7 +34,7 @@ copies() {
 if [ "${1:-}" = "--check" ]; then
   want=$(cat VERSION)
   plain "$want" || { echo "VERSION is not X.Y.Z: $want"; exit 1; }
-  bad=$(copies | awk -v w="$want" '$2 != w')
+  bad=$(copies | awk -v w="$want" '$NF != w')
   [ -z "$bad" ] || { echo "Not VERSION's ($want):"; echo "$bad"; exit 1; }
   echo "$want everywhere"
   exit 0
@@ -34,7 +44,9 @@ v=${1:?usage: scripts/version.sh X.Y.Z | --check}
 plain "$v" || { echo "$v is not X.Y.Z (a hotfix is the next patch)"; exit 1; }
 printf '%s\n' "$v" > VERSION
 sed -i "0,/^version = \".*\"\$/s//version = \"$v\"/" server/Cargo.toml
-sed -i "/^name = \"cratarr-server\"\$/{n;s/^version = \".*\"\$/version = \"$v\"/;}" server/Cargo.lock
+for p in $(server_packages); do
+  sed -i "/^name = \"$p\"\$/{n;s/^version = \".*\"\$/version = \"$v\"/;}" server/Cargo.lock
+done
 for f in web/package.json desktop/package.json; do
   sed -i "0,/^  \"version\": \".*\",\$/s//  \"version\": \"$v\",/" "$f"
 done

@@ -1,0 +1,32 @@
+[package]
+name = "cratarr-core"
+description = "Cratarr's base: the database, settings files, names, search, diagnostics, who asks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = []
+
+[dependencies]
+cratarr-rules.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+getrandom.workspace = true
+ipnet.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

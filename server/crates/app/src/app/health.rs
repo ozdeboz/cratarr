@@ -1,0 +1,1723 @@
+//! One health report (decision 0063): every domain's check says what it finds now, in one shape; the Health page
+//! shows it all, Home's System status the most critical and the most recent. A check that fails is a finding itself, never a
+//! missing report. When each finding was first found is kept while it stays, so "the most recent" means something.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
+
+use super::App;
+
+/// How much it asks of the owner, most first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    /// Broken or blind (the owner, 2026-11-04, for 0.16): the music can't play right, or Cratarr can't see (called
+    /// "needs you" until the owner renamed it, 2026-10-23; "the owner has to act" until 0.16).
+    Critical,
+    /// Something is wrong but the music plays: data that is incomplete, what retries by itself, a decision waiting on
+    /// the owner.
+    Warning,
+    /// Worth knowing.
+    Info,
+}
+
+/// Where a finding is dealt with: a page, and the switch to turn on there (the Library's `upgrades`). `connections`: Settings'
+/// Connections list itself, where the switches of every service are (G9: background reading).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Open {
+    pub page: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switch: Option<&'static str>,
+    /// The thing on that page it opens (a connection in Settings: `musicbrainz`, `discogs`, `lastfm`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thing: Option<&'static str>,
+}
+
+/// What a check finds.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Finding {
+    pub domain: &'static str,
+    /// Stable while the same thing is found (its first sight is kept by it).
+    pub key: String,
+    /// A short name for it, a noun phrase in title case (0.9.6, the owner: the panel's breadcrumb): "Missing covers".
+    pub name: String,
+    pub title: String,
+    /// Health's row, in two parts (0.13, the owner): what it is about and how it is, read "{thing} · {count} {state}"
+    /// ("Covers · 3 missing"). `None` where no such pair fits; the page falls back on the name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thing: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub count: u64,
+    /// Of how many, where it is a share (AudioMuse's tracks heard).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub of: Option<u64>,
+    pub level: Level,
+    /// When it was first found (epoch s).
+    pub since: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open: Option<Open>,
+    /// What it is about, one by one (the owner, 2026-10-23: "more deeper information"): the albums waiting, the
+    /// playlists and their missing tracks, the pages that answered slowly; each item opens where it is, when it is a
+    /// thing of its own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Item>,
+}
+
+/// One thing a finding is about.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Item {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// An album it opens: (server, album id); its cover shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album: Option<(String, String)>,
+    /// That record's type, as the Library list serves it (GOTO.S1): its Go to names it (F31.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
+    /// A playlist it opens (on its Repair tab).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<String>,
+    /// The files it is about, by name (a folder's tracks AudioMuse has not heard), at most `FILES`: its own page lists
+    /// them (the owner, 2026-10-24: the third level).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    /// An album's missing tracks (0.9.7, `library:incomplete`): "06 · Title", "Disc 2 · 03 · Title".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    /// Its release group, for "Ask for the full album" (a request, as Discover's Want), and the request already out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<super::requests::Mark>,
+    /// The track it is about (0.9.14, `files:short-*`): its song id, for replacing it on its own (the album's single
+    /// track replacement).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track: Option<String>,
+    /// Since when it stands so (epoch s, `library:missing`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+}
+
+/// At most this many files an item names.
+const FILES: usize = 30;
+
+/// At most this many items a finding lists. Its check finds them all, the report keeps the first: a record's own are
+/// looked for among all (`record_health`).
+const ITEMS: usize = 100;
+
+/// A track's sound may end this much before its given length unnoticed (ms; a page's slack for MP3 headers that
+/// disagree a little).
+pub(crate) const SHORT_SLACK_MS: i64 = 1_500;
+
+/// Why a file's sound ends `heard` ms in, before its given length: what it says of itself (`check_short`).
+pub(crate) fn short_cause(path: &std::path::Path, heard: i64) -> &'static str {
+    let mp3 = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
+    if !mp3 {
+        return "files:sound-breaks";
+    }
+    let Some(info) = crate::stream::mp3_info(path) else { return "files:sound-breaks" };
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    // Its info frame tells of more bytes than the file holds after its tag (a few KB of slack for a trailing tag).
+    if info.bytes.is_some_and(|b| b > size.saturating_sub(info.start) + 16 * 1024) {
+        return "files:cut-short";
+    }
+    match info.length_ms() {
+        // Its own length is what was heard: Cratarr read another.
+        Some(ms) if (ms as i64 - heard).abs() <= SHORT_SLACK_MS => "files:length-misread",
+        // It tells of more than there is: frames missing.
+        Some(_) => "files:cut-short",
+        None => "files:length-guessed",
+    }
+}
+
+/// Health's Missing list (A4): what Cratarr knows of and has no file for, none of it forgotten by itself. A library out of use, and the
+/// tracks with no file to play: those with files gone a while, and of those retired, the ones `held` says an account has something on,
+/// as the rest is nobody's loss. A track's row says where it lay, and takes a person's word for what it is now (`Catalogue::reconnect`).
+fn missing_list(m: crate::catalogue::Missing, held: &std::collections::HashSet<String>) -> Option<Finding> {
+    let track = |t: crate::catalogue::MissingTrack| {
+        let by: Vec<String> = [t.artist, t.album].into_iter().flatten().collect();
+        let named = t.title.or_else(|| t.rel.as_deref().map(|r| r.rsplit('/').next().unwrap_or(r).to_string()));
+        // Retired before 0.16, a track kept nothing of itself but what it holds (the owner, testing 0.16.0: its bare id
+        // showed): said so, in the page's words.
+        let line = (!by.is_empty()).then(|| by.join(" · ")).or_else(|| named.is_none().then(|| "Nothing kept of it".to_string()));
+        let title = named.unwrap_or_else(|| "A track".to_string());
+        Item { title, line, files: t.rel.into_iter().collect(), track: Some(crate::serve::ids::song(t.track)), since: Some(t.since), ..Item::default() }
+    };
+    let libraries = m.parked.into_iter().map(|l| Item { line: Some(n(l.files, "file, its library out of use", "files, their library out of use")), since: l.since, title: l.path, ..Item::default() });
+    let retired = m.retired.into_iter().filter(|t| held.contains(&crate::serve::ids::song(t.track)));
+    let items: Vec<Item> = libraries.chain(m.gone.into_iter().chain(retired).map(track)).collect();
+    if items.is_empty() {
+        return None;
+    }
+    let count = items.len() as u64;
+    let mut f = finding("library", "library:missing", Level::Info, count, n(count, "thing is missing", "things are missing"));
+    f.detail = Some("Libraries out of use, files gone, and tracks that hold plays or favourites with no file to play. Nothing here is forgotten by itself.".into());
+    f.items = items;
+    Some(f)
+}
+
+/// A length as a clock: m:ss, or h:mm:ss.
+pub(crate) fn clock(ms: i64) -> String {
+    let s = ms.max(0) / 1000;
+    if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
+}
+
+#[derive(Debug, Serialize)]
+pub struct Report {
+    /// Worst first, the most recent first among equals.
+    pub findings: Vec<Finding>,
+    /// When each domain was last checked (epoch s).
+    pub checked: BTreeMap<&'static str, i64>,
+}
+
+/// A record's own problems (0.14): the findings that name it, as Health's rows say them, each with only its items.
+#[derive(Debug, Serialize)]
+pub struct RecordHealth {
+    /// Worst first.
+    pub findings: Vec<RecordFinding>,
+}
+
+/// The albums of Cratarr's own these items are about, each once (GOTO.S1).
+fn own_albums<'a>(items: impl Iterator<Item = &'a Item>) -> Vec<String> {
+    let mut ids: Vec<String> = items.filter_map(|i| i.album.as_ref().filter(|(s, _)| s == crate::source::cratarr::KIND.id).map(|(_, a)| a.clone())).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// An item with its record's type, where it is about one of Cratarr's own (GOTO.S1).
+fn typed(i: &mut Item, types: &HashMap<String, (Option<String>, Vec<String>)>) {
+    if let Some((kind, secondary)) = i.album.as_ref().filter(|(s, _)| s == crate::source::cratarr::KIND.id).and_then(|(_, a)| types.get(a)) {
+        (i.album_type, i.album_secondary) = (kind.clone(), secondary.clone());
+    }
+}
+
+/// A finding as one record has it: its kind (the report's key), its short name and row, how much it asks, and the
+/// record's items in it (its tracks', where it is about files).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordFinding {
+    pub key: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thing: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub level: Level,
+    pub items: Vec<Item>,
+}
+
+/// What the findings say of one record (server, album id): each that names it, with only its items; and its files'
+/// problems (kind, its track's item), a finding of each kind as `files` makes them. Worst first.
+pub fn record(findings: &[Finding], album: &(String, String), wrong: &[(String, Item)]) -> RecordHealth {
+    let of = |f: &Finding, items: Vec<Item>| RecordFinding { key: f.key.clone(), name: f.name.clone(), thing: f.thing.clone(), state: f.state.clone(), detail: f.detail.clone(), level: f.level, items };
+    let mut out: Vec<RecordFinding> = findings
+        .iter()
+        .filter_map(|f| {
+            let items: Vec<Item> = f.items.iter().filter(|i| i.album.as_ref() == Some(album)).cloned().collect();
+            (!items.is_empty()).then(|| of(f, items))
+        })
+        .collect();
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    for (kind, _) in wrong {
+        *counts.entry(kind.clone()).or_default() += 1;
+    }
+    for f in files(&counts) {
+        let kind = f.key.trim_start_matches("files:");
+        out.push(of(&f, wrong.iter().filter(|(k, _)| k == kind).map(|(_, i)| i.clone()).collect()));
+    }
+    out.sort_by(|a, b| a.level.cmp(&b.level).then_with(|| a.key.cmp(&b.key)));
+    RecordHealth { findings: out }
+}
+
+fn now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+}
+
+/// When each finding (by key) was first found; those no longer found are forgotten.
+static FIRST_SEEN: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
+
+/// A finding as a check makes it; its time is set by the report.
+fn finding(domain: &'static str, key: impl Into<String>, level: Level, count: u64, title: impl Into<String>) -> Finding {
+    let key = key.into();
+    let (thing, state) = label_of(&key).map_or((None, None), |(t, s)| (Some(t.to_string()), Some(s.to_string())));
+    Finding { domain, name: name_of(&key).into(), key, title: title.into(), thing, state, detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
+}
+
+/// A finding's row, by its key: what it is about (a plural noun, Records where it counts records) and how it is (the
+/// owner's table, 2026-11-01). An unreachable server's thing is its own name, set where it is found.
+fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
+    Some(match key {
+        "library:cover" => ("Covers", "missing"),
+        "library:year" => ("Years", "missing"),
+        "library:genre" => ("Genres", "missing"),
+        "library:album-artist" => ("Album artists", "missing"),
+        "library:musicbrainz" => ("MusicBrainz ids", "missing"),
+        "library:track-numbers" => ("Track numbers", "off"),
+        "library:discs" => ("Disc numbers", "off"),
+        "library:incomplete" => ("Tracks", "missing"),
+        "library:references" => ("References", "missing"),
+        "library:missing" => ("Music", "missing"),
+        "library:rules" => ("Names", "set by a rule"),
+        "files:broken" => ("Files", "unreadable"),
+        "files:cut-short" => ("Files", "cut off"),
+        "files:damaged_tag" => ("Tags", "damaged"),
+        "files:no_tags" => ("Tags", "missing"),
+        "files:no_length" => ("Lengths", "missing"),
+        "files:length-misread" => ("Lengths", "read wrong"),
+        "files:length-guessed" => ("Lengths", "guessed"),
+        "files:sound-breaks" => ("Sound", "breaking off"),
+        "incoming:upgrades" => ("Replacements", "better"),
+        "incoming:duplicates" => ("Duplicates", "found"),
+        "incoming:failed" => ("Conversions", "failed"),
+        "incoming:arrived" => ("Records", "arrived"),
+        "requests:fetcher-down" => ("Fetchers", "down"),
+        "playlists:missing" => ("Playlist tracks", "missing"),
+        "analysis:audiomuse" => ("Analysis", "to do"),
+        "sign-in:refused" => ("Sign-ins", "refused"),
+        "sign-in:throttled" => ("Sign-ins", "throttled"),
+        "server:runaway" => ("Clients", "running away"),
+        "server:slow" => ("Responses", "slow"),
+        "server:settings-file" => ("Settings file", "unreadable"),
+        "server:short-of-space" => ("Disk space", "short"),
+        "servers:lidarr" => ("Lidarr", "unreachable"),
+        "library:ids-lost" => ("Track ids", "lost"),
+        "requests:waiting" => ("Requests", "waiting"),
+        "requests:soulseek-set-aside" => ("Soulseek queue", "set aside"),
+        "requests:soulseek-frozen" => ("Soulseek queue", "not kept"),
+        "words:genre" => ("Genres", "differ in the files"),
+        "words:style" => ("Styles", "differ in the files"),
+        "words:mood" => ("Moods", "differ in the files"),
+        "words:tag" => ("Tags", "differ in the files"),
+        k if k.starts_with("servers:") => ("Server", "unreachable"),
+        // A player's own (the owner, 2026-11-01: "The player as the thing"): named where it is found.
+        k if k.starts_with("players:held:") => ("Player", "play held"),
+        k if k.starts_with("players:away:") => ("Player", "silent"),
+        k if k.ends_with(":check") => ("Checks", "failed"),
+        _ => return None,
+    })
+}
+
+/// A finding's short name, by its key (the breadcrumb's; its title stays the sentence): a fix plan's sheet's too.
+pub(super) fn name_of(key: &str) -> &'static str {
+    match key {
+        "files:broken" => "Unreadable files",
+        "files:damaged_tag" => "Damaged tags",
+        "files:no_tags" => "Untagged files",
+        "files:no_length" => "Files without a length",
+        "files:length-misread" => "Lengths read wrong",
+        "files:length-guessed" => "Lengths guessed",
+        "files:cut-short" => "Cut-off files",
+        "files:sound-breaks" => "Sound breaking off",
+        "library:cover" => "Missing covers",
+        "library:year" => "Missing years",
+        "library:genre" => "Missing genres",
+        "library:album-artist" => "Missing album artists",
+        "library:track-numbers" => "Track numbers",
+        "library:discs" => "Disc numbers",
+        "library:musicbrainz" => "Missing MusicBrainz ids",
+        "library:incomplete" => "Records missing tracks",
+        "library:references" => "References",
+        "library:missing" => "Missing music",
+        "library:rules" => "Named otherwise by a rule",
+        "incoming:upgrades" => "Quality replacements",
+        "incoming:duplicates" => "Duplicates",
+        "incoming:failed" => "Failed conversions",
+        "incoming:arrived" => "Arrived",
+        "requests:fetcher-down" => "Fetchers out of reach",
+        "playlists:missing" => "Missing tracks",
+        // No tool names in the names (the owner, 2026-10-26).
+        "analysis:audiomuse" => "Analysis",
+        "servers:lidarr" => "Lidarr",
+        "sign-in:refused" => "Refused requests",
+        "sign-in:throttled" => "Throttled sign-ins",
+        "server:runaway" => "Runaway client",
+        "server:slow" => "Slow responses",
+        "server:settings-file" => "Settings",
+        "server:short-of-space" => "Short of space",
+        "requests:waiting" => "Requests",
+        "requests:soulseek-set-aside" | "requests:soulseek-frozen" => "Soulseek queue",
+        "words:genre" => "Genres in the files",
+        "words:style" => "Styles in the files",
+        "words:mood" => "Moods in the files",
+        "words:tag" => "Tags in the files",
+        k if k.starts_with("files:") => "File problems",
+        k if k.starts_with("servers:") => "Unreachable server",
+        k if k.starts_with("players:held:") => "Held plays",
+        k if k.starts_with("players:away:") => "Silent player",
+        k if k.ends_with(":check") => "Check failed",
+        _ => "Finding",
+    }
+}
+
+fn n(count: u64, one: &str, many: &str) -> String {
+    format!("{} {}", thousands(count), if count == 1 { one } else { many })
+}
+
+/// A count with its thousands apart, as the page shows numbers ("22,729").
+fn thousands(count: u64) -> String {
+    let digits = count.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A check's answer: its findings, or the one that says it could not look: critical, as Cratarr is blind there (the
+/// owner, 2026-11-04: a library that could not be checked is no warning).
+fn or_failed(domain: &'static str, r: anyhow::Result<Vec<Finding>>) -> Vec<Finding> {
+    r.unwrap_or_else(|e| {
+        let mut f = finding(domain, format!("{domain}:check"), Level::Critical, 1, format!("The {domain} could not be checked"));
+        f.detail = Some(format!("{e:#}"));
+        vec![f]
+    })
+}
+
+/// The findings in the report's order, each with when it was first found (kept from earlier reports).
+pub fn ordered(mut findings: Vec<Finding>, at: i64) -> Vec<Finding> {
+    let mut seen = FIRST_SEEN.lock().unwrap_or_else(|p| p.into_inner());
+    let seen = seen.get_or_insert_with(HashMap::new);
+    seen.retain(|k, _| findings.iter().any(|f| &f.key == k));
+    for f in &mut findings {
+        f.since = *seen.entry(f.key.clone()).or_insert(at);
+    }
+    findings.sort_by(|a, b| a.level.cmp(&b.level).then(b.since.cmp(&a.since)).then_with(|| a.key.cmp(&b.key)));
+    findings
+}
+
+/// The library's files the catalogue could not read properly (decision 0025): its own counts.
+pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
+    let health = || Some(Open { page: "health", switch: None, thing: None });
+    let mut out = Vec::new();
+    for (kind, &count) in issues {
+        if count == 0 {
+            continue;
+        }
+        let (level, title) = match kind.as_str() {
+            "broken" => (Level::Critical, n(count, "file can't be read", "files can't be read")),
+            "damaged_tag" => (Level::Warning, n(count, "file has a damaged tag", "files have a damaged tag")),
+            "no_tags" => (Level::Warning, n(count, "file has no tags", "files have no tags")),
+            "no_length" => (Level::Info, n(count, "file has no length", "files have no length")),
+            "bad_seektable" => (Level::Warning, n(count, "file has a broken seek table", "files have a broken seek table")),
+            other => (Level::Info, format!("{count} files: {other}")),
+        };
+        let mut f = finding("files", format!("files:{kind}"), level, count, title);
+        f.open = health();
+        out.push(f);
+    }
+    out
+}
+
+/// The library's albums lacking what it requires, a finding for each kind, each album opening its panel: the cover,
+/// the year, the genre, the album artist and the track numbers are warnings; the MusicBrainz id, which many lack and
+/// which only some things use (Lidarr, Discover, exact imports), is told. A cover missing is a warning too: the record
+/// plays (the owner, 2026-11-04, "broken or blind"; critical from 2026-10-25 until then). No share of all the albums
+/// (0.9.7, the owner: a bar is for something good, not for what is wrong).
+/// Track numbers (0.9.6): `numbering`'s
+/// albums whose numbers are off (twice, missing, none), each with what is off; Renumber fixes them.
+/// Disc numbers (0.13): `discs`' albums that lost theirs (numbers starting again, or fewer discs than the release that
+/// holds them), each with what is off; Renumber fixes them too.
+pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], discs: &[(String, String, String, String)]) -> Vec<Finding> {
+    type Pick = fn(&crate::serve::library::Lacks) -> bool;
+    let kinds: [(&str, Level, &str, &str, Pick); 5] = [
+        ("cover", Level::Warning, "record without a cover", "records without a cover", |r| r.cover),
+        ("year", Level::Warning, "record without a year", "records without a year", |r| r.year),
+        ("genre", Level::Warning, "record without a genre", "records without a genre", |r| r.genre),
+        ("album-artist", Level::Warning, "record without an album artist", "records without an album artist", |r| r.album_artist),
+        ("musicbrainz", Level::Info, "record without its MusicBrainz id", "records without their MusicBrainz id", |r| r.musicbrainz),
+    ];
+    let mut out = Vec::new();
+    for (key, level, one, many, pick) in kinds {
+        let mut hit: Vec<&crate::serve::library::Lacks> = rows.iter().filter(|r| pick(r)).collect();
+        if hit.is_empty() {
+            continue;
+        }
+        hit.sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
+        let mut f = finding("library", format!("library:{key}"), level, hit.len() as u64, n(hit.len() as u64, one, many));
+        f.items = hit
+            .iter()
+            .map(|r| Item { title: r.name.clone(), line: Some(r.artist.clone()), album: Some((crate::source::cratarr::KIND.id.to_string(), r.id.clone())), ..Item::default() })
+            .collect();
+        out.push(f);
+    }
+    let found: [(&[(String, String, String, String)], &str, &str, &str); 2] = [
+        (numbering, "library:track-numbers", "record with track numbers off", "records with track numbers off"),
+        (discs, "library:discs", "record that lost its disc numbers", "records that lost their disc numbers"),
+    ];
+    for (albums, key, one, many) in found {
+        if albums.is_empty() {
+            continue;
+        }
+        let mut hit: Vec<&(String, String, String, String)> = albums.iter().collect();
+        hit.sort_by(|a, b| a.2.to_lowercase().cmp(&b.2.to_lowercase()).then_with(|| a.1.cmp(&b.1)));
+        let count = hit.len() as u64;
+        let mut f = finding("library", key, Level::Warning, count, n(count, one, many));
+        f.items = hit
+            .iter()
+            .map(|(id, name, artist, line)| Item {
+                title: name.clone(),
+                line: Some(format!("{artist} · {line}")),
+                album: Some((crate::source::cratarr::KIND.id.to_string(), id.clone())),
+                ..Item::default()
+            })
+            .collect();
+        out.push(f);
+    }
+    out
+}
+
+/// Records arrived in Incoming and waiting to be added (W4; 0.14's "Records waiting for you", `intake_card::waiting`): an item each,
+/// its intake card opened from it ("Before adding" in it). Those a verdict names (an upgrade, a duplicate) are on that verdict's
+/// item. None waiting, no finding. Pure.
+pub fn arrived(waiting: &[super::intake_card::Waiting]) -> Option<Finding> {
+    let items: Vec<Item> = waiting
+        .iter()
+        .filter(|w| w.verdict.is_none())
+        .map(|w| Item { title: w.title.clone(), line: Some(w.artist.clone()).filter(|a| !a.is_empty()), album: Some((w.source.clone(), w.album.clone())), ..Item::default() })
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    let count = items.len() as u64;
+    let mut f = finding("incoming", "incoming:arrived", Level::Info, count, n(count, "record arrived, waiting to be added", "records arrived, waiting to be added"));
+    f.items = items;
+    Some(f)
+}
+
+/// Incoming's albums as they stand to the other libraries (decision 0034): better copies of Music's (Replace), the rest
+/// in two libraries at once (an upgrade of another Incoming library's copy among them: Replace is Music's alone); and
+/// the conversions that failed. Dealt with on their items' own pages (the comparison, the album's menu), not the
+/// Library, whose own filter could hide them (the owner, 2026-10-24): no `open`.
+pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
+    let mut out = Vec::new();
+    if upgrades > 0 {
+        // Said as what the library holds (the owner, 2026-10-25: duplicates on an artist's page went unnoticed under
+        // "duplicates waiting"). Both are decisions waiting on the owner, so warnings (the owner, 2026-11-04).
+        out.push(finding("incoming", "incoming:upgrades", Level::Warning, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
+    }
+    if duplicates > 0 {
+        out.push(finding("incoming", "incoming:duplicates", Level::Warning, duplicates, n(duplicates, "record is in two libraries at once", "records are in two libraries at once")));
+    }
+    if failed > 0 {
+        out.push(finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed")));
+    }
+    out
+}
+
+/// The track numbers a record of one disc lacks where no release was held against it: those below its highest number,
+/// and those above it up to the total its tags agree on (0.14, the owner, 2026-11-02: "05/06" lacks 06 too). None for
+/// a record of several discs.
+fn gaps_in(numbers: &[(Option<u32>, Option<u32>)], totals: &[u32]) -> Vec<String> {
+    if numbers.iter().any(|(d, _)| d.unwrap_or(1) > 1) {
+        return Vec::new();
+    }
+    let mut seen: Vec<u32> = numbers.iter().filter_map(|(_, t)| *t).filter(|t| *t > 0).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    // A record numbered nowhere lacks nothing its numbers tell.
+    let Some(&highest) = seen.last() else { return Vec::new() };
+    let top = highest.max(agreed_total(totals));
+    (1..=top).filter(|n| !seen.contains(n)).map(|n| format!("{n:02}")).collect()
+}
+
+/// The total a record's tags agree on: the largest said by two tracks or more, or the one every track that says one
+/// says (a single track's "/12" among "/06"s is that track's slip, not six tracks missing); 0 for none.
+fn agreed_total(totals: &[u32]) -> u32 {
+    let mut by: BTreeMap<u32, usize> = BTreeMap::new();
+    for &t in totals.iter().filter(|t| **t > 0) {
+        *by.entry(t).or_default() += 1;
+    }
+    if by.len() == 1 {
+        return by.keys().next().copied().unwrap_or(0);
+    }
+    by.iter().rev().find(|(_, n)| **n >= 2).map_or(0, |(t, _)| *t)
+}
+
+/// Where an Incoming copy's kept copy is, for an item's line: its library as named.
+fn paired_in<'a>(v: &crate::source::Against, libraries: &'a [super::albums::LibraryView]) -> &'a str {
+    libraries.iter().find(|l| l.id == v.library).map_or("another library", |l| l.name.as_str())
+}
+
+/// Incoming's copies of records kept elsewhere, as Health's two items list them (C37a): the better copies Replace can take, and
+/// the records in two libraries at once, by their stand against the copy that plays the record for most (`AlbumCopy.against`).
+/// Each item opens the record, its line naming the kept copy's library and folder, and why; by title. Pure.
+fn standing<'a>(sources: impl Iterator<Item = (&'a str, &'a [super::albums::LibraryView], &'a [crate::source::Album])>) -> (Vec<Item>, Vec<Item>) {
+    let (mut better, mut twice) = (Vec::new(), Vec::new());
+    for (source, libraries, albums) in sources {
+        for a in albums {
+            for v in a.copies.iter().filter_map(|c| c.against.as_ref()) {
+                let line = [a.artist.clone(), Some(format!("in {} as {}", paired_in(v, libraries), v.dir)), Some(v.why.clone()).filter(|w| !w.is_empty())]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let item = Item { title: a.title.clone(), line: Some(line), album: Some((source.to_string(), a.id.clone())), ..Item::default() };
+                if v.replaces { better.push(item) } else { twice.push(item) }
+            }
+        }
+    }
+    for items in [&mut better, &mut twice] {
+        items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    }
+    (better, twice)
+}
+
+/// The connections failing (0.9.6, the owner: each one's signal): a service Cratarr calls out to that failed a few
+/// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. Each a warning:
+/// it retries by itself (the owner, 2026-11-04, "broken or blind"; MusicBrainz was critical until then, as the
+/// background pass and Find more music stop while it fails).
+pub(crate) fn check_connections(at: i64) -> Vec<Finding> {
+    let tz = super::moment::tz(super::moment::told(at).as_ref());
+    let clock = |t: i64| {
+        let s = (t + tz).rem_euclid(86_400);
+        format!("{:02}:{:02}", s / 3600, (s % 3600) / 60)
+    };
+    let switched_off = |name: &str| match name {
+        "musicbrainz" => !super::switches::is_on(super::switches::MUSICBRAINZ),
+        "discogs" => !super::switches::is_on(super::switches::DISCOGS),
+        "lastfm" => !super::switches::is_on(super::switches::LASTFM),
+        _ => false,
+    };
+    // Bandcamp's bot check (O4): Cratarr stopped asking it for a day.
+    let day = |t: i64| (t + tz).div_euclid(86_400);
+    let held = crate::bandcamp::held_until(at).filter(|_| super::switches::is_on(super::switches::BANDCAMP)).map(|until| {
+        let when = if day(until) > day(at) { format!("tomorrow {}", clock(until)) } else { clock(until) };
+        let mut f = finding("connections", "connections:bandcamp-check", Level::Warning, 1, format!("Bandcamp asked for a browser check; Cratarr stopped asking until {when}"));
+        f.name = "Bandcamp".to_string();
+        (f.thing, f.state) = (Some(f.name.clone()), Some("paused".into()));
+        // Bandcamp's own page in Settings › Connections, its switch there (G9).
+        f.open = Some(Open { page: "settings", switch: None, thing: Some("bandcamp") });
+        f
+    });
+    let bandcamp_held = held.is_some();
+    // The background reading paused by an administrator (O5).
+    let paused = super::switches::background_paused().then(|| {
+        let mut f = finding("connections", "connections:background-paused", Level::Info, 1, "Background reading is paused: Cratarr asks no service anything on its own".to_string());
+        f.name = "Background reading".to_string();
+        (f.thing, f.state) = (Some(f.name.clone()), Some("paused".into()));
+        // Its switch is on Settings' Connections list itself (G9).
+        f.open = Some(Open { page: "connections", switch: None, thing: None });
+        f
+    });
+    super::reach::failing(at)
+        .into_iter()
+        .filter(|(name, _)| !switched_off(name) && !(*name == "bandcamp" && bandcamp_held))
+        .map(|(name, s)| {
+            let mut f = finding("connections", format!("connections:{name}"), Level::Warning, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
+            f.name = super::reach::label(name).to_string();
+            (f.thing, f.state) = (Some(f.name.clone()), Some("failing".into()));
+            f.detail = s.last_error.map(|(_, why)| why);
+            f.open = matches!(name, "musicbrainz" | "discogs" | "lastfm").then_some(Open { page: "settings", switch: None, thing: Some(name_static(name)) });
+            f
+        })
+        .chain(held)
+        .chain(paused)
+        .collect()
+}
+
+fn name_static(name: &str) -> &'static str {
+    match name {
+        "musicbrainz" => "musicbrainz",
+        "discogs" => "discogs",
+        _ => "lastfm",
+    }
+}
+
+/// Whether two paths name one folder as two containers mount it: the same, or the longer ending with the shorter at
+/// a folder's edge (Lidarr's `/data/media/lidarr-music`, Cratarr's `/media/lidarr-music`: the paths differ in front, as
+/// lib/incoming's `incoming_dir` has it).
+fn same_folder(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim_end_matches('/'), b.trim_end_matches('/'));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    long == short || (long.ends_with(short) && (short.starts_with('/') || long.as_bytes()[long.len() - short.len() - 1] == b'/'))
+}
+
+/// Lidarr's root folder `root` (one of `roots`, its root folders) as against `folders`, those of `incoming` (Lidarr's
+/// Incoming library): none when it is one of them. Else where it is dealt with: Connections' Lidarr page, choosing
+/// the root folder that is Incoming's where Lidarr has one, else adding one in Lidarr.
+fn lidarr_root_finding(root: &str, roots: &[String], incoming: &str, folders: &[String]) -> Option<Finding> {
+    if folders.iter().any(|f| same_folder(root, f)) {
+        return None;
+    }
+    let mut f = finding("servers", "servers:lidarr-root", Level::Warning, 1, format!("Lidarr adds albums outside {incoming}"));
+    f.thing = Some("Lidarr".into());
+    f.state = Some(format!("outside {incoming}"));
+    let shown = root.trim_end_matches('/');
+    f.detail = Some(match roots.iter().find(|r| folders.iter().any(|x| same_folder(r, x))) {
+        Some(fit) => format!("Its root folder is {shown}, not {incoming}'s folder, so what it fetches skips Incoming. Choose {} as its root folder.", fit.trim_end_matches('/')),
+        None => format!("Its root folder is {shown}, and none of its root folders is {incoming}'s folder. Add that folder in Lidarr, then choose it here."),
+    });
+    f.open = Some(Open { page: "settings", switch: None, thing: Some("lidarr") });
+    Some(f)
+}
+
+/// The catalogue's track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while
+/// the user data remembers another. No new ids until it is restored from the nightly backup, or an administrator starts
+/// afresh (`POST /api/catalogue/fresh-ids`).
+pub fn track_ids(lost: bool) -> Option<Finding> {
+    if !lost {
+        return None;
+    }
+    // No count: they are lost or not ("Track ids · lost"; the page leaves a 0 out).
+    let mut f = finding("library", "library:ids-lost", Level::Critical, 0, "The track ids were lost");
+    f.detail = Some(
+        "catalogue.sqlite was made anew, so no new track ids are given out. Restore it from the nightly backup, or start the \
+         track ids afresh: what named an old track then shows it missing."
+            .into(),
+    );
+    Some(f)
+}
+
+/// The fetchers out of reach for over an hour (X1: a dead fetcher raises an alert), each named with since when. None, no finding.
+/// Pure.
+pub fn fetchers_down(down: &[(&'static str, i64)], now: i64) -> Option<Finding> {
+    if down.is_empty() {
+        return None;
+    }
+    let name = |f: &str| if f == "lidarr" { "Lidarr" } else { "Soulseek (slskd)" };
+    let count = down.len() as u64;
+    let mut f = finding("requests", "requests:fetcher-down", Level::Warning, count, n(count, "fetcher can't be reached", "fetchers can't be reached"));
+    f.items = down.iter().map(|(fetcher, since)| Item { title: name(fetcher).to_string(), line: Some(match (now - since) / 60 {
+                m if m < 120 => format!("for {m} min"),
+                m => format!("for {} hours", m / 60),
+            }), ..Item::default() }).collect();
+    Some(f)
+}
+
+/// Soulseek's records held a day for its own disk's trouble (Y9): slskd could not store their files three times in a row (its disk
+/// full or read-only, its folder not writable or gone: U1), so their users are not asked again every five minutes. `held` as `soulseek::cant_store`
+/// gives them, the latest held first: its why is the detail. None held, no finding. Pure.
+pub fn soulseek_cant_store(held: &[(String, String)]) -> Option<Finding> {
+    soulseek_held("requests:soulseek-store", "can't store files", held)
+}
+
+/// Soulseek's records held a day because their placing failed three times in a row (Y12): the Incoming library gone or not writable,
+/// a name it cannot take, every folder another record's. `held` as `soulseek::cant_place` gives them, the latest held first: its
+/// why is the detail. None held, no finding. Pure.
+pub fn soulseek_cant_place(held: &[(String, String)]) -> Option<Finding> {
+    soulseek_held("requests:soulseek-place", "can't place albums", held)
+}
+
+/// Soulseek's records held a day for one trouble (Y9, Y12): "Soulseek {state}", a warning, as it tries again by itself; the latest
+/// held record's why as its detail, and each held record listed. None held, no finding. Pure.
+fn soulseek_held(key: &str, state: &str, held: &[(String, String)]) -> Option<Finding> {
+    let (_, why) = held.first()?;
+    let count = held.len() as u64;
+    let mut f = finding("requests", key, Level::Warning, count, format!("Soulseek {state}"));
+    f.name = "Soulseek".to_string();
+    (f.thing, f.state) = (Some(f.name.clone()), Some(state.into()));
+    f.detail = Some(why.clone());
+    f.items = held.iter().map(|(record, _)| Item { title: record.clone(), line: Some("held a day".into()), ..Item::default() }).collect();
+    Some(f)
+}
+
+/// Soulseek's queue as the starts left it (P7, W7; said in the log alone before): one that could not be read and was set aside,
+/// read from the data folder (`soulseek::queues_set_aside`), so it is said after a restart too, until the file set aside is put back or
+/// removed: a warning, its detail how to put it back. And one that could be neither read nor set aside at this start (`frozen`),
+/// to which nothing is written: critical. Blocking.
+pub fn soulseek_queue(data: &std::path::Path, frozen: bool) -> Vec<Finding> {
+    let mut out = Vec::new();
+    if frozen {
+        // No count: it is kept or not ("Soulseek queue · not kept").
+        let mut f = finding("requests", "requests:soulseek-frozen", Level::Critical, 0, "Soulseek's queue can't be kept");
+        f.detail = Some(
+            "soulseek.json in the data folder could not be read nor set aside, so Cratarr writes nothing to it, and the queue is not \
+             kept over a restart. Make the data folder writable, or move the file out of it, and start Cratarr again."
+                .into(),
+        );
+        out.push(f);
+    }
+    let aside = super::soulseek::queues_set_aside(data);
+    if let Some((latest, _)) = aside.first() {
+        let count = aside.len() as u64;
+        let mut f = finding("requests", "requests:soulseek-set-aside", Level::Warning, count, "Soulseek's queue was set aside");
+        f.detail = Some(format!(
+            "It could not be read at a start, so Cratarr set it aside as {latest} and began an empty queue. To put it back: stop \
+             Cratarr, rename {latest} in the data folder to soulseek.json, and start Cratarr. Or remove {latest}."
+        ));
+        f.items = aside.iter().map(|(name, at)| Item { title: name.clone(), line: Some("set aside".into()), since: *at, ..Item::default() }).collect();
+        out.push(f);
+    }
+    out
+}
+
+/// Requests waiting for an answer (decision 0070), each named, opening the Requests page; the fetchers out of reach (X1);
+/// Soulseek's records held for its own disk's trouble (Y9), or for their placing failing (Y12); and Soulseek's queue set aside or
+/// not kept (P7).
+pub(super) fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
+    let now = super::moment::now_secs();
+    let queue = served.and_then(|s| s.data_dir.as_deref()).map(|d| soulseek_queue(d, super::soulseek::frozen())).unwrap_or_default();
+    let down: Vec<Finding> = fetchers_down(&super::requests::fetchers_down(now), now)
+        .into_iter()
+        .chain(soulseek_cant_store(&super::soulseek::cant_store(now)))
+        .chain(soulseek_cant_place(&super::soulseek::cant_place(now)))
+        .chain(queue)
+        .collect();
+    let Some(serve) = served else { return Ok(down.into_iter().collect()) };
+    // Those whose state says they wait for an answer (W5): one whose album the library has meanwhile waits for no one. Each by its
+    // record's names (C49b): a label's "Artist - Title" is the artist's title.
+    let mut waiting = super::requests::waiting(serve)?;
+    if waiting.is_empty() {
+        return Ok(down.into_iter().collect());
+    }
+    let count = waiting.len() as u64;
+    waiting.truncate(ITEMS);
+    let mut f = finding("requests", "requests:waiting", Level::Info, count, format!("{} waiting", n(count, "request", "requests")));
+    f.open = Some(Open { page: "requests", switch: None, thing: None });
+    f.items = waiting.into_iter().map(|r| Item { title: r.album, line: Some(format!("{} · asked by {}", r.artist, r.user)), ..Item::default() }).collect();
+    Ok(std::iter::once(f).chain(down).collect())
+}
+
+/// A record's files' own problems, of every copy, each by its kind: a file wrong in one copy is that record's, whichever
+/// plays. Blocking.
+pub(super) fn files_wrong(served: &crate::serve::Serve, id: &str) -> anyhow::Result<Vec<(String, Item)>> {
+    let (tracks, files) = (served.library.album_tracks(id)?, served.library.files_of_record(id)?);
+    let folders: std::collections::BTreeSet<i64> = files.iter().map(|f| f.1).collect();
+    let mut out = Vec::new();
+    for folder in folders {
+        let rels: Vec<String> = files.iter().filter(|f| f.1 == folder).map(|f| f.2.clone()).collect();
+        for p in served.catalogue().problems_in(folder, &rels)? {
+            let Some((song, ..)) = files.iter().find(|f| f.1 == folder && f.2 == p.rel) else { continue };
+            let file = p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string();
+            let item = Item {
+                title: tracks.iter().find(|t| t.0 == *song).map_or_else(|| file.clone(), |t| t.3.clone()),
+                line: p.detail,
+                album: Some((crate::source::cratarr::KIND.id.to_string(), id.to_string())),
+                files: vec![file],
+                track: Some(song.clone()),
+                ..Item::default()
+            };
+            out.push((p.kind, item));
+        }
+    }
+    Ok(out)
+}
+
+impl App {
+    /// Every domain's findings now (decision 0063), worst first, the most recent first among equals.
+    pub async fn health_report(&self) -> Report {
+        let at = now();
+        let (files, playlists, incoming, analysis, servers, library) = tokio::join!(
+            self.check_files(),
+            self.check_playlists(),
+            self.check_incoming(),
+            self.check_analysis(),
+            self.check_servers(),
+            self.check_library()
+        );
+        let mut findings = Vec::new();
+        let mut checked = BTreeMap::new();
+        for (domain, found) in
+            [("files", files), ("playlists", playlists), ("incoming", incoming), ("analysis", analysis), ("servers", servers), ("library", library)]
+        {
+            findings.extend(or_failed(domain, found));
+            checked.insert(domain, at);
+        }
+        findings.extend(self.check_players());
+        checked.insert("players", at);
+        findings.extend(or_failed("library", self.check_missing().await));
+        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at, self.served.as_deref())), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
+            findings.extend(or_failed(domain, found));
+            checked.insert(domain, at);
+        }
+        for f in &mut findings {
+            f.items.truncate(ITEMS);
+        }
+        // Each item about a record of Cratarr's own with its type (GOTO.S1, F31.1: its Go to names it), one read for them all.
+        if let Some(served) = self.served.clone() {
+            let ids = own_albums(findings.iter().flat_map(|f| &f.items));
+            let types = crate::run::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
+            for i in findings.iter_mut().flat_map(|f| &mut f.items) {
+                typed(i, &types);
+            }
+        }
+        Report { findings: ordered(findings, at), checked }
+    }
+
+    /// A record's own problems (0.14, the owner, 2026-11-02: on its page and in its menu): the checks that name records,
+    /// run as the report runs them, and its tracks' files as the catalogue read them. Not the report's other domains, and
+    /// not through `ordered`: what the report found first stays its own.
+    pub async fn record_health(&self, source: &str, album: &str) -> anyhow::Result<RecordHealth> {
+        let (short, incoming, library) = tokio::join!(self.check_short(), self.check_incoming(), self.check_library());
+        let found = [short?, incoming?, library?].concat();
+        let mut wrong = Vec::new();
+        // Its files' problems: only the own library's records have files Cratarr read.
+        if let Some(served) = self.served.clone().filter(|_| source == crate::source::cratarr::KIND.id) {
+            let id = album.to_string();
+            wrong = crate::run::spawn_blocking(move || files_wrong(&served, &id)).await??;
+        }
+        let mut health = record(&found, &(source.to_string(), album.to_string()), &wrong);
+        // Its items with their record's type (GOTO.S1, F31.1).
+        if let Some(served) = self.served.clone() {
+            let ids = own_albums(health.findings.iter().flat_map(|f| &f.items));
+            let types = crate::run::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
+            for i in health.findings.iter_mut().flat_map(|f| &mut f.items) {
+                typed(i, &types);
+            }
+        }
+        Ok(health)
+    }
+
+    /// Health's Missing list, the report's alone: a record's own page has no use for it (`record_health`).
+    async fn check_missing(&self) -> anyhow::Result<Vec<Finding>> {
+        let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
+        let (c, ud) = (self.library.catalogue(), served.userdata.clone());
+        let (missing, held) = crate::run::spawn_blocking(move || -> anyhow::Result<_> { Ok((c.missing()?, ud.songs_held()?)) }).await??;
+        Ok(missing_list(missing, &held).into_iter().collect())
+    }
+
+    async fn check_files(&self) -> anyhow::Result<Vec<Finding>> {
+        let c = self.library.catalogue();
+        let status = crate::run::spawn_blocking(move || c.status()).await??;
+        let mut out = files(&status.issues);
+        out.extend(self.check_short().await?);
+        Ok(out)
+    }
+
+    /// Tracks whose sound ends before the length they give (0.9.14, the owner: different causes, different fixes, offer
+    /// all): a player asked past their sound's end fails. By cause, from what each file says of itself:
+    /// - **read wrong**: its MP3 info frame gives its true length; Cratarr read another (read again);
+    /// - **guessed**: an MP3 without an info frame, its length guessed from its first frame's bitrate (its sound whole);
+    /// - **cut off**: its info frame tells of more frames or bytes than the file holds (its sound missing: replace it,
+    ///   or play it to its end);
+    /// - **breaking off**: any other (a FLAC's damaged frames, decoding stopped): replace it, or play it to where it
+    ///   breaks off.
+    async fn check_short(&self) -> anyhow::Result<Vec<Finding>> {
+        let c = self.library.catalogue();
+        let served = self.served.clone();
+        let found = crate::run::spawn_blocking(move || -> anyhow::Result<Vec<(&'static str, Item, i64)>> {
+            let mut out = Vec::new();
+            for (folder, rel, path, given, heard) in c.shorter_than_heard(SHORT_SLACK_MS)? {
+                let cause = short_cause(&path, heard);
+                let song = served.as_ref().and_then(|s| s.library.song_at(folder, &rel).ok().flatten());
+                let (dir, file) = rel.rsplit_once('/').unwrap_or(("", rel.as_str()));
+                let item = Item {
+                    title: song.as_ref().map_or_else(|| file.to_string(), |s| s.2.clone()),
+                    line: Some(format!("Sounds {} of {} · {dir}", clock(heard), clock(given))),
+                    album: song.as_ref().map(|s| (crate::source::cratarr::KIND.id.to_string(), s.1.clone())),
+                    track: song.map(|s| s.0),
+                    files: vec![file.to_string()],
+                    ..Item::default()
+                };
+                out.push((cause, item, given - heard));
+            }
+            Ok(out)
+        })
+        .await??;
+        let mut out = Vec::new();
+        for (key, level, one, many, detail) in [
+            ("files:length-misread", Level::Warning, "track's length is read wrong", "tracks' lengths are read wrong", "Their files give their true length; Cratarr read another. Read them again."),
+            ("files:length-guessed", Level::Warning, "track's length is guessed", "tracks' lengths are guessed", "Their files do not give their length, so it was guessed; their sound is whole. Write their true length into them."),
+            ("files:cut-short", Level::Critical, "file is cut off", "files are cut off", "Their files hold less than they say: the end of their sound is missing. Replace them, or play them to where they end."),
+            ("files:sound-breaks", Level::Critical, "track's sound breaks off", "tracks' sound breaks off", "Their sound cannot be decoded to its end (damaged). Replace them, or play them to where they break off."),
+        ] {
+            let mut items: Vec<(Item, i64)> = found.iter().filter(|(c, ..)| *c == key).map(|(_, i, short)| (i.clone(), *short)).collect();
+            if items.is_empty() {
+                continue;
+            }
+            items.sort_by(|a, b| b.1.cmp(&a.1));
+            let count = items.len() as u64;
+            let mut f = finding("files", key, level, count, n(count, one, many));
+            f.detail = Some(detail.to_string());
+            f.open = Some(Open { page: "health", switch: None, thing: None });
+            f.items = items.into_iter().map(|(i, _)| i).collect();
+            out.push(f);
+        }
+        Ok(out)
+    }
+
+    /// The albums of every library in use lacking what the library requires (the owner, 2026-11-02: Music's and
+    /// Incoming's alike; Incoming's are marked there too).
+    async fn check_library(&self) -> anyhow::Result<Vec<Finding>> {
+        let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
+        let (lib, ud) = (served.library.clone(), served.userdata.clone());
+        let (rows, numbering, matched, released) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
+            Ok((lib.lacking()?, lib.numbering()?, ud.renumber_matched()?, ud.album_discs()?))
+        })
+        .await??;
+        // Disc numbers lost (0.13) first: such an album's numbers twice are that, not Track numbers.
+        let mut discs: Vec<(String, String, String, String)> = Vec::new();
+        let mut off: Vec<(String, String, String, String)> = Vec::new();
+        for (id, name, artist, numbers) in numbering {
+            if let Some(line) = super::renumber::discs_off(&numbers, released.get(&id).copied()) {
+                discs.push((id, name, artist, line));
+            } else if let Some(line) = super::renumber::off(&numbers, !matched.contains(&id)) {
+                off.push((id, name, artist, line));
+            }
+        }
+        let mut out: Vec<Finding> = track_ids(served.catalogue().ids_lost()).into_iter().collect();
+        out.extend(library(&rows, &off, &discs));
+        out.extend(self.check_incomplete(&served).await?);
+        out.extend(self.check_references(&served).await?);
+        // Each kind of word the Catalogue sheet writes (0.15, decision 0097): the records whose files differ.
+        for (kind, records) in super::file_words::findings(&served).await? {
+            let count = records.len() as u64;
+            let word = kind.name();
+            let mut f = finding("library", format!("words:{word}"), Level::Info, count, n(count, &format!("record whose files' {word} differs from Cratarr's"), &format!("records whose files' {word} differs from Cratarr's")));
+            f.items = records
+                .into_iter()
+                .take(ITEMS)
+                .map(|r| Item { title: r.title, line: Some(r.artist), album: Some((crate::source::cratarr::KIND.id.to_string(), r.album)), ..Item::default() })
+                .collect();
+            out.push(f);
+        }
+        // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
+        let s = served.clone();
+        let ruled = crate::run::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
+        if !ruled.is_empty() {
+            let count = ruled.len() as u64;
+            let s = served.clone();
+            let items = crate::run::spawn_blocking(move || -> anyhow::Result<Vec<Item>> {
+                let mut items = Vec::new();
+                for a in &ruled {
+                    if let Some((_, artist, name)) = s.library.album_names(a)? {
+                        items.push(Item { title: name, line: Some(artist), album: Some((crate::source::cratarr::KIND.id.to_string(), a.clone())), ..Item::default() });
+                    }
+                }
+                Ok(items)
+            })
+            .await??;
+            let mut f = finding("library", "library:rules", Level::Info, count, n(count, "record a rule names otherwise", "records a rule names otherwise"));
+            f.items = items;
+            out.push(f);
+        }
+        Ok(out)
+    }
+
+    /// Albums missing tracks (0.9.7, `app::incomplete`): each with what its release has beyond it and whether it is
+    /// asked for already; and the albums whose numbers have gaps that no release could be held against yet. Every
+    /// library in use's (the owner, 2026-11-02).
+    async fn check_incomplete(&self, served: &std::sync::Arc<crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
+        let s = served.clone();
+        let (found, gaps) = crate::run::spawn_blocking(move || -> anyhow::Result<_> {
+            let mut found: Vec<(String, String, String, super::incomplete::Incomplete)> = Vec::new();
+            // A row that no longer fits its album (A3.4: tracks replaced or added since its look) is not read: the pass looks again.
+            for (album, i) in super::incomplete::still_short(&s)? {
+                // One the library no longer has is left out.
+                let Some((_, artist, name)) = s.library.album_names(&album)? else { continue };
+                found.push((album, name, artist, i));
+            }
+            // Gaps in the numbers where no release was held against the album (no MusicBrainz id, no match yet).
+            let checked = s.userdata.album_complete_at()?;
+            let totals = s.library.track_totals()?;
+            let mut gaps = Vec::new();
+            for (id, name, artist, numbers) in s.library.numbering()? {
+                if checked.contains_key(&id) {
+                    continue;
+                }
+                let missing = gaps_in(&numbers, totals.get(&id).map_or(&[][..], Vec::as_slice));
+                if !missing.is_empty() {
+                    gaps.push((id, name, artist, missing));
+                }
+            }
+            Ok((found, gaps))
+        })
+        .await??;
+        if found.is_empty() && gaps.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = super::requests::marks(self, served).await.ok();
+        let mut items: Vec<Item> = found
+            .into_iter()
+            .map(|(album, name, artist, i)| {
+                let discs = i.missing.iter().any(|m| m.0 > 1);
+                Item {
+                    title: name.clone(),
+                    line: Some(format!("{artist} · {} of {}", i.has, i.of)),
+                    album: Some((crate::source::cratarr::KIND.id.to_string(), album)),
+                    missing: i.missing.iter().map(|(d, t, title)| if discs { format!("Disc {d} · {t:02} · {title}") } else { format!("{t:02} · {title}") }).collect(),
+                    request: marks.as_deref().and_then(|m| super::requests::mark_of(m, i.release_group.as_deref(), &artist, &name)),
+                    release_group: i.release_group,
+                    ..Item::default()
+                }
+            })
+            .collect();
+        items.extend(gaps.into_iter().map(|(album, name, artist, missing)| Item {
+            title: name,
+            line: Some(format!("{artist} · no MusicBrainz match yet")),
+            album: Some((crate::source::cratarr::KIND.id.to_string(), album)),
+            missing,
+            ..Item::default()
+        }));
+        items.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.title.cmp(&b.title)));
+        let count = items.len() as u64;
+        let mut f = finding("library", "library:incomplete", Level::Warning, count, n(count, "record missing tracks", "records missing tracks"));
+        f.items = items;
+        Ok(vec![f])
+    }
+
+    /// Records no reference speaks for (0.14, the owner, 2026-11-02: one Health item for references): each opens to its
+    /// sources, one to choose, a link to paste, or checked by hand (`app::references`).
+    async fn check_references(&self, served: &std::sync::Arc<crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
+        let s = served.clone();
+        let found = crate::run::spawn_blocking(move || super::references::unreferenced(&s)).await??;
+        if found.is_empty() {
+            return Ok(Vec::new());
+        }
+        let count = found.len() as u64;
+        let mut f = finding("library", "library:references", Level::Info, count, n(count, "record without a reference", "records without a reference"));
+        let mut items: Vec<Item> = found
+            .into_iter()
+            .map(|(album, name, artist)| Item { title: name, line: Some(artist), album: Some((crate::source::cratarr::KIND.id.to_string(), album)), ..Item::default() })
+            .collect();
+        items.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.title.cmp(&b.title)));
+        items.truncate(ITEMS);
+        f.items = items;
+        Ok(vec![f])
+    }
+
+    /// One's own playlists' tracks whose file is gone (the Repair view, one playlist at a time).
+    async fn check_playlists(&self) -> anyhow::Result<Vec<Finding>> {
+        let lists = self.playlists.view(None).await?;
+        let broken: Vec<_> = lists.iter().filter(|p| p.mine && p.dead > 0).collect();
+        let missing: u64 = broken.iter().map(|p| p.dead as u64).sum();
+        if missing == 0 {
+            return Ok(Vec::new());
+        }
+        let title = format!("{} in {}", n(missing, "missing track", "missing tracks"), n(broken.len() as u64, "playlist", "playlists"));
+        let mut f = finding("playlists", "playlists:missing", Level::Warning, missing, title);
+        let mut most: Vec<_> = broken.clone();
+        most.sort_by(|a, b| b.dead.cmp(&a.dead).then_with(|| a.name.cmp(&b.name)));
+        f.items = most
+            .iter()
+            .take(ITEMS)
+            .map(|p| Item { title: p.name.clone(), line: Some(n(p.dead as u64, "missing track", "missing tracks")), playlist: Some(p.name.clone()), ..Item::default() })
+            .collect();
+        f.open = Some(Open { page: "playlists", switch: None, thing: None });
+        Ok(vec![f])
+    }
+
+    async fn check_incoming(&self) -> anyhow::Result<Vec<Finding>> {
+        let view = self.albums(None).await;
+        let (mut better, mut twice) = standing(view.sources.iter().map(|s| (s.id.as_str(), s.library_info.as_slice(), s.albums.as_slice())));
+        let jobs: Vec<_> = self.incoming.jobs().into_iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).collect();
+        let mut out = incoming(better.len() as u64, twice.len() as u64, jobs.len() as u64);
+        // Each copy waiting, with the copy it stands against; each conversion failed, with why.
+        for f in &mut out {
+            match f.key.as_str() {
+                "incoming:upgrades" => f.items = std::mem::take(&mut better),
+                "incoming:duplicates" => f.items = std::mem::take(&mut twice),
+                "incoming:failed" => {
+                    f.items = jobs
+                        .iter()
+                        .map(|j| Item { title: j.title.clone(), line: j.why.clone(), album: Some((j.source.clone(), j.album_id.clone())), ..Item::default() })
+                        .collect();
+                }
+                _ => {}
+            }
+        }
+        out.extend(arrived(&super::intake_card::waiting(self).await));
+        Ok(out)
+    }
+
+    /// How far AudioMuse has heard the library (decision 0054): while it has not heard all of it.
+    async fn check_analysis(&self) -> anyhow::Result<Vec<Finding>> {
+        let cat = self.library.catalogue();
+        let facts = crate::run::spawn_blocking(move || cat.crate_facts()).await??;
+        let tracks = facts.iter().filter(|f| f.track.is_some()).count() as u64;
+        let heard = facts.iter().filter(|f| f.track.is_some() && f.sound.is_some()).count() as u64;
+        if tracks == 0 || heard >= tracks {
+            return Ok(Vec::new());
+        }
+        let mut f = finding("analysis", "analysis:audiomuse", Level::Info, heard, format!("{} of {} tracks analysed", thousands(heard), thousands(tracks)));
+        f.of = Some(tracks);
+        // The album folders with the most tracks not heard yet.
+        let mut by: HashMap<&str, (u64, u64)> = HashMap::new();
+        let mut unheard: HashMap<&str, Vec<String>> = HashMap::new();
+        for x in facts.iter().filter(|x| x.track.is_some()) {
+            let (dir, file) = x.rel.rsplit_once('/').unwrap_or(("", x.rel.as_str()));
+            let e = by.entry(dir).or_default();
+            e.1 += 1;
+            if x.sound.is_none() {
+                e.0 += 1;
+                let names = unheard.entry(dir).or_default();
+                if names.len() < FILES {
+                    names.push(file.to_string());
+                }
+            }
+        }
+        let mut left: Vec<_> = by.into_iter().filter(|(_, (not, _))| *not > 0).collect();
+        left.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(b.0)));
+        f.detail = Some(format!("{} not heard yet, in {}", n(tracks - heard, "track", "tracks"), n(left.len() as u64, "folder", "folders")));
+        f.items = left
+            .into_iter()
+            .take(ITEMS)
+            .map(|(dir, (not, all))| {
+                let mut files = unheard.remove(dir).unwrap_or_default();
+                files.sort();
+                Item { title: dir.rsplit('/').next().unwrap_or(dir).trim_start_matches("../").to_string(), line: Some(format!("{not} of {all} not heard · {dir}")), files, ..Item::default() }
+            })
+            .collect();
+        Ok(vec![f])
+    }
+
+    /// Each server switched on that cannot be reached, and Lidarr; and settings that cannot be saved (no data folder:
+    /// About showed it until the owner, 2026-10-24).
+    async fn check_servers(&self) -> anyhow::Result<Vec<Finding>> {
+        let view = self.settings.view().await?;
+        let settings = || Some(Open { page: "settings", switch: None, thing: None });
+        let mut out = Vec::new();
+        if view.settings_file.is_none() {
+            let mut f = finding("server", "server:settings-file", Level::Critical, 1, "Settings can't be saved");
+            f.detail = Some("Cratarr has no data folder: set CRATARR_DATA_DIR.".into());
+            out.push(f);
+        }
+        for s in view.sources.iter().filter(|s| s.enabled && !s.status.connected) {
+            let mut f = finding("servers", format!("servers:{}", s.id), Level::Critical, 1, format!("{} can't be reached", s.label));
+            f.thing = Some(s.label.to_string());
+            f.detail = s.status.error.clone().or_else(|| s.error.clone());
+            f.open = settings();
+            out.push(f);
+        }
+        if let Some(l) = view.lidarr.as_ref().filter(|l| l.error.is_some()) {
+            let mut f = finding("servers", "servers:lidarr", Level::Warning, 1, "Lidarr can't be reached");
+            f.detail = l.error.clone();
+            f.open = settings();
+            out.push(f);
+        } else if let Some(f) = self.check_lidarr_root().await? {
+            out.push(f);
+        }
+        Ok(out)
+    }
+
+    /// Lidarr's root folder (0101 point 10: Connections' choice, else its artists', else its first) against the folder
+    /// of Lidarr's Incoming, the library it fetches into: what it fetches comes to Incoming only from there. Nothing to
+    /// say while Lidarr is off or no library is Lidarr's.
+    async fn check_lidarr_root(&self) -> anyhow::Result<Option<Finding>> {
+        let (cfg, client) = self.incoming.lidarr_state();
+        let (Some(cfg), Some(client)) = (cfg.filter(|c| c.enabled), client) else { return Ok(None) };
+        let live = self.library.live();
+        let incoming = live.iter().find_map(|a| {
+            let id = a.cfg.libraries.fetched_by("lidarr")?;
+            a.placement.libraries.iter().find(|l| l.id == id).map(|l| (l.name.clone(), l.folders.clone()))
+        });
+        let Some((name, folders)) = incoming else { return Ok(None) };
+        let roots = client.options().await?.roots;
+        let root = match cfg.root_folder.clone() {
+            Some(r) => Some(r),
+            None => client.artists_root().await?,
+        };
+        Ok(root.and_then(|root| lidarr_root_finding(&root, &roots, &name, &folders)))
+    }
+
+    /// Cratarr's own players: a sound held back, and one of the app's not heard from for a day (but within a month:
+    /// one long gone is no news).
+    fn check_players(&self) -> Vec<Finding> {
+        let at = now();
+        let mut out = Vec::new();
+        for p in self.play_on.list() {
+            if let Some(why) = &p.held {
+                let mut f = finding("players", format!("players:held:{}", p.name), Level::Warning, 1, format!("{} held back a play", p.name));
+                f.thing = Some(p.name.clone());
+                f.detail = Some(why.clone());
+                out.push(f);
+            }
+            let away = at - p.seen as i64;
+            if !p.online && p.kind == "app" && (24 * 3600..30 * 24 * 3600).contains(&away) {
+                let days = away / (24 * 3600);
+                // No count: a player is silent or not ("Salon · silent"; the page leaves a 0 out).
+                let mut f = finding("players", format!("players:away:{}", p.name), Level::Info, 0, format!("{} not heard from for {}", p.name, n(days as u64, "day", "days")));
+                f.thing = Some(p.name.clone());
+                out.push(f);
+            }
+        }
+        out
+    }
+}
+
+/// The last hour of an event, as the diagnostics log counted it.
+fn last_hour(area: &str, what: &str, at: i64) -> anyhow::Result<u64> {
+    let Some(d) = crate::diagnostics::get() else { return Ok(0) };
+    d.count_since(area, what, (at - 3600) * 1000)
+}
+
+/// The last hour's events of a kind, grouped by `by` (a field, as the log keeps it): per group how often, the largest
+/// `ms`, and the clients; the most first.
+fn grouped(area: &str, what: &str, by: &str, at: i64) -> anyhow::Result<Vec<Item>> {
+    let Some(d) = crate::diagnostics::get() else { return Ok(Vec::new()) };
+    let rows = d.query(&crate::diagnostics::Query { area: Some(area.into()), since: Some((at - 3600) * 1000), limit: Some(1000), ..Default::default() })?;
+    let mut groups: HashMap<String, (i64, u64, std::collections::BTreeSet<String>)> = HashMap::new();
+    for r in rows.iter().filter(|r| r.what == what) {
+        let key = r.fields.get(by).and_then(|v| v.as_str().map(str::to_string).or_else(|| Some(v.to_string()))).unwrap_or_else(|| "—".into());
+        let g = groups.entry(key).or_default();
+        g.0 += r.count;
+        g.1 = g.1.max(r.fields.get("ms").and_then(serde_json::Value::as_u64).unwrap_or(0));
+        if let Some(c) = r.fields.get("client").and_then(|v| v.as_str()) {
+            g.2.insert(c.to_string());
+        }
+    }
+    let mut list: Vec<_> = groups.into_iter().collect();
+    list.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
+    Ok(list
+        .into_iter()
+        .take(ITEMS)
+        .map(|(key, (count, ms, clients))| {
+            let mut line = vec![format!("{count}×")];
+            if ms > 0 {
+                line.push(format!("up to {ms} ms"));
+            }
+            if !clients.is_empty() {
+                line.push(format!("from {}", clients.into_iter().collect::<Vec<_>>().join(", ")));
+            }
+            Item { title: key, line: Some(line.join(" · ")), ..Item::default() }
+        })
+        .collect())
+}
+
+fn check_sign_in(at: i64) -> anyhow::Result<Vec<Finding>> {
+    let refused = last_hour("signin", "request refused", at)?;
+    let throttled = last_hour("signin", "sign-in throttled", at)?;
+    let mut out = Vec::new();
+    if refused > 0 {
+        let mut f = finding("sign-in", "sign-in:refused", Level::Warning, refused, format!("{} in the last hour", n(refused, "request refused", "requests refused")));
+        f.items = grouped("signin", "request refused", "path", at)?;
+        out.push(f);
+    }
+    if throttled > 0 {
+        let mut f = finding("sign-in", "sign-in:throttled", Level::Warning, throttled, format!("{} in the last hour", n(throttled, "sign-in throttled", "sign-ins throttled")));
+        f.items = grouped("signin", "sign-in throttled", "client", at)?;
+        out.push(f);
+    }
+    Ok(out)
+}
+
+/// The server's own: slow answers and runaway clients (decision 0045, amended 2026-10-23), and the disk floor (AL03): short of space.
+fn check_server(at: i64, served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
+    let slow = last_hour("server", "slow response", at)?;
+    let runaway = last_hour("server", "client requests too often", at)?;
+    let mut out: Vec<Finding> = served.and_then(|s| short_of_space(s, &super::room::TheDisks)).into_iter().collect();
+    if slow > 0 {
+        let mut f = finding("server", "server:slow", Level::Info, slow, format!("{} in the last hour", n(slow, "slow answer", "slow answers")));
+        f.detail = Some("Answers that took longer than a second, by page: how often, the slowest, and who asked.".into());
+        f.items = grouped("server", "slow response", "path", at)?;
+        out.push(f);
+    }
+    if runaway > 0 {
+        let mut f = finding("server", "server:runaway", Level::Warning, runaway, format!("A client asked far too often in the last hour ({runaway}×)"));
+        f.items = grouped("server", "client requests too often", "client", at)?;
+        out.push(f);
+    }
+    Ok(out)
+}
+
+/// The disk floor (AL03; Q6, OQ-F5): the server short of space, one warning for the whole server, never one per user: its detail the
+/// free space where users' music lands, the floor, and what the trash there holds, as emptying it frees that; opening Settings. None
+/// while it is not short. What cratarr-ha reads is `/api/health`'s flag; Cratarr calls no one. Blocking.
+pub(crate) fn short_of_space(served: &crate::serve::Serve, disks: &dyn super::room::Disks) -> Option<Finding> {
+    use super::room::{MARGIN, size_text};
+    let space = super::room::space_on(served, disks);
+    if !space.short {
+        return None;
+    }
+    // No count: it is short or not ("Disk space · short").
+    let mut f = finding("server", "server:short-of-space", Level::Warning, 0, "The server is short of space");
+    let mut detail = format!(
+        "{} free, below the floor of {}. Users' new Wants wait until {} is free.",
+        size_text(space.free.unwrap_or(0)),
+        size_text(space.floor),
+        size_text(space.floor.saturating_add(MARGIN))
+    );
+    let trash = super::room::in_the_trash(served).unwrap_or_else(|e| {
+        tracing::warn!(target: "room", reason = %format!("{e:#}"), "what the trash holds was not read");
+        0
+    });
+    if trash > 0 {
+        detail.push_str(&format!(" The trash holds {}: emptying it frees that.", size_text(trash)));
+    }
+    f.detail = Some(detail);
+    f.open = Some(Open { page: "settings", switch: None, thing: None });
+    Some(f)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A data folder of the test's own.
+    fn data_folder(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-health-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The queue's files set aside in a data folder, by name.
+    fn set_aside_in(d: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> =
+            std::fs::read_dir(d).unwrap().flatten().filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|n| n.starts_with("soulseek.json.unreadable-")).collect();
+        names.sort();
+        names
+    }
+
+    /// P7.1, P7.3 (W7): a queue cut short is set aside at a start, a new empty one begun in its place, and Health's report says so:
+    /// one warning of the requests by a key of its own, naming the file and its time, its detail saying the queue began empty and
+    /// how to put the old one back. After a restart it is said still, as it reads the data folder; once the file is removed, no
+    /// more. No queue, an empty one and 0.16's (copied aside) say nothing.
+    #[test]
+    fn a_queue_set_aside_is_on_health_until_it_is_dealt_with() {
+        use super::super::soulseek::load_for_tests;
+        let d = data_folder("set-aside");
+        let serve = crate::serve::Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        let said = || -> Vec<Finding> {
+            check_requests(Some(serve.as_ref())).unwrap().into_iter().filter(|f| ["requests:soulseek-set-aside", "requests:soulseek-frozen"].contains(&f.key.as_str())).collect()
+        };
+        let p = d.join("soulseek.json");
+        let cut = br#"{"next": 3, "items": ["#;
+        std::fs::write(&p, cut).unwrap();
+
+        // The start.
+        assert_eq!(load_for_tests(&p), (0, false), "a new empty queue, not frozen");
+        let aside = set_aside_in(&d);
+        assert_eq!(aside.len(), 1, "set aside");
+        assert_eq!(std::fs::read(d.join(&aside[0])).unwrap(), cut, "whole");
+        let at: i64 = aside[0].strip_prefix("soulseek.json.unreadable-").unwrap().parse().unwrap();
+        // The new queue written in its place, as the start's first write leaves it.
+        std::fs::write(&p, br#"{"next":0,"items":[],"dropped_records":[]}"#).unwrap();
+
+        let found = said();
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!((f.domain, f.key.as_str(), f.level), ("requests", "requests:soulseek-set-aside", Level::Warning));
+        assert_eq!(f.items.iter().map(|i| (i.title.as_str(), i.since)).collect::<Vec<_>>(), [(aside[0].as_str(), Some(at))], "the file and its time");
+        let detail = f.detail.as_deref().unwrap_or_default();
+        let rename = format!("rename {} in the data folder to soulseek.json", aside[0]);
+        for words in ["began an empty queue", "stop Cratarr", rename.as_str(), "and start Cratarr"] {
+            assert!(detail.contains(words), "{words:?} in {detail:?}");
+        }
+
+        // A restart: the queue begun in its place is read; the finding is said still, from the data folder.
+        assert_eq!(load_for_tests(&p), (0, false));
+        assert_eq!(set_aside_in(&d), aside, "nothing more set aside");
+        assert_eq!(said(), found, "said after a restart while the file is there");
+
+        // Dealt with: the file removed by hand.
+        std::fs::remove_file(d.join(&aside[0])).unwrap();
+        assert!(said().is_empty(), "gone with the file");
+        drop(serve);
+        std::fs::remove_dir_all(&d).ok();
+
+        // P7.3: nothing to say.
+        let of_016 = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
+        for (name, queue) in [("none", None), ("empty", Some(r#"{"next":0,"items":[]}"#)), ("of-016", Some(of_016))] {
+            let d = data_folder(name);
+            let p = d.join("soulseek.json");
+            if let Some(q) = queue {
+                std::fs::write(&p, q).unwrap();
+            }
+            assert!(!load_for_tests(&p).1, "{name}");
+            assert_eq!(d.join("soulseek.json.016").exists(), name == "of-016", "{name}");
+            assert_eq!(soulseek_queue(&d, false), Vec::new(), "{name}");
+            std::fs::remove_dir_all(&d).ok();
+        }
+    }
+
+    /// P7.2 (W7): a queue that can be neither read nor set aside, its data folder refusing the rename, is frozen as before, nothing
+    /// written over it, and Health says so as critical. The tests run as root in the container, whom no mode refuses: the start's
+    /// load runs on a thread of its own as another account (`setresuid` by the system call, that thread alone, as moves.rs's test).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_queue_neither_read_nor_set_aside_is_critical() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = data_folder("frozen");
+        let p = d.join("soulseek.json");
+        let cut = br#"{"next": 3, "items": ["#;
+        std::fs::write(&p, cut).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let q = p.clone();
+        let loaded = std::thread::spawn(move || {
+            // SAFETY: plain numbers to a system call that changes the calling thread's account alone; the thread ends with the load.
+            if unsafe { libc::geteuid() } == 0 {
+                let nobody: libc::uid_t = 65_534;
+                let done = unsafe { libc::syscall(libc::SYS_setresuid, nobody, nobody, nobody) };
+                assert_eq!(done, 0, "another account: {}", std::io::Error::last_os_error());
+            }
+            super::super::soulseek::load_for_tests(&q)
+        })
+        .join()
+        .unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(loaded, (0, true), "frozen, as before");
+        assert_eq!(std::fs::read(&p).unwrap(), cut, "nothing written over it");
+        assert!(set_aside_in(&d).is_empty(), "nothing set aside");
+        let found = soulseek_queue(&d, loaded.1);
+        assert_eq!(
+            found.iter().map(|f| (f.domain, f.key.as_str(), f.level, f.title.as_str())).collect::<Vec<_>>(),
+            [("requests", "requests:soulseek-frozen", Level::Critical, "Soulseek's queue can't be kept")]
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// O5: the background reading paused by an administrator is said on Health.
+    #[test]
+    fn background_reading_paused_shows_on_health() {
+        let _one = super::super::switches::TEST_STATE.blocking_lock();
+        let shown = || check_connections(super::super::moment::now_secs()).into_iter().find(|f| f.key == "connections:background-paused");
+        let was = super::super::switches::set_for_tests(super::super::switches::BACKGROUND, false);
+        let paused = shown();
+        super::super::switches::set_for_tests(super::super::switches::BACKGROUND, true);
+        let on = shown();
+        super::super::switches::set_for_tests(super::super::switches::BACKGROUND, was);
+        assert!(on.is_none());
+        assert_eq!(paused.expect("shown").open, Some(Open { page: "connections", switch: None, thing: None }), "G9: opens Settings' Connections list");
+    }
+
+    /// W4 (E1): records arrived in Incoming and waiting to be added are one Health item, each opening its intake card ("Before
+    /// adding" in it); those an upgrade's or a duplicate's verdict names stay on those items.
+    #[test]
+    fn health_lists_arrivals_waiting_to_be_added() {
+        let w = |album: &str, verdict: Option<&'static str>| super::super::intake_card::Waiting {
+            source: "cratarr".into(),
+            album: album.into(),
+            title: format!("Title {album}"),
+            artist: "Glass Harbour".into(),
+            library: Some("incoming".into()),
+            verdict,
+        };
+        let f = arrived(&[w("al-1", None), w("al-2", Some("duplicate")), w("al-3", None)]).unwrap();
+        assert_eq!((f.key.as_str(), f.count), ("incoming:arrived", 2));
+        assert_eq!(f.items.iter().filter_map(|i| i.album.clone()).map(|(_, id)| id).collect::<Vec<_>>(), ["al-1", "al-3"]);
+        assert!(arrived(&[w("al-2", Some("upgrade"))]).is_none(), "none waiting but those");
+    }
+
+    #[test]
+    fn lidarr_adding_outside_its_incoming_is_said_with_the_root_folder_to_choose() {
+        // The containers see one folder by different paths.
+        assert!(same_folder("/data/media/lidarr-music/", "/media/lidarr-music"));
+        assert!(same_folder("/media/lidarr-music", "/media/lidarr-music/"));
+        assert!(!same_folder("/data/media/lidarr-music", "/media/music"), "another folder");
+        assert!(!same_folder("/data/media/old-lidarr-music", "lidarr-music"), "only at a folder's edge");
+        let (incoming, folders) = ("Lidarr", vec!["/media/lidarr-music".to_string()]);
+        let roots = vec!["/data/media/Music/".to_string(), "/data/media/lidarr-music/".to_string()];
+        assert_eq!(lidarr_root_finding("/data/media/lidarr-music/", &roots, incoming, &folders), None, "into its Incoming");
+        let f = lidarr_root_finding("/data/media/Music/", &roots, incoming, &folders).unwrap();
+        assert_eq!((f.key.as_str(), f.level), ("servers:lidarr-root", Level::Warning));
+        assert_eq!(f.open, Some(Open { page: "settings", switch: None, thing: Some("lidarr") }), "Connections' Lidarr page");
+        assert!(f.detail.as_deref().unwrap().ends_with("Choose /data/media/lidarr-music as its root folder."), "{:?}", f.detail);
+        let none = lidarr_root_finding("/data/media/Music/", &roots[..1], incoming, &folders).unwrap();
+        assert!(none.detail.unwrap().contains("Add that folder in Lidarr"), "Lidarr has no root folder there");
+    }
+
+    #[test]
+    fn counts_are_grouped_by_thousands() {
+        assert_eq!((thousands(7), thousands(2264), thousands(31263), thousands(1_000_000)), ("7".into(), "2,264".into(), "31,263".into(), "1,000,000".into()));
+    }
+
+    #[test]
+    fn every_finding_has_a_short_name() {
+        for key in ["files:broken", "library:cover", "library:track-numbers", "library:discs", "incoming:upgrades", "server:slow", "servers:jellyfin", "players:away:Tablet", "library:check"] {
+            assert_ne!(name_of(key), "Finding", "{key}");
+        }
+        assert_eq!(finding("library", "library:genre", Level::Warning, 12, "12 records without a genre").name, "Missing genres");
+    }
+
+    #[test]
+    fn every_finding_has_a_row_of_thing_and_state() {
+        for key in ["files:broken", "files:no_tags", "library:incomplete", "incoming:failed", "server:slow", "servers:jellyfin", "players:held:Tablet", "players:away:Tablet", "library:check"] {
+            assert!(label_of(key).is_some(), "{key}");
+        }
+        let f = finding("library", "library:cover", Level::Warning, 3, "3 records without a cover");
+        assert_eq!((f.thing.as_deref(), f.state.as_deref()), (Some("Covers"), Some("missing")));
+        assert_eq!(label_of("files:something-new"), None, "the page falls back on the name");
+    }
+
+    fn a_track(track: i64, title: Option<&str>) -> crate::catalogue::MissingTrack {
+        crate::catalogue::MissingTrack { track, title: title.map(str::to_string), artist: Some("A".into()), album: Some("B".into()), rel: Some("A - B/01 One.flac".into()), since: 100 }
+    }
+
+    /// A4: a library, a track gone and a retired one that holds something, each with where it lay and since when. A retired track nobody
+    /// holds anything on is nobody's loss, and with nothing left the list is no finding.
+    #[test]
+    fn the_missing_list_holds_what_someone_would_miss() {
+        use crate::catalogue::{Missing, ParkedLibrary};
+        let m = Missing {
+            parked: vec![ParkedLibrary { path: "/media/drive".into(), since: Some(50), files: 3 }],
+            gone: vec![a_track(1, Some("Gone"))],
+            retired: vec![a_track(2, Some("Heard")), a_track(3, Some("Nobody's")), a_track(4, None)],
+        };
+        let held = ["tr-2".to_string(), "tr-4".to_string()].into();
+        let f = missing_list(m, &held).expect("a finding");
+        assert_eq!((f.key.as_str(), f.domain, f.level, f.count), ("library:missing", "library", Level::Info, 4));
+        assert_eq!(f.items.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["/media/drive", "Gone", "Heard", "01 One.flac"], "a library, then tracks; one with no title by its file");
+        let row = &f.items[2];
+        assert_eq!((row.track.as_deref(), row.since, row.line.as_deref(), row.files.as_slice()), (Some("tr-2"), Some(100), Some("A · B"), &["A - B/01 One.flac".to_string()][..]));
+        assert_eq!((f.items[0].track.clone(), f.items[0].since), (None, Some(50)), "a library has no track to reconnect");
+        assert!(missing_list(Missing { retired: vec![a_track(3, None)], ..Missing::default() }, &["tr-2".to_string()].into()).is_none());
+    }
+
+    /// A track retired before 0.16 kept nothing of itself but what it holds (the owner, testing 0.16.0: Health › Music
+    /// showed bare ids like tr-38757): it says so, never its id.
+    #[test]
+    fn a_retired_track_nothing_was_kept_of_says_so_not_its_id() {
+        use crate::catalogue::{Missing, MissingTrack};
+        let bare = MissingTrack { track: 38757, title: None, artist: None, album: None, rel: None, since: 100 };
+        let f = missing_list(Missing { retired: vec![bare], ..Missing::default() }, &["tr-38757".to_string()].into()).expect("a finding");
+        let row = &f.items[0];
+        assert_eq!((row.title.as_str(), row.line.as_deref(), row.track.as_deref()), ("A track", Some("Nothing kept of it"), Some("tr-38757")));
+    }
+
+    #[test]
+    fn findings_are_worst_first_then_newest_and_keep_their_first_sight() {
+        let f = |key: &str, level| finding("files", key, level, 1, key);
+        let first = ordered(vec![f("a", Level::Info), f("b", Level::Critical)], 100);
+        assert_eq!(first.iter().map(|x| x.key.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+        // Found again later, with a new one of the same level: the older keeps its first sight, the newer comes first.
+        let again = ordered(vec![f("a", Level::Info), f("c", Level::Info), f("b", Level::Critical)], 200);
+        assert_eq!(again.iter().map(|x| (x.key.as_str(), x.since)).collect::<Vec<_>>(), [("b", 100), ("c", 200), ("a", 100)]);
+        // Gone, then back: found anew.
+        ordered(vec![f("b", Level::Critical)], 300);
+        let back = ordered(vec![f("a", Level::Info)], 400);
+        assert_eq!(back[0].since, 400);
+    }
+
+    #[test]
+    fn the_files_and_incoming_say_what_needs_the_owner() {
+        let issues: BTreeMap<String, u64> = [("broken".to_string(), 2), ("no_length".to_string(), 1), ("no_tags".to_string(), 0)].into();
+        let found = files(&issues);
+        assert_eq!(found.iter().map(|f| (f.title.as_str(), f.level)).collect::<Vec<_>>(), [("2 files can't be read", Level::Critical), ("1 file has no length", Level::Info)]);
+        let waiting = incoming(13, 0, 1);
+        assert_eq!(waiting[0].title, "13 better copies wait to replace Music's");
+        assert_eq!(waiting[0].open, None);
+        assert_eq!(waiting[1].title, "1 conversion failed");
+        assert_eq!(incoming(0, 17, 0)[0].title, "17 records are in two libraries at once");
+        assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 record is in two libraries at once"]);
+        assert!(incoming(0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn every_librarys_albums_are_found_each_opening_its_own_record() {
+        // An Incoming album (its id its own: `serve::ids::album`) beside Music's of the same name.
+        let lacks = |id: &str| crate::serve::library::Lacks {
+            id: id.into(),
+            name: "Zebra".into(),
+            artist: "Arp".into(),
+            cover: true,
+            year: false,
+            genre: false,
+            album_artist: false,
+            track_no: false,
+            musicbrainz: false,
+        };
+        let numbers = [("al-in".to_string(), "Heads".to_string(), "Ott".to_string(), "01 twice".to_string())];
+        let found = library(&[lacks("al-music"), lacks("al-in")], &numbers, &[]);
+        assert_eq!(found.iter().map(|f| (f.key.as_str(), f.title.as_str())).collect::<Vec<_>>(), [("library:cover", "2 records without a cover"), ("library:track-numbers", "1 record with track numbers off")]);
+        let opens = |f: &Finding| f.items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
+        assert_eq!(opens(&found[0]), ["al-music", "al-in"]);
+        assert_eq!(opens(&found[1]), ["al-in"]);
+    }
+
+    #[test]
+    fn a_records_health_is_its_own_findings_and_files_and_no_other_records() {
+        let own = ("cratarr".to_string(), "al-own".to_string());
+        let item = |album: &str, title: &str| Item { title: title.into(), album: Some(("cratarr".into(), album.into())), ..Item::default() };
+        let mut cover = finding("library", "library:cover", Level::Warning, 2, "2 records without a cover");
+        cover.items = vec![item("al-other", "Other"), item("al-own", "Own")];
+        let mut genre = finding("library", "library:genre", Level::Warning, 1, "1 record without a genre");
+        genre.items = vec![item("al-other", "Other")];
+        let mut cut = finding("files", "files:cut-short", Level::Critical, 2, "2 files are cut off");
+        cut.detail = Some("Their files hold less than they say.".into());
+        cut.items = vec![Item { track: Some("tr-3".into()), ..item("al-own", "Three") }, Item { track: Some("tr-9".into()), ..item("al-other", "Nine") }];
+        // The same id on another server is another record.
+        let mut failed = finding("incoming", "incoming:failed", Level::Warning, 1, "1 conversion failed");
+        failed.items = vec![Item { album: Some(("jellyfin".into(), "al-own".into())), ..Item::default() }];
+        let wrong = [("damaged_tag".to_string(), Item { track: Some("tr-1".into()), ..item("al-own", "One") }), ("no_length".to_string(), Item { track: Some("tr-2".into()), ..item("al-own", "Two") })];
+        let health = record(&[cover, genre, cut, failed], &own, &wrong);
+        let rows: Vec<(&str, Option<&str>, Option<&str>, Vec<&str>)> =
+            health.findings.iter().map(|f| (f.key.as_str(), f.thing.as_deref(), f.state.as_deref(), f.items.iter().map(|i| i.title.as_str()).collect())).collect();
+        assert_eq!(
+            rows,
+            [
+                ("files:cut-short", Some("Files"), Some("cut off"), vec!["Three"]),
+                ("files:damaged_tag", Some("Tags"), Some("damaged"), vec!["One"]),
+                ("library:cover", Some("Covers"), Some("missing"), vec!["Own"]),
+                ("files:no_length", Some("Lengths"), Some("missing"), vec!["Two"]),
+            ]
+        );
+        assert_eq!(health.findings[0].detail.as_deref(), Some("Their files hold less than they say."));
+        assert!(record(&[], &own, &[]).findings.is_empty());
+    }
+
+    #[test]
+    fn a_records_gaps_reach_up_to_the_total_its_tags_agree_on() {
+        let one_disc = |tracks: &[u32]| tracks.iter().map(|t| (Some(1), Some(*t))).collect::<Vec<_>>();
+        let numbers = one_disc(&[1, 2, 3, 5]);
+        assert_eq!(gaps_in(&numbers, &[6, 6, 6, 6]), ["04", "06"], "05/06: 06 is missing too");
+        assert_eq!(gaps_in(&numbers, &[]), ["04"], "without a total, as before");
+        assert_eq!(gaps_in(&numbers, &[5, 5]), ["04"], "a total no higher than the numbers adds nothing");
+        assert_eq!(gaps_in(&numbers, &[6, 6, 6, 12]), ["04", "06"], "one track's slip is not the record's total");
+        assert_eq!(gaps_in(&one_disc(&[1, 2, 3]), &[4]), ["04"], "one track saying it, the others none");
+        assert!(gaps_in(&one_disc(&[1, 2, 3, 4, 5, 6]), &[6; 6]).is_empty(), "whole");
+        let two_discs = [(Some(1), Some(1)), (Some(1), Some(2)), (Some(2), Some(1))];
+        assert!(gaps_in(&two_discs, &[3, 3, 3]).is_empty(), "several discs: not this check's");
+        assert!(gaps_in(&[(None, None), (None, None)], &[6, 6]).is_empty(), "numbered nowhere");
+    }
+
+    /// C37a: an Incoming copy of a kept record is a better copy Replace can take, or the record in two libraries at once, by its
+    /// stand against the copy that plays the record for most; each item names that copy's library and folder, and why.
+    #[test]
+    fn an_incoming_album_says_which_library_its_other_copy_is_in() {
+        let v = |library: &str, better: bool, replaces: bool| crate::source::Against {
+            better,
+            replaces,
+            library: library.into(),
+            dir: "Arp/Zebra".into(),
+            why: "lossless, yours is 320 kbps".into(),
+        };
+        let library = |id: &str, name: &str, kind: &'static str| crate::app::albums::LibraryView {
+            id: id.into(),
+            name: name.into(),
+            kind,
+            fetcher: None,
+            owner: None,
+            mine: false,
+            colour: None,
+            quality: crate::settings::Quality::None,
+            seen: true,
+            seen_why: None,
+            naming: None,
+        };
+        // Libraries are equal (0101 point 1): a main library is named by its own name, as any other.
+        let libraries = [library("music", "Music", "main"), library("new", "New music", "incoming"), library("own", "Your music", "own")];
+        let album = |id: &str, title: &str, against: Option<crate::source::Against>| crate::source::Album {
+            id: id.into(),
+            title: title.into(),
+            artist: Some("Glass Harbour".into()),
+            copies: vec![
+                crate::source::AlbumCopy { library: "music".into(), ..Default::default() },
+                crate::source::AlbumCopy { library: "new".into(), against, ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let albums = [
+            album("al-1", "Zebra", Some(v("music", true, true))),
+            album("al-2", "Arp", Some(v("own", true, false))),
+            album("al-3", "Mist", Some(v("music", false, false))),
+            album("al-4", "Kept once", None),
+        ];
+        let (better, twice) = standing([("cratarr", libraries.as_slice(), albums.as_slice())].into_iter());
+        let ids = |items: &[Item]| items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
+        assert_eq!(ids(&better), ["al-1"], "better than Music's copy: Replace's");
+        assert_eq!(ids(&twice), ["al-2", "al-3"], "better than someone's own, or no better: in two libraries at once");
+        assert_eq!(better[0].line.as_deref(), Some("Glass Harbour · in Music as Arp/Zebra · lossless, yours is 320 kbps"));
+        assert_eq!(twice[0].line.as_deref(), Some("Glass Harbour · in Your music as Arp/Zebra · lossless, yours is 320 kbps"));
+        assert_eq!(paired_in(&v("gone", false, false), &libraries), "another library");
+    }
+}

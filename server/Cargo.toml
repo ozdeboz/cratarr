@@ -1,18 +1,28 @@
 [package]
 name = "cratarr-server"
-version = "0.16.2"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Cratarr core: Jellyfin playlist index and API"
-license = "AGPL-3.0-or-later"
-repository = "https://github.com/ozdeboz/cratarr"
+license.workspace = true
+repository.workspace = true
 
-# The rules for what plays and in what order (rules/), shared with players that play on their own.
+# The rules for what plays and in what order (rules/), shared with players that play on their own; the server's own crates
+# below this package, which holds the binary (crates/, SPLIT-PLAN.md).
 [workspace]
-members = [".", "rules"]
+members = [".", "rules", "crates/*"]
 # Spike B's UniFFI crate is its own workspace (scripts/rules-android.sh).
 exclude = ["rules-ffi"]
 
-[dependencies]
+# One version for every package of the server (scripts/version.sh writes it).
+[workspace.package]
+version = "0.16.2"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/ozdeboz/cratarr"
+
+# Every dependency's one spec: each package names what its files use (`x.workspace = true`), so a dependency has the
+# same features whichever package is built.
+[workspace.dependencies]
 anyhow = "1"
 cratarr-rules = { path = "rules" }
 axum = "0.8"
@@ -72,17 +82,51 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # own compression features, so a deflated file comes raw and flate2 inflates it.
 zip = { version = "2", default-features = false }
 flate2 = "1"
+# The tests' (dev-dependencies below).
+cratarr-core = { path = "crates/core" }
+cratarr-media = { path = "crates/media" }
+cratarr-store = { path = "crates/store" }
+cratarr-clients = { path = "crates/clients" }
+cratarr-gate = { path = "crates/gate" }
+cratarr-app = { path = "crates/app" }
+cratarr-api = { path = "crates/api" }
+ts-rs = "12.0.1"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[dependencies]
+cratarr-api.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Every crate's test helpers and hooks (`test-support`): one feature set for the unit tests, `all` and e2e (SPLIT-PLAN 5.4).
+cratarr-api = { workspace = true, features = ["test-support"] }
+cratarr-app = { workspace = true, features = ["test-support"] }
+cratarr-gate = { workspace = true, features = ["test-support"] }
+cratarr-clients = { workspace = true, features = ["test-support"] }
+cratarr-store = { workspace = true, features = ["test-support"] }
+cratarr-media = { workspace = true, features = ["test-support"] }
+cratarr-core = { workspace = true, features = ["test-support"] }
 # The page's types from the server's (generated, web/src/lib/generated): written by the tests, so a release build
 # compiles none of it (0.14, faster previews: the dependency check's one lever).
-ts-rs = "12.0.1"
+ts-rs.workspace = true
 # Radio's modes are among those types, and live in the rules.
-cratarr-rules = { path = "rules", features = ["ts", "made-up", "device"] }
+cratarr-rules = { workspace = true, features = ["ts", "made-up", "device"] }
 # Calls the routers as a client would, in tests (decision 0030).
-tower = { version = "0.5", default-features = false, features = ["util"] }
+tower.workspace = true
+# What the end-to-end suite (tests/e2e.rs) reads and writes beside the server it starts.
+flate2.workspace = true
+image.workspace = true
+lofty.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
 # A paused clock for what waits its turn (MusicBrainz's, S10): its seconds pass at once, and exactly.
-tokio = { version = "1", features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 # The page's rules.wasm (scripts/rules-wasm.sh, 0.12): as small as it gets, the page loads it with its first view.
 [profile.wasm]
