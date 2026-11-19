@@ -407,16 +407,19 @@ where
 {
     let c = cat.clone();
     let mut page = tokio::task::spawn_blocking(move || record_page(&c, record, now)).await??;
-    if let Some(RecordPage::NotHad(view)) = &mut page
-        && view.more.looking
-    {
+    if let Some(RecordPage::NotHad(view)) = &mut page {
         let end = crate::serve::ids::record_number(&view.id).unwrap_or(record);
-        match super::references::read_soon_with(cat, end, now, read).await {
-            super::references::PageList::Looking(reading) => view.more.reading = reading,
-            super::references::PageList::Said(said) => {
-                view.more.looking = false;
-                view.more.no_list = Some(said);
+        if view.more.looking {
+            match super::references::read_soon_with(cat, end, now, read).await {
+                super::references::PageList::Looking(reading) => view.more.reading = reading,
+                super::references::PageList::Said(said) => {
+                    view.more.looking = false;
+                    view.more.no_list = Some(said);
+                }
             }
+        } else {
+            // F13.3: a source passed over is asked again later, the rows showing meanwhile.
+            super::references::read_again_with(cat, end, now, read).await;
         }
     }
     Ok(page)

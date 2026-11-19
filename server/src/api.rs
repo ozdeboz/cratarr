@@ -6486,7 +6486,8 @@ async fn genre_aliases(State(app): State<Arc<App>>) -> Result<Json<std::collecti
 /// Beyond the library (0076, the unindexed universe; C57): MusicBrainz's albums and Discogs' masters for the words, each album
 /// once by reference alone (`beyond::albums`: never by a name), each with where it was found, the record that holds it where one
 /// does, `have` by the one had rule on that record, and its request. MusicBrainz's artists beside, each with the artist who holds
-/// their MusicBrainz id. A page of `limit` from `offset`; kept per query in memory, a cache: nothing is made when it answers.
+/// their MusicBrainz id. A page of `limit` from `offset`; kept per query in memory, a cache: nothing is made when it answers. A
+/// source that failed is named (`no_list`, A1.3); where what is here could not be read, `known: false` and no row says had or not.
 async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
@@ -6496,28 +6497,20 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
         return Ok(Json(json!({ "q": q, "albums": [], "artists": [] })));
     }
     let (mb, discogs) = tokio::join!(crate::app::discover::musicbrainz_found(&q, (offset + limit).min(100)), crate::app::discogs::search_masters(&q, limit, offset));
+    let said = crate::app::beyond::failed(&mb, &discogs, crate::app::moment::now_secs());
     let (mb_albums, artists) = mb.unwrap_or_default();
     let mb_albums: Vec<crate::app::discover::FoundAlbum> = mb_albums.into_iter().skip(offset).take(limit).collect();
     let artists = if offset == 0 { artists } else { Vec::new() };
     let discogs = discogs.unwrap_or_default();
     let (cat, a, d, p) = (app.library.catalogue(), mb_albums.clone(), discogs.clone(), artists.clone());
-    // What is here, by reference: where it cannot be read, nothing is marked.
-    let known = match tokio::task::spawn_blocking(move || crate::app::beyond::known(&cat, &a, &d, &p)).await {
-        Ok(Ok(known)) => known,
-        Ok(Err(e)) => {
-            tracing::info!("beyond: what is here not read: {e:#}");
-            crate::app::beyond::Known::default()
-        }
-        Err(e) => {
-            tracing::info!("beyond: what is here not read: {e:#}");
-            crate::app::beyond::Known::default()
-        }
-    };
+    // What is here, by reference: where it cannot be read, nothing is marked, and nothing said not had (A1.3).
+    let known = tokio::task::spawn_blocking(move || crate::app::beyond::known(&cat, &a, &d, &p)).await.map_err(anyhow::Error::from).and_then(|k| k);
+    if let Err(e) = &known {
+        tracing::info!("beyond: what is here not read: {e:#}");
+    }
     let marks = request_marks(&app, &serve).await;
-    let albums = crate::app::beyond::albums(&mb_albums, &discogs, &known, marks.as_deref());
     crate::app::beyond::keep_listed(&artists, crate::app::moment::now_secs());
-    let artists = crate::app::beyond::artists(&artists, &known);
-    Ok(Json(json!({ "q": q, "albums": albums, "artists": artists })))
+    Ok(Json(crate::app::beyond::answer(&q, &mb_albums, &discogs, &artists, known.ok().as_ref(), marks.as_deref(), said)))
 }
 
 /// An artist of Beyond's (C57) opened: their MusicBrainz id and name.
