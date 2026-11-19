@@ -18,7 +18,7 @@
   import CoverPlay from './CoverPlay.svelte';
   import { bandcampOf, bandcampPlay, playOnBandcamp, bandcampFailed } from './bandcampFound.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { recordsTitle } from './recordTypeRules';
+  import { nothingBy, recordsTitle } from './recordTypeRules';
   import { matchesSearch, searchNone } from './pageView.svelte';
 
   let {
@@ -243,7 +243,7 @@
 {/if}
 {#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}
 {#if searching}<!-- what the words leave none of: the pill says it (searchNone) -->
-{:else if !albums.length && !appearsOn.length && !top}
+{:else if nothingBy({ had: albums.length, appears: appearsOn.length, top: !!top, missing, rows: missingShown.length })}
   <p class="empty">Nothing by {name} on this server.</p>
 {/if}
 

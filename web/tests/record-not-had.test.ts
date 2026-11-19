@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const { albumRowSub, emptyLine, emptyPlace, keptRows, lookAgainAfter, NOT_HAD_ENTRIES, notHadPage, offeredNotHad, wasInMusic } = await import('../src/lib/recordNotHad.ts');
+const { albumRowSub, emptyLine, emptyPlace, keptRows, listCount, lookAgainAfter, NOT_HAD_ENTRIES, notHadPage, offeredNotHad, wasInMusic } = await import('../src/lib/recordNotHad.ts');
 const { when } = await import('../src/lib/settings/when.ts');
 const { MENUS } = await import('../src/lib/menuTable.ts');
 
@@ -157,7 +157,7 @@ test('asked again every 4 s for its first eight asks, then every 30 s, with no l
 const view = readFileSync(new URL('../src/lib/PlaylistView.svelte', import.meta.url), 'utf8');
 
 test("an empty album's place: PageLoading naming the read while a record not had's list is read, else emptyLine's line in the .empty paragraph where \"No tracks yet.\" sat", () => {
-  assert.match(view, /import \{ albumRowSub, emptyPlace, keptRows, lookAgainAfter, notHadPage, type NotHadAction \} from '\.\/recordNotHad';/);
+  assert.match(view, /import \{ albumRowSub, emptyPlace, keptRows, listCount, lookAgainAfter, notHadPage, type NotHadAction \} from '\.\/recordNotHad';/);
   assert.match(
     view,
     /\{:else if rows && !rows\.length\}\s*\{#if nothing\}[\s\S]{0,300}?\{:else\}\s*(<!--[^>]*-->\s*)?\{@const place = emptyPlace\(notHad && albumHead \? albumHead : \{\}\)\}\s*\{#if 'reading' in place\}<PageLoading held=\{false\}><p class="opening">\{place\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{place\.line\}<\/p>\{\/if\}/,
@@ -195,4 +195,32 @@ test("a record not had's track list loader holds no panel: its header, Want and 
   const foot = view.match(/\{#snippet albumFoot\(\)\}([\s\S]*?)\{\/snippet\}/)?.[1] ?? '';
   assert.match(foot, /\{#if notHad\}\s*<AlbumAbout source=\{album\.source\} album=\{album\.id\}[^>]*more=\{albumHead\} labels=\{albumHead\.labels \?\? \[\]\} sources=\{albumHead\.sources\} \/>/, "a record not had's About");
   assert.match(view, /<SimilarLists kind="crate" id=\{crate\} \/>\{\/if\}\s*\{\/if\}\s*\{@render albumFoot\(\)\}/, 'the same foot under its tracks once they come');
+});
+
+// F17: a record not had's list head counts the tracks it lists, never "0 tracks" beside a list or a loader.
+test('a record not had counts the tracks it lists, or none; never 0 beside a list', () => {
+  assert.equal(listCount({ notHad: true, shown: 11, playable: 0 }), '11 tracks', 'Night Ferry: 11 rows read from MusicBrainz');
+  assert.equal(listCount({ notHad: true, shown: 0, playable: 0 }), '', 'its list being read: no count beside the loader');
+  assert.equal(listCount({ notHad: true, shown: 3, playable: 0 }), '3 tracks', "the page's own search narrowing it: the rows shown");
+  assert.equal(listCount({ notHad: true, shown: 1, playable: 0 }), '1 track');
+  for (const shown of [0, 1, 11]) assert.notEqual(listCount({ notHad: true, shown, playable: 0 }), '0 tracks');
+  const view = readFileSync(new URL('../src/lib/PlaylistView.svelte', import.meta.url), 'utf8');
+  assert.match(view, /count=\{crate \? plural\(total, 'track'\) : listCount\(\{ notHad, shown: shownRows\.length, playable: shownPlayable\.length \}\)\}/, "the list head's count is listCount's");
+  assert.doesNotMatch(view, /count=\{plural\(crate \? total : shownPlayable\.length, 'track'\)\}/);
+});
+
+test('the count follows the rows kept', () => {
+  const eleven = Array.from({ length: 11 }, (_, i) => ({ id: null, title: `Track ${i + 1}` }));
+  const reading = { not_had: true, looking: true };
+  assert.equal(listCount({ notHad: true, shown: keptRows([], null, reading).length, playable: 0 }), '', 'no rows yet: no count');
+  const shown = keptRows(eleven, null, reading);
+  assert.equal(listCount({ notHad: true, shown: shown.length, playable: 0 }), '11 tracks', 'its rows come: the count with them');
+  assert.equal(listCount({ notHad: true, shown: keptRows([], shown, reading).length, playable: 0 }), '11 tracks', 'an answer with none while it reads again keeps the rows and the count');
+});
+
+test("a had album's and a crate's count are as before (F17.3)", () => {
+  assert.equal(listCount({ notHad: false, shown: 10, playable: 8 }), '8 tracks', 'a had album: its playable rows (2 missing files left out, SB11 being preview 2\'s)');
+  const view = readFileSync(new URL('../src/lib/PlaylistView.svelte', import.meta.url), 'utf8');
+  // A pin (green before F17 and after): a crate's count is its total, read or not.
+  assert.match(view, /count=\{(plural\(crate \? total : |crate \? plural\(total, 'track'\))/, 'a crate: its total, 340 tracks with 100 read');
 });

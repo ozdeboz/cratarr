@@ -106,7 +106,8 @@
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import { deleteServerPlaylist, isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
-  import { albumRowSub, emptyPlace, keptRows, lookAgainAfter, notHadPage, type NotHadAction } from './recordNotHad';
+  import { albumRowSub, emptyPlace, keptRows, listCount, lookAgainAfter, notHadPage, type NotHadAction } from './recordNotHad';
+  import { artistLine } from './recordTypeRules';
   import Notice from './Notice.svelte';
   import { artistTitle, movedTo } from './artistIds';
   import { labelCovers, labelOf, labelRows, type LabelPageOf } from './labelPage';
@@ -1455,10 +1456,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (multi) return playlistsKnown() ? plural(chosenCount, 'track') : '';
     if (!rows) return '';
     if (label) return labelHead && labelRows(labelHead).length ? plural(labelRows(labelHead).length, 'record') : '';
-    if (artist) {
-      const albums = artist.tracks ? null : plural(artistHead?.albums.length ?? 0, 'album');
-      return [albums, plural(rows.length, 'track'), length ? clockText(length) : null].filter(Boolean).join(' • ');
-    }
+    if (artist) return artistLine(artist.tracks ? null : (artistHead?.albums ?? []).map((a) => a.type), rows.length, length ? clockText(length) : null);
     const h = album ? albumHead : null;
     // Each copy says its own where it has a line: here it would read as the record's.
     const heard = albumCopies.length ? [] : [h?.format, h?.kbps ? `${h.kbps} kb/s` : null];
@@ -2796,7 +2794,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         bind:value={() => sortKey, (v) => setSort(v, sortDown)}
         bind:down={() => sortDown, (d) => setSort(sortKey, d)}
         bind:open={sortOpen}
-        count={plural(crate ? total : shownPlayable.length, 'track')}
+        count={crate ? plural(total, 'track') : listCount({ notHad, shown: shownRows.length, playable: shownPlayable.length })}
         oncount={crate && !crateEditing ? () => crate && setCrateView(crate, 'records') : null}
         countLabel="Show as records"
         selecting={!!selecting}

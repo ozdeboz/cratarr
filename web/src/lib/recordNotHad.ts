@@ -109,6 +109,13 @@ export function sourceChips(sources: readonly RecordSource[] | null | undefined)
   return (sources ?? []).filter((s) => /^https:\/\//.test(s.url)).map((s) => ({ name: sourceName(s.source), url: s.url, tracks: !!s.tracks }));
 }
 
+/** "1 track", "11 tracks". */
+const tracksText = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'track' : 'tracks'}`;
+
+/** A list head's count of tracks (F17): a record not had counts the rows it shows (its page's words narrowing them too), none where
+ *  it shows none, never "0 tracks" beside a list or a loader; anything else its playable rows, as before. */
+export const listCount = (v: { notHad: boolean; shown: number; playable: number }): string => (v.notHad ? (v.shown ? tracksText(v.shown) : '') : tracksText(v.playable));
+
 /** How long a record not had waits to be asked again while the server reads its list (n: asks made for this opening), and
  *  an artist's or a label's section read in the background (F8, F10): soon at first, then seldom, with no last ask (the read
  *  is cut at the server's own limit, F1.9). */

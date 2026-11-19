@@ -41,6 +41,23 @@ export function recordsWord(types: readonly (string | null | undefined)[]): stri
   const words = new Set(types.map(recordWord));
   return words.size === 1 ? [...words][0] : 'record';
 }
+/** An artist page's header (SB5): what it has, each count above 0 alone, the records in their one type's word ("3 EPs", else
+ *  "5 records", as the section's heading reads them), then the tracks and their length; none where it has nothing. `types`: its
+ *  had records' types (none: a tracks view, no records count). */
+export function artistLine(types: readonly (string | null | undefined)[] | null, tracks: number, length: string | null): string {
+  const n = types?.length ?? 0;
+  const word = recordsWord(types ?? []);
+  const records = n ? `${n.toLocaleString()} ${n === 1 ? word : `${word}s`}` : null;
+  return [records, tracks ? `${tracks.toLocaleString()} ${tracks === 1 ? 'track' : 'tracks'}` : null, tracks ? length : null].filter(Boolean).join(' • ');
+}
+
+/** Whether an artist page says "Nothing by X on this server." (SB5.2): only where it has nothing anywhere, Not in your library
+ *  read with none among it (`missing`: its answer, null until the first; `rows`: what it shows), never beside rows or a loader,
+ *  nor before the section's first answer. */
+export function nothingBy(v: { had: number; appears: number; top: boolean; missing: { looking?: boolean } | null; rows: number }): boolean {
+  return !v.had && !v.appears && !v.top && !!v.missing && !v.missing.looking && !v.rows;
+}
+
 /** As a heading: Albums, EPs, Singles, Broadcasts, Records. */
 export const recordsTitle = (types: readonly (string | null | undefined)[]) => {
   const w = recordsWord(types);
