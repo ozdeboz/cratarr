@@ -14,18 +14,25 @@ type On = <T>(name: string, handler: (data: T) => void) => () => void;
 
 /** How long changes close together wait to be read as one. */
 const TOGETHER_MS = 250;
+/** A watch's reads at least this far apart: a steady stream of changes (a busy intake) reads once a second, and once more
+ *  after its last change (the review of 1.2, M7: the server sends each change, and reads 250 ms apart tripped LG01). */
+const APART_MS = 1000;
 
 /** The watching, on the server's events as `on` gives them (lib/events in the page; a stand-in in its test). */
 export function changesOn(on: On) {
-  type Watch = { kinds: readonly DataKind[]; read: () => void; timer: ReturnType<typeof setTimeout> | null };
+  type Watch = { kinds: readonly DataKind[]; read: () => void; timer: ReturnType<typeof setTimeout> | null; last: number };
   const watches = new Set<Watch>();
   function changed(kind: DataKind) {
     for (const w of watches) {
       if (!w.kinds.includes(kind) || w.timer) continue;
-      w.timer = setTimeout(() => {
-        w.timer = null;
-        w.read();
-      }, TOGETHER_MS);
+      w.timer = setTimeout(
+        () => {
+          w.timer = null;
+          w.last = Date.now();
+          w.read();
+        },
+        Math.max(TOGETHER_MS, w.last + APART_MS - Date.now()),
+      );
     }
   }
   let listening = false;
@@ -41,7 +48,7 @@ export function changesOn(on: On) {
    *  returned function is called (a view's own effect returns it); a store of the whole page's never calls it. */
   return function whenChanged(kinds: readonly DataKind[], read: () => void): () => void {
     listen();
-    const w: Watch = { kinds, read, timer: null };
+    const w: Watch = { kinds, read, timer: null, last: -Infinity };
     watches.add(w);
     return () => {
       if (w.timer) clearTimeout(w.timer);
