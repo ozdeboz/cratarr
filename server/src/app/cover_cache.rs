@@ -18,7 +18,7 @@ const KEEP: Duration = Duration::from_secs(30 * 86_400);
 /// A kept cover not asked for in this long is taken away.
 const FORGET: Duration = Duration::from_secs(60 * 86_400);
 /// The most of a cover's bytes read (the Spotify picture relay's too, Y11).
-pub(crate) const MOST_BYTES: usize = 5 * 1024 * 1024;
+pub const MOST_BYTES: usize = 5 * 1024 * 1024;
 /// Covers fetched at once (each one's bytes held meanwhile).
 static FETCHING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 /// A look's covers fetched ahead by one task at a time.

@@ -6,9 +6,10 @@ description = "Cratarr core: Jellyfin playlist index and API"
 license.workspace = true
 repository.workspace = true
 
-# The rules for what plays and in what order (rules/), shared with players that play on their own.
+# The rules for what plays and in what order (rules/), shared with players that play on their own; the server's own crates
+# below this package, which holds the binary (crates/, SPLIT-PLAN.md).
 [workspace]
-members = [".", "rules"]
+members = [".", "rules", "crates/*"]
 # Spike B's UniFFI crate is its own workspace (scripts/rules-android.sh).
 exclude = ["rules-ffi"]
 
@@ -82,6 +83,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = { version = "2", default-features = false }
 flate2 = "1"
 # The tests' (dev-dependencies below).
+cratarr-core = { path = "crates/core" }
+cratarr-media = { path = "crates/media" }
+cratarr-store = { path = "crates/store" }
+cratarr-clients = { path = "crates/clients" }
+cratarr-gate = { path = "crates/gate" }
 ts-rs = "12.0.1"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
@@ -91,6 +97,11 @@ tower = { version = "0.5", default-features = false, features = ["util"] }
 test-support = []
 
 [dependencies]
+cratarr-gate.workspace = true
+cratarr-clients.workspace = true
+cratarr-store.workspace = true
+cratarr-media.workspace = true
+cratarr-core.workspace = true
 anyhow.workspace = true
 cratarr-rules.workspace = true
 axum.workspace = true
@@ -130,6 +141,11 @@ zip.workspace = true
 flate2.workspace = true
 
 [dev-dependencies]
+cratarr-gate = { workspace = true, features = ["test-support"] }
+cratarr-clients = { workspace = true, features = ["test-support"] }
+cratarr-store = { workspace = true, features = ["test-support"] }
+cratarr-media = { workspace = true, features = ["test-support"] }
+cratarr-core = { workspace = true, features = ["test-support"] }
 # The page's types from the server's (generated, web/src/lib/generated): written by the tests, so a release build
 # compiles none of it (0.14, faster previews: the dependency check's one lever).
 ts-rs.workspace = true

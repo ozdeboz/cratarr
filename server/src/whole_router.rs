@@ -14,7 +14,7 @@ use tower::ServiceExt;
 /// Each route the source names: its path (each `{param}` a plain value) and its methods.
 fn named_routes() -> Vec<(String, Vec<Method>)> {
     let mut files = Vec::new();
-    let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), Path::new(env!("CARGO_MANIFEST_DIR")).join("crates")];
     while let Some(d) = dirs.pop() {
         for e in std::fs::read_dir(&d).unwrap().flatten() {
             let p = e.path();

@@ -264,3 +264,26 @@ mod library {
         assert_eq!(titles, ["t2", "t3", "t5", "t1"], "every track of their albums, and theirs on others', album by album");
     }
 }
+
+/// From `crate::serve::listener`'s tests.
+#[cfg(test)]
+mod listener {
+    use crate::serve::listener::tests::*;
+    use crate::source::CRATARR;
+
+    #[test]
+    fn a_stream_plays_the_copy_copy_for_chose() {
+        let t = two("chose");
+        assert_eq!(t.plays(&t.who(None, &[])), at(0), "no one: the row copy");
+        assert_eq!(t.plays(&t.who(Some("ann"), &[])), at(0), "the best kept copy");
+        assert_eq!(t.plays(&t.who(Some("ann"), &[0])), at(1), "the other copy is off");
+
+        let (path, kind, ms) = crate::stream::locate(&t.cat, &t.who(Some("ann"), &[0]), CRATARR, &t.song).unwrap();
+        assert_eq!((path, matches!(kind, Some(crate::stream::Kind::Mp3)), ms), (t.roots[1].join(MP3), true, Some(200_000)));
+        let (path, kind, _) = crate::stream::locate(&t.cat, &t.who(None, &[]), CRATARR, &t.song).unwrap();
+        assert_eq!((path, matches!(kind, Some(crate::stream::Kind::Flac))), (t.roots[0].join(FLAC), true));
+        let through = [(CRATARR.to_string(), t.song.clone()), (CRATARR.to_string(), t.song.clone())];
+        let joins = crate::stream::locate_through(&t.cat, &t.who(Some("ann"), &[0]), &through);
+        assert_eq!(joins, [(t.roots[1].join(MP3), Some(200_000)), (t.roots[1].join(MP3), Some(200_000))], "a wind goes through the same file");
+    }
+}

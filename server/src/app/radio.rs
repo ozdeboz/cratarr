@@ -246,9 +246,8 @@ struct Cache {
 
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
-/// The album artist Radio takes a song's artists to go on with, for a query over `albums a`. A compilation's ("Various Artists")
-/// is no artist: it would make every compilation alike.
-pub(crate) const ALBUM_ARTIST_HEARD: &str = "CASE WHEN a.compilation = 1 OR lower(a.artist) IN ('various artists', 'various', 'va', 'verschiedene interpreten') THEN NULL ELSE a.artist_id END";
+/// The album artist Radio takes a song's artists to go on with: in `serve::index_rows`, below the app, which reads it too.
+pub(crate) use crate::serve::index_rows::ALBUM_ARTIST_HEARD;
 
 /// A request as its listener's settings make it: their Similar by, and the libraries they let Radio and Autoplay choose
 /// from (0.9.5: their folders). With the account it is for, and whether Bandcamp joins.

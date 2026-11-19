@@ -3,5 +3,3 @@
 
 mod api;
 mod app;
-mod clients;
-mod gate;

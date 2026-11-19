@@ -842,7 +842,7 @@ pub(crate) mod tests {
         assert_eq!(used("ann"), 19 * 10 * 30_000_000, "her copies all free, her 19 arrivals");
         assert_eq!(used("bob"), 1_000 * 30_000_000 + 18 * 10 * 30_000_000, "his originals and his 18");
         assert_eq!((used("cy"), used("dee"), used("eve")), (18 * 300_000_000, 18 * 300_000_000, 18 * 300_000_000));
-        let source = include_str!("../catalogue/mod.rs");
+        let source = include_str!("../../crates/store/src/catalogue/mod.rs");
         let at = source.find("pub fn room_rows").unwrap();
         let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
         assert_eq!(body.matches("prepare").count(), 1, "one statement: {body}");
@@ -862,7 +862,7 @@ pub(crate) mod tests {
         assert!(SHARED_WITH.contains(&same("o", "f")), "{SHARED_WITH}");
         assert!(FREE_OF_ROOM.contains(&same("g", "f")) && FREE_OF_ROOM.contains(&same("h", "g")), "{FREE_OF_ROOM}");
         assert!(!FREE_OF_ROOM.contains(":kept") && !SHARED_WITH.contains(":main") && !SHARED_WITH.contains(":own"));
-        let source = include_str!("../catalogue/mod.rs");
+        let source = include_str!("../../crates/store/src/catalogue/mod.rs");
         let at = source.find("pub fn room_rows").unwrap();
         let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
         assert!(body.contains("{FREE_OF_ROOM}") && !body.contains("SHARED_WITH") && !body.contains("shared_copies"), "{body}");

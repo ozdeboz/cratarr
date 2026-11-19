@@ -436,7 +436,7 @@ impl<W: Write> Ogg<W> {
 }
 
 /// Ogg's CRC-32: polynomial 0x04C11DB7, not reflected, starting at 0.
-pub(crate) fn crc32(data: &[u8]) -> u32 {
+pub fn crc32(data: &[u8]) -> u32 {
     static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
     let table = TABLE.get_or_init(|| {
         let mut t = [0u32; 256];

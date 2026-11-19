@@ -1,0 +1,27 @@
+[package]
+name = "cratarr-gate"
+description = "Cratarr's file gate: writing tags, moving files, the trash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-clients/test-support"]
+
+[dependencies]
+cratarr-clients.workspace = true
+anyhow.workspace = true
+image.workspace = true
+libc.workspace = true
+lofty.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+cratarr-clients = { workspace = true, features = ["test-support"] }

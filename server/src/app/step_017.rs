@@ -1160,7 +1160,7 @@ mod tests {
         for record in data.rows_of("catalogue.sqlite", "SELECT record FROM record_artists WHERE how = 'listing' AND record IN (SELECT record FROM tracks) ORDER BY record") {
             assert!(!credited.iter().any(|c| format!("Integer({c})") == record), "R17: a listing credit stays only where the files credit nobody: {record}");
         }
-        let part = [body(include_str!("step_017.rs"), "pub(crate) fn credits("), body(include_str!("../catalogue/records.rs"), "pub fn credit_files_017(")];
+        let part = [body(include_str!("step_017.rs"), "pub(crate) fn credits("), body(include_str!("../../crates/store/src/catalogue/records.rs"), "pub fn credit_files_017(")];
         assert!(part.iter().all(|code| !code.contains("assign_records") && !code.contains("Self::assign(")), "the part gives no record");
     }
 
@@ -1175,12 +1175,12 @@ mod tests {
         data.batch("catalogue.sqlite", "ALTER TABLE analysis_shape RENAME TO shape_set_aside");
         credits(&cat, &kinds, &Rules::default(), &|| Ok(())).expect("no statement names the shape");
         assert!(!data.files_credits().is_empty());
-        let catalogue = include_str!("../catalogue/mod.rs");
+        let catalogue = include_str!("../../crates/store/src/catalogue/mod.rs");
         let reader = body(catalogue, "pub fn rows_to_credit(");
         assert!(reader.contains("PRESENT, false)"), "read without the albums' gains: {reader}");
         let part = body(include_str!("step_017.rs"), "pub(crate) fn credits(");
         assert_eq!(part.matches("rows_to_credit(").count(), 1, "one read a folder: {part}");
-        for code in [part, reader, body(include_str!("../catalogue/records.rs"), "pub fn credit_files_017(")] {
+        for code in [part, reader, body(include_str!("../../crates/store/src/catalogue/records.rs"), "pub fn credit_files_017(")] {
             for named in ["analysis_shape", "SHAPE_JOIN", "album_gains_in", "served_rows", "keep_files_names("] {
                 assert!(!code.contains(named), "{named} in {code}");
             }
