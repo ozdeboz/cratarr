@@ -65,7 +65,10 @@
       raf = 0;
       const mark = (size = loaderSizeIn(el));
       const { top, bottom, at } = seen();
-      const middle = Math.max((top + bottom) / 2, at + mark / 2);
+      // The middle of its own room as seen: from its top (or what can be seen's, if it starts above) to the bottom of what
+      // can be seen, as much room above the mark as below (the owner, 2026-11-19: "still not vertically center aligned": the
+      // window's middle put a loader that starts below it at its very top).
+      const middle = Math.max((Math.max(top, at) + bottom) / 2, at + mark / 2);
       const next = { height: Math.round(Math.max(bottom - at, mark * 2)), top: Math.round(middle - at - mark / 2) };
       const was = untrack(() => fit);
       if (next.height !== was?.height || next.top !== was?.top) fit = next;
