@@ -4,10 +4,10 @@
   // while its tracks are still heard: asked again), then its tracks, each its length beside the reference's, its peaks
   // and three parts of it to hear (start, middle, end). Keep, Replace and Delete stay in its album menu
   // (lib/HealthIncoming), Keep suggested here where every check agrees.
+  import Asking from './Asking.svelte';
   import { getIntakeCard, type CardCheck, type IntakeCard, type IntakeTrack } from './api';
   import { plural } from './insights.svelte';
   import Notice from './Notice.svelte';
-  import PageLoading from './PageLoading.svelte';
   import { clockText } from './remote.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
@@ -64,7 +64,8 @@
 {#if failed && !card}
   <Notice text={failed} onretry={() => again++} />
 {:else if !card}
-  <PageLoading />
+  <!-- A part of Health's list, not the page: its own room, the mark in its middle, saying what it reads (the owner, 2026-11-19). -->
+  <Asking said="Checking its files" />
 {:else}
   {@const c = card}
   {@const discs = new Set(c.tracks.map((t) => t.disc ?? 1)).size > 1}
