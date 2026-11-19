@@ -950,6 +950,9 @@ export function exportUrl(c: ExportChoice): string {
 /** One line of a playlist for its view (decision 0023): what the catalogue knows of its file; `id` null when not matched
  *  to the server, `missing` when the file is not in the Music folder. */
 export type PlaylistRow = {
+  /** Its record's type, as the Library list serves it (GOTO.S1): a track's Go to names it. */
+  album_type?: string | null;
+  album_secondary?: string[];
   entry: string;
   /** The line's own id (decision 0087, 0.12: kept beside the .m3u), what a playlist's operations name; absent from a
    *  server without them. */

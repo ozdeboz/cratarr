@@ -157,13 +157,19 @@
   // Shown or not; what it is for stays while it slides out.
   let menuShown = $state(false);
   const showMenu = (m: RowMenu) => ((menuFor = m), (menuShown = true));
-  const asTrack = (t: { id: string; name: string; artist: string | null; album: string | null; album_id: string | null }, source: string): MenuTrack => ({
+  const asTrack = (
+    t: { id: string; name: string; artist: string | null; album: string | null; album_id: string | null; album_type?: string | null; album_secondary?: string[] },
+    source: string,
+  ): MenuTrack => ({
     source,
     id: t.id,
     name: t.name,
     artist: t.artist,
     album: t.album,
     album_id: t.album_id,
+    // Its record's type as the server sent it (GOTO.4); a queue kept from before has none: "Go to record".
+    album_type: t.album_type ?? null,
+    album_secondary: t.album_secondary ?? [],
   });
   /** A row's menu, about its place in the queue; the playing track's card gives the playing track's own menu. */
   function rowMenu(track: MenuTrack, queue: QueuePlace | null, asker: string | null = null) {

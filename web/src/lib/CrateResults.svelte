@@ -137,7 +137,17 @@
   // 2026-11-02): a record's its tracks of the crate and Go to album, a track's its own.
   let recordMenu = $state<string | null>(null);
   let trackMenu = $state.raw<MenuTrack | null>(null);
-  const menuTrackOf = (r: PlaylistRow): MenuTrack => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, has_versions: r.has_versions });
+  const menuTrackOf = (r: PlaylistRow): MenuTrack => ({
+    source: preview?.source ?? 'cratarr',
+    id: r.id!,
+    name: r.name ?? r.file,
+    artist: r.artist,
+    album: r.album,
+    album_id: r.album_id ?? null,
+    has_versions: r.has_versions,
+    album_type: r.album_type ?? null,
+    album_secondary: r.album_secondary ?? [],
+  });
   const localOf = (rows: PlaylistRow[]): LocalTrack[] =>
     rows.filter((r) => r.id && !r.missing).map((r) => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
   const openTrackMenu = (r: PlaylistRow) => r.id && !r.missing && (trackMenu = menuTrackOf(r));
@@ -226,6 +236,8 @@
         chips={[rec.artist ?? '', holdsLine(rec.at.length, rec.of)].filter(Boolean)}
         tracks={localOf(rows)}
         album={albumId ? viewOver.bind(null, albumSubject(src, albumId)) : null}
+        albumType={rows.find((r) => r.album_type)?.album_type ?? null}
+        albumSecondary={rows.find((r) => r.album_type)?.album_secondary ?? []}
         onclose={() => (recordMenu = null)}
       />
     {/if}

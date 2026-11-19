@@ -1382,7 +1382,17 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let workMenu = $state<{ mbid: string; title: string; ids: string[] } | null>(null);
   let workOpen = $state<{ mbid: string; title: string } | null>(null);
   const workIds = (list: PlaylistRow[]) => list.filter((x) => x.id && !x.missing).map((x) => x.id!);
-  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null, has_versions: r.has_versions });
+  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({
+    source: src,
+    id: r.id!,
+    name: r.name ?? r.file,
+    artist: r.artist,
+    album: r.album,
+    album_id: album?.id ?? r.album_id ?? null,
+    has_versions: r.has_versions,
+    album_type: r.album_type ?? null,
+    album_secondary: r.album_secondary ?? [],
+  });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
   // or at the end of the queue; an album also Resume. A crate plays and shuffles; its favourites toggle sits at the
@@ -3146,6 +3156,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     chips={[rec.artist ?? '', holdsLine(rec.at.length, albumTotal(rec))].filter(Boolean)}
     tracks={tracksOf(rs.filter((r) => r.id && !r.missing))}
     album={rec.albumId ? () => viewOver(albumSubject(source, rec.albumId!)) : null}
+    albumType={rs.find((r) => r.album_type)?.album_type ?? null}
+    albumSecondary={rs.find((r) => r.album_type)?.album_secondary ?? []}
     outs={away}
     onclose={() => (recordMenu = null)}
   />
