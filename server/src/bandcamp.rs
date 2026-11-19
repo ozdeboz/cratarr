@@ -64,7 +64,7 @@ pub fn held_until(now: i64) -> Option<i64> {
 /// Bandcamp left alone for a day after its bot check, or a search answer that is no JSON (O4): said in the log once, a failure for
 /// Health's connections, nothing done to get past it. Kept in the server's user data (Y8).
 fn hold() {
-    hold_in(crate::serve::instance().as_deref().map(|s| &*s.userdata));
+    hold_in(crate::serve::view::get().as_deref().map(|s| &**s.userdata()));
 }
 
 /// `hold`, kept in `ud` where there is one (Y8), so a restart the evening of a check still leaves Bandcamp alone until the day is out

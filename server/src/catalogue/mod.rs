@@ -681,9 +681,9 @@ const FACTS_EVERY: Duration = Duration::from_secs(300);
 /// What the crates' facts take from elsewhere that no build brings them, as one stamp: the library's words (0.9.7,
 /// `app::words::stamp`), what Classical is made of (0.10), and Discogs' labels, which were only ever seen because the
 /// connection's change count moved all the same.
-fn said_stamp(s: &crate::serve::Serve) -> i64 {
-    let said = crate::app::words::stamp(s).wrapping_mul(31).wrapping_add(crate::app::classical::stamp(s));
-    said.wrapping_mul(31).wrapping_add(s.userdata.discogs_albums_stamp().unwrap_or(0))
+fn said_stamp<S: crate::serve::view::ServeView + ?Sized>(s: &impl std::ops::Deref<Target = S>) -> i64 {
+    let said = s.words_stamp().wrapping_mul(31).wrapping_add(s.classical_stamp());
+    said.wrapping_mul(31).wrapping_add(s.userdata().discogs_albums_stamp().unwrap_or(0))
 }
 
 /// What the crates' facts are read from (`read_crate_facts`): a table read there goes here too, or a write to it shows
@@ -1785,10 +1785,10 @@ impl Catalogue {
     /// or the folders change: reading them means reading every file's tags. Blocking.
     pub fn crate_facts(&self) -> Result<Arc<Vec<crate::crates::Facts>>> {
         // Read again when the library is built again too: its albums' release types (0.9.6) come from there.
-        let served = crate::serve::instance();
+        let served = crate::serve::view::get();
         let (written, folders, built) = (self.facts_written.load(Ordering::Relaxed), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
         let words = served.as_ref().map_or(0, |s| said_stamp(s));
-        let marks = served.as_ref().map_or(0, |s| s.userdata.marks_stamp().unwrap_or(0));
+        let marks = served.as_ref().map_or(0, |s| s.userdata().marks_stamp().unwrap_or(0));
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(k) = kept.as_ref()
             && k.folders == folders
@@ -1815,7 +1815,7 @@ impl Catalogue {
         let mut several: HashMap<i64, Option<Place>> = shared.iter().map(|t| (*t, None)).collect();
         if let Some(s) = served.as_ref().filter(|_| !shared.is_empty()) {
             let songs: Vec<String> = shared.iter().map(|t| crate::serve::ids::song(*t)).collect();
-            for (song, place) in s.library.song_places(&songs)? {
+            for (song, place) in s.library().song_places(&songs)? {
                 if let Some(t) = crate::serve::ids::track_of(&song) {
                     several.insert(t, Some(place));
                 }
@@ -1827,7 +1827,7 @@ impl Catalogue {
         };
         drop(reader);
         if let Some(s) = &served
-            && let Ok(types) = s.library.song_release_types()
+            && let Ok(types) = s.library().song_release_types()
         {
             for f in &mut facts {
                 if let Some(t) = f.track.and_then(|t| types.get(&crate::serve::ids::song(t))) {
@@ -1837,20 +1837,20 @@ impl Catalogue {
         }
         // And Classical where its album is one (0.10): a Type value of every list and crate.
         if let Some(s) = &served
-            && let Err(e) = crate::app::classical::add_kind(s, &mut facts)
+            && let Err(e) = s.add_classical(&mut facts)
         {
             tracing::warn!("crates: Classical not read: {e:#}");
         }
         if let Some(s) = &served
-            && let Ok(albums) = s.library.song_album_map()
+            && let Ok(albums) = s.library().song_album_map()
         {
             // Each file with its record's words and its own, from the one store (decision 0097): every source.
-            if let Err(e) = crate::app::words::build(s, &albums, &mut facts) {
+            if let Err(e) = s.add_words(&albums, &mut facts) {
                 tracing::warn!("crates: the words not read: {e:#}");
             }
             // And with its album's id (0.11, quick crates: the Album axis, an album seed), one copy for all its
             // tracks; its labels Discogs' for its album where its tags name none, as kept (never asked for here).
-            match crate::app::discogs_facts::kept_labels(s) {
+            match s.kept_labels() {
                 Ok(labels) => {
                     let mut shared: HashMap<&str, Arc<str>> = HashMap::new();
                     for f in &mut facts {
@@ -2095,7 +2095,7 @@ impl Catalogue {
     /// this, as the lowest folder can be someone's own music or a copy waiting in Incoming. Blocking.
     pub fn row_line(&self, track: i64) -> Option<String> {
         let files = self.files_of(track);
-        let row = crate::serve::instance().filter(|_| files.len() > 1).and_then(|s| s.library.file_of(&crate::serve::ids::song(track)).ok().flatten());
+        let row = crate::serve::view::get().filter(|_| files.len() > 1).and_then(|s| s.library().file_of(&crate::serve::ids::song(track)).ok().flatten());
         row_line_of(&self.folders(), &files, row.as_ref())
     }
 

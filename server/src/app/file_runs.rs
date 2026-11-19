@@ -408,8 +408,8 @@ fn restore_whole(path: &Path, w: &crate::journal::Whole) -> Result<bool> {
 
 /// Where a run keeps the originals of files it writes whole: beside the journal, under Cratarr's data folder.
 fn kept_dir(run: &str) -> Result<PathBuf> {
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let data = served.data_dir.clone().context("Cratarr's data folder is needed")?;
+    let served = crate::serve::view::get().context("Cratarr's own library is not open")?;
+    let data = served.data_dir().context("Cratarr's data folder is needed")?;
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis();
     Ok(Path::new(&data).join("run-files").join(format!("{at}-{run}")))
 }
@@ -445,7 +445,7 @@ fn by_track(rows: Vec<(FieldView, Option<String>)>) -> Vec<FieldView> {
 
 /// The review sheet of a proposal (or of a run, `written` per record).
 pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite], written: bool) -> PlanView {
-    let roots: Vec<PathBuf> = crate::serve::instance().filter(|s| s.has_catalogue()).map_or_else(Vec::new, |s| s.catalogue().folders().iter().map(|(_, root)| root.to_path_buf()).collect());
+    let roots: Vec<PathBuf> = crate::serve::view::get().filter(|s| s.has_catalogue()).map_or_else(Vec::new, |s| s.catalogue().folders().iter().map(|(_, root)| root.to_path_buf()).collect());
     view_in(kind, title, records, files, written, &roots)
 }
 
@@ -1057,7 +1057,7 @@ async fn reread(paths: &[PathBuf]) {
     if paths.is_empty() {
         return;
     }
-    let Some(served) = crate::serve::instance() else { return };
+    let Some(served) = crate::serve::view::get() else { return };
     // Files only: a cover's run names its folder (its tracks read again by `covers`).
     let paths: Vec<PathBuf> = paths.iter().filter(|p| !p.is_dir()).cloned().collect();
     let _ = tokio::task::spawn_blocking(move || served.reread(&paths)).await;

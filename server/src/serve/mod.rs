@@ -27,6 +27,7 @@ pub mod routes;
 pub mod sessions;
 pub mod signin;
 pub mod users;
+pub mod view;
 pub mod who;
 
 use std::path::PathBuf;
@@ -54,6 +55,7 @@ const FIRST_AFTER: Duration = Duration::from_secs(90);
 static INSTANCE: std::sync::OnceLock<Arc<Serve>> = std::sync::OnceLock::new();
 
 pub fn set_instance(serve: Arc<Serve>) {
+    view::set(serve.clone());
     let _ = INSTANCE.set(serve);
     // A playlist made, renamed, deleted or brought back: logged (decision 0087; its writes are logged as they are
     // written); one shared that goes (deleted, renamed away), told to the others as gone.
@@ -989,6 +991,46 @@ impl Serve {
             Some((ct, bytes)) => (head(&ct), bytes).into_response(),
             None => StatusCode::NOT_FOUND.into_response(),
         })
+    }
+}
+
+/// The server as the stores below it see it (`view`, SPLIT-PLAN P4, P5): its own parts, and the crates' facts from the app.
+impl view::ServeView for Serve {
+    fn userdata(&self) -> &Arc<UserData> {
+        &self.userdata
+    }
+    fn library(&self) -> &Arc<library::Library> {
+        &self.library
+    }
+    fn data_dir(&self) -> Option<std::path::PathBuf> {
+        self.data_dir.clone()
+    }
+    fn built_at(&self) -> i64 {
+        Serve::built_at(self)
+    }
+    fn has_catalogue(&self) -> bool {
+        Serve::has_catalogue(self)
+    }
+    fn catalogue(&self) -> &Arc<Catalogue> {
+        Serve::catalogue(self)
+    }
+    fn reread(&self, paths: &[std::path::PathBuf]) {
+        Serve::reread(self, paths)
+    }
+    fn words_stamp(&self) -> i64 {
+        crate::app::words::stamp(self)
+    }
+    fn classical_stamp(&self) -> i64 {
+        crate::app::classical::stamp(self)
+    }
+    fn add_classical(&self, facts: &mut [crate::crates::Facts]) -> Result<()> {
+        crate::app::classical::add_kind(self, facts)
+    }
+    fn add_words(&self, album_of: &std::collections::HashMap<String, String>, facts: &mut [crate::crates::Facts]) -> Result<()> {
+        crate::app::words::build(self, album_of, facts)
+    }
+    fn kept_labels(&self) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        crate::app::discogs_facts::kept_labels(self)
     }
 }
 

@@ -186,9 +186,9 @@ pub struct Status {
 
 /// How MusicBrainz stands now.
 pub async fn status() -> Result<Status> {
-    let (asked, works, of) = match crate::serve::instance() {
+    let (asked, works, of) = match crate::serve::view::get() {
         Some(s) => {
-            let (lib, ud) = (s.library.clone(), s.userdata.clone());
+            let (lib, ud) = (s.library().clone(), s.userdata().clone());
             tokio::task::spawn_blocking(move || -> Result<(usize, usize, usize)> {
                 let releases = lib.album_releases()?;
                 let typed = ud.release_types_asked("mb:", 0)?;

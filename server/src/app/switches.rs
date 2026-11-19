@@ -37,7 +37,7 @@ pub fn is_on(name: &'static str) -> bool {
     if let Some(on) = KNOWN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|k| k.get(name)) {
         return *on;
     }
-    let on = crate::serve::instance().is_none_or(|s| s.userdata.import_choice(&key(name)).ok().flatten().is_none_or(|c| c != "1"));
+    let on = crate::serve::view::get().is_none_or(|s| s.userdata().import_choice(&key(name)).ok().flatten().is_none_or(|c| c != "1"));
     KNOWN.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(name, on);
     on
 }
@@ -58,8 +58,8 @@ pub static TEST_STATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(()
 
 /// A connection switched on or off. Blocking.
 pub fn set_on(name: &'static str, on: bool) -> Result<()> {
-    let serve = crate::serve::instance().ok_or_else(|| anyhow::anyhow!("Cratarr's own library is not open"))?;
-    serve.userdata.set_import_choice(&key(name), if on { "" } else { "1" })?;
+    let serve = crate::serve::view::get().ok_or_else(|| anyhow::anyhow!("Cratarr's own library is not open"))?;
+    serve.userdata().set_import_choice(&key(name), if on { "" } else { "1" })?;
     KNOWN.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(name, on);
     Ok(())
 }
