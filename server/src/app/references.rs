@@ -1369,6 +1369,8 @@ mod tests {
             why: String::new(),
             tracks: Vec::new(),
             lengths: Vec::new(),
+            format: String::new(),
+            fits: 0,
         }
     }
 
