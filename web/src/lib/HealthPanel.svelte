@@ -37,6 +37,7 @@
   import { damagedStops, missingStops, throughKind, throughTotal, type Stop } from './healthThrough';
   import HealthItemTools from './HealthItemTools.svelte';
   import { LEVEL, fullOf } from './healthTools';
+  import { ENTRY_NAME, goToName } from './menuTable';
   import { FIXABLE } from './fixes.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
@@ -140,7 +141,11 @@
   /** A missing track being looked for (Albums missing tracks): its album and recording (lib/ReplaceTrackSheet). */
   let searchOf = $state<{ album: string; title: string; recording: string } | null>(null);
   const onward = (x: HealthItem) =>
-    x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => viewOver(x.playlist!) } : null;
+    x.album
+      ? { label: goToName(x.album_type, x.album_secondary), go: () => viewOver(albumSubject(x.album![0], x.album![1])) }
+      : x.playlist
+        ? { label: ENTRY_NAME.goPlaylist!, go: () => viewOver(x.playlist!) }
+        : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
   /** When its domain was last checked: the time today, else its day and time. */
   const checkedAt = (t: number) => {

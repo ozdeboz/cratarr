@@ -64,7 +64,7 @@
   import { isKept, setKept } from './kept.svelte';
   import DownloadStep from './DownloadStep.svelte';
   import MenuTable from './MenuTable.svelte';
-  import { inOrder, type EntryId } from './menuTable';
+  import { ICON_OF, inOrder, viewName, type EntryId } from './menuTable';
   import { offeredNotHad } from './recordNotHad';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
@@ -149,7 +149,8 @@
     }
   });
   // Named by its release type: Delete EP, this single (lib/recordTypeRules).
-  const word = $derived(recordWord(a.type));
+  // One word for its View and its Delete (F35.4), a track's Go to the same (GOTO.1).
+  const word = $derived(recordWord(a.type, a.secondary));
   const source = $derived.by(() => {
     try {
       return (keptSource = givenSource ?? keptSource);
@@ -632,8 +633,8 @@
   {:else if e === 'view'}
     {#if viewable && panel.viewed !== albumSubject(source, a.id)}
       <MenuEntry
-        icon="squareArrowOutUpRight"
-        label="View"
+        icon={ICON_OF.view}
+        label={viewName('album', a.type, a.secondary)}
         onclick={() => {
           onclose();
           viewOver(albumSubject(source, a.id));
@@ -641,13 +642,13 @@
       />
     {/if}
   {:else if e === 'goArtist'}
-    {#each artistNames as name (name)}<MenuEntry icon="user" label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
+    {#each artistNames as name (name)}<MenuEntry icon={ICON_OF.artist} label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
   {:else if e === 'goGenre'}
-    {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
+    {#each genres as g (g)}<MenuEntry icon={ICON_OF.genre} label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
   {:else if e === 'soundsLike'}
     <!-- Sounds like it: the crate search's sentence with the album as its "like" term (0.12: one way to make a crate). -->
     {#if source === 'cratarr'}<MenuEntry
-        icon="music"
+        icon={ICON_OF.soundsLike}
         label="Sounds like this"
         onclick={() => {
           // Read before closing: closing lets go of the album.
@@ -718,7 +719,7 @@
       {#each new Set(copyOffers.flatMap((o) => o.job ?? [])) as job (job)}<MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />{/each}
     {/if}
   {:else if e === 'moveTo'}
-    {#each moveEntries(copyOffers) as m (m.key)}<MenuEntry icon="intoBox" label={m.label} onclick={() => askMove(m.offer, m.to)} />{/each}
+    {#each moveEntries(copyOffers) as m (m.key)}<MenuEntry icon={ICON_OF[`${m.verb}To`]} label={m.label} onclick={() => askMove(m.offer, m.to)} />{/each}
   {:else if e === 'replaceIn'}
     {#if me.admin}
       {#each replaceEntries(copyOffers) as r (r.key)}<MenuEntry icon="swap" label={r.label} onclick={() => askReplace(r.offer, r.to)} />{/each}

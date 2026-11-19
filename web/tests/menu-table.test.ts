@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 
-const { ACTIONS_NEED_SERVER, ENTRY_NAME, GROUP_ORDER, MENUS, OWN_CARD, RETIRED_NAMES, WORKS_AWAY, actionAway, inOrder, offeredAway } = await import(
+const { ACTIONS_NEED_SERVER, ENTRY_NAME, ENTRY_WORDS, GROUP_ORDER, ICON_OF, MENUS, OWN_CARD, RETIRED_NAMES, WORKS_AWAY, actionAway, goToName, inOrder, offeredAway, viewName } = await import(
   '../src/lib/menuTable.ts'
 );
 type Kind = keyof typeof MENUS;
@@ -79,8 +79,80 @@ test('the names are the same everywhere (Info, View, Sync to this device, Downlo
   }
   for (const f of readdirSync(LIB).filter((f) => f.endsWith('.svelte'))) {
     const src = read(f);
-    for (const old of RETIRED_NAMES) assert.ok(!src.includes(`label="${old}"`), `${f}: still "${old}"`);
+    for (const old of RETIRED_NAMES) {
+      // F35.3: a bare View is retired from the menus' entries (a list's View sheet is another thing); RequestsPanel's two sheets
+      // keep theirs until RS01 rebuilds them, by name, the one exemption.
+      if (old === 'View') {
+        if (f !== 'RequestsPanel.svelte') assert.ok(!/<MenuEntry[^>]*\slabel="View"/.test(src), `${f}: still a bare "View"`);
+        continue;
+      }
+      assert.ok(!src.includes(`label="${old}"`), `${f}: still "${old}"`);
+    }
   }
+});
+
+// F31, F32, F35 and GOTO.1: the navigation words and their icons from the table, read by the components.
+test('Go to names the record\'s type, as View and Delete do (GOTO.1, F35.1, F35.4)', () => {
+  const types: [string | null | undefined, string[] | undefined, string][] = [
+    ['album', undefined, 'album'],
+    ['ep', undefined, 'EP'],
+    ['single', undefined, 'single'],
+    ['broadcast', undefined, 'broadcast'],
+    ['other', undefined, 'record'],
+    [null, undefined, 'record'],
+    [undefined, undefined, 'record'],
+    ['album', ['compilation'], 'compilation'],
+  ];
+  for (const [type, secondary, word] of types) {
+    assert.equal(goToName(type, secondary), `Go to ${word}`);
+    assert.equal(viewName('album', type, secondary), `View ${word}`);
+  }
+  // The owner's words, quoted once.
+  assert.deepEqual([goToName('ep'), goToName('single'), goToName('album', ['compilation']), goToName(null)], ['Go to EP', 'Go to single', 'Go to compilation', 'Go to record']);
+  assert.deepEqual([viewName('album', 'album'), viewName('album', 'ep'), viewName('album', 'single'), viewName('album', 'album', ['compilation']), viewName('album')], ['View album', 'View EP', 'View single', 'View compilation', 'View record']);
+  assert.deepEqual([viewName('crate'), viewName('genre'), viewName('playlist')], ['View crate', 'View genre', 'View playlist']);
+  assert.equal(ENTRY_NAME.view, undefined, 'View is named by what it is about');
+  assert.equal(ENTRY_NAME.goAlbum, undefined, 'Go to is named by what it is about');
+  assert.deepEqual([ENTRY_WORDS.saveTo, ENTRY_WORDS.addTo, ENTRY_WORDS.moveTo], ['Save to', 'Add to', 'Move to']);
+  const menu = read('AlbumMenu.svelte');
+  assert.match(menu, /const word = \$derived\(recordWord\(a\.type, a\.secondary\)\);/, "View's and Delete's one word");
+  assert.match(menu, /label=\{viewName\('album', a\.type, a\.secondary\)\}/);
+});
+
+test('the navigation words come from the table (F31)', () => {
+  const tools = read('HealthPanel.svelte');
+  assert.match(tools, /label: goToName\(x\.album_type, x\.album_secondary\)/, "Health's onward names the record's type");
+  assert.match(tools, /label: ENTRY_NAME\.goPlaylist!/);
+  assert.equal(ENTRY_NAME.goPlaylist, 'Go to playlist');
+  assert.match(read('ReplaceTrackSheet.svelte'), /<MenuEntry icon=\{ICON_OF\.outside\} label=\{ENTRY_NAME\.openOnBandcamp!\}/);
+  assert.match(read('TrackMenu.svelte'), /label=\{goToName\(t\.album_type, t\.album_secondary\)\}/);
+  assert.match(read('SelectionMenu.svelte'), /label=\{goToName\(albumType, albumSecondary\)\}/);
+  for (const f of readdirSync(LIB, { recursive: true }).map(String).filter((f) => /\.(svelte|ts)$/.test(f))) {
+    const src = read(f.replace(/\\/g, '/'));
+    assert.ok(!/(['"`>])Go to album\b/.test(src), `${f}: a literal Go to album`);
+    assert.ok(!/Open the album|Open the playlist/.test(src) || f.endsWith('prefs.svelte.ts'), `${f}: Open the album or playlist`);
+    assert.ok(!/<MenuEntry[^>]*\slabel="On Bandcamp"/.test(src), f);
+  }
+});
+
+test('one map of a destination\'s icon (F32), every Go to taking its kind\'s', () => {
+  assert.deepEqual(
+    [ICON_OF.album, ICON_OF.artist, ICON_OF.playlist, ICON_OF.crate, ICON_OF.genre, ICON_OF.soundsLike, ICON_OF.view, ICON_OF.outside, ICON_OF.requests],
+    ['disc', 'user', 'playlists', 'crates', 'swatch', 'music', 'squareArrowOutUpRight', 'externalLink', 'inbox'],
+  );
+  assert.deepEqual([ICON_OF.saveTo, ICON_OF.addTo, ICON_OF.moveTo], ['save', 'plus', 'intoBox']);
+  const icons = read('Icon.svelte');
+  for (const name of Object.values(ICON_OF)) assert.match(icons, new RegExp(`\\n\\s+${name}:`), `${name} is one of Icon's`);
+  assert.doesNotMatch(read('DownloadsPanel.svelte'), /GO_ICON/);
+  for (const f of readdirSync(LIB).filter((f) => f.endsWith('.svelte'))) {
+    const src = read(f);
+    for (const m of src.matchAll(/<MenuEntry\s[^>]*?label=(?:"Go to [^"]*"|\{goToName\([^}]*\)\}|\{`Go to[^`]*`\})[^>]*>/g)) {
+      assert.match(m[0], /icon=\{ICON_OF\.\w+\}|icon=\{ICON_OF\[/, `${f}: ${m[0]}`);
+    }
+    assert.ok(!/icon="squareArrowOutUpRight"[^>]*label="Go to/.test(src), f);
+  }
+  assert.match(read('PlaylistView.svelte'), /<Icon name=\{ICON_OF\.album\} size=\{14\} \/>/, "the In your library line's icon");
+  assert.match(read('WorkMenu.svelte'), /icon=\{ICON_OF\.work\}\r?\n\s+label="Go to the work"/);
 });
 
 test("the large actions in the table's order, equals as given, one it does not name last", () => {

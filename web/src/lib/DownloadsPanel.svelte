@@ -16,6 +16,7 @@
   import { albumCoverUrl, crateImageUrl } from './api';
   import { albumSubject, artistSubject, backOne, closePlaylist, DOWNLOADS, SETTINGS, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
   import { keepsPlace } from './keepsPlace';
+  import { ICON_OF } from './menuTable';
   import Crumbs from './Crumbs.svelte';
   import { appInfo, download, downloads, removeDownloads } from './app.svelte';
   import type { Collection } from './api';
@@ -110,7 +111,6 @@
   /** Its own menu where one can be made from what is known: an album's (a real id), a playlist's (one listed), a crate's. */
   const ownMenu = (m: Menu) =>
     (m.kind === 'album' && !m.id.includes('\n')) || m.kind === 'crate' || (m.kind === 'playlist' && shownPlaylists().some((p) => p.id === m.id));
-  const GO_ICON = { album: 'disc', artist: 'user', playlist: 'playlists', crate: 'crates' } as const;
 
   // --- Downloaded once ---
   const listedOf = (g: OnceAlbum) => library.view?.sources.find((s) => s.id === g.source)?.albums.find((a) => a.id === g.id) ?? null;
@@ -387,7 +387,7 @@
   {:else}
     <MenuSheet label={m.name} title={m.name} images={m.cover ? [m.cover] : []} onclose={() => (menu = null)}>
       <div role="menu">
-        <MenuEntry icon={GO_ICON[m.kind]} label="Go to {m.name}" onclick={() => (goTo(m.kind, m.subject), (menu = null))} />
+        <MenuEntry icon={ICON_OF[m.kind]} label="Go to {m.name}" onclick={() => (goTo(m.kind, m.subject), (menu = null))} />
         {#if m.synced}<MenuEntry icon="close" label="Stop syncing" danger onclick={() => (setKept(m.kind, m.source, m.id, false, m.name), (menu = null))} />{/if}
       </div>
     </MenuSheet>

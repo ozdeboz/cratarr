@@ -35,10 +35,12 @@ export const typeLabel = (value: string) => PLURAL[value.toLowerCase()] ?? value
 /** A record as its release type names it (the owner, 2026-11-01: "When it's a single type, we can use that type"):
  *  album, EP, single, broadcast; a record where it has none or is Other. */
 const ONE: Record<string, string> = { album: 'album', ep: 'EP', single: 'single', broadcast: 'broadcast' };
-export const recordWord = (type?: string | null) => ONE[type?.toLowerCase() ?? ''] ?? 'record';
+/** A compilation is said so whatever its primary type (OQ-F35: "View compilation", "Delete compilation"). */
+export const recordWord = (type?: string | null, secondary?: readonly string[] | null) =>
+  secondary?.some((s) => s.toLowerCase() === 'compilation') ? 'compilation' : (ONE[type?.toLowerCase() ?? ''] ?? 'record');
 /** Several records' word: their one release type where they all have it ("3 EPs"), else record ("12 records"). */
 export function recordsWord(types: readonly (string | null | undefined)[]): string {
-  const words = new Set(types.map(recordWord));
+  const words = new Set(types.map((t) => recordWord(t)));
   return words.size === 1 ? [...words][0] : 'record';
 }
 /** An artist page's header (SB5): what it has, each count above 0 alone, the records in their one type's word ("3 EPs", else

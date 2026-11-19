@@ -5,6 +5,7 @@
   // it (lib/WorkSheet) where it is not open already. No notice on success; an error in one line.
   import { getWork, type PlayHow } from './api';
   import MenuEntry from './MenuEntry.svelte';
+  import { ICON_OF } from './menuTable';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { playCollection } from './play.svelte';
   import { toast } from './toast.svelte';
@@ -56,7 +57,7 @@
 <MenuSheet label={title} {title} {actions} {onclose}>
   {#if onopen}
     <MenuEntry
-      icon="music"
+      icon={ICON_OF.work}
       label="Go to the work"
       onclick={() => {
         const go = onopen;

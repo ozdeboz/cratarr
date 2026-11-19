@@ -14,6 +14,7 @@
   import { plural } from './insights.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import { ENTRY_NAME, ICON_OF } from './menuTable';
   import MenuGroup from './MenuGroup.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -339,7 +340,7 @@
         </MenuGroup>
         {#if search.bandcamp}
           <MenuGroup>
-            <MenuEntry icon="externalLink" label="On Bandcamp" onclick={() => window.open(search!.bandcamp!, '_blank', 'noopener')} />
+            <MenuEntry icon={ICON_OF.outside} label={ENTRY_NAME.openOnBandcamp!} onclick={() => window.open(search!.bandcamp!, '_blank', 'noopener')} />
           </MenuGroup>
         {/if}
       </MenuCards>

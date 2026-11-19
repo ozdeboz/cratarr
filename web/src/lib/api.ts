@@ -1712,6 +1712,9 @@ export type HealthItem = {
   title: string;
   line?: string;
   album?: [string, string];
+  /** Its record's type, where it is about a record (GOTO.S1): its Go to names it (F31.1). */
+  album_type?: string | null;
+  album_secondary?: string[];
   playlist?: string;
   files?: string[];
   /** An album missing tracks (0.9.7): those it lacks ("06 · Title", "Disc 2 · 03 · Title"), its release group to ask

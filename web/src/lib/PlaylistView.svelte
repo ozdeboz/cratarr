@@ -135,6 +135,7 @@
   import AlbumMenu from './AlbumMenu.svelte';
   import RecordProblemSheet from './RecordProblemSheet.svelte';
   import { sheetFor } from './healthTools';
+  import { ICON_OF } from './menuTable';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -2628,7 +2629,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
                state, W12), a tap to Requests; until when it was in Music (OQ16). -->
           {#if notHadShown}
             {#each notHadShown.lines as l (l.kind)}
-              {#if l.kind === 'have'}{@const to = l.record}<button class="details left-out" onclick={() => viewOver(albumSubject('cratarr', to))}><Icon name="disc" size={14} /><span>{l.text}</span></button>
+              {#if l.kind === 'have'}{@const to = l.record}<button class="details left-out" onclick={() => viewOver(albumSubject('cratarr', to))}><Icon name={ICON_OF.album} size={14} /><span>{l.text}</span></button>
               {:else if l.kind === 'request'}<button class="details left-out" onclick={() => (location.hash = hrefOf('requests'))}><Icon name="inbox" size={14} /><span>{l.text}</span></button>
               {:else}<span class="details left-out"><Icon name="clock" size={14} /><span>{l.text}</span></span>{/if}
             {/each}

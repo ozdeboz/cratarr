@@ -15,7 +15,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import MenuTable from './MenuTable.svelte';
-  import { inOrder, type EntryId } from './menuTable';
+  import { ICON_OF, inOrder, type EntryId } from './menuTable';
   import type { LocalTrack } from './localPlayer.svelte';
   import { share } from './share';
   import { toast } from './toast.svelte';
@@ -73,7 +73,7 @@
 {#snippet entry(e: EntryId)}
   {#if e === 'goArtist'}
     {#if album.artist}
-      <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist('cratarr', album.artist!))} />
+      <MenuEntry icon={ICON_OF.artist} label="Go to {album.artist}" onclick={act(() => goToArtist('cratarr', album.artist!))} />
     {/if}
   {:else if e === 'discover'}
     <DiscoverEntries {page} artist={album.artist} album={album.title} {onclose} />

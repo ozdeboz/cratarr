@@ -17,7 +17,7 @@
   import { WORD_FIELD_OF, mergeInto, sourceNames } from './words.svelte';
   import { inApp, type Downloadable } from './app.svelte';
   import DownloadStep from './DownloadStep.svelte';
-  import { inOrder, type EntryId, type MenuKind } from './menuTable';
+  import { ICON_OF, inOrder, viewName, type EntryId, type MenuKind } from './menuTable';
   import MenuTable from './MenuTable.svelte';
   import { CRATE, EDIT_CRATE, WORD_LABEL, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, likeOf, playCrate, seeded, shuffleCrate, startCrate, wordOf, withoutFor } from './crates.svelte';
   import { isKept, setKept } from './kept.svelte';
@@ -197,7 +197,7 @@
 
 {#snippet entry(e: EntryId)}
   {#if e === 'view'}
-    {#if !viewed}<MenuEntry icon="squareArrowOutUpRight" label="View" onclick={view} />{/if}
+    {#if !viewed}<MenuEntry icon={ICON_OF.view} label={viewName(kind === 'genre' ? 'genre' : 'crate')} onclick={view} />{/if}
   {:else if e === 'startCrate'}
     {#if like !== null}<MenuEntry icon="crates" label="Start a crate from it" onclick={fromLike} />{/if}
   {:else if e === 'grabCrate'}
