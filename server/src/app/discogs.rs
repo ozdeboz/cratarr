@@ -629,6 +629,32 @@ pub struct Listed {
     pub catno: Option<String>,
 }
 
+/// Whether Discogs' format words say a record of the artist's own (A1.1, as MusicBrainz's list keeps albums and EPs of their own): an
+/// album ("Album", "LP") or an EP, and no compilation ("Comp", "Smplr", "Compilation"), DJ mix ("Mixed"), mixtape or single. None:
+/// no record of their own, or words that say no type ("12\""). Pure.
+pub fn own_record(format: &str) -> bool {
+    let words: Vec<String> = format.split(',').map(|w| w.trim().trim_matches('"').to_ascii_lowercase()).collect();
+    let has = |w: &str| words.iter().any(|x| x == w);
+    if ["comp", "smplr", "compilation", "mixed", "mixtape", "single"].iter().any(|w| has(w)) {
+        return false;
+    }
+    has("album") || has("lp") || has("ep")
+}
+
+/// A master's main release's format words (A1.1.2: what types a master row), from Discogs' release answer: each format's name and
+/// descriptions, comma-joined; none where Discogs has no such master or main release.
+pub async fn master_format(master: u64) -> Result<Option<String>> {
+    let Some(main) = self::master(master).await?.and_then(|m| m.main_release) else { return Ok(None) };
+    let Some(v) = release_raw(main).await? else { return Ok(None) };
+    let words: Vec<String> = v["formats"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|f| f["name"].as_str().map(str::to_string).into_iter().chain(f["descriptions"].as_array().into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string))))
+        .collect();
+    Ok(Some(words.join(", ")))
+}
+
 /// One page of an artist's (`/artists/{id}/releases`) or a label's (`/labels/{id}/releases`) list, read: its rows, each once
 /// (a label's lists a release once for each time it names the label), and of an artist's only those they made themselves,
 /// role Main: their remixes, appearances and productions are other artists' records. Pure.

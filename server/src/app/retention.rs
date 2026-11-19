@@ -86,7 +86,7 @@ fn forgetting_waits(cat: &Catalogue, now: i64) -> bool {
 /// status (`UserData::request_records`), every record on Soulseek's list, and, as an artist is kept (`protected_artists`, Z5),
 /// anything the user data names it in (`UserData::records_named`: a heart, plays, a rating, words, tags) and the stores in the
 /// data folder `data` (`stores_name`). Blocking.
-fn protected(ud: &UserData, data: Option<&std::path::Path>) -> Result<BTreeSet<i64>> {
+pub(crate) fn protected(ud: &UserData, data: Option<&std::path::Path>) -> Result<BTreeSet<i64>> {
     let mut kept: BTreeSet<i64> = ud.request_records()?.into_iter().filter_map(|(_, record)| record).collect();
     kept.extend(super::soulseek::item_records());
     kept.extend(ud.records_named()?);
@@ -196,7 +196,7 @@ async fn reread(cat: &Arc<Catalogue>, sources: &[Arc<dyn ArtistList>], paused: f
     for (artist, due_at) in batch {
         let c = cat.clone();
         let Some((name, refs)) = tokio::task::spawn_blocking(move || c.artist_known(artist)).await?? else { continue };
-        let asked = ArtistAsked { id: artist, name, refs: refs.into_iter().map(|(r, _)| r).collect() };
+        let asked = ArtistAsked::of(artist, name, refs);
         // Whether a list read now knew them, and whether one did not (Z4).
         let (mut known, mut unknown) = (false, false);
         for source in due_at {

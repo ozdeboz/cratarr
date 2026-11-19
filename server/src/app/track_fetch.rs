@@ -121,6 +121,9 @@ pub struct ReleaseView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<u32>,
     pub tracks: Vec<ReleaseTrack>,
+    /// Its pages elsewhere as MusicBrainz links them (`url-rels`, F14.5): its Bandcamp page among them.
+    #[serde(skip)]
+    pub links: Vec<String>,
 }
 
 /// A release's tracks as MusicBrainz gives them (with its recordings and artist credits).
@@ -155,6 +158,7 @@ fn release_of(v: &Value) -> ReleaseView {
         artist: credit(&v["artist-credit"]).0,
         year: v["date"].as_str().and_then(|d| d.get(..4)).and_then(|y| y.parse().ok()),
         tracks,
+        links: v["relations"].as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect(),
     }
 }
 
@@ -197,7 +201,7 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
 pub async fn release_by_id(id: &str) -> Result<ReleaseView> {
     let http = super::discover::http()?;
     let v: Value = http
-        .get(format!("https://musicbrainz.org/ws/2/release/{id}?inc=recordings+artist-credits&fmt=json"))
+        .get(format!("https://musicbrainz.org/ws/2/release/{id}?inc=recordings+artist-credits+url-rels&fmt=json"))
         .asked()
         .await?
         .error_for_status()?

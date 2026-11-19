@@ -620,6 +620,22 @@ mod tests {
         }
     }
 
+    /// A1.1.5 (a pin): FX01's step makes no record not had that holds Discogs references alone, so none is left on an artist's list
+    /// by a Discogs row the rule no longer keeps; the step does give Discogs references (to had records).
+    #[test]
+    fn the_step_makes_no_record_of_discogs_references_alone() {
+        let d = Data::new("discogs-alone");
+        d.run();
+        assert!(d.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'discogs' AND subject GLOB 'al-*'") > 0, "Discogs references made");
+        let alone: i64 = d.sql(
+            "catalogue.sqlite",
+            "SELECT count(*) FROM records r WHERE r.merged_into IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id)
+               AND EXISTS (SELECT 1 FROM \"references\" x WHERE x.subject = 'al-' || r.id AND x.source = 'discogs')
+               AND NOT EXISTS (SELECT 1 FROM \"references\" x WHERE x.subject = 'al-' || r.id AND x.source <> 'discogs')",
+        );
+        assert_eq!(alone, 0);
+    }
+
     /// R2: each part has a mark of its own, so a data folder that ran an earlier version of the step, one without a part, runs
     /// that part at its next start and not the parts it ran: here the pages part is the one it lacked, and a link pasted that
     /// was let go of since stays let go of. The report is written again, with the new part's.

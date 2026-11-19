@@ -391,6 +391,12 @@ pub struct ReadMore {
 /// release group's (R25: kept as a reference), and what the answer says besides (`ReadMore`).
 pub type Read = (Vec<RefTrack>, Option<Ref>, ReadMore);
 
+/// What a MusicBrainz release's answer says besides its list (F14.5): its Bandcamp album page, where MusicBrainz links one.
+pub fn musicbrainz_more(links: &[String]) -> ReadMore {
+    let page = links.iter().find_map(|u| crate::bandcamp::album_page(u));
+    ReadMore { also: page.map(|p| Ref::new("bandcamp", "album", &p)).into_iter().collect(), artists: Vec::new() }
+}
+
 /// What a Discogs release's answer says besides its list (F15, F18.2): its master, where it was read as a release (`as_release`),
 /// and its artists by their Discogs ids, Discogs' "Various" none.
 pub fn discogs_more(v: &serde_json::Value, as_release: bool) -> ReadMore {
@@ -665,7 +671,7 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
     let not_found = |e: &anyhow::Error| e.downcast_ref::<reqwest::Error>().and_then(reqwest::Error::status) == Some(reqwest::StatusCode::NOT_FOUND);
     let release = |id: String| async move {
         match super::track_fetch::release_by_id(&id).await {
-            Ok(v) => Ok(Some(list_of_release(&v))),
+            Ok(v) => Ok(Some((list_of_release(&v), musicbrainz_more(&v.links)))),
             Err(e) if not_found(&e) => Ok(None),
             Err(e) => Err(e),
         }
@@ -676,9 +682,9 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
         return Err(off.into());
     }
     match (r.source.as_str(), r.kind.as_str()) {
-        ("musicbrainz", "release") => Ok(release(r.value).await?.map(|list| (list, None, ReadMore::default()))),
+        ("musicbrainz", "release") => Ok(release(r.value).await?.map(|(list, more)| (list, None, more))),
         ("musicbrainz", "release-group") => match release_of_group(&r.value).await? {
-            Some(id) => Ok(release(id.clone()).await?.map(|list| (list, Some(Ref::new("musicbrainz", "release", &id)), ReadMore::default()))),
+            Some(id) => Ok(release(id.clone()).await?.map(|(list, more)| (list, Some(Ref::new("musicbrainz", "release", &id)), more))),
             None => Ok(None),
         },
         ("discogs", "release") => Ok(super::discogs::release_raw(r.value.parse()?).await?.map(|v| (list_of_discogs(&v), None, discogs_more(&v, true)))),
@@ -2165,6 +2171,7 @@ mod tests {
     /// keeps its credit (one the release contradicts is said in the log, nothing moved); never a second Discogs id on one artist.
     #[tokio::test]
     async fn a_release_read_credits_the_artists_it_names() {
+        let _state = crate::app::references::TestState::set().await;
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let field = cat.artist_for("Noor Field").unwrap();
         let held = cat.artist_for("Orbit Lane").unwrap();
@@ -2199,5 +2206,39 @@ mod tests {
         assert_eq!(artist_holding("9104"), None, "nothing moved, nothing made for it");
         let discogs_ids: i64 = cat.db_for_tests().query_row("SELECT max(n) FROM (SELECT count(*) AS n FROM \"references\" WHERE subject GLOB 'ar-*' AND source = 'discogs' AND kind = 'artist' GROUP BY subject)", [], |r| r.get(0)).unwrap();
         assert_eq!(discogs_ids, 1, "never a second Discogs id on one artist");
+    }
+
+    /// F14.5: a record not had "Night Walks" with MusicBrainz release R, whose read (asked with `url-rels`) has two tracks and its Bandcamp
+    /// page P: P kept on it (`link`, its page then plays its preview). A second record not had holding P alone is the same album: the newer
+    /// into the older. A had record holding P keeps it: nothing joined, P not moved. Never P on two records.
+    #[tokio::test]
+    async fn a_releases_bandcamp_link_is_kept_with_its_tracklist() {
+        let _state = crate::app::references::TestState::set().await;
+        const P: &str = "https://kitetheory.bandcamp.com/album/night-walks";
+        let read = |_: Ref| std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000)), ("Morning", Some(180_000))]), None, ReadMore { also: vec![Ref::new("bandcamp", "album", P)], artists: Vec::new() }))));
+        let t = crate::app::moment::now_secs();
+        // Kept.
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let night = wanted(&cat, "Night Walks", &[("musicbrainz", "release", "00000000-0000-4000-8000-000000000b51")]);
+        opened(&cat, night, t, read).await;
+        page_read_settled(&cat, night).await;
+        assert_eq!(cat.subject_of(&Ref::new("bandcamp", "album", P)).unwrap(), [ids::record(night)], "P kept on it");
+        assert!(opened(&cat, night, t, read).await.more.bandcamp.is_some(), "its preview");
+        // A record not had holding P alone: joined.
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let older = wanted(&cat, "Night Walks", &[("bandcamp", "album", P)]);
+        let night = wanted(&cat, "Night Walks", &[("musicbrainz", "release", "00000000-0000-4000-8000-000000000b52")]);
+        opened(&cat, night, t, read).await;
+        page_read_settled(&cat, night).await;
+        assert_eq!(cat.record(night).unwrap().unwrap().id, older, "the newer into the older");
+        // A had record holding P: nothing joined.
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let had = cat.record_for_tests("Night Walks", 2);
+        assert!(cat.set_reference(&ids::record(had), &Ref::new("bandcamp", "album", P), "link").unwrap());
+        let night = wanted(&cat, "Night Walks", &[("musicbrainz", "release", "00000000-0000-4000-8000-000000000b53")]);
+        opened(&cat, night, t, read).await;
+        page_read_settled(&cat, night).await;
+        assert_eq!(cat.record(night).unwrap().unwrap().id, night, "a had record's page: no merge");
+        assert_eq!(cat.subject_of(&Ref::new("bandcamp", "album", P)).unwrap(), [ids::record(had)], "P not moved");
     }
 }

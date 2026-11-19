@@ -82,6 +82,12 @@ CREATE TABLE IF NOT EXISTS artists_bare (artist INTEGER PRIMARY KEY, since INTEG
 -- carry a release alone; its master, once known, makes the rows of one master one album and their records one record not had.
 CREATE TABLE IF NOT EXISTS discogs_masters (release INTEGER PRIMARY KEY, master INTEGER NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS discogs_masters_by_master ON discogs_masters (master);
+-- A1.1 (OQ-A1.1 (a)): a Discogs master's type as its main release's format says it (`kind`: album, ep; NULL: no record of the
+-- artist's own), read once; and the master rows of artists' Discogs lists waiting for it, a cache as a label's rows are.
+CREATE TABLE IF NOT EXISTS discogs_master_types (master INTEGER PRIMARY KEY, kind TEXT, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS artist_master_rows (
+  artist INTEGER NOT NULL, master INTEGER NOT NULL, title TEXT NOT NULL, year INTEGER, cover TEXT, at INTEGER NOT NULL, tried INTEGER,
+  PRIMARY KEY (artist, master)) WITHOUT ROWID;
 -- Y12: the records of a name, by the names each row keeps folded (`names_of`); a rename makes them to be folded again.
 CREATE INDEX IF NOT EXISTS records_by_names ON records (names);
 DROP TRIGGER IF EXISTS records_names_unfolded;
@@ -2150,11 +2156,144 @@ impl Catalogue {
                 }
             }
         }
+        // F14.5: the release's Bandcamp page (MusicBrainz's link): kept on the record; a record not had holding it alone is this one, the
+        // newer into the older; a had record holding it keeps it (said in the log), nothing joined.
+        for p in also.iter().filter(|r| r.source == "bandcamp" && r.kind == "album") {
+            if had_now {
+                continue;
+            }
+            let holder = subjects_in(&tx, p)?.iter().filter_map(|s| ids::record_number(s)).find_map(|h| merged_end(&tx, h).ok().flatten());
+            match holder {
+                None => {
+                    put_reference(&tx, &ids::record(record), p, "link", at, false)?;
+                }
+                Some(h) if h == record => {}
+                Some(h) if had(&tx, h)? => {
+                    tracing::info!(target: "library", record, holder = h, page = %p.value, "a release's Bandcamp page is a had record's: nothing joined");
+                }
+                Some(h) if albums_differ(&refs_in(&tx, &ids::record(record))?, &refs_in(&tx, &ids::record(h))?) => {
+                    tracing::info!(target: "library", record, holder = h, page = %p.value, "a release's Bandcamp page is another album's: nothing joined");
+                }
+                Some(h) => {
+                    let (older, newer) = (h.min(record), h.max(record));
+                    merge_records_in(&tx, newer, older)?;
+                    record = older;
+                }
+            }
+        }
         if !artists.is_empty() && !had_now {
             credit_release_in(&tx, record, artists, at)?;
         }
         tx.commit()?;
         Ok(record)
+    }
+
+    /// A1.1: an artist's Discogs list as the records of their own it names, in its order. A row whose references find a record that
+    /// holds more than Discogs' (MusicBrainz's record of that master, a had one) is kept as found, whatever its type (A1.1.3). Else a
+    /// release row typed an album or an EP of theirs by its format (`discogs_listing`); a master row by its type as kept
+    /// (`discogs_master_types`), else set aside untyped (`artist_master_rows`) for the typing pass. A row it leaves out whose record holds
+    /// Discogs' references alone (one an earlier read made) lets go of this artist's list credit, so it leaves their page; never a had,
+    /// hand-linked or merged one, nor one the user data names (`protected`: a request keeps a record). Blocking.
+    pub fn discogs_own(&self, artist: i64, rows: Vec<Listing>, at: i64, protected: &std::collections::BTreeSet<i64>) -> Result<Vec<Listing>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut kept = Vec::with_capacity(rows.len());
+        for mut row in rows {
+            let found = found_by_reference(&tx, &row)?;
+            let others = match found {
+                Some(r) => had(&tx, r)? || refs_in(&tx, &ids::record(r))?.iter().any(|(s, ..)| s != "discogs"),
+                None => false,
+            };
+            if others {
+                kept.push(row);
+                continue;
+            }
+            let master = row.refs.iter().find(|r| r.source == "discogs" && r.kind == "master").and_then(|r| r.value.parse::<i64>().ok());
+            let own = match master {
+                Some(m) => match tx.prepare_cached("SELECT kind FROM discogs_master_types WHERE master = ?1")?.query_row([m], |r| r.get::<_, Option<String>>(0)).optional()? {
+                    Some(kind) => {
+                        row.kind = kind.clone();
+                        kind.is_some()
+                    }
+                    None if row.kind.is_some() => true,
+                    None => {
+                        tx.prepare_cached(
+                            "INSERT INTO artist_master_rows (artist, master, title, year, cover, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                             ON CONFLICT (artist, master) DO UPDATE SET title = excluded.title, year = excluded.year, cover = excluded.cover, at = excluded.at",
+                        )?
+                        .execute(params![artist, m, row.title, row.year, row.cover, at])?;
+                        false
+                    }
+                },
+                None => row.kind.is_some(),
+            };
+            if own {
+                kept.push(row);
+            } else if let Some(record) = found
+                && !protected.contains(&record)
+                && !tx.prepare_cached("SELECT 1 FROM \"references\" WHERE subject = ?1 AND how = 'hand'")?.exists([ids::record(record)])?
+                && !tx.prepare_cached("SELECT 1 FROM records WHERE merged_into = ?1")?.exists([record])?
+            {
+                let gone = tx.prepare_cached("DELETE FROM record_artists WHERE record = ?1 AND artist = ?2 AND how = 'listing'")?.execute(params![record, artist])?;
+                if gone > 0 && !tx.prepare_cached("SELECT 1 FROM record_artists WHERE artist = ?1")?.exists([artist])? {
+                    tx.prepare_cached(LAST_CREDIT_WENT)?.execute(params![artist, at])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(kept)
+    }
+
+    /// The Discogs masters waiting for a type (A1.1.2): named by an artist's list, untyped, not tried since `since`; at most `most`, the
+    /// newest named first. Blocking.
+    pub fn masters_to_type(&self, since: i64, most: usize) -> Result<Vec<u64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT DISTINCT r.master FROM artist_master_rows r WHERE NOT EXISTS (SELECT 1 FROM discogs_master_types t WHERE t.master = r.master)
+               AND (r.tried IS NULL OR r.tried < ?1) ORDER BY r.at DESC, r.master LIMIT ?2",
+        )?;
+        let rows = st.query_map(params![since, most as i64], |r| r.get::<_, i64>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().map(|m| m as u64).collect())
+    }
+
+    /// Whether `master` still waits for its type (A1.1.6): untyped, not tried since `since`. Blocking.
+    pub fn master_untyped(&self, master: u64, since: i64) -> Result<bool> {
+        let db = self.db();
+        Ok(db
+            .prepare_cached(
+                "SELECT 1 FROM artist_master_rows r WHERE r.master = ?1 AND NOT EXISTS (SELECT 1 FROM discogs_master_types t WHERE t.master = r.master)
+                   AND (r.tried IS NULL OR r.tried < ?2)",
+            )?
+            .exists(params![master as i64, since])?)
+    }
+
+    /// A master typed by its main release (A1.1.2): `Some(kind)` kept by master (`Some(None)`: no record of the artist's own), and each
+    /// artist's row of it that is theirs made a record of theirs (credited `listing`, seen now); `None`, its main release unread: tried
+    /// now, asked again later. Blocking.
+    pub fn master_typed(&self, master: u64, said: Option<Option<String>>, at: i64) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let Some(kind) = said else {
+            tx.execute("UPDATE artist_master_rows SET tried = ?2 WHERE master = ?1", params![master as i64, at])?;
+            tx.commit()?;
+            return Ok(());
+        };
+        tx.execute("INSERT OR REPLACE INTO discogs_master_types (master, kind, at) VALUES (?1, ?2, ?3)", params![master as i64, kind, at])?;
+        let rows: Vec<(i64, String, Option<i32>, Option<String>)> = tx
+            .prepare("SELECT artist, title, year, cover FROM artist_master_rows WHERE master = ?1")?
+            .query_map([master as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        tx.execute("DELETE FROM artist_master_rows WHERE master = ?1", [master as i64])?;
+        if kind.is_some() {
+            for (artist, title, year, cover) in rows {
+                let name: Option<String> = tx.query_row("SELECT name FROM artists WHERE id = ?1", [artist], |r| r.get(0)).optional()?;
+                let Some(name) = name else { continue };
+                let row = Listing { title, artist: name, year, kind: kind.clone(), cover, refs: vec![Ref::new("discogs", "master", &master.to_string())], ..Listing::default() };
+                keep_listing_in(&tx, Some(artist), &[row], "link", at, Some(at))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// F18.1: a record opened from a list's row (a label's, Beyond's) credited at once where nobody is yet: by the artist reference
@@ -2179,6 +2318,36 @@ impl Catalogue {
         }
         tx.commit()?;
         Ok(credited)
+    }
+
+    /// A related artist as the library has them (A1.2): the artist holding their MusicBrainz id, where the library has albums by them;
+    /// else, by their name, the one library artist of it holding no MusicBrainz id (X8: a namesake holding another id, or two of the
+    /// name, is none). On a reader. Blocking.
+    pub fn library_artist_of(&self, mbid: Option<&str>, name: &str) -> Result<Option<i64>> {
+        let read = |db: &Connection| -> Result<Option<i64>> {
+            if let Some(m) = mbid {
+                let held = subjects_in(db, &Ref::new("musicbrainz", "artist", &m.to_ascii_lowercase()))?.iter().find_map(|s| ids::artist_number(s));
+                if let Some(artist) = held {
+                    let here: bool = db.prepare_cached(&format!("SELECT ?1 IN ({LIBRARY_ARTISTS})"))?.query_row([artist], |r| r.get(0))?;
+                    return Ok(here.then_some(artist));
+                }
+            }
+            let named: Vec<(i64, bool)> = db
+                .prepare_cached(&format!(
+                    "SELECT a.id, EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.source = 'musicbrainz' AND f.kind = 'artist')
+                     FROM artists a WHERE a.key = ?1 AND a.id IN ({LIBRARY_ARTISTS}) ORDER BY a.id LIMIT 2"
+                ))?
+                .query_map([ids::artist_key(name.trim())], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(match named[..] {
+                [(one, false)] => Some(one),
+                _ => None,
+            })
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
     }
 
     /// Two records found to be one (G3, OQ13 (a)): the one with copies keeps its id, else the older; the other answers through
@@ -2224,6 +2393,12 @@ impl Catalogue {
     /// (`files` over `link` over `search`, the hand over all). One a source gives to one subject alone (a release, an album page, an
     /// artist, a label) that another subject holds stays there, unless this is by hand: a link pasted names what it names, and the
     /// other lets go of it. Blocking.
+    /// A subject's references of one source and kind that a search found, let go of (F14.3 (c): a Bandcamp page searched for before
+    /// MusicBrainz's link alone). How many. Blocking.
+    pub fn let_go_searched(&self, subject: &str, source: &str, kind: &str) -> Result<usize> {
+        Ok(self.db().execute("DELETE FROM \"references\" WHERE subject = ?1 AND source = ?2 AND kind = ?3 AND how = 'search'", params![subject, source, kind])?)
+    }
+
     pub fn set_reference(&self, subject: &str, r: &Ref, how: &str) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
