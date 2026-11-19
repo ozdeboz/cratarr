@@ -48,7 +48,8 @@
     played?: number;
     plays?: number;
     /** The server's name, and each library holding it (with its dot) when known. */
-    provider: { server: string; libraries: Pick<import('./api').LibraryInfo, 'id' | 'name' | 'colour'>[] };
+    /** Where its copies are; none for a record not had, which no library holds (the owner, 2026-11-19, F37). */
+    provider: { server: string; libraries: Pick<import('./api').LibraryInfo, 'id' | 'name' | 'colour'>[] } | null;
     /** What a page elsewhere says of it (a Bandcamp album's, 0.9.2): no rating then, which only a server keeps. */
     more?: Pick<import('./api').AlbumView, 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> | null;
     /** Its labels as the server names them (C54, F9): by their ids for life, else by their references. */
@@ -197,6 +198,7 @@
     <h3>Sources</h3>
     <p class="chips">{#each sourced as s (s.url)}<button class="chip" onclick={() => (linked ??= s)}>{s.name}{#if s.tracks}<span class="sep">·</span>{TRACKLIST}{/if}</button>{/each}</p>
   {/if}
+  {#if provider}
   <h3>Media provider</h3>
   <p class="chips">
     {#each provider.libraries as l (l.id)}
@@ -211,6 +213,7 @@
       </span>
     {/each}
   </p>
+  {/if}
   </div>
 </section>
 
