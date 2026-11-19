@@ -29,6 +29,7 @@
   import { matchesSearch, searchNone } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
   import { albumSubject, backOne, REQUESTS, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
+  import { keepsPlace } from './keepsPlace';
   import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, listsShown, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import ChoiceList from './ChoiceList.svelte';
@@ -271,7 +272,7 @@
       {@render glassExtra()}
     </div>
   {/if}
-  <div class="scroll" class:away={handed && everywhere()}>
+  <div class="scroll" class:away={handed && everywhere()} {@attach keepsPlace()}>
     {#if requests.error && !view}
       <Notice text={requests.error} onretry={loadRequests} away="Requests need Cratarr." />
     {:else if !view}

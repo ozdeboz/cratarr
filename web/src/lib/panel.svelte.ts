@@ -156,8 +156,46 @@ function address(names: string[], tab: Tab) {
 
 /** A level of the panel's own history: what it shows, on which tab, and how it was reached (`tab`: another tab over its
  *  tracks; `thing`: a step deeper, a thing's own page; else a view, a page's or the panel's own). */
-type Step = { names: string[]; tab: Tab; how: 'view' | 'tab' | 'thing' };
+type Step = { names: string[]; tab: Tab; how: 'view' | 'tab' | 'thing'; place?: Place };
 let trail: Step[] = [];
+/** Where a step's list was left (F25): its scroll, and the row open in it where it has one. It rides with its step, into the page's
+ *  history too where a guard stands for the trail (F25.5). */
+export type Place = { scroll: number; open?: string | null };
+/** How the step shown was reached: by back (its place comes back) or forward (it starts at its top). */
+let reached: 'back' | 'forward' = 'forward';
+/** The shown list's place written as its step is left (`keepsPlace`), so its last scroll counts. */
+let leaving: (() => void) | null = null;
+function leave() {
+  const f = leaving;
+  leaving = null;
+  f?.();
+}
+/** How the step shown was reached (F25.1). */
+export const reachedBy = () => reached;
+/** The place the step shown was left at, where it was reached by back; none on a forward step (F25.1, F25.3). */
+export const placeOf = (): Place | null => (reached === 'back' ? (trail.at(-1)?.place ?? null) : null);
+function keepOn(t: Step, p: Place) {
+  t.place = p;
+  if (history.state?.panelGuard) history.replaceState({ ...history.state, trail }, '');
+}
+/** The step shown's place kept. */
+export function keepPlace(p: Place) {
+  const t = trail.at(-1);
+  if (t) keepOn(t, p);
+}
+/** The step shown, for its list (lib/keepsPlace): its place where it was reached by back, keeping its place, and the place written
+ *  once more as it is left. */
+export function placeHere() {
+  const t = trail.at(-1) ?? null;
+  return {
+    place: reached === 'back' ? (t?.place ?? null) : null,
+    keep: (p: Place) => void (t && keepOn(t, p)),
+    leaving: (f: () => void) => {
+      leaving = f;
+      return () => void (leaving === f && (leaving = null));
+    },
+  };
+}
 /** The trail as the panels read it: how many levels, and how the one shown was reached. */
 const steps = $state({ n: 0, how: 'view' as Step['how'] });
 /** How many levels the panel's history has: Back goes to the one before where there is more than one. */
@@ -258,8 +296,9 @@ function onAddress() {
     const names = q.getAll('view');
     const tab = isTab(q.get('tab')) ? (q.get('tab') as Tab) : 'tracks';
     const t = trail.at(-1);
+    if (!names.length || !t || names.join('\n') !== t.names.join('\n') || tab !== t.tab) leave();
     if (!names.length) trail = [];
-    else if (!t || names.join('\n') !== t.names.join('\n') || tab !== t.tab) trail = [...trail, { names, tab, how: 'view' }];
+    else if (!t || names.join('\n') !== t.names.join('\n') || tab !== t.tab) (trail = [...trail, { names, tab, how: 'view' }]), (reached = 'forward');
     show();
     return;
   }
@@ -272,12 +311,15 @@ function onAddress() {
     return;
   }
   if (!history.state.panelGuard && !layout.beside && trail.length) {
-    // Back over the guard: the panel's own Back.
+    // Back over the guard: the panel's own Back, to the step before at its place (F25.5 (b)).
+    leave();
     trail = trail.slice(0, -1);
+    reached = 'back';
     show();
     return;
   }
-  if (history.state.panelGuard && !layout.beside && !trail.length && Array.isArray(history.state.trail)) trail = history.state.trail;
+  // Back to the guard from a page gone to over the panel: the trail comes back, its places with it (F25.5 (c)).
+  if (history.state.panelGuard && !layout.beside && !trail.length && Array.isArray(history.state.trail)) (trail = history.state.trail), (reached = 'back');
   for (const f of alongside) f();
   show();
 }
@@ -290,12 +332,16 @@ show();
 
 /** A level onto the trail. */
 function step(names: string[], tab: Tab, how: Step['how'] = 'view') {
+  leave();
   trail = [...trail, { names, tab, how }];
+  reached = 'forward';
   show();
 }
 /** The trail's last level in its place (none: the first). */
 function swap(names: string[], tab: Tab, how: Step['how'] = 'view') {
+  leave();
   trail = [...trail.slice(0, -1), { names, tab, how }];
+  reached = 'forward';
   show();
 }
 
@@ -389,7 +435,9 @@ export function viewSibling(name: string) {
  *  panel's breadcrumbs, the levels Back walks through): the step before, or the panel closed where it is the first. */
 export function backOne() {
   if (trail.length < 2) return closePlaylist();
+  leave();
   trail = trail.slice(0, -1);
+  reached = 'back';
   show();
 }
 /** What shows was opened a step deeper (openStep): the level above it is the step before. */
@@ -398,7 +446,9 @@ export const isStep = () => steps.how === 'thing' && steps.n > 1;
 /** Closes the panel, its whole history with it; `then` once the page's history is settled. */
 export function closePlaylist(then?: () => void) {
   panel.playerTop = false;
+  leave();
   trail = [];
+  reached = 'forward';
   show();
   settled(then);
 }

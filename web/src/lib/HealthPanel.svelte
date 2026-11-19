@@ -51,7 +51,8 @@
   import ContentControls from './ContentControls.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
-  import { albumSubject, backOne, closePlaylist, HEALTH, healthThing, isStep, openTab, panel, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
+  import { albumSubject, backOne, closePlaylist, HEALTH, healthThing, isStep, openTab, panel, placeOf, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
+  import { keepsPlace } from './keepsPlace';
   import { byArea } from './healthThrough';
   import { AREAS } from './health';
   import { planTitle } from './fileChangeRules';
@@ -137,10 +138,10 @@
   searchNone(() => !!p && !p.items.some((x) => matchesSearch(x.title, x.line)) && { n: p.items.length, one: 'item' }, 'panel');
   const keyOf = (x: HealthItem) => (x.track ? `t/${x.track}` : x.album ? `a/${x.album.join('/')}` : x.playlist ? `p/${x.playlist}` : `n/${x.title}`);
   let openKey = $state<string | null>(null);
-  // Another problem: none open.
+  // Another problem: none open; back to it, the row that was open (F25.8: the step's own, after this clearing).
   $effect(() => {
     void problem;
-    openKey = null;
+    openKey = untrack(() => placeOf()?.open ?? null);
   });
   const toggle = (x: HealthItem) => (openKey = openKey === keyOf(x) ? null : keyOf(x));
   /** A tool done with its item (renumbered, fixed, kept or replaced): closed, the report read again. */
@@ -491,7 +492,7 @@
       {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>
   {/if}
-  <div class="scroll" class:away={handed && everywhere()}>
+  <div class="scroll" class:away={handed && everywhere()} {@attach keepsPlace({ open: () => openKey, reopen: (k) => (openKey = k) })}>
     {#if changes}
       <FileChanges thing={healthThing(panel.viewed)} />
     {:else if !p}
