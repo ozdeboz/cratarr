@@ -274,8 +274,8 @@ where
         return Ok(answered(Err("No such record".into())));
     };
     let kept_of = |source: &str| kept.iter().find(|(s, l)| s == source && !l.is_empty()).map(|(_, l)| l.clone());
-    let keep = |source: &'static str, list: Vec<RefTrack>, release: Option<Ref>, count: bool| {
-        let (c, id) = (cat.clone(), row.id);
+    let keep = |source: &'static str, list: Vec<RefTrack>, release: Option<Ref>, count: bool, read: Option<(Ref, ReadMore)>| {
+        let (c, id, had) = (cat.clone(), row.id, row.had);
         async move {
             tokio::task::spawn_blocking(move || -> Result<()> {
                 c.set_reference_tracks(id, source, &list)?;
@@ -286,6 +286,19 @@ where
                 }
                 if count {
                     c.set_counting(id, Some(source), false)?;
+                }
+                // F15.1, F18.2: what the answer says besides its list, for a record not had: its master joins it, its artists credit it.
+                if let Some((read, more)) = read.filter(|_| !had) {
+                    let artists: Vec<(Ref, String, bool)> = more
+                        .artists
+                        .iter()
+                        .map(|(r, name)| {
+                            let clean = super::discogs::clean_name(name);
+                            let marked = r.source == "discogs" && clean != name.trim();
+                            (r.clone(), clean, !marked)
+                        })
+                        .collect();
+                    c.learn_from_read(id, &read, &more.also, &artists)?;
                 }
                 Ok(())
             })
@@ -314,7 +327,7 @@ where
         let list = match kept_of(source) {
             Some(list) => {
                 if !counted {
-                    keep(source, list.clone(), None, true).await?;
+                    keep(source, list.clone(), None, true, None).await?;
                     counted = true;
                 }
                 list
@@ -322,8 +335,8 @@ where
             None => {
                 let Some((r, _)) = main_ref(&refs, source) else { continue };
                 match read(r.clone()).await {
-                    Ok(Some((list, release))) if !list.is_empty() => {
-                        keep(source, list.clone(), release, !counted).await?;
+                    Ok(Some((list, release, more))) if !list.is_empty() => {
+                        keep(source, list.clone(), release, !counted, Some((r.clone(), more))).await?;
                         counted = true;
                         list
                     }
@@ -365,9 +378,33 @@ where
     Ok(Judged { answer, said, stop, off })
 }
 
-/// A list read through a reference (`tracklist`'s reader): its tracks, and the release they were read from where the reference was
-/// a release group's (R25: kept as a reference).
-pub type Read = (Vec<RefTrack>, Option<Ref>);
+/// What a source's answer says besides its list (F14.5, F15, F18.2): other references of the album it names (`also`: a Discogs
+/// release's master, a MusicBrainz release's Bandcamp page), and the release's artists by their id there, each with their name as
+/// that source writes it. Test readers give none.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReadMore {
+    pub also: Vec<Ref>,
+    pub artists: Vec<(Ref, String)>,
+}
+
+/// A list read through a reference (`tracklist`'s reader): its tracks, the release they were read from where the reference was a
+/// release group's (R25: kept as a reference), and what the answer says besides (`ReadMore`).
+pub type Read = (Vec<RefTrack>, Option<Ref>, ReadMore);
+
+/// What a Discogs release's answer says besides its list (F15, F18.2): its master, where it was read as a release (`as_release`),
+/// and its artists by their Discogs ids, Discogs' "Various" none.
+pub fn discogs_more(v: &serde_json::Value, as_release: bool) -> ReadMore {
+    let master = v["master_id"].as_u64().filter(|m| *m > 0 && as_release).map(|m| Ref::new("discogs", "master", &m.to_string()));
+    let artists = v["artists"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| Some((a["id"].as_u64().filter(|id| *id > 0)?, a["name"].as_str()?.trim().to_string())))
+        .filter(|(_, name)| !name.is_empty() && !name.eq_ignore_ascii_case("various"))
+        .map(|(id, name)| (Ref::new("discogs", "artist", &id.to_string()), name))
+        .collect();
+    ReadMore { also: master.into_iter().collect(), artists }
+}
 
 /// How long a record's list its page asked for and could not have is left before a page asks for it again (C54), unless a source
 /// it said was switched off is on again, or Bandcamp's hold it said was lifted (F1.6): read at once then.
@@ -480,8 +517,8 @@ fn page_words(said: &[(&'static str, Outcome)], now: i64) -> Vec<Said> {
 
 /// What a page's read of `key` has to say at `now`: being read, or what its sources said within `PAGE_READ_AGAIN_SECS`, where that
 /// still stands.
-fn page_read_known(key: (usize, i64), now: i64) -> Option<PageList> {
-    match page_reads().get(&key)? {
+fn page_read_known(key: (usize, i64), cat: &Arc<Catalogue>, now: i64) -> Option<PageList> {
+    match page_reads().get(&key).filter(|(c, _)| c.upgrade().is_some_and(|c| Arc::ptr_eq(&c, cat)))? {
         (_, PageReadState::Reading(source)) => Some(PageList::Looking(*source)),
         (_, PageReadState::Ended(at, said)) => ((0..PAGE_READ_AGAIN_SECS).contains(&(now - at)) && still_said(said, now)).then(|| PageList::Said(page_words(said, now))),
     }
@@ -492,7 +529,7 @@ fn page_read_known(key: (usize, i64), now: i64) -> Option<PageList> {
 fn page_read_begins(key: (usize, i64), cat: &Arc<Catalogue>, first: Option<&'static str>) -> bool {
     let mut reads = page_reads();
     reads.retain(|_, (c, _)| c.strong_count() > 0);
-    if matches!(reads.get(&key), Some((_, PageReadState::Reading(_)))) {
+    if matches!(reads.get(&key), Some((c, PageReadState::Reading(_))) if c.upgrade().is_some_and(|c| Arc::ptr_eq(&c, cat))) {
         return false;
     }
     reads.insert(key, (Arc::downgrade(cat), PageReadState::Reading(first)));
@@ -554,7 +591,7 @@ where
     F: std::future::Future<Output = Result<Option<Read>>> + Send + 'static,
 {
     let key = (Arc::as_ptr(cat) as usize, record);
-    if let Some(known) = page_read_known(key, now) {
+    if let Some(known) = page_read_known(key, cat, now) {
         return known;
     }
     let first = match said_unasked(cat, record, now).await {
@@ -569,7 +606,7 @@ where
         }
     };
     if !page_read_begins(key, cat, first) {
-        return page_read_known(key, now).unwrap_or(PageList::Looking(first));
+        return page_read_known(key, cat, now).unwrap_or(PageList::Looking(first));
     }
     let (cat, read) = (cat.clone(), Arc::new(read));
     let (deadline, started) = (tokio::time::Instant::now() + PAGE_READ_AT_MOST, std::time::Instant::now());
@@ -639,18 +676,18 @@ pub async fn read_reference(r: Ref) -> Result<Option<Read>> {
         return Err(off.into());
     }
     match (r.source.as_str(), r.kind.as_str()) {
-        ("musicbrainz", "release") => Ok(release(r.value).await?.map(|list| (list, None))),
+        ("musicbrainz", "release") => Ok(release(r.value).await?.map(|list| (list, None, ReadMore::default()))),
         ("musicbrainz", "release-group") => match release_of_group(&r.value).await? {
-            Some(id) => Ok(release(id.clone()).await?.map(|list| (list, Some(Ref::new("musicbrainz", "release", &id))))),
+            Some(id) => Ok(release(id.clone()).await?.map(|list| (list, Some(Ref::new("musicbrainz", "release", &id)), ReadMore::default()))),
             None => Ok(None),
         },
-        ("discogs", "release") => Ok(super::discogs::release_raw(r.value.parse()?).await?.map(|v| (list_of_discogs(&v), None))),
+        ("discogs", "release") => Ok(super::discogs::release_raw(r.value.parse()?).await?.map(|v| (list_of_discogs(&v), None, discogs_more(&v, true)))),
         ("discogs", "master") => match super::discogs::master(r.value.parse()?).await?.and_then(|m| m.main_release) {
-            Some(main) => Ok(super::discogs::release_raw(main).await?.map(|v| (list_of_discogs(&v), None))),
+            Some(main) => Ok(super::discogs::release_raw(main).await?.map(|v| (list_of_discogs(&v), None, discogs_more(&v, false)))),
             None => Ok(None),
         },
         ("bandcamp", "album") => match crate::bandcamp::Bandcamp::get().album(&r.value).await {
-            Ok(a) => Ok(Some((list_of_bandcamp(&a), None))),
+            Ok(a) => Ok(Some((list_of_bandcamp(&a), None, ReadMore::default()))),
             Err(e) if crate::bandcamp::not_read(&e) => Err(e),
             // Bandcamp has no such page (`Bandcamp::text` says its status in words).
             Err(e) if e.to_string().starts_with("Bandcamp answered 404") => Ok(None),
@@ -1481,7 +1518,7 @@ mod tests {
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let both = wanted(&cat, "Night Walks", &[("musicbrainz", "release", "r5"), ("discogs", "release", "2000005")]);
         let off = |r: Ref| {
-            std::future::ready(if r.source == "musicbrainz" { Err(anyhow::Error::from(SwitchedOff("MusicBrainz"))) } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None))) })
+            std::future::ready(if r.source == "musicbrainz" { Err(anyhow::Error::from(SwitchedOff("MusicBrainz"))) } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None, Default::default()))) })
         };
         assert_eq!(tracklist(&cat, both, off).await.unwrap().unwrap().timed.unwrap().0, "discogs");
         let alone = wanted(&cat, "Undated", &[("musicbrainz", "release", "r6")]);
@@ -1494,7 +1531,7 @@ mod tests {
     async fn a_list_without_lengths_gives_way_to_the_next_with_them() {
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let record = wanted(&cat, "Night Walks", &[("discogs", "release", "2000007"), ("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks")]);
-        let read = |r: Ref| std::future::ready(Ok(Some((list(&[("Lamplight", if r.source == "discogs" { None } else { Some(200_000) })]), None))));
+        let read = |r: Ref| std::future::ready(Ok(Some((list(&[("Lamplight", if r.source == "discogs" { None } else { Some(200_000) })]), None, Default::default()))));
         let first = tracklist(&cat, record, read).await.unwrap().unwrap();
         assert_eq!((first.timed.map(|(s, _)| s), first.untimed.map(|(s, _)| s)), (Some("bandcamp".to_string()), Some("discogs".to_string())));
         assert_eq!(cat.record(record).unwrap().unwrap().counting.as_deref(), Some("discogs"), "the first list counts, lengths or none");
@@ -1521,7 +1558,7 @@ mod tests {
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let record = wanted(&cat, "Further", &[("bandcamp", "album", "https://grouch.bandcamp.com/album/further"), ("discogs", "release", "2000011")]);
         cat.set_counting(record, Some("bandcamp"), false).unwrap();
-        let read = |r: Ref| async move { if r.source == "bandcamp" { read_reference(r).await } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None))) } };
+        let read = |r: Ref| async move { if r.source == "bandcamp" { read_reference(r).await } else { Ok(Some((list(&[("Lamplight", Some(200_000))]), None, Default::default()))) } };
         let was = super::super::switches::set_for_tests(super::super::switches::BANDCAMP, false);
         let judged = tracklist(&cat, record, read).await;
         super::super::switches::set_for_tests(super::super::switches::BANDCAMP, was);
@@ -1561,7 +1598,7 @@ mod tests {
         move |r: Ref| {
             asked.lock().unwrap().push(format!("{}:{}", r.source, r.kind));
             let answer = match lists.iter().find(|(s, _)| *s == r.source) {
-                Some((_, titles)) => Ok(Some((list(&titles.iter().map(|t| (*t, Some(200_000))).collect::<Vec<_>>()), None))),
+                Some((_, titles)) => Ok(Some((list(&titles.iter().map(|t| (*t, Some(200_000))).collect::<Vec<_>>()), None, Default::default()))),
                 None => other(),
             };
             std::future::ready(answer)
@@ -1575,7 +1612,7 @@ mod tests {
         let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
         let record = wanted(&cat, "Signal", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000190")]);
         let release = "00000000-0000-4000-8000-000000000191";
-        let read = |_| std::future::ready(Ok(Some((list(&[("Signal", Some(200_000))]), Some(Ref::new("musicbrainz", "release", release))))));
+        let read = |_| std::future::ready(Ok(Some((list(&[("Signal", Some(200_000))]), Some(Ref::new("musicbrainz", "release", release)), Default::default()))));
         tracklist(&cat, record, read).await.unwrap().unwrap();
         let refs = cat.references_of(&ids::record(record)).unwrap();
         assert!(refs.iter().any(|(r, row)| (r.kind.as_str(), r.value.as_str(), row.how.as_str()) == ("release", release, "search")), "{refs:?}");
@@ -1632,7 +1669,7 @@ mod tests {
             let asked = asked.clone();
             move |r: Ref| {
                 asked.lock().unwrap().push(format!("{}:{}", r.kind, r.value));
-                std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000))]), None))))
+                std::future::ready(Ok(Some((list(&[("Lamplight", Some(200_000))]), None, Default::default()))))
             }
         };
         let (source, pasted) = tracklist(&cat, record, &read).await.unwrap().unwrap().timed.unwrap();
@@ -1762,7 +1799,7 @@ mod tests {
             let gate = gate.clone();
             Box::pin(async move {
                 let _open = gate.acquire().await;
-                Ok::<Option<Read>, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None)))
+                Ok::<Option<Read>, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None, Default::default())))
             })
         }
     }
@@ -1795,7 +1832,7 @@ mod tests {
                     return Ok::<Option<Read>, anyhow::Error>(None);
                 }
                 let _open = gate.acquire().await;
-                Ok::<Option<Read>, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None)))
+                Ok::<Option<Read>, anyhow::Error>(Some((list(&[("Lamplight", Some(200_000))]), None, Default::default())))
             })
         }
     }
@@ -2120,5 +2157,47 @@ mod tests {
         assert_eq!(listed.iter().map(|s| s.source).collect::<Vec<_>>(), named, "{why}");
         assert_eq!(named.len(), 3, "{why}");
         assert!(listed.iter().all(|s| s.said == "none"), "{listed:?}");
+    }
+
+    /// F18.2: records credited to nobody (opened from a label's rows by a name no artist has, two have, or Discogs marks as shared);
+    /// each release's read names its artists by Discogs id, one release a collaboration of two. Each artist found by the id, else the
+    /// one live artist of the name holding no Discogs id, else one made; credited in the release's order. A record credited before
+    /// keeps its credit (one the release contradicts is said in the log, nothing moved); never a second Discogs id on one artist.
+    #[tokio::test]
+    async fn a_release_read_credits_the_artists_it_names() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let field = cat.artist_for("Noor Field").unwrap();
+        let held = cat.artist_for("Orbit Lane").unwrap();
+        assert!(cat.set_reference(&ids::artist(held), &Ref::new("discogs", "artist", "9300"), "link").unwrap());
+        let (signal, together, lamplight) = (wanted(&cat, "Signal", &[("discogs", "release", "3800001")]), wanted(&cat, "Together", &[("discogs", "release", "3800002")]), wanted(&cat, "Lamplight", &[("discogs", "release", "3800003")]));
+        let credited_before = wanted(&cat, "Undertow", &[("discogs", "release", "3800004")]);
+        cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", rusqlite::params![credited_before, field]).unwrap();
+        let read = |r: Ref| {
+            let artists: Vec<(Ref, String)> = match r.value.as_str() {
+                "3800001" => vec![(Ref::new("discogs", "artist", "9101"), "Noor Field".into())],
+                "3800002" => vec![(Ref::new("discogs", "artist", "9102"), "Kite Theory".into()), (Ref::new("discogs", "artist", "9300"), "Orbit Lane (2)".into())],
+                "3800003" => vec![(Ref::new("discogs", "artist", "9103"), "Glass Harbour (2)".into())],
+                _ => vec![(Ref::new("discogs", "artist", "9104"), "Tape Club".into())],
+            };
+            std::future::ready(Ok(Some((list(&[("One", Some(200_000))]), None, ReadMore { also: Vec::new(), artists }))))
+        };
+        let t = crate::app::moment::now_secs();
+        for r in [signal, together, lamplight, credited_before] {
+            opened(&cat, r, t, read).await;
+            page_read_settled(&cat, r).await;
+        }
+        let artist_holding = |id: &str| cat.subject_of(&Ref::new("discogs", "artist", id)).unwrap().iter().find_map(|s| ids::artist_number(s));
+        assert_eq!(cat.record_artists(signal).unwrap(), [field], "the one Noor Field holding no Discogs id, given it");
+        assert_eq!(artist_holding("9101"), Some(field));
+        let kite = cat.artist_of("Kite Theory").unwrap().expect("made by the release's id");
+        assert_eq!(cat.record_artists(together).unwrap(), [kite, held], "a collaboration, in the release's order, each by their id");
+        let made = cat.record_artists(lamplight).unwrap();
+        assert_eq!(made.len(), 1);
+        assert_ne!(cat.artist_named(made[0]).unwrap().unwrap().name, "", "a name Discogs marks as shared: an artist of their own");
+        assert_eq!(artist_holding("9103"), Some(made[0]));
+        assert_eq!(cat.record_artists(credited_before).unwrap(), [field], "credited before: kept");
+        assert_eq!(artist_holding("9104"), None, "nothing moved, nothing made for it");
+        let discogs_ids: i64 = cat.db_for_tests().query_row("SELECT max(n) FROM (SELECT count(*) AS n FROM \"references\" WHERE subject GLOB 'ar-*' AND source = 'discogs' AND kind = 'artist' GROUP BY subject)", [], |r| r.get(0)).unwrap();
+        assert_eq!(discogs_ids, 1, "never a second Discogs id on one artist");
     }
 }

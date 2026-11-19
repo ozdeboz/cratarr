@@ -1150,6 +1150,7 @@ mod tests {
             catno: String::new(),
             kind: None,
             cover: None,
+            also: Vec::new(),
         };
         cat.keep_label_rows(label, "discogs", &[row("3913"), row("3914")], None, true, 1).unwrap();
         let kept = cat.label_kept(label).unwrap().expect("a label");

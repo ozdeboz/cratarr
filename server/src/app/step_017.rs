@@ -2122,4 +2122,53 @@ mod tests {
         let warp = data.texts("catalogue.sqlite", "SELECT CAST(r.record AS TEXT) FROM record_labels r JOIN labels l ON l.id = r.label WHERE l.name = 'Warp' ORDER BY r.record");
         assert_eq!(warp, ["3", "4", "8"], "every record naming Warp tied to the one label");
     }
+
+    /// F15.5: (a) FX01: no merge by a master or a group (0.16's data holds one record per group and masters on had records alone): no two
+    /// records not had share one before the step, and none of the fold's merges joins two that did. (b) A catalogue as a preview left it:
+    /// records not had X and Y of master 5000005 (two releases), credited to two artists' lists, and Z and W of one release group: Y into
+    /// X and W into Z, listed in the fold's report; never a had record, never across two groups.
+    #[test]
+    fn the_fold_joins_records_not_had_of_one_master_or_group() {
+        let plain = Data::new("fold-masters-plain");
+        let shared = |data: &Data| -> Vec<String> {
+            data.texts(
+                "catalogue.sqlite",
+                "SELECT a.subject || ' ' || b.subject FROM \"references\" a JOIN \"references\" b ON a.source = b.source AND a.kind = b.kind AND a.value = b.value AND a.subject < b.subject
+                 WHERE a.subject GLOB 'al-*' AND b.subject GLOB 'al-*' AND ((a.source = 'discogs' AND a.kind = 'master') OR (a.source = 'musicbrainz' AND a.kind = 'release-group'))
+                   AND NOT EXISTS (SELECT 1 FROM tracks t WHERE 'al-' || t.record IN (a.subject, b.subject) AND t.retired_at IS NULL)",
+            )
+        };
+        {
+            let (cat, ud) = plain.open();
+            run_without_fold(&cat, &ud, &[]);
+            assert!(shared(&plain).is_empty(), "(a) as the fold begins, no two records not had share a master or a group: {:?}", shared(&plain));
+            fold(&cat, &ud, &[], &|| Ok(())).unwrap();
+            assert!(shared(&plain).is_empty(), "(a) and none after it");
+        }
+        let data = Data::new("fold-masters");
+        let (cat, ud) = data.open();
+        let (harbour, field) = (cat.artist_for("Glass Harbour").unwrap(), cat.artist_for("Noor Field").unwrap());
+        let made = |title: &str, artist: i64, refs: &[(&str, &str, &str)]| {
+            let record = cat.record_for_tests(title, 0);
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", rusqlite::params![record, artist]).unwrap();
+            for (s, k, v) in refs {
+                assert!(cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new(s, k, v), "link").unwrap());
+            }
+            record
+        };
+        let x = made("Two Rooms", harbour, &[("discogs", "release", "3600006"), ("discogs", "master", "5000005"), ("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000f07")]);
+        let y = made("Two Rooms", field, &[("discogs", "release", "3600007"), ("discogs", "master", "5000005")]);
+        let g5 = "00000000-0000-4000-8000-000000000f05";
+        let z = made("Undertow", harbour, &[("musicbrainz", "release-group", g5)]);
+        let w = made("Undertow (Live)", field, &[("musicbrainz", "release-group", g5)]);
+        let other = made("Two Rooms (Deluxe)", field, &[("discogs", "master", "5000005"), ("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000f06")]);
+        run(&cat, &ud).unwrap();
+        let end = |r: i64| cat.record(r).unwrap().unwrap().id;
+        assert_eq!((end(y), end(w)), (x, z), "(b) Y into X, W into Z");
+        let fold = cat.meta("017:fold").unwrap();
+        for line in [format!("al-{y} into al-{x}"), format!("al-{w} into al-{z}")] {
+            assert!(fold.contains(&line), "listed: {line} in {fold}");
+        }
+        assert_eq!(end(other), other, "a second release group: never folded by the master");
+    }
 }

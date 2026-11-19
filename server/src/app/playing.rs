@@ -1608,7 +1608,7 @@ mod tests {
         let named = |v: &AlbumView| v.more.sources.iter().map(|s| (s.source, s.kind, s.url.clone(), s.tracks)).collect::<Vec<_>>();
         let group_page = format!("https://musicbrainz.org/release-group/{group}");
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let reads = asking(&asked, || Ok(Some((vec![track(1, "Lamplight"), track(2, "Morning")], None))));
+        let reads = asking(&asked, || Ok(Some((vec![track(1, "Lamplight"), track(2, "Morning")], None, Default::default()))));
         let t = super::super::moment::now_secs();
         let first = opened(&cat, record, t, reads.clone()).await;
         assert!(first.more.looking, "its list being read");

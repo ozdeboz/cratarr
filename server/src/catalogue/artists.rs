@@ -130,6 +130,18 @@ fn opening_in(db: &Connection, r: &super::records::Ref, name: &str) -> Result<Op
     })
 }
 
+/// `Catalogue::artist_by_reference` in the caller's transaction: the artist who holds `r`; else, where `sure`, the one live artist of
+/// the name holding none of that source's ids; else one made (the name's next number); the one found or made given it, `how`.
+pub(super) fn by_reference_in(tx: &Connection, r: &super::records::Ref, name: &str, how: &str, sure: bool, at: i64) -> Result<i64> {
+    let artist = match opening_in(tx, r, name)? {
+        Opening::Held(artist) => return Ok(artist),
+        Opening::Decides(only) if sure => only,
+        _ => give_artist(tx, &ids::artist_key(name), name, at)?,
+    };
+    super::records::put_reference(tx, &ids::artist(artist), r, how, at, false)?;
+    Ok(artist)
+}
+
 impl Catalogue {
     /// Who an open of a source's id and a name is, as the catalogue stands (`Opening`, RF13): what an open asks the source of, and
     /// when not at all. Blocking.
@@ -164,16 +176,7 @@ impl Catalogue {
     pub fn artist_by_reference(&self, r: &super::records::Ref, name: &str, how: &str, sure: bool) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let at = now();
-        let artist = match opening_in(&tx, r, name)? {
-            Opening::Held(artist) => {
-                tx.commit()?;
-                return Ok(artist);
-            }
-            Opening::Decides(only) if sure => only,
-            _ => give_artist(&tx, &ids::artist_key(name), name, at)?,
-        };
-        super::records::put_reference(&tx, &ids::artist(artist), r, how, at, false)?;
+        let artist = by_reference_in(&tx, r, name, how, sure, now())?;
         tx.commit()?;
         Ok(artist)
     }

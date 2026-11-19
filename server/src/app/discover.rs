@@ -840,7 +840,7 @@ pub(super) async fn mb_label_by_name(http: &reqwest::Client, name: &str) -> Resu
 /// A page of a label's releases on MusicBrainz, read (S13): each release group once, as a record a list names, by its
 /// release group, with its first release's date and year, its type in the library's words, and its artist as credited
 /// where the answer has it (`inc=artist-credits`). Every type: a label's list is its catalogue. Pure.
-fn label_listings(v: &serde_json::Value) -> Vec<crate::catalogue::records::Listing> {
+pub(super) fn label_listings(v: &serde_json::Value) -> Vec<crate::catalogue::records::Listing> {
     let mut out: Vec<crate::catalogue::records::Listing> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for r in v["releases"].as_array().into_iter().flatten() {
@@ -851,7 +851,15 @@ fn label_listings(v: &serde_json::Value) -> Vec<crate::catalogue::records::Listi
         }
         let first = g["first-release-date"].as_str().filter(|d| !d.is_empty());
         let words = g["primary-type"].as_str().into_iter().chain(g["secondary-types"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str));
-        let artist: String = r["artist-credit"].as_array().into_iter().flatten().map(|c| format!("{}{}", c["name"].as_str().unwrap_or_default(), c["joinphrase"].as_str().unwrap_or_default())).collect();
+        let credit = r["artist-credit"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let artist: String = credit.iter().map(|c| format!("{}{}", c["name"].as_str().unwrap_or_default(), c["joinphrase"].as_str().unwrap_or_default())).collect();
+        // A2.3.1: the Discogs release MusicBrainz links the release to (`url-rels`), so the label's Discogs row of it is the same album;
+        // F18.1 (a): the credit's one artist by their MusicBrainz id (a collaboration names none: no one artist is it).
+        let discogs = r["relations"].as_array().into_iter().flatten().filter_map(|rel| rel["url"]["resource"].as_str()).find_map(|u| super::discogs::id_in(&[u.to_string()], "release"));
+        let credited = match credit {
+            [one] => one["artist"]["id"].as_str().filter(|a| super::discogs::is_mbid(a)).map(|a| crate::catalogue::records::Ref::new("musicbrainz", "artist", &a.to_ascii_lowercase())),
+            _ => None,
+        };
         out.push(crate::catalogue::records::Listing {
             title: title.to_string(),
             artist: artist.trim().to_string(),
@@ -859,6 +867,7 @@ fn label_listings(v: &serde_json::Value) -> Vec<crate::catalogue::records::Listi
             kind: crate::serve::library::release_words(words).0,
             released: first.map(str::to_string),
             refs: vec![crate::catalogue::records::Ref::new("musicbrainz", "release-group", &id.to_ascii_lowercase())],
+            says: discogs.map(|d| crate::catalogue::records::Ref::new("discogs", "release", &d.to_string())).into_iter().chain(credited).collect(),
             ..Default::default()
         });
     }
@@ -868,7 +877,7 @@ fn label_listings(v: &serde_json::Value) -> Vec<crate::catalogue::records::Listi
 /// A page of a label's releases on MusicBrainz from `offset` (`label_listings`; a label runs to thousands, OQ10, so a page at
 /// a time), and where the next starts, none at the end.
 pub(super) async fn mb_label_releases(http: &reqwest::Client, label: &str, offset: usize) -> Result<(Vec<crate::catalogue::records::Listing>, Option<usize>)> {
-    let v = mb_page(http, "release", &[("label", label), ("inc", "release-groups+artist-credits")], offset).await?;
+    let v = mb_page(http, "release", &[("label", label), ("inc", "release-groups+artist-credits+url-rels")], offset).await?;
     Ok((label_listings(&v), next_offset(&v, "release")))
 }
 
@@ -1885,6 +1894,16 @@ pub trait ArtistList: Send + Sync {
     }
     /// The artist's list there.
     fn read<'a>(&'a self, artist: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead>;
+    /// An artist this source knows by a name no artist here has (F18.3): their reference there, and whether it is the source's sure
+    /// match for the name; none where it knows no one of it. A source that finds no one by a name (Bandcamp: MusicBrainz's link
+    /// alone) answers none.
+    fn find<'a>(&'a self, _name: &'a str) -> crate::source::Fut<'a, Option<(crate::catalogue::records::Ref, bool)>> {
+        Box::pin(async { Ok(None) })
+    }
+    /// Whether it finds an artist by a name at all (`find`): MusicBrainz and Discogs, never Bandcamp.
+    fn finds(&self) -> bool {
+        false
+    }
 }
 
 /// MusicBrainz's list of an artist: their release groups, as a discography is read (`mb_discography`), by the id the files gave
@@ -1913,6 +1932,15 @@ impl ArtistList for MusicBrainzList {
             let listings = group_listings(mb_discography(&http, &mbid, &today()).await?);
             Ok(Some((crate::catalogue::records::Ref::new("musicbrainz", "artist", &mbid), how, listings)))
         })
+    }
+
+    fn finds(&self) -> bool {
+        true
+    }
+
+    /// MusicBrainz's sure match for the name (F18.3).
+    fn find<'a>(&'a self, name: &'a str) -> crate::source::Fut<'a, Option<(crate::catalogue::records::Ref, bool)>> {
+        Box::pin(async move { Ok(mb_artist_by_name(&http()?, name).await?.map(|id| (crate::catalogue::records::Ref::new("musicbrainz", "artist", &id), true))) })
     }
 }
 
@@ -1943,6 +1971,15 @@ impl ArtistList for DiscogsList {
             let listings = super::discogs::artist_masters(id).await?.iter().map(discogs_listing).collect();
             Ok(Some((crate::catalogue::records::Ref::new("discogs", "artist", &id.to_string()), how, listings)))
         })
+    }
+
+    fn finds(&self) -> bool {
+        true
+    }
+
+    /// Discogs' artist of the name by the one rule (F18.3, A1.8: never a namesake).
+    fn find<'a>(&'a self, name: &'a str) -> crate::source::Fut<'a, Option<(crate::catalogue::records::Ref, bool)>> {
+        Box::pin(async move { Ok(super::discogs::artist_found(None, name).await?.map(|(id, _)| (crate::catalogue::records::Ref::new("discogs", "artist", &id.to_string()), true))) })
     }
 }
 
@@ -2143,7 +2180,7 @@ async fn read_settled(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<Artis
 
 /// The artists whose name's MusicBrainz id another artist holds (A2.2, OQ-A2.2 (a)): by catalogue (its address) and artist, the holder
 /// and when it was found. Their page's "Not in your library" is the holder's for `LIST_FRESH_SECS`; MusicBrainz is asked again after.
-type HeldBy = std::sync::Mutex<HashMap<(usize, i64), (i64, i64)>>;
+type HeldBy = std::sync::Mutex<HashMap<(usize, i64), (std::sync::Weak<crate::catalogue::Catalogue>, i64, i64)>>;
 
 fn held_by_all() -> &'static HeldBy {
     static HELD: std::sync::OnceLock<HeldBy> = std::sync::OnceLock::new();
@@ -2152,7 +2189,12 @@ fn held_by_all() -> &'static HeldBy {
 
 /// The artist who holds the MusicBrainz id `artist`'s name is (A2.2), where it was found within `LIST_FRESH_SECS` of `now`.
 fn held_by(cat: &Arc<crate::catalogue::Catalogue>, artist: i64, now: i64) -> Option<i64> {
-    held_by_all().lock().unwrap_or_else(|p| p.into_inner()).get(&(Arc::as_ptr(cat) as usize, artist)).filter(|(_, at)| now - at <= LIST_FRESH_SECS).map(|(holder, _)| *holder)
+    held_by_all()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&(Arc::as_ptr(cat) as usize, artist))
+        .filter(|(c, _, at)| now - at <= LIST_FRESH_SECS && c.upgrade().is_some_and(|c| Arc::ptr_eq(&c, cat)))
+        .map(|(_, holder, _)| *holder)
 }
 
 /// One source's list of the artist read and kept (C53a): what it knows them by (where found now), its rows as records not had
@@ -2183,7 +2225,9 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
     })
     .await??;
     if let Some(holder) = holder.filter(|_| source.source() == "musicbrainz") {
-        held_by_all().lock().unwrap_or_else(|p| p.into_inner()).insert((Arc::as_ptr(cat) as usize, artist.id), (holder, super::moment::now_secs()));
+        let mut all = held_by_all().lock().unwrap_or_else(|p| p.into_inner());
+        all.retain(|_, (c, ..)| c.strong_count() > 0);
+        all.insert((Arc::as_ptr(cat) as usize, artist.id), (Arc::downgrade(cat), holder, super::moment::now_secs()));
     }
     Ok(true)
 }
@@ -2214,6 +2258,71 @@ pub struct ArtistMissing {
 /// `ArtistMissing`).
 pub async fn missing_albums(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources: &[Arc<dyn ArtistList>]) -> Result<ArtistMissing> {
     missing_at(cat, artist, sources, super::moment::now_secs()).await
+}
+
+/// An artist page asked by a name (F18.3, F18.4): the artist of the name where there is one (C55: a bare name means the first; one a
+/// build credited meanwhile too); else the one the first source that knows the name finds (in the sources' order: MusicBrainz's sure
+/// match, then Discogs' by the one rule), found or made by that reference (`artist_by_reference`, `search`), whose lists are then read
+/// as any artist's (`artist` their id); else none, each source said in F1's words: `none`, `off`, `unanswered` (asked again after
+/// `LIST_RETRY_SECS`). Never an artist made by a name alone.
+pub async fn missing_by_name(cat: Arc<crate::catalogue::Catalogue>, name: &str, sources: &[Arc<dyn ArtistList>]) -> Result<ArtistMissing> {
+    missing_by_name_at(cat, name, sources, super::moment::now_secs()).await
+}
+
+/// The sources that failed to say who a name is (F18.4), by catalogue (its address), the name's key and the source, and when.
+type NameFailures = std::sync::Mutex<HashMap<(usize, String, &'static str), (std::sync::Weak<crate::catalogue::Catalogue>, i64)>>;
+
+fn name_failures() -> &'static NameFailures {
+    static FAILED: std::sync::OnceLock<NameFailures> = std::sync::OnceLock::new();
+    FAILED.get_or_init(Default::default)
+}
+
+/// `missing_by_name` at `now`.
+async fn missing_by_name_at(cat: Arc<crate::catalogue::Catalogue>, name: &str, sources: &[Arc<dyn ArtistList>], now: i64) -> Result<ArtistMissing> {
+    use super::references::{Outcome, Said};
+    let name = name.trim().to_string();
+    let (c, n) = (cat.clone(), name.clone());
+    if let Some(artist) = tokio::task::spawn_blocking(move || c.artist_of(&n)).await?? {
+        let mut found = missing_at(cat, artist, sources, now).await?;
+        found.artist.get_or_insert_with(|| crate::serve::ids::artist(artist));
+        return Ok(found);
+    }
+    if name.is_empty() {
+        return Ok(ArtistMissing::default());
+    }
+    let key = |source: &'static str| (Arc::as_ptr(&cat) as usize, crate::serve::ids::artist_key(&name), source);
+    let mut said: Vec<Said> = Vec::new();
+    for source in sources.iter().filter(|s| s.finds()) {
+        let s = source.source();
+        if !source.on() {
+            said.push(Said::of(s, Outcome::Off, now));
+            continue;
+        }
+        let failed = name_failures().lock().unwrap_or_else(|p| p.into_inner()).get(&key(s)).filter(|(c, _)| c.upgrade().is_some_and(|c| Arc::ptr_eq(&c, &cat))).map(|(_, at)| *at);
+        if failed.is_some_and(|at| now - at <= LIST_RETRY_SECS) {
+            said.push(Said::of(s, Outcome::Unanswered, now));
+            continue;
+        }
+        match source.find(&name).await {
+            Ok(Some((r, sure))) => {
+                name_failures().lock().unwrap_or_else(|p| p.into_inner()).remove(&key(s));
+                let (c, n) = (cat.clone(), name.clone());
+                let artist = tokio::task::spawn_blocking(move || c.artist_by_reference(&r, &n, "search", sure)).await??;
+                let mut found = missing_at(cat, artist, sources, now).await?;
+                found.artist = Some(crate::serve::ids::artist(artist));
+                return Ok(found);
+            }
+            Ok(None) => said.push(Said::of(s, Outcome::None, now)),
+            Err(e) => {
+                tracing::info!(target: "discover", source = s, "who a name is could not be asked: {e:#}");
+                let mut all = name_failures().lock().unwrap_or_else(|p| p.into_inner());
+                all.retain(|_, (c, _)| c.strong_count() > 0);
+                all.insert(key(s), (Arc::downgrade(&cat), now));
+                said.push(Said::of(s, Outcome::Unanswered, now));
+            }
+        }
+    }
+    Ok(ArtistMissing { no_list: (!said.is_empty()).then_some(said), ..ArtistMissing::default() })
 }
 
 /// `missing_albums` at `now`.
@@ -3133,7 +3242,7 @@ mod missing_tests {
                 match r.source.as_str() {
                     "musicbrainz" => Err(anyhow::Error::from(crate::app::references::SwitchedOff("MusicBrainz"))),
                     "discogs" => Err(anyhow::Error::from(crate::app::references::SwitchedOff("Discogs"))),
-                    "bandcamp" if r.kind == "album" && r.value == THEIR_PAGES[3] => Ok(Some((list, None))),
+                    "bandcamp" if r.kind == "album" && r.value == THEIR_PAGES[3] => Ok(Some((list, None, Default::default()))),
                     _ => Err(anyhow::anyhow!("not expected: {r:?}")),
                 }
             }
@@ -3431,6 +3540,141 @@ mod missing_tests {
         let asked = ASKED.lock().unwrap().clone();
         assert_eq!(asked.iter().filter(|a| a.ends_with("The\u{f6}ry")).cloned().collect::<Vec<_>>(), ["musicbrainz Kite The\u{f6}ry"], "MusicBrainz asked for the name once, nothing else read under it: {asked:?}");
         assert!(asked.iter().filter(|a| a.as_str() == "musicbrainz Kite Theory").count() <= 1, "the holder's list read once at most: {asked:?}");
+    }
+}
+
+#[cfg(test)]
+mod by_name_tests {
+    use super::*;
+    use crate::catalogue::Catalogue;
+    use crate::catalogue::records::{Listing, Ref};
+
+    const A6: &str = "00000000-0000-4000-8000-000000000a66";
+
+    /// A source of the test's own that finds artists by a name (`finds`): who it finds, and its list of anyone.
+    struct Finder(&'static str, fn(&str) -> Result<Option<(Ref, bool)>>, fn(&ArtistAsked) -> Result<ListRead>);
+
+    impl ArtistList for Finder {
+        fn source(&self) -> &'static str {
+            self.0
+        }
+
+        fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
+            let answer = (self.2)(a);
+            Box::pin(async move { answer })
+        }
+
+        fn on(&self) -> bool {
+            self.0 != "musicbrainz" || crate::app::switches::is_on(crate::app::switches::MUSICBRAINZ)
+        }
+
+        fn finds(&self) -> bool {
+            true
+        }
+
+        fn find<'a>(&'a self, name: &'a str) -> crate::source::Fut<'a, Option<(Ref, bool)>> {
+            let found = (self.1)(name);
+            Box::pin(async move { found })
+        }
+    }
+
+    fn row(title: &str, refs: &[(&str, &str, &str)]) -> Listing {
+        Listing { title: title.into(), kind: Some("album".into()), year: Some(2024), refs: refs.iter().map(|(s, k, v)| Ref::new(s, k, v)).collect(), ..Listing::default() }
+    }
+
+    /// The answer once no read runs.
+    async fn by_name_settled(cat: &Arc<Catalogue>, name: &str, sources: &[Arc<dyn ArtistList>], now: i64) -> ArtistMissing {
+        for _ in 0..500 {
+            let m = missing_by_name_at(cat.clone(), name, sources, now).await.unwrap();
+            if !m.looking {
+                return m;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("still looking")
+    }
+
+    /// F18.3, F18.4: a page asked by a name no artist has. MusicBrainz's sure match A6: an artist made by it (`search`), the first answer
+    /// looking with `artist` theirs, a later one their rows. Where MusicBrainz knows none, Discogs' id by name makes them. Where no source
+    /// knows the name: no artist made, nothing looking, each source said (`none`, `off` switched off); MusicBrainz busy: `unanswered`,
+    /// asked again only after the quarter hour.
+    #[tokio::test]
+    async fn an_artist_page_by_a_name_none_has_makes_them_by_the_source_that_knows_them() {
+        static ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let _state = crate::app::switches::TEST_STATE.lock().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let mb: Arc<dyn ArtistList> = Arc::new(Finder(
+            "musicbrainz",
+            |name| Ok((name == "Glass Harbour").then(|| (Ref::new("musicbrainz", "artist", A6), true))),
+            |_| Ok(Some((Ref::new("musicbrainz", "artist", A6), None, vec![row("Cenotes", &[("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000a67")])]))),
+        ));
+        let discogs: Arc<dyn ArtistList> = Arc::new(Finder("discogs", |name| Ok((name == "Babon").then(|| (Ref::new("discogs", "artist", "17300128"), true))), |_| Ok(None)));
+        let sources = [mb.clone(), discogs.clone()];
+        let t = super::super::moment::now_secs();
+        let first = missing_by_name_at(cat.clone(), "Glass Harbour", &sources, t).await.unwrap();
+        let made = cat.artist_of("Glass Harbour").unwrap().expect("made");
+        assert_eq!(first.artist.as_deref(), Some(crate::serve::ids::artist(made).as_str()));
+        assert!(first.looking, "its lists read in the background");
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "artist", A6)).unwrap(), [crate::serve::ids::artist(made)], "made by A6");
+        assert_eq!(cat.references_of(&crate::serve::ids::artist(made)).unwrap()[0].1.how, "search");
+        let later = by_name_settled(&cat, "Glass Harbour", &sources, t + 60).await;
+        assert_eq!(later.albums.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Cenotes"], "their rows");
+        let babon = by_name_settled(&cat, "Babon", &sources, t).await;
+        let by_discogs = cat.artist_of("Babon").unwrap().expect("made by Discogs' id");
+        assert_eq!(babon.artist.as_deref(), Some(crate::serve::ids::artist(by_discogs).as_str()));
+        assert_eq!(cat.subject_of(&Ref::new("discogs", "artist", "17300128")).unwrap(), [crate::serve::ids::artist(by_discogs)]);
+        // F18.4: no source knows the name.
+        let none = missing_by_name_at(cat.clone(), "Nobody Knows", &sources, t).await.unwrap();
+        assert_eq!(cat.artist_of("Nobody Knows").unwrap(), None, "no artist made");
+        assert!(!none.looking && none.albums.is_empty());
+        assert_eq!(serde_json::to_value(&none).unwrap()["no_list"], serde_json::json!([{ "source": "musicbrainz", "said": "none" }, { "source": "discogs", "said": "none" }]));
+        let was = crate::app::switches::set_for_tests(crate::app::switches::MUSICBRAINZ, false);
+        let off = missing_by_name_at(cat.clone(), "Nobody Knows", &sources, t).await.unwrap();
+        crate::app::switches::set_for_tests(crate::app::switches::MUSICBRAINZ, was);
+        assert_eq!(serde_json::to_value(&off).unwrap()["no_list"][0], serde_json::json!({ "source": "musicbrainz", "said": "off" }));
+        let busy: Arc<dyn ArtistList> = Arc::new(Finder(
+            "musicbrainz",
+            |_| {
+                ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(anyhow::anyhow!("MusicBrainz answered 503"))
+            },
+            |_| Ok(None),
+        ));
+        let sources = [busy, discogs];
+        let said = missing_by_name_at(cat.clone(), "Still Nobody", &sources, t).await.unwrap();
+        assert_eq!(serde_json::to_value(&said).unwrap()["no_list"][0], serde_json::json!({ "source": "musicbrainz", "said": "unanswered" }));
+        missing_by_name_at(cat.clone(), "Still Nobody", &sources, t + 60).await.unwrap();
+        assert_eq!(ASKED.load(std::sync::atomic::Ordering::SeqCst), 1, "not asked again inside the quarter hour");
+        missing_by_name_at(cat.clone(), "Still Nobody", &sources, t + LIST_RETRY_SECS + 60).await.unwrap();
+        assert_eq!(ASKED.load(std::sync::atomic::Ordering::SeqCst), 2, "asked again after it");
+        assert_eq!(cat.artist_of("Still Nobody").unwrap(), None, "never made without a reference");
+    }
+
+    /// F18.5: two asks at once make one artist; a name a build credited an artist of meanwhile is that one, nothing made; A6 held by an
+    /// artist of another name (A2.2's spelling) answers as that artist; one made this way with nothing credited a day on is forgotten
+    /// (RT01b).
+    #[tokio::test]
+    async fn an_artist_by_name_is_made_once_and_never_beside_one_of_its_name() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let mb: Arc<dyn ArtistList> = Arc::new(Finder("musicbrainz", |_| Ok(Some((Ref::new("musicbrainz", "artist", A6), true))), |_| Ok(None)));
+        let sources = [mb];
+        let t = super::super::moment::now_secs();
+        let (a, b) = tokio::join!(missing_by_name_at(cat.clone(), "Glass Harbour", &sources, t), missing_by_name_at(cat.clone(), "Glass Harbour", &sources, t));
+        assert_eq!(a.unwrap().artist, b.unwrap().artist, "one artist");
+        let n: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM artists WHERE key = 'glass harbour'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        // A build credited an artist of the name meanwhile: that one.
+        let built = cat.artist_for("Tape Club").unwrap();
+        let found = missing_by_name_at(cat.clone(), "Tape Club", &sources, t).await.unwrap();
+        assert_eq!(found.artist.as_deref(), Some(crate::serve::ids::artist(built).as_str()), "C55: a bare name means the first");
+        // A6 is held (by Glass Harbour, made above): another name finding it answers as its holder.
+        let holder = cat.artist_of("Glass Harbour").unwrap().unwrap();
+        let spelled = missing_by_name_at(cat.clone(), "Glass Harb\u{f6}ur", &sources, t).await.unwrap();
+        assert_eq!(spelled.artist.as_deref(), Some(crate::serve::ids::artist(holder).as_str()), "the holder answers");
+        assert_eq!(cat.artist_of("Glass Harb\u{f6}ur").unwrap(), None, "nothing made beside them");
+        // RT01b: made this way, nothing credited, a day on: forgotten, its number kept.
+        let gone = cat.forget_quiet_artists(t + 2 * 86_400, &std::collections::BTreeSet::new()).unwrap();
+        assert!(gone.contains(&holder), "forgotten a day on: {gone:?}");
     }
 }
 

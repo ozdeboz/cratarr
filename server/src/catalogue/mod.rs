@@ -1131,6 +1131,7 @@ impl Catalogue {
         conn.execute_batch(records::SCHEMA).context("creating the records' references")?;
         conn.execute_batch(artists::SCHEMA).context("creating the artists' numbers")?;
         conn.execute_batch(labels::SCHEMA).context("creating the labels' kept rows")?;
+        labels::add_also(&conn).context("adding the labels' rows' references")?;
         // C55: the artists from before the numbers given theirs, in the order they were made.
         artists::number_all(&conn).context("numbering the artists of one name")?;
         // A folder in use before ids for life: its place is its id from now on.

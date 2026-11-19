@@ -1363,6 +1363,26 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             i.record.record = *record;
         }
     }
+    // F15.6: two items of one record after a merge (by a master, a group, a fold): one searches it, the first made or the one under
+    // way; the other is taken off where nothing of it is under way (ticked, fetched, checked, placed): one under way stays, the other
+    // waits. Each request reads the record's item.
+    let mut first: BTreeMap<i64, bool> = BTreeMap::new();
+    for i in k.items.iter().filter(|i| i.record.record != 0) {
+        let under_way = under_way(i);
+        first.entry(i.record.record).and_modify(|u| *u |= under_way).or_insert(under_way);
+    }
+    let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let doubles: std::collections::HashSet<String> = k
+        .items
+        .iter()
+        .filter(|i| i.record.record != 0)
+        .filter(|i| {
+            let again = !seen.insert(i.record.record) || (first.get(&i.record.record) == Some(&true) && !under_way(i));
+            again && !under_way(i)
+        })
+        .map(|i| i.id.clone())
+        .collect();
+    stopped.extend(take_off(&mut k.items, |i| doubles.contains(&i.id)));
     // A record already had, by its own files or a record holding them (the one had rule, R26, N9), is not searched: none is made for
     // it (Clear placed, or Lidarr's delivery, is no reason to fetch it again).
     let had: std::collections::HashSet<i64> = of.iter().flatten().filter(|o| o.had()).map(|o| o.record).collect();
@@ -1425,6 +1445,11 @@ fn take_off(items: &mut Vec<Item>, goes: impl Fn(&Item) -> bool) -> Vec<Item> {
 /// noted, past the list's last look before its rename (V4): that placing finishes, and the item is judged once placed.
 fn stays(i: &Item) -> bool {
     i.state == State::Placed || i.placing.is_some()
+}
+
+/// Whether something of an item is under way (F15.6): ticked, fetched, checked, or placed.
+fn under_way(i: &Item) -> bool {
+    stays(i) || i.chosen.is_some() || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed)
 }
 
 /// Whether a placed item lets another item of its record be made (Y2): the record reads partly there, and its own copy is short of
@@ -3923,6 +3948,62 @@ mod tests {
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), [(9701, older)], "the next round names the record it went into");
     }
 
+    /// F15.6: alice's open request on one record of a master and bob's on the other, a Soulseek item for each, none ticked; the two
+    /// records joined by their master (the newer into the older): both requests read the one record, one item searches it (alice's, the
+    /// first made) and bob's is taken off, his request reading the record's item. Where bob's is under way (fetching), it stays and
+    /// alice's is taken off, her request waiting on his: never two searching, never one under way taken off.
+    #[test]
+    fn a_merge_by_a_master_leaves_one_item_searching() {
+        for (case, bobs_fetching) in [("none ticked", false), ("bob's fetching", true)] {
+            let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+            let (older, newer) = (cat.record_for_tests("Two Rooms", 0), cat.record_for_tests("Two Rooms", 0));
+            let request = |id: i64, user: &str, record: i64| crate::userdata::Request {
+                id,
+                user: user.into(),
+                album_key: "glassharbour|tworooms".into(),
+                artist_key: "glass harbour".into(),
+                release_group: None,
+                album: "Two Rooms".into(),
+                artist: "Glass Harbour".into(),
+                year: None,
+                cover: None,
+                at: 1,
+                status: super::super::requests::APPROVED.into(),
+                reason: None,
+                decided_by: None,
+                decided_at: None,
+                fetched: None,
+                record: Some(record),
+            };
+            let asked = [request(9801, "alice", older), request(9802, "bob", newer)];
+            let mut k = Kept::default();
+            let round = |k: &mut Kept| {
+                let of = super::super::requests::records_of(&cat, &asked).unwrap();
+                take_requests(k, &asked, &of, &[])
+            };
+            round(&mut k);
+            assert_eq!(k.items.len(), 2, "{case}: an item each");
+            if bobs_fetching {
+                let bobs = k.items.iter_mut().find(|i| i.record.request == 9802).unwrap();
+                bobs.state = State::Fetching;
+                bobs.chosen = Some(0);
+            }
+            for (record, master) in [(older, "5000031"), (newer, "5000031")] {
+                cat.learn_from_read(record, &crate::catalogue::records::Ref::new("discogs", "release", &format!("36000{record}")), &[crate::catalogue::records::Ref::new("discogs", "master", master)], &[]).unwrap();
+            }
+            assert_eq!(cat.record(newer).unwrap().unwrap().id, older, "{case}: one record");
+            round(&mut k);
+            let records: Vec<i64> = super::super::requests::records_of(&cat, &asked).unwrap().into_iter().map(|o| o.unwrap().record).collect();
+            assert_eq!(records, [older, older], "{case}: both requests read the one record");
+            let searching: Vec<(i64, State)> = k.items.iter().map(|i| (i.record.request, i.state.clone())).collect();
+            if bobs_fetching {
+                assert_eq!(searching, [(9802, State::Fetching)], "{case}: the one under way stays, never taken off; alice's waits on it, taken off");
+            } else {
+                assert_eq!(searching, [(9801, State::Waiting)], "{case}: one item searches it, the first made; bob's taken off");
+            }
+        }
+    }
+
     /// RG1 (the owner, 2026-11-18: "When the type agrees"), at 0.17's fold (PA1): alice's open Want "Kite EP", by its names alone (a
     /// record of its own, as 0.16's step or preview 1 made it), being fetched by Soulseek (its batch 60% done), beside the house's had
     /// "Kite". Where that "Kite" is an EP by the release type rule (four tracks), or a ten-track one set to EP by hand, the fold joins the
@@ -4047,7 +4128,7 @@ mod tests {
     fn bandcamp_list(r: crate::catalogue::records::Ref) -> std::future::Ready<Result<Option<crate::app::references::Read>>> {
         assert_eq!((r.source.as_str(), r.value.as_str()), ("bandcamp", "https://paperlantern.bandcamp.com/album/after-hours"));
         let list = [("Night Ferry", 241_000), ("Last Lights", 198_000)].into_iter().zip(1..).map(|((t, ms), n)| Track { disc: 1, position: n, title: t.into(), length_ms: Some(ms), recording: None }).collect();
-        std::future::ready(Ok(Some((list, None))))
+        std::future::ready(Ok(Some((list, None, Default::default()))))
     }
 
     /// R25 (N7): Search now reads the record's counting list again, so a list chosen by hand since reaches the item; one in

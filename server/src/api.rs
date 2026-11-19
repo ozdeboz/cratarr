@@ -5188,15 +5188,18 @@ async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<c
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
     let cat = app.library.catalogue();
-    let artist = match q.id.as_deref().and_then(crate::serve::ids::artist_number) {
-        Some(id) => Some(id),
+    // F18.3: a page asked by a name no artist has finds the artist by the source that knows the name (made by that reference), or
+    // says that none does.
+    let (artist, mut missing) = match q.id.as_deref().and_then(crate::serve::ids::artist_number) {
+        Some(id) => (id, crate::app::discover::missing_albums(cat, id, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?),
         None => {
-            let (c, name) = (cat.clone(), q.name.trim().to_string());
-            tokio::task::spawn_blocking(move || c.artist_of(&name)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?.map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+            let missing = crate::app::discover::missing_by_name(cat, &q.name, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+            match missing.artist.as_deref().and_then(crate::serve::ids::artist_number) {
+                Some(id) => (id, missing),
+                None => return Ok(Json(missing)),
+            }
         }
     };
-    let Some(artist) = artist else { return Ok(Json(Default::default())) };
-    let mut missing = crate::app::discover::missing_albums(cat, artist, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     // An artist forgotten (RT01b) says so, by their tombstone: asked where nothing is listed nor looked for, as for one unknown.
     if missing.albums.is_empty() && !missing.looking {
         let (c, id) = (app.library.catalogue(), crate::serve::ids::artist(artist));

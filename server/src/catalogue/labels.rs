@@ -26,6 +26,7 @@ pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS label_rows (
   label INTEGER NOT NULL, source TEXT NOT NULL, ref_kind TEXT NOT NULL, ref_value TEXT NOT NULL,
   title TEXT NOT NULL, artist TEXT NOT NULL DEFAULT '', year INTEGER, catno TEXT NOT NULL DEFAULT '', kind TEXT, cover TEXT, at INTEGER NOT NULL,
+  also TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (label, source, ref_kind, ref_value)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS label_rows_by_ref ON label_rows (source, ref_kind, ref_value);
 -- C56 (OQ10 (a): a hundred at a time): how far a label's list at a source was read: when its first hundred was (`at`), and where
@@ -33,6 +34,14 @@ CREATE INDEX IF NOT EXISTS label_rows_by_ref ON label_rows (source, ref_kind, re
 -- with the rows, thirty days on.
 CREATE TABLE IF NOT EXISTS label_reads (label INTEGER NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL, next INTEGER, PRIMARY KEY (label, source)) WITHOUT ROWID;
 ";
+
+/// A row's `also` added to a label's rows kept before it (A2.3: a preview's copy), once, as the catalogue opens.
+pub(super) fn add_also(db: &Connection) -> Result<()> {
+    if !db.prepare("SELECT 1 FROM pragma_table_info('label_rows') WHERE name = 'also'")?.exists([])? {
+        db.execute_batch("ALTER TABLE label_rows ADD COLUMN also TEXT NOT NULL DEFAULT ''")?;
+    }
+    Ok(())
+}
 
 /// How long a label's rows from a source are kept, and its list there counts as read (C56: thirty days, like Bandcamp finds).
 pub const ROWS_KEPT: i64 = 30 * 86_400;
@@ -48,6 +57,22 @@ pub struct LabelListed {
     pub catno: String,
     pub kind: Option<String>,
     pub cover: Option<String>,
+    /// What else its source says of it (A2.3, F18.1): the album's references at other sources (MusicBrainz's link to a Discogs
+    /// release), and its artist's reference there (MusicBrainz's credit), kind `artist`.
+    pub also: Vec<Ref>,
+}
+
+/// A row's `also` as kept: JSON [[source, kind, value], ...], '' none.
+fn also_text(also: &[Ref]) -> String {
+    if also.is_empty() {
+        return String::new();
+    }
+    serde_json::to_string(&also.iter().map(|r| [r.source.as_str(), r.kind.as_str(), r.value.as_str()]).collect::<Vec<_>>()).unwrap_or_default()
+}
+
+/// A row's `also` read back.
+fn also_of(text: &str) -> Vec<Ref> {
+    serde_json::from_str::<Vec<[String; 3]>>(text).map(|v| v.into_iter().map(|[s, k, v]| Ref { source: s, kind: k, value: v }).collect()).unwrap_or_default()
 }
 
 /// How far a label's list at a source was read (C56): when its first hundred was, and where the next starts (none: its end).
@@ -77,7 +102,7 @@ pub struct LabelKept {
 }
 
 /// A kept row's columns, as `listed_of` reads them.
-const ROW_COLUMNS: &str = "source, ref_kind, ref_value, title, artist, year, catno, kind, cover";
+const ROW_COLUMNS: &str = "source, ref_kind, ref_value, title, artist, year, catno, kind, cover, also";
 
 fn listed_of(r: &rusqlite::Row) -> rusqlite::Result<LabelListed> {
     Ok(LabelListed {
@@ -88,6 +113,7 @@ fn listed_of(r: &rusqlite::Row) -> rusqlite::Result<LabelListed> {
         catno: r.get(6)?,
         kind: r.get(7)?,
         cover: r.get(8)?,
+        also: also_of(&r.get::<_, String>(9)?),
     })
 }
 
@@ -351,11 +377,11 @@ impl Catalogue {
         let tx = db.transaction()?;
         {
             let mut put = tx.prepare_cached(
-                "INSERT OR REPLACE INTO label_rows (label, source, ref_kind, ref_value, title, artist, year, catno, kind, cover, at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT OR REPLACE INTO label_rows (label, source, ref_kind, ref_value, title, artist, year, catno, kind, cover, at, also)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             )?;
             for r in rows {
-                put.execute(params![label, r.reference.source, r.reference.kind, r.reference.value, r.title, r.artist, r.year, r.catno, r.kind, r.cover, at])?;
+                put.execute(params![label, r.reference.source, r.reference.kind, r.reference.value, r.title, r.artist, r.year, r.catno, r.kind, r.cover, at, also_text(&r.also)])?;
             }
         }
         if first {
@@ -386,6 +412,7 @@ impl Catalogue {
                         catno: row.get(7)?,
                         kind: row.get(8)?,
                         cover: row.get(9)?,
+                        also: also_of(&row.get::<_, String>(10)?),
                     },
                 ))
             })
@@ -523,6 +550,7 @@ mod tests {
             catno: "LTR-040".into(),
             kind: Some("ep".into()),
             cover: None,
+            also: Vec::new(),
         };
         let rows = [row("Night Walks", "3001"), row("Orbital", "3002")];
         cat.keep_label_rows(label, "discogs", &rows, None, true, 1).unwrap();

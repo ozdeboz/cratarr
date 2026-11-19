@@ -84,9 +84,9 @@ impl LabelList for MusicBrainzLabel {
 }
 
 /// A row of MusicBrainz's list as kept: by its release group, with no catalogue number.
-fn listed_of_musicbrainz(l: Listing) -> Option<LabelListed> {
+pub(super) fn listed_of_musicbrainz(l: Listing) -> Option<LabelListed> {
     let reference = l.refs.into_iter().next()?;
-    Some(LabelListed { reference, title: l.title, artist: l.artist, year: l.year, catno: String::new(), kind: l.kind, cover: None })
+    Some(LabelListed { reference, title: l.title, artist: l.artist, year: l.year, catno: String::new(), kind: l.kind, cover: None, also: l.says })
 }
 
 /// Discogs' list of a label: its releases as its label page lists them (`discogs::label_releases`), a page of a hundred, newest
@@ -145,6 +145,7 @@ fn listed_of_discogs(l: &super::discogs::Listed) -> LabelListed {
         catno: l.catno.clone().unwrap_or_default(),
         kind: crate::serve::library::release_words(l.format.as_deref().unwrap_or_default().split(',')).0,
         cover: l.thumb.clone(),
+        also: Vec::new(),
     }
 }
 
@@ -256,26 +257,25 @@ impl LabelEntry {
         }
     }
 
-    /// A source's row no record holds yet: not had.
+    /// A source's row no record holds yet: not had. Its artist as the page names them, without Discogs' namesake mark.
     fn of_row(l: &LabelListed) -> Self {
-        let mut e = LabelEntry { title: l.title.clone(), artist: l.artist.clone(), year: l.year, kind: l.kind.clone(), ..LabelEntry::default() };
+        let mut e = LabelEntry { title: l.title.clone(), artist: super::discogs::clean_name(&l.artist), year: l.year, kind: l.kind.clone(), ..LabelEntry::default() };
         e.fill(l);
         e.cover = l.cover.clone().or_else(|| e.release_group.as_ref().map(|g| format!("/api/covers/release-group/{g}")));
         e
     }
 
-    /// What a source's row of the same album adds: its catalogue number and its reference where the row has none, and the facts
-    /// the record lacks.
+    /// What a source's row of the same album adds: its catalogue number beside the others (A2.3: every one), its references where
+    /// the row has none of their kind (its own, and the album's elsewhere its source names), and the facts the record lacks.
     fn fill(&mut self, l: &LabelListed) {
-        if self.catno.is_none() && !l.catno.is_empty() {
-            self.catno = Some(l.catno.clone());
-        }
-        let r = &l.reference;
-        match (r.source.as_str(), r.kind.as_str()) {
-            ("musicbrainz", "release-group") if self.release_group.is_none() => self.release_group = Some(r.value.clone()),
-            ("discogs", "master") if self.discogs_master.is_none() => self.discogs_master = r.value.parse().ok(),
-            ("discogs", "release") if self.discogs_release.is_none() => self.discogs_release = r.value.parse().ok(),
-            _ => {}
+        add_catno(&mut self.catno, &l.catno);
+        for r in std::iter::once(&l.reference).chain(l.also.iter().filter(|r| r.kind != "artist")) {
+            match (r.source.as_str(), r.kind.as_str()) {
+                ("musicbrainz", "release-group") if self.release_group.is_none() => self.release_group = Some(r.value.clone()),
+                ("discogs", "master") if self.discogs_master.is_none() => self.discogs_master = r.value.parse().ok(),
+                ("discogs", "release") if self.discogs_release.is_none() => self.discogs_release = r.value.parse().ok(),
+                _ => {}
+            }
         }
         if self.year.is_none() {
             self.year = l.year;
@@ -284,9 +284,32 @@ impl LabelEntry {
             self.kind = l.kind.clone();
         }
         if self.artist.is_empty() {
-            self.artist = l.artist.clone();
+            self.artist = super::discogs::clean_name(&l.artist);
         }
     }
+
+    /// The album references it holds, as (source, kind, value): what tells it from another album of its name (A2.3).
+    fn album_refs(&self) -> Vec<(String, String, String)> {
+        let group = self.release_group.iter().map(|g| ("musicbrainz".to_string(), "release-group".to_string(), g.to_ascii_lowercase()));
+        let master = self.discogs_master.iter().map(|m| ("discogs".to_string(), "master".to_string(), m.to_string()));
+        let release = self.discogs_release.iter().map(|r| ("discogs".to_string(), "release".to_string(), r.to_string()));
+        group.chain(master).chain(release).collect()
+    }
+}
+
+/// A row's album references, as (source, kind, value): its own and the album's elsewhere its source names (A2.3).
+fn row_refs(l: &LabelListed) -> Vec<(String, String, String)> {
+    std::iter::once(&l.reference).chain(l.also.iter().filter(|r| r.kind != "artist")).map(|r| (r.source.clone(), r.kind.clone(), r.value.to_ascii_lowercase())).collect()
+}
+
+/// Whether two rows' references say two albums (A2.3, X8): two release groups, or two Discogs masters. Discogs releases are editions:
+/// two of them say nothing.
+fn two_albums(a: &[(String, String, String)], b: &[(String, String, String)]) -> bool {
+    [("musicbrainz", "release-group"), ("discogs", "master")].iter().any(|(s, k)| {
+        let of = |x: &[(String, String, String)]| x.iter().filter(|(xs, xk, _)| xs == s && xk == k).map(|(.., v)| v.clone()).collect::<Vec<_>>();
+        let (x, y) = (of(a), of(b));
+        !x.is_empty() && !y.is_empty() && !x.iter().any(|v| y.contains(v))
+    })
 }
 
 /// A label's rows from what the catalogue keeps (C56, `LabelKept`): each record once, as merged now, its catalogue number the
@@ -295,7 +318,6 @@ impl LabelEntry {
 /// other is a row of its own. By year, newest first, then by title and artist.
 fn rows_of(kept: &LabelKept, by_names: &[Option<i64>], holders: &HashMap<i64, Requested>) -> Vec<LabelEntry> {
     let mut by_record: BTreeMap<i64, LabelEntry> = BTreeMap::new();
-    let mut loose: Vec<LabelEntry> = Vec::new();
     for (record, catno) in &kept.tied {
         let Some(q) = kept.records.get(record) else { continue };
         let row = by_record.entry(q.row.id).or_insert_with(|| LabelEntry::of_record(q));
@@ -303,14 +325,42 @@ fn rows_of(kept: &LabelKept, by_names: &[Option<i64>], holders: &HashMap<i64, Re
             row.catno = Some(catno.clone());
         }
     }
+    let mut loose_rows: Vec<&LabelListed> = Vec::new();
     for (i, (listed, record)) in kept.rows.iter().enumerate() {
         let named = || by_names.get(i).copied().flatten().and_then(|h| kept.records.get(&h).or_else(|| holders.get(&h)));
         match record.and_then(|r| kept.records.get(&r)).or_else(named) {
             Some(q) => by_record.entry(q.row.id).or_insert_with(|| LabelEntry::of_record(q)).fill(listed),
-            None => loose.push(LabelEntry::of_row(listed)),
+            None => loose_rows.push(listed),
         }
     }
-    let mut rows: Vec<LabelEntry> = by_record.into_values().chain(loose).collect();
+    // A2.3: one album, one row. A source's row no record holds is the row of another of its album: one it shares a reference with
+    // (MusicBrainz's link to the Discogs release), else the one of its artist and title whose references say no second album (two
+    // release groups, two masters), where the name is one album's alone (X8). A record is never another record's row.
+    let key = |artist: &str, title: &str| (crate::serve::ids::artist_key(artist), crate::catalogue::identity::title_key(title));
+    let mut entries: Vec<(LabelEntry, Vec<(String, String, String)>)> = by_record.into_values().map(|e| {
+        let refs = e.album_refs();
+        (e, refs)
+    }).collect();
+    for listed in loose_rows {
+        let mine = row_refs(listed);
+        let named = key(&super::discogs::clean_name(&listed.artist), &listed.title);
+        let shared = entries.iter().position(|(_, refs)| refs.iter().any(|r| mine.contains(r)));
+        let at = shared.or_else(|| {
+            let of_name: Vec<usize> = entries.iter().enumerate().filter(|(_, (e, refs))| key(&e.artist, &e.title) == named && !two_albums(refs, &mine)).map(|(i, _)| i).collect();
+            match of_name[..] {
+                [one] if !named.0.is_empty() && !named.1.is_empty() => Some(one),
+                _ => None,
+            }
+        });
+        match at {
+            Some(i) => {
+                entries[i].0.fill(listed);
+                entries[i].1.extend(mine);
+            }
+            None => entries.push((LabelEntry::of_row(listed), mine)),
+        }
+    }
+    let mut rows: Vec<LabelEntry> = entries.into_iter().map(|(e, _)| e).collect();
     rows.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.title.cmp(&b.title)).then_with(|| a.artist.cmp(&b.artist)));
     rows
 }
@@ -610,7 +660,18 @@ pub fn open_record(cat: &Catalogue, o: &Opened) -> Result<Option<i64>> {
         refs,
         ..Listing::default()
     };
-    let Some(record) = cat.keep_opened(&listing, label, listed_others)? else { return Ok(None) };
+    // F18.1 (e): a name Discogs marks as another's of the same name ("Glass Harbour (2)") is told by no name: it joins nothing by it
+    // (X8) and credits nobody by it; the record shows the name without the mark.
+    let raw = listed.as_ref().map(|(_, l)| l.artist.clone()).filter(|a| !a.trim().is_empty()).unwrap_or_else(|| listing.artist.clone());
+    let marked = super::discogs::clean_name(&raw) != raw.trim();
+    let artist_ref = listed.as_ref().and_then(|(_, l)| l.also.iter().find(|r| r.kind == "artist").cloned());
+    let listing = Listing { artist: super::discogs::clean_name(&listing.artist), ..listing };
+    let Some(record) = cat.keep_opened(&listing, label, if marked { 2 } else { listed_others })? else { return Ok(None) };
+    // F18.1: opened from a label's page, credited at once, by the artist reference its row names, else by its name where one artist
+    // has it. Beyond's opens credit nobody (F2.8, Z3) until its release is read (F18.2).
+    if label.is_some() {
+        cat.credit_opened(record, artist_ref.as_ref(), &listing.artist, !marked)?;
+    }
     if let Some(label) = label {
         // Through this label's own kept row alone, with its catalogue number there (U10).
         if let Some(catno) = listed.as_ref().filter(|(of, _)| *of == label).map(|(_, l)| l.catno.as_str()) {
@@ -850,6 +911,7 @@ mod tests {
             catno: "LTR-040".into(),
             kind: Some("ep".into()),
             cover: Some("https://i.discogs.com/night-walks.jpg".into()),
+            also: Vec::new(),
         }
     }
 
@@ -1563,5 +1625,194 @@ mod tests {
         let mb = [crate::app::discogs::MbLabel { name: "Warp Records Ltd.".into(), mbid: "00000000-0000-4000-8000-000000000909".into(), catno: None }];
         assert_eq!(about(&cat, &[l("Warp", None, Some(23528))], &mb).unwrap().len(), 1, "MusicBrainz's of the same bare key: not again");
         assert_eq!(crate::app::playing::record_labels_shown_for_tests(&cat), (1, Some("TRAUM CD21, TRAUM SCHALLPLATTEN CD21".to_string())), "a record's: one, both numbers");
+    }
+
+    // ---- F18.1, F15.1, A2.3
+
+    /// A row of a label's Discogs list: by its release, of `title` by `artist`.
+    fn discogs_row(release: &str, title: &str, artist: &str, catno: &str) -> LabelListed {
+        LabelListed { reference: Ref::new("discogs", "release", release), title: title.into(), artist: artist.into(), year: Some(2020), catno: catno.into(), ..Default::default() }
+    }
+
+    /// A row opened from `label`'s page as the page sends it (`POST /api/records/open`): its references, names and the label.
+    fn open_row(cat: &Catalogue, label: i64, l: &LabelListed) -> i64 {
+        let r = &l.reference;
+        let o = Opened {
+            release_group: (r.kind == "release-group").then(|| r.value.clone()),
+            discogs_master: (r.source == "discogs" && r.kind == "master").then(|| r.value.parse().unwrap()),
+            discogs_release: (r.source == "discogs" && r.kind == "release").then(|| r.value.parse().unwrap()),
+            title: l.title.clone(),
+            artist: crate::app::discogs::clean_name(&l.artist),
+            year: l.year,
+            label: Some(ids::label(label)),
+        };
+        open_record(cat, &o).unwrap().expect("a record")
+    }
+
+    /// F18.1: rows opened from a label's page credit their artist at once. (a) MusicBrainz's row names its credit's artist by id (A5):
+    /// credited to an artist found or made by it, holding A5; again, the same one. (b) A Discogs row by "Glass Harbour", the one artist
+    /// of the name: credited to them. (c) No artist of the name, (d) two of it, (e) a name Discogs marks "Glass Harbour (2)": nobody yet
+    /// (Z3), and no artist made by a name. Never one credited to an artist holding another MusicBrainz id than its row names.
+    #[test]
+    fn a_row_opened_credits_its_artist_by_reference_else_the_one_of_its_name() {
+        const A5: &str = "00000000-0000-4000-8000-000000000a51";
+        const A6: &str = "00000000-0000-4000-8000-000000000a52";
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let harbour = cat.artist_for("Glass Harbour").unwrap();
+        let (club, twin) = (cat.artist_for("Tape Club").unwrap(), cat.artist_apart("Tape Club").unwrap());
+        let lane = cat.artist_for("Orbit Lane").unwrap();
+        assert!(cat.set_reference(&ids::artist(lane), &Ref::new("musicbrainz", "artist", A6), "files").unwrap());
+        let mb = |group: &str, title: &str, artist: &str, id: &str| LabelListed {
+            reference: Ref::new("musicbrainz", "release-group", group),
+            title: title.into(),
+            artist: artist.into(),
+            also: vec![Ref::new("musicbrainz", "artist", id)],
+            ..Default::default()
+        };
+        let (a, a2) = (mb("00000000-0000-4000-8000-000000000a61", "Night Walks", "Kite Theory", A5), mb("00000000-0000-4000-8000-000000000a62", "Morning", "Orbit Lane", A5));
+        cat.keep_label_rows(label, "musicbrainz", &[a.clone(), a2.clone()], None, true, 1).unwrap();
+        let rows = [
+            discogs_row("3700001", "Tide Tables", "Glass Harbour", "LTR-1"),
+            discogs_row("3700002", "Signal", "Noor Field", "LTR-2"),
+            discogs_row("3700003", "Undertow", "Tape Club", "LTR-3"),
+            discogs_row("3700004", "Lamplight", "Glass Harbour (2)", "LTR-4"),
+        ];
+        cat.keep_label_rows(label, "discogs", &rows, None, true, 1).unwrap();
+        let credits = |record: i64| cat.record_artists(cat.record(record).unwrap().unwrap().id).unwrap();
+        let opened = open_row(&cat, label, &a);
+        let kite = credits(opened);
+        assert_eq!(kite.len(), 1, "(a) credited at once");
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "artist", A5)).unwrap(), [ids::artist(kite[0])], "(a) the artist holding A5");
+        assert_eq!(credits(open_row(&cat, label, &a)), kite, "(a) again: the same one, never two artists for one reference");
+        let morning = credits(open_row(&cat, label, &a2));
+        assert_eq!(morning, kite, "the holder of A5, whatever name the row gives");
+        assert!(!morning.contains(&lane), "never the Orbit Lane holding another id");
+        assert_eq!(credits(open_row(&cat, label, &rows[0])), [harbour], "(b) the one artist of the name");
+        assert!(credits(open_row(&cat, label, &rows[1])).is_empty(), "(c) nobody yet");
+        assert_eq!(cat.artist_of("Noor Field").unwrap(), None, "(c) no artist made by a name alone");
+        let undertow = credits(open_row(&cat, label, &rows[2]));
+        assert!(undertow.is_empty() && !undertow.contains(&club) && !undertow.contains(&twin), "(d) two of the name: nobody yet");
+        assert!(credits(open_row(&cat, label, &rows[3])).is_empty(), "(e) a name Discogs marks as shared: nobody, though one Glass Harbour is here");
+    }
+
+    /// F15.1: a label's kept Discogs rows "Two Rooms" by Glass Harbour, releases 3600001 and 3600002, no master on the rows; each
+    /// release's read names master 5000001. Each row opened, each page's read settled: one live record holding both releases and the
+    /// master (`link`), the second open's id answering as the first's, one Discogs list kept (the first's), and the memory holding
+    /// both releases' master.
+    #[tokio::test]
+    async fn two_releases_of_one_master_become_one_record_once_the_master_is_known() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let label = cat.label_for("Low Tide Records").unwrap();
+        let rows = [discogs_row("3600001", "Two Rooms", "Glass Harbour", "LTR-21"), discogs_row("3600002", "Two Rooms", "Glass Harbour", "LTR-22")];
+        cat.keep_label_rows(label, "discogs", &rows, None, true, 1).unwrap();
+        let read = |r: Ref| {
+            let track = |n: u32, t: &str| crate::catalogue::identity::RefTrack { disc: 1, position: n, title: t.into(), length_ms: Some(200_000), recording: None };
+            let more = crate::app::references::ReadMore { also: vec![Ref::new("discogs", "master", "5000001")], artists: Vec::new() };
+            std::future::ready(Ok(Some((vec![track(1, &format!("Lamplight {}", r.value)), track(2, "Morning")], None, more))))
+        };
+        let t = super::super::moment::now_secs();
+        let first = open_row(&cat, label, &rows[0]);
+        crate::app::playing::page_at(&cat, first, t, read).await.unwrap();
+        crate::app::references::page_read_settled(&cat, first).await;
+        let second = open_row(&cat, label, &rows[1]);
+        assert_ne!(second, first, "unknown at the open: a record of its own");
+        crate::app::playing::page_at(&cat, second, t, read).await.unwrap();
+        crate::app::references::page_read_settled(&cat, second).await;
+        assert_eq!(cat.record(second).unwrap().unwrap().id, first, "the second answers as the first");
+        let held: Vec<(String, String, String)> = cat.references_of(&ids::record(first)).unwrap().into_iter().filter(|(r, _)| r.source == "discogs").map(|(r, row)| (r.kind, r.value, row.how)).collect();
+        for (kind, value) in [("release", "3600001"), ("release", "3600002"), ("master", "5000001")] {
+            assert!(held.iter().any(|(k, v, _)| k == kind && v == value), "holds {kind} {value}: {held:?}");
+        }
+        assert!(held.iter().any(|(k, v, how)| k == "master" && v == "5000001" && how == "link"), "the master by `link`");
+        let lists = cat.reference_tracks(first).unwrap();
+        assert_eq!(lists.iter().filter(|(s, _)| s == "discogs").count(), 1, "one Discogs list kept");
+        assert!(lists.iter().any(|(s, l)| s == "discogs" && l.first().is_some_and(|t| t.title == "Lamplight 3600001")), "the first's");
+        let remembered: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM discogs_masters WHERE master = 5000001 AND release IN (3600001, 3600002)", [], |r| r.get(0)).unwrap();
+        assert_eq!(remembered, 2, "the memory holds both releases' master");
+        let live: i64 = cat.db_for_tests().query_row("SELECT count(*) FROM records WHERE merged_into IS NULL AND id IN (?1, ?2)", rusqlite::params![first, second], |r| r.get(0)).unwrap();
+        assert_eq!(live, 1, "never two live records of one master");
+    }
+
+    /// A2.3.1: MusicBrainz's label page (the browse asked with url-rels, one question) whose release of group G links Discogs release
+    /// 3600010, and Discogs' rows holding 3600010 with its catalogue number: one row for that album, with G, 3600010 and the number.
+    #[tokio::test]
+    async fn a_musicbrainz_label_row_carries_its_discogs_release() {
+        const G: &str = "00000000-0000-4000-8000-000000000a31";
+        let answer = serde_json::json!({ "release-count": 1, "releases": [{
+            "id": "00000000-0000-4000-8000-000000000a32",
+            "release-group": { "id": G, "title": "Cenotes", "primary-type": "Album", "first-release-date": "2024-03-01" },
+            "artist-credit": [{ "name": "Glass Harbour", "joinphrase": "", "artist": { "id": "00000000-0000-4000-8000-000000000a33" } }],
+            "relations": [{ "type": "discogs", "url": { "resource": "https://www.discogs.com/release/3600010-Glass-Harbour-Cenotes" } }]
+        }] });
+        let listed = crate::app::discover::label_listings(&answer);
+        assert_eq!(listed[0].says.iter().filter(|r| r.kind == "release").cloned().collect::<Vec<_>>(), [Ref::new("discogs", "release", "3600010")], "the link kept with the row");
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let label = cat.label_for("Wonderwheel Recordings").unwrap();
+        let mb: Vec<LabelListed> = listed.into_iter().filter_map(listed_of_musicbrainz).collect();
+        cat.keep_label_rows(label, "musicbrainz", &mb, None, true, 1).unwrap();
+        cat.keep_label_rows(label, "discogs", &[discogs_row("3600010", "Cenotes", "Glass Harbour", "WW-010")], None, true, 1).unwrap();
+        let page = settled(&cat, label, None, &[]).await;
+        assert_eq!(page.not_had.len(), 1, "one row: {:?}", page.not_had);
+        let row = &page.not_had[0];
+        assert_eq!((row.release_group.as_deref(), row.discogs_release, row.catno.as_deref()), (Some(G), Some(3600010), Some("WW-010")));
+    }
+
+    /// A2.3.2: a label's rows by Glass Harbour: "Cenotes" (group G6) and "Cenotes" (a Discogs release, no master known): one row;
+    /// "Tropical Fish" (a record) and two loose releases of that title: one row; "Orbital" (G7) and "Orbital" (G8): two rows. The row
+    /// carries every catalogue number and its first reference of each source.
+    #[tokio::test]
+    async fn a_label_shows_one_row_for_one_artist_and_title_unless_two_albums_are_known() {
+        let (g6, g7, g8) = ("00000000-0000-4000-8000-000000000a46", "00000000-0000-4000-8000-000000000a47", "00000000-0000-4000-8000-000000000a48");
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let label = cat.label_for("Wonderwheel Recordings").unwrap();
+        let group = |g: &str, title: &str| LabelListed { reference: Ref::new("musicbrainz", "release-group", g), title: title.into(), artist: "Glass Harbour".into(), year: Some(2024), ..Default::default() };
+        cat.keep_label_rows(label, "musicbrainz", &[group(g6, "Cenotes"), group(g7, "Orbital"), group(g8, "Orbital")], None, true, 1).unwrap();
+        let fish = cat.record_for_tests("Tropical Fish", 0);
+        cat.db_for_tests().execute("UPDATE records SET artist = 'Glass Harbour', year = 2024 WHERE id = ?1", [fish]).unwrap();
+        assert!(cat.set_reference(&ids::record(fish), &Ref::new("discogs", "release", "3600050"), "link").unwrap());
+        cat.tie_label(fish, label, "WW-050").unwrap();
+        cat.keep_label_rows(
+            label,
+            "discogs",
+            &[discogs_row("3600046", "Cenotes", "Glass Harbour", "WW-046"), discogs_row("3600051", "Tropical Fish", "Glass Harbour", "WW-051"), discogs_row("3600052", "Tropical Fish", "Glass Harbour", "WW-052")],
+            None,
+            true,
+            1,
+        )
+        .unwrap();
+        let page = settled(&cat, label, None, &[]).await;
+        let named = |title: &str| page.not_had.iter().filter(|r| r.title == title).collect::<Vec<_>>();
+        let cenotes = named("Cenotes");
+        assert_eq!(cenotes.len(), 1, "one row for Cenotes: {:?}", page.not_had);
+        assert_eq!((cenotes[0].release_group.as_deref(), cenotes[0].discogs_release, cenotes[0].catno.as_deref()), (Some(g6), Some(3600046), Some("WW-046")));
+        let fishes = named("Tropical Fish");
+        assert_eq!(fishes.len(), 1, "one row for Tropical Fish");
+        assert_eq!(fishes[0].record.as_deref(), Some(ids::record(fish).as_str()), "the record's row");
+        assert_eq!(fishes[0].catno.as_deref(), Some("WW-050, WW-051, WW-052"), "every catalogue number");
+        assert_eq!(named("Orbital").len(), 2, "two release groups: two rows (X8)");
+    }
+
+    /// A2.3.3: the one row opens the record that holds any of its references, else one made with them all; the next open of any of
+    /// them is that record; a label's rows still let go after thirty days (rows, not records).
+    #[tokio::test]
+    async fn one_label_row_opens_one_record() {
+        const G: &str = "00000000-0000-4000-8000-000000000a71";
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let label = cat.label_for("Wonderwheel Recordings").unwrap();
+        let mb = LabelListed { reference: Ref::new("musicbrainz", "release-group", G), title: "Cenotes".into(), artist: "Glass Harbour".into(), also: vec![Ref::new("discogs", "release", "3600070")], ..Default::default() };
+        cat.keep_label_rows(label, "musicbrainz", &[mb], None, true, 1).unwrap();
+        cat.keep_label_rows(label, "discogs", &[discogs_row("3600070", "Cenotes", "Glass Harbour", "WW-070")], None, true, 1).unwrap();
+        let page = settled(&cat, label, None, &[]).await;
+        assert_eq!(page.not_had.len(), 1);
+        let row = &page.not_had[0];
+        let o = Opened { release_group: row.release_group.clone(), discogs_master: row.discogs_master, discogs_release: row.discogs_release, title: row.title.clone(), artist: row.artist.clone(), year: row.year, label: Some(ids::label(label)) };
+        let record = open_record(&cat, &o).unwrap().unwrap();
+        let held: Vec<(String, String)> = cat.references_of(&ids::record(record)).unwrap().into_iter().map(|(r, _)| (r.kind, r.value)).collect();
+        assert!(held.contains(&("release-group".into(), G.into())) && held.contains(&("release".into(), "3600070".into())), "made with them all: {held:?}");
+        let by_release = Opened { discogs_release: Some(3600070), title: "Cenotes".into(), artist: "Glass Harbour".into(), ..Default::default() };
+        assert_eq!(open_record(&cat, &by_release).unwrap(), Some(record), "any of its references: that record");
+        assert_eq!(cat.forget_label_rows(1 + ROWS_KEPT + 1).unwrap(), 2, "rows let go after thirty days");
+        assert!(cat.record(record).unwrap().is_some(), "the record stays");
     }
 }

@@ -863,6 +863,36 @@ async fn an_artist_is_one_id_by_name_and_by_number_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// F18.3, F18.4 (the F18.4 half: MusicBrainz switched off, Discogs without a key): an artist page asked by a name no artist has and no
+/// source knows makes no artist and says so, each source in F1's words, nothing looking: never "Nothing by" alone. A name an artist has
+/// answers as before, by that artist.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_artist_asked_by_name_alone_is_made_by_reference_end_to_end() {
+    let root = temp("artist-by-name");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_fixtures(&music);
+    settings_0_15(&data, &music.to_string_lossy());
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    let artists = || -> i64 {
+        let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+        db.query_row("SELECT count(*) FROM artists", [], |r| r.get(0)).unwrap()
+    };
+    let before = artists();
+    let nobody = s.get("/api/artists/missing?name=Nobody%20Knows%20Them").await;
+    assert_eq!(nobody["looking"], false, "{nobody}");
+    assert_eq!(nobody["no_list"], json!([{ "source": "musicbrainz", "said": "off" }, { "source": "discogs", "said": "none" }]), "{nobody}");
+    assert!(nobody.get("artist").is_none(), "{nobody}");
+    assert_eq!(artists(), before, "no artist made by a name alone");
+    let known = s.get("/api/artists/missing?name=Glass%20Harbour").await;
+    assert!(known["artist"].as_str().is_some_and(|a| a.starts_with("ar-")), "a name an artist has: theirs: {known}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// C56: a label's page from what the catalogue keeps, with MusicBrainz, Discogs and Bandcamp switched off, so nothing is read
 /// elsewhere: the label Tide Tables' files name, its records by year, newest first, each had or not with its catalogue number, a
 /// record not had among them, and nothing being read. An id that is no label is refused, and "More" reads on at MusicBrainz or

@@ -649,7 +649,7 @@ fn listed_of(v: &Value) -> Vec<Listed> {
             master,
             main_release: r["main_release"].as_u64().filter(|_| master),
             title: title.trim().to_string(),
-            artist: clean_name(r["artist"].as_str().unwrap_or_default().trim().trim_end_matches('*')),
+            artist: r["artist"].as_str().unwrap_or_default().trim().trim_end_matches('*').trim().to_string(),
             year: r["year"].as_i64().filter(|y| *y > 0).map(|y| y as i32),
             thumb: text("thumb"),
             format: text("format"),
