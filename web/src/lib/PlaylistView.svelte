@@ -110,7 +110,7 @@
   import { albumRowSub, emptyPlace, keptRows, listCount, lookAgainAfter, notHadPage, type NotHadAction } from './recordNotHad';
   import { artistLine } from './recordTypeRules';
   import Notice from './Notice.svelte';
-  import { artistTitle, movedTo } from './artistIds';
+  import { albumChips, artistTitle, movedTo } from './artistIds';
   import { labelCount, labelCovers, labelOf, labelRows, type LabelPageOf } from './labelPage';
   import { editionLines } from './editions';
   import { wantOf } from './wantPath';
@@ -281,7 +281,7 @@
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   // The record's libraries, as dots before its details (0.9.3): where it lies, beside its year.
   const albumDots = $derived(album ? libraryDots(album.source, { id: album.id }) : []);
-  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'was_until' | 'bandcamp' | 'looking' | 'no_list' | 'reading' | 'sources' | 'editions'> & { kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'artists' | 'was_until' | 'bandcamp' | 'looking' | 'no_list' | 'reading' | 'sources' | 'editions'> & { kbps: number | null } | null>(null);
   /** A record not had (C54, lib/recordNotHad): its page from the catalogue, of an album the library has no copy of. */
   const notHad = $derived(!!album && !!albumHead?.not_had);
   /** What its page shows of it: no heart or Resume, its header's Want or Requested and its preview's play, its lines. */
@@ -421,34 +421,32 @@
   // The album's artist chips: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
   // their own panel's chip). One chip per credited artist, in the credit's order (the owner, 2026-11-19, F39: "This shows
   // two artists, but when I click on it, it goes to Nicola Conte"); each with their photo where the artist store has one,
-  // never the album's own cover (F38).
-  const albumBys = $derived(
-    album && albumHead?.artist ? (listedHere?.a.artists?.length ? listedHere.a.artists : [mainArtist(albumHead.artist)].filter((x): x is string => !!x)) : [],
-  );
-  const albumBy = $derived(albumBys[0] ?? null);
+  // never the album's own cover (F38). The record's own credit first, each by their id (lib/artistIds albumChips: M8, M9).
+  const albumChipsShown = $derived(album && albumHead ? albumChips(albumHead.artist, mainArtist(albumHead.artist), albumHead.artists, listedHere?.a.artists) : []);
   let byOf = $state<Record<string, { photo: string | null; favorite: boolean | null }>>({});
   // Read again only when who is credited changes, not each time the list's answer is made anew (a new array of the same
   // names restarted it before its answers came, F39).
-  const albumByKey = $derived(albumBys.join('|'));
+  const albumByKey = $derived(albumChipsShown.flatMap((c) => c.ask ?? []).join('|'));
   const albumFrom = $derived(album?.source ?? null);
   $effect(() => {
     const from = albumFrom;
-    const names = albumByKey ? albumByKey.split('|') : [];
+    const asks = albumByKey ? albumByKey.split('|') : [];
     // Written whole, never read here: an effect that reads what it writes runs again, and this one asked the server in a loop
     // (thousands of asks a minute, the server then refusing the page's covers too).
     const fresh: Record<string, { photo: string | null; favorite: boolean | null }> = {};
-    for (const name of names) fresh[name] = { photo: null, favorite: null };
+    for (const ask of asks) fresh[ask] = { photo: null, favorite: null };
     byOf = fresh;
-    if (!from || !names.length) return;
+    if (!from || !asks.length) return;
     let live = true;
-    for (const name of names) {
-      artistFavorite(from, name).then(
-        (r) => live && byOf[name] && (byOf[name].favorite = r.favorite),
+    // By their id where the credit has one: two artists of one name are two (M9).
+    for (const ask of asks) {
+      artistFavorite(from, ask).then(
+        (r) => live && byOf[ask] && (byOf[ask].favorite = r.favorite),
         () => {},
       );
       if (from === 'cratarr')
-        getArtistAbout(name).then(
-          (x) => live && byOf[name] && x.photo && x.id && (byOf[name].photo = artistPhotoUrl(x.id)),
+        getArtistAbout(ask).then(
+          (x) => live && byOf[ask] && x.photo && x.id && (byOf[ask].photo = artistPhotoUrl(x.id)),
           () => {},
         );
     }
@@ -564,7 +562,7 @@
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
-              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, was_until: r.was_until, bandcamp: r.bandcamp, looking: r.looking, no_list: r.no_list, reading: r.reading, sources: r.sources, editions: r.editions };
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, artists: r.artists, was_until: r.was_until, bandcamp: r.bandcamp, looking: r.looking, no_list: r.no_list, reading: r.reading, sources: r.sources, editions: r.editions };
             // A record not had whose list is being read (C54, F1): asked again a little later, until the server has read it.
             if (want === id && r.not_had) lookAgain(want, !!r.looking);
             // Its rows once shown stay while the server reads again (F6): never the loader again for it.
@@ -2672,12 +2670,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
               >
             {/each}
           {:else if album && listedHere?.a.whole_tracks}<span class="details left-out"><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></span>{/if}
-          {#if album && albumHead?.artist}
+          {#if album && albumChipsShown.length}
             <span class="by">
-              {#each albumBys.length > 1 ? albumBys : [albumBy] as name, i (i)}
-                {@const by = name ? byOf[name] : undefined}
-                <button class="chip" disabled={!name} onclick={() => name && goToArtist(album.source, name)}
-                  >{#if by?.photo}<span class="chip-art"><Cover src={by.photo} /></span>{/if}<span>{albumBys.length > 1 ? name : albumHead.artist}</span>{#if by?.favorite}<i class="liked" role="img" aria-label="Favourite"
+              {#each albumChipsShown as chip, i (i)}
+                {@const by = chip.ask ? byOf[chip.ask] : undefined}
+                <button class="chip" disabled={!chip.ask} onclick={() => chip.ask && goToArtist(album.source, chip.ask)}
+                  >{#if by?.photo}<span class="chip-art"><Cover src={by.photo} /></span>{/if}<span>{chip.label}</span>{#if by?.favorite}<i class="liked" role="img" aria-label="Favourite"
                       ><Icon name="heart" size={16} /></i
                     >{/if}</button
                 >
