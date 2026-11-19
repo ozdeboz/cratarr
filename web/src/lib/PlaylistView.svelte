@@ -172,6 +172,7 @@
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
   import { serverPlaylistOf } from './panel.svelte';
+  import { keepsPlace } from './keepsPlace';
   import { whenChanged } from './dataChanged';
   import { albumMoved, albumOf, albumSubject, artistMoved, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
@@ -397,20 +398,33 @@
   /** Its problem narrowed to it, over it (Back returns to it). */
   const openRecordProblem = (key: string) => album && viewOver(`${HEALTH}${key}/${encodeURIComponent(albumSubject(album.source, album.id))}`);
 
-  // The album's artist chip: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
-  // their own panel's chip).
-  const albumBy = $derived(album && albumHead?.artist ? (listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)) : null);
-  let albumByFavorite = $state<boolean | null>(null);
+  // The album's artist chips: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
+  // their own panel's chip). One chip per credited artist, in the credit's order (the owner, 2026-11-19, F39: "This shows
+  // two artists, but when I click on it, it goes to Nicola Conte"); each with their photo where the artist store has one,
+  // never the album's own cover (F38).
+  const albumBys = $derived(
+    album && albumHead?.artist ? (listedHere?.a.artists?.length ? listedHere.a.artists : [mainArtist(albumHead.artist)].filter((x): x is string => !!x)) : [],
+  );
+  const albumBy = $derived(albumBys[0] ?? null);
+  let byOf = $state<Record<string, { photo: string | null; favorite: boolean | null }>>({});
   $effect(() => {
     const a = album;
-    const by = albumBy;
-    albumByFavorite = null;
-    if (!a || !by) return;
+    const names = albumBys;
+    byOf = {};
+    if (!a || !names.length) return;
     let live = true;
-    artistFavorite(a.source, by).then(
-      (r) => live && (albumByFavorite = r.favorite),
-      () => {},
-    );
+    for (const name of names) {
+      byOf[name] = { photo: null, favorite: null };
+      artistFavorite(a.source, name).then(
+        (r) => live && byOf[name] && (byOf[name].favorite = r.favorite),
+        () => {},
+      );
+      if (a.source === 'cratarr')
+        getArtistAbout(name).then(
+          (x) => live && byOf[name] && x.photo && x.id && (byOf[name].photo = artistPhotoUrl(x.id)),
+          () => {},
+        );
+    }
     return () => {
       live = false;
     };
@@ -738,24 +752,6 @@
         artistPhotoKnown = true;
       },
       () => !gone && (artistPhotoKnown = true),
-    );
-    return () => (gone = true);
-  });
-
-  // The album's artist chip: their photo where the artist store has one, never the album's own cover again (the owner,
-  // 2026-11-19, F38: "the artist image is simply the record cover"); none, the name alone.
-  let byPhoto = $state<string | null>(null);
-  $effect(() => {
-    const by = albumBy;
-    const from = album?.source;
-    byPhoto = null;
-    if (!by || from !== 'cratarr') return;
-    let gone = false;
-    getArtistAbout(by).then(
-      (a) => {
-        if (!gone && a.photo && a.id) byPhoto = artistPhotoUrl(a.id);
-      },
-      () => {},
     );
     return () => (gone = true);
   });
@@ -1321,10 +1317,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   $effect(() => void loadPlaylistFavorites());
 
-  // Viewing it again scrolls it to the top.
+  // Viewing it again scrolls it to the top: as it is viewed again, never as the list mounts (F25.3: a place brought back by back
+  // stands).
   let scroller = $state<HTMLElement>();
+  let againSeen = untrack(() => panel.again);
   $effect(() => {
-    void panel.again;
+    const again = panel.again;
+    if (again === againSeen) return;
+    againSeen = again;
     // Viewed again for one of its tracks: that track's place instead (below).
     if (untrack(() => panel.mark?.subject === id)) return;
     scroller?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2417,7 +2417,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {/if}
   {/if}
 
-  <div class="scroll" class:away={(handed || full) && everywhere()} class:own bind:this={scroller} onscroll={onScroll}>
+  <div class="scroll" class:away={(handed || full) && everywhere()} class:own bind:this={scroller} onscroll={onScroll} {@attach keepsPlace()}>
     {#if making}
       <header class="head">
         <div class="top">
@@ -2627,11 +2627,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
             {/each}
           {:else if album && listedHere?.a.whole_tracks}<span class="details left-out"><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></span>{/if}
           {#if album && albumHead?.artist}
-            <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
-              >{#if byPhoto}<span class="chip-art"><Cover src={byPhoto} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
-                  ><Icon name="heart" size={16} /></i
-                >{/if}</button
-            >
+            <span class="by">
+              {#each albumBys.length > 1 ? albumBys : [albumBy] as name, i (i)}
+                {@const by = name ? byOf[name] : undefined}
+                <button class="chip" disabled={!name} onclick={() => name && goToArtist(album.source, name)}
+                  >{#if by?.photo}<span class="chip-art"><Cover src={by.photo} /></span>{/if}<span>{albumBys.length > 1 ? name : albumHead.artist}</span>{#if by?.favorite}<i class="liked" role="img" aria-label="Favourite"
+                      ><Icon name="heart" size={16} /></i
+                    >{/if}</button
+                >
+              {/each}
+            </span>
           {:else if artist?.tracks}
             <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
               >{#if heroArt[0]}<span class="chip-art"><Cover src={heroArt[0]} /></span>{/if}<span>{artistName}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
@@ -3901,6 +3906,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
     margin: 0;
     color: var(--muted);
     font-size: 15px;
+  }
+
+  /* A record's artists, a chip each, side by side (F39). */
+  .by {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   /* The album's artist (Symfonium's chip): it opens the artist. */
