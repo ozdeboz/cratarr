@@ -1425,9 +1425,9 @@ impl IncomingService {
         ("replace", format!("Replaced in {} from {}: {title}", self.library_name(source_id, to), self.library_name(source_id, from)))
     }
 
-    /// What a Copy to is called on Health's list of changes to files, and its title (C40).
+    /// What a Save to is called on Health's list of changes to files, and its title (C40; F33: "Saved to", its kind still `copy`).
     pub(super) fn copied_named(&self, source_id: &str, to: i64, title: &str) -> (&'static str, String) {
-        ("copy", format!("Copied to {}: {title}", self.library_name(source_id, to)))
+        ("copy", format!("Saved to {}: {title}", self.library_name(source_id, to)))
     }
 
     /// The id of a server's used library in catalogue folder `folder`.
@@ -1454,7 +1454,7 @@ impl IncomingService {
     pub async fn move_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         let at = self.locate_listed(source_id, album).await?;
         self.refuse_if_queued(&at.album.id, at.dir.folder)?;
-        let (target, quality) = self.target_of(source_id, to)?;
+        let (target, quality) = self.destination_of(source_id, to)?;
         if target == at.dir.folder {
             return Err(ToggleError::Refused("the album is in that library already".into()));
         }
@@ -1464,7 +1464,7 @@ impl IncomingService {
     /// What a move would do (decision 0034), for the page to show before asking. Changes nothing.
     pub async fn move_preview(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let at = self.locate_listed(source_id, album).await?;
-        let (target, quality) = self.target_of(source_id, to)?;
+        let (target, quality) = self.destination_of(source_id, to)?;
         let (_, plan) = self.plan_move(&at, target, year).await?;
         let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some() && !self.lib.is_kept(at.dir.folder);
@@ -1482,7 +1482,7 @@ impl IncomingService {
     pub async fn copy_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>, sheet: Option<&CopySheet>) -> Result<KeepResult, ToggleError> {
         let at = self.locate_listed(source_id, album).await?;
         self.refuse_if_queued(&at.album.id, at.dir.folder)?;
-        let (target, _) = self.target_of(source_id, to)?;
+        let (target, _) = self.destination_of(source_id, to)?;
         if target == at.dir.folder {
             return Err(ToggleError::Refused("the album is in that library already".into()));
         }
@@ -1500,7 +1500,7 @@ impl IncomingService {
     /// not told. Changes nothing.
     pub async fn copy_preview(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let at = self.locate_listed(source_id, album).await?;
-        let (target, _) = self.target_of(source_id, to)?;
+        let (target, _) = self.destination_of(source_id, to)?;
         let (_, plan) = self.plan_move(&at, target, year).await?;
         Ok(match plan {
             Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert: 0, acquisition: false, copy: true, from_dir: Some(at.dir.dir.clone()) },
@@ -1610,6 +1610,17 @@ impl IncomingService {
             return Ok(self.enqueue(source_id, at, queue::Action::Keep, year, convert, limit, plan.folder, target));
         }
         self.keep_now(&at, target, year, Vec::new(), None).await
+    }
+
+    /// A Move's or a Save to's target (F34, the owner 2026-11-19): a main library or someone's own music, never an Incoming library,
+    /// which its fetcher alone fills; refused at the preview and again at the tap, so a library made Incoming after its sheet was shown
+    /// is refused there.
+    fn destination_of(&self, source_id: &str, library: &str) -> Result<(i64, settings::Quality), ToggleError> {
+        let (target, quality) = self.target_of(source_id, library)?;
+        if !self.lib.is_kept(target) {
+            return Err(ToggleError::Refused(INCOMING_IS_NO_DESTINATION.into()));
+        }
+        Ok((target, quality))
     }
 
     /// A library of a server as Cratarr's catalogue folder (a main library's too: its own, 0101 point 1), and its
@@ -2226,6 +2237,9 @@ pub(super) async fn tell_moved(lib: &Library, title: &str, moved: &[((i64, Strin
         }
     }
 }
+
+/// Why Move and Save to never take an Incoming library as their target (F34): the owner's words.
+pub(crate) const INCOMING_IS_NO_DESTINATION: &str = "An Incoming library is filled by its fetcher alone.";
 
 #[cfg(test)]
 mod tests {
@@ -4195,6 +4209,57 @@ mod tests {
         assert_eq!(count(settings::Quality::Hr96), 1);
         assert_eq!(count(settings::Quality::None), 0);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The service of `on_disk` with Cratarr's own server in use: `music` its main library, `inc` its Incoming.
+    async fn on_server(music: &std::path::Path, inc: &std::path::Path) -> IncomingService {
+        let svc = on_disk(music, inc).await;
+        let (m, i) = (music.to_string_lossy().into_owned(), inc.to_string_lossy().into_owned());
+        let placed = |p: &str| crate::placement::PlacedLibrary { id: p.into(), name: p.into(), folders: vec![p.into()], paths: Vec::new(), read_only: false };
+        let libraries = settings::Libraries(vec![settings::LibrarySetting::new(m.clone(), settings::LibraryKind::Main), settings::LibrarySetting::new(i.clone(), settings::LibraryKind::Incoming)]);
+        let cfg = settings::SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries, values: Default::default() };
+        let placement = crate::placement::Placement { roots: Vec::new(), libraries: vec![placed(&m), placed(&i)] };
+        svc.lib.switch_to(vec![Arc::new(Active { cfg, source: None, placement, error: None })]).await.unwrap();
+        svc
+    }
+
+    /// F33.1, F33.2: a Save to is told on Health's list of changes as "Saved to <library>: <album>", its kind still `copy`; Keep's
+    /// "Added to", Move's "Moved:" and Replace's "Replaced in" as before.
+    #[tokio::test]
+    async fn a_save_to_is_told_as_saved() {
+        let (music, inc) = (folder("f33-music"), folder("f33-inc"));
+        let svc = on_server(&music, &inc).await;
+        let m = music.to_string_lossy().into_owned();
+        assert_eq!(svc.copied_named("cratarr", 0, "Tide Tables"), ("copy", format!("Saved to {m}: Tide Tables")));
+        let src = include_str!("incoming.rs").replace("\r\n", "\n");
+        for kept in ["(\"keep\", format!(\"Added to {}: {title}\"", "(\"move\", format!(\"Moved: {title}\")", "(\"replace\", format!(\"Replaced in {} from {}: {title}\""] {
+            assert!(src.contains(kept), "{kept}");
+        }
+        assert!(!src.contains(&["\"Copied", " to {}: {title}\""].concat()), "no run written now says Copied to");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// F34.1, F34.3: a Move's and a Save to's target is never an Incoming library (its fetcher fills it alone): refused with the owner's
+    /// words; a main library still a target. Each door asks at its start (the preview and the tap alike), so a library made Incoming
+    /// after its sheet was shown is refused at the tap. Keep's own check, and Lidarr's and Soulseek's placing, as before.
+    #[tokio::test]
+    async fn incoming_is_no_destination() {
+        let (music, inc) = (folder("f34-music"), folder("f34-inc"));
+        let svc = on_server(&music, &inc).await;
+        let (m, i) = (music.to_string_lossy().into_owned(), inc.to_string_lossy().into_owned());
+        assert!(matches!(svc.destination_of("cratarr", &i), Err(ToggleError::Refused(why)) if why == INCOMING_IS_NO_DESTINATION));
+        assert_eq!(svc.destination_of("cratarr", &m).ok().map(|(f, _)| f), Some(0), "a main library still a target");
+        let src = include_str!("incoming.rs").replace("\r\n", "\n");
+        for door in ["pub async fn move_album(", "pub async fn move_preview(", "pub async fn copy_album(", "pub async fn copy_preview("] {
+            let at = src.find(door).unwrap_or_else(|| panic!("{door}"));
+            let body = &src[at..at + src[at..].find("\n    }\n").unwrap()];
+            assert!(body.contains("self.destination_of(source_id, to)?") && !body.contains("self.target_of("), "{door}");
+        }
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 }
 
