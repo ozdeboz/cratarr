@@ -5,6 +5,7 @@
 // by and tied to the label (lib/openRecord). Pure.
 import type { ListRead, RequestMark } from './api';
 import { editionsMark } from './editions';
+import { recordsWord } from './recordTypeRules';
 import type { Openable } from './openRecord';
 
 /** A label in the panel's address. */
@@ -63,6 +64,16 @@ export type LabelSource = 'musicbrainz' | 'discogs';
 export type LabelPageOf = { id: string; name: string; had: LabelRow[]; not_had: LabelRow[]; looking: boolean; more: Record<LabelSource, boolean> } & ListRead;
 /** Every record of the page, what the house has first: its picture's and its count's. */
 export const labelRows = (p: Pick<LabelPageOf, 'had' | 'not_had'>): LabelRow[] => [...p.had, ...p.not_had];
+
+/** A label page's header (SB4, the owner's "Records you have"): the records of it the library has, all of them, in their one type's
+ *  word where they have one ("3 albums", "2 EPs", else "5 records"), "in your library"; nothing where it has none. Never the rows
+ *  read so far, which "More" adds to. */
+export function labelCount(p: Pick<LabelPageOf, 'had'>): string {
+  const n = p.had.length;
+  if (!n) return '';
+  const word = recordsWord(p.had.map((r) => r.kind));
+  return `${n.toLocaleString()} ${n === 1 ? word : `${word}s`} in your library`;
+}
 
 /** A row's line: its artist, year, catalogue number, its type where it is not an album, and its editions where several (F12). */
 export const rowLine = (r: LabelRow) =>

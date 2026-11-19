@@ -111,7 +111,7 @@
   import { artistLine } from './recordTypeRules';
   import Notice from './Notice.svelte';
   import { artistTitle, movedTo } from './artistIds';
-  import { labelCovers, labelOf, labelRows, type LabelPageOf } from './labelPage';
+  import { labelCount, labelCovers, labelOf, labelRows, type LabelPageOf } from './labelPage';
   import { editionLines } from './editions';
   import { wantOf } from './wantPath';
   import LabelBody from './LabelBody.svelte';
@@ -1501,7 +1501,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return rows ? plural(total, 'track') : '';
     if (multi) return playlistsKnown() ? plural(chosenCount, 'track') : '';
     if (!rows) return '';
-    if (label) return labelHead && labelRows(labelHead).length ? plural(labelRows(labelHead).length, 'record') : '';
+    if (label) return labelHead ? labelCount(labelHead) : '';
     if (artist) return artistLine(artist.tracks ? null : (artistHead?.albums ?? []).map((a) => a.type), rows.length, length ? clockText(length) : null);
     const h = album ? albumHead : null;
     // Each copy says its own where it has a line: here it would read as the record's.

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const { fromDiscogs, labelChip, labelCovers, labelOf, labelRows, labelSubject, moreToRead, rowLine, rowOpenable } = await import('../src/lib/labelPage.ts');
+const { fromDiscogs, labelChip, labelCount, labelCovers, labelOf, labelRows, labelSubject, moreToRead, rowLine, rowOpenable } = await import('../src/lib/labelPage.ts');
 const { sectionPlace } = await import('../src/lib/recordNotHad.ts');
 const { when } = await import('../src/lib/settings/when.ts');
 const { howToOpen } = await import('../src/lib/openRecord.ts');
@@ -74,7 +74,8 @@ test("the label page's every record, what you have first: its picture's and its 
   assert.deepEqual(labelCovers(labelRows(p)), ['/c/h1']);
   const view = source('PlaylistView.svelte');
   assert.match(view, /covers = labelCovers\(labelRows\(p\)\);/);
-  assert.match(view, /if \(label\) return labelHead && labelRows\(labelHead\)\.length \? plural\(labelRows\(labelHead\)\.length, 'record'\) : '';/);
+  // SB4 (changed by design): the header counts what the library has, never the rows read so far.
+  assert.match(view, /if \(label\) return labelHead \? labelCount\(labelHead\) : '';/);
   assert.doesNotMatch(view, /labelHead\??\.rows/);
 });
 
@@ -105,4 +106,19 @@ test('the label page is asked again while its list is read, by lookAgainAfter, w
   assert.match(body, /lookAgainAfter\(looked\.n\+\+\)/);
   assert.doesNotMatch(body, /LOOK_TRIES|LOOK_MS/);
   assert.match(source('labelPage.ts'), /had: LabelRow\[\]; not_had: LabelRow\[\]; looking: boolean;/);
+});
+
+test('SB4.1: the header counts "In your library", in the records\' one word; none had, no count', () => {
+  const row = (kind: string | null) => ({ title: 't', artist: 'a', kind, had: true }) as never;
+  const notHad = Array.from({ length: 112 }, () => ({ title: 'n', artist: 'a', had: false }) as never);
+  assert.equal(labelCount({ had: [row('Album'), row('Album'), row('Album')] }), '3 albums in your library');
+  assert.equal(labelCount({ had: [row('EP'), row('EP')] }), '2 EPs in your library');
+  assert.equal(labelCount({ had: [row('Album'), row('EP'), row(null)] }), '3 records in your library');
+  assert.equal(labelCount({ had: [row('Single')] }), '1 single in your library');
+  assert.equal(labelCount({ had: [] }), '', 'none had: no count, never "0"');
+  // SB4.2: More reads the next hundred: the header is unchanged; a record that came into the library counts at the next read.
+  const page = { had: [row('Album'), row('Album'), row('Album')], not_had: notHad };
+  const more = { ...page, not_had: [...notHad, ...notHad] };
+  assert.equal(labelCount(more), labelCount(page));
+  assert.equal(labelCount({ ...page, had: [...page.had, row('Album')] }), '4 albums in your library');
 });
