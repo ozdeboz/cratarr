@@ -193,7 +193,7 @@ test("a record not had's track list loader holds no panel: its header, Want and 
   assert.match(view, /\{#if 'reading' in place\}<PageLoading held=\{false\}><p class="opening">\{place\.reading\}<\/p><\/PageLoading>/);
   assert.match(view, /<p class="empty">\{place\.line\}<\/p>\{\/if\}\s*\{#if notHad\}\{@render albumFoot\(\)\}\{\/if\}/, 'its About under the waiting track list');
   const foot = view.match(/\{#snippet albumFoot\(\)\}([\s\S]*?)\{\/snippet\}/)?.[1] ?? '';
-  assert.match(foot, /\{#if notHad\}\s*<AlbumAbout source=\{album\.source\} album=\{album\.id\}[^>]*more=\{albumHead\} labels=\{albumHead\.labels \?\? \[\]\} sources=\{albumHead\.sources\} \/>/, "a record not had's About");
+  assert.match(foot, /\{#if notHad\}\s*<AlbumAbout source=\{album\.source\} album=\{album\.id\}[^>]*more=\{albumHead\} labels=\{albumHead\.labels \?\? \[\]\} sources=\{albumHead\.sources \?\? \[\]\} onsaved=\{\(\) => saved\+\+\} \/>/, "a record not had's About");
   assert.match(view, /<SimilarLists kind="crate" id=\{crate\} \/>\{\/if\}\s*\{\/if\}\s*\{@render albumFoot\(\)\}/, 'the same foot under its tracks once they come');
 });
 

@@ -9,6 +9,7 @@
   import { clockText } from './remote.svelte';
   import { loadHealth } from './healthReport.svelte';
   import { me } from './me.svelte';
+  import { TRACKLIST } from './recordNotHad';
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import Group from './settings/Group.svelte';
@@ -16,7 +17,7 @@
   import ValueSheet from './settings/ValueSheet.svelte';
   import { toast } from './toast.svelte';
 
-  let { album }: { album: string } = $props();
+  let { album, onchange }: { album: string; onchange?: () => void } = $props();
 
   let refs = $state<References | null>(null);
   let failed = $state<string | null>(null);
@@ -62,6 +63,7 @@
     try {
       refs = await setReferences(album, choice);
       loadHealth();
+      onchange?.();
     } catch (e) {
       toast.fail(e, "The reference wasn't changed");
     } finally {
@@ -80,7 +82,7 @@
   <Group>
     {#each r.sources as x (x.source)}
       {@const counts = r.counting === x.source}
-      <Item lead={LEAD[x.state]} name={NAME[x.source] ?? x.source} line={lineOf(x)} tone={x.state === 'differs' ? 'warn' : null} value={counts ? 'Counts' : null} busy={busy === x.source} wrap>
+      <Item lead={LEAD[x.state]} name={NAME[x.source] ?? x.source} line={lineOf(x)} tone={x.state === 'differs' ? 'warn' : null} value={counts ? TRACKLIST : null} busy={busy === x.source} wrap>
         <!-- The row's own buttons, as every settings row's (lib/settings/Item). -->
         {#if x.url}{@const url = x.url}<button onclick={() => window.open(url, '_blank', 'noopener')}>Page</button>{/if}
         {#if me.admin && x.guessed && !x.confirmed && x.state !== 'missing'}<button disabled={!!busy} onclick={() => void choose(x.source, { confirm: x.source })}>Confirm</button>{/if}

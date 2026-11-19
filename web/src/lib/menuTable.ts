@@ -245,6 +245,17 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   deleteCrate: 'Delete crate',
 };
 
+/** The verbs of entries named by what they are about, and the link sheet's own (F19): one place for each word. */
+export const ENTRY_WORDS = {
+  openEdition: 'Open the edition',
+  references: 'References…',
+} as const;
+
+/** The one map of a destination's icon (F32): outside sites the external-link icon. */
+export const ICON_OF = {
+  outside: 'externalLink',
+} as const;
+
 /** Names no menu uses any more: what 0058 and its amendment renamed, and Delete album (a record by its type, 2026-11-01). */
 export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…', 'Delete album'];
 

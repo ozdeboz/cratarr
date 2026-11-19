@@ -10,7 +10,12 @@
   // chip per source the record has a reference of, each opening its page there, the one its tracklist was read from marked.
   import { albumRatings, loadAlbumRating, rateAlbum } from './albums.svelte';
   import { aboutLabels, labelChip, labelOpenBody, labelOpens, labelSubject, type LabelChip } from './labelPage';
-  import { sourceChips } from './recordNotHad';
+  import { sourceChips, TRACKLIST, type SourceChip } from './recordNotHad';
+  import { ENTRY_WORDS } from './menuTable';
+  import { me } from './me.svelte';
+  import LinkSheet from './LinkSheet.svelte';
+  import MenuSheet from './MenuSheet.svelte';
+  import RecordReferences from './RecordReferences.svelte';
   import { toast } from './toast.svelte';
   import { viewOver } from './panel.svelte';
   import { CRATE, GENRE, viewGenre } from './crates.svelte';
@@ -32,7 +37,8 @@
     provider,
     more = null,
     labels = [],
-    sources = [],
+    sources,
+    onsaved,
   }: {
     source: string;
     album: string;
@@ -47,8 +53,11 @@
     more?: Pick<import('./api').AlbumView, 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> | null;
     /** Its labels as the server names them (C54, F9): by their ids for life, else by their references. */
     labels?: LabelChip[];
-    /** Its references the server may show (F7): where it comes from. */
+    /** Its references the server may show (F7): where it comes from. A record's page always passes them (F19.4: its Elsewhere
+     *  is its Sources row); none, no record (a Bandcamp album's page), whose links stay under Elsewhere. */
     sources?: RecordSource[];
+    /** The record changed by its References sheet (F19.7): its page reads it again. */
+    onsaved?: () => void;
   } = $props();
 
   $effect(() => {
@@ -103,8 +112,17 @@
       openingLabel = false;
     }
   }
-  /** Where it comes from (F7): a chip per source, in the server's order. */
-  const sourced = $derived(sourceChips(sources));
+  /** Where it comes from (F7, F19): one chip per source, Discogs' lookup among them. */
+  const sourced = $derived(sources ? sourceChips(sources, discogs?.url) : []);
+  /** A chip tapped: its link sheet (F19.3), with the edition held and, for an administrator, References. One at a time. */
+  let linked = $state<SourceChip | null>(null);
+  let referencesOpen = $state(false);
+  let referencesChanged = false;
+  function closeReferences() {
+    referencesOpen = false;
+    if (referencesChanged) onsaved?.();
+    referencesChanged = false;
+  }
 
   // A badge's menu (decision 0058: a chip that opens an object opens its menu on a long-press).
   let menuOf = $state<string | null>(null);
@@ -156,10 +174,10 @@
     <h3>Credits</h3>
     <p class="words">{credits}</p>
   {/if}
-  {#if more?.links?.length}
+  {#if !sources && more?.links?.length}
     <h3>Elsewhere</h3>
     <p class="chips">{#each more.links as l (l.url)}<a class="chip" href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}</p>
-  {:else if discogs?.url}
+  {:else if !sources && discogs?.url}
     <h3>Elsewhere</h3>
     <p class="chips"><a class="chip" href={discogs.url} target="_blank" rel="noopener noreferrer">Discogs</a></p>
   {/if}
@@ -177,7 +195,7 @@
   {/if}
   {#if sourced.length}
     <h3>Sources</h3>
-    <p class="chips">{#each sourced as s (s.url)}<a class="chip" href={s.url} target="_blank" rel="noopener noreferrer">{s.name}{#if s.tracks}<span class="sep">·</span>Tracklist{/if}</a>{/each}</p>
+    <p class="chips">{#each sourced as s (s.url)}<button class="chip" onclick={() => (linked ??= s)}>{s.name}{#if s.tracks}<span class="sep">·</span>{TRACKLIST}{/if}</button>{/each}</p>
   {/if}
   <h3>Media provider</h3>
   <p class="chips">
@@ -197,6 +215,21 @@
 </section>
 
 {#if menuOf}<SubjectMenu subject={menuOf} onclose={() => (menuOf = null)} />{/if}
+{#if linked}
+  {@const s = linked}
+  <LinkSheet
+    url={s.url}
+    name={s.name}
+    also={s.edition ? [{ label: ENTRY_WORDS.openEdition, url: s.edition }] : []}
+    onreferences={me.admin && source === 'cratarr' ? () => ((linked = null), (referencesOpen = true)) : undefined}
+    onclose={() => (linked = null)}
+  />
+{/if}
+{#if referencesOpen}
+  <MenuSheet label="References" title={ENTRY_WORDS.references.replace('…', '')} onclose={closeReferences}>
+    <RecordReferences {album} onchange={() => (referencesChanged = true)} />
+  </MenuSheet>
+{/if}
 
 <style>
   section {

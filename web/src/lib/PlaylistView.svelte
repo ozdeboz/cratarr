@@ -2854,9 +2854,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
     {/if}
     {#if notHad}
-      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} labels={albumHead.labels ?? []} sources={albumHead.sources} />
+      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} labels={albumHead.labels ?? []} sources={albumHead.sources ?? []} onsaved={() => saved++} />
     {:else}
-      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} sources={albumHead.sources} />
+      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} sources={albumHead.sources ?? []} onsaved={() => saved++} />
     {/if}
   {/if}
   {#if album && albumHead && album.source === BANDCAMP}
