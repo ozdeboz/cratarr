@@ -1056,7 +1056,7 @@ fn credits_of(v: &Value) -> Vec<Credit> {
 }
 
 /// `labels_of` for the tests of other modules.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn labels_of_for_tests(v: &Value) -> Vec<Label> {
     labels_of(v)
 }

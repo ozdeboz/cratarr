@@ -23,7 +23,7 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::play::Rng;
 use super::playon::QueueTrack;
 use crate::similarity::{Signal, Track, Weights, unique};

@@ -740,13 +740,13 @@ pub fn set_levels(added: &str, holds: Duration) -> Result<LevelsNow> {
 /// from the default of whichever thread reaches the callsite first, and keeps it for every thread: a test running at
 /// the same moment without a subscriber switched "request refused" off for the test that logged it (lost in 2 of 4
 /// full runs, never alone). With two, the interest comes from every registered dispatcher.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn log_here<S: Subscriber + Send + Sync + 'static>(subscriber: S) -> TestLogging {
     let beside = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     TestLogging { _default: tracing::subscriber::set_default(subscriber), _beside: beside }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct TestLogging {
     _default: tracing::subscriber::DefaultGuard,
     _beside: tracing::Dispatch,
@@ -754,7 +754,7 @@ pub(crate) struct TestLogging {
 
 /// The events `f` logs on this thread at info and above, in order, each a line "<target>: <message>" and its fields as
 /// " <name>=<value>": what a test reads of the log (through `log_here`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn logged_lines(f: impl FnOnce()) -> Vec<String> {
     use tracing_subscriber::layer::SubscriberExt;
     struct Line(String, String);

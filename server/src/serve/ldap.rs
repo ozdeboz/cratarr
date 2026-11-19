@@ -240,7 +240,7 @@ struct Verifier {
 
 pub struct Directory {
     /// Where `set_config` keeps new settings; only tests set them (decision 0040).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     config_file: Option<PathBuf>,
     verifier_file: Option<PathBuf>,
     config: RwLock<Config>,
@@ -267,7 +267,7 @@ impl Directory {
             _ => HashMap::new(),
         };
         Ok(Self {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             config_file,
             verifier_file,
             config: RwLock::new(config),
@@ -282,7 +282,7 @@ impl Directory {
 
     /// New settings, checked and kept. Kept hashes go when the directory or its base changes. Not reachable from the
     /// page (decision 0040): the operator writes `ldap.json`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_config(&self, new: Config) -> Result<()> {
         new.check()?;
         let old = self.config();

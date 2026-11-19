@@ -246,7 +246,7 @@ fn labels_of(cat: &crate::catalogue::Catalogue, record: i64) -> Result<Vec<Label
 
 /// A2.5's record half for `labels`' tests: a record tied to one label ("Traum Schallplatten") by two catalogue numbers, as its view
 /// names its labels: how many, and the first's catalogue numbers.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn record_labels_shown_for_tests(cat: &crate::catalogue::Catalogue) -> (usize, Option<String>) {
     let record = cat.record_for_tests("Dehli9", 0);
     let label = cat.label_for("Traum Schallplatten").unwrap();

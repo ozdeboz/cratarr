@@ -66,7 +66,7 @@ pub fn apply(plan: &[Step]) -> Result<()> {
             bail!("{} exists already; not overwriting it", to.display());
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     AFTER_CHECK.with(|h| {
         if let Some(f) = h.take() {
             f()
@@ -197,7 +197,7 @@ pub fn replace_through_part(path: &Path, fill: impl FnOnce(&Path) -> Result<()>)
     done
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// What runs between `apply`'s look at its targets and its first move (T11.3's test): a file coming meanwhile.
     static AFTER_CHECK: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
@@ -425,7 +425,7 @@ mod fiemap {
 /// taken away whole after each probe and before it, so what a probe a stop cut short left goes at the next.
 const PROBE_DIR: &str = ".cratarr-probe";
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// What runs while the share probe's files are there (T13.2's test): a look at the folders.
     static MID_PROBE: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
@@ -463,7 +463,7 @@ pub fn shares(from: &Path, to: &Path) -> bool {
         && std::fs::create_dir(&copy).is_ok()
         && std::fs::write(source.join(&name), vec![7u8; 64 << 10]).is_ok()
         && clone_file(&source.join(&name), &copy.join(&name)).unwrap_or(false);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     MID_PROBE.with(|h| {
         if let Some(f) = h.take() {
             f()

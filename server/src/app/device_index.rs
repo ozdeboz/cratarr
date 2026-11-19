@@ -469,7 +469,7 @@ pub async fn stands(app: &Arc<App>, serve: Arc<Serve>, since: Option<i64>) -> Re
     Ok(found.await.map_err(|e| anyhow!("{e}"))??)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) mod tests {
     use std::path::{Path, PathBuf};
 

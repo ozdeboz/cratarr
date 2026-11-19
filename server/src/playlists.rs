@@ -353,7 +353,7 @@ impl Store {
 
     /// Tests: the playlists of `dir`'s `.m3u` files, entries relative to it, in a database of their own, their copies
     /// written back out there.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         let db = Arc::new(UserData::open(None).expect("an in-memory database"));
@@ -611,7 +611,7 @@ impl Store {
 
     /// Make the playlist exactly `entries`, in order. Returns false when it already was.
     /// Tests only: the sync uses `set_entries_if`, which never overwrites an edit it has not seen.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn set_entries(&self, id: &str, entries: &[String]) -> Result<bool, StoreError> {
         let _one_writer = self.write.lock().await;
         let e = self.put(id, None, entries.to_vec()).await?.ok_or(StoreError::Unknown)?;

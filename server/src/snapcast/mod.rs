@@ -209,7 +209,7 @@ impl Snapcast {
     }
 
     /// How many groups' streams there are.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn streams_held(&self) -> usize {
         self.streams.lock().unwrap_or_else(|p| p.into_inner()).len()
     }

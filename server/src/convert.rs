@@ -239,7 +239,7 @@ pub fn to_flac_told(input: &Path, output: &Path, limit: Limit, progress: impl Fn
 }
 
 /// [`to_flac_told`] at CD format, quietly: the tests'.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn to_cd_flac(input: &Path, output: &Path) -> Result<Report> {
     to_flac_told(input, output, CD, |_| {})
 }
@@ -664,7 +664,7 @@ fn _tool_paths() -> Option<(PathBuf, PathBuf, Option<PathBuf>)> {
     Some((input.into(), output.into(), std::env::var_os("CRATARR_CONVERT_RAW").map(PathBuf::from)))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod tests {
     use super::*;
     use lofty::picture::{MimeType, Picture, PictureType};

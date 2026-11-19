@@ -391,7 +391,7 @@ impl Wind {
     }
 
     /// The whole WAV's length (bytes): one track alone (the endpoint sums a chain's parts).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn bytes(&self) -> u64 {
         44 + self.data()
     }
@@ -463,7 +463,7 @@ impl Wind {
 
     /// The WAV, header first, a block at a time to `send`; one that answers false (the player stopped reading: a hold
     /// let go) ends it. Only what the crossfades still need is kept, however long the wind.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn render(&self, sound: &mut dyn Sound, mut send: impl FnMut(Vec<u8>) -> bool) -> Result<()> {
         if !send(crate::rewind::wav_header(self.out_rate, self.channels, self.data())) {
             return Ok(());

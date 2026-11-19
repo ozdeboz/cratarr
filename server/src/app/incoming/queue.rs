@@ -121,7 +121,7 @@ impl JobView {
     }
 
     /// A Keep of this copy being converted, for what reads the queue.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn converting(id: u64, source: &str, album: &str, from: &str, folder: i64, dir: &str) -> Self {
         JobView {
             id,
@@ -144,7 +144,7 @@ impl JobView {
     }
 
     /// That job, done.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn done(self) -> Self {
         JobView { state: State::Done, ..self }
     }

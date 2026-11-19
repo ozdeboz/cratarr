@@ -63,7 +63,7 @@ impl Spectrum {
     }
 
     /// A frame's bands, lowest first.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn frame(&self, i: usize) -> &[u8] {
         &self.0[HEAD + i * BANDS..HEAD + (i + 1) * BANDS]
     }

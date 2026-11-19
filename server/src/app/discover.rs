@@ -286,7 +286,7 @@ pub struct Candidate {
 }
 
 pub(super) fn http() -> Result<reqwest::Client> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if MB_FAKE.with(|f| f.borrow().is_some()) {
         // The test's fake MusicBrainz, plain http on this machine (`FakeMusicBrainz`), which `reach::client` would refuse.
         return Ok(reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).user_agent(super::reach::USER_AGENT).timeout(Duration::from_secs(30)).build()?);
@@ -295,12 +295,12 @@ pub(super) fn http() -> Result<reqwest::Client> {
 }
 
 /// MusicBrainz's web service (T6's seam), where `mb_artist_by_name`, `mb_page` and Beyond's search (`musicbrainz_found`) ask.
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 fn mb_ws() -> String {
     "https://musicbrainz.org/ws/2".to_string()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     // The test's fake MusicBrainz on this thread (`FakeMusicBrainz`): its web service's address.
     static MB_FAKE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
@@ -308,17 +308,17 @@ thread_local! {
 
 /// Tests: MusicBrainz's web service is the test's fake (`FakeMusicBrainz`), else an address that reaches nothing (plain http,
 /// which `reach::client` never asks): no test asks musicbrainz.org.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn mb_ws() -> String {
     MB_FAKE.with(|f| f.borrow().clone()).unwrap_or_else(|| "http://127.0.0.1:9/ws/2".to_string())
 }
 
 /// Tests: this thread's questions through `mb_ws` go to a fake MusicBrainz at `at` (its web service, as `http://…/ws/2`), asked
 /// through a plain client (`http`), until this is dropped.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct FakeMusicBrainz;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl FakeMusicBrainz {
     pub(crate) fn at(at: String) -> Self {
         MB_FAKE.with(|f| *f.borrow_mut() = Some(at));
@@ -326,7 +326,7 @@ impl FakeMusicBrainz {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for FakeMusicBrainz {
     fn drop(&mut self) {
         MB_FAKE.with(|f| *f.borrow_mut() = None);
@@ -2215,7 +2215,7 @@ async fn artist_links(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsk
         return Links::Unasked;
     }
     // Tests: asked of the test's fake MusicBrainz alone (`FakeMusicBrainz`); with none, not asked, as no test asks musicbrainz.org.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if MB_FAKE.with(|f| f.borrow().is_none()) {
         return Links::Unasked;
     }

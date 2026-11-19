@@ -323,7 +323,7 @@ pub fn frozen() -> bool {
 }
 
 /// Tests elsewhere: a start's load of the queue at `p` (`load`): how many items it holds, and whether it froze.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn load_for_tests(p: &Path) -> (usize, bool) {
     let k = load(p);
     (k.items.len(), k.frozen)
@@ -947,7 +947,7 @@ fn held_in(items: &[Item], now: i64, held: impl Fn(&Item) -> bool) -> Vec<(Strin
 }
 
 /// Tests elsewhere: an item of `record` on the list as `id`, its folders found and waiting for a tick, so no worker takes it up.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn list_for_tests(id: &str, record: i64) {
     let r = Record { record, artist: "Glass Harbour".into(), album: "Undertow".into(), year: None, request: 0 };
     let i = Item {
@@ -976,7 +976,7 @@ pub fn list_for_tests(id: &str, record: i64) {
 }
 
 /// Tests elsewhere: a Placed item of `record` on the list as `id`, its folder read (U3).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn placed_for_tests(id: &str, record: i64) {
     list_for_tests(id, record);
     kept(|k| {
@@ -987,19 +987,19 @@ pub fn placed_for_tests(id: &str, record: i64) {
 }
 
 /// Tests elsewhere: whether an item `id` is on the list.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn listed_for_tests(id: &str) -> bool {
     kept(|k| k.items.iter().any(|i| i.id == id))
 }
 
 /// Tests elsewhere: item `id` on the list as `f` leaves it (`list_for_tests` puts one there).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn change_for_tests(id: &str, f: impl FnOnce(&mut Item)) {
     with_item(id, f);
 }
 
 /// Tests elsewhere: item `id`'s fetch failed on `user` (refused, offline): the next folder chosen, as a fetch does (`on_failed`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn failed_for_tests(id: &str, user: &str) {
     with_item(id, |i| {
         on_failed(i, user, format!("{user} is offline"));
@@ -1239,7 +1239,7 @@ pub(crate) fn requests_taken(
 }
 
 /// The records `take_requests` makes items of from these requests, on a list of their own (the tests', AL02).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn items_of(approved: &[crate::userdata::Request], of: &[Option<super::requests::RecordOf>]) -> Vec<i64> {
     let mut k = Kept::default();
     take_requests(&mut k, approved, of, &vec![0; approved.len()]);

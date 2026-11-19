@@ -263,7 +263,7 @@ impl Catalogue {
     }
 
     /// Tests elsewhere: the crates' facts read again at the next asking. With no server behind them a build does not tell them.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn facts_forgotten_for_tests(&self) {
         *self.facts.lock().unwrap() = None;
     }

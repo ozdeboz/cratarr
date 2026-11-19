@@ -452,7 +452,7 @@ pub(crate) fn crc32(data: &[u8]) -> u32 {
     data.iter().fold(0u32, |crc, &b| (crc << 8) ^ table[((crc >> 24) as u8 ^ b) as usize])
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod tests {
     use super::*;
 

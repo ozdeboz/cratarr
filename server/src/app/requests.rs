@@ -2200,7 +2200,7 @@ pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
 }
 
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod tests {
     use super::*;
 

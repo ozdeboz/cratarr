@@ -96,12 +96,12 @@ type ListedTitles = HashMap<(String, String, String), (usize, i64)>;
 /// `f` on what Beyond listed lately (`ListedTitles`): the server's, one for every request; a test's own, as each runs on a thread of
 /// its own and many list the same ids at once.
 fn with_listed<T>(f: impl FnOnce(&mut ListedTitles) -> T) -> T {
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     {
         static LISTED_TITLES: std::sync::OnceLock<std::sync::Mutex<ListedTitles>> = std::sync::OnceLock::new();
         f(&mut LISTED_TITLES.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner()))
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         thread_local! {
             static LISTED_TITLES: std::cell::RefCell<ListedTitles> = Default::default();

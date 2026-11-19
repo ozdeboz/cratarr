@@ -156,7 +156,7 @@ impl UserData {
 
     /// What 0.14 chose of a record's references (`app::references::Chosen`; JSON). Kept one version after 0.17's step moved it
     /// into the catalogue, written by nothing.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn record_references(&self, album: &str) -> Result<Option<String>> {
         use rusqlite::OptionalExtension;
         Ok(self.db().query_row("SELECT chosen FROM record_references WHERE album = ?1", [album], |r| r.get(0)).optional()?)

@@ -624,7 +624,7 @@ pub fn main_artist(artist: &str) -> String {
 /// as asked (1 its grabs, 3 its track imports, each with its `downloadId` and `data.importedPath`); a grab marked failed answered
 /// only for one of its grabs (404 else); an album monitored and a search taken; 404 for anything else. Every write is written down,
 /// whatever is answered (`Seen::writes`), and every call it did not expect (`Seen::refused`), for the test to fail on.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod fake {
     use axum::Json;
     use axum::body::Bytes;

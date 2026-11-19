@@ -208,7 +208,7 @@ impl Requests {
     }
 
     /// As if request `id` had been asked `secs` earlier (the tests' clock).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn age(&self, id: &str, secs: i64) {
         if let Some(r) = self.inner().list.iter_mut().find(|r| r.id == id) {
             r.at -= secs;
@@ -223,7 +223,7 @@ pub const SETTLE_MS: i64 = 5_000;
 /// none follows for that long: its own line when it is one ("Ann asks for So What"), else how many. Each request as
 /// (when, ms; its line); the notices as (when sent, ms; the line). Pure, for the tests: the leader's timer
 /// (`PlayOn::tell_leader`) runs the same rule as it goes.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn notices(asked: &[(i64, String)]) -> Vec<(i64, String)> {
     let mut sorted: Vec<&(i64, String)> = asked.iter().collect();
     sorted.sort_by_key(|(at, _)| *at);
@@ -242,7 +242,7 @@ pub fn notices(asked: &[(i64, String)]) -> Vec<(i64, String)> {
     out
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn told(burst: &[&(i64, String)]) -> (i64, String) {
     let last = burst.last().map_or(0, |(at, _)| *at);
     (last + SETTLE_MS, line_of(&burst.iter().map(|(_, l)| l.clone()).collect::<Vec<_>>()))

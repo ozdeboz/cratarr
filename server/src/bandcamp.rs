@@ -112,7 +112,7 @@ pub fn switched(ud: Option<&crate::userdata::UserData>, on: bool) {
 }
 
 /// Tests: Bandcamp held back after its bot check until `until` (0: not), as its own tests hold it; what it was.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn hold_for_tests(until: i64) -> i64 {
     HELD_UNTIL.swap(until, std::sync::atomic::Ordering::Relaxed)
 }
@@ -192,11 +192,11 @@ impl Track {
 }
 
 /// Tests: the stream addresses of fake media servers at home (`fake_media_at`), reached plainly.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static FAKE_MEDIA: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Tests: a fake media server's stream address, reached plainly as if it were on Bandcamp's media hosts.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn fake_media_at(stream: &str) {
     FAKE_MEDIA.lock().unwrap_or_else(|p| p.into_inner()).push(stream.to_string());
 }
@@ -333,7 +333,7 @@ impl Bandcamp {
     /// goes back to the listener whole, or a first hop on Bandcamp's own stream hosts, followed on to its media hosts only (Y10,
     /// `Purpose::starts_at`); none for any other address. Tests: a fake media server at home (`fake_media_at`), plainly.
     fn media_for(&self, stream: &str) -> Option<reqwest::Client> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if FAKE_MEDIA.lock().unwrap_or_else(|p| p.into_inner()).iter().any(|f| f == stream) {
             return Some(reqwest::Client::new());
         }
@@ -353,7 +353,7 @@ impl Bandcamp {
     }
 
     /// An album taken as read, as if its page had just been read (a fake Bandcamp's, in tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn keep(&self, album: Album) {
         let url = album_page(&album.url).unwrap_or_else(|| album.url.clone());
         self.kept.lock().unwrap_or_else(|p| p.into_inner()).insert(url, (Instant::now(), album));

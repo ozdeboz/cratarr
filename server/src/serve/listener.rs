@@ -78,7 +78,7 @@ impl Listener {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod tests {
     use super::*;
     use crate::catalogue::Rules;

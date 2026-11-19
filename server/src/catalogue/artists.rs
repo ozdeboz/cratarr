@@ -243,7 +243,7 @@ impl Catalogue {
     }
 
     /// `note_artists_moved`, in a transaction of its own. Blocking.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn note_artists_moved(&self) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;

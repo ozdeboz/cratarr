@@ -710,7 +710,7 @@ fn bin_waveform(squares: &[f32]) -> Vec<u8> {
     rms.iter().map(|r| (r / top * 255.0).round() as u8).collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod tests {
     use super::*;
 

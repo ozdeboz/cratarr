@@ -251,7 +251,7 @@ impl Queue {
     }
 
     /// `edit_at` with no track playing.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn edit(&mut self, command: Command) -> Result<Command, ToggleError> {
         self.edit_at(command, None)
     }
@@ -460,7 +460,7 @@ impl Queue {
     }
 
     /// [`Queue::adopted`]: `true` when the queue changed.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn adopt(&mut self, reported: Vec<QueueTrack>) -> bool {
         self.adopted(reported).is_some()
     }

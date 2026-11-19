@@ -679,7 +679,7 @@ where
 }
 
 /// Tests: where a page's read of `record` stands: being read (true), ended without a list (false), or none kept.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn page_read_of(cat: &Arc<Catalogue>, record: i64) -> Option<bool> {
     page_reads().get(&(Arc::as_ptr(cat) as usize, record)).map(|(_, s)| matches!(s, PageReadState::Reading(_)))
 }
@@ -1225,14 +1225,14 @@ pub fn unreferenced(served: &crate::serve::Serve) -> Result<Vec<(String, String,
 
 /// Tests: what a page's read looks at that the whole process shares (Y12): every source and background reading switched on, Bandcamp
 /// not held back, under the one test lock (`switches::TEST_STATE`); put back as they were when it ends.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct TestState {
     was: Vec<(&'static str, bool)>,
     held: i64,
     _one: tokio::sync::MutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TestState {
     pub(crate) async fn set() -> TestState {
         use super::switches::{BACKGROUND, BANDCAMP, DISCOGS, MUSICBRAINZ, TEST_STATE, set_for_tests};
@@ -1242,7 +1242,7 @@ impl TestState {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for TestState {
     fn drop(&mut self) {
         for &(name, on) in &self.was {
@@ -1253,7 +1253,7 @@ impl Drop for TestState {
 }
 
 /// Tests: waits for a page's read of `record` to end (ten seconds at most).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn page_read_settled(cat: &Arc<Catalogue>, record: i64) {
     for _ in 0..1_000 {
         if page_read_of(cat, record) != Some(true) {

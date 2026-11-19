@@ -111,13 +111,13 @@ impl Report {
     }
 
     /// The rows of one table, by its name.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn table_named(&self, name: &str) -> Option<&Table> {
         self.tables.iter().find(|t| t.name == name)
     }
 
     /// How many found no match, in all.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn unmatched_count(&self) -> u64 {
         self.unmatched.iter().map(|u| u.count).sum()
     }

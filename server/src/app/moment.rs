@@ -68,11 +68,11 @@ pub fn tz(w: Option<&Weather>) -> i64 {
 }
 
 /// The time a proof runs at (`radio::proof`), when not 0: two runs compared must not differ for when they ran.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub static PINNED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 pub fn now_secs() -> i64 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let pinned @ 1.. = PINNED.load(std::sync::atomic::Ordering::Relaxed) {
         return pinned;
     }

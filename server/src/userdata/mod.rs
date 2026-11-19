@@ -885,7 +885,7 @@ impl UserData {
     }
 
     /// Read-only from now on, as a disk gone read-only leaves it: nothing more is written (`PRAGMA query_only`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn read_only_for_tests(&self) {
         self.db().execute_batch("PRAGMA query_only = ON").unwrap();
     }
@@ -1312,7 +1312,7 @@ impl UserData {
     }
 
     /// `WEEK_BEFORE_THE_LOG` over a test's own rows: the file has run it at its open, before they were there.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn backfill_week(&self) -> Result<()> {
         Ok(self.db().execute_batch(WEEK_BEFORE_THE_LOG)?)
     }

@@ -2429,7 +2429,7 @@ impl Catalogue {
     }
 
     /// Tests elsewhere: the catalogue's connection, to set what no call sets (a record's release date).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn db_for_tests(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db()
     }
@@ -2477,13 +2477,13 @@ impl Catalogue {
     }
 
     /// Tests elsewhere: one statement on the catalogue, as a test sets a shape no action makes (a file rewritten in place).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn execute_for_tests(&self, sql: &str) {
         self.db().execute_batch(sql).unwrap();
     }
 
     /// Tests elsewhere: a copy of the record in catalogue folder `folder`, a file there behind each of its tracks (`copy-<record>/…`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn copy_for_tests(&self, record: i64, folder: i64) {
         self.db()
             .execute("INSERT INTO files (folder, rel, size, mtime, track) SELECT ?2, 'copy-' || ?1 || '/' || id || '.flac', 1, 1, id FROM tracks WHERE record = ?1", params![record, folder])
@@ -2549,13 +2549,13 @@ impl Catalogue {
     }
 
     /// Tests elsewhere: the type a build kept on a record (RF1, `keep_types`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn typed_for_tests(&self, record: i64) -> Option<String> {
         self.db().query_row("SELECT typed FROM records WHERE id = ?1", [record], |r| r.get(0)).unwrap()
     }
 
     /// Tests elsewhere: a record of this title with `tracks` tracks on it (none: a record not had), no file behind them. Its id.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn record_for_tests(&self, title: &str, tracks: usize) -> i64 {
         let db = self.db();
         db.execute("INSERT INTO records (born, title, artist) VALUES (1, ?1, 'Glass Harbour')", [title]).unwrap();
@@ -2642,7 +2642,7 @@ impl Catalogue {
     }
 
     /// Tests elsewhere: a record waiting for its release's list, as 0.17's step leaves a certain match.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn wait_for_list_for_tests(&self, record: i64, release: &str) {
         self.db().execute("INSERT INTO lists_to_read (record, release, at) VALUES (?1, ?2, 1)", params![record, release]).unwrap();
     }

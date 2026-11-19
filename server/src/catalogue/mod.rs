@@ -1050,7 +1050,7 @@ const FOLDER_TOP: &str = "folder_top";
 pub struct Catalogue {
     db: Mutex<Connection>,
     /// How many readers it opened (`reader`): what a test counts.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     readers: std::sync::atomic::AtomicUsize,
     /// The folders in use, by their ids for life.
     folders: RwLock<InUse>,
@@ -1170,7 +1170,7 @@ impl Catalogue {
             moving: Default::default(),
             read_half_way: Default::default(),
             file: file.map(Path::to_path_buf),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             readers: Default::default(),
         };
         // A better reader may read what an older one could not.
@@ -1449,7 +1449,7 @@ impl Catalogue {
 
     /// Ask for a pass now.
     /// When the last background pass finished, epoch seconds.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn last_pass(&self) -> Option<i64> {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass
     }
@@ -1768,7 +1768,7 @@ impl Catalogue {
     /// keeps its time), each with its folder and that time: what the crates are worked out on (decision 0024).
     /// Blocking.
     // The tests' own: nothing else uses it (no warning in the server's build).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn files_newest_first(&self) -> Result<Vec<(i64, String, Option<i64>)>> {
         let db = self.db();
         let mut st = db.prepare(&format!(
@@ -2167,7 +2167,7 @@ impl Catalogue {
     }
 
     /// What the catalogue knows of each of these files of a folder, in order. Blocking.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn file_rows(&self, source: &str, folder: i64, rels: &[String]) -> Result<Vec<FileRow>> {
         let places: Vec<Option<(i64, String)>> = rels.iter().map(|r| Some((folder, r.clone()))).collect();
         self.rows_at(source, &places)
@@ -2398,13 +2398,13 @@ impl Catalogue {
     }
 
     /// How many readers it has opened (`reader`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn readers_for_tests(&self) -> usize {
         self.readers.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The writer's lock, held by a test as a build holds it for its record pass.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn writer_for_tests(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db()
     }
@@ -2412,7 +2412,7 @@ impl Catalogue {
     /// A read-only connection of its own to the catalogue's file, for long reads that must not hold up the catalogue
     /// (WAL lets it read beside the writer). `None` for a catalogue in memory.
     pub fn reader(&self) -> Option<Connection> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.readers.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let file = self.file.as_ref()?;
         let conn = crate::db::open_read_only(file).ok()?;
@@ -2471,51 +2471,51 @@ impl Catalogue {
     }
 
     /// Tests elsewhere: treat every file waiting for its tags as read (test files are not audio).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn pretend_read_for_tests(&self) {
         self.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
     }
 
     /// Tests elsewhere: when a folder's files came.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn came_for_tests(&self, folder: i64, at: i64) {
         self.db().execute("UPDATE files SET came = ?2 WHERE folder = ?1", [folder, at]).unwrap();
     }
 
     /// Tests elsewhere: a file rewritten in place, as a tag write's row update leaves it (`carry_over`, C39): its new size and time,
     /// and a copy that shared its original's blocks shares them no more.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn rewrite_for_tests(&self, folder: i64, rel: &str, size: u64, mtime: i64) {
         let (was, at): (i64, i64) = self.db().query_row("SELECT size, mtime FROM files WHERE folder = ?1 AND rel = ?2", params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         self.carry_over(folder, rel, (was as u64, at), (size, mtime)).unwrap();
     }
 
     /// Tests elsewhere: every gone file gone longer than a gone file waits, for `identify` to retire it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn gone_long_ago_for_tests(&self) {
         self.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
     }
 
     /// Tests elsewhere: as a stop between the user data's move and its mark leaves it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn not_followed_for_tests(&self) {
         self.db().execute("UPDATE track_moved SET followed = 0", []).unwrap();
     }
 
     /// Tests elsewhere: a file on a track, as the take leaves a record's copies.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn give_track_for_tests(&self, folder: i64, rel: &str, track: i64) {
         self.db().execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, track]).unwrap();
     }
 
     /// Tests elsewhere: a file found wrong, as a read would leave it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn issue_for_tests(&self, folder: i64, rel: &str, issue: &str, detail: &str) {
         self.db().execute("UPDATE files SET issue = ?3, issue_detail = ?4 WHERE folder = ?1 AND rel = ?2", params![folder, rel, issue, detail]).unwrap();
     }
 
     /// Tests elsewhere: a file's tags as a read would leave them.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn tag_for_tests(&self, folder: i64, rel: &str, tags: &[(&str, &str)]) {
         let db = self.db();
         db.execute("DELETE FROM tags WHERE folder = ?1 AND rel = ?2", params![folder, rel]).unwrap();
@@ -4138,7 +4138,7 @@ impl Catalogue {
     /// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every
     /// track of the directory has one, so a half-analysed album has none yet. Blocking. (The served library reads them
     /// through its own connection, `album_gains`; this one is the tests'.)
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn album_gains(&self, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
         album_gains(&self.db(), folder)
     }
@@ -4747,7 +4747,7 @@ pub fn band_waves(cat: &Catalogue) -> Result<()> {
 /// The albums' gain and peak in a folder, by album directory (an album is a folder of files, as the served library
 /// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every track
 /// of the directory has one, so a half-analysed album has none yet. Any connection to the catalogue's file.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
     album_gains_in(db, folder, None)
 }

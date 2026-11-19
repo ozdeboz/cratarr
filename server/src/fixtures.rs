@@ -398,7 +398,7 @@ pub fn make_layout(dir: &Path) -> Result<Vec<PathBuf>> {
 /// each table in the shapes production's rows have (read 2026-11-16): requests with a release group and without, choices of
 /// every kind, discographies read before dates were kept and after, a row 0.16's first start could not move. Its ids are the
 /// records' own (`al-<record>`), as that start left them, and it is done in both. No library is behind it: nothing reads a file.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn data_0_16(data: &Path) -> Result<()> {
     std::fs::create_dir_all(data)?;
     for (file, sql) in [("catalogue.sqlite", include_str!("../tests/fixtures/0.16/catalogue.sql")), ("userdata.sqlite", include_str!("../tests/fixtures/0.16/userdata.sql"))] {
@@ -409,7 +409,7 @@ pub fn data_0_16(data: &Path) -> Result<()> {
 }
 
 /// The folder of bob's own music in the tests of FX01 tagged (`tag_0_16_shapes`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub const BOB_OWN: &str = "/own/bob";
 
 /// Tests elsewhere (P2.5, P3): FX01's had records' files tagged in production's shapes, in its catalogue `cat`, opened with
@@ -418,7 +418,7 @@ pub const BOB_OWN: &str = "/own/bob";
 /// artists in tag order, a label; Night Walks EP and Partial Shore: tagged by names; Undated: untagged (no id, no album artist:
 /// its album and artist alone); Late Train OST: Various Artists, three tracks of three artists, its file gone come back and two
 /// more; Signal: a copy in bob's own music, the same track. Blocking.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn tag_0_16_shapes(cat: &crate::catalogue::Catalogue) {
     let own = cat.folders().id_of(Path::new(BOB_OWN)).expect("bob's own music in use");
     let file = |folder: i64, rel: &str, track: i64| {

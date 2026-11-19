@@ -642,7 +642,7 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
 
 /// What these files say, cheaply: when it differs from what the library was built from, it is built again (tests;
 /// the server checks the catalogue itself, `change` and `build_from`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn fingerprint(folders: &[FolderRows]) -> String {
     let mut h = md5::Md5::default();
     use md5::Digest;
@@ -798,7 +798,7 @@ impl Library {
 
     /// Builds the library again from these files, unless it was built from them already. Returns whether it was
     /// built. Blocking.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn refresh(&self, folders: &[FolderRows], rules: &Rules) -> Result<bool> {
         // The print of the files as given: a test's rows have no records until `build` gives them theirs.
         let print = fingerprint(folders);
@@ -813,7 +813,7 @@ impl Library {
     /// connection of its own so the catalogue is not held up meanwhile (a full read takes seconds). Returns whether it
     /// was built. Blocking. The server does it in its two steps (`change`, then `build_from`), to tell new analyses from
     /// changed songs; this is the timing test's.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn refresh_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<bool> {
         let (change, print) = self.change(cat, rules)?;
         if change == Change::None {
@@ -943,14 +943,14 @@ impl Library {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn build(&self, folders: &[FolderRows], rules: &Rules) -> Result<()> {
         self.credit_in_tests(folders, rules);
         self.build_with(&with_records(folders, rules), rules, &Covers::new())
     }
 
     /// Stands in for `build_from` giving these rows' names their ids, in tests that write with no catalogue.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn credit_in_tests(&self, folders: &[FolderRows], rules: &Rules) {
         for name in credited_artists(folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules) {
             self.artists.lock().unwrap_or_else(|p| p.into_inner()).entry(ids::artist_key(&name)).or_insert(artist_number_in_tests(&name));
@@ -1659,7 +1659,7 @@ fn credited_artists<'r>(rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules:
 
 /// Stands in for the catalogue's artists in tests with no catalogue, as `with_records` does for records: a stable number from
 /// the name.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn artist_number_in_tests(name: &str) -> i64 {
     use md5::Digest;
     let hash = md5::Md5::digest(ids::artist_key(name).as_bytes());
@@ -1682,7 +1682,7 @@ fn labels_of_album(list: &[&Song]) -> Vec<(String, String)> {
 
 /// Stands in for `assign_records` in tests with no catalogue: each group a record of its own, from a stable hash of it,
 /// unless the test named one. So hand-made rows mean what they meant, and production has no fallback.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn with_records(folders: &[FolderRows], rules: &Rules) -> Vec<FolderRows> {
     use md5::Digest;
     let rows: Vec<(i64, &ServedRow)> = folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))).collect();

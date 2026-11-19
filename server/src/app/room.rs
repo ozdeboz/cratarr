@@ -263,7 +263,7 @@ pub fn size_text(bytes: u64) -> String {
     format!("{} {unit}", s.strip_suffix(".0").unwrap_or(&s))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod tests {
     use super::*;
     use crate::app::requests::{APPROVED, CANCELLED, DECLINED, DELIVERED, REJECTED, requesters_in};

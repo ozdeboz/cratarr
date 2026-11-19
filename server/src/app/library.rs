@@ -617,7 +617,7 @@ impl Library {
 
     /// Whether the catalogue's folder `folder` is a main library's: Keep's target, Replace's, out of Lidarr's reach. What
     /// decides that reads `main_folders`; only the tests ask it of one folder.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn is_main(&self, folder: i64) -> bool {
         self.main_folders().contains(&folder)
     }

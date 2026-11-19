@@ -321,7 +321,7 @@ pub(crate) fn audio_print(path: &Path, kind: Kind) -> Result<Option<[u8; 32]>> {
 
 /// A file's audio, without its tags: FLAC's frames after its metadata blocks; MP3's frames between a leading ID3v2
 /// tag and trailing APEv2 and ID3v1 tags.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn audio_of(b: &[u8], kind: Kind) -> Option<&[u8]> {
     match kind {
         Kind::Flac => {
@@ -360,7 +360,7 @@ pub(crate) fn audio_of(b: &[u8], kind: Kind) -> Option<&[u8]> {
 }
 
 /// Small real tracks to write to, for this module's tests and the covers'.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod fixtures {
     use std::path::{Path, PathBuf};
 

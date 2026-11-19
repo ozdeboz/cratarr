@@ -21,7 +21,7 @@ mod queue;
 mod replace;
 pub use queue::JobView;
 pub use replace::{ReplacePreview, ReplaceSheet};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use replace::{rows_back_of_copy, rows_of_copy};
 
 /// The handler name in the journal for telling Lidarr (decision 0011 §6). Its result is what it stopped fetching.
@@ -280,21 +280,21 @@ fn waiting_copy<'a>(listed: impl Iterator<Item = &'a source::Album>, album_id: &
 /// The served library as `serve::instance` has it, or in a unit test the one it gave on its thread (`served_in_tests`): what Replace's
 /// guard of Music's folder reads (RF11, RY01.6 case 3), so its unit tests run it.
 pub(super) fn served() -> Option<Arc<crate::serve::Serve>> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(s) = SERVED_IN_TESTS.with(|s| s.borrow().clone()) {
         return Some(s);
     }
     crate::serve::instance()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     // A unit test's served library, on its thread (`served`).
     static SERVED_IN_TESTS: std::cell::RefCell<Option<Arc<crate::serve::Serve>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// A unit test's served library for `served`, on its thread; none lets it go.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn served_in_tests(s: Option<Arc<crate::serve::Serve>>) {
     SERVED_IN_TESTS.with(|t| *t.borrow_mut() = s);
 }
@@ -1034,7 +1034,7 @@ impl IncomingService {
     }
 
     /// Tests elsewhere: the journal Incoming writes to.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn journal_for_tests(&self) -> &Journal {
         &self.journal
     }

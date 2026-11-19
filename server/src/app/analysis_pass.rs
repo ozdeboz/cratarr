@@ -414,7 +414,7 @@ pub async fn spectrum(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<S
 
 /// The files decoded for the visuals, one entry a decode: the tests count their own files' (a count of all would count
 /// another test's too, run beside them).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static DECODED: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 /// How long a request waits for its turn, and then for its decode (a 40-minute track takes about 7 s on the NAS).
 const TURN: Duration = Duration::from_secs(20);
@@ -494,7 +494,7 @@ fn work_out(cat: &Catalogue, folder: i64, rel: &str, with_signals: bool) -> anyh
     let started = Instant::now();
     let heard = cat.beat_this_of(folder, rel).map(|(beats, downbeats)| crate::analysis::Heard { beats, downbeats });
     let (a, signals) = crate::analysis::analyse_with_signals(&path, &cat.genres_of_file(folder, &rel), heard.as_ref())?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     DECODED.lock().unwrap().push(path.clone());
     let whole = a.complete != Some(false);
     let beats = match had_beats {

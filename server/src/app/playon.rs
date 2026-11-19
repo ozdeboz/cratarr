@@ -2121,19 +2121,19 @@ impl PlayOn {
     }
 
     /// An app's player, without a connection id (the tests').
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn connect(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
         self.connect_as(name, PlayerKind::App, None, None)
     }
 
     /// Play On over an empty library, with no files kept (other modules' tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn for_tests() -> Arc<Self> {
         tests::play_on().await
     }
 
     /// Player `name` made `owner`'s device (the tests').
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn own(&self, name: &str, owner: &str) {
         if let Some(e) = self.entries().get_mut(name) {
             e.owner = Some(owner.to_string());

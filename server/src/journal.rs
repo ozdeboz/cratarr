@@ -334,7 +334,7 @@ pub struct Journal {
 /// The next journal's key: one a journal opened, never twice in a process.
 static NEXT_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     // A test's step (`between`), on its own thread alone.
     static BETWEEN: std::cell::RefCell<Option<Box<dyn FnMut()>>> = const { std::cell::RefCell::new(None) };
@@ -343,13 +343,13 @@ thread_local! {
 /// What another thread could do between the journal's own steps, done on this one (tests): `step` comes each time before
 /// the journal takes its database and each time once it lets it go, until set to `None`. What the step itself asks of the
 /// journal lets nothing in.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn between(step: Option<Box<dyn FnMut()>>) {
     BETWEEN.with(|b| *b.borrow_mut() = step);
 }
 
 /// The step a test set (`between`), if any.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn let_in() {
     let Some(mut step) = BETWEEN.with(|b| b.borrow_mut().take()) else { return };
     step();
@@ -362,10 +362,10 @@ fn let_in() {
 }
 
 /// The journal's database while a step holds it (tests): `between`'s step comes once it is let go.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct Held<'a>(Option<std::sync::MutexGuard<'a, Connection>>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl std::ops::Deref for Held<'_> {
     type Target = Connection;
     fn deref(&self) -> &Connection {
@@ -373,14 +373,14 @@ impl std::ops::Deref for Held<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl std::ops::DerefMut for Held<'_> {
     fn deref_mut(&mut self) -> &mut Connection {
         self.0.as_deref_mut().expect("held until let go")
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for Held<'_> {
     fn drop(&mut self) {
         drop(self.0.take());
@@ -413,13 +413,13 @@ impl Journal {
         self.key
     }
 
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// As above, with the step a test set (`between`) before the database is taken and once it is let go.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn db(&self) -> Held<'_> {
         let_in();
         Held(Some(self.db.lock().unwrap_or_else(|p| p.into_inner())))

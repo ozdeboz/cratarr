@@ -88,14 +88,14 @@ fn fits(resident: Option<u64>, limit: Option<u64>) -> bool {
 }
 
 // A test's word that there is no room: on its own thread, so the tests beside it decode as ever.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     pub static FULL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Whether there is room for a decode now.
 pub fn room() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if FULL.get() {
         return false;
     }

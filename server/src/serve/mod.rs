@@ -404,13 +404,13 @@ impl Serve {
     }
 
     /// Tests elsewhere: the covers' stamps as a build's end leaves them.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn covers_read_again_for_tests(&self) {
         self.covers_built();
     }
 
     /// Tests elsewhere: the time of the last build moved on, as a build's end moves it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn build_passed_for_tests(&self) {
         *self.built_at.write().unwrap() += 1;
     }
