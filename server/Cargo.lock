@@ -436,6 +436,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratarr-api"
+version = "0.16.2"
+dependencies = [
+ "anyhow",
+ "axum",
+ "cratarr-app",
+ "getrandom 0.3.4",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "cratarr-app"
+version = "0.16.2"
+dependencies = [
+ "alac-encoder",
+ "anyhow",
+ "argon2",
+ "axum",
+ "base64 0.22.1",
+ "cratarr-gate",
+ "cratarr-rules",
+ "flacenc",
+ "flate2",
+ "getrandom 0.3.4",
+ "image",
+ "ipnet",
+ "ldap3",
+ "libc",
+ "lofty",
+ "md-5",
+ "mp3lame-encoder",
+ "opusic-sys",
+ "realfft",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2",
+ "symphonia",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "tract-onnx",
+ "ts-rs",
+ "zip",
+]
+
+[[package]]
 name = "cratarr-clients"
 version = "0.16.2"
 dependencies = [
@@ -521,50 +580,28 @@ dependencies = [
 name = "cratarr-server"
 version = "0.16.2"
 dependencies = [
- "alac-encoder",
  "anyhow",
- "argon2",
  "axum",
- "base64 0.22.1",
+ "cratarr-api",
+ "cratarr-app",
  "cratarr-clients",
  "cratarr-core",
  "cratarr-gate",
  "cratarr-media",
  "cratarr-rules",
  "cratarr-store",
- "ebur128",
- "flacenc",
  "flate2",
- "getrandom 0.3.4",
  "image",
- "ipnet",
- "ldap3",
- "libc",
  "lofty",
- "md-5",
- "mp3lame-encoder",
- "opusic-sys",
- "realfft",
  "reqwest",
- "rmcp",
- "rubato 5.0.0",
  "rusqlite",
- "rusty-chromaprint",
- "serde",
  "serde_json",
- "serde_urlencoded",
  "sha2",
- "symphonia",
- "taktus",
- "thiserror",
  "tokio",
- "tokio-stream",
  "tower",
  "tracing",
  "tracing-subscriber",
- "tract-onnx",
  "ts-rs",
- "zip",
 ]
 
 [[package]]

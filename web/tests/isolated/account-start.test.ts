@@ -43,7 +43,7 @@ test('signed out is kept too: nobody, never the one before, whatever an older co
 });
 
 test("Cratarr's sign-in page says nobody in the page's own words, and that no sign-out is left to tell", () => {
-  const server = readFileSync(new URL('../../../server/src/serve/signin.rs', import.meta.url), 'utf8');
+  const server = readFileSync(new URL('../../../server/crates/app/src/serve/signin.rs', import.meta.url), 'utf8');
   const account = readFileSync(new URL('../../src/lib/account.ts', import.meta.url), 'utf8');
   const script = server.slice(server.indexOf('<script nonce='), server.indexOf('</script>'));
   assert.ok(script.includes(`localStorage.setItem('${WHO}', 'null')`));

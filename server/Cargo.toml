@@ -88,59 +88,24 @@ cratarr-media = { path = "crates/media" }
 cratarr-store = { path = "crates/store" }
 cratarr-clients = { path = "crates/clients" }
 cratarr-gate = { path = "crates/gate" }
+cratarr-app = { path = "crates/app" }
+cratarr-api = { path = "crates/api" }
 ts-rs = "12.0.1"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
-# Test helpers and hooks for the tests of the crates above (SPLIT-PLAN 5.4): only dev-dependencies turn it on, so no
-# release build has them.
-[features]
-test-support = []
-
 [dependencies]
-cratarr-gate.workspace = true
-cratarr-clients.workspace = true
-cratarr-store.workspace = true
-cratarr-media.workspace = true
-cratarr-core.workspace = true
+cratarr-api.workspace = true
 anyhow.workspace = true
-cratarr-rules.workspace = true
 axum.workspace = true
-ipnet.workspace = true
-flacenc.workspace = true
-lofty.workspace = true
-opusic-sys.workspace = true
-image.workspace = true
-md-5.workspace = true
-getrandom.workspace = true
-libc.workspace = true
-ldap3.workspace = true
-argon2.workspace = true
-sha2.workspace = true
-reqwest.workspace = true
-rusqlite.workspace = true
-rubato.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-rmcp.workspace = true
-serde_urlencoded.workspace = true
-symphonia.workspace = true
-ebur128.workspace = true
-taktus.workspace = true
-realfft.workspace = true
-tract-onnx.workspace = true
-base64.workspace = true
-thiserror.workspace = true
-rusty-chromaprint.workspace = true
-alac-encoder.workspace = true
-mp3lame-encoder.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-zip.workspace = true
-flate2.workspace = true
 
 [dev-dependencies]
+# Every crate's test helpers and hooks (`test-support`): one feature set for the unit tests, `all` and e2e (SPLIT-PLAN 5.4).
+cratarr-api = { workspace = true, features = ["test-support"] }
+cratarr-app = { workspace = true, features = ["test-support"] }
 cratarr-gate = { workspace = true, features = ["test-support"] }
 cratarr-clients = { workspace = true, features = ["test-support"] }
 cratarr-store = { workspace = true, features = ["test-support"] }
@@ -153,6 +118,13 @@ ts-rs.workspace = true
 cratarr-rules = { workspace = true, features = ["ts", "made-up", "device"] }
 # Calls the routers as a client would, in tests (decision 0030).
 tower.workspace = true
+# What the end-to-end suite (tests/e2e.rs) reads and writes beside the server it starts.
+flate2.workspace = true
+image.workspace = true
+lofty.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
 # A paused clock for what waits its turn (MusicBrainz's, S10): its seconds pass at once, and exactly.
 tokio = { workspace = true, features = ["test-util"] }
 

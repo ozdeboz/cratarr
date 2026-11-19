@@ -1,60 +1,7 @@
-use cratarr_clients::acoustid;
-use cratarr_store::albums;
-// Decision 0035's core; the pass that uses it comes next.
-#[allow(dead_code)]
-mod analysis;
-use cratarr_clients::bandcamp;
-mod fixtures;
-mod api;
-mod app;
-use cratarr_store::catalogue;
-use cratarr_core::config;
-mod ctx;
-use cratarr_media::convert;
-use cratarr_media::covers;
-use cratarr_gate::covers_inside;
-use cratarr_store::crates;
-use cratarr_core::db;
-use cratarr_core::diagnostics;
-mod export;
-mod folders;
-mod idempotent;
-use cratarr_store::incoming;
-use cratarr_store::insights;
-use cratarr_store::journal;
-use cratarr_clients::lidarr;
-use cratarr_gate::trash;
-use cratarr_store::userdata;
-// Cratarr as an MCP server (0.13).
-mod mcp;
-use cratarr_core::memwatch;
-use cratarr_core::mounts;
-use cratarr_store::moved;
-use cratarr_gate::moves;
-use cratarr_core::naming;
-use cratarr_clients::nowplaying;
-mod opus_copies;
-mod opus_copy;
-use cratarr_store::placement;
-use cratarr_core::playlist_merge;
-use cratarr_core::playlist_ops;
-use cratarr_gate::ports;
-use cratarr_store::playlists;
-use cratarr_gate::retag;
-use cratarr_media::rewind;
-use cratarr_media::wind;
-use cratarr_core::search;
-mod serve;
-use cratarr_store::settings;
-use cratarr_core::similarity;
-use cratarr_clients::slskd;
-use cratarr_clients::snapcast;
-mod source;
-mod stream;
-mod stream_forms;
-use cratarr_store::sync_state;
-mod voice;
-use cratarr_core::web;
+use cratarr_api::{analysis, api, app, bandcamp, catalogue, config, diagnostics, fixtures, idempotent, mcp, memwatch, serve, settings, snapcast, source};
+// What the route sweep's tests (whole_router.rs) name besides.
+#[cfg(test)]
+use cratarr_api::{journal, playlists, search};
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -103,9 +50,6 @@ fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -
 #[cfg(test)]
 mod whole_router;
 
-/// Tests moved up out of the modules bound for the crates below (SPLIT-PLAN 3.2).
-#[cfg(test)]
-mod moved_tests;
 
 /// What the arguments ask (W4): with none, the server; a known flag, its own work; anything else, nothing at all. So a flag
 /// mistyped, or one this version lacks (`--version` before 0.17), never starts a second server on a live data folder.

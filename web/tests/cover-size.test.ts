@@ -43,6 +43,6 @@ test('what Cratarr makes no sizes of is asked as it is', () => {
 });
 
 test("the least size is the small covers' Cratarr makes for a device, which it then hands out as they are", () => {
-  const made = readFileSync(new URL('../../server/src/app/device_covers.rs', import.meta.url), 'utf8').match(/pub const SIDE: u32 = (\d+);/);
+  const made = readFileSync(new URL('../../server/crates/app/src/app/device_covers.rs', import.meta.url), 'utf8').match(/pub const SIDE: u32 = (\d+);/);
   assert.equal(COVER_STEPS[0], Number(made![1]));
 });
