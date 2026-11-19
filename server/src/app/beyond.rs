@@ -497,7 +497,8 @@ mod tests {
                 && uri.path() == "/ws/2/artist"
                 && pairs.len() == 3
                 && field("fmt") == ["json"]
-                && field("limit") == ["3"]
+                // Ten asked (H3, the review of 1.2: a namesake ranked past the third is seen); changed by design.
+                && field("limit") == ["10"]
                 && headers.get(header::USER_AGENT).is_some_and(|a| a.as_bytes() == super::super::reach::USER_AGENT.as_bytes());
             let reply = match known {
                 Some((_, status, body)) if asked_right => {
@@ -879,10 +880,11 @@ mod tests {
         assert_eq!(may_open(CARDED, "Air", false, now), None, "by the card's name alone");
     }
 
-    /// U6, with T6: a library artist of the name with no MusicBrainz id is given the id only where it is MusicBrainz's first sure
-    /// match for the name, asked at open (`open_asking`) as the monthly read asks it. Opening a second namesake on purpose (the
-    /// rapper, beside the library's local band) makes a new artist, and so does a match MusicBrainz is not sure of; the first sure
-    /// one is the library's.
+    /// U6, with T6: a library artist of the name with no MusicBrainz id is given the id only where it is MusicBrainz's sure match
+    /// for the name, asked at open (`open_asking`) as the monthly read asks it. Opening a second namesake on purpose (the rapper,
+    /// beside the library's local band) makes a new artist, and so does a match MusicBrainz is not sure of. Changed by design (H3,
+    /// the review of 1.2): MusicBrainz answers the two "Grouch"es at 100, so neither is the name's sure match, and opening the first
+    /// makes a new artist too; the library's keeps no id.
     #[tokio::test]
     async fn a_beyond_open_of_a_second_namesake_makes_a_new_artist() {
         use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
@@ -908,7 +910,8 @@ mod tests {
         assert_ne!(second, grouch, "the second of the name: a new artist");
         assert!(holds(&cat, grouch).is_empty(), "the library's keeps no id");
         assert_ne!(unsure, lantern, "MusicBrainz not sure: a new artist");
-        assert_eq!(first, library, "the first sure match: the library's Grouch, given the id");
+        assert_ne!(first, library, "H3: two of the name at 100, neither sure: a new artist");
+        assert!(holds(&fresh, library).is_empty(), "H3: the library's Grouch given no id by the name");
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 3, "one question an open");
     }
 
@@ -947,8 +950,10 @@ mod tests {
         assert_eq!(credits(&cat, grouch), [had], "and keeps its records");
     }
 
-    /// T6.2: where the rapper is MusicBrainz's first sure match for the name, the library's id-less Grouch is given his id, as the
-    /// monthly read would give it. A card's artist (G7) and an administrator's name ask the same question: one an open.
+    /// T6.2: where the rapper is MusicBrainz's sure match for the name, the library's id-less Grouch is given his id, as the monthly
+    /// read would give it. A card's artist (G7) and an administrator's name ask the same question: one an open. (H3, the review of
+    /// 1.2: the sure match is the one result of the name, so the answer's other row is another name now, "The Grouch Band"; two of
+    /// the name are `a_beyond_open_of_a_second_namesake_makes_a_new_artist`'s.)
     #[tokio::test]
     async fn the_names_first_sure_match_is_the_library_artist() {
         use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
@@ -959,7 +964,7 @@ mod tests {
         let _one = TEST_STATE.lock().await;
         let was = set_for_tests(MUSICBRAINZ, true);
         let (fake, asked) = fake_musicbrainz(vec![
-            ("Grouch", 200, serde_json::json!({ "artists": [found(RAPPER, "Grouch", 100), found(BAND, "Grouch", 90)] })),
+            ("Grouch", 200, serde_json::json!({ "artists": [found(RAPPER, "Grouch", 100), found(BAND, "The Grouch Band", 90)] })),
             ("Air", 200, serde_json::json!({ "artists": [found(AIR, "Air", 100)] })),
             ("Zero 7", 200, serde_json::json!({ "artists": [found(ZERO, "Zero 7", 100)] })),
         ])

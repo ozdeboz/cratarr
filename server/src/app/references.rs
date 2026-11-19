@@ -2203,7 +2203,8 @@ mod tests {
 
     /// F18.2: records credited to nobody (opened from a label's rows by a name no artist has, two have, or Discogs marks as shared);
     /// each release's read names its artists by Discogs id, one release a collaboration of two. Each artist found by the id, else the
-    /// one live artist of the name holding no Discogs id, else one made; credited in the release's order. A record credited before
+    /// one live artist of the name holding no Discogs id (credited, given no id: M1, changed by design), else one made; credited in
+    /// the release's order. A record credited before
     /// keeps its credit (one the release contradicts is said in the log, nothing moved); never a second Discogs id on one artist.
     #[tokio::test]
     async fn a_release_read_credits_the_artists_it_names() {
@@ -2230,8 +2231,8 @@ mod tests {
             page_read_settled(&cat, r).await;
         }
         let artist_holding = |id: &str| cat.subject_of(&Ref::new("discogs", "artist", id)).unwrap().iter().find_map(|s| ids::artist_number(s));
-        assert_eq!(cat.record_artists(signal).unwrap(), [field], "the one Noor Field holding no Discogs id, given it");
-        assert_eq!(artist_holding("9101"), Some(field));
+        assert_eq!(cat.record_artists(signal).unwrap(), [field], "the one Noor Field holding no Discogs id");
+        assert_eq!(artist_holding("9101"), None, "M1: credited by the name alone, given no id");
         let kite = cat.artist_of("Kite Theory").unwrap().expect("made by the release's id");
         assert_eq!(cat.record_artists(together).unwrap(), [kite, held], "a collaboration, in the release's order, each by their id");
         let made = cat.record_artists(lamplight).unwrap();
@@ -2242,6 +2243,24 @@ mod tests {
         assert_eq!(artist_holding("9104"), None, "nothing moved, nothing made for it");
         let discogs_ids: i64 = cat.db_for_tests().query_row("SELECT max(n) FROM (SELECT count(*) AS n FROM \"references\" WHERE subject GLOB 'ar-*' AND source = 'discogs' AND kind = 'artist' GROUP BY subject)", [], |r| r.get(0)).unwrap();
         assert_eq!(discogs_ids, 1, "never a second Discogs id on one artist");
+    }
+
+    /// M1 (the review of 1.2; A1.8's strict rule, by another door): a record opened from a label's row by "Coma", credited to nobody;
+    /// its Discogs release names artist "Coma", Discogs id 12. The library's one Coma holds no Discogs id, so only the name says they
+    /// are that Coma: the record credited to them, and no Discogs id put on them (12 held by nobody). A Discogs id goes to an artist by
+    /// an id path alone: MusicBrainz's link, or the artist who holds it.
+    #[tokio::test]
+    async fn a_release_read_never_gives_an_artist_an_id_by_their_name_alone() {
+        let _state = crate::app::references::TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let coma = cat.artist_for("Coma").unwrap();
+        let record = wanted(&cat, "Northern Lights", &[("discogs", "release", "3800021")]);
+        let read = |_: Ref| std::future::ready(Ok(Some((list(&[("One", Some(200_000))]), None, ReadMore { also: Vec::new(), artists: vec![(Ref::new("discogs", "artist", "12"), "Coma".into())] }))));
+        opened(&cat, record, crate::app::moment::now_secs(), read).await;
+        page_read_settled(&cat, record).await;
+        assert_eq!(cat.record_artists(record).unwrap(), [coma], "credited to the library's one Coma");
+        assert!(cat.subject_of(&Ref::new("discogs", "artist", "12")).unwrap().is_empty(), "no Discogs id by the name alone");
+        assert!(cat.references_of(&ids::artist(coma)).unwrap().is_empty(), "nothing put on them");
     }
 
     /// F14.5: a record not had "Night Walks" with MusicBrainz release R, whose read (asked with `url-rels`) has two tracks and its Bandcamp

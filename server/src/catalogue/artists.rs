@@ -109,7 +109,7 @@ pub enum Opening {
 }
 
 /// `Opening` as `db` reads it (a forgotten artist's row goes, RT01b, its tombstone kept).
-fn opening_in(db: &Connection, r: &super::records::Ref, name: &str) -> Result<Opening> {
+pub(super) fn opening_in(db: &Connection, r: &super::records::Ref, name: &str) -> Result<Opening> {
     let held: Vec<String> = db
         .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?
         .query_map(params![r.source, r.kind, r.value], |row| row.get(0))?
@@ -165,6 +165,11 @@ impl Catalogue {
     #[cfg_attr(not(test), allow(dead_code))] // a split
     pub fn artist_apart(&self, name: &str) -> Result<i64> {
         give_artist(&self.db(), &ids::artist_key(name), name, now())
+    }
+
+    /// Whether two artists are of one name (one key, C55: "Coma" and "Coma (2)"): namesakes, never one page (M2). Blocking.
+    pub fn of_one_name(&self, a: i64, b: i64) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM artists x JOIN artists y ON y.key = x.key WHERE x.id = ?1 AND y.id = ?2")?.exists(params![a, b])?)
     }
 
     /// The artist a source's id names (C57: an artist of Beyond's opened, OQ12 (a)): the one who holds it; else, where the id is the

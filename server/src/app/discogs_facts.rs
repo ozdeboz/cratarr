@@ -17,11 +17,19 @@ use crate::userdata::words::RawWord;
 /// Asked again after this long; where Discogs had nothing, sooner.
 const AGAIN: i64 = 30 * 86_400;
 const NONE_AGAIN: i64 = 7 * 86_400;
+/// Asked again after this long where MusicBrainz's link could not be had (F47): what Discogs' search found stands in till then.
+const LINK_AGAIN: i64 = 15 * 60;
 /// Albums asked in one background round.
 const ROUND: usize = 60;
 
 fn due(kept: Option<&(i64, Option<String>)>, now: i64) -> bool {
     kept.is_none_or(|(at, facts)| now - at >= if facts.is_some() { AGAIN } else { NONE_AGAIN })
+}
+
+/// The time facts read at `now` are kept as read: now; where MusicBrainz's link could not be had (F47), as long before as makes them
+/// due again after `LINK_AGAIN`.
+fn kept_at(now: i64, found: bool, link_unread: bool) -> i64 {
+    if link_unread { now - if found { AGAIN } else { NONE_AGAIN } + LINK_AGAIN } else { now }
 }
 
 fn parse<T: serde::de::DeserializeOwned>(kept: Option<(i64, Option<String>)>) -> Option<T> {
@@ -195,9 +203,10 @@ pub async fn artist(served: &Arc<crate::serve::Serve>, name: &str, mbid: Option<
     if !due(kept.as_ref(), now) {
         return Ok(parse(kept));
     }
-    let facts = super::discogs::artist_facts(mbid.filter(|m| super::discogs::is_mbid(m)), name).await?;
+    let (facts, link_unread) = super::discogs::artist_facts(mbid.filter(|m| super::discogs::is_mbid(m)), name).await?;
     let (ud, json) = (served.userdata.clone(), facts.as_ref().map(serde_json::to_string).transpose()?);
-    tokio::task::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), now)).await??;
+    let at = kept_at(now, facts.is_some(), link_unread);
+    tokio::task::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), at)).await??;
     Ok(facts)
 }
 
@@ -252,6 +261,20 @@ pub fn fill(served: Arc<crate::serve::Serve>, albums: Vec<String>) {
 mod tests {
     use super::*;
     use crate::app::discogs::Label;
+
+    /// F47: an artist's facts read while MusicBrainz's link could not be had are asked again after a quarter hour, found or not; read
+    /// with it, after a month (none found: a week).
+    #[test]
+    fn facts_read_without_musicbrainzs_link_are_asked_again_soon() {
+        let now = 1_800_000_000;
+        let kept = |found: bool, unread: bool| (kept_at(now, found, unread), found.then(|| "{}".to_string()));
+        for found in [true, false] {
+            assert!(!due(Some(&kept(found, true)), now + LINK_AGAIN - 1), "kept a while");
+            assert!(due(Some(&kept(found, true)), now + LINK_AGAIN), "asked again after a quarter hour");
+            assert!(!due(Some(&kept(found, false)), now + 86_400), "with the link: kept");
+        }
+        assert!(due(Some(&kept(true, false)), now + AGAIN) && due(Some(&kept(false, false)), now + NONE_AGAIN));
+    }
 
     #[test]
     fn discogs_labels_are_named_once_and_not_on_label_is_no_label() {

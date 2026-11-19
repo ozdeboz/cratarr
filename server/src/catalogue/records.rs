@@ -1099,9 +1099,11 @@ fn one_live_artist_in(tx: &Connection, name: &str) -> Result<Option<i64>> {
 }
 
 /// F18.2: a record not had credited by the release its page read, where nobody is credited on it yet: each of the release's artists,
-/// in its order, the artist holding their reference, else (where the name may decide) the one live artist of the name holding none of
-/// that source's ids, else one made (`artists::by_reference_in`, `link`). One credited keeps its credit; a credit the release
-/// contradicts (an artist of it holding another id at that source) is said in the log, nothing moved. In the caller's transaction.
+/// in its order, the artist holding their reference; else (where the name may decide) the one live artist of the name holding none of
+/// that source's ids, credited and given no id (M1: only the name says who they are, and an id goes by an id path alone, MusicBrainz's
+/// link or its holder); else one made holding it (`artists::by_reference_in`, `link`). One credited keeps its credit; a credit the
+/// release contradicts (an artist of it holding another id at that source) is said in the log, nothing moved. In the caller's
+/// transaction.
 fn credit_release_in(tx: &Connection, record: i64, artists: &[(Ref, String, bool)], at: i64) -> Result<()> {
     let credited: Vec<i64> = tx.prepare_cached("SELECT artist FROM record_artists WHERE record = ?1 ORDER BY position")?.query_map([record], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     if !credited.is_empty() {
@@ -1122,7 +1124,11 @@ fn credit_release_in(tx: &Connection, record: i64, artists: &[(Ref, String, bool
         if name.trim().is_empty() {
             continue;
         }
-        let artist = super::artists::by_reference_in(tx, r, name.trim(), "link", *by_name, at)?;
+        let artist = match super::artists::opening_in(tx, r, name.trim())? {
+            super::artists::Opening::Held(artist) => artist,
+            super::artists::Opening::Decides(only) if *by_name => only,
+            _ => super::artists::by_reference_in(tx, r, name.trim(), "link", false, at)?,
+        };
         tx.prepare_cached("INSERT OR IGNORE INTO record_artists (record, artist, position, how) VALUES (?1, ?2, ?3, 'listing')")?.execute(params![record, artist, position as i64])?;
     }
     Ok(())

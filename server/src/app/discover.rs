@@ -1457,27 +1457,51 @@ pub async fn bandcamp_artist(name: &str, mbid: Option<&str>, given: Option<&str>
     Ok((Some(page), releases))
 }
 
-/// The artist MusicBrainz is sure a name is (its search's score 95 or more, the name the same as the matcher reads
-/// names): their id, the first such of its answer to `artist:"<name>"`. The monthly read's question, and every open's (T6,
-/// `beyond::open_asking`).
+/// The artist MusicBrainz is sure a name is (`mb_name_match`: the one result of the name, its score 95 or more; never one of
+/// namesakes, H3), of its answer to `artist:"<name>"`. The monthly read's question, every open's (T6, `beyond::open_asking`), and
+/// a page asked by a name (F18.3).
 pub(super) async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<String>> {
-    #[derive(Deserialize)]
-    struct Artist {
-        id: String,
-        #[serde(default)]
-        score: u32,
-        #[serde(default)]
-        name: String,
-    }
     #[derive(Deserialize)]
     struct Search {
         #[serde(default)]
-        artists: Vec<Artist>,
+        artists: Vec<MbArtist>,
     }
+    let s: Search = http.get(mb_artist_search(name)?).asked().await?.error_for_status()?.json().await?;
+    Ok(mb_name_match(&s.artists, name))
+}
+
+/// One of MusicBrainz's answers to an artist search (`mb_artist_by_name`).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct MbArtist {
+    id: String,
+    #[serde(default)]
+    score: u32,
+    #[serde(default)]
+    name: String,
+}
+
+/// MusicBrainz's search for an artist by their name, as `mb_artist_by_name` asks it.
+fn mb_artist_search(name: &str) -> Result<reqwest::Url> {
     let mut url = reqwest::Url::parse(&format!("{}/artist", mb_ws()))?;
-    url.query_pairs_mut().append_pair("query", &format!("artist:{}", quoted(name))).append_pair("fmt", "json").append_pair("limit", "3");
-    let s: Search = http.get(url).asked().await?.error_for_status()?.json().await?;
-    Ok(s.artists.into_iter().find(|a| a.score >= 95 && loose(&a.name) == loose(name)).map(|a| a.id))
+    url.query_pairs_mut().append_pair("query", &format!("artist:{}", quoted(name))).append_pair("fmt", "json").append_pair("limit", "10");
+    Ok(url)
+}
+
+/// The MusicBrainz id a name is, of a search's answers, by the one rule A1.8 gave Discogs (H3, X8; the same-name artists rule):
+/// MusicBrainz tells namesakes apart only by a disambiguation, and answers each of them at the same score. So: the one result whose
+/// name is the name (as the matcher folds names), MusicBrainz sure of it (95 or more); where two or more results of the name are
+/// there, whatever their scores or disambiguations, none: no id by a name that is shared. Pure.
+fn mb_name_match(results: &[MbArtist], name: &str) -> Option<String> {
+    let want = loose(name.trim());
+    if want.is_empty() {
+        return None;
+    }
+    let mut of_name = results.iter().filter(|a| loose(&a.name) == want);
+    let one = of_name.next()?;
+    if of_name.any(|a| a.id != one.id) {
+        return None;
+    }
+    (one.score >= 95).then(|| one.id.clone())
 }
 
 /// How many full-length studio albums an artist (their MusicBrainz id) has released (0.9.3; the owner: "how many
@@ -1995,7 +2019,7 @@ impl ArtistList for DiscogsList {
             let linked = if a.links == Links::Unasked { a.at("musicbrainz") } else { None };
             let (id, how) = match a.at("discogs").and_then(|v| v.parse::<u64>().ok()) {
                 Some(id) => (id, None),
-                None => match super::discogs::artist_found(linked, &a.name).await? {
+                None => match super::discogs::artist_found(linked, &a.name).await?.id {
                     Some((id, how)) => (id, Some(how)),
                     None => return Ok(None),
                 },
@@ -2011,7 +2035,7 @@ impl ArtistList for DiscogsList {
 
     /// Discogs' artist of the name by the one rule (F18.3, A1.8: never a namesake).
     fn find<'a>(&'a self, name: &'a str) -> crate::source::Fut<'a, Option<(crate::catalogue::records::Ref, bool)>> {
-        Box::pin(async move { Ok(super::discogs::artist_found(None, name).await?.map(|(id, _)| (crate::catalogue::records::Ref::new("discogs", "artist", &id.to_string()), true))) })
+        Box::pin(async move { Ok(super::discogs::artist_found(None, name).await?.id.map(|(id, _)| (crate::catalogue::records::Ref::new("discogs", "artist", &id.to_string()), true))) })
     }
 }
 
@@ -2292,6 +2316,11 @@ async fn read_settled(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<Artis
     // How it failed (F8): F1's outcomes; past the cut, it did not answer.
     let failed = |how| Reading::Failed(super::moment::now_secs(), how);
     settles.1 = Some(match tokio::time::timeout(LIST_READ_AT_MOST, read_one(cat, artist, source.as_ref())).await {
+        // F47: Discogs read while MusicBrainz's links could not be had (busy), by the name or an id a search found: due again after
+        // `LIST_RETRY_SECS`, when the links are asked again, not after `LIST_FRESH_SECS`.
+        Ok(Ok(_)) if source.source() == "discogs" && artist.links == Links::Failed => {
+            Reading::Done(super::moment::now_secs() - LIST_FRESH_SECS + LIST_RETRY_SECS)
+        }
         Ok(Ok(_)) => Reading::Done(super::moment::now_secs()),
         Ok(Err(e)) => {
             tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: {e:#}");
@@ -2333,11 +2362,19 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
     let sees_bandcamp_only = source.source() != "bandcamp";
     let holder = tokio::task::spawn_blocking(move || -> Result<Option<i64>> {
         let cat = c;
-        // A2.1.3, A2.2.2: an id found now that another artist holds is theirs: no list is read or kept under this artist by it.
+        // A2.1.3, A2.2.2: an id found now that another artist holds is theirs: no list is read or kept under this artist by it. Where
+        // the holder is of this artist's own name (one key: "Coma" and "Coma (2)"), they are a namesake, and this artist's page stays
+        // their own, their other lists read as ever (M2, the same-name artists rule): A2.2's redirect is another spelling's alone.
         if let Some(how) = how
             && !cat.set_reference(&crate::serve::ids::artist(id), &known, how)?
         {
             let holder = cat.subject_of(&known)?.iter().find_map(|s| crate::serve::ids::artist_number(s)).filter(|h| *h != id);
+            if let Some(h) = holder
+                && cat.of_one_name(h, id)?
+            {
+                tracing::info!(target: "discover", artist = id, namesake = h, source = %known.source, "an artist's list not kept: the id their name was found by is a namesake's");
+                return Ok(None);
+            }
             tracing::info!(target: "discover", artist = id, holder = ?holder, source = %known.source, "an artist's list not kept: the id their name was found by is another artist's");
             return Ok(holder);
         }
@@ -3685,6 +3722,29 @@ mod missing_tests {
         assert_eq!(asked.iter().filter(|a| a.ends_with("The\u{f6}ry")).cloned().collect::<Vec<_>>(), ["musicbrainz Kite The\u{f6}ry"], "MusicBrainz asked for the name once, nothing else read under it: {asked:?}");
         assert!(asked.iter().filter(|a| a.as_str() == "musicbrainz Kite Theory").count() <= 1, "the holder's list read once at most: {asked:?}");
     }
+
+    /// M2 (the review of 1.2; the same-name artists rule): "Coma" #1 holds MusicBrainz id K; "Coma" #2, an artist apart (a namesake
+    /// F18.2 made), holds none, and MusicBrainz's sure match for the name is K. #2's page is their own: never #1's list (`artist`
+    /// none, none of #1's rows), K never on #2, and #2's other lists read and kept under them. A2.2's redirect is another spelling's
+    /// alone.
+    #[tokio::test]
+    async fn a_namesakes_page_reads_their_own_lists_never_the_id_holders() {
+        const K: &str = "00000000-0000-4000-8000-000000000a22";
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let first = cat.artist_for("Coma").unwrap();
+        assert!(cat.set_reference(&crate::serve::ids::artist(first), &Ref::new("musicbrainz", "artist", K), "files").unwrap());
+        let second = cat.artist_apart("Coma").unwrap();
+        let sources: Vec<Arc<dyn ArtistList>> = vec![
+            Arc::new(Stub("musicbrainz", |a| Ok(Some((Ref::new("musicbrainz", "artist", K), a.at("musicbrainz").is_none().then_some("search"), vec![listing("First Light", &[("musicbrainz", "release-group", GROUP_1)])]))))),
+            Arc::new(Stub("discogs", |a| Ok(Some((Ref::new("discogs", "artist", "9022"), a.at("discogs").is_none().then_some("search"), vec![listing("Second Sight", &[("discogs", "master", "3022")])]))))),
+        ];
+        let page = ended_at(&cat, second, &sources, super::super::moment::now_secs()).await;
+        assert_eq!(page.artist, None, "their own page, not #1's");
+        assert_eq!(page.albums.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Second Sight"], "their own lists' rows, none of #1's");
+        let held: Vec<String> = cat.references_of(&crate::serve::ids::artist(second)).unwrap().into_iter().map(|(r, _)| format!("{}:{}", r.source, r.value)).collect();
+        assert_eq!(held, ["discogs:9022"], "K never on #2; their Discogs id theirs");
+        assert_eq!(cat.subject_of(&Ref::new("musicbrainz", "artist", K)).unwrap(), [crate::serve::ids::artist(first)], "K stays #1's");
+    }
 }
 
 #[cfg(test)]
@@ -4056,6 +4116,46 @@ mod links_tests {
         assert_eq!(pages, [("https://tapeclub.bandcamp.com".to_string(), "link".to_string())], "(c) the searched page let go of");
     }
 
+    /// Discogs' list as `DiscogsList` reads it: by the Discogs id they hold, else (MusicBrainz's links failed) by their name, the one
+    /// rule's id 700005 (`search`).
+    fn discogs_by_name(a: &ArtistAsked) -> Result<ListRead> {
+        Ok(match a.at("discogs") {
+            Some(d) => Some((Ref::new("discogs", "artist", d), None, Vec::new())),
+            None if a.links == Links::Failed => Some((Ref::new("discogs", "artist", "700005"), Some("search"), Vec::new())),
+            None => None,
+        })
+    }
+
+    /// F47 (b) (the owner, 2026-11-19): Glass Harbour holds MusicBrainz id A5, MusicBrainz busy for their links, so Discogs' list is read
+    /// by their name. That read is no lasting one: inside the quarter hour nothing is asked again; after it, Discogs' list is read again,
+    /// MusicBrainz asked for the links again, and the Discogs link it gives kept as theirs (`link`).
+    #[tokio::test]
+    async fn a_discogs_list_read_by_name_while_musicbrainz_was_busy_asks_for_the_link_again() {
+        let _state = crate::app::references::TestState::set().await;
+        const A5: &str = "00000000-0000-4000-8000-000000000b05";
+        let answers: Answers = Default::default();
+        answers.lock().unwrap().insert(format!("/ws/2/artist/{A5}"), (503, serde_json::json!({ "error": "busy" })));
+        let (_fake, asked) = fake_musicbrainz(&answers).await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artist = cat.artist_for("Glass Harbour").unwrap();
+        assert!(cat.set_reference(&crate::serve::ids::artist(artist), &Ref::new("musicbrainz", "artist", A5), "files").unwrap());
+        let sources: Vec<Arc<dyn ArtistList>> = vec![
+            Arc::new(Source("musicbrainz", |a| Ok(a.at("musicbrainz").map(|m| (Ref::new("musicbrainz", "artist", m), None, Vec::new()))))),
+            Arc::new(Source("discogs", discogs_by_name)),
+        ];
+        let links_asked = || asked.lock().unwrap().iter().filter(|p| p.contains("/artist/")).count();
+        let t = super::super::moment::now_secs();
+        ended(&cat, artist, &sources, t).await;
+        assert_eq!(links_asked(), 1);
+        assert!(held(&cat, artist).contains(&("discogs:artist".into(), "700005".into(), "search".into())), "read by the name: {:?}", held(&cat, artist));
+        answers.lock().unwrap().insert(format!("/ws/2/artist/{A5}"), (200, links(&["https://www.discogs.com/artist/700005-Glass-Harbour"])));
+        ended(&cat, artist, &sources, t + 60).await;
+        assert_eq!(links_asked(), 1, "nothing asked again inside the quarter hour");
+        ended(&cat, artist, &sources, t + LIST_RETRY_SECS + 60).await;
+        assert_eq!(links_asked(), 2, "the link asked again after it");
+        assert!(held(&cat, artist).contains(&("discogs:artist".into(), "700005".into(), "link".into())), "the link kept: {:?}", held(&cat, artist));
+    }
+
     /// F14.4: (a) an artist's three lists read at once ask MusicBrainz for their links once (20 rounds); (b) "Tide Tables Band", no
     /// MusicBrainz id: MusicBrainz's sure match A3 kept by its list's read first, then its links asked once, and Bandcamp's list read in
     /// the same round, never ending "does not know them" for having run first.
@@ -4225,6 +4325,23 @@ mod by_name_tests {
         // RT01b: made this way, nothing credited, a day on: forgotten, its number kept.
         let gone = cat.forget_quiet_artists(t + 2 * 86_400, &std::collections::BTreeSet::new()).unwrap();
         assert!(gone.contains(&holder), "forgotten a day on: {gone:?}");
+    }
+
+    /// H3 (the review of 1.2; A1.8's strict rule, as Discogs has it; X8): MusicBrainz tells namesakes apart only by a disambiguation,
+    /// and answers a search for "Coma" with several "Coma"s at score 100. Never the first of them: two results of the name, whatever
+    /// their scores or disambiguations, say none. One result of the name, MusicBrainz sure of it (95 or more): that one, case and
+    /// quotes folded. One it is not sure of: none. The search asks for ten, so a namesake ranked past the third is seen.
+    #[test]
+    fn a_musicbrainz_namesake_is_never_matched_by_name() {
+        let a = |id: &str, score: u32, name: &str| MbArtist { id: id.into(), score, name: name.into() };
+        let (c1, c2) = ("00000000-0000-4000-8000-000000000c01", "00000000-0000-4000-8000-000000000c02");
+        assert_eq!(mb_name_match(&[a(c1, 100, "Coma"), a(c2, 100, "Coma")], "Coma"), None, "two of the name at 100: neither");
+        assert_eq!(mb_name_match(&[a(c1, 100, "Coma"), a("x", 98, "Comah"), a(c2, 80, "COMA")], "Coma"), None, "another of the name, however sure");
+        assert_eq!(mb_name_match(&[a(c1, 100, "Coma"), a("x", 98, "Comah")], "coma"), Some(c1.to_string()), "one of the name");
+        assert_eq!(mb_name_match(&[a(c1, 90, "Coma")], "Coma"), None, "one it is not sure of");
+        assert_eq!(mb_name_match(&[a(c1, 100, "Coma"), a(c1, 100, "Coma")], "Coma"), Some(c1.to_string()), "one id answered twice is one");
+        let url = mb_artist_search("Coma").unwrap();
+        assert!(url.query_pairs().any(|(k, v)| k == "limit" && v == "10"), "ten asked: {url}");
     }
 }
 
