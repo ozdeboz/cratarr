@@ -434,11 +434,14 @@
   $effect(() => {
     const from = albumFrom;
     const names = albumByKey ? albumByKey.split('|') : [];
-    byOf = {};
+    // Written whole, never read here: an effect that reads what it writes runs again, and this one asked the server in a loop
+    // (thousands of asks a minute, the server then refusing the page's covers too).
+    const fresh: Record<string, { photo: string | null; favorite: boolean | null }> = {};
+    for (const name of names) fresh[name] = { photo: null, favorite: null };
+    byOf = fresh;
     if (!from || !names.length) return;
     let live = true;
     for (const name of names) {
-      byOf[name] = { photo: null, favorite: null };
       artistFavorite(from, name).then(
         (r) => live && byOf[name] && (byOf[name].favorite = r.favorite),
         () => {},
