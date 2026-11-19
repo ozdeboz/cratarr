@@ -3289,6 +3289,28 @@ pub(crate) mod tests {
         assert_eq!(want_copy(&[(lone(1, "B/Other Room"), judged(1, "B/Other Room"))], Some(2), &[]), Chosen::From(1, "B/Other Room".into()));
     }
 
+    /// A3.1.1: a Want of a record whose one copy went (deleted outside Cratarr, its tracks within their day) or sits in a parked
+    /// library: handed to the fetchers, never "Already in the library"; the requests' round delivers neither.
+    #[tokio::test]
+    async fn a_want_of_a_copy_gone_or_parked_is_fetched_and_never_delivered() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let gone = cat.record_for_tests("Gone Copy", 2);
+        cat.copy_for_tests(gone, 0);
+        cat.execute_for_tests(&format!("UPDATE files SET gone_at = {} WHERE track IN (SELECT id FROM tracks WHERE record = {gone})", super::super::moment::now_secs()));
+        let parked = cat.record_for_tests("Parked Copy", 2);
+        cat.copy_for_tests(parked, -1);
+        for record in [gone, parked] {
+            let mut r = asked_for(record);
+            r.id = serve.userdata.add_request(&r).unwrap();
+            let lidarr = Wanting::default();
+            let said = hand_to(Some(&lidarr), false, &serve, &r).await;
+            assert_ne!(said, ALREADY_HAD, "{record}");
+            assert_eq!(lidarr.0.lock().unwrap().len(), 1, "{record}: to the fetchers");
+        }
+        assert!(deliver_in(&serve.userdata, cat, &[(0, crate::settings::LibraryKind::Main)], None).is_empty(), "the round delivers neither");
+    }
+
     /// W3 (F4): a Want of an album the library has is handed to no fetcher: Lidarr is not asked (it would fetch it again where its
     /// folder no longer holds it), and nothing says Soulseek searches for it. It reads as had.
     #[tokio::test]

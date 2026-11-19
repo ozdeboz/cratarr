@@ -971,8 +971,8 @@ impl App {
         let s = served.clone();
         let (found, gaps) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let mut found: Vec<(String, String, String, super::incomplete::Incomplete)> = Vec::new();
-            for (album, json) in s.userdata.albums_incomplete()? {
-                let Ok(i) = serde_json::from_str::<super::incomplete::Incomplete>(&json) else { continue };
+            // A row that no longer fits its album (A3.4: tracks replaced or added since its look) is not read: the pass looks again.
+            for (album, i) in super::incomplete::still_short(&s)? {
                 // One the library no longer has is left out.
                 let Some((_, artist, name)) = s.library.album_names(&album)? else { continue };
                 found.push((album, name, artist, i));

@@ -3771,10 +3771,12 @@ mod tests {
         cat.move_files(1, &rows[0], 0, &rows[0]).unwrap();
         cat.mark_trashed(0, &rows[0], &format!("{}/{}", days_ago(3), rows[0])).unwrap();
         gone(1, &rows[1], days_ago(2));
-        // Gone a while, its files hold the record still; U7's, in Music's trash, holds none and did not go from Incoming.
+        // Gone, its files hold the record no more (A3.1: only a present copy is had): its last copy went from Incoming, its item let go
+        // at once; U7's, in Music's trash, holds none and did not go from Incoming.
         let read = round(&cat, &mut k, &rs);
-        assert_eq!((read[0], read[1]), ((Holding::Arrived, false), (Holding::None, false)));
-        assert!(k.items.iter().all(|i| i.state == State::Placed), "none let go while its files are gone a while");
+        assert_eq!((read[0], read[1]), ((Holding::None, true), (Holding::None, false)));
+        let placed = |request: i64| k.items.iter().filter(|i| i.record.request == request).all(|i| i.state == State::Placed);
+        assert!(!placed(1) && placed(2) && placed(3) && placed(4), "gone from Incoming: let go; kept into Music and deleted there: never");
         // The catalogue's pass retires what went (a trash emptied too: no library here keeps one).
         cat.identify().unwrap();
         // Then the other file of "Kept After" is kept into Music and deleted there: in Music's trash still, after its Incoming one went.

@@ -707,7 +707,7 @@ fn sureness(how: &str) -> u8 {
 
 /// A record's row as `records` holds it: what `row_of` reads, in its order.
 const RECORD_COLUMNS: &str = "id, COALESCE(title, ''), COALESCE(artist, ''), year, kind, released, genres, cover, counting, counted_by_hand, checked_by_hand, merged_into, retired_at,
-   EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))";
+   EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))";
 
 fn row_of(r: &rusqlite::Row) -> rusqlite::Result<RecordRow> {
     let genres: Option<String> = r.get(6)?;
@@ -1252,7 +1252,7 @@ fn live_had_of(db: &Connection, records: &[i64]) -> Result<std::collections::Has
     }
     let sql = format!(
         "SELECT r.id FROM records r WHERE r.id IN ({}) AND r.merged_into IS NULL AND r.retired_at IS NULL
-         AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))",
+         AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))",
         id_list(records)
     );
     let mut st = db.prepare(&sql)?;
@@ -1280,7 +1280,7 @@ fn refs_of(db: &Connection, records: &[i64]) -> Result<std::collections::HashMap
 /// Whether a record is live (neither merged nor retired) and holds live tracks.
 fn live_had(db: &Connection, record: i64) -> Result<bool> {
     let mut st = db.prepare_cached(
-        "SELECT r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))) FROM records r WHERE r.id = ?1",
+        "SELECT r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))) FROM records r WHERE r.id = ?1",
     )?;
     Ok(st.query_row([record], |r| r.get(0)).optional()?.unwrap_or(false))
 }
@@ -1586,7 +1586,7 @@ fn lengths_of(db: &Connection, records: &[i64]) -> Result<std::collections::Hash
         "SELECT t.record, (SELECT max(f.duration_ms) FROM files f WHERE f.track = t.id AND f.trashed IS NULL AND f.duration_ms > 0)
          FROM tracks t JOIN records r ON r.id = t.record
          WHERE t.record IN ({}) AND r.merged_into IS NULL AND r.retired_at IS NULL AND t.retired_at IS NULL
-           AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))",
+           AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))",
         id_list(records)
     );
     let mut st = db.prepare(&sql)?;
@@ -1780,14 +1780,14 @@ fn holding_in(db: &Connection, record: i64, holder: i64) -> Result<(Vec<(i64, us
     let copies: Vec<(i64, usize)> = db
         .prepare_cached(
             "SELECT f.folder, count(DISTINCT t.id) FROM tracks t JOIN files f ON f.track = t.id
-             WHERE t.record = ?1 AND t.retired_at IS NULL AND f.trashed IS NULL GROUP BY f.folder ORDER BY f.folder",
+             WHERE t.record = ?1 AND t.retired_at IS NULL AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL GROUP BY f.folder ORDER BY f.folder",
         )?
         .query_map([holder], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?
         .collect::<rusqlite::Result<_>>()?;
     let present: i64 = db
         .prepare_cached(concat!(
             "SELECT count(*) FROM tracks t WHERE t.record = ?1 AND t.retired_at IS NULL AND ",
-            "(EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))"
+            "(EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))"
         ))?
         .query_row([holder], |r| r.get(0))?;
     let listed = |id: i64, source: &str| -> Result<Option<usize>> {
@@ -1962,7 +1962,7 @@ impl Catalogue {
                 .prepare_cached(&format!(
                     "SELECT a.artist, a.record FROM record_artists a JOIN records r ON r.id = a.record
                      WHERE a.position = 0 AND r.merged_into IS NULL AND (r.kind IS NULL OR r.kind IN ('album', 'ep'))
-                       AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
+                       AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
                        AND a.artist IN ({HERE})
                      ORDER BY a.artist, a.record"
                 ))?
@@ -2588,7 +2588,7 @@ impl Catalogue {
         let mut st = db.prepare_cached(
             "SELECT r.id FROM records r
              WHERE r.retired_at IS NULL AND r.merged_into IS NULL AND r.counting IS NULL AND r.checked_by_hand = 0
-               AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
+               AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
                AND NOT (?1 AND EXISTS (SELECT 1 FROM lists_to_read w WHERE w.record = r.id))
                AND NOT EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'al-' || r.id
                  AND (f.how = 'hand' OR (f.how = 'files' AND f.source = 'musicbrainz' AND f.kind = 'release')))
@@ -2860,7 +2860,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         }
         let mut st = tx.prepare_cached(
             "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
-             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
+             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
              ORDER BY r.id",
         )?;
         let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -2900,7 +2900,7 @@ pub(super) fn request_record_in(tx: &Connection, w: &Wanted, at: i64) -> Result<
         }
         let mut st = tx.prepare_cached(
             "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
-             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
+             WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
              ORDER BY r.id",
         )?;
         let rows: Vec<(i64, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -3097,7 +3097,7 @@ pub(super) fn wanted_record(tx: &Connection, a: &super::AlbumCopy, expected: Opt
     let open = |record: i64| -> Result<Option<i64>> {
         let Some(id) = merged_end(tx, record)? else { return Ok(None) };
         let free: bool = tx.query_row(
-            "SELECT r.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))) FROM records r WHERE r.id = ?1",
+            "SELECT r.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))) FROM records r WHERE r.id = ?1",
             [id],
             |r| r.get(0),
         )?;
@@ -3500,7 +3500,7 @@ impl Carrying<'_> {
         let mut names: std::collections::HashMap<String, (Vec<i64>, Vec<i64>)> = std::collections::HashMap::new();
         {
             let mut st = self.tx.prepare(
-                "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, ''), EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
+                "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, ''), EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
                  FROM records r WHERE r.merged_into IS NULL AND r.retired_at IS NULL ORDER BY r.id",
             )?;
             for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))? {
@@ -3551,7 +3551,7 @@ impl Carrying<'_> {
             .tx
             .prepare(
                 "SELECT r.id, COALESCE(r.artist, ''), COALESCE(r.title, '') FROM records r
-                 WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
+                 WHERE r.merged_into IS NULL AND r.retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id AND t.retired_at IS NULL AND (EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id)))
                  ORDER BY r.id DESC",
             )?
             .query_map([], |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?)))?
@@ -5286,7 +5286,8 @@ mod tests {
         let before = rows(&Connection::open(&file).unwrap());
         assert!(before.len() >= 6, "{before:?}");
         for _ in 0..2 {
-            let cat = Catalogue::open(Some(&file), Vec::new()).unwrap();
+            // Its library in use, as 0.17 opens it (A3.1: a copy in a library no longer in use is not had).
+            let cat = Catalogue::open(Some(&file), vec![std::path::PathBuf::from("/music")]).unwrap();
             assert_eq!(rows(&cat.db()), before);
             for table in ["references", "reference_tracks"] {
                 assert!(cat.db().prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1").unwrap().exists([table]).unwrap(), "{table}");
@@ -6715,5 +6716,63 @@ mod tests {
         cat.db().execute("UPDATE records SET retired_at = 1 WHERE id = ?1", [gone]).unwrap();
         let fresh = kites(&cat, kite, "Undertow", &[("discogs", "release", "3600073")]);
         assert_eq!(cat.learn_from_read(fresh, &Ref::new("discogs", "release", "3600073"), &[Ref::new("discogs", "master", "5000072")], &[]).unwrap(), fresh, "(c) a record of its own");
+    }
+
+    // ---- A3.1: only a present copy is had
+
+    /// A3.1.1: a record whose one copy's files went (deleted outside Cratarr: `gone_at`, its tracks within their day) and one whose one
+    /// copy sits in a parked library (a negative folder) are not had: `requested` and `record` say so, and both stand in their artist's
+    /// list of records not in the library (`missing_of`); a copy there, in a library in use, is had. Never a copy no one can play
+    /// counted as had.
+    #[test]
+    fn a_copy_gone_or_parked_is_not_had() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let made = |title: &str, release: &str, folder: i64| -> i64 {
+            let row = Listing { title: title.into(), artist: "Kite Theory".into(), kind: Some("album".into()), refs: vec![Ref::new("discogs", "release", release)], ..Listing::default() };
+            let record = cat.keep_listing(Some(artist), &[row], "link").unwrap()[0];
+            for n in 1..=2 {
+                cat.db().execute("INSERT INTO tracks (born, record, disc, number) VALUES (1, ?1, 1, ?2)", params![record, n]).unwrap();
+            }
+            cat.copy_for_tests(record, folder);
+            record
+        };
+        let (gone, parked, there) = (made("Gone Copy", "3600501", 0), made("Parked Copy", "3600502", -1), made("Copy There", "3600503", 0));
+        cat.db().execute("UPDATE files SET gone_at = ?2 WHERE track IN (SELECT id FROM tracks WHERE record = ?1)", params![gone, now()]).unwrap();
+        let q = cat.requested(&[gone, parked, there]).unwrap();
+        assert_eq!((q[&gone].row.had, q[&parked].row.had, q[&there].row.had), (false, false, true), "gone, parked, there");
+        assert!(!cat.record(gone).unwrap().unwrap().had && !cat.record(parked).unwrap().unwrap().had);
+        let mut missing: Vec<String> = cat.missing_of(artist).unwrap().into_iter().map(|q| q.row.title).collect();
+        missing.sort();
+        assert_eq!(missing, ["Gone Copy", "Parked Copy"], "listed as not in the library");
+    }
+
+    /// A3.1.2: every had expression here reads present files (`PRESENT_F`), the "a track no file holds" clause kept: in `RECORD_COLUMNS`,
+    /// `live_had`, `live_had_of`, `holding_in` (its copies too), `missing_everywhere`, `request_record_in` (both name lookups),
+    /// `wanted_record`'s `open` and the step's `pages`; none reads a file gone or parked as there.
+    #[test]
+    fn had_reads_present_files_alone() {
+        let src = include_str!("records.rs").replace("\r\n", "\n");
+        let present = format!("(EXISTS (SELECT 1 FROM files f WHERE f.track = t.id AND {}) OR NOT EXISTS (SELECT 1 FROM files f WHERE f.track = t.id))", super::super::PRESENT_F);
+        let any_file = ["f.track = t.id AND f.trashed", " IS NULL) OR NOT EXISTS"].concat();
+        assert!(!src.contains(&any_file), "a had expression reads a file gone or parked");
+        let body = |head: &str, end: &str| -> String {
+            let at = src.find(head).unwrap_or_else(|| panic!("{head}"));
+            let rest = &src[at..];
+            rest[..rest.find(end).unwrap_or(rest.len())].to_string()
+        };
+        for (head, end) in [
+            ("const RECORD_COLUMNS", "\";\n"),
+            ("\nfn live_had_of(", "\n}\n"),
+            ("\nfn live_had(", "\n}\n"),
+            ("\nfn holding_in(", "\n}\n"),
+            ("\n    pub fn missing_everywhere(", "\n    }\n"),
+            ("\npub(super) fn wanted_record(", "\n}\n"),
+            ("\n    fn pages(&mut self", "\n    }\n"),
+        ] {
+            assert!(body(head, end).contains(&present), "{head}");
+        }
+        assert!(body("\npub(super) fn request_record_in(", "\n}\n").matches(&present).count() >= 2, "request_record_in: both name lookups");
+        assert!(body("\nfn holding_in(", "\n}\n").contains(&format!("AND {} GROUP BY f.folder", super::super::PRESENT_F)), "a copy is its present files");
     }
 }

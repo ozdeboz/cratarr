@@ -5691,6 +5691,31 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// A3.1.3: a copy whose files went (moved outside Cratarr) is not had while they are gone; recognised as moved within the day, it
+    /// is had again, on the same tracks (the 24 hours are for track ids alone, `GONE_KEEP_SECS`).
+    #[test]
+    fn a_copy_back_within_a_day_is_had_again() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, two) = (cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap(), cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap());
+        let record = cat.record_for_tests("B", 0);
+        cat.db().execute("UPDATE tracks SET record = ?1 WHERE id IN (?2, ?3)", params![record, one, two]).unwrap();
+        let had = || cat.record(record).unwrap().unwrap().had;
+        assert!(had(), "its copy there");
+        std::fs::rename(d.join("A - B (2020)"), d.join("A - B (2020) [FLAC]")).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.file_of(one), None, "gone, waiting");
+        assert!(!had(), "gone: not had, its tracks kept for the day");
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        assert_eq!(cat.track_of(0, "A - B (2020) [FLAC]/01 One.mp3"), Some(one), "recognised as moved");
+        assert!(had(), "back within the day: had again, on the same tracks");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// 0101 point 11: a retired track keeps what it was (its tags go with its file), and a file that is it again, days
     /// later and elsewhere, takes its id back rather than a new one.
     #[test]

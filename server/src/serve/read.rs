@@ -867,6 +867,14 @@ impl Library {
         Ok(out)
     }
 
+    /// Every album's tracks in the library now, by album id (A3.4: whether a row of its missing tracks still fits it).
+    pub fn song_counts(&self) -> Result<HashMap<String, usize>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album_id, count(*) FROM songs GROUP BY album_id")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as usize)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// A song's file and album (0.9.14, Health's fixes): its folder, its path in it, its album's id and its title.
     pub fn song_file(&self, id: &str) -> Result<Option<(i64, String, String, String)>> {
         let db = self.db();

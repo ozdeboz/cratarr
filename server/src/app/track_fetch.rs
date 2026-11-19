@@ -181,7 +181,8 @@ fn place(view: &mut ReleaseView, files: &[super::renumber::Track]) {
 /// The release an album's missing tracks are on: the one `incomplete` found holding it, else its files' own, else its
 /// match's.
 fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<String>> {
-    let found = served.userdata.albums_incomplete()?.into_iter().find(|(a, _)| a == album).and_then(|(_, j)| serde_json::from_str::<super::incomplete::Incomplete>(&j).ok());
+    // Its row where it still fits the album (A3.4).
+    let found = super::incomplete::still_short(served)?.into_iter().find(|(a, _)| a == album).map(|(_, i)| i);
     if let Some(id) = found.and_then(|i| i.release_id) {
         return Ok(Some(id));
     }

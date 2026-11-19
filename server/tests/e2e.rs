@@ -5962,3 +5962,38 @@ async fn a_record_not_had_says_its_sources_are_off_end_to_end() {
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// A3.1.1: an album whose one copy's folder was removed on disk, outside Cratarr: once the library has seen it go, a Want of it is no
+/// Want of an album held: handed on, never "Already in the library", and a requests' round on it is neither done nor delivered.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_want_of_an_album_whose_copy_went_is_fetched_end_to_end() {
+    use reqwest::Method;
+    let root = temp("copy-went");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let music = library.join("music");
+    settings(&data, &[(&music, "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(Method::POST, "/api/users", json!({ "name": "root", "password": "root pw", "admin": true })).await;
+    s.act_as("root", "root pw").await;
+    s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    let album = s.read_in("Both Shores", &music).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    std::fs::remove_dir_all(music.join(SHORES)).unwrap();
+    s.until("the library to see its copy go", Duration::from_secs(120), || async { listed(&s, "Both Shores").await == 0 }).await;
+    let admin = s.sign_in("root", "root pw").await;
+    let asked = admin.ok(Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Both Shores" })).await;
+    let request = asked["request"]["id"].as_i64().expect("the request");
+    assert_ne!(request_line(&data, request).as_deref(), Some("Already in the library"), "handed on, not had: {asked}");
+    // A round on, neither done nor delivered.
+    tokio::time::sleep(Duration::from_secs(70)).await;
+    let mine = admin.get("/api/requests").await;
+    let r = mine["mine"].as_array().unwrap().iter().find(|r| r["id"] == request).cloned().expect("the request");
+    assert!(!matches!(r["state"]["state"].as_str(), Some("done" | "delivered" | "arrived")), "{r}");
+    assert_ne!(request_line(&data, request).as_deref(), Some("Already in the library"));
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
