@@ -17,6 +17,8 @@ const FOLDER: &str = "cover-cache";
 const KEEP: Duration = Duration::from_secs(30 * 86_400);
 /// A kept cover not asked for in this long is taken away.
 const FORGET: Duration = Duration::from_secs(60 * 86_400);
+/// How long a record none of whose pictures gave one is not asked again, while its pictures are the same (M5).
+const NONE_KEEP: Duration = Duration::from_secs(86_400);
 /// The most of a cover's bytes read (the Spotify picture relay's too, Y11).
 pub(crate) const MOST_BYTES: usize = 5 * 1024 * 1024;
 /// Covers fetched at once (each one's bytes held meanwhile).
@@ -107,54 +109,66 @@ pub fn pictures_of(own: Option<&str>, refs: &[(String, String, String)]) -> Vec<
 
 /// The cover of Cratarr's record `album` where it is not had (C54, F16: `/api/albums/cratarr/al-<n>/cover`), merges followed: kept,
 /// else each of its pictures tried in turn (`pictures_of`) until one gives one, kept a month by the record. None: no such record, one
-/// had (its files hold its cover: the album route), or none of its pictures gives one.
-pub async fn of_record(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str) -> Option<(Vec<u8>, &'static str)> {
+/// had (its files hold its cover: the album route), or none of its pictures gives one; an error where the record could not be read
+/// now (M4: the route asks again, never "no cover").
+pub async fn of_record(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str) -> Result<Option<(Vec<u8>, &'static str)>> {
     let keep = crate::serve::instance().and_then(|s| s.data_dir.clone()).map(|d| d.join(FOLDER));
-    of_record_with(cat, album, keep, fetch_picture).await
+    of_record_tried(cat, album, keep, fetch_picture).await
 }
 
-/// `of_record`, its pictures kept in `keep` (none: not kept) and fetched through `fetch`. One record's fetch at a time (F16.5): a
-/// second ask waits for the first and serves what it kept. A picture that answers nothing, or fails, gives way to the next (F16.4);
-/// none kept as "no cover"; where none gives one now, the one kept before, however old.
+/// `of_record`, its pictures kept in `keep` (none: not kept) and fetched through `fetch`, a failure to read the record as none.
 pub async fn of_record_with<F, Fut>(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str, keep: Option<PathBuf>, fetch: F) -> Option<(Vec<u8>, &'static str)>
 where
     F: Fn(Picture) -> Fut,
     Fut: std::future::Future<Output = Result<Option<Vec<u8>>>>,
 {
-    let record = crate::serve::ids::record_number(album)?;
+    of_record_tried(cat, album, keep, fetch).await.unwrap_or_else(|e| {
+        tracing::debug!("covers: {album} not read: {e:#}");
+        None
+    })
+}
+
+/// `of_record` through `fetch`. One record's fetch at a time (F16.5): a second ask waits for the first and serves what it kept. A
+/// picture that answers nothing, or fails, gives way to the next (F16.4); where none gives one now, the one kept before, however old.
+/// Where each answered none (no failure), that is kept a day as the record's "no picture" (M5), by its pictures: none is asked
+/// again meanwhile, and a change of its pictures (its references, its own) lets go of it.
+async fn of_record_tried<F, Fut>(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str, keep: Option<PathBuf>, fetch: F) -> Result<Option<(Vec<u8>, &'static str)>>
+where
+    F: Fn(Picture) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<Vec<u8>>>>,
+{
+    let Some(record) = crate::serve::ids::record_number(album) else { return Ok(None) };
     let read = tokio::task::spawn_blocking(move || -> Result<Option<(i64, Vec<Picture>)>> {
         let Some(row) = cat.record(record)?.filter(|r| !r.had) else { return Ok(None) };
         let refs: Vec<(String, String, String)> = cat.references_of(&crate::serve::ids::record(row.id))?.into_iter().map(|(r, _)| (r.source, r.kind, r.value)).collect();
         Ok(Some((row.id, pictures_of(row.cover.as_deref(), &refs))))
     });
-    let (id, pictures) = match read.await {
-        Ok(Ok(Some(found))) => found,
-        Ok(Ok(None)) => return None,
-        Ok(Err(e)) => {
-            tracing::debug!("covers: {album} not read: {e:#}");
-            return None;
-        }
-        Err(e) => {
-            tracing::debug!("covers: {album} not read: {e}");
-            return None;
-        }
-    };
-    let file = keep.map(|k| k.join(named(&format!("rec:{id}"))));
+    let Some((id, pictures)) = read.await?? else { return Ok(None) };
+    let file = keep.as_ref().map(|k| k.join(named(&format!("rec:{id}"))));
+    let none = keep.map(|k| k.join(named(&format!("rec:{id}.none"))));
+    let print = format!("{pictures:?}");
     let fresh = |f: Option<PathBuf>| async move {
         let f = f?;
         tokio::task::spawn_blocking(move || kept(&f)).await.ok().flatten()
     };
     if let Some(b) = fresh(file.clone()).await {
-        return Some(sniffed(b));
+        return Ok(Some(sniffed(b)));
     }
     let one = record_turn(id);
     let _one = one.lock().await;
     // Fetched by another meanwhile.
     if let Some(b) = fresh(file.clone()).await {
-        return Some(sniffed(b));
+        return Ok(Some(sniffed(b)));
     }
+    let old = |f: Option<PathBuf>| async move { tokio::fs::read(f?).await.ok().filter(|b| !b.is_empty()).map(sniffed) };
+    // M5: none of these pictures gave one within the day: none asked again.
+    let (n, p) = (none.clone(), print.clone());
+    if tokio::task::spawn_blocking(move || n.is_some_and(|n| none_kept(&n, &p))).await? {
+        return Ok(old(file).await);
+    }
+    let mut failed = false;
     for p in pictures {
-        let _turn = FETCHING.acquire().await.ok()?;
+        let _turn = FETCHING.acquire().await?;
         match fetch(p.clone()).await {
             Ok(Some(b)) if !b.is_empty() => {
                 if let Some(f) = file.clone() {
@@ -171,15 +185,34 @@ where
                         tracing::debug!("covers: {album}'s picture not kept");
                     }
                 }
-                return Some(sniffed(b));
+                return Ok(Some(sniffed(b)));
             }
             Ok(_) => {}
-            Err(e) => tracing::debug!("covers: {p:?} of {album}: {e:#}"),
+            Err(e) => {
+                failed = true;
+                tracing::debug!("covers: {p:?} of {album}: {e:#}");
+            }
+        }
+    }
+    // Each answered none: kept so a day (M5). One failed: nothing kept, asked again next time (F16.4).
+    if !failed && let Some(n) = none {
+        let wrote = tokio::task::spawn_blocking(move || -> Result<()> {
+            std::fs::create_dir_all(n.parent().context("no folder")?)?;
+            Ok(std::fs::write(&n, print)?)
+        })
+        .await;
+        if !matches!(wrote, Ok(Ok(()))) {
+            tracing::debug!("covers: {album}'s \"no picture\" not kept");
         }
     }
     // None gives one now: the one kept before, however old.
-    let f = file?;
-    tokio::fs::read(&f).await.ok().filter(|b| !b.is_empty()).map(sniffed)
+    Ok(old(file).await)
+}
+
+/// Whether a record's "no picture" (M5) is kept for these pictures (`print`), younger than a day.
+fn none_kept(file: &std::path::Path, print: &str) -> bool {
+    let young = std::fs::metadata(file).ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age < NONE_KEEP);
+    young && std::fs::read_to_string(file).is_ok_and(|kept| kept == print)
 }
 
 /// One record's cover fetched at a time (F16.5): its lock, the records not asked for let go of.
@@ -475,6 +508,30 @@ mod tests {
         let asked: Asks = Arc::default();
         assert!(of_record_with(cat.clone(), &ids::record(had), None, answering(&asked, |_| Ok(Some(PNG.to_vec())))).await.is_none());
         assert!(asked.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&keep).ok();
+    }
+
+    /// M5 (the review of 1.2): a record not had none of whose pictures gives one (each answers none) is not asked again within the
+    /// day: no Discogs question on each view. A day on, asked again; its pictures changed (a reference added), asked again at once. One
+    /// picture failing keeps nothing (F16.4's test).
+    #[tokio::test]
+    async fn a_record_with_no_picture_is_not_asked_again_for_a_day() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let keep = keep_folder("none");
+        let r = record_with(&cat, None, &[("discogs", "master", "5000040"), ("discogs", "release", "3600040")]);
+        let asked: Asks = Arc::default();
+        let album = ids::record(r);
+        assert!(of_record_with(cat.clone(), &album, Some(keep.clone()), answering(&asked, |_| Ok(None))).await.is_none());
+        assert_eq!(asked.lock().unwrap().len(), 2, "each picture asked");
+        assert!(of_record_with(cat.clone(), &album, Some(keep.clone()), answering(&asked, |_| Ok(None))).await.is_none());
+        assert_eq!(asked.lock().unwrap().len(), 2, "none asked again within the day");
+        let mark = keep.join(named(&format!("rec:{r}.none")));
+        std::fs::File::options().write(true).open(&mark).unwrap().set_modified(std::time::SystemTime::now() - Duration::from_secs(86_400 + 60)).unwrap();
+        assert!(of_record_with(cat.clone(), &album, Some(keep.clone()), answering(&asked, |_| Ok(None))).await.is_none());
+        assert_eq!(asked.lock().unwrap().len(), 4, "a day on, asked again");
+        cat.set_reference(&ids::record(r), &Ref::new("bandcamp", "album", "https://kitetheory.bandcamp.com/album/none-yet"), "link").unwrap();
+        assert!(of_record_with(cat.clone(), &album, Some(keep.clone()), answering(&asked, |_| Ok(None))).await.is_none());
+        assert_eq!(asked.lock().unwrap().len(), 7, "its pictures changed: asked again at once");
         std::fs::remove_dir_all(&keep).ok();
     }
 

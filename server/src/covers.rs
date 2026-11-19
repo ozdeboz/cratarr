@@ -15,6 +15,8 @@ pub const MAX_BYTES: u64 = 10 * 1024 * 1024;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     NotFound,
+    /// Not read now for a reason of Cratarr's own (M4: the catalogue, a task): asked again, never "no cover".
+    Unread,
     NotModified { etag: String },
     Image { content_type: &'static str, etag: String, bytes: Vec<u8> },
 }

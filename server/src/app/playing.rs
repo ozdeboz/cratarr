@@ -1245,7 +1245,8 @@ impl PlayingService {
     }
 
     /// The cover of the album that holds the given track. `NotFound` when the source or track is unknown, the track
-    /// is not in a library in use, or there is no cover. The ids are only lookup keys, never paths.
+    /// is not in a library in use, or there is no cover; `Unread` where the catalogue could not be read now (M4). The ids are
+    /// only lookup keys, never paths.
     pub async fn cover(&self, source_id: &str, id: &str, if_none_match: Option<&str>) -> crate::covers::Outcome {
         use crate::covers::{Outcome, resolve, valid_item_id};
         if !valid_item_id(id) {
@@ -1254,15 +1255,23 @@ impl PlayingService {
         // Where the catalogue has the track: in any of its folders, and for Cratarr's own ids without the source
         // connected (decision 0032).
         let (cat, source, item) = (self.lib.catalogue(), source_id.to_string(), id.to_string());
-        let place = tokio::task::spawn_blocking(move || {
-            let (folder, rel) = cat.file_of(cat.track_of_source(&source, &item)?)?;
-            Some((cat.folders().get(folder)?.clone(), rel))
+        let place = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(std::path::PathBuf, String)>> {
+            let Some(track) = cat.track_of_source_read(&source, &item)? else { return Ok(None) };
+            let Some((folder, rel)) = cat.file_of_read(track)? else { return Ok(None) };
+            Ok(cat.folders().get(folder).cloned().map(|root| (root, rel)))
         })
-        .await
-        .ok()
-        .flatten();
-        if let Some((root, rel)) = place {
-            return resolve(&root, &rel, if_none_match).await;
+        .await;
+        match place {
+            Ok(Ok(Some((root, rel)))) => return resolve(&root, &rel, if_none_match).await,
+            Ok(Ok(None)) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(target: "library", track = %id, reason = %format!("{e:#}"), "a cover not read now");
+                return Outcome::Unread;
+            }
+            Err(e) => {
+                tracing::warn!(target: "library", track = %id, reason = %e, "a cover not read now");
+                return Outcome::Unread;
+            }
         }
         let Some((a, s)) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id) else { return Outcome::NotFound };
         let Ok(track) = s.track(id).await else { return Outcome::NotFound };

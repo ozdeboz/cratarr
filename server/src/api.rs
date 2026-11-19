@@ -959,6 +959,13 @@ async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Q
     Ok(Json(app.playing.toggle(&id, f.source.as_deref(), f.member).await?))
 }
 
+/// A cover that could not be read now for a reason of Cratarr's own (M4: the catalogue, a task): 503, asked again after a few
+/// seconds; never 404's "no cover", which a page keeps for the record.
+fn cover_unread(what: &str, why: &str) -> Response {
+    tracing::warn!(target: "library", cover = %what, reason = %why, "a cover not read now");
+    (StatusCode::SERVICE_UNAVAILABLE, [(header::RETRY_AFTER, HeaderValue::from_static("5"))], Json(json!({ "error": "cover not read now" }))).into_response()
+}
+
 async fn cover(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Query<CoverStamp>, headers: HeaderMap) -> Response {
     use crate::covers::Outcome;
     let app = ctx.app.clone();
@@ -976,23 +983,28 @@ async fn cover(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Q
         && id.starts_with(crate::serve::ids::SONG)
     {
         let (s, song) = (served.clone(), id.clone());
-        let Some(album) = tokio::task::spawn_blocking(move || s.album_of_song(&song)).await.ok().flatten() else {
-            return (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response();
+        let album = match tokio::task::spawn_blocking(move || s.album_of_song_read(&song)).await {
+            Ok(Ok(Some(album))) => album,
+            Ok(Ok(None)) => return (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+            Ok(Err(e)) => return cover_unread(&id, &format!("{e:#}")),
+            Err(e) => return cover_unread(&id, &e.to_string()),
         };
         let etag = format!("\"{}-{size}\"", served.cover_stamps().get(&album).map_or("", String::as_str));
         if inm.is_some_and(|h| crate::covers::etag_matches(h, &etag)) {
             return (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response();
         }
         return match crate::app::device_covers::for_list(&served, &album, size).await {
-            Some((ct, bytes)) => {
+            Ok(Some((ct, bytes))) => {
                 let ct = HeaderValue::from_static(crate::serve::art::picture_type(Some(&ct), &bytes));
                 ([cache, (header::ETAG, tag(&etag)), (header::CONTENT_TYPE, ct)], bytes).into_response()
             }
-            None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+            Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+            Err(e) => cover_unread(&album, &format!("{e:#}")),
         };
     }
     match app.playing.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+        Outcome::Unread => cover_unread(&id, "the catalogue not read"),
         Outcome::NotModified { etag } => (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response(),
         Outcome::Image { content_type, etag, bytes } => (
             [cache, (header::ETAG, tag(&etag)), (header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
@@ -4186,17 +4198,24 @@ struct CoverStamp {
 /// for an hour (another server's album, a device's picture).
 async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
     let own = source == crate::source::cratarr::KIND.id;
+    // M4: an internal failure (the catalogue, a task) is 503, asked again; never "no cover".
     let found = match (q.from.as_deref(), q.size, ctx.served.as_ref()) {
-        (Some(library), _, Some(served)) if own => served.copy_cover_bytes(&album, library).await.unwrap_or_else(|e| {
-            tracing::warn!("cover of {album} in {library}: {e:#}");
-            None
-        }),
-        (None, Some(size), Some(served)) if own => crate::app::device_covers::for_list(served, &album, size).await,
+        (Some(library), _, Some(served)) if own => match served.copy_cover_bytes(&album, library).await {
+            Ok(found) => found,
+            Err(e) => return cover_unread(&album, &format!("{library}: {e:#}")),
+        },
+        (None, Some(size), Some(served)) if own => match crate::app::device_covers::for_list(served, &album, size).await {
+            Ok(found) => found,
+            Err(e) => return cover_unread(&album, &format!("{e:#}")),
+        },
         _ => ctx.app.playing.album_cover(&source, &album).await,
     };
     // A record not had (C54): from the cover cache, by the address its page shows.
     let found = match found {
-        None if own => crate::app::cover_cache::of_record(ctx.app.library.catalogue(), &album).await.map(|(bytes, mime)| (mime.to_string(), bytes)),
+        None if own => match crate::app::cover_cache::of_record(ctx.app.library.catalogue(), &album).await {
+            Ok(found) => found.map(|(bytes, mime)| (mime.to_string(), bytes)),
+            Err(e) => return cover_unread(&album, &format!("{e:#}")),
+        },
         found => found,
     };
     match found {
@@ -7703,6 +7722,27 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{ExportRequest, PreviewOf, attachment, form_decode};
+
+    /// M4 (the review of 1.2): a cover not read now for a reason of Cratarr's own is 503 with Retry-After, which the page asks again;
+    /// never the 404 "no cover" it keeps for the record.
+    #[test]
+    fn a_cover_not_read_now_is_asked_again_never_no_cover() {
+        let r = super::cover_unread("al-1", "the catalogue is busy");
+        assert_eq!(r.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(r.headers().get(axum::http::header::RETRY_AFTER).and_then(|v| v.to_str().ok()), Some("5"));
+        // Each route's internal failures go there (the source's own check: no Err or failed task reads as "no cover").
+        let src = include_str!("api.rs").replace("
+", "
+");
+        for route in ["async fn cover(ctx", "async fn album_cover(ctx"] {
+            let body = &src[src.find(route).unwrap()..];
+            let body = &body[..body.find("
+}
+").unwrap()];
+            assert!(!body.contains(".ok().flatten()") && !body.contains("unwrap_or_else(|e|"), "{route}: an error read as none");
+            assert!(body.contains("cover_unread("), "{route}");
+        }
+    }
 
     #[test]
     fn the_sign_ins_come_back_where_the_table_of_addresses_says() {
