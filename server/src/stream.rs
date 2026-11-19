@@ -244,24 +244,9 @@ pub(crate) fn fragment(sequence: u32, base: u64, samples: &[(u32, u32)], data: &
     out
 }
 
-/// An MP3 frame header's length (bytes), samples, and sample rate; `None` where it is not a Layer III header.
-fn mp3_frame(h: [u8; 4]) -> Option<(u64, u64, u64)> {
-    const V1: [u64; 15] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
-    const V2: [u64; 15] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
-    if h[0] != 0xFF || h[1] & 0xE0 != 0xE0 {
-        return None;
-    }
-    // Version: 3 MPEG-1, 2 MPEG-2, 0 MPEG-2.5 (1 reserved); layer 1 is Layer III.
-    let (version, layer) = ((h[1] >> 3) & 3, (h[1] >> 1) & 3);
-    let (bi, si, pad) = (usize::from(h[2] >> 4), usize::from((h[2] >> 2) & 3), u64::from((h[2] >> 1) & 1));
-    if version == 1 || layer != 1 || bi == 0 || bi == 15 || si == 3 {
-        return None;
-    }
-    let kbps = if version == 3 { V1[bi] } else { V2[bi] };
-    let rate = [44_100, 48_000, 32_000][si] >> if version == 3 { 0 } else if version == 2 { 1 } else { 2 };
-    let samples = if version == 3 { 1152 } else { 576 };
-    Some((samples / 8 * 1000 * kbps / rate + pad, samples, rate))
-}
+/// An MP3's first frame, its header and its info frame: in `catalogue::tags`, which reads a length by them (SPLIT-PLAN P7).
+pub use crate::catalogue::tags::mp3_info;
+use crate::catalogue::tags::mp3_frame;
 
 /// Where the first whole MP3 frame starts in bytes taken from the middle of a file (a range of a Bandcamp preview's
 /// stream): a header whose next frame has one too, as a stray 0xFF is no frame. `None` where none is found in them.
@@ -270,63 +255,6 @@ pub fn first_frame(b: &[u8]) -> Option<usize> {
     (0..b.len()).find(|&i| at(i).is_some_and(|(len, _, _)| at(i + len as usize).is_some()))
 }
 
-/// What an MP3's first frame says of the whole (its Xing/Info frame, where it has one): its frame count and its bytes,
-/// each where given; the sample rate and samples a frame; and where its sound begins (after its ID3v2 tag).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Mp3Info {
-    pub start: u64,
-    pub rate: u64,
-    pub samples: u64,
-    /// None: no info frame (a constant bitrate's, or a variable one whose length can only be guessed).
-    pub frames: Option<u64>,
-    pub bytes: Option<u64>,
-    pub has_info: bool,
-    /// Where in the file its info frame's frame count and byte count are (to set them; Health's fixes).
-    pub frames_at: Option<u64>,
-    pub bytes_at: Option<u64>,
-    /// Its first frame's header and length (the info frame where it has one).
-    pub header: [u8; 4],
-    pub first_len: u64,
-}
-
-impl Mp3Info {
-    /// The length its info frame gives (ms).
-    pub fn length_ms(&self) -> Option<u64> {
-        self.frames.map(|f| f * self.samples * 1000 / self.rate)
-    }
-}
-
-/// Reads an MP3's first frame (0.9.14): its info frame found anywhere in it, as encoders place it (lofty looks at one
-/// place only, and read some files as ten times their length: Night Lights, 2026-10-28).
-pub fn mp3_info(path: &Path) -> Option<Mp3Info> {
-    use std::io::{Read, Seek, SeekFrom};
-    let start = crate::analysis::after_id3(path);
-    let mut f = File::open(path).ok()?;
-    f.seek(SeekFrom::Start(start)).ok()?;
-    let mut h = [0u8; 4];
-    f.read_exact(&mut h).ok()?;
-    let (len, samples, rate) = mp3_frame(h)?;
-    let mut body = vec![0u8; usize::try_from(len.checked_sub(4)?).ok()?];
-    f.read_exact(&mut body).ok()?;
-    let at = body.windows(4).position(|w| w == b"Xing" || w == b"Info");
-    let (mut frames, mut bytes, mut frames_at, mut bytes_at) = (None, None, None, None);
-    if let Some(k) = at.filter(|k| k + 8 <= body.len()) {
-        let word = |i: usize| body.get(i..i + 4).map(|b| u64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]])));
-        let flags = word(k + 4)?;
-        let mut p = k + 8;
-        // Offsets in the file: the body starts after the 4-byte header.
-        if flags & 1 != 0 {
-            frames = word(p).filter(|n| *n > 0);
-            frames_at = Some(start + 4 + p as u64);
-            p += 4;
-        }
-        if flags & 2 != 0 {
-            bytes = word(p).filter(|n| *n > 0);
-            bytes_at = Some(start + 4 + p as u64);
-        }
-    }
-    Some(Mp3Info { start, rate, samples, frames, bytes, has_info: at.is_some(), frames_at, bytes_at, header: h, first_len: len })
-}
 
 /// An MP3's sound as its frames run (0.9.14, Health's fixes): where its first sound frame is (after the info frame
 /// where there is one), how many whole frames follow one another to where they stop (its end, or where the file is

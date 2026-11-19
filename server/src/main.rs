@@ -4,6 +4,7 @@ mod albums;
 #[allow(dead_code)]
 mod analysis;
 mod bandcamp;
+mod bandcamp_ids;
 mod fixtures;
 mod api;
 mod app;
@@ -410,9 +411,8 @@ async fn main() -> Result<()> {
     std::process::exit(0)
 }
 
-/// A restart asked from Settings (0.9.6): Cratarr stops as `docker stop` stops it, and Docker's restart policy brings it
-/// back.
-pub(crate) static RESTART: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// A restart asked from Settings: in `api`, which asks it (SPLIT-PLAN P9).
+use api::RESTART;
 
 /// SIGTERM (what docker stop sends), Ctrl-C, or a restart asked from Settings.
 async fn stop_signal() {

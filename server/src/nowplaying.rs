@@ -2,8 +2,6 @@
 //! old track as "paused at 0 s" while the activity log correctly said a new track had started), so the
 //! activity log is the primary source: the newest audio playback that has not been stopped.
 
-use serde::Serialize;
-
 use crate::jellyfin::{ActivityEntry, Session};
 
 const START: &str = "AudioPlayback";
@@ -42,25 +40,8 @@ pub fn playing_from_activity(entries: &[ActivityEntry], now_epoch: i64, max_age_
     out
 }
 
-/// How far into the playing track we are.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Progress {
-    pub position_secs: f64,
-    pub duration_secs: Option<f64>,
-    pub paused: bool,
-    /// True when no player session reports this track, so the position is "time since it started" from the
-    /// activity log: right unless it was paused or seeked.
-    pub estimated: bool,
-    /// Tape rewind under way on the player (0.9.10): the position goes back to the start as reported, not run on.
-    pub rewinding: bool,
-    /// Asked to play from rest and not sounding yet (0.9.14): the page's waveform stays grey until it sounds.
-    pub starting: bool,
-    /// How fast it moves, as its player says (track s per s, signed): a Cratarr player's while it winds, holds or ramps
-    /// (2026-11-03, the owner: "No guessing anywhere": the page counted another player on at 1× through a Vinyl ramp).
-    /// Left out where it says none: its own speed playing.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub speed_x: Option<f64>,
-}
+/// How far into the playing track we are (in `source`, beside the `Playing` that holds it).
+pub use crate::source::Progress;
 
 const TICKS_PER_SEC: f64 = 10_000_000.0;
 

@@ -121,8 +121,6 @@ fn give_again(cat: &Catalogue, ud: &UserData, asked_twice: &mut Vec<serde_json::
     Ok(())
 }
 
-/// The rows of `analysis_shape` the part `band_wave` reads at a time (M1): a batch a transaction.
-const BAND_WAVE_BATCH: usize = 500;
 
 /// The step at a start: done before, or done now. `kinds` (each catalogue folder's library, in the libraries' order) and `rules`
 /// (the tag rules) as the library's builds have them: the part `credits` makes the albums a build makes. Blocking.
@@ -202,14 +200,8 @@ fn follow_folded(cat: &Catalogue, ud: &UserData) -> Result<()> {
     ud.set_migration_part(FOLDED, &report)
 }
 
-/// The part `band_wave` (M1): the waveforms in three bands apart from the visuals' signals, once. Blocking.
-pub(crate) fn band_waves(cat: &Catalogue) -> Result<()> {
-    let started = std::time::Instant::now();
-    if let Some(apart) = cat.band_waves_apart(BAND_WAVE_BATCH, &|| Ok(())).context("0.17's step, part band_wave")? {
-        tracing::info!(target: "library", band_waves = apart, secs = started.elapsed().as_secs(), "0.17's step: the waveforms in three bands apart from the visuals' signals");
-    }
-    Ok(())
-}
+/// The part `band_wave` (M1): in `catalogue`, below the step, for its tests (SPLIT-PLAN P7).
+pub use crate::catalogue::band_waves;
 
 /// What a failure outside the parts says (W5): no part's mark holds what was done, so nothing tells the next start what was half
 /// done, and the way back is the backup taken before the upgrade.

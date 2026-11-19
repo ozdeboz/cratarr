@@ -24,32 +24,8 @@ static FETCHING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 /// A look's covers fetched ahead by one task at a time.
 static WARMING: AtomicBool = AtomicBool::new(false);
 
-/// Whose cover.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Of {
-    /// A MusicBrainz release group.
-    ReleaseGroup(String),
-    /// A Bandcamp album, by its page.
-    Bandcamp(String),
-}
-
-impl Of {
-    /// The album a cover address of Cratarr's own names (`/api/covers/release-group/…`, `/api/cover/bandcamp/…`).
-    pub fn of_address(cover: &str) -> Option<Of> {
-        if let Some(rg) = cover.strip_prefix("/api/covers/release-group/") {
-            return super::discogs::is_mbid(rg).then(|| Of::ReleaseGroup(rg.to_string()));
-        }
-        let id = cover.strip_prefix(&format!("/api/cover/{}/", crate::bandcamp::SOURCE))?;
-        crate::bandcamp::read_id(id).map(|(page, _)| Of::Bandcamp(page))
-    }
-
-    fn key(&self) -> String {
-        match self {
-            Of::ReleaseGroup(rg) => format!("rg:{}", rg.to_ascii_lowercase()),
-            Of::Bandcamp(page) => format!("bc:{page}"),
-        }
-    }
-}
+/// Whose cover: in `catalogue::records`, beside the requests' cover check that reads it (SPLIT-PLAN P7).
+pub use crate::catalogue::records::Of;
 
 /// One of a record's pictures (F16.2), as its cover tries them in turn.
 #[derive(Debug, Clone, PartialEq, Eq)]

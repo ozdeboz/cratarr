@@ -153,30 +153,8 @@ pub struct Status {
     pub albums: usize,
 }
 
-/// A record's files' state: differs (offered), waiting, writing (`done` of `of` files), written (`at`, today only) or
-/// changed (a file changed since it was planned or written).
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
-pub struct FilesState {
-    pub state: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub done: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub of: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<i64>,
-    /// Where it differs (F27): each field its files lack, with what it gets, as its plan's rows name them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub facts: Option<Vec<FileFact>>,
-}
-
-/// A field a record's files lack (F27): what the plan writes into it.
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
-pub struct FileFact {
-    pub field: String,
-    pub values: Vec<String>,
-}
+/// A record's files' state (in `source`, beside the `Album` that holds it).
+pub use crate::source::{FileFact, FilesState};
 
 /// What a run's id and undo token start with (a kept run: its journal id).
 pub const RUN: char = 'r';

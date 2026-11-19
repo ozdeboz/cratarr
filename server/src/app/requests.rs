@@ -321,21 +321,8 @@ fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Reques
     serve.userdata.open_request(account, None, key)
 }
 
-/// Whether a Want's cover is one every account may be shown (W6): Cratarr's own, in the exact shapes it makes (O3: a release
-/// group's `/api/covers/release-group/<id>`, a Bandcamp album's `/api/cover/bandcamp/<id>`, never a path that climbs out with `..`),
-/// or the Cover Art Archive's, Bandcamp's, Spotify's or Discogs' images over https. Any other address is left out. Checked on the
-/// way to every record (`record_of_album_paged`) and by 0.17's step for 0.16's Wants, on the records and on the request rows; on
-/// the way onto a request row (`asked_of`) and on every view of one (`shown`, Y5).
-pub(crate) fn cover_kept(cover: &str) -> bool {
-    if cover.starts_with('/') {
-        // A record's own address (F16.3), exactly: `al-` and its digits.
-        let record = cover.strip_prefix(&format!("/api/albums/{}/al-", crate::source::cratarr::KIND.id)).and_then(|r| r.strip_suffix("/cover"));
-        return super::cover_cache::Of::of_address(cover).is_some() || record.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    }
-    let Ok(u) = reqwest::Url::parse(cover) else { return false };
-    let host = u.host_str().unwrap_or_default().to_ascii_lowercase();
-    u.scheme() == "https" && ["coverartarchive.org", "archive.org", "bcbits.com", "scdn.co", "discogs.com"].iter().any(|h| host == *h || host.ends_with(&format!(".{h}")))
-}
+/// Whether a Want's cover is one every account may be shown: in `catalogue::records`, below the requests (SPLIT-PLAN P7).
+pub(crate) use crate::catalogue::records::cover_kept;
 
 /// Views as a viewer may read them (W6): an administrator the fetchers' own words too; any other account the states alone, never
 /// Lidarr's text (its errors name its address), Soulseek's whys in Cratarr's own words (OQ-RQ1 (a), `own_words`).
@@ -357,22 +344,9 @@ fn own_words(why: &str) -> String {
     why.split(": ").next().unwrap_or_default().to_string()
 }
 
-/// The record an album asked for by its names is (C49a): its names as a label's own account gives them sorted out first (S12,
-/// `bandcamp::label_release`: a Want from a label's Bandcamp page, "Artist - Title (Label)" by the label, is the artist's
-/// "Title", the label credited), then the record of its release group, else a record had of its names, else a new record not
-/// had (`Catalogue::record_for_request`). Blocking.
-pub fn record_of_album(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<i64> {
-    record_of_album_paged(cat, release_group, crate::bandcamp::label_release(artist, album, None), Vec::new(), year, cover, None)
-}
-
-/// `record_of_album`, its names sorted out by the caller, its Bandcamp album page given (R22): kept on the record as a reference
-/// (`search`), so a record only Bandcamp lists is judged by Bandcamp's list.
-fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, named: crate::bandcamp::Named, artists: Vec<String>, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
-    // Every way to a record checks its cover (O3).
-    let cover = cover.filter(|c| cover_kept(c));
-    let wanted = crate::catalogue::records::Wanted { group: release_group.map(str::to_string), artist: named.artist, artists, title: named.title, label: named.label, year, cover, page };
-    cat.record_for_request(&wanted)
-}
+/// The record an album asked for by its names is (C49a): in `catalogue::records`, below the requests (SPLIT-PLAN P7).
+pub use crate::catalogue::records::record_of_album;
+use crate::catalogue::records::record_of_album_paged;
 
 /// `record_of_album` for a Want (R22, N2): its Bandcamp album page the card's, else the one Discover found for it by its release
 /// group or by its names (`bandcamp_found`, as a page is found when an album is opened), made plain; else, once its record is

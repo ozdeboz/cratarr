@@ -3561,13 +3561,13 @@ impl Carrying<'_> {
             loosely.add_album(&id.to_string(), title, Some(artist));
         }
         for r in &c.requests {
-            let named = crate::bandcamp::label_release(&r.artist, &r.album, None);
+            let named = crate::bandcamp_ids::label_release(&r.artist, &r.album, None);
             // Its page as `bandcamp_found` kept it, by its names or by its release group (R19, F13): where its record is made only
             // here, the pages part found none to give it to. Counted where it is put now; one another record holds is reported so.
             let page = pages.get(&lower(&r.key)).or_else(|| r.group.as_deref().and_then(|g| pages.get(&lower(g)))).map(|p| p.to_string());
             // A 0.16 Want's cover that fails W6's check, any address then, is dropped (O3), each listed.
             let cover = r.cover.clone().filter(|c| {
-                let kept = crate::app::requests::cover_kept(c);
+                let kept = cover_kept(c);
                 if !kept {
                     covers_dropped.push(format!("{} {c}", r.id));
                 }
@@ -4458,6 +4458,66 @@ impl Catalogue {
     }
 }
 
+/// Whose cover.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Of {
+    /// A MusicBrainz release group.
+    ReleaseGroup(String),
+    /// A Bandcamp album, by its page.
+    Bandcamp(String),
+}
+
+impl Of {
+    /// The album a cover address of Cratarr's own names (`/api/covers/release-group/…`, `/api/cover/bandcamp/…`).
+    pub fn of_address(cover: &str) -> Option<Of> {
+        if let Some(rg) = cover.strip_prefix("/api/covers/release-group/") {
+            return is_mbid(rg).then(|| Of::ReleaseGroup(rg.to_string()));
+        }
+        let id = cover.strip_prefix(&format!("/api/cover/{}/", crate::bandcamp_ids::SOURCE))?;
+        crate::bandcamp_ids::read_id(id).map(|(page, _)| Of::Bandcamp(page))
+    }
+
+    pub fn key(&self) -> String {
+        match self {
+            Of::ReleaseGroup(rg) => format!("rg:{}", rg.to_ascii_lowercase()),
+            Of::Bandcamp(page) => format!("bc:{page}"),
+        }
+    }
+}
+
+/// Whether a Want's cover is one every account may be shown (W6): Cratarr's own, in the exact shapes it makes (O3: a release
+/// group's `/api/covers/release-group/<id>`, a Bandcamp album's `/api/cover/bandcamp/<id>`, never a path that climbs out with `..`),
+/// or the Cover Art Archive's, Bandcamp's, Spotify's or Discogs' images over https. Any other address is left out. Checked on the
+/// way to every record (`record_of_album_paged`) and by 0.17's step for 0.16's Wants, on the records and on the request rows; on
+/// the way onto a request row (`asked_of`) and on every view of one (`shown`, Y5).
+pub fn cover_kept(cover: &str) -> bool {
+    if cover.starts_with('/') {
+        // A record's own address (F16.3), exactly: `al-` and its digits.
+        let record = cover.strip_prefix(&format!("/api/albums/{}/al-", crate::source::CRATARR)).and_then(|r| r.strip_suffix("/cover"));
+        return Of::of_address(cover).is_some() || record.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    }
+    let Ok(u) = reqwest::Url::parse(cover) else { return false };
+    let host = u.host_str().unwrap_or_default().to_ascii_lowercase();
+    u.scheme() == "https" && ["coverartarchive.org", "archive.org", "bcbits.com", "scdn.co", "discogs.com"].iter().any(|h| host == *h || host.ends_with(&format!(".{h}")))
+}
+
+/// The record an album asked for by its names is (C49a): its names as a label's own account gives them sorted out first (S12,
+/// `bandcamp::label_release`: a Want from a label's Bandcamp page, "Artist - Title (Label)" by the label, is the artist's
+/// "Title", the label credited), then the record of its release group, else a record had of its names, else a new record not
+/// had (`Catalogue::record_for_request`). Blocking.
+pub fn record_of_album(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<i64> {
+    record_of_album_paged(cat, release_group, crate::bandcamp_ids::label_release(artist, album, None), Vec::new(), year, cover, None)
+}
+
+/// `record_of_album`, its names sorted out by the caller, its Bandcamp album page given (R22): kept on the record as a reference
+/// (`search`), so a record only Bandcamp lists is judged by Bandcamp's list.
+pub fn record_of_album_paged(cat: &crate::catalogue::Catalogue, release_group: Option<&str>, named: crate::bandcamp_ids::Named, artists: Vec<String>, year: Option<i32>, cover: Option<String>, page: Option<String>) -> Result<i64> {
+    // Every way to a record checks its cover (O3).
+    let cover = cover.filter(|c| cover_kept(c));
+    let wanted = Wanted { group: release_group.map(str::to_string), artist: named.artist, artists, title: named.title, label: named.label, year, cover, page };
+    cat.record_for_request(&wanted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4487,8 +4547,8 @@ mod tests {
     fn a_request_for_an_album_had_by_a_loose_name_is_another() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let had = cat.record_for_tests("Tide Tables", 2);
-        assert_ne!(crate::app::requests::record_of_album(&cat, None, "The Glass Harbour", "Tide Tables (Deluxe Edition)", None, None).unwrap(), had);
-        assert_eq!(crate::app::requests::record_of_album(&cat, None, "GLASS HARBOUR", "Tide Tables", None, None).unwrap(), had, "its own names, folded");
+        assert_ne!(crate::catalogue::records::record_of_album(&cat, None, "The Glass Harbour", "Tide Tables (Deluxe Edition)", None, None).unwrap(), had);
+        assert_eq!(crate::catalogue::records::record_of_album(&cat, None, "GLASS HARBOUR", "Tide Tables", None, None).unwrap(), had, "its own names, folded");
     }
 
     /// A record not had of `artist`'s, as their list keeps one: an album, titled `title`, holding `refs`.
@@ -4599,12 +4659,12 @@ mod tests {
         let (owned_group, asked) = ("00000000-0000-4000-8000-000000000200", "00000000-0000-4000-8000-000000000201");
         let owned = cat.record_for_tests("Tide Tables", 2);
         assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", owned_group), "files").unwrap());
-        let wanted = crate::app::requests::record_of_album(&cat, Some(asked), "Glass Harbour", "Tide Tables (Remixes)", None, None).unwrap();
+        let wanted = crate::catalogue::records::record_of_album(&cat, Some(asked), "Glass Harbour", "Tide Tables (Remixes)", None, None).unwrap();
         assert_ne!(wanted, owned);
         assert!(cat.references_of(&ids::record(wanted)).unwrap().iter().any(|(r, _)| r.value == asked));
-        let untagged = crate::app::requests::record_of_album(&cat, None, "Glass Harbour", "Tide Tables (Deluxe)", None, None).unwrap();
+        let untagged = crate::catalogue::records::record_of_album(&cat, None, "Glass Harbour", "Tide Tables (Deluxe)", None, None).unwrap();
         assert_ne!(untagged, owned, "by its names only, not the owned album its loose names match (W2)");
-        assert_eq!(crate::app::requests::record_of_album(&cat, None, "Glass Harbour", "TIDE TABLES", None, None).unwrap(), owned, "its own names, folded");
+        assert_eq!(crate::catalogue::records::record_of_album(&cat, None, "Glass Harbour", "TIDE TABLES", None, None).unwrap(), owned, "its own names, folded");
     }
 
     /// W6 (H): a Want credited to two artists credits each, as the record pass credits a file's, the first its artist; not one
@@ -5185,7 +5245,7 @@ mod tests {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let owned = cat.record_for_tests("Glass Harbour", 2);
         assert!(cat.set_reference(&ids::record(owned), &Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000202"), "files").unwrap());
-        let wanted = crate::app::requests::record_of_album(&cat, Some("00000000-0000-4000-8000-000000000203"), "Glass Harbour", "Glass Harbour", None, None).unwrap();
+        let wanted = crate::catalogue::records::record_of_album(&cat, Some("00000000-0000-4000-8000-000000000203"), "Glass Harbour", "Glass Harbour", None, None).unwrap();
         assert_ne!(wanted, owned);
     }
 
@@ -5240,7 +5300,7 @@ mod tests {
     fn a_request_never_takes_another_artists_album_by_its_title() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let had = cat.record_for_tests("Tide Tables", 2);
-        let asked = crate::app::requests::record_of_album(&cat, None, "Orbit Lane", "Tide Tables", None, None).unwrap();
+        let asked = crate::catalogue::records::record_of_album(&cat, None, "Orbit Lane", "Tide Tables", None, None).unwrap();
         assert_ne!(asked, had);
         assert!(!cat.record(asked).unwrap().unwrap().had);
     }
@@ -5251,7 +5311,7 @@ mod tests {
     fn a_request_names_the_live_record_of_its_group_over_a_retired_one() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let group = "00000000-0000-4000-8000-000000000141";
-        let want = || crate::app::requests::record_of_album(&cat, Some(group), "Glass Harbour", "Undertow", None, None).unwrap();
+        let want = || crate::catalogue::records::record_of_album(&cat, Some(group), "Glass Harbour", "Undertow", None, None).unwrap();
         let holding = |record: i64, how: &str| assert!(cat.set_reference(&ids::record(record), &Ref::new("musicbrainz", "release-group", group), how).unwrap());
         let gone = cat.record_for_tests("Undertow", 2);
         holding(gone, "files");

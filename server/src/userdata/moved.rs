@@ -315,7 +315,7 @@ fn move_tracks(tx: &Transaction, moved: &[(i64, i64)]) -> Result<Vec<(&'static s
     }
     let song = crate::serve::ids::song;
     let songs: HashMap<String, String> = moved.iter().map(|(old, new)| (song(*old), song(*new))).collect();
-    let own = crate::source::cratarr::KIND.id;
+    let own = crate::source::CRATARR;
     let items: HashMap<String, String> = songs.iter().map(|(old, new)| (item_id("track", own, old), item_id("track", own, new))).collect();
     let mut counts = vec![
         ("annotation", fold(tx, "annotation", "item", "kind = 'song'", &songs, annotations)?),

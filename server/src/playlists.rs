@@ -1335,7 +1335,7 @@ B/2.mp3
         let led = s.led_entries("Mix").await.unwrap();
         assert_eq!(led, ["A/1.mp3"]);
         let song = crate::serve::ids::song(track);
-        assert_eq!(cat.line_track_ids(crate::source::cratarr::KIND.id, &led).unwrap(), [Some(song)]);
+        assert_eq!(cat.line_track_ids(crate::source::CRATARR, &led).unwrap(), [Some(song)]);
         assert!(line_exists(&cat, &led[0]), "not missing");
         assert_eq!(s.entries("Mix").await.unwrap(), ["../own/A/1.mp3"], "reading writes nothing");
         s.refresh_dead().await;

@@ -21,8 +21,8 @@ pub const PROMOTED: &str = "promoted";
 pub const REJECTED: &str = "rejected";
 pub const UNREVIEWED: &str = "unreviewed";
 
-/// In a review's undo key: a Keep queued for conversion, by the server's album id (its job has the real key).
-pub const JOB: &str = "job:";
+/// In a review's undo key: in `userdata::albums`, which rekeys it (SPLIT-PLAN P7).
+pub use crate::userdata::albums::JOB;
 
 pub fn router(serve: Arc<Serve>) -> Router {
     Router::new()

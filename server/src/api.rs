@@ -3202,10 +3202,8 @@ fn never_offline(t: &TrackRefOf) -> Option<serde_json::Value> {
     (t.source == crate::bandcamp::SOURCE).then(|| json!({ "source": t.source, "id": t.id, "offline": false, "error": crate::bandcamp::NOT_KEPT }))
 }
 
-/// A path segment, percent-encoded.
-pub(crate) fn form_urlencoded_segment(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
-}
+/// A path segment, percent-encoded: in `serve`, below Incoming's replace that names one too (SPLIT-PLAN P7).
+pub(crate) use crate::serve::form_urlencoded_segment;
 
 /// Offline play (0.9.8, the installed web app): the tracks' files readied, each with where to fetch it and whether it
 /// is ready yet; asked again until all are.
@@ -7374,13 +7372,17 @@ async fn connections_state() -> Json<serde_json::Value> {
     Json(json!({ "connections": all }))
 }
 
+/// A restart asked from Settings (0.9.6): Cratarr stops as `docker stop` stops it, and Docker's restart policy brings it
+/// back.
+pub static RESTART: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 /// Cratarr restarted from Settings (0.9.6, the owner: no command line needed): answered at once, then stopped as
 /// `docker stop` stops it (`main`'s graceful stop); Docker's restart policy (unless-stopped) brings it back.
 async fn restart_server() -> (StatusCode, Json<serde_json::Value>) {
     tracing::info!(target: "server", "restart asked from Settings");
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        crate::RESTART.notify_one();
+        RESTART.notify_one();
     });
     (StatusCode::ACCEPTED, Json(json!({ "restarting": true })))
 }

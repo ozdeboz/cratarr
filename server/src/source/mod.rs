@@ -23,8 +23,6 @@ use std::pin::Pin;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::nowplaying::Progress;
-
 /// What a source's async methods return. Boxed so `Source` can be used as `dyn Source`.
 pub type Fut<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
@@ -239,7 +237,7 @@ pub struct ReleaseType {
     /// Its files' state where they differ from what Cratarr holds, or a run touched them (decision 0092; Cratarr's own
     /// records, with writing into files on).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub files_state: Option<crate::app::file_runs::FilesState>,
+    pub files_state: Option<FilesState>,
     /// Classical (0.10, the owner, 2026-10-30), a kind beside the release type: Cratarr's own library's records say
     /// whether they are (`app::classical`), other servers' say nothing; the mark where someone marked it (`classical`,
     /// `not`); a classical record's composers (keyed by MusicBrainz artist, else `name:<loose name>`) and performers,
@@ -250,7 +248,7 @@ pub struct ReleaseType {
     pub classical_mark: Option<String>,
     /// Why a record is classical or not (0.13, for administrators and the MCP server; `app::classical::Why`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub classical_why: Option<crate::app::classical::Why>,
+    pub classical_why: Option<Why>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub composers: Vec<ComposerRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -265,6 +263,68 @@ pub struct ReleaseType {
 pub struct ComposerRef {
     pub key: String,
     pub name: String,
+}
+
+/// How far into the playing track we are.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Progress {
+    pub position_secs: f64,
+    pub duration_secs: Option<f64>,
+    pub paused: bool,
+    /// True when no player session reports this track, so the position is "time since it started" from the
+    /// activity log: right unless it was paused or seeked.
+    pub estimated: bool,
+    /// Tape rewind under way on the player (0.9.10): the position goes back to the start as reported, not run on.
+    pub rewinding: bool,
+    /// Asked to play from rest and not sounding yet (0.9.14): the page's waveform stays grey until it sounds.
+    pub starting: bool,
+    /// How fast it moves, as its player says (track s per s, signed): a Cratarr player's while it winds, holds or ramps
+    /// (2026-11-03, the owner: "No guessing anywhere": the page counted another player on at 1× through a Vinyl ramp).
+    /// Left out where it says none: its own speed playing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed_x: Option<f64>,
+}
+
+/// A record's files' state: differs (offered), waiting, writing (`done` of `of` files), written (`at`, today only) or
+/// changed (a file changed since it was planned or written).
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct FilesState {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub of: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<i64>,
+    /// Where it differs (F27): each field its files lack, with what it gets, as its plan's rows name them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<Vec<FileFact>>,
+}
+
+/// A field a record's files lack (F27): what the plan writes into it.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct FileFact {
+    pub field: String,
+    pub values: Vec<String>,
+}
+
+/// Why a record is classical or not (0.13): the genre that opened the gate and where it was found (`genres`: the
+/// record's own, `musicbrainz`, `discogs`), and what confirmed it: `mark` (set by hand), `works` (its works with
+/// composers, someone performing), `composer` (a composer of its works confirmed on another record, named), `artist`
+/// (its album artist confirmed so, named), `most tracks` (a mix of others' records, most of its tracks of confirmed
+/// composers); none where nothing did.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
+pub struct Why {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer: Option<String>,
 }
 
 /// One copy of a record as the page sees it: one folder's files of it (docs/records-and-copies.md). `AlbumCopy` in the
@@ -889,6 +949,10 @@ pub struct Kind {
     /// while the page is still being filled in); otherwise every required field must be set.
     pub connect: fn(&Values, partial: bool) -> Result<Box<dyn Source>>,
 }
+
+/// Cratarr's own source's id (`cratarr::KIND`): kept in the settings file and on its tracks' rows. Here, below the source
+/// itself, for the stores that tell its tracks from other servers'.
+pub const CRATARR: &str = "cratarr";
 
 pub static KINDS: &[Kind] = &[cratarr::KIND, jellyfin::KIND, subsonic::KIND];
 

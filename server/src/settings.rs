@@ -43,7 +43,7 @@ pub const YOUR_MUSIC: &str = "Your music";
 impl SourceConfig {
     /// The own-music folder: Cratarr's own source's, where one is set.
     pub fn own_music(&self) -> Option<std::path::PathBuf> {
-        (self.kind == crate::source::cratarr::KIND.id).then(|| source::text(&self.values, OWN_MUSIC).map(std::path::PathBuf::from)).flatten()
+        (self.kind == crate::source::CRATARR).then(|| source::text(&self.values, OWN_MUSIC).map(std::path::PathBuf::from)).flatten()
     }
 
     /// Whether `account` has own music: an own-music folder set, and not switched off for it (`OWN_MUSIC_OFF`).
@@ -315,8 +315,11 @@ struct File {
     naming: Option<String>,
 }
 
+/// How long a deleted album can still be brought back, until Settings says otherwise.
+pub const DEFAULT_KEEP_DAYS: u32 = 14;
+
 fn default_trash_days() -> u32 {
-    crate::trash::DEFAULT_KEEP_DAYS
+    DEFAULT_KEEP_DAYS
 }
 
 /// Lidarr, which Incoming asks to stop fetching an album it deleted. Optional.
@@ -586,7 +589,7 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
         // Cratarr's own folders (decision 0044) are its values though no field of its form shows them (they are chosen in
         // the folder browser): kept, or every save dropped them and the source then had no library (2026-11-02, found
         // on the development instance: "a Music library is no longer on the server" for any change).
-        let own_folders = d.kind == crate::source::cratarr::KIND.id;
+        let own_folders = d.kind == crate::source::CRATARR;
         d.values.retain(|k, v| {
             (own_folders && k == "folders" && v.is_array())
                 || (own_folders && k == OWN_MUSIC && v.is_string())
@@ -762,7 +765,7 @@ mod tests {
     fn cratarrs_own_folders_are_kept_through_a_save() {
         let own = |folders: serde_json::Value| SourceConfig {
             id: "cratarr".into(),
-            kind: crate::source::cratarr::KIND.id.into(),
+            kind: crate::source::CRATARR.into(),
             enabled: true,
             libraries: list(&[("/music", LibraryKind::Main), ("/incoming", LibraryKind::Incoming)]),
             values: [("folders".to_string(), folders)].into_iter().collect(),
@@ -778,7 +781,7 @@ mod tests {
     fn the_own_music_folder_is_kept_and_checked() {
         let own = |folder: &str| SourceConfig {
             id: "cratarr".into(),
-            kind: crate::source::cratarr::KIND.id.into(),
+            kind: crate::source::CRATARR.into(),
             enabled: true,
             libraries: Libraries::default(),
             values: [("folders".to_string(), serde_json::json!(["/music", "/media/x"])), (OWN_MUSIC.to_string(), serde_json::json!(folder))].into_iter().collect(),

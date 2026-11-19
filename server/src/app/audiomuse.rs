@@ -85,7 +85,7 @@ fn parse(cat: &Catalogue, text: &str) -> (Vec<AudioMuseRow>, Counts) {
             counts.bad += 1;
             continue;
         };
-        let Some(track) = cat.track_of_source(crate::source::cratarr::KIND.id, &line.track) else {
+        let Some(track) = cat.track_of_source(crate::source::CRATARR, &line.track) else {
             counts.unknown += 1;
             continue;
         };

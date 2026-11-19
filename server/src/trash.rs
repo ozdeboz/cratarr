@@ -7,10 +7,9 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-/// Under each library's folder; hidden, so media servers, Lidarr and Cratarr's own scan leave it alone.
-pub const TRASH_DIR: &str = ".cratarr-trash";
-/// How long a deleted album can still be brought back, until Settings says otherwise.
-pub const DEFAULT_KEEP_DAYS: u32 = 14;
+/// The trash's folder under each library's, and how long it keeps: in `catalogue` and `settings`, below the trash (SPLIT-PLAN P7).
+pub use crate::catalogue::TRASH_DIR;
+pub use crate::settings::DEFAULT_KEEP_DAYS;
 
 /// `rel` must be a plain relative path inside the folder: no `..`, no root, not the trash itself.
 fn checked(rel: &str) -> Result<PathBuf> {

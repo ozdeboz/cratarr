@@ -168,7 +168,16 @@ pub enum Change {
     /// key and name.
     ArtistOut { user: String, key: String, name: String, out: bool },
     /// Tracks' tempo adjusted (Adjust BPM, 2026-10-23): each one's BPM tag before and after.
-    Tempo { tracks: Vec<crate::app::tempo::TempoChange> },
+    Tempo { tracks: Vec<TempoChange> },
+}
+
+/// One track's tempo changed: its BPM tag before (none: it had none) and after, for the undo.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TempoChange {
+    pub source: String,
+    pub id: String,
+    pub before: Option<u32>,
+    pub after: Option<u32>,
 }
 
 /// A run of changes to the library's files (decision 0092): what wrote it, and each file it wrote with its fields before

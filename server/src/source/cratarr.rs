@@ -22,7 +22,7 @@ use crate::app::{PlayOn, PlayOnCommand as Command};
 use crate::serve::Serve;
 use crate::userdata::{Annotation, Kind as Item};
 
-pub const KIND: Kind = Kind { id: "cratarr", label: "Cratarr", fields, connect };
+pub const KIND: Kind = Kind { id: super::CRATARR, label: "Cratarr", fields, connect };
 
 fn fields() -> Vec<Field> {
     Vec::new()

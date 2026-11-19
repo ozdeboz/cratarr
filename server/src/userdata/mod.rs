@@ -1532,7 +1532,7 @@ impl UserData {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT album FROM bandcamp_found WHERE page = ?1 ORDER BY at DESC")?;
         let keys: Vec<String> = st.query_map([page], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        Ok(keys.into_iter().find(|k| crate::app::discogs::is_mbid(k)))
+        Ok(keys.into_iter().find(|k| is_mbid(k)))
     }
 
     /// Every album page found on Bandcamp since `since` (epoch seconds), by the album's key: what lists of albums not in
@@ -2444,6 +2444,11 @@ fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
         fetched: r.get(14)?,
         record: r.get(15)?,
     })
+}
+
+/// A MusicBrainz id's shape (so it can go into an address as it is).
+pub fn is_mbid(id: &str) -> bool {
+    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
 #[cfg(test)]

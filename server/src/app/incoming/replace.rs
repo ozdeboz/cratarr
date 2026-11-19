@@ -296,7 +296,7 @@ pub struct ReplaceCovers {
 /// An album's cover as the page asks for it, of its copy in `library`: two copies of a record have one id, and the address
 /// alone can tell their pictures apart.
 fn cover_at(source_id: &str, album_id: &str, library: Option<&str>) -> String {
-    let named = library.map_or_else(String::new, |l| format!("?from={}", crate::api::form_urlencoded_segment(l)));
+    let named = library.map_or_else(String::new, |l| format!("?from={}", crate::serve::form_urlencoded_segment(l)));
     format!("/api/albums/{source_id}/{album_id}/cover{named}")
 }
 

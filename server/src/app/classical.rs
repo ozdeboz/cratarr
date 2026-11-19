@@ -72,22 +72,8 @@ pub fn gate<'a>(genres: impl IntoIterator<Item = &'a str>) -> bool {
     genres.into_iter().any(classical_genre)
 }
 
-/// Why a record is classical or not (0.13): the genre that opened the gate and where it was found (`genres`: the
-/// record's own, `musicbrainz`, `discogs`), and what confirmed it: `mark` (set by hand), `works` (its works with
-/// composers, someone performing), `composer` (a composer of its works confirmed on another record, named), `artist`
-/// (its album artist confirmed so, named), `most tracks` (a mix of others' records, most of its tracks of confirmed
-/// composers); none where nothing did.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
-pub struct Why {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub genre: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub by: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub composer: Option<String>,
-}
+/// Why a record is classical or not (in `source`, beside the `Album` that holds it).
+pub use crate::source::Why;
 
 /// A record's mark by hand (the owner: library-wide, outlasting every pass).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

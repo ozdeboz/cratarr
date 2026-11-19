@@ -15,7 +15,9 @@ use super::offline::ChangeKind;
 use super::{NO_FOLDER, UserData};
 use crate::moved::{Report, Walk};
 use crate::serve::ids;
-use crate::serve::review::JOB;
+
+/// In a review's undo key: a Keep queued for conversion, by the server's album id (its job has the real key).
+pub const JOB: &str = "job:";
 
 /// A copy's old id, and the record it is a copy of.
 #[derive(Debug, Clone)]
@@ -255,7 +257,7 @@ mod tests {
     use super::super::offline::{Since, item_id};
     use super::super::{ImportKey, Kind, put_migration_part};
     use super::*;
-    use crate::source::cratarr::KIND;
+    use crate::source::CRATARR;
 
     /// The main library's, listed first and sorting last: what a list's order decides, no key's order could.
     const MAIN: &str = "al-zzzzzzzzzzzzzzzzzzzzzz";
@@ -609,7 +611,7 @@ mod tests {
     /// A write older than an item's last change changes nothing: left behind, an old write wins over a newer heart.
     #[test]
     fn of_two_last_changes_the_later_stands() {
-        let (main, other, moved) = (item_id("album", KIND.id, MAIN), item_id("album", KIND.id, OTHER), item_id("album", KIND.id, RECORD));
+        let (main, other, moved) = (item_id("album", CRATARR, MAIN), item_id("album", CRATARR, OTHER), item_id("album", CRATARR, RECORD));
         let u = with(&format!(
             "INSERT INTO change_at (account, kind, item, at) VALUES
                ('ann', 'favourite', '{main}', 200), ('ann', 'favourite', '{other}', 300), ('ann', 'favourite', 'album:jf/1', 7), ('ann', 'favourite', 'track:cratarr/tr-1', 7);"

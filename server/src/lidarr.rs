@@ -368,7 +368,7 @@ impl Lidarr {
     /// The album Lidarr's lookup finds by these names (`terms`, `pick`). A term that fails is passed over for the next;
     /// that failure is what is told if no term finds it.
     async fn by_name(&self, artist: &str, album: &str) -> Result<serde_json::Value> {
-        let main = crate::app::soulseek::main_artist(artist);
+        let main = main_artist(artist);
         let mut failed = None;
         for term in terms(artist, &main, album) {
             match self.get::<Vec<serde_json::Value>>("/api/v1/album/lookup", &[("term", term.as_str())]).await {
@@ -605,6 +605,18 @@ impl Lidarr {
         }
         Ok(())
     }
+}
+
+/// The first artist credited ("Air feat. Beck", "Air & Beck", "Air, Beck", "Air / Beck" → "Air").
+pub fn main_artist(artist: &str) -> String {
+    // ASCII only: a letter that grows when lowered would move the cut off the artist's own bytes.
+    let lower = artist.to_ascii_lowercase();
+    let cut = [" feat.", " feat ", " ft.", " featuring ", " & ", " and ", ", ", " / ", " x ", " vs. ", " vs ", " with "]
+        .iter()
+        .filter_map(|s| lower.find(s))
+        .min()
+        .unwrap_or(artist.len());
+    artist[..cut].trim().to_string()
 }
 
 /// A strict Lidarr for the tests (T9's): the API key checked on every call (401 without it); release group `GROUP`'s one album, 7

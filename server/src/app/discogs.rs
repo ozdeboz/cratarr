@@ -275,10 +275,8 @@ async fn mb_links(entity: &str, id: &str) -> Result<Vec<String>> {
     Ok(v["relations"].as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect())
 }
 
-/// A MusicBrainz id's shape (so it can go into an address as it is).
-pub fn is_mbid(id: &str) -> bool {
-    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
-}
+/// A MusicBrainz id's shape: in `userdata`, below its first store (SPLIT-PLAN P7).
+pub use crate::userdata::is_mbid;
 
 /// An album's master: MusicBrainz's link from its release group, else Discogs' search by artist and title (with the
 /// key only: Discogs' search needs it), the first whose "Artist - Title" is the album's.

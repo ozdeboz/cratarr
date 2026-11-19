@@ -400,17 +400,8 @@ fn stripped(title: &str) -> String {
     out.trim().to_string()
 }
 
-/// The first artist credited ("Air feat. Beck", "Air & Beck", "Air, Beck", "Air / Beck" → "Air").
-pub fn main_artist(artist: &str) -> String {
-    // ASCII only: a letter that grows when lowered would move the cut off the artist's own bytes.
-    let lower = artist.to_ascii_lowercase();
-    let cut = [" feat.", " feat ", " ft.", " featuring ", " & ", " and ", ", ", " / ", " x ", " vs. ", " vs ", " with "]
-        .iter()
-        .filter_map(|s| lower.find(s))
-        .min()
-        .unwrap_or(artist.len());
-    artist[..cut].trim().to_string()
-}
+/// The first artist credited: in `lidarr`, its first user below Soulseek (SPLIT-PLAN P7).
+pub use crate::lidarr::main_artist;
 
 /// The searches for a record, in turn, none twice: the record and its year; its title stripped; the main artist only;
 /// then a wildcard for the artist's first letter (Soulseek's server leaves some artists' names out of every search).

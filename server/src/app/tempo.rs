@@ -27,14 +27,8 @@ pub struct TrackTempo {
     pub measured: Option<u32>,
 }
 
-/// One track's tempo changed: its BPM tag before (none: it had none) and after, for the undo.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TempoChange {
-    pub source: String,
-    pub id: String,
-    pub before: Option<u32>,
-    pub after: Option<u32>,
-}
+/// One track's tempo changed: in `journal`, which keeps it for the undo (SPLIT-PLAN P7).
+pub use crate::journal::TempoChange;
 
 /// A track's file: its folder in the catalogue, its path there, and where it is.
 pub(super) fn place(cat: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<(i64, String, PathBuf)> {

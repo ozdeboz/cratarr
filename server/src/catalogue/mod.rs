@@ -750,7 +750,7 @@ fn taken_for_good(tx: &Connection, goes: i64, stays: i64) -> Result<()> {
     tx.execute("UPDATE track_moved SET id = ?2 WHERE id = ?1", params![goes, stays])?;
     tx.execute("INSERT OR REPLACE INTO track_moved (old, id, followed) VALUES (?1, ?2, 0)", params![goes, stays])?;
     // A link names one file a track: the next pass makes the one that stays its own.
-    tx.execute("DELETE FROM source_ids WHERE source = ?1 AND track_id = ?2", params![crate::source::cratarr::KIND.id, crate::serve::ids::song(goes)])?;
+    tx.execute("DELETE FROM source_ids WHERE source = ?1 AND track_id = ?2", params![crate::source::CRATARR, crate::serve::ids::song(goes)])?;
     tx.execute("UPDATE OR IGNORE audiomuse SET track = ?2 WHERE track = ?1", params![goes, stays])?;
     tx.execute("DELETE FROM audiomuse WHERE track = ?1", [goes])?;
     Ok(())
@@ -2068,7 +2068,7 @@ impl Catalogue {
     /// The playlist lines of the files these server track ids are, in any folder in use (`line_of`); ids not known are
     /// left out. Cratarr's own id is a track: its one line, as the crates know it (`row_line`). Blocking.
     pub fn lines_of(&self, source: &str, ids: &[String]) -> Result<std::collections::HashSet<String>> {
-        if source == crate::source::cratarr::KIND.id {
+        if source == crate::source::CRATARR {
             return Ok(ids.iter().filter_map(|id| self.row_line(self.track_of_source(source, id)?)).collect());
         }
         let folders = self.folders();
@@ -2675,7 +2675,7 @@ impl Catalogue {
             let mut st = tx.prepare("SELECT DISTINCT folder, trashed FROM files WHERE trashed IS NOT NULL")?;
             let trashed: Vec<(i64, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
             for (folder, token) in trashed {
-                let still = folders.get(folder).is_some_and(|f| f.join(crate::trash::TRASH_DIR).join(&token).exists());
+                let still = folders.get(folder).is_some_and(|f| f.join(TRASH_DIR).join(&token).exists());
                 if !still {
                     let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND trashed = ?2")?;
                     let rels: Vec<String> = st.query_map(params![folder, token], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -3137,12 +3137,12 @@ impl Catalogue {
     /// An album folder (or file) Cratarr moved into the trash of its folder: its rows follow it there, keep their
     /// track ids, and are marked trashed with the trash token. Their server links go. Blocking.
     pub fn mark_trashed(&self, folder: i64, rel: &str, token: &str) -> Result<usize> {
-        self.rekey(folder, rel, folder, &format!("{}/{token}", crate::trash::TRASH_DIR), Some(token))
+        self.rekey(folder, rel, folder, &format!("{}/{token}", TRASH_DIR), Some(token))
     }
 
     /// Undo `mark_trashed`: the rows go back to where the files are again. Blocking.
     pub fn unmark_trashed(&self, folder: i64, rel: &str, token: &str) -> Result<usize> {
-        self.rekey(folder, &format!("{}/{token}", crate::trash::TRASH_DIR), folder, rel, None)
+        self.rekey(folder, &format!("{}/{token}", TRASH_DIR), folder, rel, None)
     }
 
     /// Files Cratarr moved itself (adopting an album, say): their rows follow, track ids and tags kept, so nothing is
@@ -3569,7 +3569,7 @@ impl Catalogue {
             .iter()
             .map_while(|(source, item)| {
                 let track = track_of_source(&db, source, item)?;
-                let files = if *source == crate::source::cratarr::KIND.id { files_of(&db, track) } else { place_of_source(&db, source, item).into_iter().collect() };
+                let files = if *source == crate::source::CRATARR { files_of(&db, track) } else { place_of_source(&db, source, item).into_iter().collect() };
                 let files: Vec<_> = files
                     .into_iter()
                     .map(|(folder, rel)| {
@@ -4729,6 +4729,21 @@ fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::anal
     })
 }
 
+/// Under each library's folder; hidden, so media servers, Lidarr and Cratarr's own scan leave it alone.
+pub const TRASH_DIR: &str = ".cratarr-trash";
+
+/// The rows of `analysis_shape` the part `band_wave` reads at a time (M1): a batch a transaction.
+pub const BAND_WAVE_BATCH: usize = 500;
+
+/// The part `band_wave` (M1): the waveforms in three bands apart from the visuals' signals, once. Blocking.
+pub fn band_waves(cat: &Catalogue) -> Result<()> {
+    let started = std::time::Instant::now();
+    if let Some(apart) = cat.band_waves_apart(BAND_WAVE_BATCH, &|| Ok(())).context("0.17's step, part band_wave")? {
+        tracing::info!(target: "library", band_waves = apart, secs = started.elapsed().as_secs(), "0.17's step: the waveforms in three bands apart from the visuals' signals");
+    }
+    Ok(())
+}
+
 /// The albums' gain and peak in a folder, by album directory (an album is a folder of files, as the served library
 /// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every track
 /// of the directory has one, so a half-analysed album has none yet. Any connection to the catalogue's file.
@@ -4784,7 +4799,7 @@ fn album_gains_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Has
 
 /// See `Catalogue::track_of_source`; on the catalogue's connection, held (`files_of_sources` asks for many at once).
 fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
-    if source == crate::source::cratarr::KIND.id {
+    if source == crate::source::CRATARR {
         // An id a take retired stands for the track that took it: a queue, an export or a crate can name it long after.
         let track = taken_by(db, crate::serve::ids::track_of(item)?).ok()?;
         let present = format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}");
@@ -4808,7 +4823,7 @@ fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
 /// A file's item on a source. Cratarr's own item is the track, whichever copy the file is: its links come from `songs`, which
 /// holds a track's row copy alone, so a playlist line on any other copy would have no id and stop playing.
 fn item_at(db: &Connection, source: &str, folder: i64, rel: &str) -> Result<Option<String>> {
-    if source == crate::source::cratarr::KIND.id {
+    if source == crate::source::CRATARR {
         let mut st = db.prepare_cached(&format!("SELECT track FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"))?;
         return Ok(st.query_row(params![folder, rel], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten().map(crate::serve::ids::song));
     }
@@ -4837,7 +4852,7 @@ fn files_of(db: &Connection, track: i64) -> Vec<(i64, String)> {
 
 /// See `Catalogue::place_of_source`.
 fn place_of_source(db: &Connection, source: &str, item: &str) -> Option<(i64, String)> {
-    if source == crate::source::cratarr::KIND.id {
+    if source == crate::source::CRATARR {
         return file_of(db, track_of_source(db, source, item)?);
     }
     db.query_row(
@@ -5125,7 +5140,7 @@ mod tests {
             lines.iter().filter_map(|l| l.strip_prefix("library: 0.17's step: waveforms in three bands apart so far band_waves=")?.parse().ok()).collect()
         };
         let cat = made();
-        let lines = crate::diagnostics::logged_lines(|| crate::app::step_017::band_waves(&cat).unwrap());
+        let lines = crate::diagnostics::logged_lines(|| crate::catalogue::band_waves(&cat).unwrap());
         assert_eq!(so_far(&lines), [5_000, 10_000], "at the first batch past 5,000 and 10,000: {lines:#?}");
         assert!(so_far(&lines).iter().all(|n| *n < ROWS), "none once the mark is set");
         assert_eq!(lines.first().map(String::as_str), Some("library: 0.17's step, part band_wave"), "{lines:#?}");
@@ -5143,7 +5158,7 @@ mod tests {
         });
         let copied: i64 = cut.db().query_row("SELECT count(*) FROM analysis_band_wave", [], |r| r.get(0)).unwrap();
         assert_eq!(copied, 6_000, "cut off inside the part");
-        let again = crate::diagnostics::logged_lines(|| crate::app::step_017::band_waves(&cut).unwrap());
+        let again = crate::diagnostics::logged_lines(|| crate::catalogue::band_waves(&cut).unwrap());
         let said = so_far(&again);
         assert!(said.first().is_some_and(|n| *n >= 6_000), "the waves apart before counted: {again:#?}");
         assert!(said.len() <= 3, "{again:#?}");
@@ -6756,7 +6771,7 @@ mod tests {
     #[test]
     fn a_taken_id_still_stands_for_its_track() {
         let (a, b, cat, stays, goes) = two_folders_on_disk("named");
-        let own = crate::source::cratarr::KIND.id;
+        let own = crate::source::CRATARR;
         assert_eq!(cat.track_of_source(own, &crate::serve::ids::song(goes)), Some(stays));
         let files = cat.files_of_sources(&[(own, crate::serve::ids::song(goes).as_str())]);
         assert_eq!((files[0].0, files[0].1.len()), (stays, 2), "both copies to choose from");
@@ -7895,7 +7910,7 @@ mod tests {
     #[test]
     fn a_line_on_any_copy_has_its_track() {
         let (root, cat) = one_track_twice();
-        let own = crate::source::cratarr::KIND.id;
+        let own = crate::source::CRATARR;
         let song = Some("tr-77".to_string());
         let lines = ["A/01.mp3".to_string(), "../own/A/01.mp3".to_string(), "Nowhere/01.mp3".to_string()];
         assert_eq!(cat.line_track_ids(own, &lines).unwrap(), [song.clone(), song.clone(), None]);
@@ -7915,7 +7930,7 @@ mod tests {
         assert_eq!(row_line_of(&folders, &files, Some(&row)).as_deref(), Some("../own/A/01.mp3"));
         assert_eq!(row_line_of(&folders, &files, None).as_deref(), Some("A/01.mp3"), "no library to ask: the first by folder");
         assert_eq!(row_line_of(&folders, &files, Some(&(1, "Gone/01.mp3".to_string()))).as_deref(), Some("A/01.mp3"), "a row from before the file went");
-        let own = crate::source::cratarr::KIND.id;
+        let own = crate::source::CRATARR;
         assert_eq!(cat.lines_of(own, &["tr-77".to_string()]).unwrap(), ["A/01.mp3".to_string()].into_iter().collect(), "one line a track, as the crates know it");
         std::fs::remove_dir_all(&root).ok();
     }
@@ -8390,7 +8405,7 @@ mod tests {
         cat.reconnect(1, 2).unwrap();
         assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(1, 2)]));
         assert_eq!(cat.tracks_to_follow().unwrap(), [(1, 2)]);
-        assert_eq!(cat.track_of_source(crate::source::cratarr::KIND.id, "tr-1"), Some(2), "an old id plays what took it");
+        assert_eq!(cat.track_of_source(crate::source::CRATARR, "tr-1"), Some(2), "an old id plays what took it");
         assert_eq!(cat.remembered(1).unwrap().title.as_deref(), Some("Gone"), "what it was stays");
         assert!(retired(&cat, 1));
     }
