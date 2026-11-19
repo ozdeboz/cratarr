@@ -418,16 +418,25 @@ async fn known_at(cat: &Arc<Catalogue>, label: &LabelAsked, source: &dyn LabelLi
         return Ok(Some(id));
     }
     let found = source.find(&label.name, &refs).await?;
-    let id = label_id_at(found.iter().map(|(r, _)| r), source.source());
-    let (c, subject) = (cat.clone(), ids::label(label.id));
-    tokio::task::spawn_blocking(move || -> Result<()> {
+    let (c, subject, source_name) = (cat.clone(), ids::label(label.id), source.source());
+    // A2.4.3: only an id the label could keep is read by: one another label holds is theirs, and nothing is read or kept under this
+    // one from that source (the log names the holder).
+    tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+        let mut id = None;
         for (r, how) in &found {
-            c.set_reference(&subject, r, how)?;
+            let kept = c.set_reference(&subject, r, how)?;
+            if r.source == source_name && r.kind == "label" {
+                if kept {
+                    id = Some(r.value.clone());
+                } else {
+                    let holder = c.subject_of(r)?.into_iter().find(|s| *s != subject).unwrap_or_default();
+                    tracing::info!(target: "discover", label = %subject, holder = %holder, source = source_name, "a label's list not read: its id there is another label's");
+                }
+            }
         }
-        Ok(())
+        Ok(id)
     })
-    .await??;
-    Ok(id)
+    .await?
 }
 
 /// A page of the label's list at `source` read and kept (C56): from its start (`from` none), where its list then starts again,
@@ -683,18 +692,47 @@ pub fn of_text(cat: &Catalogue, text: &str) -> Result<Vec<LabelOf>> {
 /// before C46 have none: by its name alone), then those of the files' release at MusicBrainz, by their MBIDs, of a name Discogs
 /// names none of. Blocking.
 pub fn about(cat: &Catalogue, discogs: &[super::discogs::Label], musicbrainz: &[super::discogs::MbLabel]) -> Result<Vec<LabelOf>> {
-    let at_discogs: std::collections::HashSet<String> = discogs.iter().map(|l| ids::artist_key(l.name.trim())).collect();
-    let named: Vec<LabelNamed> = discogs
+    use crate::catalogue::labels::bare_key;
+    // One a label (A2.5): Discogs names a label once per catalogue number; by its id, else by its bare name, an entry with no id
+    // going with the one of its bare name that has one. Two ids are two labels.
+    let mut one: Vec<super::discogs::Label> = Vec::new();
+    for l in discogs {
+        let same = |m: &super::discogs::Label| match (m.id, l.id) {
+            (Some(a), Some(b)) => a == b,
+            _ => bare_key(&m.name) == bare_key(&l.name),
+        };
+        match one.iter_mut().find(|m| same(m)) {
+            Some(m) => {
+                add_catno(&mut m.catno, l.catno.as_deref().unwrap_or_default());
+                m.id = m.id.or(l.id);
+            }
+            None => one.push(l.clone()),
+        }
+    }
+    let at_discogs: std::collections::HashSet<String> = one.iter().map(|l| bare_key(&l.name)).collect();
+    let named: Vec<LabelNamed> = one
         .iter()
         .map(|l| LabelNamed { name: l.name.clone(), catno: l.catno.clone(), reference: l.id.map(|id| Ref::new("discogs", "label", &id.to_string())) })
         .chain(
             musicbrainz
                 .iter()
-                .filter(|l| !at_discogs.contains(&ids::artist_key(l.name.trim())))
+                .filter(|l| !at_discogs.contains(&bare_key(&l.name)))
                 .map(|l| LabelNamed { name: l.name.clone(), catno: l.catno.clone(), reference: Some(Ref::new("musicbrainz", "label", &l.mbid)) }),
         )
         .collect();
     shown(cat, &named)
+}
+
+/// A catalogue number added to a label's shown ones (A2.5): after them, ", " between, each once; an empty one adds nothing.
+pub(super) fn add_catno(shown: &mut Option<String>, catno: &str) {
+    let catno = catno.trim();
+    if catno.is_empty() || shown.as_deref().is_some_and(|s| s.split(", ").any(|c| c == catno)) {
+        return;
+    }
+    *shown = Some(match shown.take() {
+        Some(s) if !s.is_empty() => format!("{s}, {catno}"),
+        _ => catno.to_string(),
+    });
 }
 
 /// A label About shows, opened (F9, `POST /api/labels/open`): its reference at a source, and its name as shown.
@@ -733,21 +771,22 @@ fn label_reference(source: &str, id: &str) -> Option<Ref> {
 /// A label About shows, opened (F9): the label that holds its reference, found by anyone; else the one label of its name given it, or
 /// one made now with it (`Catalogue::open_label`), only where the reference is one an album's labels were kept with (`named`: its name
 /// then), by that name, or by an administrator, by the name given; never by a name alone. Blocking.
-pub fn open_label(cat: &Catalogue, o: &LabelOpened, named: impl FnOnce(&Ref) -> Result<Option<String>>, administering: bool) -> Result<LabelOpen> {
+pub fn open_label(cat: &Catalogue, o: &LabelOpened, named: impl FnOnce(&Ref) -> Result<Option<(String, bool)>>, administering: bool) -> Result<LabelOpen> {
     let Some(r) = label_reference(&o.source, &o.id) else { return Ok(LabelOpen::NoReference) };
     if let Some(Some(id)) = cat.labels_shown(&[(Some(r.clone()), String::new())])?.first() {
         return Ok(LabelOpen::Opened(*id));
     }
     let asked = o.name.trim();
-    let name = match named(&r)? {
-        Some(kept) if ids::artist_key(kept.trim()) == ids::artist_key(asked) => kept.trim().to_string(),
-        _ if administering && !asked.is_empty() => asked.to_string(),
+    // A1.8.4: a label Discogs marks as a namesake ("Source (2)") never joins a label of its name: it is another.
+    let (name, namesake) = match named(&r)? {
+        Some((kept, namesake)) if ids::artist_key(kept.trim()) == ids::artist_key(asked) => (kept.trim().to_string(), namesake),
+        _ if administering && !asked.is_empty() => (asked.to_string(), false),
         _ => return Ok(LabelOpen::NotNamed),
     };
     if name.chars().count() > NAME_MOST {
         anyhow::bail!("A name that long is no label's.");
     }
-    Ok(LabelOpen::Opened(cat.open_label(&r, &name)?))
+    Ok(LabelOpen::Opened(cat.open_label(&r, &name, !namesake)?))
 }
 
 #[cfg(test)]
@@ -1093,8 +1132,8 @@ mod tests {
     // ---- F9 (preview 1's fix batch): every label About shows opens its page where it has a reference
 
     /// The name a reference was kept with, as `discogs_facts::label_named` answers it: every one, by this name (the test's).
-    fn named_as(name: &'static str) -> impl Fn(&Ref) -> Result<Option<String>> {
-        move |_| Ok(Some(name.to_string()))
+    fn named_as(name: &'static str) -> impl Fn(&Ref) -> Result<Option<(String, bool)>> {
+        move |_| Ok(Some((name.to_string(), false)))
     }
 
     /// A source of the test's own that knows no label by its name: how often it was asked to find one, and the ids its list was read
@@ -1170,7 +1209,7 @@ mod tests {
         assert_eq!(both[0], both[1], "one label");
         assert_eq!(labels_kept(&cat), 4);
         // A later read of About: each by its id.
-        let discogs = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528) }];
+        let discogs = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528), namesake: false }];
         let musicbrainz = [crate::app::discogs::MbLabel { name: "Kite Records".into(), mbid: LABEL_MBID.into(), catno: None }];
         assert_eq!(
             serde_json::to_value(about(&cat, &discogs, &musicbrainz).unwrap()).unwrap(),
@@ -1197,7 +1236,7 @@ mod tests {
     fn a_label_is_made_only_by_a_reference_the_server_named() {
         let cat = Catalogue::open(None, Vec::new()).unwrap();
         let open = |source: &str, id: &str, name: &str, named: Option<&'static str>, administering: bool| {
-            open_label(&cat, &LabelOpened { source: source.into(), id: id.into(), name: name.into() }, move |_| Ok(named.map(str::to_string)), administering).unwrap()
+            open_label(&cat, &LabelOpened { source: source.into(), id: id.into(), name: name.into() }, move |_| Ok(named.map(|n| (n.to_string(), false))), administering).unwrap()
         };
         for (source, id) in [("", ""), ("bandcamp", "23528"), ("discogs", "x1"), ("discogs", "0"), ("discogs", ""), ("musicbrainz", "not an id"), ("musicbrainz", "23528")] {
             assert_eq!(open(source, id, "Low Tide Records", Some("Low Tide Records"), true), LabelOpen::NoReference, "{source:?} {id:?}: a name alone opens none");
@@ -1226,17 +1265,17 @@ mod tests {
         assert_eq!(text(" LOW TIDE RECORDS "), serde_json::json!([{ "name": "LOW TIDE RECORDS", "id": ids::label(low) }]), "(c) the one label of its name");
         assert_eq!(text("Quiet Pier"), serde_json::json!([{ "name": "Quiet Pier" }]), "no label of its name: text");
         assert_eq!(text(" "), serde_json::json!([]));
-        let old = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: None }];
+        let old = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: None, namesake: false }];
         let at_discogs = |labels: &[crate::app::discogs::Label]| serde_json::to_value(about(&cat, labels, &[]).unwrap()).unwrap();
         assert_eq!(at_discogs(&old), serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012", "id": ids::label(low) }]), "kept with no id: by its name");
         // (d) A second label of the name, made by its reference, the files' label holding another Discogs id (RG9: by the first, the
         // files' label was joined): the name opens neither.
-        assert_eq!(cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records").unwrap(), low, "the one label of its name");
-        let second = cat.open_label(&Ref::new("discogs", "label", "777"), "Low Tide Records").unwrap();
+        assert_eq!(cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records", true).unwrap(), low, "the one label of its name");
+        let second = cat.open_label(&Ref::new("discogs", "label", "777"), "Low Tide Records", true).unwrap();
         assert_ne!(second, low);
         assert_eq!(text("Low Tide Records"), serde_json::json!([{ "name": "Low Tide Records" }]), "(d) two labels of its name: text");
         assert_eq!(at_discogs(&old), serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012" }]));
-        let self_released = [crate::app::discogs::Label { name: "Not On Label (Kite Theory Self-released)".into(), catno: None, id: Some(1818) }];
+        let self_released = [crate::app::discogs::Label { name: "Not On Label (Kite Theory Self-released)".into(), catno: None, id: Some(1818), namesake: false }];
         assert_eq!(at_discogs(&self_released), serde_json::json!([{ "name": "Not On Label (Kite Theory Self-released)" }]), "no label: text");
         assert_eq!(labels_kept(&cat), 2, "nothing made by showing");
     }
@@ -1266,7 +1305,7 @@ mod tests {
         assert_eq!(labels_kept(&cat), 1, "one real label, one page");
         assert_eq!(open_label(&cat, &by_discogs, named_as("Low Tide Records"), false).unwrap(), LabelOpen::Opened(files), "opened again: the same");
         // A later About names it by its id; a name-only chip of its name still opens it.
-        let at_discogs = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528) }];
+        let at_discogs = [crate::app::discogs::Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528), namesake: false }];
         assert_eq!(
             serde_json::to_value(about(&cat, &at_discogs, &[]).unwrap()).unwrap(),
             serde_json::json!([{ "name": "Low Tide Records", "catno": "LTR-012", "id": ids::label(files) }])
@@ -1462,5 +1501,67 @@ mod tests {
         assert_eq!(said(&kept)["no_list"], serde_json::json!([{ "source": "discogs", "said": "unanswered" }]));
         let never = settled(&cat, cat.label_for("Kite Records").unwrap(), None, &off).await;
         assert_eq!(said(&never)["no_list"], serde_json::json!([{ "source": "musicbrainz", "said": "off" }, { "source": "discogs", "said": "unanswered" }]));
+    }
+
+    /// A2.4.3: a label whose search at a source finds an id another label holds reads nothing there: nothing read or kept under it from
+    /// that source (no page asked), and its page says no reason for it (the source answered: not this label's).
+    #[tokio::test]
+    async fn a_label_reads_no_list_by_an_id_it_could_not_keep() {
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let holder = cat.label_for("Warp").unwrap();
+        assert!(cat.set_reference(&ids::label(holder), &Ref::new("musicbrainz", "label", LABEL_MBID), "link").unwrap());
+        let variant = {
+            let db = cat.db_for_tests();
+            db.execute("INSERT INTO labels (born, name, key) VALUES (1, 'Warp Imprint', 'warp imprint')", []).unwrap();
+            db.last_insert_rowid()
+        };
+        let musicbrainz = stub("musicbrainz", Some(LABEL_MBID), |_| (vec![group_row(GROUP_1, "Night Walks", 2020)], None));
+        let shown = settled(&cat, variant, None, &[musicbrainz.clone() as Arc<dyn LabelList>]).await;
+        assert!(musicbrainz.asked.lock().unwrap().is_empty(), "no page read by an id another label holds");
+        assert!(shown.had.is_empty() && shown.not_had.is_empty(), "nothing kept under it");
+        assert!(shown.no_list.is_none(), "no reason said for that source");
+        assert_eq!(shown.musicbrainz, None, "the id stays the holder's");
+        assert!(cat.references_of(&ids::label(variant)).unwrap().is_empty());
+    }
+
+    /// A1.8.4: a Discogs label named "Source (2)" (Discogs' own namesake mark) never joins the house's "Source" by name: opened, it is a
+    /// label of its own; one Discogs gives no mark joins the one of its name, as PB3 has it.
+    #[test]
+    fn a_discogs_label_namesake_joins_no_label_by_name() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let house = cat.label_for("Source").unwrap();
+        let namesake = LabelOpened { source: "discogs".into(), id: "2880".into(), name: "Source".into() };
+        let LabelOpen::Opened(opened) = open_label(&cat, &namesake, |_| Ok(Some(("Source".to_string(), true))), false).unwrap() else { panic!("not opened") };
+        assert_ne!(opened, house, "a namesake: a label of its own");
+        assert!(cat.references_of(&ids::label(house)).unwrap().is_empty(), "the house's Source holds no Discogs id");
+        let plain = LabelOpened { source: "discogs".into(), id: "2881".into(), name: "Others".into() };
+        let others = cat.label_for("Others").unwrap();
+        assert_eq!(open_label(&cat, &plain, |_| Ok(Some(("Others".to_string(), false))), false).unwrap(), LabelOpen::Opened(others), "no mark: the one of its name");
+        // The facts keep Discogs' mark: "Source (2)" named Source, marked.
+        let v = serde_json::json!({ "labels": [{ "name": "Source (2)", "catno": "SRC 1", "id": 2880 }] });
+        let read = crate::app::discogs::labels_of_for_tests(&v);
+        assert_eq!((read[0].name.as_str(), read[0].namesake), ("Source", true));
+    }
+
+    /// A2.5.1, A2.5.2: About shows a label once. Discogs names Traum Schallplatten (2880) twice, once per catalogue number: one chip,
+    /// "TRAUM CD21, TRAUM SCHALLPLATTEN CD21". Two labels of one name with two Discogs ids: two chips. An entry with no id beside one
+    /// with an id of the same bare key: one, the id's. A record tied to one label with two catalogue numbers: one, both numbers.
+    #[test]
+    fn about_shows_a_label_once_with_its_catalogue_numbers() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let l = |name: &str, catno: Option<&str>, id: Option<u64>| crate::app::discogs::Label { name: name.into(), catno: catno.map(str::to_string), id, namesake: false };
+        let traum = [l("Traum Schallplatten", Some("TRAUM CD21"), Some(2880)), l("Traum Schallplatten", Some("TRAUM SCHALLPLATTEN CD21"), Some(2880))];
+        let shown = about(&cat, &traum, &[]).unwrap();
+        assert_eq!(shown.len(), 1, "one chip: {shown:?}");
+        assert_eq!(shown[0].catno.as_deref(), Some("TRAUM CD21, TRAUM SCHALLPLATTEN CD21"));
+        let two = about(&cat, &[l("Source", Some("A"), Some(1)), l("Source", Some("B"), Some(2))], &[]).unwrap();
+        assert_eq!(two.len(), 2, "two ids: two labels");
+        let one = about(&cat, &[l("Warp", Some("W1"), None), l("Warp Records", Some("W2"), Some(23528))], &[]).unwrap();
+        assert_eq!(one.len(), 1, "no id beside an id of the same bare key: one");
+        assert_eq!(one[0].reference.as_ref().map(|r| r.id.as_str()), Some("23528"), "the id's");
+        assert_eq!(one[0].catno.as_deref(), Some("W1, W2"));
+        let mb = [crate::app::discogs::MbLabel { name: "Warp Records Ltd.".into(), mbid: "00000000-0000-4000-8000-000000000909".into(), catno: None }];
+        assert_eq!(about(&cat, &[l("Warp", None, Some(23528))], &mb).unwrap().len(), 1, "MusicBrainz's of the same bare key: not again");
+        assert_eq!(crate::app::playing::record_labels_shown_for_tests(&cat), (1, Some("TRAUM CD21, TRAUM SCHALLPLATTEN CD21".to_string())), "a record's: one, both numbers");
     }
 }

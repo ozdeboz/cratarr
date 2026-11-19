@@ -944,6 +944,9 @@ pub struct Label {
     /// Discogs' own id for it (C46: what a label's reference is). Facts kept before it was read have none until read again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<u64>,
+    /// Whether Discogs marks its name as one another label shares ("Source (2)", A1.8.4): it never joins a label by its name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub namesake: bool,
 }
 
 /// Who did what on a release (`role`: "Producer", "Mastered By"…), on which tracks where not all ("A1 to A3").
@@ -1028,12 +1031,18 @@ fn credits_of(v: &Value) -> Vec<Credit> {
     out
 }
 
+/// `labels_of` for the tests of other modules.
+#[cfg(test)]
+pub fn labels_of_for_tests(v: &Value) -> Vec<Label> {
+    labels_of(v)
+}
+
 fn labels_of(v: &Value) -> Vec<Label> {
     let mut out: Vec<Label> = Vec::new();
     for l in v["labels"].as_array().into_iter().flatten() {
         let Some(name) = l["name"].as_str() else { continue };
         let catno = l["catno"].as_str().map(str::trim).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("none")).map(str::to_string);
-        let label = Label { name: clean_name(name), catno, id: l["id"].as_u64() };
+        let label = Label { name: clean_name(name), catno, id: l["id"].as_u64(), namesake: clean_name(name) != name.trim() };
         if !out.contains(&label) {
             out.push(label);
         }
@@ -1077,22 +1086,67 @@ pub async fn release_group_facts(release_group: &str) -> Result<Option<AlbumFact
     Ok(master(id).await?.map(|m| AlbumFacts { master: Some(id), release: m.main_release, genres: m.genres, styles: m.styles, ..AlbumFacts::default() }))
 }
 
-/// An artist's facts: by MusicBrainz's link from their id, else Discogs' search by name (the key's; an exact name
-/// only).
-pub async fn artist_facts(mbid: Option<&str>, name: &str) -> Result<Option<ArtistFacts>> {
-    let mut id = match mbid {
-        Some(m) => id_in(&mb_links("artist", m).await?, "artist"),
-        None => None,
-    };
-    if id.is_none() && !name.trim().is_empty() && saved().await.is_some() {
-        let mut q = reqwest::Url::parse("https://x/database/search")?;
-        q.query_pairs_mut().append_pair("type", "artist").append_pair("q", name).append_pair("per_page", "5");
-        if let Some(v) = get(&format!("/database/search?{}", q.query().unwrap_or_default())).await? {
-            let want = super::import::loose(name);
-            id = v["results"].as_array().into_iter().flatten().find(|r| r["title"].as_str().is_some_and(|t| super::import::loose(&clean_name(t)) == want)).and_then(|r| r["id"].as_u64());
+/// The one rule for a Discogs id by a name (A1.8, X8), an artist's or a label's: the one result of Discogs' search (`results`)
+/// whose name is the name (case and quotes folded as `loose` folds them), where no result of that name carries Discogs'
+/// namesake mark "(n)": Discogs itself says such a name is shared, so it names none. Two results of the name, none. Pure.
+pub fn name_match(results: &Value, name: &str) -> Option<u64> {
+    let want = super::import::loose(name.trim());
+    if want.is_empty() {
+        return None;
+    }
+    let mut found = None;
+    for r in results.as_array().into_iter().flatten() {
+        let Some(title) = r["title"].as_str() else { continue };
+        if super::import::loose(&clean_name(title)) != want {
+            continue;
+        }
+        if clean_name(title) != title.trim() {
+            return None;
+        }
+        match (found, r["id"].as_u64()) {
+            (None, Some(id)) => found = Some(id),
+            (Some(was), Some(id)) if was != id => return None,
+            _ => {}
         }
     }
-    let Some(id) = id else { return Ok(None) };
+    found
+}
+
+/// An artist's Discogs id and how it was found (A1.8.3): MusicBrainz's link among their MusicBrainz links (`links`), kept `link`;
+/// else Discogs' search for their name (`search`, its answer), by the one rule (`name_match`), kept `search`. Pure.
+pub fn artist_id_of(links: &[String], search: Option<&Value>, name: &str) -> Option<(u64, &'static str)> {
+    if let Some(id) = id_in(links, "artist") {
+        return Some((id, "link"));
+    }
+    name_match(&search?["results"], name).map(|id| (id, "search"))
+}
+
+/// Discogs' search answer for an artist's name, where a key is saved (Discogs' search needs it); none without.
+async fn artist_search(name: &str) -> Result<Option<Value>> {
+    if name.trim().is_empty() || saved().await.is_none() {
+        return Ok(None);
+    }
+    let mut q = reqwest::Url::parse("https://x/database/search")?;
+    q.query_pairs_mut().append_pair("type", "artist").append_pair("q", name).append_pair("per_page", "5");
+    get(&format!("/database/search?{}", q.query().unwrap_or_default())).await
+}
+
+/// An artist's Discogs id and how it was found (`artist_id_of`): by MusicBrainz's link from their id, else Discogs' search by their
+/// name, asked only where MusicBrainz links none.
+pub async fn artist_found(mbid: Option<&str>, name: &str) -> Result<Option<(u64, &'static str)>> {
+    let links = match mbid {
+        Some(m) => mb_links("artist", m).await?,
+        None => Vec::new(),
+    };
+    if let Some(found) = artist_id_of(&links, None, name) {
+        return Ok(Some(found));
+    }
+    Ok(artist_id_of(&links, artist_search(name).await?.as_ref(), name))
+}
+
+/// An artist's facts: by MusicBrainz's link from their id, else Discogs' search by name, by the one rule (`name_match`).
+pub async fn artist_facts(mbid: Option<&str>, name: &str) -> Result<Option<ArtistFacts>> {
+    let Some((id, _)) = artist_found(mbid, name).await? else { return Ok(None) };
     let Some(v) = get(&format!("/artists/{id}")).await? else { return Ok(None) };
     Ok(Some(artist_of(id, &v)))
 }
@@ -1139,6 +1193,29 @@ fn artist_of(id: u64, v: &Value) -> ArtistFacts {
 mod facts_tests {
     use super::*;
 
+    /// A1.8.1, A1.8.2 (OQ-A1.8 (a), strict): Discogs' search answers "Coma (2)" (11) before "Coma" (12). Today's match takes the first
+    /// whose name with its "(n)" cleaned is the name: 11, a namesake's, whose whole list would then be the library artist's. The one
+    /// rule: where any result of the name carries Discogs' namesake mark, none; one unmarked result of the name, that one (case and
+    /// quotes folded); another name, none.
+    #[test]
+    fn a_discogs_namesake_is_never_matched_by_name() {
+        let results = |rows: &[(&str, u64)]| serde_json::Value::Array(rows.iter().map(|(t, id)| serde_json::json!({ "title": t, "id": id })).collect());
+        assert_eq!(name_match(&results(&[("Coma (2)", 11), ("Coma", 12)]), "Coma"), None, "a namesake answered first: never its id");
+        assert_eq!(name_match(&results(&[("Coma", 12)]), "Coma"), Some(12));
+        assert_eq!(name_match(&results(&[("Coma", 12), ("Coma (2)", 11)]), "Coma"), None, "Discogs says the name is shared");
+        assert_eq!(name_match(&results(&[("Coma (2)", 11)]), "Coma"), None);
+        assert_eq!(name_match(&results(&[("COMA", 12)]), "Coma"), Some(12), "case folded as loose folds it");
+        assert_eq!(name_match(&results(&[("Coma\u{2019}s", 13)]), "Coma's"), Some(13), "quotes folded");
+        assert_eq!(name_match(&results(&[("Coma Band", 14)]), "Coma"), None, "another name");
+        assert_eq!(name_match(&results(&[("Coma", 12), ("Coma", 15)]), "Coma"), None, "two of the name: none");
+        // How it was found (A1.8.3's half here): MusicBrainz's link first, else the search by the one rule.
+        let linked = ["https://www.discogs.com/artist/700001-Coma".to_string()];
+        assert_eq!(artist_id_of(&linked, Some(&serde_json::json!({ "results": [{ "title": "Coma", "id": 12 }] })), "Coma"), Some((700001, "link")));
+        assert_eq!(artist_id_of(&[], Some(&serde_json::json!({ "results": [{ "title": "Coma", "id": 12 }] })), "Coma"), Some((12, "search")));
+        assert_eq!(artist_id_of(&[], Some(&serde_json::json!({ "results": [{ "title": "Coma (2)", "id": 11 }, { "title": "Coma", "id": 12 }] })), "Coma"), None);
+        assert_eq!(artist_id_of(&[], None, "Coma"), None, "no search, no link: none");
+    }
+
     #[test]
     fn discogs_markup_and_names_are_made_plain() {
         assert_eq!(clean_name("Jon Hopkins (2)"), "Jon Hopkins");
@@ -1153,7 +1230,7 @@ mod facts_tests {
     #[test]
     fn labels_of_keeps_the_id() {
         let v = serde_json::json!({ "labels": [{ "name": "Low Tide Records", "catno": "LTR-012", "id": 23528 }, { "name": "Bleep (2)", "catno": "none", "id": 9 }] });
-        assert_eq!(labels_of(&v), [Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528) }, Label { name: "Bleep".into(), catno: None, id: Some(9) }]);
+        assert_eq!(labels_of(&v), [Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528), namesake: false }, Label { name: "Bleep".into(), catno: None, id: Some(9), namesake: true }]);
         let kept: Label = serde_json::from_str(r#"{"name":"Low Tide Records","catno":"LTR-012"}"#).unwrap();
         assert_eq!(kept.id, None);
         assert_eq!(id_in(&["https://www.discogs.com/label/23528-Low-Tide-Records".to_string()], "label"), Some(23528), "a label's page names its id");
@@ -1190,7 +1267,7 @@ mod facts_tests {
             "extraartists": [{ "name": "Axel Boman", "anv": "", "role": "Producer", "tracks": "" }, { "name": "Mandy Parnell (2)", "role": "Mastered By" }],
             "tracklist": [{ "position": "A2", "extraartists": [{ "name": "Kornél Kovács", "anv": "Kornél", "role": "Vocals" }] }]
         });
-        assert_eq!(labels_of(&v), [Label { name: "Studio Barnhus".into(), catno: Some("BARN 042".into()), id: None }, Label { name: "Self Released".into(), catno: None, id: None }]);
+        assert_eq!(labels_of(&v), [Label { name: "Studio Barnhus".into(), catno: Some("BARN 042".into()), id: None, namesake: false }, Label { name: "Self Released".into(), catno: None, id: None, namesake: false }]);
         let c = credits_of(&v);
         assert_eq!(c[0], Credit { name: "Axel Boman".into(), role: "Producer".into(), tracks: None });
         assert_eq!(c[1].name, "Mandy Parnell");

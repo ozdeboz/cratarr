@@ -64,7 +64,7 @@ fn every_artist(db: &Connection) -> Result<HashMap<String, i64>> {
 }
 
 /// A new artist of a name, with their number (C55).
-fn give_artist(db: &Connection, key: &str, name: &str, born: i64) -> Result<i64> {
+pub(super) fn give_artist(db: &Connection, key: &str, name: &str, born: i64) -> Result<i64> {
     db.prepare_cached("INSERT INTO artists (born, name, key) VALUES (?1, ?2, ?3)")?.execute(params![born, name, key])?;
     let artist = db.last_insert_rowid();
     number(db, artist, key)?;

@@ -1932,10 +1932,11 @@ impl ArtistList for DiscogsList {
 
     fn read<'a>(&'a self, a: &'a ArtistAsked) -> crate::source::Fut<'a, ListRead> {
         Box::pin(async move {
+            // How it was found is kept (A1.8.3): MusicBrainz's link `link`, Discogs' search by the one rule `search`.
             let (id, how) = match a.at("discogs").and_then(|v| v.parse::<u64>().ok()) {
                 Some(id) => (id, None),
-                None => match super::discogs::artist_facts(a.at("musicbrainz"), &a.name).await? {
-                    Some(f) => (f.id, Some("search")),
+                None => match super::discogs::artist_found(a.at("musicbrainz"), &a.name).await? {
+                    Some((id, how)) => (id, Some(how)),
                     None => return Ok(None),
                 },
             };
@@ -2074,11 +2075,12 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
         return false;
     }
     let mut looking = false;
+    let mut due: Vec<(Settles, Arc<dyn ArtistList>)> = Vec::new();
     for source in sources.iter().filter(|s| s.on()) {
         let key = (Arc::as_ptr(cat) as usize, artist.id, source.source());
         {
             let mut all = readings().lock().unwrap_or_else(|p| p.into_inner());
-            let due = match all.get(&key) {
+            let is_due = match all.get(&key) {
                 Some(Reading::Now) => {
                     looking = true;
                     false
@@ -2087,33 +2089,70 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
                 Some(Reading::Failed(at, _)) => now - at > LIST_RETRY_SECS,
                 None => read_at.get(source.source()).is_none_or(|at| now - at > LIST_FRESH_SECS),
             };
-            if !due {
+            if !is_due {
                 continue;
             }
             all.insert(key, Reading::Now);
         }
         looking = true;
-        let (cat, artist, source) = (cat.clone(), artist.clone(), source.clone());
-        tokio::spawn(async move {
-            let mut settles = Settles(Some(key), None);
-            // Its source's one reader, in turn (O5): the cut counts from when it asks, not from its place in the line.
-            let Ok(_turn) = turn_of(source.source()).acquire_owned().await else { return };
-            // How it failed (F8): F1's outcomes; past the cut, it did not answer.
-            let failed = |how| Reading::Failed(super::moment::now_secs(), how);
-            settles.1 = Some(match tokio::time::timeout(LIST_READ_AT_MOST, read_one(&cat, &artist, source.as_ref())).await {
-                Ok(Ok(_)) => Reading::Done(super::moment::now_secs()),
-                Ok(Err(e)) => {
-                    tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: {e:#}");
-                    failed(super::references::Outcome::of(&e))
-                }
-                Err(_) => {
-                    tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: no answer in time");
-                    failed(super::references::Outcome::Unanswered)
-                }
-            });
-        });
+        due.push((Settles(Some(key), None), source.clone()));
     }
+    if due.is_empty() {
+        return looking;
+    }
+    // A2.2: an artist who holds no MusicBrainz id is first read there, which says who the name is: where its id is another artist's,
+    // that artist's lists are this page's (`held_by`), and nothing is read or kept under this one at the other sources.
+    let first = if artist.at("musicbrainz").is_none() { due.iter().position(|(_, s)| s.source() == "musicbrainz").map(|i| due.remove(i)) } else { None };
+    let (cat, artist) = (cat.clone(), artist.clone());
+    tokio::spawn(async move {
+        if let Some((settles, source)) = first {
+            read_settled(&cat, &artist, settles, source).await;
+        }
+        let held = held_by(&cat, artist.id, super::moment::now_secs()).is_some();
+        for (mut settles, source) in due {
+            if held {
+                settles.1 = Some(Reading::Done(super::moment::now_secs()));
+                continue;
+            }
+            let (cat, artist) = (cat.clone(), artist.clone());
+            tokio::spawn(async move { read_settled(&cat, &artist, settles, source).await });
+        }
+    });
     looking
+}
+
+/// One source's list of an artist read and settled (`read_lists`): in its source's one turn, cut at `LIST_READ_AT_MOST`, its outcome
+/// kept by `settles`.
+async fn read_settled(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>, mut settles: Settles, source: Arc<dyn ArtistList>) {
+    // Its source's one reader, in turn (O5): the cut counts from when it asks, not from its place in the line.
+    let Ok(_turn) = turn_of(source.source()).acquire_owned().await else { return };
+    // How it failed (F8): F1's outcomes; past the cut, it did not answer.
+    let failed = |how| Reading::Failed(super::moment::now_secs(), how);
+    settles.1 = Some(match tokio::time::timeout(LIST_READ_AT_MOST, read_one(cat, artist, source.as_ref())).await {
+        Ok(Ok(_)) => Reading::Done(super::moment::now_secs()),
+        Ok(Err(e)) => {
+            tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: {e:#}");
+            failed(super::references::Outcome::of(&e))
+        }
+        Err(_) => {
+            tracing::info!(target: "discover", artist = artist.id, source = source.source(), "an artist's list not read: no answer in time");
+            failed(super::references::Outcome::Unanswered)
+        }
+    });
+}
+
+/// The artists whose name's MusicBrainz id another artist holds (A2.2, OQ-A2.2 (a)): by catalogue (its address) and artist, the holder
+/// and when it was found. Their page's "Not in your library" is the holder's for `LIST_FRESH_SECS`; MusicBrainz is asked again after.
+type HeldBy = std::sync::Mutex<HashMap<(usize, i64), (i64, i64)>>;
+
+fn held_by_all() -> &'static HeldBy {
+    static HELD: std::sync::OnceLock<HeldBy> = std::sync::OnceLock::new();
+    HELD.get_or_init(Default::default)
+}
+
+/// The artist who holds the MusicBrainz id `artist`'s name is (A2.2), where it was found within `LIST_FRESH_SECS` of `now`.
+fn held_by(cat: &Arc<crate::catalogue::Catalogue>, artist: i64, now: i64) -> Option<i64> {
+    held_by_all().lock().unwrap_or_else(|p| p.into_inner()).get(&(Arc::as_ptr(cat) as usize, artist)).filter(|(_, at)| now - at <= LIST_FRESH_SECS).map(|(holder, _)| *holder)
 }
 
 /// One source's list of the artist read and kept (C53a): what it knows them by (where found now), its rows as records not had
@@ -2122,20 +2161,30 @@ fn read_lists(cat: &Arc<crate::catalogue::Catalogue>, artist: &Arc<ArtistAsked>,
 /// knows too (RT01), as Bandcamp's own lists only its search box's first answers (O4). Whether the source knows them.
 async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, source: &dyn ArtistList) -> Result<bool> {
     let Some((known, how, listings)) = source.read(artist).await? else { return Ok(false) };
-    let (cat, id, name) = (cat.clone(), artist.id, artist.name.clone());
+    let (c, id, name) = (cat.clone(), artist.id, artist.name.clone());
     let sees_bandcamp_only = source.source() != "bandcamp";
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        if let Some(how) = how {
-            cat.set_reference(&crate::serve::ids::artist(id), &known, how)?;
+    let holder = tokio::task::spawn_blocking(move || -> Result<Option<i64>> {
+        let cat = c;
+        // A2.1.3, A2.2.2: an id found now that another artist holds is theirs: no list is read or kept under this artist by it.
+        if let Some(how) = how
+            && !cat.set_reference(&crate::serve::ids::artist(id), &known, how)?
+        {
+            let holder = cat.subject_of(&known)?.iter().find_map(|s| crate::serve::ids::artist_number(s)).filter(|h| *h != id);
+            tracing::info!(target: "discover", artist = id, holder = ?holder, source = %known.source, "an artist's list not kept: the id their name was found by is another artist's");
+            return Ok(holder);
         }
         let listings: Vec<crate::catalogue::records::Listing> = listings.into_iter().map(|l| crate::catalogue::records::Listing { artist: name.clone(), ..l }).collect();
         cat.keep_listing(Some(id), &listings, "link")?;
         if sees_bandcamp_only {
             cat.bandcamp_only_seen(id, super::moment::now_secs())?;
         }
-        cat.artist_list_read(id, &known.source)
+        cat.artist_list_read(id, &known.source)?;
+        Ok(None)
     })
     .await??;
+    if let Some(holder) = holder.filter(|_| source.source() == "musicbrainz") {
+        held_by_all().lock().unwrap_or_else(|p| p.into_inner()).insert((Arc::as_ptr(cat) as usize, artist.id), (holder, super::moment::now_secs()));
+    }
     Ok(true)
 }
 
@@ -2147,6 +2196,10 @@ async fn read_one(cat: &Arc<crate::catalogue::Catalogue>, artist: &ArtistAsked, 
 pub struct ArtistMissing {
     pub albums: Vec<Missing>,
     pub looking: bool,
+    /// The artist whose list it is (`ar-<n>`), where it is not the one asked about: the name's MusicBrainz id is another artist's
+    /// (A2.2), or the page asked by a name (F18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reading: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2173,13 +2226,19 @@ async fn missing_at(cat: Arc<crate::catalogue::Catalogue>, artist: i64, sources:
         return Ok(ArtistMissing::default());
     }
     read_lists(&cat, &asked, &read_at, sources, now);
+    // A2.2 (OQ-A2.2 (a)): a name whose MusicBrainz id another artist holds shows that artist's list, whose page it is.
+    if let Some(holder) = held_by(&cat, artist, now).filter(|h| *h != artist) {
+        let mut theirs = Box::pin(missing_at(cat, holder, sources, now)).await?;
+        theirs.artist = Some(crate::serve::ids::artist(holder));
+        return Ok(theirs);
+    }
     // What the reads say, at one look, before anything else runs (F8).
     let (looking, reading, no_list) = lists_said(&cat, artist, sources, now);
     let c = cat.clone();
     let rows = tokio::task::spawn_blocking(move || c.missing_of(artist)).await??;
     let mut out: Vec<Missing> = rows.into_iter().map(Missing::of).collect();
     out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.title.cmp(&b.title)));
-    Ok(ArtistMissing { albums: out, looking, reading, no_list })
+    Ok(ArtistMissing { albums: out, looking, reading, no_list, artist: None })
 }
 
 /// What an artist's list reads say at `now`, at one look (F8): whether one is being read (`looking`) and the first such in the
@@ -3321,6 +3380,57 @@ mod missing_tests {
             serde_json::json!([{ "source": "musicbrainz", "said": "unanswered" }, { "source": "discogs", "said": "off" }, { "source": "bandcamp", "said": "unanswered" }])
         );
         assert_eq!(asked_now().len(), 5, "Discogs not read");
+    }
+
+    /// A1.8.3: how a Discogs artist id was found is kept: MusicBrainz's link `link`, Discogs' search by the one rule `search`; and
+    /// Discogs' list is read by the id with how it was found (`artist_found`), never a fixed word.
+    #[test]
+    fn a_discogs_artist_id_says_how_it_was_found() {
+        let linked = ["https://www.discogs.com/artist/700001-Kite-Theory".to_string()];
+        let search = serde_json::json!({ "results": [{ "title": "Kite Theory", "id": 12 }] });
+        assert_eq!(super::super::discogs::artist_id_of(&linked, Some(&search), "Kite Theory"), Some((700001, "link")));
+        assert_eq!(super::super::discogs::artist_id_of(&[], Some(&search), "Kite Theory"), Some((12, "search")));
+        let src = include_str!("discover.rs").replace("\r\n", "\n");
+        let list = &src[src.find("impl ArtistList for DiscogsList").unwrap()..];
+        let list = &list[..list.find("\nfn discogs_listing").unwrap()];
+        assert!(list.contains("artist_found(") && list.contains("Some((id, how)) => (id, Some(how))"), "the list keeps how its id was found");
+        assert!(!list.contains("Some(\"search\")"), "never \"search\" for an id MusicBrainz linked");
+    }
+
+    /// A2.2.2 (OQ-A2.2 (a)), with A2.1.3's list half: "Kite Theöry" holds no MusicBrainz id, and MusicBrainz's sure match for that name is
+    /// K, which "Kite Theory" holds. Their page lists the holder's rows (`artist` the holder's id), nothing read or kept under "Kite
+    /// Theöry" at any source, and MusicBrainz asked for that name once in `LIST_FRESH_SECS`, not at each open (an hour apart).
+    #[tokio::test]
+    async fn a_spellings_page_reads_the_list_of_the_artist_who_holds_its_id() {
+        static ASKED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        const K: &str = "00000000-0000-4000-8000-000000000a21";
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let holder = cat.artist_for("Kite Theory").unwrap();
+        assert!(cat.set_reference(&crate::serve::ids::artist(holder), &Ref::new("musicbrainz", "artist", K), "files").unwrap());
+        let spelling = cat.artist_for("Kite The\u{f6}ry").unwrap();
+        let sources: Vec<Arc<dyn ArtistList>> = vec![
+            Arc::new(Stub("musicbrainz", |a| {
+                ASKED.lock().unwrap().push(format!("musicbrainz {}", a.name));
+                Ok(Some((Ref::new("musicbrainz", "artist", K), a.at("musicbrainz").is_none().then_some("search"), vec![listing("Night Walks", &[("musicbrainz", "release-group", GROUP_1)])])))
+            })),
+            Arc::new(Stub("discogs", |a| {
+                ASKED.lock().unwrap().push(format!("discogs {}", a.name));
+                Ok(Some((Ref::new("discogs", "artist", "9021"), a.at("discogs").is_none().then_some("search"), vec![listing("Undertow", &[("discogs", "master", "3021")])])))
+            })),
+        ];
+        let t = super::super::moment::now_secs();
+        let first = ended_at(&cat, spelling, &sources, t).await;
+        assert_eq!(first.artist.as_deref(), Some(crate::serve::ids::artist(holder).as_str()), "the holder's list");
+        let titles = |m: &ArtistMissing| m.albums.iter().map(|a| a.title.clone()).collect::<Vec<_>>();
+        assert!(titles(&first).contains(&"Night Walks".to_string()), "the holder's rows: {:?}", titles(&first));
+        assert!(cat.references_of(&crate::serve::ids::artist(spelling)).unwrap().is_empty(), "nothing kept under the spelling");
+        assert!(cat.missing_of(spelling).unwrap().is_empty(), "no record credited to the spelling");
+        let later = ended_at(&cat, spelling, &sources, t + 3600).await;
+        assert_eq!(later.artist, first.artist);
+        assert_eq!(titles(&later), titles(&first));
+        let asked = ASKED.lock().unwrap().clone();
+        assert_eq!(asked.iter().filter(|a| a.ends_with("The\u{f6}ry")).cloned().collect::<Vec<_>>(), ["musicbrainz Kite The\u{f6}ry"], "MusicBrainz asked for the name once, nothing else read under it: {asked:?}");
+        assert!(asked.iter().filter(|a| a.as_str() == "musicbrainz Kite Theory").count() <= 1, "the holder's list read once at most: {asked:?}");
     }
 }
 

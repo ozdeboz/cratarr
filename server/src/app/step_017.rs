@@ -2050,4 +2050,76 @@ mod tests {
             assert_eq!(cat.join_copies(a, b, &kinds).unwrap(), None, "al-{a} and al-{b}: an arrival joins them neither");
         }
     }
+
+    /// Tags added to every file of an album of FX01 (`rels`, a LIKE pattern under Music), from tag number 40 on.
+    fn tag_album(cat: &Catalogue, rels: &str, tags: &[(&str, &str)]) {
+        let sql: String = tags
+            .iter()
+            .zip(40..)
+            .map(|((name, value), n)| format!("INSERT INTO tags (folder, rel, n, raw, name, value) SELECT folder, rel, {n}, upper('{name}'), '{name}', '{value}' FROM files WHERE folder = 0 AND rel LIKE '{rels}';"))
+            .collect();
+        cat.execute_for_tests(&sql);
+    }
+
+    /// A2.1.5: (a) FX01's library agrees with itself: the part makes no artist apart. (b) FX01 with Partial Shore's files naming their
+    /// album artist "Glass Harbour" with another MusicBrainz id, B, than Tide Tables' (Glass Harbour's own, which the step's
+    /// discographies gave them): Tide Tables is Glass Harbour's; Partial Shore an artist of their own's, who holds B, listed in the
+    /// part's report; Glass Harbour never holds B.
+    #[test]
+    fn the_credits_part_credits_each_files_id_to_its_own_artist() {
+        let plain = Data::tagged("credits-plain");
+        {
+            let (cat, ud, kinds) = plain.open_both();
+            super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+            let mark: serde_json::Value = serde_json::from_str(&cat.meta("017:credits").unwrap()).unwrap();
+            assert!(mark.get("apart").is_none(), "(a) no artist made apart: {mark}");
+        }
+        const HARBOUR: &str = "00000000-0000-4000-8000-000000000201";
+        const B: &str = "00000000-0000-4000-8000-000000000a12";
+        let data = Data::tagged("credits-ids");
+        let (cat, ud, kinds) = data.open_both();
+        tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("musicbrainz_albumartistid", B)]);
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let holder = |id: &str| -> Vec<String> { cat.subject_of(&crate::catalogue::records::Ref::new("musicbrainz", "artist", id)).unwrap() };
+        let harbour = cat.artist_of("Glass Harbour").unwrap().unwrap();
+        assert_eq!(holder(HARBOUR), [crate::serve::ids::artist(harbour)], "Glass Harbour holds their own id");
+        let made = holder(B);
+        assert_eq!(made.len(), 1, "one artist holds B");
+        let made = crate::serve::ids::artist_number(&made[0]).unwrap();
+        assert_ne!(made, harbour, "never on Glass Harbour");
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT artist FROM record_artists WHERE record = 1 AND how = 'files'"), harbour, "Tide Tables: Glass Harbour's");
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT artist FROM record_artists WHERE record = 8 AND how = 'files'"), made, "Partial Shore: the artist apart's");
+        let mark: serde_json::Value = serde_json::from_str(&cat.meta("017:credits").unwrap()).unwrap();
+        assert_eq!(mark["apart"], serde_json::json!([format!("{} Glass Harbour: musicbrainz {B}", crate::serve::ids::artist(made))]), "listed in the part's report");
+    }
+
+    /// A2.2.3 (production): FX01 with Partial Shore's files naming their album artist "Glass Hárbour" and Glass Harbour's MusicBrainz
+    /// id: after the step, one credited artist for both spellings.
+    #[test]
+    fn the_step_credits_one_artist_for_spellings_of_one_id() {
+        let data = Data::tagged("credits-spellings");
+        let (cat, ud, kinds) = data.open_both();
+        cat.execute_for_tests("UPDATE tags SET value = 'Glass H\u{e1}rbour' WHERE folder = 0 AND name = 'albumartist' AND rel LIKE 'Glass Harbour/Partial Shore (2011)/%';");
+        tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("musicbrainz_albumartistid", "00000000-0000-4000-8000-000000000201")]);
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let credited = data.texts("catalogue.sqlite", "SELECT DISTINCT CAST(artist AS TEXT) FROM record_artists WHERE record IN (1, 8) AND how = 'files'");
+        assert_eq!(credited.len(), 1, "one artist for both spellings: {credited:?}");
+        assert_eq!(credited[0].parse::<i64>().unwrap(), cat.artist_of("Glass Harbour").unwrap().unwrap());
+    }
+
+    /// A2.4.4 (production): FX01 with files naming "Warp", "Warp Records" and "Warp Records,Beat Records": after the step, the labels
+    /// Warp and Beat Records, one each, the three records tied to Warp.
+    #[test]
+    fn the_step_makes_one_label_per_bare_name() {
+        let data = Data::tagged("labels-bare");
+        let (cat, ud, kinds) = data.open_both();
+        tag_album(&cat, "Kite Theory/Night Walks EP (2020)/%", &[("label", "Warp")]);
+        tag_album(&cat, "Kite Theory/Undated (no year)/%", &[("label", "Warp Records")]);
+        tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("label", "Warp Records,Beat Records")]);
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let named = data.texts("catalogue.sqlite", "SELECT name FROM labels WHERE name LIKE '%Warp%' OR name LIKE '%Beat%' ORDER BY name");
+        assert_eq!(named, ["Beat Records", "Warp"], "one label per bare name");
+        let warp = data.texts("catalogue.sqlite", "SELECT CAST(r.record AS TEXT) FROM record_labels r JOIN labels l ON l.id = r.label WHERE l.name = 'Warp' ORDER BY r.record");
+        assert_eq!(warp, ["3", "4", "8"], "every record naming Warp tied to the one label");
+    }
 }

@@ -1100,6 +1100,14 @@ impl Drop for CopiesMoving {
     }
 }
 
+/// The artists a build's record pass made apart (A2.1, R1), each in the log: an artist of their own, by a MusicBrainz id the one of
+/// their name could not hold.
+fn said_apart(apart: &[String]) {
+    for a in apart {
+        tracing::info!(target: "library", artist = %a, "an artist made apart: their files' MusicBrainz id is no other artist's of the name");
+    }
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -2766,8 +2774,9 @@ impl Catalogue {
         let read_half_way = self.read_half_way.swap(false, Ordering::SeqCst);
         let (given, records) = Self::assign(&tx, albums, now(), read_half_way || self.copies_are_moving())?;
         records::files_references(&tx, albums, &records, now())?;
-        records::record_credits(&tx, albums, &records, now())?;
+        let apart = records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
+        said_apart(&apart);
         Ok(given)
     }
 
@@ -2793,8 +2802,9 @@ impl Catalogue {
             records
         };
         records::files_references(&tx, albums, &records, now())?;
-        records::record_credits(&tx, albums, &records, now())?;
+        let apart = records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
+        said_apart(&apart);
         Ok(())
     }
 

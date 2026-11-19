@@ -98,9 +98,43 @@ pub struct LabelRow {
     pub name: String,
 }
 
-/// What makes two names one label: as two names are one artist, case and typographic quotes aside.
+/// What makes two names one label (A2.4): its bare name (`bare_key`).
 fn key(name: &str) -> String {
-    ids::artist_key(name)
+    bare_key(name)
+}
+
+/// The words a label's name carries or leaves off as a company, which say nothing of which label it is (A2.4).
+const COMPANY: [&str; 5] = ["records", "recordings", "ltd", "limited", "inc"];
+
+/// A label's key (A2.4): its name folded as an artist's is (case and typographic quotes), without the company words Discogs and the
+/// files add or leave off ("Records", "Recordings", "Ltd", "Limited", "Inc", with or without a dot or a comma) while one is last,
+/// keeping at least one word: "Warp Records" is "warp", "Freestyle Records Ltd." is "freestyle", "Records" stays "records". Pure.
+pub fn bare_key(name: &str) -> String {
+    let folded = ids::artist_key(name.trim());
+    let mut words: Vec<&str> = folded.split_whitespace().collect();
+    while words.len() > 1 && words.last().is_some_and(|w| COMPANY.contains(&w.trim_end_matches(['.', ',']))) {
+        words.pop();
+    }
+    let mut out = words.join(" ");
+    while out.ends_with(',') {
+        out.pop();
+    }
+    out
+}
+
+/// A files' label value as the labels it names (A2.4.2), as the artists' are taken apart: split at ",", ";" and "/", each part
+/// trimmed; a part that is a company word alone ("Inc.", "Ltd") belongs to the one before it and is dropped; never split at "&"
+/// ("Simon & Schuster Audio" is one). Pure.
+pub fn apart(value: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in value.split([',', ';', '/']) {
+        let part = part.trim();
+        if part.is_empty() || (!out.is_empty() && COMPANY.contains(&part.to_lowercase().trim_end_matches('.'))) {
+            continue;
+        }
+        out.push(part.to_string());
+    }
+    out
 }
 
 fn label_by_key(db: &Connection, key: &str) -> Result<Option<i64>> {
@@ -289,14 +323,16 @@ impl Catalogue {
     /// The label a label's reference names (F9: one About shows, opened): the one that holds it; else the one label of its name that
     /// holds none of that source's (`joined_by_name_in`, PB3: one real label, one page), given it; else one made now with it, named
     /// `name`. In one transaction, so two opens at once make or join one. Blocking.
-    pub fn open_label(&self, r: &Ref, name: &str) -> Result<i64> {
+    pub fn open_label(&self, r: &Ref, name: &str, by_name: bool) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction()?;
         if let Some(id) = holding_in(&tx, r)? {
             return Ok(id);
         }
         let at = now();
-        let id = match joined_by_name_in(&tx, r, name)? {
+        // A1.8.4: a namesake (`by_name` false) joins no label by its name.
+        let joined = if by_name { joined_by_name_in(&tx, r, name)? } else { None };
+        let id = match joined {
             Some(one) => one,
             None => give_label(&tx, &key(name.trim()), name.trim(), at)?,
         };
@@ -502,5 +538,57 @@ mod tests {
         assert!(cat.references_of(&ids::record(had)).unwrap().iter().any(|(r, row)| r.value == "3001" && row.how == "link"), "its master added");
         let own = opened(&rows[1]);
         assert!(!orbital.contains(&own), "a name two had records share: a record of its own");
+    }
+
+    /// A2.4.1: files naming "Warp" and "Warp Records", "Big Dada" and "Big Dada Recordings", "Freestyle Records" and "Freestyle Records
+    /// Ltd.", and a label "Records": four labels, Warp, Big Dada, Freestyle and Records, each by its bare name (company words off the
+    /// end while one is last, one word kept). Two labels of one bare key holding two Discogs ids stay two (X8), and a name alone finds
+    /// neither.
+    #[test]
+    fn a_label_is_keyed_by_its_bare_name() {
+        assert_eq!(bare_key("Warp Records"), "warp");
+        assert_eq!(bare_key("Freestyle Records Ltd."), "freestyle");
+        assert_eq!(bare_key("Big Dada Recordings"), "big dada");
+        assert_eq!(bare_key("Merge Records, Inc."), "merge");
+        assert_eq!(bare_key("Limited Edition Records Limited"), "limited edition");
+        assert_eq!(bare_key("Records"), "records", "at least one word");
+        assert_eq!(bare_key("WARP"), "warp", "case folded as an artist's key");
+        let cat = with_tracks(7);
+        let names = ["Warp", "Warp Records", "Big Dada", "Big Dada Recordings", "Freestyle Records", "Freestyle Records Ltd.", "Records"];
+        let albums: Vec<AlbumCopy> = names.iter().enumerate().map(|(i, l)| album(&format!("Album {i}"), &[i as i64 + 1], &["Glass Harbour"], &[], &[(l, "")])).collect();
+        cat.assign_records(&albums).unwrap();
+        let kept: Vec<String> = {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT name FROM labels ORDER BY id").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        assert_eq!(kept, ["Big Dada", "Freestyle Records", "Records", "Warp"], "four labels, each first named as its files first name it");
+        let warp = cat.label_for("Warp Records").unwrap();
+        assert_eq!(cat.label_records(warp).unwrap().len(), 2, "Warp's two records on one label");
+        // Two of one bare key with two Discogs ids: two, and a name alone finds neither.
+        let other = {
+            let db = cat.db();
+            give_label(&db, &bare_key("Warp Recordings"), "Warp Recordings", 1).unwrap()
+        };
+        assert!(cat.set_reference(&ids::label(warp), &Ref::new("discogs", "label", "23528"), "link").unwrap());
+        assert!(cat.set_reference(&ids::label(other), &Ref::new("discogs", "label", "777"), "link").unwrap());
+        assert_eq!(cat.labels_shown(&[(None, "Warp".into())]).unwrap(), [None], "a name two labels share names neither (X8)");
+    }
+
+    /// A2.4.2: a files' label value naming two labels is two ("," ";" "/"); a part that is a company word alone belongs to the one
+    /// before it; never split at "&".
+    #[test]
+    fn a_files_label_value_is_split_into_its_labels() {
+        assert_eq!(apart("Warp Records,Beat Records"), ["Warp Records", "Beat Records"]);
+        assert_eq!(apart("Warp; Beat"), ["Warp", "Beat"]);
+        assert_eq!(apart("Warp / Beat"), ["Warp", "Beat"]);
+        assert_eq!(apart("Merge Records, Inc."), ["Merge Records"]);
+        assert_eq!(apart("Simon & Schuster Audio"), ["Simon & Schuster Audio"]);
+        let cat = with_tracks(2);
+        cat.assign_records(&[album("Tide Tables", &[1, 2], &["Glass Harbour"], &[], &[("Warp Records,Beat Records", "WARP-1")])]).unwrap();
+        let record = record_of(&cat, 1);
+        let mut tied: Vec<(String, String)> = cat.record_labels(record).unwrap().into_iter().map(|(l, catno)| (l.name, catno)).collect();
+        tied.sort();
+        assert_eq!(tied, [("Beat Records".to_string(), "WARP-1".to_string()), ("Warp Records".to_string(), "WARP-1".to_string())], "two labels, each with the catalogue number");
     }
 }

@@ -95,7 +95,7 @@ fn answer_with(cat: &crate::catalogue::Catalogue, facts: Option<&AlbumFacts>, mu
 
 /// The name a label's reference was kept with (F9: who may make a label by it, `labels::open_label`): an album's label at Discogs by
 /// its id (its facts), or at MusicBrainz by its MBID (its release's, kept beside them); none where nothing kept names it. Blocking.
-pub fn label_named(served: &crate::serve::Serve, r: &Ref) -> Result<Option<String>> {
+pub fn label_named(served: &crate::serve::Serve, r: &Ref) -> Result<Option<(String, bool)>> {
     if r.kind != "label" {
         return Ok(None);
     }
@@ -106,7 +106,7 @@ pub fn label_named(served: &crate::serve::Serve, r: &Ref) -> Result<Option<Strin
                 if let Ok(kept) = serde_json::from_str::<Labelled>(&json)
                     && let Some(l) = kept.labels.into_iter().find(|l| l.id == Some(id))
                 {
-                    return Ok(Some(l.name));
+                    return Ok(Some((l.name, l.namesake)));
                 }
             }
         }
@@ -115,7 +115,7 @@ pub fn label_named(served: &crate::serve::Serve, r: &Ref) -> Result<Option<Strin
                 if let Ok(kept) = serde_json::from_str::<Vec<MbLabel>>(&json)
                     && let Some(l) = kept.into_iter().find(|l| l.mbid == r.value)
                 {
-                    return Ok(Some(l.name));
+                    return Ok(Some((l.name, false)));
                 }
             }
         }
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn discogs_labels_are_named_once_and_not_on_label_is_no_label() {
-        let l = |name: &str| Label { name: name.into(), catno: None, id: None };
+        let l = |name: &str| Label { name: name.into(), catno: None, id: None, namesake: false };
         let names = label_names(&[l("Warp Records"), l("warp records"), l("Not On Label (Air Self-released)"), l(" "), l("Bleep")]);
         assert_eq!(names, ["Warp Records", "Bleep"]);
     }
@@ -267,9 +267,9 @@ mod tests {
     #[test]
     fn the_discogs_answer_names_each_label_as_about_shows_it() {
         let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
-        let held = cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records").unwrap();
+        let held = cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records", true).unwrap();
         let (anthem, nonesuch) = ("00000000-0000-4000-8000-000000000901", "00000000-0000-4000-8000-000000000902");
-        let label = |name: &str, catno: Option<&str>, id: u64| Label { name: name.into(), catno: catno.map(str::to_string), id: Some(id) };
+        let label = |name: &str, catno: Option<&str>, id: u64| Label { name: name.into(), catno: catno.map(str::to_string), id: Some(id), namesake: false };
         let facts = AlbumFacts {
             master: Some(3001),
             year: Some(2021),
@@ -307,8 +307,8 @@ mod tests {
         let kept = serde_json::to_string(&[MbLabel { name: "Nonesuch".into(), mbid: nonesuch.into(), catno: None }]).unwrap();
         served.userdata.set_discogs_facts(&musicbrainz_subject("al-1"), Some(&kept), 1).unwrap();
         let named = |r: Ref| label_named(&served, &r).unwrap();
-        assert_eq!(named(Ref::new("discogs", "label", "23528")), Some("Low Tide Records".to_string()));
-        assert_eq!(named(Ref::new("musicbrainz", "label", nonesuch)), Some("Nonesuch".to_string()));
+        assert_eq!(named(Ref::new("discogs", "label", "23528")), Some(("Low Tide Records".to_string(), false)));
+        assert_eq!(named(Ref::new("musicbrainz", "label", nonesuch)), Some(("Nonesuch".to_string(), false)));
         assert_eq!(named(Ref::new("discogs", "label", "4401")), None);
         assert_eq!(named(Ref::new("musicbrainz", "label", other)), None);
         assert_eq!(named(Ref::new("discogs", "master", "23528")), None, "a label's reference alone");

@@ -233,11 +233,28 @@ use super::labels::LabelOf;
 /// A record's labels as its view names them (C54, G4): a record not had's page and an owned album's alike, each by its id for life
 /// (`la-<n>`), its name and its catalogue number there. Blocking.
 fn labels_of(cat: &crate::catalogue::Catalogue, record: i64) -> Result<Vec<LabelOf>> {
-    Ok(cat
-        .record_labels(record)?
-        .into_iter()
-        .map(|(l, catno)| LabelOf { name: l.name, catno: Some(catno).filter(|c| !c.is_empty()), id: Some(crate::serve::ids::label(l.id)), reference: None })
-        .collect())
+    // One a label (A2.5), its catalogue numbers together, in the order they come.
+    let mut out: Vec<(i64, LabelOf)> = Vec::new();
+    for (l, catno) in cat.record_labels(record)? {
+        match out.iter_mut().find(|(id, _)| *id == l.id) {
+            Some((_, shown)) => super::labels::add_catno(&mut shown.catno, &catno),
+            None => out.push((l.id, LabelOf { name: l.name, catno: Some(catno).filter(|c| !c.is_empty()), id: Some(crate::serve::ids::label(l.id)), reference: None })),
+        }
+    }
+    Ok(out.into_iter().map(|(_, l)| l).collect())
+}
+
+/// A2.5's record half for `labels`' tests: a record tied to one label ("Traum Schallplatten") by two catalogue numbers, as its view
+/// names its labels: how many, and the first's catalogue numbers.
+#[cfg(test)]
+pub fn record_labels_shown_for_tests(cat: &crate::catalogue::Catalogue) -> (usize, Option<String>) {
+    let record = cat.record_for_tests("Dehli9", 0);
+    let label = cat.label_for("Traum Schallplatten").unwrap();
+    for catno in ["TRAUM CD21", "TRAUM SCHALLPLATTEN CD21"] {
+        cat.db_for_tests().execute("INSERT INTO record_labels (record, label, catno, how) VALUES (?1, ?2, ?3, 'listing')", rusqlite::params![record, label, catno]).unwrap();
+    }
+    let shown = labels_of(cat, record).unwrap();
+    (shown.len(), shown.first().and_then(|l| l.catno.clone()))
 }
 
 /// One of a record's references as its About names it (F7): its source, its kind there ("release-group", "release", "master",
