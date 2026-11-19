@@ -39,7 +39,7 @@ test('cold, the loader says the library opens; warm, nothing; Cratarr back, cold
 
 test('the loader shows the line only where nothing else goes under it', () => {
   const loader = readFileSync(new URL('../../src/lib/PageLoading.svelte', import.meta.url), 'utf8');
-  assert.match(loader, /\{#if children\}.*\{:else if waitingFor\(\)\}.*\{waitingFor\(\)\}/);
+  assert.match(loader, /\{(?:#if|:else if) children\}.*\{:else if waitingFor\(\)\}.*\{waitingFor\(\)\}/);
   // What it waits for, from one place (lib/waiting, 0.17): the library on this device opening among it.
   const waiting = readFileSync(new URL('../../src/lib/waiting.svelte.ts', import.meta.url), 'utf8');
   assert.match(waiting, /if \(deviceOpening\.asks > 0\) return 'Opening the library on this device';/);
