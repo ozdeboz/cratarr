@@ -427,19 +427,23 @@
   );
   const albumBy = $derived(albumBys[0] ?? null);
   let byOf = $state<Record<string, { photo: string | null; favorite: boolean | null }>>({});
+  // Read again only when who is credited changes, not each time the list's answer is made anew (a new array of the same
+  // names restarted it before its answers came, F39).
+  const albumByKey = $derived(albumBys.join('|'));
+  const albumFrom = $derived(album?.source ?? null);
   $effect(() => {
-    const a = album;
-    const names = albumBys;
+    const from = albumFrom;
+    const names = albumByKey ? albumByKey.split('|') : [];
     byOf = {};
-    if (!a || !names.length) return;
+    if (!from || !names.length) return;
     let live = true;
     for (const name of names) {
       byOf[name] = { photo: null, favorite: null };
-      artistFavorite(a.source, name).then(
+      artistFavorite(from, name).then(
         (r) => live && byOf[name] && (byOf[name].favorite = r.favorite),
         () => {},
       );
-      if (a.source === 'cratarr')
+      if (from === 'cratarr')
         getArtistAbout(name).then(
           (x) => live && byOf[name] && x.photo && x.id && (byOf[name].photo = artistPhotoUrl(x.id)),
           () => {},
