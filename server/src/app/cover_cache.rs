@@ -116,7 +116,8 @@ pub async fn of_record(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: 
     of_record_tried(cat, album, keep, fetch_picture).await
 }
 
-/// `of_record`, its pictures kept in `keep` (none: not kept) and fetched through `fetch`, a failure to read the record as none.
+/// Tests: `of_record`, its pictures kept in `keep` (none: not kept) and fetched through `fetch`, a failure to read the record as none.
+#[cfg(test)]
 pub async fn of_record_with<F, Fut>(cat: std::sync::Arc<crate::catalogue::Catalogue>, album: &str, keep: Option<PathBuf>, fetch: F) -> Option<(Vec<u8>, &'static str)>
 where
     F: Fn(Picture) -> Fut,

@@ -924,7 +924,8 @@ impl Serve {
         self.library.roots().into_iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| f)
     }
 
-    /// The record a song is in; none for a song not held. Blocking.
+    /// Tests: the record a song is in; none for a song not held. Blocking.
+    #[cfg(test)]
     pub fn album_of_song(&self, song: &str) -> Option<String> {
         self.album_of_song_read(song).ok().flatten()
     }
