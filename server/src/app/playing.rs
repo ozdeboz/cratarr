@@ -355,6 +355,8 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
             track: Some(t.position),
             album_id: Some(album.clone()),
             missing: true,
+            // Its kept kind (GOTO.S2: the kind its card and label row show).
+            album_type: q.row.kind.clone(),
             ..Default::default()
         })
         .collect();

@@ -867,6 +867,21 @@ impl Library {
         Ok(out)
     }
 
+    /// These albums' kept types (GOTO.S4: the build's own, never worked out again): `release_type` and `secondary`, by id; an album
+    /// not in the library left out.
+    pub fn kept_types(&self, ids: &[String]) -> Result<HashMap<String, (Option<String>, Vec<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT release_type, secondary FROM albums WHERE id = ?1")?;
+        let mut out = HashMap::new();
+        for id in ids {
+            let row = st.query_map([id], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)))?.next().transpose()?;
+            if let Some((kind, secondary)) = row {
+                out.insert(id.clone(), (kind, secondary.split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect()));
+            }
+        }
+        Ok(out)
+    }
+
     /// Every album's tracks in the library now, by album id (A3.4: whether a row of its missing tracks still fits it).
     pub fn song_counts(&self) -> Result<HashMap<String, usize>> {
         let db = self.db();

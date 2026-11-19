@@ -319,6 +319,40 @@ impl Serve {
         self.catalogue_cell.get().expect("the catalogue is attached before Cratarr serves")
     }
 
+    /// Each record's type as the Library list serves it (GOTO.S1, S4), by album id: a had record's kept `release_type` and
+    /// `secondary` (the build's rule with the hand's `set`), a record not had's kept `records.kind`; another server's or no record's
+    /// left out. Read once for all of an answer's tracks, never worked out again here. Blocking.
+    pub fn record_types(&self, ids: &[String]) -> std::collections::HashMap<String, (Option<String>, Vec<String>)> {
+        let mut out = self.library.kept_types(ids).unwrap_or_else(|e| {
+            tracing::debug!(reason = %format!("{e:#}"), "records' types not read");
+            Default::default()
+        });
+        if let Some(cat) = self.catalogue_cell.get() {
+            for id in ids {
+                if out.contains_key(id) {
+                    continue;
+                }
+                if let Some(row) = ids::record_number(id).and_then(|n| cat.record(n).ok().flatten()).filter(|r| !r.had) {
+                    out.insert(id.clone(), (row.kind.clone(), Vec::new()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Track rows with their record's type (GOTO.S1), one read for them all (GOTO.S6). Blocking.
+    pub fn with_types(&self, rows: &mut [crate::app::PlaylistRow]) {
+        let mut ids: Vec<String> = rows.iter().filter_map(|r| r.album_id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        let types = self.record_types(&ids);
+        for r in rows {
+            if let Some((kind, secondary)) = r.album_id.as_ref().and_then(|a| types.get(a)) {
+                (r.album_type, r.album_secondary) = (kind.clone(), secondary.clone());
+            }
+        }
+    }
+
     /// Every artist's id for life by `ids::artist_key`: none until the catalogue is attached. Blocking.
     pub fn artist_ids(&self) -> Result<std::collections::HashMap<String, i64>> {
         self.catalogue_cell.get().map_or_else(|| Ok(Default::default()), |c| c.artist_ids())
@@ -1127,6 +1161,43 @@ mod tests {
     }
 
     /// RF1 (RB1's third scenario, RB5's second): a copy of three of an album's eight tracks, untagged, is a single by its own files.
+    /// GOTO.S1, S2, S4: a track carries its record's type as the Library list serves it: a had album's kept `release_type` and
+    /// `secondary` (here set as a build keeps them), a record not had's kept kind, none for an album of no record; one read for all of
+    /// an answer's rows; and the reader works nothing out: its body names none of the three classifiers.
+    #[test]
+    fn the_library_list_and_its_tracks_say_one_type() {
+        use crate::app::PlaylistRow;
+        let (roots, cat, serve) = on_two_folders("goto-types");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")]);
+        serve.refresh().unwrap();
+        let had = ids::record(record_in(&serve, 0, "A"));
+        serve.library.db().execute("UPDATE albums SET release_type = 'album', secondary = 'compilation' WHERE id = ?1", [&had]).unwrap();
+        let not_had = {
+            use crate::catalogue::records::{Listing, Ref};
+            let artist = cat.artist_for("Artist").unwrap();
+            let l = Listing { title: "Slack Water".into(), artist: "Artist".into(), kind: Some("ep".into()), refs: vec![Ref::new("musicbrainz", "release-group", "00000000-0000-4000-8000-000000006301")], ..Listing::default() };
+            ids::record(cat.keep_listing(Some(artist), &[l], "link").unwrap()[0])
+        };
+        let types = serve.record_types(&[had.clone(), not_had.clone(), "al-999999".to_string()]);
+        assert_eq!(types[&had], (Some("album".to_string()), vec!["compilation".to_string()]), "the Library list's type and secondary");
+        assert_eq!(types[&not_had], (Some("ep".to_string()), Vec::new()), "a record not had: its kept kind");
+        assert!(!types.contains_key("al-999999"), "no record: none made up");
+        let row = |album: &str| PlaylistRow { album_id: Some(album.into()), ..Default::default() };
+        let mut rows = vec![row(&had), row(&not_had), row(&had)];
+        serve.with_types(&mut rows);
+        let said: Vec<(Option<&str>, Vec<String>)> = rows.iter().map(|r| (r.album_type.as_deref(), r.album_secondary.clone())).collect();
+        assert_eq!(said, [(Some("album"), vec!["compilation".to_string()]), (Some("ep"), Vec::new()), (Some("album"), vec!["compilation".to_string()])]);
+        let shown = serde_json::to_value(&rows[0]).unwrap();
+        assert_eq!((shown["album_type"].as_str(), shown["album_secondary"].clone()), (Some("album"), serde_json::json!(["compilation"])));
+        let src = include_str!("mod.rs").replace("\r\n", "\n");
+        let at = src.find("    pub fn record_types(&self, ids: &[String])").unwrap();
+        let body = &src[at..at + src[at..].find("\n    }\n").unwrap()];
+        for classifier in ["release_type_of", "type_by_files", "type_by_rule"] {
+            assert!(!body.contains(classifier), "GOTO.S4: no second classifier: {classifier}");
+        }
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
     /// Found missing tracks (`app::incomplete`: its whole release eight), the build types it as that release, an album, and the
     /// catalogue keeps that type: the album's record of its name, MusicBrainz's, is held by it, partly there (three of eight), and off
     /// the artist's missing list. Never: the album read missing beside its own partial copy once it is found short.

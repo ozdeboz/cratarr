@@ -49,6 +49,13 @@ const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct QueueTrack {
+    /// Its record's type, as the Library list serves it (GOTO.S1): a queue row's Go to names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(test, ts(as = "Option<Vec<String>>", optional))]
+    pub album_secondary: Vec<String>,
     /// Its entry in the queue (decision 0033): an id of its own, never reused, apart from the track's.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub entry: String,

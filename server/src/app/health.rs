@@ -78,6 +78,11 @@ pub struct Item {
     /// An album it opens: (server, album id); its cover shows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album: Option<(String, String)>,
+    /// That record's type, as the Library list serves it (GOTO.S1): its Go to names it (F31.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     /// A playlist it opens (on its Repair tab).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist: Option<String>,
@@ -179,6 +184,21 @@ pub struct Report {
 pub struct RecordHealth {
     /// Worst first.
     pub findings: Vec<RecordFinding>,
+}
+
+/// The albums of Cratarr's own these items are about, each once (GOTO.S1).
+fn own_albums<'a>(items: impl Iterator<Item = &'a Item>) -> Vec<String> {
+    let mut ids: Vec<String> = items.filter_map(|i| i.album.as_ref().filter(|(s, _)| s == crate::source::cratarr::KIND.id).map(|(_, a)| a.clone())).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// An item with its record's type, where it is about one of Cratarr's own (GOTO.S1).
+fn typed(i: &mut Item, types: &HashMap<String, (Option<String>, Vec<String>)>) {
+    if let Some((kind, secondary)) = i.album.as_ref().filter(|(s, _)| s == crate::source::cratarr::KIND.id).and_then(|(_, a)| types.get(a)) {
+        (i.album_type, i.album_secondary) = (kind.clone(), secondary.clone());
+    }
 }
 
 /// A finding as one record has it: its kind (the report's key), its short name and row, how much it asks, and the
@@ -820,6 +840,14 @@ impl App {
         for f in &mut findings {
             f.items.truncate(ITEMS);
         }
+        // Each item about a record of Cratarr's own with its type (GOTO.S1, F31.1: its Go to names it), one read for them all.
+        if let Some(served) = self.served.clone() {
+            let ids = own_albums(findings.iter().flat_map(|f| &f.items));
+            let types = tokio::task::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
+            for i in findings.iter_mut().flat_map(|f| &mut f.items) {
+                typed(i, &types);
+            }
+        }
         Report { findings: ordered(findings, at), checked }
     }
 
@@ -835,7 +863,16 @@ impl App {
             let id = album.to_string();
             wrong = tokio::task::spawn_blocking(move || files_wrong(&served, &id)).await??;
         }
-        Ok(record(&found, &(source.to_string(), album.to_string()), &wrong))
+        let mut health = record(&found, &(source.to_string(), album.to_string()), &wrong);
+        // Its items with their record's type (GOTO.S1, F31.1).
+        if let Some(served) = self.served.clone() {
+            let ids = own_albums(health.findings.iter().flat_map(|f| &f.items));
+            let types = tokio::task::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
+            for i in health.findings.iter_mut().flat_map(|f| &mut f.items) {
+                typed(i, &types);
+            }
+        }
+        Ok(health)
     }
 
     /// Health's Missing list, the report's alone: a record's own page has no use for it (`record_health`).
