@@ -13,9 +13,10 @@ itself, present since 0.16.
 
 ## Decision
 
-1. **Every GET the page sends passes one guard** (`lib/loopGuard`). The same address asked more than 20 times in 10 s
-   fails at once for the rest of that window, said once in the console with its address. Polls, at most one every 2 s,
-   and every write are never held. A burst that settles is let through again.
+1. **Every GET the page sends passes one guard** (`lib/loopGuard`). The same address sent more than 60 times in 10 s
+   is held, said once in the console with its address. Only asks that went out count, so a held address goes again once
+   they leave the window, but an address asked again within half a second while held stays held, because a loop never
+   pauses. Polls, at most one every 2 s, a view's reads on the server's changes, and every write never come near it.
 2. **A page test scans every effect** for one that reads and writes the same `$state`. A new one fails the tests unless
    it is reviewed and listed as harmless: it settles in one pass, or its write is an unchanged value.
 3. **A failure is never "nothing".** A server error answers as an error, not as "no cover", and the page asks again

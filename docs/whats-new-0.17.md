@@ -166,3 +166,9 @@ Keep a copy of the data folder from before the upgrade: going back to 0.16.3 mea
 - **Search answers quickly:** the lists of missing albums and crates' tracks are no longer made again inside a search.
 - **A page that asks the same thing over and over** is held back before the server, and says so in the console.
 - **A label page's header** counts the records you have.
+- **Health's intake card:** its first row says what this copy is and where it came from; each track plays once, from its
+  middle; a length that differs from MusicBrainz's says so ("MusicBrainz says 10:38"); while it reads, its own loader
+  says "Checking its files".
+- **A cover that failed** is asked again later. Only a real "no cover" is kept.
+- **A record's artist chips** open each artist by their id, so two artists of one name never mix.
+- **A crate with a Sounds like** asks for itself once, where it asked again and again.

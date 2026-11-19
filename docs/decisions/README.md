@@ -331,5 +331,5 @@ by a later record that says so in its header. A new decision takes the next numb
   artists' photos and lists' pictures keep every source's candidate; the hand's pick wins, kept by the object's id, with
   one Undo; one picker for every kind.
 - [0108: A request loop never reaches the server](0108-a-request-loop-never-reaches-the-server.md): accepted, 0.17.
-  One guard holds back a GET asked over 20 times in 10 s; a page test fails a new effect that reads and writes one
-  state; a failure is never read as "nothing".
+  One guard holds back a GET sent over 60 times in 10 s, for as long as a loop keeps asking; a page test fails a new
+  effect that reads and writes one state; a failure is never read as "nothing".
