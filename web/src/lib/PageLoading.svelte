@@ -77,6 +77,11 @@
     if (el.parentElement) sized.observe(el.parentElement);
     const box = seen().box;
     if (box) sized.observe(box);
+    // Everything above it too, up to the scrolling box: a header settling (a record's cover known, its hero shorter) moves it
+    // without resizing its parent, and the mark measured before stayed near its top (the owner, 2026-11-19: "There's more
+    // space below than above").
+    for (let a: Element | null = el; a && a !== box && a !== document.body; a = a.parentElement)
+      for (let x = a.previousElementSibling; x; x = x.previousElementSibling) sized.observe(x);
     addEventListener('resize', ask);
     window.visualViewport?.addEventListener('resize', ask);
     return () => {
