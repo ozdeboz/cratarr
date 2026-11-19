@@ -863,6 +863,36 @@ async fn an_artist_is_one_id_by_name_and_by_number_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// F18.3, F18.4 (the F18.4 half: MusicBrainz switched off, Discogs without a key): an artist page asked by a name no artist has and no
+/// source knows makes no artist and says so, each source in F1's words, nothing looking: never "Nothing by" alone. A name an artist has
+/// answers as before, by that artist.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_artist_asked_by_name_alone_is_made_by_reference_end_to_end() {
+    let root = temp("artist-by-name");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_fixtures(&music);
+    settings_0_15(&data, &music.to_string_lossy());
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    let artists = || -> i64 {
+        let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+        db.query_row("SELECT count(*) FROM artists", [], |r| r.get(0)).unwrap()
+    };
+    let before = artists();
+    let nobody = s.get("/api/artists/missing?name=Nobody%20Knows%20Them").await;
+    assert_eq!(nobody["looking"], false, "{nobody}");
+    assert_eq!(nobody["no_list"], json!([{ "source": "musicbrainz", "said": "off" }, { "source": "discogs", "said": "none" }]), "{nobody}");
+    assert!(nobody.get("artist").is_none(), "{nobody}");
+    assert_eq!(artists(), before, "no artist made by a name alone");
+    let known = s.get("/api/artists/missing?name=Glass%20Harbour").await;
+    assert!(known["artist"].as_str().is_some_and(|a| a.starts_with("ar-")), "a name an artist has: theirs: {known}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// C56: a label's page from what the catalogue keeps, with MusicBrainz, Discogs and Bandcamp switched off, so nothing is read
 /// elsewhere: the label Tide Tables' files name, its records by year, newest first, each had or not with its catalogue number, a
 /// record not had among them, and nothing being read. An id that is no label is refused, and "More" reads on at MusicBrainz or
@@ -5929,6 +5959,60 @@ async fn a_record_not_had_says_its_sources_are_off_end_to_end() {
     assert!(page.get("looking").is_none(), "nothing being read: {page}");
     let again = alice.get(&path).await;
     assert_eq!((&again["no_list"], again.get("looking")), (&page["no_list"], None), "asked again, the same: {again}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A3.1.1: an album whose one copy's folder was removed on disk, outside Cratarr: once the catalogue has seen it go, a Want of it is no
+/// Want of an album held: handed on, never "Already in the library", and a requests' round on it is neither done nor delivered.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_want_of_an_album_whose_copy_went_is_fetched_end_to_end() {
+    use reqwest::Method;
+    let root = temp("copy-went");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    make_layout(&library);
+    let music = library.join("music");
+    // The Given: the album's one copy is Music's. The layout keeps a second in ann's own music, a library too, which would hold
+    // the record had (A3.1) and keep its files present at the same relative path (the review's H1).
+    std::fs::remove_dir_all(library.join("own").join("ann").join(SHORES)).unwrap();
+    settings(&data, &[(&music, "main")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    s.act_as(ANN.0, ANN.1).await;
+    s.ok(Method::PUT, "/api/settings/floor", json!({ "gb": 0 })).await;
+    let album = s.read_in("Both Shores", &music).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    let admin = s.sign_in(ANN.0, ANN.1).await;
+    std::fs::remove_dir_all(music.join(SHORES)).unwrap();
+    // The catalogue looks when asked, as an app's scan asks it (else at its next pass, minutes on), and marks the copy's files
+    // gone. The Library list may hold the album the day a gone file is kept for; "had" reads present files alone. Music's
+    // files alone are counted: another library's copy at the same relative path is another copy.
+    let gone = || {
+        let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        let sql = "SELECT COALESCE(SUM(f.gone_at IS NOT NULL), 0), COALESCE(SUM(f.gone_at IS NULL), 0) FROM files f \
+                   JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE ?2";
+        let at = [music.to_string_lossy().to_string(), format!("{SHORES}/%")];
+        let (went, here): (i64, i64) = db.query_row(sql, at, |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        went > 0 && here == 0
+    };
+    s.until("the catalogue to see its copy go", Duration::from_secs(120), || async {
+        ask(&admin, "startScan", "").await;
+        gone()
+    })
+    .await;
+    let asked = admin.ok(Method::POST, "/api/requests/want", json!({ "record": id, "artist": "Salt Meridian", "album": "Both Shores" })).await;
+    let request = asked["request"]["id"].as_i64().expect("the request");
+    assert_ne!(request_line(&data, request).as_deref(), Some("Already in the library"), "handed on, not had: {asked}");
+    // A round on, neither done nor delivered.
+    tokio::time::sleep(Duration::from_secs(70)).await;
+    let mine = admin.get("/api/requests").await;
+    let r = mine["mine"].as_array().unwrap().iter().find(|r| r["id"] == request).cloned().expect("the request");
+    assert!(!matches!(r["state"]["state"].as_str(), Some("done" | "delivered" | "arrived")), "{r}");
+    assert_ne!(request_line(&data, request).as_deref(), Some("Already in the library"));
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

@@ -66,6 +66,7 @@
     type PlaylistRow,
     tasteFits,
     getRecordHealth,
+    type RecordFinding,
   } from './api';
   import {
     builderOf,
@@ -106,10 +107,11 @@
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import { deleteServerPlaylist, isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
-  import { albumRowSub, emptyPlace, keptRows, lookAgainAfter, notHadPage, type NotHadAction } from './recordNotHad';
+  import { albumRowSub, emptyPlace, keptRows, listCount, lookAgainAfter, notHadPage, type NotHadAction } from './recordNotHad';
+  import { artistLine } from './recordTypeRules';
   import Notice from './Notice.svelte';
-  import { artistTitle, movedTo } from './artistIds';
-  import { labelCovers, labelOf, labelRows, type LabelPageOf } from './labelPage';
+  import { albumChips, artistTitle, movedTo } from './artistIds';
+  import { labelCount, labelCovers, labelOf, labelRows, type LabelPageOf } from './labelPage';
   import { editionLines } from './editions';
   import { wantOf } from './wantPath';
   import LabelBody from './LabelBody.svelte';
@@ -131,6 +133,9 @@
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
+  import RecordProblemSheet from './RecordProblemSheet.svelte';
+  import { sheetFor } from './healthTools';
+  import { ICON_OF } from './menuTable';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -171,8 +176,9 @@
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
   import { serverPlaylistOf } from './panel.svelte';
+  import { keepsPlace } from './keepsPlace';
   import { whenChanged } from './dataChanged';
-  import { albumMoved, albumOf, albumSubject, artistMoved, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
+  import { albumMoved, albumOf, albumSubject, artistMoved, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
   import { wordRows } from './wordRows';
   import { openRadio } from './radioAsk.svelte';
@@ -275,7 +281,7 @@
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   // The record's libraries, as dots before its details (0.9.3): where it lies, beside its year.
   const albumDots = $derived(album ? libraryDots(album.source, { id: album.id }) : []);
-  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'was_until' | 'bandcamp' | 'looking' | 'no_list' | 'reading' | 'sources' | 'editions'> & { kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words' | 'not_had' | 'have' | 'request' | 'labels' | 'artists' | 'was_until' | 'bandcamp' | 'looking' | 'no_list' | 'reading' | 'sources' | 'editions'> & { kbps: number | null } | null>(null);
   /** A record not had (C54, lib/recordNotHad): its page from the catalogue, of an album the library has no copy of. */
   const notHad = $derived(!!album && !!albumHead?.not_had);
   /** What its page shows of it: no heart or Resume, its header's Want or Requested and its preview's play, its lines. */
@@ -376,40 +382,74 @@
   const filesLine = $derived(album ? stateLine(filesState ?? listedHere?.a.files_state) : null);
   // Its own Health problems (the owner, 2026-11-02: "on its page", a line each under its title; its missing tracks one
   // of them): an administrator's, as Health is; a tap opens that problem narrowed to this record, Back returns here.
-  let recordHealth = $state.raw<{ for: string; lines: ReturnType<typeof recordProblem>[] } | null>(null);
+  let recordHealth = $state.raw<{ for: string; findings: RecordFinding[]; lines: ReturnType<typeof recordProblem>[]; failed: string | null } | null>(null);
+  /** Read again after something was done in its sheet (F28.5), or Try again there. */
+  let healthAgain = $state(0);
   $effect(() => {
     const a = album;
     void health.findings;
     void saved;
     void undos.n;
+    void healthAgain;
     if (!a || offServer || !me.admin) return void (recordHealth = null);
     const key = `${a.source}/${a.id}`;
     if (untrack(() => recordHealth?.for) !== key) recordHealth = null;
     let gone = false;
     getRecordHealth(a.source, a.id).then(
-      (h) => !gone && (recordHealth = { for: key, lines: h.findings.map(recordProblem) }),
-      () => !gone && (recordHealth = { for: key, lines: [] }),
+      (h) => !gone && (recordHealth = { for: key, findings: h.findings, lines: h.findings.map(recordProblem), failed: null }),
+      // Read before: kept, its sheet saying why (F28.5 (c)); never read: no lines.
+      (e) => !gone && (recordHealth = untrack(() => recordHealth?.for === key ? { ...recordHealth!, failed: e instanceof Error ? e.message : 'Unexpected error' } : { for: key, findings: [], lines: [], failed: null })),
     );
     return () => (gone = true);
   });
   const healthLines = $derived(album && recordHealth?.for === `${album.source}/${album.id}` ? recordHealth.lines : []);
-  /** Its problem narrowed to it, over it (Back returns to it). */
-  const openRecordProblem = (key: string) => album && viewOver(`${HEALTH}${key}/${encodeURIComponent(albumSubject(album.source, album.id))}`);
-
-  // The album's artist chip: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
-  // their own panel's chip).
-  const albumBy = $derived(album && albumHead?.artist ? (listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)) : null);
-  let albumByFavorite = $state<boolean | null>(null);
+  // Its line opened in place (F28): a sheet over the page, the panel where it is. The first tap wins (F28.6); the finding read again
+  // without its key closes it (F28.5), and another record shown too.
+  let problemOpen = $state<{ key: string; title: string; for: string } | null>(null);
+  const problemFinding = $derived(
+    album && problemOpen?.for === `${album.source}/${album.id}` ? sheetFor(recordHealth?.findings, problemOpen.key, (f) => recordProblem(f).key) : null,
+  );
   $effect(() => {
-    const a = album;
-    const by = albumBy;
-    albumByFavorite = null;
-    if (!a || !by) return;
+    if (problemOpen && !problemFinding) untrack(() => (problemOpen = null));
+  });
+  const lineText = (l: ReturnType<typeof recordProblem>) => {
+    const whole = l.key === 'library:incomplete' ? listedHere?.a.whole_tracks : null;
+    return whole ? `${listedHere!.a.tracks} of ${plural(whole, 'track')}` : l.missing ? `${plural(l.missing, 'track')} missing` : l.text;
+  };
+  const openRecordProblem = (l: ReturnType<typeof recordProblem>) => album && (problemOpen ??= { key: l.key, title: lineText(l), for: `${album.source}/${album.id}` });
+
+  // The album's artist chips: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
+  // their own panel's chip). One chip per credited artist, in the credit's order (the owner, 2026-11-19, F39: "This shows
+  // two artists, but when I click on it, it goes to Nicola Conte"); each with their photo where the artist store has one,
+  // never the album's own cover (F38). The record's own credit first, each by their id (lib/artistIds albumChips: M8, M9).
+  const albumChipsShown = $derived(album && albumHead ? albumChips(albumHead.artist, mainArtist(albumHead.artist), albumHead.artists, listedHere?.a.artists) : []);
+  let byOf = $state<Record<string, { photo: string | null; favorite: boolean | null }>>({});
+  // Read again only when who is credited changes, not each time the list's answer is made anew (a new array of the same
+  // names restarted it before its answers came, F39).
+  const albumByKey = $derived(albumChipsShown.flatMap((c) => c.ask ?? []).join('|'));
+  const albumFrom = $derived(album?.source ?? null);
+  $effect(() => {
+    const from = albumFrom;
+    const asks = albumByKey ? albumByKey.split('|') : [];
+    // Written whole, never read here: an effect that reads what it writes runs again, and this one asked the server in a loop
+    // (thousands of asks a minute, the server then refusing the page's covers too).
+    const fresh: Record<string, { photo: string | null; favorite: boolean | null }> = {};
+    for (const ask of asks) fresh[ask] = { photo: null, favorite: null };
+    byOf = fresh;
+    if (!from || !asks.length) return;
     let live = true;
-    artistFavorite(a.source, by).then(
-      (r) => live && (albumByFavorite = r.favorite),
-      () => {},
-    );
+    // By their id where the credit has one: two artists of one name are two (M9).
+    for (const ask of asks) {
+      artistFavorite(from, ask).then(
+        (r) => live && byOf[ask] && (byOf[ask].favorite = r.favorite),
+        () => {},
+      );
+      if (from === 'cratarr')
+        getArtistAbout(ask).then(
+          (x) => live && byOf[ask] && x.photo && x.id && (byOf[ask].photo = artistPhotoUrl(x.id)),
+          () => {},
+        );
+    }
     return () => {
       live = false;
     };
@@ -522,7 +562,7 @@
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
-              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, was_until: r.was_until, bandcamp: r.bandcamp, looking: r.looking, no_list: r.no_list, reading: r.reading, sources: r.sources, editions: r.editions };
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words, not_had: r.not_had, have: r.have, request: r.request, labels: r.labels, artists: r.artists, was_until: r.was_until, bandcamp: r.bandcamp, looking: r.looking, no_list: r.no_list, reading: r.reading, sources: r.sources, editions: r.editions };
             // A record not had whose list is being read (C54, F1): asked again a little later, until the server has read it.
             if (want === id && r.not_had) lookAgain(want, !!r.looking);
             // Its rows once shown stay while the server reads again (F6): never the loader again for it.
@@ -846,12 +886,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const topTracks = $derived(!!artist?.tracks);
   let topSort = $state<ListSort>({ key: 'plays', down: true });
   // A crate with a Sounds like on: its Best match is Most alike (lib/crateRecords ranksAlike), read from its conditions; a draft's
-  // as they stand.
+  // as they stand. The effect reads a local, never the state it writes: reading it asked the crate again for ever (H2).
   let crateAlike = $state(false);
   $effect(() => {
     const c = crate;
-    crateAlike = ranksAlike(c);
-    if (!c || crateAlike) return;
+    const sure = ranksAlike(c);
+    crateAlike = sure;
+    if (!c || sure) return;
     let gone = false;
     getCrate(c).then(
       (d) => !gone && (crateAlike = ranksAlike(c, d.conditions)),
@@ -1146,7 +1187,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
   // An album's tracks carry its id: its cover, and the Incoming page's mark on what plays.
   const tracksOf = (list: PlaylistRow[], src = source): LocalTrack[] =>
-    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? x.album_id ?? null, duration_secs: x.duration_secs, ...(src === BANDCAMP ? { addable: false } : {}) }));
+    list.map((x) => ({
+      source: src,
+      id: x.id!,
+      name: x.name ?? x.file,
+      artist: x.artist,
+      album: x.album,
+      album_id: album?.id ?? x.album_id ?? null,
+      album_type: x.album_type ?? null,
+      album_secondary: x.album_secondary ?? [],
+      duration_secs: x.duration_secs,
+      ...(src === BANDCAMP ? { addable: false } : {}),
+    }));
 
   // Several playlists: each section's rows, asked for when it comes into view; a section folds.
   let sections = $state<Record<string, { rows: PlaylistRow[]; source: string } | { error: string }>>({});
@@ -1302,10 +1354,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   $effect(() => void loadPlaylistFavorites());
 
-  // Viewing it again scrolls it to the top.
+  // Viewing it again scrolls it to the top: as it is viewed again, never as the list mounts (F25.3: a place brought back by back
+  // stands).
   let scroller = $state<HTMLElement>();
+  let againSeen = untrack(() => panel.again);
   $effect(() => {
-    void panel.again;
+    const again = panel.again;
+    if (again === againSeen) return;
+    againSeen = again;
     // Viewed again for one of its tracks: that track's place instead (below).
     if (untrack(() => panel.mark?.subject === id)) return;
     scroller?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1339,7 +1395,17 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let workMenu = $state<{ mbid: string; title: string; ids: string[] } | null>(null);
   let workOpen = $state<{ mbid: string; title: string } | null>(null);
   const workIds = (list: PlaylistRow[]) => list.filter((x) => x.id && !x.missing).map((x) => x.id!);
-  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null, has_versions: r.has_versions });
+  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({
+    source: src,
+    id: r.id!,
+    name: r.name ?? r.file,
+    artist: r.artist,
+    album: r.album,
+    album_id: album?.id ?? r.album_id ?? null,
+    has_versions: r.has_versions,
+    album_type: r.album_type ?? null,
+    album_secondary: r.album_secondary ?? [],
+  });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
   // or at the end of the queue; an album also Resume. A crate plays and shuffles; its favourites toggle sits at the
@@ -1374,6 +1440,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
     requested: { icon: 'inbox', label: 'Requested' },
   };
   let wanting = $state(false);
+  /** The header's Want or Requested, in its ⋮ menu too (F36). */
+  const menuWant = $derived(
+    notHadShown?.actions.includes('requested')
+      ? { requested: true, disabled: false, run: () => void notHadAct('requested') }
+      : notHadShown?.actions.includes('want')
+        ? { requested: false, disabled: wanting, run: () => void notHadAct('want') }
+        : null,
+  );
   async function notHadAct(k: NotHadAction) {
     if (k === 'requested') return void (location.hash = hrefOf('requests'));
     if (k === 'want') return wantNotHad();
@@ -1454,11 +1528,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return rows ? plural(total, 'track') : '';
     if (multi) return playlistsKnown() ? plural(chosenCount, 'track') : '';
     if (!rows) return '';
-    if (label) return labelHead && labelRows(labelHead).length ? plural(labelRows(labelHead).length, 'record') : '';
-    if (artist) {
-      const albums = artist.tracks ? null : plural(artistHead?.albums.length ?? 0, 'album');
-      return [albums, plural(rows.length, 'track'), length ? clockText(length) : null].filter(Boolean).join(' • ');
-    }
+    if (label) return labelHead ? labelCount(labelHead) : '';
+    if (artist) return artistLine(artist.tracks ? null : (artistHead?.albums ?? []).map((a) => a.type), rows.length, length ? clockText(length) : null);
     const h = album ? albumHead : null;
     // Each copy says its own where it has a line: here it would read as the record's.
     const heard = albumCopies.length ? [] : [h?.format, h?.kbps ? `${h.kbps} kb/s` : null];
@@ -2393,7 +2464,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {/if}
   {/if}
 
-  <div class="scroll" class:away={(handed || full) && everywhere()} class:own bind:this={scroller} onscroll={onScroll}>
+  <div class="scroll" class:away={(handed || full) && everywhere()} class:own bind:this={scroller} onscroll={onScroll} {@attach keepsPlace()}>
     {#if making}
       <header class="head">
         <div class="top">
@@ -2577,7 +2648,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
               disabled={!l.act}
               onclick={() => (l.act === 'review' ? openReview('types', album.id) : l.act === 'undo' && run ? void undoRun(run, [album.id]) : undefined)}
               ><Icon name={l.tone === 'warn' ? 'bang' : l.act === 'undo' ? 'check' : l.act === 'review' ? 'pencil' : 'save'} size={14} /><span
-                >{l.text}{#if l.act === 'review'} · <b class="act">Review</b>{:else if l.act === 'undo'} · <b class="act">Undo</b>{/if}</span
+                >{l.text}{#if l.say} · <b class="act">{l.say}</b>{/if}</span
               >{#if l.progress !== null}<span class="files-meter"><i style:width={`${l.progress * 100}%`}></i></span>{/if}</button
             >
           {/if}
@@ -2585,7 +2656,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
                state, W12), a tap to Requests; until when it was in Music (OQ16). -->
           {#if notHadShown}
             {#each notHadShown.lines as l (l.kind)}
-              {#if l.kind === 'have'}{@const to = l.record}<button class="details left-out" onclick={() => viewOver(albumSubject('cratarr', to))}><Icon name="disc" size={14} /><span>{l.text}</span></button>
+              {#if l.kind === 'have'}{@const to = l.record}<button class="details left-out" onclick={() => viewOver(albumSubject('cratarr', to))}><Icon name={ICON_OF.album} size={14} /><span>{l.text}</span></button>
               {:else if l.kind === 'request'}<button class="details left-out" onclick={() => (location.hash = hrefOf('requests'))}><Icon name="inbox" size={14} /><span>{l.text}</span></button>
               {:else}<span class="details left-out"><Icon name="clock" size={14} /><span>{l.text}</span></span>{/if}
             {/each}
@@ -2594,20 +2665,22 @@ ${r.album_artist ?? r.artist ?? ''}`;
                where they can't be looked for here, only said. -->
           {#if album && me.admin && !offServer && !notHad}
             {#each healthLines as l (l.key)}
-              {@const whole = l.key === 'library:incomplete' ? listedHere?.a.whole_tracks : null}
-              <button class="details left-out" class:warn={l.urgent} onclick={() => openRecordProblem(l.key)}
-                ><Icon name={l.key === 'library:incomplete' ? 'search' : 'bang'} size={14} /><span
-                  >{whole ? `${listedHere!.a.tracks} of ${plural(whole, 'track')}` : l.missing ? `${plural(l.missing, 'track')} missing` : l.text}</span
-                ></button
+              <button class="details left-out" class:warn={l.urgent} onclick={() => openRecordProblem(l)}
+                ><Icon name={l.key === 'library:incomplete' ? 'search' : 'bang'} size={14} /><span>{lineText(l)}</span></button
               >
             {/each}
           {:else if album && listedHere?.a.whole_tracks}<span class="details left-out"><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></span>{/if}
-          {#if album && albumHead?.artist}
-            <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
-              >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
-                  ><Icon name="heart" size={16} /></i
-                >{/if}</button
-            >
+          {#if album && albumChipsShown.length}
+            <span class="by">
+              {#each albumChipsShown as chip, i (i)}
+                {@const by = chip.ask ? byOf[chip.ask] : undefined}
+                <button class="chip" disabled={!chip.ask} onclick={() => chip.ask && goToArtist(album.source, chip.ask)}
+                  >{#if by?.photo}<span class="chip-art"><Cover src={by.photo} /></span>{/if}<span>{chip.label}</span>{#if by?.favorite}<i class="liked" role="img" aria-label="Favourite"
+                      ><Icon name="heart" size={16} /></i
+                    >{/if}</button
+                >
+              {/each}
+            </span>
           {:else if artist?.tracks}
             <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
               >{#if heroArt[0]}<span class="chip-art"><Cover src={heroArt[0]} /></span>{/if}<span>{artistName}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
@@ -2760,7 +2833,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows, null, false)}{/each}</ol>
       {/snippet}
     {:else if waitSign.loader}
-      <Asking now />
+      <!-- The panel's list as a whole: its mark in the middle of the room under the header (F42). -->
+      <Asking now room="page" />
     {:else if rows && !rows.length}
       {#if nothing}
         <NothingPopover anchor={nothing.anchor} said={nothing.said} chips={nothing.chips} onclearall={nothing.clearAll} more={nothing.more} />
@@ -2796,7 +2870,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         bind:value={() => sortKey, (v) => setSort(v, sortDown)}
         bind:down={() => sortDown, (d) => setSort(sortKey, d)}
         bind:open={sortOpen}
-        count={plural(crate ? total : shownPlayable.length, 'track')}
+        count={crate ? plural(total, 'track') : listCount({ notHad, shown: shownRows.length, playable: shownPlayable.length })}
         oncount={crate && !crateEditing ? () => crate && setCrateView(crate, 'records') : null}
         countLabel="Show as records"
         selecting={!!selecting}
@@ -2812,7 +2886,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {/if}
       </ol>
       {/if}
-      {#if crate && rows.length < total}<div class="loading" bind:this={more}><Asking size={40} now room="given" /></div>{/if}
+      {#if crate && rows.length < total}<div class="loading" bind:this={more}><Asking size={40} now room="given" said={`Reading more tracks: ${rows.length.toLocaleString()} of ${total.toLocaleString()}`} /></div>{/if}
       <!-- Each list's own kind of similar ones at its foot (the owner, 2026-10-23); a crate's once all its rows are in. -->
       <!-- One's own playlist: tracks to add to it (lib/SuggestedTracks; the owner, 2026-10-23). -->
       {#if !own}
@@ -2856,9 +2930,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if !notHad}<SimilarAlbums source={album.source} album={album.id} />{/if}
     {/if}
     {#if notHad}
-      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={{ server: provider.server, libraries: [] }} more={albumHead} labels={albumHead.labels ?? []} sources={albumHead.sources} />
+      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} provider={null} more={albumHead} labels={albumHead.labels ?? []} sources={albumHead.sources ?? []} onsaved={() => saved++} />
     {:else}
-      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} sources={albumHead.sources} />
+      <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} labels={albumHead.labels ?? []} sources={albumHead.sources ?? []} onsaved={() => saved++} />
     {/if}
   {/if}
   {#if album && albumHead && album.source === BANDCAMP}
@@ -3096,6 +3170,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     chips={[rec.artist ?? '', holdsLine(rec.at.length, albumTotal(rec))].filter(Boolean)}
     tracks={tracksOf(rs.filter((r) => r.id && !r.missing))}
     album={rec.albumId ? () => viewOver(albumSubject(source, rec.albumId!)) : null}
+    albumType={rs.find((r) => r.album_type)?.album_type ?? null}
+    albumSecondary={rs.find((r) => r.album_type)?.album_secondary ?? []}
     outs={away}
     onclose={() => (recordMenu = null)}
   />
@@ -3139,6 +3215,19 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {#if bandcampMenuOpen && album && albumHead}
   <BandcampAlbumMenu album={{ id: album.id, title: albumHead.title, artist: albumHead.artist }} tracks={tracksOf((rows ?? []).filter((r) => r.id && !r.missing), BANDCAMP)} onclose={() => (bandcampMenuOpen = false)} />
 {/if}
+{#if problemOpen && problemFinding && album}
+  <!-- Its health line opened in place (F28): mounted here, as its menu is. -->
+  <RecordProblemSheet
+    finding={problemFinding}
+    problem={problemOpen.key}
+    title={problemOpen.title}
+    here={album.id}
+    failed={recordHealth?.failed ?? null}
+    onretry={() => healthAgain++}
+    onclose={() => (problemOpen = null)}
+    onchanged={() => healthAgain++}
+  />
+{/if}
 {#if albumMenuOpen && album}
   <AlbumMenu
     source={album.source}
@@ -3148,6 +3237,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     genres={listGenres}
     viewable={false}
     {notHad}
+    want={menuWant}
     onresumegone={() => (resumeAt = null)}
     onclose={() => (albumMenuOpen = false)}
   />
@@ -3528,6 +3618,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     border: 0;
     background: none;
     font: inherit;
+    /* A button centres its text; a line that wraps reads from the left as the page's other lines do (F36). */
+    text-align: start;
     cursor: pointer;
   }
 
@@ -3874,6 +3966,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
     margin: 0;
     color: var(--muted);
     font-size: 15px;
+  }
+
+  /* A record's artists, a chip each, side by side (F39). */
+  .by {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   /* The album's artist (Symfonium's chip): it opens the artist. */

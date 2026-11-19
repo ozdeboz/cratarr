@@ -217,7 +217,10 @@ pub async fn kept_or_look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &s
     let (s, key) = (serve.clone(), mbid.to_string());
     let (found, due) = tokio::task::spawn_blocking(move || kept(&s, &key, super::moment::now_secs())).await??;
     if !due || !begins(mbid) {
-        return Ok(found.unwrap_or_default());
+        // A1.2.3: marked as the library is now.
+        let mut found = found.unwrap_or_default();
+        found.artists = marked(serve, std::mem::take(&mut found.artists)).await?;
+        return Ok(found);
     }
     let _ends = Ends(mbid.to_string());
     looked(serve, name, mbid, Services::new().as_ref()).await
@@ -279,7 +282,8 @@ pub async fn answer(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str, no
         start(serve.clone(), name.to_string(), mbid.to_string(), lists);
     }
     let (looking, reading, no_list) = said_now(mbid, now);
-    Ok(Answer { artists: found.map(|f| f.artists).unwrap_or_default(), looking, reading, no_list })
+    let artists = marked(serve, found.map(|f| f.artists).unwrap_or_default()).await?;
+    Ok(Answer { artists, looking, reading, no_list })
 }
 
 /// What the looks of the artist say at `now` (F8): whether one runs, and the source it asks now; where none runs, what the last look
@@ -298,6 +302,21 @@ fn said_now(mbid: &str, now: i64) -> (bool, Option<&'static str>, Option<Vec<sup
     let words: Vec<super::references::Said> =
         LISTS.iter().flat_map(|l| said.iter().filter(move |(s, _)| s == l)).map(|&(s, o)| super::references::Said::of(s, o, now)).collect();
     (false, None, (!words.is_empty()).then_some(words))
+}
+
+/// Related artists as the library has them now (A1.2): each the catalogue's artist holding their MusicBrainz id, with albums here;
+/// else, by their name, the one library artist of it holding no MusicBrainz id (a namesake holding another id, or two of the name, is
+/// no one: new to the library). Marked at every answer: a look kept a month carries no marks of its own, so an artist the library
+/// gained since is marked at once.
+async fn marked(serve: &Arc<crate::serve::Serve>, mut artists: Vec<Related>) -> Result<Vec<Related>> {
+    let cat = serve.catalogue().clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<Related>> {
+        for r in artists.iter_mut() {
+            r.id = cat.library_artist_of(r.mbid.as_deref(), &r.name)?.map(crate::serve::ids::artist);
+        }
+        Ok(artists)
+    })
+    .await?
 }
 
 /// ListenBrainz's similar artists: (MusicBrainz id, name, its score).
@@ -437,13 +456,8 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str, lists: &
         }
     }
     let mut artists: Vec<Related> = by.into_values().filter(|r| loose(&r.name) != loose(name)).collect();
-    // The library's: by name, as the artist page names them.
-    let (lib, names) = (serve.library.clone(), artists.iter().map(|r| r.name.clone()).collect::<Vec<_>>());
-    let ids: Vec<Option<String>> =
-        tokio::task::spawn_blocking(move || names.iter().map(|n| lib.artist_by_name(n).ok().flatten().map(|(id, _)| id)).collect()).await?;
-    for (r, id) in artists.iter_mut().zip(ids) {
-        r.id = id;
-    }
+    // The library's (A1.2): by their MusicBrainz id first, by name only where it can be no other.
+    artists = marked(serve, artists).await?;
     // The new ones on Bandcamp, the most related first.
     artists.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
     let mut looked = 0;
@@ -514,6 +528,77 @@ mod tests {
         assert_eq!(by(Some(id(second).as_str()), ""), Some((id(second), "Rone".to_string(), Some(other.to_string()))), "by id: that one");
         assert_eq!(by(None, "RONE"), Some((id(first), "RONE".to_string(), Some(french.to_string()))), "a bare name: the first");
         assert_eq!(by(Some("ar-999999"), "Rone"), None, "an id no artist has");
+    }
+
+    // ---- A1.2: related artists marked by their MusicBrainz id
+
+    /// A serve with a catalogue, and a library artist of `name` (a had record, credited first), holding MusicBrainz id `mbid` where given.
+    fn library_artist(serve: &crate::serve::Serve, name: &str, mbid: Option<&str>) -> i64 {
+        let cat = serve.catalogue();
+        let artist = cat.artist_apart(name).unwrap();
+        let record = cat.record_for_tests(&format!("{name}'s album"), 2);
+        cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'files')", rusqlite::params![record, artist]).unwrap();
+        if let Some(m) = mbid {
+            assert!(cat.set_reference(&crate::serve::ids::artist(artist), &crate::catalogue::records::Ref::new("musicbrainz", "artist", m), "files").unwrap());
+        }
+        artist
+    }
+
+    fn serve_with_catalogue() -> Arc<crate::serve::Serve> {
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        serve
+    }
+
+    fn related(name: &str, mbid: &str) -> Related {
+        Related { name: name.into(), mbid: Some(mbid.into()), why: vec!["Listened alongside".into()], id: None, number: None, bandcamp: None, album: None, score: 0.5 }
+    }
+
+    /// A1.2.1: a related "Mo’ Horizons" carries MusicBrainz id A7, which the library's "mo'horizons" holds: marked theirs (`id`), so
+    /// not new, and Discover's "Like <seed>" skips it.
+    #[tokio::test]
+    async fn a_related_artist_is_the_library_artist_who_holds_their_id() {
+        const A7: &str = "00000000-0000-4000-8000-000000000c07";
+        let serve = serve_with_catalogue();
+        let horizons = library_artist(&serve, "mo'horizons", Some(A7));
+        let marks = marked(&serve, vec![related("Mo\u{2019} Horizons", A7)]).await.unwrap();
+        assert_eq!(marks[0].id.as_deref(), Some(crate::serve::ids::artist(horizons).as_str()), "theirs by the id");
+    }
+
+    /// A1.2.2: a related "Glass Harbour" with id A8 is the library's by name only where it can be no other: (a) one library "Glass
+    /// Harbour" holding no MusicBrainz id: marked; (b) one holding another id: new; (c) two of the name: new.
+    #[tokio::test]
+    async fn a_related_artist_by_name_only_where_one_with_no_id_has_it() {
+        const A8: &str = "00000000-0000-4000-8000-000000000c08";
+        let serve = serve_with_catalogue();
+        let one = library_artist(&serve, "Glass Harbour", None);
+        assert_eq!(marked(&serve, vec![related("Glass Harbour", A8)]).await.unwrap()[0].id.as_deref(), Some(crate::serve::ids::artist(one).as_str()), "(a)");
+        let serve = serve_with_catalogue();
+        library_artist(&serve, "Glass Harbour", Some("00000000-0000-4000-8000-000000000c09"));
+        assert_eq!(marked(&serve, vec![related("Glass Harbour", A8)]).await.unwrap()[0].id, None, "(b) a namesake holding another id: new");
+        let serve = serve_with_catalogue();
+        library_artist(&serve, "Glass Harbour", None);
+        library_artist(&serve, "Glass Harbour", None);
+        assert_eq!(marked(&serve, vec![related("Glass Harbour", A8)]).await.unwrap()[0].id, None, "(c) two of the name: new");
+    }
+
+    /// A1.2.3: a look kept a month carries no marks of its own: each answer marks again, so an artist the library gained since is marked
+    /// at once, and one kept marked who is no longer the library's is not.
+    #[tokio::test]
+    async fn a_kept_look_is_marked_as_the_library_is_now() {
+        const SEED: &str = "00000000-0000-4000-8000-000000000c10";
+        const A9: &str = "00000000-0000-4000-8000-000000000c11";
+        let serve = serve_with_catalogue();
+        let stale = Related { id: Some("ar-999999".into()), ..related("Paper Lantern", "00000000-0000-4000-8000-000000000c12") };
+        let found = Found { at: super::super::moment::now_secs(), artists: vec![related("Tape Club", A9), stale] };
+        serve.userdata.set_related_artists(SEED, found.at, &serde_json::to_string(&found).unwrap()).unwrap();
+        let club = library_artist(&serve, "Tape Club", Some(A9));
+        let lists: Arc<dyn Lists> = Arc::new(Fake { asked: Default::default(), similar: || Ok(Vec::new()) });
+        let answered = answer(&serve, "Seed", SEED, super::super::moment::now_secs(), lists).await.unwrap();
+        let ids: Vec<Option<String>> = answered.artists.iter().map(|a| a.id.clone()).collect();
+        assert_eq!(ids, [Some(crate::serve::ids::artist(club)), None], "marked as the library is now");
+        let discover = kept_or_look(&serve, "Seed", SEED).await.unwrap();
+        assert_eq!(discover.artists[0].id, Some(crate::serve::ids::artist(club)), "Discover's look too");
     }
 
     // ---- F8 (preview 1's fix batch): the recommendations say what they read, and what they could not

@@ -3,6 +3,8 @@
 // with `inOrder`; what is true of the object (in the app, an administrator's, has tracks) decides which entries show,
 // never where. No runes, so the tests take it as it is (tests/menu-table.test.ts holds every menu to it).
 
+import { recordWord } from './recordTypeRules';
+
 export type MenuKind = 'track' | 'album' | 'artist' | 'playlist' | 'crate' | 'genre' | 'queue' | 'selection' | 'bandcamp';
 
 /** 0058's groups, B to H; A is the large actions. `library` is Change's second card (an album's library's own),
@@ -68,6 +70,7 @@ export type EntryId =
   | 'deleteAlbum'
   | 'deletePlaylist'
   | 'deleteCrate'
+  | 'goPlaylist'
   | 'extra';
 
 export type MenuCard = { group: MenuGroupId; entries: readonly EntryId[]; label?: string };
@@ -202,11 +205,10 @@ export const OWN_CARD: readonly EntryId[] = ['discover', 'extra'];
  *  entries named by what they are about ("Go to Bonobo", "Delete 3 playlists", "Delete EP": a record by its type,
  *  lib/recordTypeRules) are left out. */
 export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
-  view: 'View',
   renameWord: 'Rename everywhere',
   mergeWord: 'Merge into…',
   removeWord: 'Remove from this record',
-  goAlbum: 'Go to album',
+  goPlaylist: 'Go to playlist',
   soundsLike: 'Sounds like this',
   otherVersions: 'Other versions',
   favourite: 'Favourite',
@@ -245,8 +247,49 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   deleteCrate: 'Delete crate',
 };
 
-/** Names no menu uses any more: what 0058 and its amendment renamed, and Delete album (a record by its type, 2026-11-01). */
-export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…', 'Delete album'];
+/** The verbs of entries named by what they are about, and the link sheet's own (F19): one place for each word. Go to, View and
+ *  Delete name a record by its type (F31, F35, GOTO); a copy is saved, an Incoming one added, between main libraries moved (F33). */
+export const ENTRY_WORDS = {
+  openEdition: 'Open the edition',
+  references: 'References…',
+  goTo: 'Go to',
+  view: 'View',
+  saveTo: 'Save to',
+  addTo: 'Add to',
+  moveTo: 'Move to',
+} as const;
+
+/** The one map of a destination's icon (F32), the owner's choices: an album the disc, an artist the user, a playlist, a crate, a
+ *  genre the swatch, Sounds like this the notes, View the arrow out, outside sites the external link, Requests the inbox; Save to,
+ *  Add to, Move to their own (F33); Other versions the stack (OQ-F32), a work the beamed notes. */
+export const ICON_OF = {
+  album: 'disc',
+  artist: 'user',
+  playlist: 'playlists',
+  crate: 'crates',
+  genre: 'swatch',
+  soundsLike: 'music',
+  view: 'squareArrowOutUpRight',
+  outside: 'externalLink',
+  requests: 'inbox',
+  saveTo: 'save',
+  addTo: 'plus',
+  moveTo: 'intoBox',
+  versions: 'stack',
+  work: 'notes',
+} as const;
+
+/** A record's Go to, named by its type (GOTO.1, F31.3): "Go to EP", "Go to compilation"; "Go to record" where none is known. */
+export const goToName = (type?: string | null, secondary?: readonly string[] | null) => `${ENTRY_WORDS.goTo} ${recordWord(type, secondary)}`;
+
+/** A thing's View (F35): a record's by its type ("View EP", "View record"), a crate's, a genre's, a playlist's by its kind. */
+export function viewName(kind: 'album' | 'crate' | 'genre' | 'playlist', type?: string | null, secondary?: readonly string[] | null): string {
+  return `${ENTRY_WORDS.view} ${kind === 'album' ? recordWord(type, secondary) : kind}`;
+}
+
+/** Names no menu uses any more: what 0058 and its amendment renamed, Delete album (a record by its type, 2026-11-01), and a bare
+ *  View (F35: named by what it is about; "View album" is back as a record's). */
+export const RETIRED_NAMES = ['Details', 'View', 'Keep on this device', 'Download once', 'Export…', 'Delete album'];
 
 /** What a menu offers out of reach (decision 0085: don't offer what can't be upheld; the owner, 2026-10-30): the entries
  *  that work with Cratarr away. A navigation reads the service worker's last copy (lib/away), a heart, a rating, a

@@ -28,7 +28,7 @@
   import PlaylistAbout from './PlaylistAbout.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuTable from './MenuTable.svelte';
-  import { inOrder, type EntryId } from './menuTable';
+  import { ICON_OF, inOrder, viewName, type EntryId } from './menuTable';
   import { installed } from './offline.svelte';
   import { startPlaylists } from './output.svelte';
   import { openTab, viewOver, viewSelection, panel, type Tab } from './panel.svelte';
@@ -324,7 +324,7 @@
 
 {#snippet entry(e: EntryId)}
   {#if e === 'view'}
-    {#if !shown}<MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => viewTab('tracks')} />{/if}
+    {#if !shown}<MenuEntry icon={ICON_OF.view} label={viewName('playlist')} onclick={() => viewTab('tracks')} />{/if}
   {:else if e === 'favourite'}
     <MenuEntry
       icon="heart"

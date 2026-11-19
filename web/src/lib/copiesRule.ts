@@ -6,6 +6,7 @@
 // neither: a list with no libraries (the device's, a server's in its mode, Discover).
 import type { AlbumCopy, AlbumsSource, KeepPreview, LibraryInfo, ListedAlbum, MoveSheet, ReplacePreview, ReplaceSheet } from './api';
 import { size } from './exportChoices';
+import { ENTRY_WORDS } from './menuTable';
 
 /** Whether a format loses nothing: here so a copy's line can say it, and the list's order by quality too (lib/pageView). */
 const LOSSLESS = new Set(['FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV', 'WAVPACK', 'DSF', 'DFF']);
@@ -81,7 +82,7 @@ export const copies = (from: LibraryInfo | null, to: LibraryInfo) =>
 /** A move's words (C40, T3): a copy's, an add's, a move's. One place for the record's menu and Several albums. */
 export const moveWords = (copying: boolean, adding: boolean) =>
   copying
-    ? { verb: 'Copy', none: 'copied to', past: 'Copied', not: 'Not copied', act: 'copy' }
+    ? { verb: 'Save', none: 'saved to', past: 'Saved', not: 'Not saved', act: 'save' }
     : adding
       ? { verb: 'Add', none: 'added to', past: 'Added', not: 'Not added', act: 'add' }
       : { verb: 'Move', none: 'moved to', past: 'Moved', not: 'Not moved', act: 'move' };
@@ -137,7 +138,8 @@ export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?
       : from?.kind === 'incoming'
         ? others.filter((l) => c.keepable && (l.id === keepTo || (admin && (l.kind === 'main' || l.mine))))
         : admin
-          ? others.filter((l) => !(from?.kind === 'own' && l.kind === 'incoming'))
+          ? // F34 (the owner, 2026-11-19): an Incoming library is filled by its fetcher alone, never a kept copy's target.
+            others.filter((l) => l.kind !== 'incoming')
           : [];
     const kept = from?.kind === 'main' || from?.kind === 'own';
     return {
@@ -157,19 +159,33 @@ export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?
   });
 }
 
-/** An entry of a record's menu that takes a copy somewhere. */
-export type CopyEntry = { key: string; offer: AlbumOffer; to: LibraryInfo; label: string };
+/** An entry of a record's menu that takes a copy somewhere: saved (a copy), added, or moved (F33), its icon by that. */
+export type CopyEntry = { key: string; offer: AlbumOffer; to: LibraryInfo; label: string; verb: 'save' | 'add' | 'move' };
 
 /** A record of several copies names the copy each entry acts on (the owner, testing 0.16.0: on Drift, Music's MP3 and Your music's
  *  FLAC, "Move to lidarr-music" moved Music's copy where the FLAC was meant): every one of them, not only where two would read the
  *  same. Of one copy there is nothing to tell apart. */
 const named = (offers: AlbumOffer[], entries: CopyEntry[]) => (offers.length > 1 ? entries.map((e) => ({ ...e, label: `${e.label} from ${e.offer.name}` })) : entries);
 const free = (offers: AlbumOffer[]) => offers.filter((o) => o.job === null);
-const entry = (offer: AlbumOffer, to: LibraryInfo, label: string): CopyEntry => ({ key: `${offer.library}>${to.id}`, offer, to, label });
+const entry = (offer: AlbumOffer, to: LibraryInfo, label: string, verb: CopyEntry['verb'] = 'move'): CopyEntry => ({ key: `${offer.library}>${to.id}`, offer, to, label, verb });
 
-/** Add to, Copy to and Move to, each copy's targets in turn. */
+/** A move's verb into `to` (F33): a copy is saved, an Incoming one or one into own music added, between main libraries moved. */
+export const verbOf = (from: LibraryInfo | null, to: LibraryInfo): CopyEntry['verb'] => (copies(from, to) ? 'save' : adds(from, to) ? 'add' : 'move');
+const VERB_WORD = { save: ENTRY_WORDS.saveTo, add: ENTRY_WORDS.addTo, move: ENTRY_WORDS.moveTo } as const;
+/** A move's entry as the menus say it: "Save to OWN", "Add to Music", "Move to MORE", from the table. */
+export const moveLabel = (verb: CopyEntry['verb'], to: string) => `${VERB_WORD[verb]} ${to}`;
+
+/** Save to, Add to and Move to, each copy's targets in turn. */
 export const moveEntries = (offers: AlbumOffer[]) =>
-  named(offers, free(offers).flatMap((o) => o.targets.map((to) => entry(o, to, `${copies(o.from, to) ? 'Copy' : adds(o.from, to) ? 'Add' : 'Move'} to ${to.name}`))));
+  named(
+    offers,
+    free(offers).flatMap((o) =>
+      o.targets.map((to) => {
+        const verb = verbOf(o.from, to);
+        return entry(o, to, moveLabel(verb, to.name), verb);
+      }),
+    ),
+  );
 
 /** Replace in, one per main library it can take a copy's place in. From someone's own music the record has that library's copy
  *  too, so the line names whose copy it is (the owner, 2026-11-17): "Replace in Music from Your music", "… from <name>'s music". */

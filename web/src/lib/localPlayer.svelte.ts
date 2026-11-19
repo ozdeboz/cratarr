@@ -69,6 +69,9 @@ export type LocalTrack = {
   artist: string | null;
   album: string | null;
   album_id: string | null;
+  /** Its record's type, kept from the row it was queued from (GOTO.4 (a)): its Go to names it. */
+  album_type?: string | null;
+  album_secondary?: string[];
   /** False for a track no playlist line can name (outside every library Cratarr sees). */
   addable?: boolean;
   /** Its length (s), where the list it came from said: the queue's lengths and when it ends. */

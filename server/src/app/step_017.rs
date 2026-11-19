@@ -620,6 +620,22 @@ mod tests {
         }
     }
 
+    /// A1.1.5 (a pin): FX01's step makes no record not had that holds Discogs references alone, so none is left on an artist's list
+    /// by a Discogs row the rule no longer keeps; the step does give Discogs references (to had records).
+    #[test]
+    fn the_step_makes_no_record_of_discogs_references_alone() {
+        let d = Data::new("discogs-alone");
+        d.run();
+        assert!(d.sql::<i64>("catalogue.sqlite", "SELECT count(*) FROM \"references\" WHERE source = 'discogs' AND subject GLOB 'al-*'") > 0, "Discogs references made");
+        let alone: i64 = d.sql(
+            "catalogue.sqlite",
+            "SELECT count(*) FROM records r WHERE r.merged_into IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = r.id)
+               AND EXISTS (SELECT 1 FROM \"references\" x WHERE x.subject = 'al-' || r.id AND x.source = 'discogs')
+               AND NOT EXISTS (SELECT 1 FROM \"references\" x WHERE x.subject = 'al-' || r.id AND x.source <> 'discogs')",
+        );
+        assert_eq!(alone, 0);
+    }
+
     /// R2: each part has a mark of its own, so a data folder that ran an earlier version of the step, one without a part, runs
     /// that part at its next start and not the parts it ran: here the pages part is the one it lacked, and a link pasted that
     /// was let go of since stays let go of. The report is written again, with the new part's.
@@ -2049,5 +2065,126 @@ mod tests {
         for (a, b) in [(41, 42), (43, 44), (45, 46)] {
             assert_eq!(cat.join_copies(a, b, &kinds).unwrap(), None, "al-{a} and al-{b}: an arrival joins them neither");
         }
+    }
+
+    /// Tags added to every file of an album of FX01 (`rels`, a LIKE pattern under Music), from tag number 40 on.
+    fn tag_album(cat: &Catalogue, rels: &str, tags: &[(&str, &str)]) {
+        let sql: String = tags
+            .iter()
+            .zip(40..)
+            .map(|((name, value), n)| format!("INSERT INTO tags (folder, rel, n, raw, name, value) SELECT folder, rel, {n}, upper('{name}'), '{name}', '{value}' FROM files WHERE folder = 0 AND rel LIKE '{rels}';"))
+            .collect();
+        cat.execute_for_tests(&sql);
+    }
+
+    /// A2.1.5: (a) FX01's library agrees with itself: the part makes no artist apart. (b) FX01 with Partial Shore's files naming their
+    /// album artist "Glass Harbour" with another MusicBrainz id, B, than Tide Tables' (Glass Harbour's own, which the step's
+    /// discographies gave them): Tide Tables is Glass Harbour's; Partial Shore an artist of their own's, who holds B, listed in the
+    /// part's report; Glass Harbour never holds B.
+    #[test]
+    fn the_credits_part_credits_each_files_id_to_its_own_artist() {
+        let plain = Data::tagged("credits-plain");
+        {
+            let (cat, ud, kinds) = plain.open_both();
+            super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+            let mark: serde_json::Value = serde_json::from_str(&cat.meta("017:credits").unwrap()).unwrap();
+            assert!(mark.get("apart").is_none(), "(a) no artist made apart: {mark}");
+        }
+        const HARBOUR: &str = "00000000-0000-4000-8000-000000000201";
+        const B: &str = "00000000-0000-4000-8000-000000000a12";
+        let data = Data::tagged("credits-ids");
+        let (cat, ud, kinds) = data.open_both();
+        tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("musicbrainz_albumartistid", B)]);
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let holder = |id: &str| -> Vec<String> { cat.subject_of(&crate::catalogue::records::Ref::new("musicbrainz", "artist", id)).unwrap() };
+        let harbour = cat.artist_of("Glass Harbour").unwrap().unwrap();
+        assert_eq!(holder(HARBOUR), [crate::serve::ids::artist(harbour)], "Glass Harbour holds their own id");
+        let made = holder(B);
+        assert_eq!(made.len(), 1, "one artist holds B");
+        let made = crate::serve::ids::artist_number(&made[0]).unwrap();
+        assert_ne!(made, harbour, "never on Glass Harbour");
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT artist FROM record_artists WHERE record = 1 AND how = 'files'"), harbour, "Tide Tables: Glass Harbour's");
+        assert_eq!(data.sql::<i64>("catalogue.sqlite", "SELECT artist FROM record_artists WHERE record = 8 AND how = 'files'"), made, "Partial Shore: the artist apart's");
+        let mark: serde_json::Value = serde_json::from_str(&cat.meta("017:credits").unwrap()).unwrap();
+        assert_eq!(mark["apart"], serde_json::json!([format!("{} Glass Harbour: musicbrainz {B}", crate::serve::ids::artist(made))]), "listed in the part's report");
+    }
+
+    /// A2.2.3 (production): FX01 with Partial Shore's files naming their album artist "Glass Hárbour" and Glass Harbour's MusicBrainz
+    /// id: after the step, one credited artist for both spellings.
+    #[test]
+    fn the_step_credits_one_artist_for_spellings_of_one_id() {
+        let data = Data::tagged("credits-spellings");
+        let (cat, ud, kinds) = data.open_both();
+        cat.execute_for_tests("UPDATE tags SET value = 'Glass H\u{e1}rbour' WHERE folder = 0 AND name = 'albumartist' AND rel LIKE 'Glass Harbour/Partial Shore (2011)/%';");
+        tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("musicbrainz_albumartistid", "00000000-0000-4000-8000-000000000201")]);
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let credited = data.texts("catalogue.sqlite", "SELECT DISTINCT CAST(artist AS TEXT) FROM record_artists WHERE record IN (1, 8) AND how = 'files'");
+        assert_eq!(credited.len(), 1, "one artist for both spellings: {credited:?}");
+        assert_eq!(credited[0].parse::<i64>().unwrap(), cat.artist_of("Glass Harbour").unwrap().unwrap());
+    }
+
+    /// A2.4.4 (production): FX01 with files naming "Warp", "Warp Records" and "Warp Records,Beat Records": after the step, the labels
+    /// Warp and Beat Records, one each, the three records tied to Warp.
+    #[test]
+    fn the_step_makes_one_label_per_bare_name() {
+        let data = Data::tagged("labels-bare");
+        let (cat, ud, kinds) = data.open_both();
+        tag_album(&cat, "Kite Theory/Night Walks EP (2020)/%", &[("label", "Warp")]);
+        tag_album(&cat, "Kite Theory/Undated (no year)/%", &[("label", "Warp Records")]);
+        tag_album(&cat, "Glass Harbour/Partial Shore (2011)/%", &[("label", "Warp Records,Beat Records")]);
+        super::run(&cat, &ud, &kinds, &Rules::default()).unwrap();
+        let named = data.texts("catalogue.sqlite", "SELECT name FROM labels WHERE name LIKE '%Warp%' OR name LIKE '%Beat%' ORDER BY name");
+        assert_eq!(named, ["Beat Records", "Warp"], "one label per bare name");
+        let warp = data.texts("catalogue.sqlite", "SELECT CAST(r.record AS TEXT) FROM record_labels r JOIN labels l ON l.id = r.label WHERE l.name = 'Warp' ORDER BY r.record");
+        assert_eq!(warp, ["3", "4", "8"], "every record naming Warp tied to the one label");
+    }
+
+    /// F15.5: (a) FX01: no merge by a master or a group (0.16's data holds one record per group and masters on had records alone): no two
+    /// records not had share one before the step, and none of the fold's merges joins two that did. (b) A catalogue as a preview left it:
+    /// records not had X and Y of master 5000005 (two releases), credited to two artists' lists, and Z and W of one release group: Y into
+    /// X and W into Z, listed in the fold's report; never a had record, never across two groups.
+    #[test]
+    fn the_fold_joins_records_not_had_of_one_master_or_group() {
+        let plain = Data::new("fold-masters-plain");
+        let shared = |data: &Data| -> Vec<String> {
+            data.texts(
+                "catalogue.sqlite",
+                "SELECT a.subject || ' ' || b.subject FROM \"references\" a JOIN \"references\" b ON a.source = b.source AND a.kind = b.kind AND a.value = b.value AND a.subject < b.subject
+                 WHERE a.subject GLOB 'al-*' AND b.subject GLOB 'al-*' AND ((a.source = 'discogs' AND a.kind = 'master') OR (a.source = 'musicbrainz' AND a.kind = 'release-group'))
+                   AND NOT EXISTS (SELECT 1 FROM tracks t WHERE 'al-' || t.record IN (a.subject, b.subject) AND t.retired_at IS NULL)",
+            )
+        };
+        {
+            let (cat, ud) = plain.open();
+            run_without_fold(&cat, &ud, &[]);
+            assert!(shared(&plain).is_empty(), "(a) as the fold begins, no two records not had share a master or a group: {:?}", shared(&plain));
+            fold(&cat, &ud, &[], &|| Ok(())).unwrap();
+            assert!(shared(&plain).is_empty(), "(a) and none after it");
+        }
+        let data = Data::new("fold-masters");
+        let (cat, ud) = data.open();
+        let (harbour, field) = (cat.artist_for("Glass Harbour").unwrap(), cat.artist_for("Noor Field").unwrap());
+        let made = |title: &str, artist: i64, refs: &[(&str, &str, &str)]| {
+            let record = cat.record_for_tests(title, 0);
+            cat.db_for_tests().execute("INSERT INTO record_artists (record, artist, position, how) VALUES (?1, ?2, 0, 'listing')", rusqlite::params![record, artist]).unwrap();
+            for (s, k, v) in refs {
+                assert!(cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new(s, k, v), "link").unwrap());
+            }
+            record
+        };
+        let x = made("Two Rooms", harbour, &[("discogs", "release", "3600006"), ("discogs", "master", "5000005"), ("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000f07")]);
+        let y = made("Two Rooms", field, &[("discogs", "release", "3600007"), ("discogs", "master", "5000005")]);
+        let g5 = "00000000-0000-4000-8000-000000000f05";
+        let z = made("Undertow", harbour, &[("musicbrainz", "release-group", g5)]);
+        let w = made("Undertow (Live)", field, &[("musicbrainz", "release-group", g5)]);
+        let other = made("Two Rooms (Deluxe)", field, &[("discogs", "master", "5000005"), ("musicbrainz", "release-group", "00000000-0000-4000-8000-000000000f06")]);
+        run(&cat, &ud).unwrap();
+        let end = |r: i64| cat.record(r).unwrap().unwrap().id;
+        assert_eq!((end(y), end(w)), (x, z), "(b) Y into X, W into Z");
+        let fold = cat.meta("017:fold").unwrap();
+        for line in [format!("al-{y} into al-{x}"), format!("al-{w} into al-{z}")] {
+            assert!(fold.contains(&line), "listed: {line} in {fold}");
+        }
+        assert_eq!(end(other), other, "a second release group: never folded by the master");
     }
 }

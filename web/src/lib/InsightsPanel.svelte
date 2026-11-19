@@ -18,6 +18,7 @@
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import { backOne, INSIGHTS, isStep, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
+  import { keepsPlace } from './keepsPlace';
   import Crumbs, { type Level, type Siblings } from './Crumbs.svelte';
   import { groupsOf, landingOf, remembered } from './groupCrumb';
   import { prefs } from './prefs.svelte';
@@ -110,7 +111,7 @@
       {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>
   {/if}
-  <div class="scroll" class:away={handed && everywhere()}>
+  <div class="scroll" class:away={handed && everywhere()} {@attach keepsPlace()}>
     {#if view === 'discover-missing' || view === 'discover-excluded'}
       <DiscoveryList kind={view === 'discover-missing' ? 'missing' : 'excluded'} />
     {:else if view === 'history'}

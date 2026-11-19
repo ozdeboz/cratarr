@@ -38,3 +38,20 @@ export function artistOpen(a: { id?: string | null; mbid?: string | null; name: 
   if (a.mbid) return { mbid: a.mbid, name: a.name };
   return { name: a.name };
 }
+
+/** An artist a record credits, as its view names them: by their id for life (`ar-<n>`) where Cratarr has them. */
+export type ArtistOf = { name: string; id?: string | null };
+/** An album's artist chip: whom it asks for and opens (an id, else a name; none where nobody can be), and its words. */
+export type AlbumChip = { ask: string | null; label: string };
+/** An album's artist chips (F38, F39): one per credited artist, in the credit's order; one alone shows the credit's whole `line`.
+ *  The record's own credit first, with ids (the review of 1.2: M8, a record not had has no row in the library list, and a record
+ *  opened before the list has loaded showed one chip, then two; M9, a chip asked by a name showed the first of two of one name).
+ *  Without it, the library list's names (`listed`), else the main artist of the line (`main`), by name. */
+export function albumChips(line: string | null | undefined, main: string | null, credited?: readonly ArtistOf[] | null, listed?: readonly string[] | null): AlbumChip[] {
+  const each = credited?.length
+    ? credited.map((a) => ({ ask: a.id && isArtistId(a.id) ? a.id : a.name, name: a.name }))
+    : (listed ?? []).map((name) => ({ ask: name, name }));
+  if (each.length > 1) return each.map(({ ask, name }) => ({ ask, label: name }));
+  const label = line || each[0]?.name;
+  return label ? [{ ask: each[0]?.ask ?? main, label }] : [];
+}

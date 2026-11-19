@@ -260,7 +260,14 @@ pub async fn by_name(app: &Arc<App>, said: &str, shuffled: bool, limit: usize, w
 /// A song of Cratarr's own library as players hold it.
 pub(super) fn own_track(s: crate::serve::api::Song) -> QueueTrack {
     let named = |s: String| Some(s).filter(|s| !s.is_empty());
+    // Its record's type (GOTO.S1), read as the track is described.
+    let (album_type, album_secondary) = crate::serve::instance()
+        .zip(named(s.album_id.clone()))
+        .and_then(|(serve, a)| serve.record_types(std::slice::from_ref(&a)).remove(&a))
+        .unwrap_or_default();
     QueueTrack {
+        album_type,
+        album_secondary,
         source: source::cratarr::KIND.id.to_string(),
         id: s.id,
         name: s.title,

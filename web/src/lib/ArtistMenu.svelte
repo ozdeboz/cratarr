@@ -17,7 +17,7 @@
   import DownloadStep from './DownloadStep.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuTable from './MenuTable.svelte';
-  import { inOrder, type EntryId } from './menuTable';
+  import { ICON_OF, inOrder, type EntryId } from './menuTable';
   import { BANDCAMP } from './bandcampPreview';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { artistSubject } from './panel.svelte';
@@ -167,7 +167,7 @@
 
 {#snippet entry(e: EntryId)}
   {#if e === 'soundsLike'}
-    {#if source === 'cratarr' && !previews}<MenuEntry icon="music" label="Sounds like this" onclick={soundsLike} />{/if}
+    {#if source === 'cratarr' && !previews}<MenuEntry icon={ICON_OF.soundsLike} label="Sounds like this" onclick={soundsLike} />{/if}
   {:else if e === 'favourite'}
     {#if favorite !== undefined}<MenuEntry icon="heart" label="Favourite" switched={favorite} onclick={ontogglefavorite} />{/if}
   {:else if e === 'excludeArtist'}

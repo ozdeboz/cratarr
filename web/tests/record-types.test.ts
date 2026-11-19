@@ -90,3 +90,9 @@ test('the picker ticks every type the rows select, and a long-press takes one in
   assert.deepEqual(toggledRows([row(['Album'])], 'Album'), [], 'none left: Records');
   assert.deepEqual(toggledRows([row(['Album'])], ALL), [], 'Records: none');
 });
+
+test("OQ-F35: a compilation is said so, whatever its primary type", () => {
+  assert.equal(recordWord('album', ['compilation']), 'compilation');
+  assert.equal(recordWord('album', ['live']), 'album');
+  assert.equal(recordsWord(['ep', 'ep']), 'EP', 'several records keep their one word');
+});

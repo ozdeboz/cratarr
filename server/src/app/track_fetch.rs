@@ -121,6 +121,9 @@ pub struct ReleaseView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<u32>,
     pub tracks: Vec<ReleaseTrack>,
+    /// Its pages elsewhere as MusicBrainz links them (`url-rels`, F14.5): its Bandcamp page among them.
+    #[serde(skip)]
+    pub links: Vec<String>,
 }
 
 /// A release's tracks as MusicBrainz gives them (with its recordings and artist credits).
@@ -155,6 +158,7 @@ fn release_of(v: &Value) -> ReleaseView {
         artist: credit(&v["artist-credit"]).0,
         year: v["date"].as_str().and_then(|d| d.get(..4)).and_then(|y| y.parse().ok()),
         tracks,
+        links: v["relations"].as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect(),
     }
 }
 
@@ -177,7 +181,8 @@ fn place(view: &mut ReleaseView, files: &[super::renumber::Track]) {
 /// The release an album's missing tracks are on: the one `incomplete` found holding it, else its files' own, else its
 /// match's.
 fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<String>> {
-    let found = served.userdata.albums_incomplete()?.into_iter().find(|(a, _)| a == album).and_then(|(_, j)| serde_json::from_str::<super::incomplete::Incomplete>(&j).ok());
+    // Its row where it still fits the album (A3.4).
+    let found = super::incomplete::still_short(served)?.into_iter().find(|(a, _)| a == album).map(|(_, i)| i);
     if let Some(id) = found.and_then(|i| i.release_id) {
         return Ok(Some(id));
     }
@@ -197,7 +202,7 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
 pub async fn release_by_id(id: &str) -> Result<ReleaseView> {
     let http = super::discover::http()?;
     let v: Value = http
-        .get(format!("https://musicbrainz.org/ws/2/release/{id}?inc=recordings+artist-credits&fmt=json"))
+        .get(format!("https://musicbrainz.org/ws/2/release/{id}?inc=recordings+artist-credits+url-rels&fmt=json"))
         .asked()
         .await?
         .error_for_status()?

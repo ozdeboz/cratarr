@@ -14,7 +14,7 @@
   import MenuTable from './MenuTable.svelte';
   import DownloadStep from './DownloadStep.svelte';
   import { BANDCAMP } from './bandcampPreview';
-  import { inOrder, type EntryId } from './menuTable';
+  import { goToName, ICON_OF, inOrder, type EntryId } from './menuTable';
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { me } from './me.svelte';
   import TempoStep from './TempoStep.svelte';
@@ -33,6 +33,8 @@
     tracks,
     chips = null,
     album = null,
+    albumType = null,
+    albumSecondary = [],
     outs = [],
     extra,
     onclose,
@@ -42,6 +44,9 @@
     chips?: string[] | null;
     /** Go to album: a record's tracks in a list. */
     album?: (() => void) | null;
+    /** The record's type, as its rows have it (GOTO.3): its Go to names it. */
+    albumType?: string | null;
+    albumSecondary?: string[];
     /** Out of the list it is opened in (a crate's Exclude from, Exclude album from), beside Exclude everywhere. */
     outs?: { label: string; icon: IconName; run: () => void }[];
     extra?: Snippet<[() => void]>;
@@ -101,7 +106,7 @@
   {#if e === 'excludeEverywhere'}
     {#if source && source !== 'device'}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
   {:else if e === 'goAlbum'}
-    {#if album}<MenuEntry icon="squareArrowOutUpRight" label="Go to album" onclick={() => (album(), onclose())} />{/if}
+    {#if album}<MenuEntry icon={ICON_OF.album} label={goToName(albumType, albumSecondary)} onclick={() => (album(), onclose())} />{/if}
   {:else if e === 'notInCrate'}
     {#each outs as o (o.label)}<MenuEntry icon={o.icon} label={o.label} danger onclick={() => (o.run(), onclose())} />{/each}
   {:else if e === 'addToPlaylist'}

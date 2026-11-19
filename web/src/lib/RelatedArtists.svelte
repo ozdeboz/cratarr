@@ -46,7 +46,8 @@
 
   const photo = (a: RelatedArtist) => (a.id ? artistPhotoUrl(a.id) : discoverArtistPhotoUrl(a.name));
   // No picture: the chip is its name alone.
-  const none = (e: Event) => ((e.currentTarget as HTMLImageElement).style.display = 'none');
+  // No photo: the picture leaves, and its chip's room evens out (`bare`, below).
+  let noPhoto = $state<Record<string, boolean>>({});
   const open = (a: RelatedArtist) => openArtistPage(artistOpen(a)).catch((e) => toast.fail(e, "Their page couldn't be opened"));
 </script>
 
@@ -56,10 +57,11 @@
     {#if place === 'rows'}
     <div class="chips">
       {#each artists as a (a.mbid ?? a.name)}
-        <button class="chip" onclick={() => open(a)}><img src={photo(a)} alt="" onerror={none} />{artistLabel(a.name, a.number, artists.map((x) => x.name))}</button>
+        {@const key = a.mbid ?? a.name}
+        <button class="chip" class:bare={noPhoto[key]} onclick={() => open(a)}>{#if !noPhoto[key]}<img src={photo(a)} alt="" onerror={() => (noPhoto[key] = true)} />{/if}{artistLabel(a.name, a.number, artists.map((x) => x.name))}</button>
       {/each}
     </div>
-    {:else if 'reading' in place}<PageLoading><p class="opening">{place.reading}</p></PageLoading>{:else}<p class="empty">{place.line}</p>{/if}
+    {:else if 'reading' in place}<PageLoading row><p class="opening">{place.reading}</p></PageLoading>{:else}<p class="empty">{place.line}</p>{/if}
   </section>
 {/if}
 
@@ -82,6 +84,7 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    min-height: 38px;
     padding: 4px 12px 4px 4px;
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -103,6 +106,11 @@
   .opening {
     margin: 0;
     color: var(--muted);
+  }
+
+  /* A chip without a photo: as much room before the name as after it, as tall as one with (the owner, 2026-11-19). */
+  .chip.bare {
+    padding-left: 12px;
   }
 
   .chip img {

@@ -192,6 +192,48 @@ fn request_of(marks: Option<&Marks>, record: Option<i64>, release_group: Option<
 /// MusicBrainz row only where a record holds both its master and the row's release group (or both are one record), and rows
 /// whose records are one record are one row. Never by a name: two albums of one name from two sources are two rows. Each names
 /// its record and is had by the one had rule on it; a row no record holds is not had. Pure.
+/// What Beyond says of its sources (A1.3, in F1's words): MusicBrainz switched off (`off`), or either source that failed
+/// (`unanswered`); none where both answered. Discogs without a key answers nothing and is no Beyond source: never named.
+pub fn failed<A, B>(mb: &Result<A>, discogs: &Result<B>, now: i64) -> Vec<super::references::Said> {
+    use super::references::{Outcome, Said};
+    let mut said = Vec::new();
+    if !super::switches::is_on(super::switches::MUSICBRAINZ) {
+        said.push(Said::of("musicbrainz", Outcome::Off, now));
+    } else if let Err(e) = mb {
+        said.push(Said::of("musicbrainz", Outcome::of(e), now));
+    }
+    if let Err(e) = discogs {
+        said.push(Said::of("discogs", Outcome::of(e), now));
+    }
+    said
+}
+
+/// Beyond's answer (A1.3): its rows and artists, and `no_list` where a source failed. Where what is here could not be read (`known`
+/// none): `known: false`, and no row says had or not, nor names a record, a request or an artist here: never a row shown as not had
+/// for that.
+pub fn answer(q: &str, mb: &[FoundAlbum], discogs: &[FoundMaster], artists: &[FoundArtist], known: Option<&Known>, marks: Option<&Marks>, said: Vec<super::references::Said>) -> serde_json::Value {
+    let none = Known::default();
+    let albums = self::albums(mb, discogs, known.unwrap_or(&none), marks.filter(|_| known.is_some()));
+    let artists = self::artists(artists, known.unwrap_or(&none));
+    let mut out = serde_json::json!({ "q": q, "albums": albums, "artists": artists });
+    if known.is_none() {
+        out["known"] = false.into();
+        let strip = |rows: &mut serde_json::Value, keys: &[&str]| {
+            for row in rows.as_array_mut().into_iter().flatten().filter_map(serde_json::Value::as_object_mut) {
+                for k in keys {
+                    row.remove(*k);
+                }
+            }
+        };
+        strip(&mut out["albums"], &["have", "record", "request"]);
+        strip(&mut out["artists"], &["have", "artist", "number"]);
+    }
+    if !said.is_empty() {
+        out["no_list"] = serde_json::to_value(said).unwrap_or_default();
+    }
+    out
+}
+
 pub fn albums(mb: &[FoundAlbum], discogs: &[FoundMaster], known: &Known, marks: Option<&Marks>) -> Vec<BeyondAlbum> {
     let mut rows: Vec<BeyondAlbum> = Vec::new();
     // Each row's record, and the row each record is on.
@@ -264,6 +306,12 @@ pub fn albums(mb: &[FoundAlbum], discogs: &[FoundMaster], known: &Known, marks: 
             have: known.row_had(record, &known.masters_named, i),
             request: request_of(marks, record, None, &d.artist, &d.title),
         });
+    }
+    // F16.1: a row a record holds shows the record's cover; one no record holds, its source's picture.
+    for (row, record) in rows.iter_mut().zip(&records) {
+        if let Some(r) = record {
+            row.cover = Some(super::cover_cache::record_address(*r));
+        }
     }
     rows
 }
@@ -449,7 +497,8 @@ mod tests {
                 && uri.path() == "/ws/2/artist"
                 && pairs.len() == 3
                 && field("fmt") == ["json"]
-                && field("limit") == ["3"]
+                // Ten asked (H3, the review of 1.2: a namesake ranked past the third is seen); changed by design.
+                && field("limit") == ["10"]
                 && headers.get(header::USER_AGENT).is_some_and(|a| a.as_bytes() == super::super::reach::USER_AGENT.as_bytes());
             let reply = match known {
                 Some((_, status, body)) if asked_right => {
@@ -468,6 +517,76 @@ mod tests {
         let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
         (crate::app::discover::FakeMusicBrainz::at(at), asked)
+    }
+
+    /// A fake MusicBrainz busy to every question (503, wait a second), this thread's while the guard lives; its questions counted.
+    async fn busy_musicbrainz() -> (crate::app::discover::FakeMusicBrainz, Arc<std::sync::atomic::AtomicUsize>) {
+        use axum::http::{StatusCode, header};
+        use axum::response::IntoResponse;
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = asked.clone();
+        let answer = move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready((StatusCode::SERVICE_UNAVAILABLE, [(header::RETRY_AFTER, "1")], "busy").into_response())
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = format!("http://{}/ws/2", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new().fallback(answer)).await.unwrap() });
+        (crate::app::discover::FakeMusicBrainz::at(at), asked)
+    }
+
+    /// A1.3.1, A1.3.3: MusicBrainz busy (503, twice), Discogs with a key answering two masters: Discogs' rows, and `no_list` names
+    /// MusicBrainz unanswered; the failure not kept: the next ask reads MusicBrainz again. Switched off: `off`. Discogs without a key
+    /// is no Beyond source: never named. Never a failed source silent.
+    #[tokio::test]
+    async fn beyond_names_a_source_that_failed() {
+        use crate::app::switches::{MUSICBRAINZ, set_for_tests};
+        let _state = crate::app::references::TestState::set().await;
+        let (_fake, asked) = busy_musicbrainz().await;
+        let first = crate::app::discover::musicbrainz_found("night walks", 20).await;
+        let again = crate::app::discover::musicbrainz_found("night walks", 20).await;
+        assert!(first.is_err() && again.is_err());
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2, "A1.3.3: the failure not kept, MusicBrainz asked again");
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let masters = vec![master(3201, "Night Walks", "Kite Theory"), master(3202, "Night Walks (Live)", "Kite Theory")];
+        let discogs: Result<Vec<FoundMaster>> = Ok(masters.clone());
+        let here = known(&cat, &[], &masters, &[]).unwrap();
+        let out = answer("night walks", &[], &masters, &[], Some(&here), None, failed(&again, &discogs, 1));
+        assert_eq!(out["albums"].as_array().map(Vec::len), Some(2), "Discogs' rows");
+        assert_eq!(out["no_list"], serde_json::json!([{ "source": "musicbrainz", "said": "unanswered" }]));
+        assert!(out.get("known").is_none(), "what is here was read");
+        set_for_tests(MUSICBRAINZ, false);
+        let off = crate::app::discover::musicbrainz_found("night walks", 20).await;
+        let said = failed(&off, &discogs, 1);
+        set_for_tests(MUSICBRAINZ, true);
+        assert_eq!(serde_json::to_value(said).unwrap(), serde_json::json!([{ "source": "musicbrainz", "said": "off" }]));
+        // Discogs without a key answers nothing (`search_masters`): no Beyond source, never named.
+        let keyless: Result<Vec<FoundMaster>> = Ok(Vec::new());
+        assert!(failed(&Ok::<(), anyhow::Error>(()), &keyless, 1).is_empty());
+        let src = include_str!("../api.rs").replace("\r\n", "\n");
+        assert!(src.contains("let said = crate::app::beyond::failed(&mb, &discogs, crate::app::moment::now_secs());"), "the handler says it");
+        assert!(src.contains("crate::app::beyond::answer(&q, &mb_albums, &discogs, &artists, known.ok().as_ref(), marks.as_deref(), said)"), "and answers by it");
+    }
+
+    /// A1.3.2: what is here could not be read (`known` fails: the references' table gone, made so here): `known: false`; no album row
+    /// says had or not (`have` absent, not false), nor names a record or a request; no artist row an artist here. Never a row shown
+    /// as not had for that.
+    #[test]
+    fn beyond_marks_nothing_not_had_when_the_library_could_not_be_read() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        cat.db_for_tests().execute_batch("DROP TABLE \"references\"").unwrap();
+        let (albums, masters, people) = (vec![album(GROUP_1, "Lamplight", "Kite Theory")], vec![master(3203, "Lamplight", "Kite Theory")], vec![person(ARTIST_1, "Kite Theory")]);
+        let here = known(&cat, &albums, &masters, &people);
+        assert!(here.is_err(), "the library not read");
+        let out = answer("lamplight", &albums, &masters, &people, here.as_ref().ok(), None, Vec::new());
+        assert_eq!(out["known"], false);
+        assert_eq!(out["albums"].as_array().map(Vec::len), Some(2));
+        for row in out["albums"].as_array().unwrap() {
+            assert!(row.get("have").is_none() && row.get("record").is_none() && row.get("request").is_none(), "{row}");
+        }
+        for row in out["artists"].as_array().unwrap() {
+            assert!(row.get("have").is_none() && row.get("artist").is_none() && row.get("number").is_none(), "{row}");
+        }
     }
 
     /// An artist as MusicBrainz's search answers them, with its score.
@@ -761,10 +880,11 @@ mod tests {
         assert_eq!(may_open(CARDED, "Air", false, now), None, "by the card's name alone");
     }
 
-    /// U6, with T6: a library artist of the name with no MusicBrainz id is given the id only where it is MusicBrainz's first sure
-    /// match for the name, asked at open (`open_asking`) as the monthly read asks it. Opening a second namesake on purpose (the
-    /// rapper, beside the library's local band) makes a new artist, and so does a match MusicBrainz is not sure of; the first sure
-    /// one is the library's.
+    /// U6, with T6: a library artist of the name with no MusicBrainz id is given the id only where it is MusicBrainz's sure match
+    /// for the name, asked at open (`open_asking`) as the monthly read asks it. Opening a second namesake on purpose (the rapper,
+    /// beside the library's local band) makes a new artist, and so does a match MusicBrainz is not sure of. Changed by design (H3,
+    /// the review of 1.2): MusicBrainz answers the two "Grouch"es at 100, so neither is the name's sure match, and opening the first
+    /// makes a new artist too; the library's keeps no id.
     #[tokio::test]
     async fn a_beyond_open_of_a_second_namesake_makes_a_new_artist() {
         use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
@@ -790,7 +910,8 @@ mod tests {
         assert_ne!(second, grouch, "the second of the name: a new artist");
         assert!(holds(&cat, grouch).is_empty(), "the library's keeps no id");
         assert_ne!(unsure, lantern, "MusicBrainz not sure: a new artist");
-        assert_eq!(first, library, "the first sure match: the library's Grouch, given the id");
+        assert_ne!(first, library, "H3: two of the name at 100, neither sure: a new artist");
+        assert!(holds(&fresh, library).is_empty(), "H3: the library's Grouch given no id by the name");
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 3, "one question an open");
     }
 
@@ -829,8 +950,10 @@ mod tests {
         assert_eq!(credits(&cat, grouch), [had], "and keeps its records");
     }
 
-    /// T6.2: where the rapper is MusicBrainz's first sure match for the name, the library's id-less Grouch is given his id, as the
-    /// monthly read would give it. A card's artist (G7) and an administrator's name ask the same question: one an open.
+    /// T6.2: where the rapper is MusicBrainz's sure match for the name, the library's id-less Grouch is given his id, as the monthly
+    /// read would give it. A card's artist (G7) and an administrator's name ask the same question: one an open. (H3, the review of
+    /// 1.2: the sure match is the one result of the name, so the answer's other row is another name now, "The Grouch Band"; two of
+    /// the name are `a_beyond_open_of_a_second_namesake_makes_a_new_artist`'s.)
     #[tokio::test]
     async fn the_names_first_sure_match_is_the_library_artist() {
         use crate::app::switches::{MUSICBRAINZ, TEST_STATE, set_for_tests};
@@ -841,7 +964,7 @@ mod tests {
         let _one = TEST_STATE.lock().await;
         let was = set_for_tests(MUSICBRAINZ, true);
         let (fake, asked) = fake_musicbrainz(vec![
-            ("Grouch", 200, serde_json::json!({ "artists": [found(RAPPER, "Grouch", 100), found(BAND, "Grouch", 90)] })),
+            ("Grouch", 200, serde_json::json!({ "artists": [found(RAPPER, "Grouch", 100), found(BAND, "The Grouch Band", 90)] })),
             ("Air", 200, serde_json::json!({ "artists": [found(AIR, "Air", 100)] })),
             ("Zero 7", 200, serde_json::json!({ "artists": [found(ZERO, "Zero 7", 100)] })),
         ])
@@ -1150,6 +1273,7 @@ mod tests {
             catno: String::new(),
             kind: None,
             cover: None,
+            also: Vec::new(),
         };
         cat.keep_label_rows(label, "discogs", &[row("3913"), row("3914")], None, true, 1).unwrap();
         let kept = cat.label_kept(label).unwrap().expect("a label");

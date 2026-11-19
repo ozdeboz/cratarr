@@ -1,3 +1,4 @@
+import { loopHeld } from './loopGuard';
 import { accountKey, signOutOwed } from './account';
 import { track } from './progress.svelte';
 import { keepAndTry, later as outbox, laterKey } from './later.svelte';
@@ -216,6 +217,7 @@ function watched(path: string, init?: RequestInit): Promise<Response> {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  if (loopHeld(path, init)) throw new ApiError('Asked too often', true);
   // A sign-out owed (lib/account): nothing is asked under a session that is over, what one taps either.
   if (signOutOwed()) {
     unreached();
@@ -950,6 +952,9 @@ export function exportUrl(c: ExportChoice): string {
 /** One line of a playlist for its view (decision 0023): what the catalogue knows of its file; `id` null when not matched
  *  to the server, `missing` when the file is not in the Music folder. */
 export type PlaylistRow = {
+  /** Its record's type, as the Library list serves it (GOTO.S1): a track's Go to names it. */
+  album_type?: string | null;
+  album_secondary?: string[];
   entry: string;
   /** The line's own id (decision 0087, 0.12: kept beside the .m3u), what a playlist's operations name; absent from a
    *  server without them. */
@@ -1300,7 +1305,15 @@ export type FileRun = {
   albums: number;
 };
 /** A record's files against Cratarr (`done` of `of` files while writing; `written` for a day). */
-export type FilesState = { state: 'differs' | 'waiting' | 'writing' | 'written' | 'changed'; done?: number; of?: number; run?: string; at?: number };
+export type FilesState = {
+  state: 'differs' | 'waiting' | 'writing' | 'written' | 'changed';
+  done?: number;
+  of?: number;
+  run?: string;
+  at?: number;
+  /** Where it differs (F27): each field its files lack, with what it gets, as its plan's rows name them. */
+  facts?: { field: string; values: string[] }[];
+};
 const posting = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 export const getFilePlan = (kind: string, albums?: string[]) =>
   request<FilePlan>(`/api/file-changes/plans/${encodeURIComponent(kind)}${albums?.length ? `?albums=${albums.map(encodeURIComponent).join(',')}` : ''}`);
@@ -1704,6 +1717,9 @@ export type HealthItem = {
   title: string;
   line?: string;
   album?: [string, string];
+  /** Its record's type, where it is about a record (GOTO.S1): its Go to names it (F31.1). */
+  album_type?: string | null;
+  album_secondary?: string[];
   playlist?: string;
   files?: string[];
   /** An album missing tracks (0.9.7): those it lacks ("06 · Title", "Disc 2 · 03 · Title"), its release group to ask
@@ -2650,6 +2666,9 @@ export type AlbumView = {
   request?: AlbumRequest;
   /** Its labels, each by its id for life where it has a row, else by its reference (F9). */
   labels?: LabelOf[];
+  /** Its artists one by one, in the credit's order, each by their id for life where Cratarr has them (the review of 1.2, M8 and
+   *  M9: the chips, a record not had's too); absent from an answer before it, and from another server's. */
+  artists?: import('./artistIds').ArtistOf[];
   /** Its cover's address: its own, else its release group's, else its Bandcamp page's. */
   cover?: string;
   /** A retired record's: when it went from Music (epoch seconds, OQ16). */

@@ -64,7 +64,7 @@ fn every_artist(db: &Connection) -> Result<HashMap<String, i64>> {
 }
 
 /// A new artist of a name, with their number (C55).
-fn give_artist(db: &Connection, key: &str, name: &str, born: i64) -> Result<i64> {
+pub(super) fn give_artist(db: &Connection, key: &str, name: &str, born: i64) -> Result<i64> {
     db.prepare_cached("INSERT INTO artists (born, name, key) VALUES (?1, ?2, ?3)")?.execute(params![born, name, key])?;
     let artist = db.last_insert_rowid();
     number(db, artist, key)?;
@@ -109,7 +109,7 @@ pub enum Opening {
 }
 
 /// `Opening` as `db` reads it (a forgotten artist's row goes, RT01b, its tombstone kept).
-fn opening_in(db: &Connection, r: &super::records::Ref, name: &str) -> Result<Opening> {
+pub(super) fn opening_in(db: &Connection, r: &super::records::Ref, name: &str) -> Result<Opening> {
     let held: Vec<String> = db
         .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?
         .query_map(params![r.source, r.kind, r.value], |row| row.get(0))?
@@ -128,6 +128,18 @@ fn opening_in(db: &Connection, r: &super::records::Ref, name: &str) -> Result<Op
         [(only, false)] => Opening::Decides(*only),
         _ => Opening::New,
     })
+}
+
+/// `Catalogue::artist_by_reference` in the caller's transaction: the artist who holds `r`; else, where `sure`, the one live artist of
+/// the name holding none of that source's ids; else one made (the name's next number); the one found or made given it, `how`.
+pub(super) fn by_reference_in(tx: &Connection, r: &super::records::Ref, name: &str, how: &str, sure: bool, at: i64) -> Result<i64> {
+    let artist = match opening_in(tx, r, name)? {
+        Opening::Held(artist) => return Ok(artist),
+        Opening::Decides(only) if sure => only,
+        _ => give_artist(tx, &ids::artist_key(name), name, at)?,
+    };
+    super::records::put_reference(tx, &ids::artist(artist), r, how, at, false)?;
+    Ok(artist)
 }
 
 impl Catalogue {
@@ -155,6 +167,11 @@ impl Catalogue {
         give_artist(&self.db(), &ids::artist_key(name), name, now())
     }
 
+    /// Whether two artists are of one name (one key, C55: "Coma" and "Coma (2)"): namesakes, never one page (M2). Blocking.
+    pub fn of_one_name(&self, a: i64, b: i64) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM artists x JOIN artists y ON y.key = x.key WHERE x.id = ?1 AND y.id = ?2")?.exists(params![a, b])?)
+    }
+
     /// The artist a source's id names (C57: an artist of Beyond's opened, OQ12 (a)): the one who holds it; else, where the id is the
     /// source's first sure match for the name (`sure`, U6), the one live artist of the name who holds no id at that source (Z2), as
     /// the monthly read finds a library artist by their name (`discover::mb_artist_by_name`); else one of their own made now, as
@@ -164,16 +181,7 @@ impl Catalogue {
     pub fn artist_by_reference(&self, r: &super::records::Ref, name: &str, how: &str, sure: bool) -> Result<i64> {
         let mut db = self.db();
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let at = now();
-        let artist = match opening_in(&tx, r, name)? {
-            Opening::Held(artist) => {
-                tx.commit()?;
-                return Ok(artist);
-            }
-            Opening::Decides(only) if sure => only,
-            _ => give_artist(&tx, &ids::artist_key(name), name, at)?,
-        };
-        super::records::put_reference(&tx, &ids::artist(artist), r, how, at, false)?;
+        let artist = by_reference_in(&tx, r, name, how, sure, now())?;
         tx.commit()?;
         Ok(artist)
     }

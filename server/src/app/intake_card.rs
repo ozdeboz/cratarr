@@ -261,13 +261,23 @@ fn heard_checks(heard: Option<&Heard>, tracks: &[Track], matched: Option<&super:
 }
 
 /// The reference's check: MusicBrainz's release as matched; else what Discogs knows; waiting while it is looked for.
-fn reference_check(matched: Option<&super::matching::Match>, looking: bool, discogs: Option<&super::discogs::AlbumFacts>, n: usize) -> Check {
+/// The card's Reference line (the owner, 2026-11-19: "unreadable"; what was compared, so MusicBrainz never reads as the authority:
+/// judging by every source equally comes with 0.18's matcher). A certain match: "Matches a MusicBrainz edition: <title>, all N
+/// tracks". A likely one: "Compared with MusicBrainz's editions: probably <edition>; track 18's length differs (2:00 against
+/// 10:38)", by the card's own tracks, so a match kept before reads so too; several editions fitting within a few seconds say so.
+/// Only Discogs: "Only Discogs knows it (1999)". None: "No source knows it". Pure.
+fn reference_check(matched: Option<&super::matching::Match>, looking: bool, discogs: Option<&super::discogs::AlbumFacts>, tracks: &[Track]) -> Check {
+    let n = tracks.len();
     match (matched, discogs) {
-        (Some(m), _) if m.certain => Check { key: "reference", state: "green", said: format!("MusicBrainz agrees: {}, all {n} tracks", m.title) },
-        (Some(m), _) => Check { key: "reference", state: "amber", said: format!("MusicBrainz likely: {}", m.why) },
+        (Some(m), _) if m.certain => Check { key: "reference", state: "green", said: super::matching::agrees_words(&m.title, n) },
+        (Some(m), _) => {
+            let theirs = |t: &Track| m.tracks.iter().position(|(f, ..)| *f == t.file).and_then(|i| m.lengths.get(i).copied().flatten());
+            let differ = super::matching::differing(tracks.iter().enumerate().map(|(i, t)| (t.no.map_or(i + 1, |no| no as usize), (t.ms + 500) / 1000, theirs(t))));
+            Check { key: "reference", state: "amber", said: super::matching::likely_words(&m.title, m.year, &m.format, &differ, m.fits > 1) }
+        }
         (None, _) if looking => Check { key: "reference", state: "waiting", said: "Being looked for on MusicBrainz".into() },
         (None, Some(d)) => Check { key: "reference", state: "amber", said: format!("Only Discogs knows it{}", d.year.map(|y| format!(" ({y})")).unwrap_or_default()) },
-        (None, None) => Check { key: "reference", state: "red", said: "No reference knows it".into() },
+        (None, None) => Check { key: "reference", state: "red", said: "No source knows it".into() },
     }
 }
 
@@ -393,7 +403,7 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
     let files: Vec<String> = tracks.iter().map(|t| t.file.clone()).collect();
     let folder = tracks.first().and_then(|t| t.path.parent()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let from = from_of(app, &files, &folder, &tags).await;
-    let mut checks = vec![reference_check(matched.as_ref(), looking, discogs.as_ref(), tracks.len())];
+    let mut checks = vec![reference_check(matched.as_ref(), looking, discogs.as_ref(), &tracks)];
     let (sound, acoustid) = heard_checks(heard.as_ref(), &tracks, matched.as_ref());
     checks.push(acoustid);
     checks.push(sound);
@@ -550,6 +560,48 @@ pub fn hear(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner (2026-11-19): the Reference line says what was compared, never MusicBrainz as the authority. A likely match names its
+    /// edition and the tracks whose lengths differ, by the card's own track numbers, the file's length against the edition's; several
+    /// editions fitting within a few seconds say so; a certain one says all its tracks match; only Discogs, and none, as said. No
+    /// "likely", no "ref", no tolerance in seconds. A match kept before (no format, no count of editions) reads so too.
+    #[test]
+    fn the_reference_line_says_what_was_compared_and_which_tracks_differ() {
+        let track = |no: u32, ms: i64| Track { id: format!("tr-{no}"), path: PathBuf::from(format!("{no:02}.flac")), place: (0, format!("A/{no:02}.flac")), file: format!("{no:02}.flac"), title: format!("Track {no}"), ms, disc: Some(1), no: Some(no) };
+        let tracks: Vec<Track> = (1..=18).map(|no| track(no, if no == 18 { 120_000 } else { 200_000 })).collect();
+        let m = super::super::matching::Match {
+            release: "r1".into(),
+            release_group: None,
+            title: "Down the Stairs".into(),
+            artist: "Kite Theory".into(),
+            artist_id: None,
+            year: Some(2002),
+            certain: false,
+            why: "Down the Stairs, 2002, CD · 17 of 18 tracks within 5 s".into(),
+            tracks: tracks.iter().map(|t| (t.file.clone(), String::new(), None)).collect(),
+            lengths: (1..=18).map(|no| Some(if no == 18 { 638 } else { 200 })).collect(),
+            format: "CD".into(),
+            fits: 0,
+        };
+        let line = |c: Check| (c.state, c.said);
+        let probably = "Compared with MusicBrainz's editions: probably Down the Stairs (2002 CD); track 18's length differs (2:00 against 10:38)";
+        assert_eq!(line(reference_check(Some(&m), false, None, &tracks)), ("amber", probably.to_string()));
+        let kept_before = super::super::matching::Match { format: String::new(), ..m.clone() };
+        assert_eq!(line(reference_check(Some(&kept_before), false, None, &tracks)).1, "Compared with MusicBrainz's editions: probably Down the Stairs (2002); track 18's length differs (2:00 against 10:38)");
+        let near: Vec<Track> = (1..=18).map(|no| track(no, if no == 18 { 636_000 } else { 200_000 })).collect();
+        let several = super::super::matching::Match { fits: 3, ..m.clone() };
+        assert_eq!(line(reference_check(Some(&several), false, None, &near)).1, "Compared with MusicBrainz's editions: several fit within a few seconds; none exactly");
+        let certain = super::super::matching::Match { certain: true, ..m.clone() };
+        assert_eq!(line(reference_check(Some(&certain), false, None, &tracks)), ("green", "Matches a MusicBrainz edition: Down the Stairs, all 18 tracks".to_string()));
+        let discogs = super::super::discogs::AlbumFacts { year: Some(1999), ..Default::default() };
+        assert_eq!(line(reference_check(None, false, Some(&discogs), &tracks)), ("amber", "Only Discogs knows it (1999)".to_string()));
+        assert_eq!(line(reference_check(None, false, None, &tracks)), ("red", "No source knows it".to_string()));
+        for c in [reference_check(Some(&m), false, None, &tracks), reference_check(Some(&certain), false, None, &tracks)] {
+            for word in ["likely", "within 5", "ref"] {
+                assert!(!c.said.contains(word), "{}", c.said);
+            }
+        }
+    }
 
     /// C37a, OQ1: the card's line on the library: a copy kept elsewhere it is better than (named by its library) or not; else another
     /// edition a main library has by name, no action; else nothing yet.

@@ -1363,6 +1363,26 @@ fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request], of: &[Opti
             i.record.record = *record;
         }
     }
+    // F15.6: two items of one record after a merge (by a master, a group, a fold): one searches it, the first made or the one under
+    // way; the other is taken off where nothing of it is under way (ticked, fetched, checked, placed): one under way stays, the other
+    // waits. Each request reads the record's item.
+    let mut first: BTreeMap<i64, bool> = BTreeMap::new();
+    for i in k.items.iter().filter(|i| i.record.record != 0) {
+        let under_way = under_way(i);
+        first.entry(i.record.record).and_modify(|u| *u |= under_way).or_insert(under_way);
+    }
+    let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let doubles: std::collections::HashSet<String> = k
+        .items
+        .iter()
+        .filter(|i| i.record.record != 0)
+        .filter(|i| {
+            let again = !seen.insert(i.record.record) || (first.get(&i.record.record) == Some(&true) && !under_way(i));
+            again && !under_way(i)
+        })
+        .map(|i| i.id.clone())
+        .collect();
+    stopped.extend(take_off(&mut k.items, |i| doubles.contains(&i.id)));
     // A record already had, by its own files or a record holding them (the one had rule, R26, N9), is not searched: none is made for
     // it (Clear placed, or Lidarr's delivery, is no reason to fetch it again).
     let had: std::collections::HashSet<i64> = of.iter().flatten().filter(|o| o.had()).map(|o| o.record).collect();
@@ -1427,6 +1447,11 @@ fn stays(i: &Item) -> bool {
     i.state == State::Placed || i.placing.is_some()
 }
 
+/// Whether something of an item is under way (F15.6): ticked, fetched, checked, or placed.
+fn under_way(i: &Item) -> bool {
+    stays(i) || i.chosen.is_some() || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed)
+}
+
 /// Whether a placed item lets another item of its record be made (Y2): the record reads partly there, and its own copy is short of
 /// the record's list, or has been read (as many tracks there as it placed) and the record is short still. A whole copy no pass has
 /// read yet waits for one, which may make its record had: till then the record is partly there by another copy. Pure.
@@ -1447,13 +1472,13 @@ fn copy_gone(i: &Item, held: &BTreeMap<i64, (super::requests::Holding, bool)>) -
 /// The next record to search: waiting and due, the longest waiting first.
 fn next_search() -> Option<String> {
     let t = now();
-    kept(|k| {
-        k.items
-            .iter()
-            .filter(|i| i.state == State::Waiting && i.due <= t)
-            .min_by_key(|i| (i.due, i.id.clone()))
-            .map(|i| i.id.clone())
-    })
+    kept(|k| next_to_search(k, t))
+}
+
+/// The next item to search at `t` (A1.4): a waiting one whose time came, and a Stuck one whose time came, its list read again (a
+/// reference gained since, MusicBrainz back): the longest due first. Pure.
+fn next_to_search(k: &Kept, t: i64) -> Option<String> {
+    k.items.iter().filter(|i| matches!(i.state, State::Waiting | State::Stuck) && i.due <= t).min_by_key(|i| (i.due, i.id.clone())).map(|i| i.id.clone())
 }
 
 /// The next record to fetch: one whose fetch a restart left under way first, then the approved; one held waits for its
@@ -1512,23 +1537,42 @@ where
 async fn search(id: &str) {
     let Some(it) = item(id) else { return };
     let Some(served) = crate::serve::instance() else { return };
-    with_item(id, |i| i.state = State::Searching);
-    if it.tracks.is_empty() && it.untimed.is_empty() {
-        match listing(&it, served.catalogue(), super::references::read_reference).await {
-            Listing::Ready(lists) => {
-                let source = |l: &Option<(String, Vec<Track>)>| l.as_ref().map_or_else(String::new, |(s, _)| s.clone());
-                tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), list = %source(&lists.timed), untimed = %source(&lists.untimed), "judged by its list");
-                with_item(id, |i| (i.tracks, i.untimed) = (lists.timed.map(|(_, l)| l).unwrap_or_default(), lists.untimed.map(|(_, l)| l).unwrap_or_default()));
-            }
-            Listing::None(why) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Stuck, Some(why), now() + wait_after(3))),
-            Listing::Later(why, wait) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(why), now() + wait)),
-        }
+    if !read_its_list(id, &it, served.catalogue(), super::references::read_reference).await {
+        return;
     }
     let slskd = match super::track_fetch::slskd_ready().await {
         Ok((s, _)) => s,
         Err(e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
     };
     search_through(id, &slskd).await;
+}
+
+/// A record taken to be searched (`search`): Searching, its list read first where it has none (once; a Stuck one's again, A1.4).
+/// Whether it goes on to its search: else it waits (`Later`, R23) or is Stuck a day (no list).
+async fn read_its_list<R, F>(id: &str, it: &Item, cat: &Arc<crate::catalogue::Catalogue>, read: R) -> bool
+where
+    R: Fn(crate::catalogue::records::Ref) -> F,
+    F: std::future::Future<Output = Result<Option<super::references::Read>>>,
+{
+    with_item(id, |i| i.state = State::Searching);
+    if it.tracks.is_empty() && it.untimed.is_empty() {
+        match listing(it, cat, read).await {
+            Listing::Ready(lists) => {
+                let source = |l: &Option<(String, Vec<Track>)>| l.as_ref().map_or_else(String::new, |(s, _)| s.clone());
+                tracing::info!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), list = %source(&lists.timed), untimed = %source(&lists.untimed), "judged by its list");
+                with_item(id, |i| (i.tracks, i.untimed) = (lists.timed.map(|(_, l)| l).unwrap_or_default(), lists.untimed.map(|(_, l)| l).unwrap_or_default()));
+            }
+            Listing::None(why) => {
+                with_item(id, |i| (i.state, i.why, i.due) = (State::Stuck, Some(why), now() + wait_after(3)));
+                return false;
+            }
+            Listing::Later(why, wait) => {
+                with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(why), now() + wait));
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// The ladder's rungs in turn, through this slskd, until one finds folders.
@@ -3727,10 +3771,12 @@ mod tests {
         cat.move_files(1, &rows[0], 0, &rows[0]).unwrap();
         cat.mark_trashed(0, &rows[0], &format!("{}/{}", days_ago(3), rows[0])).unwrap();
         gone(1, &rows[1], days_ago(2));
-        // Gone a while, its files hold the record still; U7's, in Music's trash, holds none and did not go from Incoming.
+        // Gone, its files hold the record no more (A3.1: only a present copy is had): its last copy went from Incoming, its item let go
+        // at once; U7's, in Music's trash, holds none and did not go from Incoming.
         let read = round(&cat, &mut k, &rs);
-        assert_eq!((read[0], read[1]), ((Holding::Arrived, false), (Holding::None, false)));
-        assert!(k.items.iter().all(|i| i.state == State::Placed), "none let go while its files are gone a while");
+        assert_eq!((read[0], read[1]), ((Holding::None, true), (Holding::None, false)));
+        let placed = |request: i64| k.items.iter().filter(|i| i.record.request == request).all(|i| i.state == State::Placed);
+        assert!(!placed(1) && placed(2) && placed(3) && placed(4), "gone from Incoming: let go; kept into Music and deleted there: never");
         // The catalogue's pass retires what went (a trash emptied too: no library here keeps one).
         cat.identify().unwrap();
         // Then the other file of "Kept After" is kept into Music and deleted there: in Music's trash still, after its Incoming one went.
@@ -3923,6 +3969,141 @@ mod tests {
         assert_eq!(k.items.iter().map(|i| (i.record.request, i.record.record)).collect::<Vec<_>>(), [(9701, older)], "the next round names the record it went into");
     }
 
+    /// F15.6: alice's open request on one record of a master and bob's on the other, a Soulseek item for each, none ticked; the two
+    /// records joined by their master (the newer into the older): both requests read the one record, one item searches it (alice's, the
+    /// first made) and bob's is taken off, his request reading the record's item. Where bob's is under way (fetching), it stays and
+    /// alice's is taken off, her request waiting on his: never two searching, never one under way taken off.
+    #[test]
+    fn a_merge_by_a_master_leaves_one_item_searching() {
+        for (case, bobs_fetching) in [("none ticked", false), ("bob's fetching", true)] {
+            let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
+            let (older, newer) = (cat.record_for_tests("Two Rooms", 0), cat.record_for_tests("Two Rooms", 0));
+            let request = |id: i64, user: &str, record: i64| crate::userdata::Request {
+                id,
+                user: user.into(),
+                album_key: "glassharbour|tworooms".into(),
+                artist_key: "glass harbour".into(),
+                release_group: None,
+                album: "Two Rooms".into(),
+                artist: "Glass Harbour".into(),
+                year: None,
+                cover: None,
+                at: 1,
+                status: super::super::requests::APPROVED.into(),
+                reason: None,
+                decided_by: None,
+                decided_at: None,
+                fetched: None,
+                record: Some(record),
+            };
+            let asked = [request(9801, "alice", older), request(9802, "bob", newer)];
+            let mut k = Kept::default();
+            let round = |k: &mut Kept| {
+                let of = super::super::requests::records_of(&cat, &asked).unwrap();
+                take_requests(k, &asked, &of, &[])
+            };
+            round(&mut k);
+            assert_eq!(k.items.len(), 2, "{case}: an item each");
+            if bobs_fetching {
+                let bobs = k.items.iter_mut().find(|i| i.record.request == 9802).unwrap();
+                bobs.state = State::Fetching;
+                bobs.chosen = Some(0);
+            }
+            for (record, master) in [(older, "5000031"), (newer, "5000031")] {
+                cat.learn_from_read(record, &crate::catalogue::records::Ref::new("discogs", "release", &format!("36000{record}")), &[crate::catalogue::records::Ref::new("discogs", "master", master)], &[]).unwrap();
+            }
+            assert_eq!(cat.record(newer).unwrap().unwrap().id, older, "{case}: one record");
+            round(&mut k);
+            let records: Vec<i64> = super::super::requests::records_of(&cat, &asked).unwrap().into_iter().map(|o| o.unwrap().record).collect();
+            assert_eq!(records, [older, older], "{case}: both requests read the one record");
+            let searching: Vec<(i64, State)> = k.items.iter().map(|i| (i.record.request, i.state.clone())).collect();
+            if bobs_fetching {
+                assert_eq!(searching, [(9802, State::Fetching)], "{case}: the one under way stays, never taken off; alice's waits on it, taken off");
+            } else {
+                assert_eq!(searching, [(9801, State::Waiting)], "{case}: one item searches it, the first made; bob's taken off");
+            }
+        }
+    }
+
+    /// A1.4.1: an item Stuck with "No list to judge by", due in the past, whose record has since gained a MusicBrainz reference whose
+    /// list has lengths: the round takes it (the longest due first; one not due yet, one fetching or placed never), its list read again:
+    /// Searching, judged by it. With still no list: Stuck again, a day on.
+    #[tokio::test]
+    async fn a_stuck_item_is_searched_again_once_due() {
+        let _state = crate::app::references::TestState::set().await;
+        let t = now();
+        let stuck = |id: &str, due: i64| Item { id: id.into(), state: State::Stuck, why: Some("No list to judge by".into()), due, folders: Vec::new(), ..found_twice(id) };
+        let mut k = Kept::default();
+        k.items = vec![stuck("ss-a141-1", t - 10), stuck("ss-a141-2", t - 500), stuck("ss-a141-3", t + 3600), Item { state: State::Fetching, ..found_twice("ss-a141-4") }, Item { state: State::Placed, ..found_twice("ss-a141-5") }];
+        assert_eq!(next_to_search(&k, t).as_deref(), Some("ss-a141-2"), "the longest due first");
+        k.items.retain(|i| i.id != "ss-a141-2");
+        assert_eq!(next_to_search(&k, t).as_deref(), Some("ss-a141-1"));
+        k.items.retain(|i| i.id != "ss-a141-1");
+        assert_eq!(next_to_search(&k, t), None, "never one not due yet, fetching or placed");
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/music")]).unwrap());
+        for (id, found) in [("ss-a141-found", true), ("ss-a141-none", false)] {
+            let record = cat.record_for_tests("Two Rooms", 0);
+            assert!(cat.set_reference(&crate::serve::ids::record(record), &crate::catalogue::records::Ref::new("musicbrainz", "release", &format!("r141-{id}")), "link").unwrap());
+            let it = Item { record: Record { record, ..found_twice(id).record }, ..stuck(id, t - 10) };
+            kept(|q| q.items.push(it.clone()));
+            let read = move |_: crate::catalogue::records::Ref| {
+                let list: Vec<Track> = [("Lamplight", 200_000), ("Morning", 180_000)].into_iter().zip(1..).map(|((title, ms), n)| Track { disc: 1, position: n, title: title.into(), length_ms: Some(ms), recording: None }).collect();
+                std::future::ready(Ok::<_, anyhow::Error>(found.then(|| (list, None::<crate::catalogue::records::Ref>, crate::app::references::ReadMore::default()))))
+            };
+            let goes = read_its_list(id, &it, &cat, read).await;
+            let now_it = item(id).unwrap();
+            kept(|q| q.items.retain(|i| i.id != id));
+            if found {
+                assert!(goes, "judged by its list: on to its search");
+                assert_eq!((now_it.state, now_it.tracks.len()), (State::Searching, 2));
+            } else {
+                assert!(!goes);
+                assert_eq!(now_it.state, State::Stuck, "still no list: Stuck again");
+                assert!((now_it.due - (t + 86_400)).abs() <= 5, "a day on: {}", now_it.due - t);
+            }
+        }
+    }
+
+    /// A1.4.2: 0.16.3's queue with items Stuck on "503 Service Temporarily Unavailable" and on "No list to judge by", due long since:
+    /// the first round takes each in turn (no step part needed: their due is past), its list read again; MusicBrainz busy now reads
+    /// `Later` (Waiting, R23), never Stuck again for that.
+    #[tokio::test]
+    async fn the_stuck_items_of_0_16_are_looked_at_in_the_first_round() {
+        let _state = crate::app::references::TestState::set().await;
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-a142-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("soulseek.json");
+        let of_016 = |id: &str, n: i64, why: &str, due: i64| {
+            serde_json::json!({ "id": id, "record": { "artist": "Kite Theory", "album": format!("Record {n}"), "release_group": format!("00000000-0000-4000-8000-00000000014{n}"), "year": 2001, "request": n },
+                "state": "stuck", "tracks": [], "folders": [], "failed": [], "misses": 0, "due": due, "why": why, "percent": 0.0, "set_aside": [] })
+        };
+        let queue = serde_json::json!({ "next": 3, "items": [of_016("ss-a142-1", 1, "503 Service Temporarily Unavailable", 1_790_000_000), of_016("ss-a142-2", 2, "No list to judge by", 1_790_100_000)], "dropped": [] });
+        std::fs::write(&p, serde_json::to_vec(&queue).unwrap()).unwrap();
+        let mut k = load(&p);
+        assert_eq!(k.items.len(), 2, "0.16.3's queue read as it is");
+        let cat = Arc::new(crate::catalogue::Catalogue::open(None, vec![PathBuf::from("/music")]).unwrap());
+        let busy = |_: crate::catalogue::records::Ref| std::future::ready(Err::<Option<crate::app::references::Read>, _>(anyhow::anyhow!("MusicBrainz answered 503 Service Temporarily Unavailable")));
+        let mut taken = Vec::new();
+        while let Some(id) = next_to_search(&k, now()) {
+            let mut it = k.items.iter().find(|i| i.id == id).cloned().unwrap();
+            k.items.retain(|i| i.id != id);
+            // Its request's record, as the requests' read gives it (`take_requests`): a MusicBrainz reference.
+            it.record.record = cat.record_for_tests(&it.record.album, 0);
+            cat.set_reference(&crate::serve::ids::record(it.record.record), &crate::catalogue::records::Ref::new("musicbrainz", "release", &format!("r142-{id}")), "link").unwrap();
+            kept(|q| q.items.push(it.clone()));
+            let goes = read_its_list(&id, &it, &cat, busy).await;
+            let now_it = item(&id).unwrap();
+            kept(|q| q.items.retain(|i| i.id != id));
+            assert!(!goes, "{id}: waits");
+            assert_eq!(now_it.state, State::Waiting, "{id}: Later (R23), never Stuck again for MusicBrainz being busy");
+            assert!(now_it.why.as_deref().is_some_and(|w| w.contains("503")), "{id}: {:?}", now_it.why);
+            taken.push(id);
+        }
+        assert_eq!(taken, ["ss-a142-1", "ss-a142-2"], "each in turn, the longest due first");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// RG1 (the owner, 2026-11-18: "When the type agrees"), at 0.17's fold (PA1): alice's open Want "Kite EP", by its names alone (a
     /// record of its own, as 0.16's step or preview 1 made it), being fetched by Soulseek (its batch 60% done), beside the house's had
     /// "Kite". Where that "Kite" is an EP by the release type rule (four tracks), or a ten-track one set to EP by hand, the fold joins the
@@ -4047,7 +4228,7 @@ mod tests {
     fn bandcamp_list(r: crate::catalogue::records::Ref) -> std::future::Ready<Result<Option<crate::app::references::Read>>> {
         assert_eq!((r.source.as_str(), r.value.as_str()), ("bandcamp", "https://paperlantern.bandcamp.com/album/after-hours"));
         let list = [("Night Ferry", 241_000), ("Last Lights", 198_000)].into_iter().zip(1..).map(|((t, ms), n)| Track { disc: 1, position: n, title: t.into(), length_ms: Some(ms), recording: None }).collect();
-        std::future::ready(Ok(Some((list, None))))
+        std::future::ready(Ok(Some((list, None, Default::default()))))
     }
 
     /// R25 (N7): Search now reads the record's counting list again, so a list chosen by hand since reaches the item; one in

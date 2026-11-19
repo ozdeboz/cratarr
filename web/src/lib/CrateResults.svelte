@@ -137,9 +137,31 @@
   // 2026-11-02): a record's its tracks of the crate and Go to album, a track's its own.
   let recordMenu = $state<string | null>(null);
   let trackMenu = $state.raw<MenuTrack | null>(null);
-  const menuTrackOf = (r: PlaylistRow): MenuTrack => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, has_versions: r.has_versions });
+  const menuTrackOf = (r: PlaylistRow): MenuTrack => ({
+    source: preview?.source ?? 'cratarr',
+    id: r.id!,
+    name: r.name ?? r.file,
+    artist: r.artist,
+    album: r.album,
+    album_id: r.album_id ?? null,
+    has_versions: r.has_versions,
+    album_type: r.album_type ?? null,
+    album_secondary: r.album_secondary ?? [],
+  });
   const localOf = (rows: PlaylistRow[]): LocalTrack[] =>
-    rows.filter((r) => r.id && !r.missing).map((r) => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
+    rows
+      .filter((r) => r.id && !r.missing)
+      .map((r) => ({
+        source: preview?.source ?? 'cratarr',
+        id: r.id!,
+        name: r.name ?? r.file,
+        artist: r.artist,
+        album: r.album,
+        album_id: r.album_id ?? null,
+        album_type: r.album_type ?? null,
+        album_secondary: r.album_secondary ?? [],
+        duration_secs: r.duration_secs,
+      }));
   const openTrackMenu = (r: PlaylistRow) => r.id && !r.missing && (trackMenu = menuTrackOf(r));
   const openRecord = $derived(view === 'records' && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
   $effect(() => {
@@ -226,12 +248,14 @@
         chips={[rec.artist ?? '', holdsLine(rec.at.length, rec.of)].filter(Boolean)}
         tracks={localOf(rows)}
         album={albumId ? viewOver.bind(null, albumSubject(src, albumId)) : null}
+        albumType={rows.find((r) => r.album_type)?.album_type ?? null}
+        albumSecondary={rows.find((r) => r.album_type)?.album_secondary ?? []}
         onclose={() => (recordMenu = null)}
       />
     {/if}
   {/if}
   {#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
-  {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><Asking size={40} now room="given" /></div>{/if}
+  {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><Asking size={40} now room="given" said={`Reading more tracks: ${preview.rows.length.toLocaleString()} of ${preview.total.toLocaleString()}`} /></div>{/if}
 {:else if conditions.length}
   <!-- Its first answer on its way: the one loading rule's spinner (the owner, 2026-10-31: a grabbed crate showed
        nothing, no spinner either). A later change keeps the list shown until its answer. -->

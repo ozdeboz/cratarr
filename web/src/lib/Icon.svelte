@@ -70,6 +70,10 @@
     checkCheck: '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>',
     swap: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
     plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    // Lucide's music-4: beamed notes (a work, F32.3).
+    notes: '<path d="M9 18V5l12-2v13"/><path d="m9 9 12-2"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+    // Lucide's layers: stacked albums (Other versions, OQ-F32).
+    stack: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
     minus: '<path d="M5 12h14"/>',
     // Two speakers: the players (Settings → Players).
     speakers: '<rect x="2" y="4" width="9" height="16" rx="2"/><circle cx="6.5" cy="14" r="2.5"/><path d="M6.5 8h.01"/><rect x="13" y="4" width="9" height="16" rx="2"/><circle cx="17.5" cy="14" r="2.5"/><path d="M17.5 8h.01"/>',

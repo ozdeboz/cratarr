@@ -103,11 +103,42 @@ export function sectionPlace(v: ListRead, rows: number, said: (t: number) => str
   return v.no_list?.length ? { line: `No list: ${why(v.no_list, said)}` } : null;
 }
 
-/** A record's About's Sources row (F7): a chip per reference the server names, in its order, by its source's name, opening
- *  its page there (https only); `tracks` on the one its tracklist is read from. None: no row. */
-export function sourceChips(sources: readonly RecordSource[] | null | undefined): { name: string; url: string; tracks: boolean }[] {
-  return (sources ?? []).filter((s) => /^https:\/\//.test(s.url)).map((s) => ({ name: sourceName(s.source), url: s.url, tracks: !!s.tracks }));
+/** The mark of the source a record's tracklist is read from (SB18): About's chip and the References sheet say it alike. */
+export const TRACKLIST = 'Tracklist';
+
+/** A source's chip in About's Sources row (F19). */
+export type SourceChip = { name: string; url: string; edition?: string; tracks: boolean };
+const ALBUM_KINDS = ['release-group', 'master', 'album'];
+
+/** A record's About's Sources row (F7, F19): one chip per source, in counting order, by its source's name, opening the album's
+ *  page there (its release group, master or album page; a release where that is its only reference), the exact edition the
+ *  record holds kept on the same chip (`edition`, never a second chip); `tracks` where its tracklist is read from there. Discogs'
+ *  page from About's lookup (`discogs`) is the Discogs chip where the record holds no Discogs reference: Elsewhere folds into
+ *  Sources (F19.4). https pages only. None: no row. */
+export function sourceChips(sources: readonly RecordSource[] | null | undefined, discogs?: string | null): SourceChip[] {
+  const https = (u: string | null | undefined): u is string => !!u && /^https:\/\//.test(u);
+  const by = new Map<string, RecordSource[]>();
+  for (const s of sources ?? []) if (https(s.url)) by.set(s.source, [...(by.get(s.source) ?? []), s]);
+  if (https(discogs) && !by.has('discogs')) by.set('discogs', [{ source: 'discogs', kind: 'master', url: discogs }]);
+  const order = (s: string) => {
+    const i = COUNTING_ORDER.indexOf(s as NoList['source']);
+    return i < 0 ? COUNTING_ORDER.length : i;
+  };
+  return [...by]
+    .sort(([a], [b]) => order(a) - order(b))
+    .map(([source, refs]) => {
+      const page = refs.find((r) => ALBUM_KINDS.includes(r.kind)) ?? refs[0];
+      const edition = refs.find((r) => r !== page && r.kind === 'release' && r.url !== page.url);
+      return { name: sourceName(source), url: page.url, ...(edition ? { edition: edition.url } : {}), tracks: refs.some((r) => !!r.tracks) };
+    });
 }
+
+/** "1 track", "11 tracks". */
+const tracksText = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'track' : 'tracks'}`;
+
+/** A list head's count of tracks (F17): a record not had counts the rows it shows (its page's words narrowing them too), none where
+ *  it shows none, never "0 tracks" beside a list or a loader; anything else its playable rows, as before. */
+export const listCount = (v: { notHad: boolean; shown: number; playable: number }): string => (v.notHad ? (v.shown ? tracksText(v.shown) : '') : tracksText(v.playable));
 
 /** How long a record not had waits to be asked again while the server reads its list (n: asks made for this opening), and
  *  an artist's or a label's section read in the background (F8, F10): soon at first, then seldom, with no last ask (the read

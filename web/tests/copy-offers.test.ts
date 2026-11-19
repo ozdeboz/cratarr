@@ -23,11 +23,15 @@ const none = () => null;
 const offers = (copies: AlbumCopy[], s = list(), admin = true) => offersOf(s, { id: 'al-1', copies }, admin, none);
 const ids = (l: { id: string }[]) => l.map((x) => x.id);
 
-test("a copy keeps the original's copy and says Copy", () => {
+// F33.2 (changed by design, the owner's "Save to", AMENDMENTS 2026-11-19 ~11:25): a copy says Save.
+test("a copy keeps the original's copy and says Save", () => {
   const said = moveSentences({ title: 'Two Rooms', from: 'Music', to: "Ann's music", folder: 'A/Two Rooms', files: 12, copy: true, adding: true });
-  assert.equal(said.ask, "Copy Two Rooms to Ann's music as A/Two Rooms (12 files)? The album stays in Music.");
-  assert.equal(said.button, "Copy to Ann's music");
-  assert.equal(said.done, "Copied Two Rooms to Ann's music.");
+  assert.equal(said.ask, "Save Two Rooms to Ann's music as A/Two Rooms (12 files)? The album stays in Music.");
+  assert.equal(said.button, "Save to Ann's music");
+  assert.equal(said.done, "Saved Two Rooms to Ann's music.");
+  assert.equal(said.undone, "Two Rooms is no longer in Ann's music.");
+  assert.deepEqual(moveWords(true, true), { verb: 'Save', none: 'saved to', past: 'Saved', not: 'Not saved', act: 'save' });
+  for (const s of [said.ask, said.button, said.done, said.undone]) assert.ok(!/\b(Copy|Copied)\b/.test(s), s);
   assert.ok(!said.undone.includes('back in Music'), said.undone);
   for (const s of [said.ask, said.button, said.done, said.undone]) assert.ok(!/\b(Add|Move|Moved)\b/.test(s), s);
   const record = { library: undefined, format: 'MP3', bitrate_kbps: 320, copies: [copy('music', { plays: true })] };
@@ -35,7 +39,7 @@ test("a copy keeps the original's copy and says Copy", () => {
   assert.deepEqual(after.copies!.map((c) => [c.library, c.plays]), [['music', true], ['ann', false]], "Music's copy as it was, Ann's added");
   // T3.2: own music into Music.
   const back = moveSentences({ title: 'Two Rooms', from: "Ann's music", to: 'Music', folder: 'A/Two Rooms', files: 12, copy: true, adding: false });
-  assert.equal(back.ask, "Copy Two Rooms to Music as A/Two Rooms (12 files)? The album stays in Ann's music.");
+  assert.equal(back.ask, "Save Two Rooms to Music as A/Two Rooms (12 files)? The album stays in Ann's music.");
   assert.ok(copies(library('ann', 'own', { owner: 'ann' }), library('music', 'main')), "Ann's own music into Music is a copy");
 });
 
@@ -51,12 +55,16 @@ test("a leaver's own music into Music reads Move, as the server moves it", () =>
   assert.deepEqual(withCopyMoved({ library: undefined, format: 'MP3', bitrate_kbps: 320, copies: [copy('gone', { plays: true })] }, 'gone', 'music').copies!.map((c) => c.library), ['music'], 'its copy leaves that library');
 });
 
-test("the record menu and several albums take Copy to's words from one place", () => {
+test("the record menu and several albums take their words and icons from one place", () => {
   const read = (f: string) => readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8');
   const [menu, several] = [read('AlbumMenu.svelte'), read('SeveralAlbums.svelte')];
   assert.ok(/moveSentences/.test(menu) && /keep\??\.copy/.test(menu) && /copiesAdded\(/.test(menu), 'the record menu: the preview\'s copy, the shared words, copiesAdded');
   assert.ok(!/'Added' : 'Moved'/.test(menu) && !/adding \? 'Add' : 'Move'/.test(menu), 'no words of its own');
   assert.ok(!/const moveWords/.test(several) && /moveWords\(/.test(several) && /copiesAdded\(/.test(several), 'several albums: the shared words, copiesAdded');
+  // F33.1, F33.3: the entries' words from the table, their icons from the one map; neither builds its own.
+  assert.match(menu, /<MenuEntry icon=\{ICON_OF\[`\$\{m\.verb\}To`\]\} label=\{m\.label\}/);
+  assert.match(several, /icon=\{ICON_OF\[`\$\{verb\}To`\]\}\r?\n      label=\{moveLabel\(verb, mv\.name\)\}/);
+  assert.ok(!/'Copy' : mv\.adding \? 'Add' : 'Move'/.test(several) && !/icon="intoBox"/.test(several + menu), 'no words or icon of their own');
 });
 
 test('a record has one offer per copy, in the order the list gives them', () => {
@@ -77,8 +85,21 @@ test('a target already holding a copy is out: a record in Music and More cannot 
   assert.deepEqual(more.targets.map((l) => l.id).filter((id) => id === 'music'), []);
 });
 
-test('a kept copy goes into any other library, own music as a copy', () => {
-  assert.deepEqual(ids(offers([copy('music')])[0].targets), ['more', 'in', 'in2', 'own', 'theirs']);
+// F34.1 (changed by design, the owner, AMENDMENTS 2026-11-19 ~11:30): an Incoming library is filled by its fetcher alone.
+test('a kept copy goes into any other main library, or own music as a copy', () => {
+  assert.deepEqual(ids(offers([copy('music')])[0].targets), ['more', 'own', 'theirs']);
+});
+
+test('F34.2: with one main library, a main album has no Move to', () => {
+  const s = list({ library_info: [library('music', 'main'), library('in', 'incoming'), library('in2', 'incoming')] });
+  assert.deepEqual(moveEntries(offers([copy('music')], s)), []);
+});
+
+test("F34.3: Incoming's Add to and its Undo as before; several kept records never name an Incoming library", () => {
+  assert.deepEqual(ids(offers([copy('in', { keepable: true, keep_to: 'more' })])[0].targets), ['more', 'music', 'own']);
+  assert.equal(moveSentences({ title: 'Two Rooms', from: 'IN', to: 'MORE', folder: 'A/Two Rooms', files: 12, copy: false, adding: true }).undone, 'Two Rooms is back in IN.');
+  const groups = moveGroups([ticked('al-1', copy('music')), ticked('al-2', copy('more'))]);
+  assert.ok(!groups.some((g) => g.name === 'IN' || g.name === 'IN2'), groups.map((g) => g.name).join(', '));
 });
 
 test('only an administrator moves or copies a kept copy, out of own music as a copy', () => {
@@ -86,8 +107,11 @@ test('only an administrator moves or copies a kept copy, out of own music as a c
   assert.deepEqual(ids(offers([copy('own')])[0].targets), ['music', 'more', 'theirs'], 'never into Incoming');
 });
 
-test("into or out of someone's own music a kept record is copied: Copy to, alone or with others", () => {
-  assert.deepEqual(moveEntries(offers([copy('music')])).map((e) => e.label), ['Move to MORE', 'Move to IN', 'Move to IN2', 'Copy to OWN', 'Copy to THEIRS']);
+test("into or out of someone's own music a kept record is copied: Save to, alone or with others", () => {
+  // F33.1, F34.1 (changed by design): Save to for a copy, its icon by its verb; no Incoming target for a kept copy.
+  assert.deepEqual(moveEntries(offers([copy('music')])).map((e) => [e.label, e.verb]), [['Move to MORE', 'move'], ['Save to OWN', 'save'], ['Save to THEIRS', 'save']]);
+  assert.deepEqual(moveEntries(offers([copy('own')])).map((e) => e.label), ['Save to MUSIC', 'Save to MORE', 'Save to THEIRS']);
+  assert.deepEqual(moveEntries(offers([copy('in', { keepable: true, keep_to: 'more' })])).map((e) => [e.label, e.verb]), [['Add to MORE', 'add'], ['Add to MUSIC', 'add'], ['Add to OWN', 'add']]);
   assert.equal(copies(INFO[0], INFO[4]), true, 'Music into own music');
   assert.equal(copies(INFO[4], INFO[0]), true, 'own music into Music');
   assert.equal(copies(INFO[2], INFO[4]), false, 'out of Incoming: added');
@@ -278,15 +302,14 @@ test('the name is the server\'s, so "Your music" comes for free', () => {
   assert.deepEqual(deleteEntries(offers([copy('music'), copy('own')], s), 'EP').map((e) => e.label), ['Delete from MUSIC', 'Delete from Your music']);
 });
 
-test('Add to, Move to or Copy to as the copy goes, each entry knowing its copy and its target', () => {
+test('Add to, Move to or Save to as the copy goes, each entry knowing its copy and its target', () => {
   const e = moveEntries(offers([copy('in', { keepable: true, keep_to: 'own' }), copy('music')]));
   assert.deepEqual(e.map((x) => [x.label, x.offer.library, x.to.id]), [
     ['Add to OWN from IN', 'in', 'own'],
     ['Add to MORE from IN', 'in', 'more'],
     ['Move to MORE from MUSIC', 'music', 'more'],
-    ['Move to IN2 from MUSIC', 'music', 'in2'],
-    ['Copy to OWN from MUSIC', 'music', 'own'],
-    ['Copy to THEIRS from MUSIC', 'music', 'theirs'],
+    ['Save to OWN from MUSIC', 'music', 'own'],
+    ['Save to THEIRS from MUSIC', 'music', 'theirs'],
   ]);
 });
 
@@ -294,7 +317,7 @@ test('Add to, Move to or Copy to as the copy goes, each entry knowing its copy a
 // was meant. Every action on a record of several copies names the copy it acts on, not only where two would read the same.
 test('a record of several copies names the copy each Move and Replace acts on; one copy names none', () => {
   const s = list({ library_info: [...INFO, library('lidarr', 'main', { name: 'lidarr-music' })] });
-  assert.deepEqual(moveEntries(offers([copy('music'), copy('own')], s)).filter((x) => x.to.id === 'lidarr').map((x) => x.label), ['Move to lidarr-music from MUSIC', 'Copy to lidarr-music from OWN'], "own music's copy goes as a copy (C40)");
+  assert.deepEqual(moveEntries(offers([copy('music'), copy('own')], s)).filter((x) => x.to.id === 'lidarr').map((x) => x.label), ['Move to lidarr-music from MUSIC', 'Save to lidarr-music from OWN'], "own music's copy goes as a copy (C40)");
   assert.deepEqual(replaceEntries(offers([copy('in', against('music')), copy('music'), copy('more')])).map((x) => x.label), ['Replace in MUSIC from IN', 'Replace in MORE from IN']);
   assert.deepEqual(moveEntries(offers([copy('music')], s)).filter((x) => x.to.id === 'lidarr').map((x) => x.label), ['Move to lidarr-music']);
 });

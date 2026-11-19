@@ -17,11 +17,19 @@ use crate::userdata::words::RawWord;
 /// Asked again after this long; where Discogs had nothing, sooner.
 const AGAIN: i64 = 30 * 86_400;
 const NONE_AGAIN: i64 = 7 * 86_400;
+/// Asked again after this long where MusicBrainz's link could not be had (F47): what Discogs' search found stands in till then.
+const LINK_AGAIN: i64 = 15 * 60;
 /// Albums asked in one background round.
 const ROUND: usize = 60;
 
 fn due(kept: Option<&(i64, Option<String>)>, now: i64) -> bool {
     kept.is_none_or(|(at, facts)| now - at >= if facts.is_some() { AGAIN } else { NONE_AGAIN })
+}
+
+/// The time facts read at `now` are kept as read: now; where MusicBrainz's link could not be had (F47), as long before as makes them
+/// due again after `LINK_AGAIN`.
+fn kept_at(now: i64, found: bool, link_unread: bool) -> i64 {
+    if link_unread { now - if found { AGAIN } else { NONE_AGAIN } + LINK_AGAIN } else { now }
 }
 
 fn parse<T: serde::de::DeserializeOwned>(kept: Option<(i64, Option<String>)>) -> Option<T> {
@@ -95,7 +103,7 @@ fn answer_with(cat: &crate::catalogue::Catalogue, facts: Option<&AlbumFacts>, mu
 
 /// The name a label's reference was kept with (F9: who may make a label by it, `labels::open_label`): an album's label at Discogs by
 /// its id (its facts), or at MusicBrainz by its MBID (its release's, kept beside them); none where nothing kept names it. Blocking.
-pub fn label_named(served: &crate::serve::Serve, r: &Ref) -> Result<Option<String>> {
+pub fn label_named(served: &crate::serve::Serve, r: &Ref) -> Result<Option<(String, bool)>> {
     if r.kind != "label" {
         return Ok(None);
     }
@@ -106,7 +114,7 @@ pub fn label_named(served: &crate::serve::Serve, r: &Ref) -> Result<Option<Strin
                 if let Ok(kept) = serde_json::from_str::<Labelled>(&json)
                     && let Some(l) = kept.labels.into_iter().find(|l| l.id == Some(id))
                 {
-                    return Ok(Some(l.name));
+                    return Ok(Some((l.name, l.namesake)));
                 }
             }
         }
@@ -115,7 +123,7 @@ pub fn label_named(served: &crate::serve::Serve, r: &Ref) -> Result<Option<Strin
                 if let Ok(kept) = serde_json::from_str::<Vec<MbLabel>>(&json)
                     && let Some(l) = kept.into_iter().find(|l| l.mbid == r.value)
                 {
-                    return Ok(Some(l.name));
+                    return Ok(Some((l.name, false)));
                 }
             }
         }
@@ -195,9 +203,10 @@ pub async fn artist(served: &Arc<crate::serve::Serve>, name: &str, mbid: Option<
     if !due(kept.as_ref(), now) {
         return Ok(parse(kept));
     }
-    let facts = super::discogs::artist_facts(mbid.filter(|m| super::discogs::is_mbid(m)), name).await?;
+    let (facts, link_unread) = super::discogs::artist_facts(mbid.filter(|m| super::discogs::is_mbid(m)), name).await?;
     let (ud, json) = (served.userdata.clone(), facts.as_ref().map(serde_json::to_string).transpose()?);
-    tokio::task::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), now)).await??;
+    let at = kept_at(now, facts.is_some(), link_unread);
+    tokio::task::spawn_blocking(move || ud.set_discogs_facts(&subject, json.as_deref(), at)).await??;
     Ok(facts)
 }
 
@@ -253,9 +262,23 @@ mod tests {
     use super::*;
     use crate::app::discogs::Label;
 
+    /// F47: an artist's facts read while MusicBrainz's link could not be had are asked again after a quarter hour, found or not; read
+    /// with it, after a month (none found: a week).
+    #[test]
+    fn facts_read_without_musicbrainzs_link_are_asked_again_soon() {
+        let now = 1_800_000_000;
+        let kept = |found: bool, unread: bool| (kept_at(now, found, unread), found.then(|| "{}".to_string()));
+        for found in [true, false] {
+            assert!(!due(Some(&kept(found, true)), now + LINK_AGAIN - 1), "kept a while");
+            assert!(due(Some(&kept(found, true)), now + LINK_AGAIN), "asked again after a quarter hour");
+            assert!(!due(Some(&kept(found, false)), now + 86_400), "with the link: kept");
+        }
+        assert!(due(Some(&kept(true, false)), now + AGAIN) && due(Some(&kept(false, false)), now + NONE_AGAIN));
+    }
+
     #[test]
     fn discogs_labels_are_named_once_and_not_on_label_is_no_label() {
-        let l = |name: &str| Label { name: name.into(), catno: None, id: None };
+        let l = |name: &str| Label { name: name.into(), catno: None, id: None, namesake: false };
         let names = label_names(&[l("Warp Records"), l("warp records"), l("Not On Label (Air Self-released)"), l(" "), l("Bleep")]);
         assert_eq!(names, ["Warp Records", "Bleep"]);
     }
@@ -267,9 +290,9 @@ mod tests {
     #[test]
     fn the_discogs_answer_names_each_label_as_about_shows_it() {
         let cat = crate::catalogue::Catalogue::open(None, Vec::new()).unwrap();
-        let held = cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records").unwrap();
+        let held = cat.open_label(&Ref::new("discogs", "label", "23528"), "Low Tide Records", true).unwrap();
         let (anthem, nonesuch) = ("00000000-0000-4000-8000-000000000901", "00000000-0000-4000-8000-000000000902");
-        let label = |name: &str, catno: Option<&str>, id: u64| Label { name: name.into(), catno: catno.map(str::to_string), id: Some(id) };
+        let label = |name: &str, catno: Option<&str>, id: u64| Label { name: name.into(), catno: catno.map(str::to_string), id: Some(id), namesake: false };
         let facts = AlbumFacts {
             master: Some(3001),
             year: Some(2021),
@@ -307,8 +330,8 @@ mod tests {
         let kept = serde_json::to_string(&[MbLabel { name: "Nonesuch".into(), mbid: nonesuch.into(), catno: None }]).unwrap();
         served.userdata.set_discogs_facts(&musicbrainz_subject("al-1"), Some(&kept), 1).unwrap();
         let named = |r: Ref| label_named(&served, &r).unwrap();
-        assert_eq!(named(Ref::new("discogs", "label", "23528")), Some("Low Tide Records".to_string()));
-        assert_eq!(named(Ref::new("musicbrainz", "label", nonesuch)), Some("Nonesuch".to_string()));
+        assert_eq!(named(Ref::new("discogs", "label", "23528")), Some(("Low Tide Records".to_string(), false)));
+        assert_eq!(named(Ref::new("musicbrainz", "label", nonesuch)), Some(("Nonesuch".to_string(), false)));
         assert_eq!(named(Ref::new("discogs", "label", "4401")), None);
         assert_eq!(named(Ref::new("musicbrainz", "label", other)), None);
         assert_eq!(named(Ref::new("discogs", "master", "23528")), None, "a label's reference alone");

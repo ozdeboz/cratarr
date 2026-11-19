@@ -778,6 +778,11 @@ pub struct CrateCounts {
 /// relative), `file` its file name; the rest is what the catalogue knows, `None` where it does not.
 #[derive(Debug, Default, Serialize, PartialEq)]
 pub struct PlaylistRow {
+    /// Its record's type, as the Library list serves it (GOTO.S1): a track's Go to names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     pub entry: String,
     /// Its entry id (0.12, decision 0087): what the playlist's operations name it by (`entry` stays the line). Absent
     /// (a crate's row, or ids not kept): no operations for it.
@@ -2394,6 +2399,8 @@ impl PlaylistService {
                 .zip(at)
                 .zip(facts)
                 .map(|((entry, at), f)| PlaylistRow {
+                    album_type: None,
+                    album_secondary: Vec::new(),
                     entry_id: None,
                     album_id: f.track_id.as_ref().and_then(|t| albums.get(t).cloned()),
                     album_tracks: f.track_id.as_ref().and_then(|t| albums.get(t)).and_then(|a| album_tracks.get(a).copied()),
@@ -2420,6 +2427,15 @@ impl PlaylistService {
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))??;
+        // Each track with its record's type (GOTO.S1).
+        let Some(serve) = self.served() else { return Ok(rows) };
+        let rows = tokio::task::spawn_blocking(move || {
+            let mut rows = rows;
+            serve.with_types(&mut rows);
+            rows
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(rows)
     }
 

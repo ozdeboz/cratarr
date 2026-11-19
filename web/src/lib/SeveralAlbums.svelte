@@ -15,7 +15,8 @@
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo. Of records with several
   // copies Delete is an entry per library, as Move's. No Play from: it starts one record's queue.
   import { offersIn } from './AlbumMenu.svelte';
-  import { deleteGroups, moveGroups, moveSheet, moveWords, type AlbumOffer } from './copiesRule';
+  import { deleteGroups, moveGroups, moveLabel, moveSheet, moveWords, type AlbumOffer } from './copiesRule';
+  import { ICON_OF } from './menuTable';
   import { albumOfDownload, albumRatings, copiesAdded, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
   import { cancelJob, deleteAlbum, moveAlbum, movePreview, type AlbumsSource, type KeepPreview, type LibraryInfo, type ListedAlbum, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -261,7 +262,11 @@
 </MenuGroup>
 <MenuGroup label="Library">
   {#if converting.length}<MenuEntry icon="close" label="Cancel conversion" onclick={cancelAll} />{/if}
-  {#each moves as mv (mv.name)}<MenuEntry icon="intoBox" label={`${mv.copying ? 'Copy' : mv.adding ? 'Add' : 'Move'} to ${mv.name}`} onclick={() => askMove(mv.name, mv.them, mv.adding, mv.copying)} />{/each}
+  {#each moves as mv (mv.name)}{@const verb = mv.copying ? 'save' : mv.adding ? 'add' : 'move'}<MenuEntry
+      icon={ICON_OF[`${verb}To`]}
+      label={moveLabel(verb, mv.name)}
+      onclick={() => askMove(mv.name, mv.them, mv.adding, mv.copying)}
+    />{/each}
 </MenuGroup>
 <!-- Remove, last. -->
 <MenuGroup>

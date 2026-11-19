@@ -867,6 +867,29 @@ impl Library {
         Ok(out)
     }
 
+    /// These albums' kept types (GOTO.S4: the build's own, never worked out again): `release_type` and `secondary`, by id; an album
+    /// not in the library left out.
+    pub fn kept_types(&self, ids: &[String]) -> Result<HashMap<String, (Option<String>, Vec<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT release_type, secondary FROM albums WHERE id = ?1")?;
+        let mut out = HashMap::new();
+        for id in ids {
+            let row = st.query_map([id], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)))?.next().transpose()?;
+            if let Some((kind, secondary)) = row {
+                out.insert(id.clone(), (kind, secondary.split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect()));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every album's tracks in the library now, by album id (A3.4: whether a row of its missing tracks still fits it).
+    pub fn song_counts(&self) -> Result<HashMap<String, usize>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album_id, count(*) FROM songs GROUP BY album_id")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as usize)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// A song's file and album (0.9.14, Health's fixes): its folder, its path in it, its album's id and its title.
     pub fn song_file(&self, id: &str) -> Result<Option<(i64, String, String, String)>> {
         let db = self.db();

@@ -261,6 +261,8 @@ async fn a_match_reaches_every_copy_by_its_track_not_its_file_name() {
             ("02 Two.flac".into(), "33333333-3333-3333-3333-333333333333".into(), None),
         ],
         lengths: Vec::new(),
+        format: String::new(),
+        fits: 0,
     };
     let fix = super::matching::fix_of(&c.serve, "library:musicbrainz", &c.album, &m, None).unwrap().unwrap();
     let (p, _) = super::fix_plans::proposal(&c.serve, "fix:library:musicbrainz", &[fix], None).unwrap();

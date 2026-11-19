@@ -166,6 +166,16 @@ pub struct FilesState {
     pub run: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<i64>,
+    /// Where it differs (F27): each field its files lack, with what it gets, as its plan's rows name them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<Vec<FileFact>>,
+}
+
+/// A field a record's files lack (F27): what the plan writes into it.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct FileFact {
+    pub field: String,
+    pub values: Vec<String>,
 }
 
 /// What a run's id and undo token start with (a kept run: its journal id).
@@ -656,7 +666,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         albums: albums.len(),
     };
     for (album, _) in &albums {
-        set_state(album, FilesState { state: "waiting".into(), done: None, of: None, run: Some(id.clone()), at: None });
+        set_state(album, FilesState { facts: None, state: "waiting".into(), done: None, of: None, run: Some(id.clone()), at: None });
     }
     tell(app.journal.key(), &status);
     let (app, first) = (app.clone(), status.clone());
@@ -670,7 +680,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         let entry = Arc::new(Mutex::new(RunEntry::begin(app.journal.clone(), &p, at, account.as_deref(), i64::from(app.incoming.trash_days()) * 86_400)));
         for (album, files) in albums {
             let of = files.len();
-            set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(id.clone()), at: None });
+            set_state(&album, FilesState { facts: None, state: "writing".into(), done: Some(0), of: Some(of), run: Some(id.clone()), at: None });
             let (keep, noted) = (kept_dir(&id), entry.clone());
             let done = tokio::task::spawn_blocking(move || {
                 let mut ok = Vec::new();
@@ -710,6 +720,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
             set_state(
                 &album,
                 FilesState {
+                    facts: None,
                     state: if changed { "changed" } else { "written" }.into(),
                     done: Some(wrote),
                     of: Some(of),
@@ -755,7 +766,7 @@ pub async fn made(app: &Arc<super::App>, work: impl FnOnce() -> Result<Proposal>
     let j = app.journal.record_run(at, &run, account.as_deref(), keep)?;
     let id = format!("{RUN}{j}");
     for (album, files) in albums_of(&p.files) {
-        set_state(&album, FilesState { state: "written".into(), done: Some(files.len()), of: Some(files.len()), run: Some(id.clone()), at: Some(at) });
+        set_state(&album, FilesState { facts: None, state: "written".into(), done: Some(files.len()), of: Some(files.len()), run: Some(id.clone()), at: Some(at) });
     }
     let status = kept_status(j, at, &run, false);
     tracing::info!(target: "library", what = %status.what, albums = status.of, "files changed");
@@ -967,7 +978,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
     let mut status = kept_status(id, at, &run, false);
     (status.state, status.done, status.of, status.failed) = ("waiting", 0, todo.len(), Vec::new());
     for album in &todo {
-        set_state(album, FilesState { state: "waiting".into(), done: None, of: None, run: Some(token.to_string()), at: None });
+        set_state(album, FilesState { facts: None, state: "waiting".into(), done: None, of: None, run: Some(token.to_string()), at: None });
     }
     tell(app.journal.key(), &status);
     let (app, token, first) = (app.clone(), token.to_string(), status.clone());
@@ -981,7 +992,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
         for album in todo {
             let files: Vec<(usize, FileWrite)> = run.files.iter().enumerate().filter(|(_, f)| f.album == album && !f.undone).map(|(i, f)| (i, f.clone())).collect();
             let of = files.len();
-            set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(token.clone()), at: None });
+            set_state(&album, FilesState { facts: None, state: "writing".into(), done: Some(0), of: Some(of), run: Some(token.clone()), at: None });
             let results = tokio::task::spawn_blocking(move || {
                 files
                     .into_iter()
@@ -1012,6 +1023,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
             set_state(
                 &album,
                 FilesState {
+                    facts: None,
                     state: if changed { "changed" } else { "differs" }.into(),
                     done: None,
                     of: None,
@@ -1723,7 +1735,7 @@ mod tests {
             track: Some(track.into()),
             before: vec![("date".into(), s(before)), ("releasetype".into(), s(&["album"]))],
             after: vec![("date".into(), s(after)), ("releasetype".into(), s(&["album", "compilation"]))],
-            from: vec![("date".into(), "the album's year".into()), ("releasetype".into(), "the type rule".into())],
+            from: vec![("date".into(), "the album's year".into()), ("releasetype".into(), "the release type rule".into())],
             undone: false,
             whole: None,
         };

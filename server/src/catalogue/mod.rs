@@ -1100,6 +1100,14 @@ impl Drop for CopiesMoving {
     }
 }
 
+/// The artists a build's record pass made apart (A2.1, R1), each in the log: an artist of their own, by a MusicBrainz id the one of
+/// their name could not hold.
+fn said_apart(apart: &[String]) {
+    for a in apart {
+        tracing::info!(target: "library", artist = %a, "an artist made apart: their files' MusicBrainz id is no other artist's of the name");
+    }
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -1123,6 +1131,7 @@ impl Catalogue {
         conn.execute_batch(records::SCHEMA).context("creating the records' references")?;
         conn.execute_batch(artists::SCHEMA).context("creating the artists' numbers")?;
         conn.execute_batch(labels::SCHEMA).context("creating the labels' kept rows")?;
+        labels::add_also(&conn).context("adding the labels' rows' references")?;
         // C55: the artists from before the numbers given theirs, in the order they were made.
         artists::number_all(&conn).context("numbering the artists of one name")?;
         // A folder in use before ids for life: its place is its id from now on.
@@ -2766,8 +2775,9 @@ impl Catalogue {
         let read_half_way = self.read_half_way.swap(false, Ordering::SeqCst);
         let (given, records) = Self::assign(&tx, albums, now(), read_half_way || self.copies_are_moving())?;
         records::files_references(&tx, albums, &records, now())?;
-        records::record_credits(&tx, albums, &records, now())?;
+        let apart = records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
+        said_apart(&apart);
         Ok(given)
     }
 
@@ -2793,8 +2803,9 @@ impl Catalogue {
             records
         };
         records::files_references(&tx, albums, &records, now())?;
-        records::record_credits(&tx, albums, &records, now())?;
+        let apart = records::record_credits(&tx, albums, &records, now())?;
         tx.commit()?;
+        said_apart(&apart);
         Ok(())
     }
 
@@ -3536,6 +3547,11 @@ impl Catalogue {
         track_of_source(&self.db(), source, item)
     }
 
+    /// `track_of_source`, a failure to read said (M4: a cover's route answers it apart from "no cover"). Blocking.
+    pub fn track_of_source_read(&self, source: &str, item: &str) -> Result<Option<i64>> {
+        Ok(track_of_source_in(&self.db(), source, item)?)
+    }
+
     /// The file a server's item names (decision 0012): for another server its link says one file, whichever copy that is;
     /// Cratarr's own ids name a track, so any present file. Blocking.
     pub fn place_of_source(&self, source: &str, item: &str) -> Option<(i64, String)> {
@@ -4148,6 +4164,11 @@ impl Catalogue {
 
     pub fn file_of(&self, track: i64) -> Option<(i64, String)> {
         file_of(&self.db(), track)
+    }
+
+    /// `file_of`, a failure to read said (M4). Blocking.
+    pub fn file_of_read(&self, track: i64) -> Result<Option<(i64, String)>> {
+        Ok(file_of_in(&self.db(), track)?)
     }
 
     /// A note the catalogue keeps (its `meta` table), by key.
@@ -4773,25 +4794,30 @@ fn album_gains_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Has
 
 /// See `Catalogue::track_of_source`; on the catalogue's connection, held (`files_of_sources` asks for many at once).
 fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
+    track_of_source_in(db, source, item).ok().flatten()
+}
+
+/// `track_of_source`, its failures said.
+fn track_of_source_in(db: &Connection, source: &str, item: &str) -> rusqlite::Result<Option<i64>> {
     if source == crate::source::cratarr::KIND.id {
         // An id a take retired stands for the track that took it: a queue, an export or a crate can name it long after.
-        let track = taken_by(db, crate::serve::ids::track_of(item)?).ok()?;
+        let Some(asked) = crate::serve::ids::track_of(item) else { return Ok(None) };
+        let track = taken_by(db, asked)?;
         let present = format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}");
-        return db.query_row(&present, [track], |_| Ok(())).optional().ok().flatten().map(|()| track);
+        return Ok(db.query_row(&present, [track], |_| Ok(())).optional()?.map(|()| track));
     }
-    db.query_row(
-        &format!(
-            "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
+    Ok(db
+        .query_row(
+            &format!(
+                "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
              WHERE s.source = ?1 AND s.track_id = ?2 AND {}",
-            PRESENT_F
-        ),
-        params![source, item],
-        |r| r.get(0),
-    )
-    .optional()
-    .ok()
-    .flatten()
-    .flatten()
+                PRESENT_F
+            ),
+            params![source, item],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten())
 }
 
 /// A file's item on a source. Cratarr's own item is the track, whichever copy the file is: its links come from `songs`, which
@@ -4812,10 +4838,12 @@ fn row_line_of(folders: &InUse, files: &[Place], row: Option<&Place>) -> Option<
 
 /// See `Catalogue::file_of`.
 fn file_of(db: &Connection, track: i64) -> Option<(i64, String)> {
-    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT} ORDER BY folder, rel LIMIT 1"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()
-        .ok()
-        .flatten()
+    file_of_in(db, track).ok().flatten()
+}
+
+/// `file_of`, its failures said.
+fn file_of_in(db: &Connection, track: i64) -> rusqlite::Result<Option<(i64, String)>> {
+    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT} ORDER BY folder, rel LIMIT 1"), [track], |r| Ok((r.get(0)?, r.get(1)?))).optional()
 }
 
 /// See `Catalogue::files_of`.
@@ -5677,6 +5705,31 @@ mod tests {
         cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
         cat.identify().unwrap();
         assert!(retired(&cat, one), "unclaimed for a day: retired");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A3.1.3: a copy whose files went (moved outside Cratarr) is not had while they are gone; recognised as moved within the day, it
+    /// is had again, on the same tracks (the 24 hours are for track ids alone, `GONE_KEEP_SECS`).
+    #[test]
+    fn a_copy_back_within_a_day_is_had_again() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, two) = (cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap(), cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap());
+        let record = cat.record_for_tests("B", 0);
+        cat.db().execute("UPDATE tracks SET record = ?1 WHERE id IN (?2, ?3)", params![record, one, two]).unwrap();
+        let had = || cat.record(record).unwrap().unwrap().had;
+        assert!(had(), "its copy there");
+        std::fs::rename(d.join("A - B (2020)"), d.join("A - B (2020) [FLAC]")).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.file_of(one), None, "gone, waiting");
+        assert!(!had(), "gone: not had, its tracks kept for the day");
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        assert_eq!(cat.track_of(0, "A - B (2020) [FLAC]/01 One.mp3"), Some(one), "recognised as moved");
+        assert!(had(), "back within the day: had again, on the same tracks");
         std::fs::remove_dir_all(&d).ok();
     }
 

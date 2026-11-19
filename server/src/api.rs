@@ -959,6 +959,13 @@ async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Q
     Ok(Json(app.playing.toggle(&id, f.source.as_deref(), f.member).await?))
 }
 
+/// A cover that could not be read now for a reason of Cratarr's own (M4: the catalogue, a task): 503, asked again after a few
+/// seconds; never 404's "no cover", which a page keeps for the record.
+fn cover_unread(what: &str, why: &str) -> Response {
+    tracing::warn!(target: "library", cover = %what, reason = %why, "a cover not read now");
+    (StatusCode::SERVICE_UNAVAILABLE, [(header::RETRY_AFTER, HeaderValue::from_static("5"))], Json(json!({ "error": "cover not read now" }))).into_response()
+}
+
 async fn cover(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Query<CoverStamp>, headers: HeaderMap) -> Response {
     use crate::covers::Outcome;
     let app = ctx.app.clone();
@@ -976,23 +983,28 @@ async fn cover(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Q
         && id.starts_with(crate::serve::ids::SONG)
     {
         let (s, song) = (served.clone(), id.clone());
-        let Some(album) = tokio::task::spawn_blocking(move || s.album_of_song(&song)).await.ok().flatten() else {
-            return (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response();
+        let album = match tokio::task::spawn_blocking(move || s.album_of_song_read(&song)).await {
+            Ok(Ok(Some(album))) => album,
+            Ok(Ok(None)) => return (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+            Ok(Err(e)) => return cover_unread(&id, &format!("{e:#}")),
+            Err(e) => return cover_unread(&id, &e.to_string()),
         };
         let etag = format!("\"{}-{size}\"", served.cover_stamps().get(&album).map_or("", String::as_str));
         if inm.is_some_and(|h| crate::covers::etag_matches(h, &etag)) {
             return (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response();
         }
         return match crate::app::device_covers::for_list(&served, &album, size).await {
-            Some((ct, bytes)) => {
+            Ok(Some((ct, bytes))) => {
                 let ct = HeaderValue::from_static(crate::serve::art::picture_type(Some(&ct), &bytes));
                 ([cache, (header::ETAG, tag(&etag)), (header::CONTENT_TYPE, ct)], bytes).into_response()
             }
-            None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+            Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+            Err(e) => cover_unread(&album, &format!("{e:#}")),
         };
     }
     match app.playing.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+        Outcome::Unread => cover_unread(&id, "the catalogue not read"),
         Outcome::NotModified { etag } => (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response(),
         Outcome::Image { content_type, etag, bytes } => (
             [cache, (header::ETAG, tag(&etag)), (header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
@@ -4186,17 +4198,24 @@ struct CoverStamp {
 /// for an hour (another server's album, a device's picture).
 async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
     let own = source == crate::source::cratarr::KIND.id;
+    // M4: an internal failure (the catalogue, a task) is 503, asked again; never "no cover".
     let found = match (q.from.as_deref(), q.size, ctx.served.as_ref()) {
-        (Some(library), _, Some(served)) if own => served.copy_cover_bytes(&album, library).await.unwrap_or_else(|e| {
-            tracing::warn!("cover of {album} in {library}: {e:#}");
-            None
-        }),
-        (None, Some(size), Some(served)) if own => crate::app::device_covers::for_list(served, &album, size).await,
+        (Some(library), _, Some(served)) if own => match served.copy_cover_bytes(&album, library).await {
+            Ok(found) => found,
+            Err(e) => return cover_unread(&album, &format!("{library}: {e:#}")),
+        },
+        (None, Some(size), Some(served)) if own => match crate::app::device_covers::for_list(served, &album, size).await {
+            Ok(found) => found,
+            Err(e) => return cover_unread(&album, &format!("{e:#}")),
+        },
         _ => ctx.app.playing.album_cover(&source, &album).await,
     };
     // A record not had (C54): from the cover cache, by the address its page shows.
     let found = match found {
-        None if own => crate::app::cover_cache::of_record(ctx.app.library.catalogue(), &album).await.map(|(bytes, mime)| (mime.to_string(), bytes)),
+        None if own => match crate::app::cover_cache::of_record(ctx.app.library.catalogue(), &album).await {
+            Ok(found) => found.map(|(bytes, mime)| (mime.to_string(), bytes)),
+            Err(e) => return cover_unread(&album, &format!("{e:#}")),
+        },
         found => found,
     };
     match found {
@@ -5188,15 +5207,18 @@ async fn artist_missing(ctx: Ctx, Query(q): Query<ArtistQuery>) -> Result<Json<c
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
     let cat = app.library.catalogue();
-    let artist = match q.id.as_deref().and_then(crate::serve::ids::artist_number) {
-        Some(id) => Some(id),
+    // F18.3: a page asked by a name no artist has finds the artist by the source that knows the name (made by that reference), or
+    // says that none does.
+    let (artist, mut missing) = match q.id.as_deref().and_then(crate::serve::ids::artist_number) {
+        Some(id) => (id, crate::app::discover::missing_albums(cat, id, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?),
         None => {
-            let (c, name) = (cat.clone(), q.name.trim().to_string());
-            tokio::task::spawn_blocking(move || c.artist_of(&name)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?.map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+            let missing = crate::app::discover::missing_by_name(cat, &q.name, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+            match missing.artist.as_deref().and_then(crate::serve::ids::artist_number) {
+                Some(id) => (id, missing),
+                None => return Ok(Json(missing)),
+            }
         }
     };
-    let Some(artist) = artist else { return Ok(Json(Default::default())) };
-    let mut missing = crate::app::discover::missing_albums(cat, artist, &crate::app::discover::artist_sources()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     // An artist forgotten (RT01b) says so, by their tombstone: asked where nothing is listed nor looked for, as for one unknown.
     if missing.albums.is_empty() && !missing.looking {
         let (c, id) = (app.library.catalogue(), crate::serve::ids::artist(artist));
@@ -6483,7 +6505,8 @@ async fn genre_aliases(State(app): State<Arc<App>>) -> Result<Json<std::collecti
 /// Beyond the library (0076, the unindexed universe; C57): MusicBrainz's albums and Discogs' masters for the words, each album
 /// once by reference alone (`beyond::albums`: never by a name), each with where it was found, the record that holds it where one
 /// does, `have` by the one had rule on that record, and its request. MusicBrainz's artists beside, each with the artist who holds
-/// their MusicBrainz id. A page of `limit` from `offset`; kept per query in memory, a cache: nothing is made when it answers.
+/// their MusicBrainz id. A page of `limit` from `offset`; kept per query in memory, a cache: nothing is made when it answers. A
+/// source that failed is named (`no_list`, A1.3); where what is here could not be read, `known: false` and no row says had or not.
 async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
@@ -6493,28 +6516,20 @@ async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<se
         return Ok(Json(json!({ "q": q, "albums": [], "artists": [] })));
     }
     let (mb, discogs) = tokio::join!(crate::app::discover::musicbrainz_found(&q, (offset + limit).min(100)), crate::app::discogs::search_masters(&q, limit, offset));
+    let said = crate::app::beyond::failed(&mb, &discogs, crate::app::moment::now_secs());
     let (mb_albums, artists) = mb.unwrap_or_default();
     let mb_albums: Vec<crate::app::discover::FoundAlbum> = mb_albums.into_iter().skip(offset).take(limit).collect();
     let artists = if offset == 0 { artists } else { Vec::new() };
     let discogs = discogs.unwrap_or_default();
     let (cat, a, d, p) = (app.library.catalogue(), mb_albums.clone(), discogs.clone(), artists.clone());
-    // What is here, by reference: where it cannot be read, nothing is marked.
-    let known = match tokio::task::spawn_blocking(move || crate::app::beyond::known(&cat, &a, &d, &p)).await {
-        Ok(Ok(known)) => known,
-        Ok(Err(e)) => {
-            tracing::info!("beyond: what is here not read: {e:#}");
-            crate::app::beyond::Known::default()
-        }
-        Err(e) => {
-            tracing::info!("beyond: what is here not read: {e:#}");
-            crate::app::beyond::Known::default()
-        }
-    };
+    // What is here, by reference: where it cannot be read, nothing is marked, and nothing said not had (A1.3).
+    let known = tokio::task::spawn_blocking(move || crate::app::beyond::known(&cat, &a, &d, &p)).await.map_err(anyhow::Error::from).and_then(|k| k);
+    if let Err(e) = &known {
+        tracing::info!("beyond: what is here not read: {e:#}");
+    }
     let marks = request_marks(&app, &serve).await;
-    let albums = crate::app::beyond::albums(&mb_albums, &discogs, &known, marks.as_deref());
     crate::app::beyond::keep_listed(&artists, crate::app::moment::now_secs());
-    let artists = crate::app::beyond::artists(&artists, &known);
-    Ok(Json(json!({ "q": q, "albums": albums, "artists": artists })))
+    Ok(Json(crate::app::beyond::answer(&q, &mb_albums, &discogs, &artists, known.ok().as_ref(), marks.as_deref(), said)))
 }
 
 /// An artist of Beyond's (C57) opened: their MusicBrainz id and name.
@@ -7707,6 +7722,27 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{ExportRequest, PreviewOf, attachment, form_decode};
+
+    /// M4 (the review of 1.2): a cover not read now for a reason of Cratarr's own is 503 with Retry-After, which the page asks again;
+    /// never the 404 "no cover" it keeps for the record.
+    #[test]
+    fn a_cover_not_read_now_is_asked_again_never_no_cover() {
+        let r = super::cover_unread("al-1", "the catalogue is busy");
+        assert_eq!(r.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(r.headers().get(axum::http::header::RETRY_AFTER).and_then(|v| v.to_str().ok()), Some("5"));
+        // Each route's internal failures go there (the source's own check: no Err or failed task reads as "no cover").
+        let src = include_str!("api.rs").replace("
+", "
+");
+        for route in ["async fn cover(ctx", "async fn album_cover(ctx"] {
+            let body = &src[src.find(route).unwrap()..];
+            let body = &body[..body.find("
+}
+").unwrap()];
+            assert!(!body.contains(".ok().flatten()") && !body.contains("unwrap_or_else(|e|"), "{route}: an error read as none");
+            assert!(body.contains("cover_unread("), "{route}");
+        }
+    }
 
     #[test]
     fn the_sign_ins_come_back_where_the_table_of_addresses_says() {

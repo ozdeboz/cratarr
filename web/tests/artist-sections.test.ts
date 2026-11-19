@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const { emptyLine, sectionPlace } = await import('../src/lib/recordNotHad.ts');
+const { artistLine, nothingBy, recordsTitle, recordsWord } = await import('../src/lib/recordTypeRules.ts');
 const { when } = await import('../src/lib/settings/when.ts');
 
 const source = (file: string) => readFileSync(new URL(`../src/lib/${file}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -62,7 +63,7 @@ test('Not in your library: the loader naming the read, its rows, or why; asked a
   assert.match(body, /const missingPlace = \$derived\(searching \? \(missingShown\.length \? 'rows' : null\) : missing && sectionPlace\(missing, missingShown\.length\)\);/);
   assert.match(
     body,
-    /\{#if missingPlace\}\s*<section aria-label="Not in your library">\s*<SectionHead title="Not in your library" \/>\s*\{#if missingPlace === 'rows'\}[\s\S]*?\{:else if 'reading' in missingPlace\}<PageLoading><p class="opening">\{missingPlace\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{missingPlace\.line\}<\/p>\{\/if\}\s*<\/section>\s*\{\/if\}/,
+    /\{#if missingPlace\}\s*<section aria-label="Not in your library">\s*<SectionHead title="Not in your library" \/>\s*\{#if missingPlace === 'rows'\}[\s\S]*?\{:else if 'reading' in missingPlace\}<PageLoading held=\{false\}><p class="opening">\{missingPlace\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{missingPlace\.line\}<\/p>\{\/if\}\s*<\/section>\s*\{\/if\}/,
   );
   assert.match(body, /if \(r\.looking\) t = window\.setTimeout\(\(\) => ask\(n \+ 1\), lookAgainAfter\(n\)\);/);
   assert.match(body, /void ask\(0\);/);
@@ -74,7 +75,7 @@ test('the recommendations: the loader naming the read, their artists, or why; as
   assert.match(related, /const place = \$derived\(answer && sectionPlace\(answer, answer\.artists\.length\)\);/);
   assert.match(
     related,
-    /\{#if place\}\s*<section aria-label="Related artists to explore">\s*<SectionHead title="Related artists to explore" \/>\s*\{#if place === 'rows'\}[\s\S]*?\{:else if 'reading' in place\}<PageLoading><p class="opening">\{place\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{place\.line\}<\/p>\{\/if\}\s*<\/section>\s*\{\/if\}/,
+    /\{#if place\}\s*<section aria-label="Related artists to explore">\s*<SectionHead title="Related artists to explore" \/>\s*\{#if place === 'rows'\}[\s\S]*?\{:else if 'reading' in place\}<PageLoading row><p class="opening">\{place\.reading\}<\/p><\/PageLoading>\{:else\}<p class="empty">\{place\.line\}<\/p>\{\/if\}\s*<\/section>\s*\{\/if\}/,
   );
   assert.match(related, /if \(r\.looking\) timer = setTimeout\(look, lookAgainAfter\(n\+\+\)\);/);
   assert.doesNotMatch(related, /TRIES|AGAIN_MS/, 'no last ask');
@@ -84,4 +85,41 @@ test('the recommendations: the loader naming the read, their artists, or why; as
 test("an artist page's sections never hold it: the page shows at once, what is read follows in its place", () => {
   assert.match(body, /setContext\(HOLD, undefined\);/);
   assert.match(body, /import \{ HOLD \} from '\.\/holdPlace\.svelte';/);
+});
+
+// SB5: an artist's header counts what it has, above 0 alone, in its records' word; "Nothing by" only where there is nothing at all.
+test("SB5.1: an artist's header counts what it has, above 0 alone, in its records' word", () => {
+  assert.equal(artistLine(['album', 'album', 'ep', 'ep', 'ep'], 61, '4:12:00'), '5 records • 61 tracks • 4:12:00', '(a) 2 albums and 3 EPs');
+  assert.equal(artistLine(['ep', 'ep', 'ep'], 14, '58:00'), '3 EPs • 14 tracks • 58:00', '(b) 3 EPs');
+  assert.equal(artistLine([], 0, null), '', '(c) nothing had: no details line');
+  assert.equal(artistLine(['album'], 9, '41:30'), '1 album • 9 tracks • 41:30', '(d) one album');
+  for (const line of [artistLine([], 0, null), artistLine(['album'], 9, null)]) {
+    assert.doesNotMatch(line, /\b0 (albums|tracks|records)\b/);
+  }
+  assert.doesNotMatch(artistLine(['ep', 'single'], 4, null), /albums/, 'never "albums" over EPs');
+  const view = readFileSync(new URL('../src/lib/PlaylistView.svelte', import.meta.url), 'utf8');
+  assert.match(view, /if \(artist\) return artistLine\(artist\.tracks \? null : \(artistHead\?\.albums \?\? \[\]\)\.map\(\(a\) => a\.type\), rows\.length, length \? clockText\(length\) : null\);/);
+  assert.doesNotMatch(view, /plural\(artistHead\?\.albums\.length \?\? 0, 'album'\)/);
+});
+
+test('SB5.2: "Nothing by X on this server." only when there is nothing anywhere', () => {
+  const nothing = { had: 0, appears: 0, top: false };
+  assert.equal(nothingBy({ ...nothing, missing: null, rows: 0 }), false, '(a) not answered yet: no flash before the first answer');
+  assert.equal(nothingBy({ ...nothing, missing: { looking: true }, rows: 0 }), false, '(b) being read: never beside the loader');
+  assert.equal(nothingBy({ ...nothing, missing: { looking: false }, rows: 5 }), false, '(c) with 5 rows');
+  assert.equal(nothingBy({ ...nothing, missing: { looking: false }, rows: 0 }), true, '(d) read with none, no source failing');
+  assert.equal(nothingBy({ ...nothing, missing: { looking: false, no_list: [{ source: 'musicbrainz', said: 'unanswered' }] } as never, rows: 0 }), true, '(e) read with none, MusicBrainz unanswered');
+  assert.equal(nothingBy({ ...nothing, had: 1, missing: { looking: false }, rows: 0 }), false, 'something had');
+  assert.match(body, /\{:else if nothingBy\(\{ had: albums\.length, appears: appearsOn\.length, top: !!top, missing, rows: missingShown\.length \}\)\}\n {2}<p class="empty">Nothing by \{name\} on this server\.<\/p>/);
+  // (e): after the section's why line, as today's order.
+  assert.ok(body.indexOf('{#if missingPlace}') < body.indexOf('Nothing by {name} on this server.'), 'after the section');
+});
+
+test("SB5.3: the header's word and the section's heading are one rule", () => {
+  for (const types of [['album', 'album', 'ep', 'ep', 'ep'], ['ep', 'ep', 'ep'], ['album']]) {
+    const word = recordsWord(types);
+    assert.ok(artistLine(types, 1, null).startsWith(`${types.length} ${word}`), `${types}: ${word}`);
+    assert.equal(recordsTitle(types).toLowerCase(), `${word.toLowerCase()}s`);
+  }
+  assert.match(body, /\{@const heading = recordsTitle\(albumsShown\.map\(\(a\) => a\.type\)\)\}/, 'the section heading over the records shown');
 });
