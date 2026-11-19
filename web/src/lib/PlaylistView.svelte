@@ -742,6 +742,24 @@
     return () => (gone = true);
   });
 
+  // The album's artist chip: their photo where the artist store has one, never the album's own cover again (the owner,
+  // 2026-11-19, F38: "the artist image is simply the record cover"); none, the name alone.
+  let byPhoto = $state<string | null>(null);
+  $effect(() => {
+    const by = albumBy;
+    const from = album?.source;
+    byPhoto = null;
+    if (!by || from !== 'cratarr') return;
+    let gone = false;
+    getArtistAbout(by).then(
+      (a) => {
+        if (!gone && a.photo && a.id) byPhoto = artistPhotoUrl(a.id);
+      },
+      () => {},
+    );
+    return () => (gone = true);
+  });
+
   // The cover's place: a crate's picture (its own, else its albums' covers; in edit mode as Save will leave it).
   const heroArt = $derived.by(() => {
     if (crateEditing) {
@@ -2610,7 +2628,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {:else if album && listedHere?.a.whole_tracks}<span class="details left-out"><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></span>{/if}
           {#if album && albumHead?.artist}
             <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
-              >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
+              >{#if byPhoto}<span class="chip-art"><Cover src={byPhoto} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
                   ><Icon name="heart" size={16} /></i
                 >{/if}</button
             >
