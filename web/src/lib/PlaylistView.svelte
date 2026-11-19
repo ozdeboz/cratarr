@@ -888,12 +888,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const topTracks = $derived(!!artist?.tracks);
   let topSort = $state<ListSort>({ key: 'plays', down: true });
   // A crate with a Sounds like on: its Best match is Most alike (lib/crateRecords ranksAlike), read from its conditions; a draft's
-  // as they stand.
+  // as they stand. The effect reads a local, never the state it writes: reading it asked the crate again for ever (H2).
   let crateAlike = $state(false);
   $effect(() => {
     const c = crate;
-    crateAlike = ranksAlike(c);
-    if (!c || crateAlike) return;
+    const sure = ranksAlike(c);
+    crateAlike = sure;
+    if (!c || sure) return;
     let gone = false;
     getCrate(c).then(
       (d) => !gone && (crateAlike = ranksAlike(c, d.conditions)),
