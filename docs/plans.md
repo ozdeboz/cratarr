@@ -146,9 +146,8 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
     a trial.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
-- **Genre aliases from MusicBrainz** (the owner, 2026-11-07): its whole genre list and each genre's aliases, asked again
-  every 90 days and joined to the hand-kept list in search's matching. Built once on a branch of 2026-10-30, never
-  merged: done again on the code as it stands.
+- **Genre aliases from MusicBrainz** (the owner, 2026-11-07): dropped on 2026-11-17. MusicBrainz's web service gives
+  genres no aliases, and its website is not read. The hand-kept list of aliases stays.
 - **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
   own pages (0.11, done); Downloads an offline shelf, and nothing done offline lost, playlist edits included (0.12,
   done); the whole library's index on the device, and crates and the queue on the device (0.16).
