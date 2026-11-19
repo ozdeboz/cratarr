@@ -3540,6 +3540,34 @@ fn numbered(mut tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
     tracks
 }
 
+/// A Bandcamp album's tracks that can be heard, as players hold them (SPLIT-PLAN P8: up here, with `QueueTrack`).
+pub trait QueueTracks {
+    fn queue_tracks(&self) -> Vec<QueueTrack>;
+}
+
+impl QueueTracks for crate::bandcamp::Album {
+    /// Its tracks that can be heard, as players hold them (`QueueTrack`): each with its own name, artist, album and
+    /// length from the page, its album's id `track_id(page, 0)`.
+    fn queue_tracks(&self) -> Vec<QueueTrack> {
+        let album_id = crate::bandcamp::track_id(&self.url, 0);
+        self.tracks
+            .iter()
+            .filter(|t| t.plays())
+            .map(|t| QueueTrack {
+                source: crate::bandcamp::SOURCE.into(),
+                id: crate::bandcamp::track_id(&self.url, t.n),
+                name: t.title.clone(),
+                artist: Some(t.artist.clone().unwrap_or_else(|| self.artist.clone())),
+                album: Some(self.title.clone()),
+                album_id: Some(album_id.clone()),
+                duration_secs: t.duration_secs,
+                n: Some(t.n),
+                ..Default::default()
+            })
+            .collect()
+    }
+}
+
 /// An album of Cratarr's own library (decision 0032) for `play` and `add`, in its order, or a Bandcamp album by its id
 /// (`track_id(page, 0)`, decision 0071) as its previews. `None` when none is asked for.
 async fn own_album(served: Option<Arc<crate::serve::Serve>>, from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {

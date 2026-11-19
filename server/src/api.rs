@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::{App, SettingsView, SourceView, StateView, StatusView, ToggleError, TrackStateView};
+use crate::app::{App, QueueTracks as _, SettingsView, SourceView, StateView, StatusView, ToggleError, TrackStateView};
 use crate::ctx::{ChangeAt, Ctx};
 use crate::serve::listener::Listener;
 use crate::userdata::offline::{ChangeKind, Op, item_id};

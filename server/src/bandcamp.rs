@@ -141,9 +141,6 @@ pub fn track_id(album: &str, n: u32) -> String {
     format!("{ID}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("{n}|{album}")))
 }
 
-
-
-
 /// Why Tape rewind and a wind refuse a preview: they are rendered from a file Cratarr keeps, and it keeps none.
 pub const NO_TAPE: &str = "A Bandcamp preview does not wind: Cratarr keeps no file of it.";
 
@@ -171,29 +168,6 @@ pub struct Album {
     pub tags: Vec<String>,
 }
 
-impl Album {
-    /// Its tracks that can be heard, as players hold them (`QueueTrack`): each with its own name, artist, album and
-    /// length from the page, its album's id `track_id(page, 0)`.
-    pub fn queue_tracks(&self) -> Vec<crate::app::QueueTrack> {
-        let album_id = track_id(&self.url, 0);
-        self.tracks
-            .iter()
-            .filter(|t| t.plays())
-            .map(|t| crate::app::QueueTrack {
-                source: SOURCE.into(),
-                id: track_id(&self.url, t.n),
-                name: t.title.clone(),
-                artist: Some(t.artist.clone().unwrap_or_else(|| self.artist.clone())),
-                album: Some(self.title.clone()),
-                album_id: Some(album_id.clone()),
-                duration_secs: t.duration_secs,
-                n: Some(t.n),
-                ..Default::default()
-            })
-            .collect()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Track {
     /// Its number on the album (1 on).
@@ -216,8 +190,6 @@ impl Track {
         self.stream.is_some() || self.page.is_some()
     }
 }
-
-
 
 /// Tests: the stream addresses of fake media servers at home (`fake_media_at`), reached plainly.
 #[cfg(test)]
@@ -636,8 +608,6 @@ fn sized(cover: &str, n: u32) -> String {
     }
 }
 
-
-
 /// The names a Want with a Bandcamp page names its record by (W1): the album as Bandcamp lists it, its own artist (not a track's,
 /// which a track's menu sends), a label's release sorted out with the page's account as the label (`label_release`), its publisher
 /// credited where that names none. The page not read (Bandcamp's bot check among the reasons) leaves the names sent, sorted out as
@@ -745,6 +715,7 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::QueueTracks as _;
 
     #[test]
     fn a_previews_id_holds_its_album_and_number() {

@@ -255,7 +255,6 @@ pub fn first_frame(b: &[u8]) -> Option<usize> {
     (0..b.len()).find(|&i| at(i).is_some_and(|(len, _, _)| at(i + len as usize).is_some()))
 }
 
-
 /// An MP3's sound as its frames run (0.9.14, Health's fixes): where its first sound frame is (after the info frame
 /// where there is one), how many whole frames follow one another to where they stop (its end, or where the file is
 /// cut), and where that is. Reads the whole file's headers once.

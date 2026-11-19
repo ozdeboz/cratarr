@@ -121,7 +121,6 @@ fn give_again(cat: &Catalogue, ud: &UserData, asked_twice: &mut Vec<serde_json::
     Ok(())
 }
 
-
 /// The step at a start: done before, or done now. `kinds` (each catalogue folder's library, in the libraries' order) and `rules`
 /// (the tag rules) as the library's builds have them: the part `credits` makes the albums a build makes. Blocking.
 pub fn run(cat: &Catalogue, ud: &UserData, kinds: &[(i64, LibraryKind)], rules: &Rules) -> Result<()> {

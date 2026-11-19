@@ -969,7 +969,6 @@ pub fn total_secs(lengths: impl IntoIterator<Item = Option<f64>>) -> Option<f64>
     (n > 0).then_some(sum)
 }
 
-
 /// A string value, trimmed; `None` when missing or blank.
 pub fn text<'a>(values: &'a Values, key: &str) -> Option<&'a str> {
     values.get(key).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
@@ -1010,7 +1009,6 @@ mod tests {
         let d: AlbumDetails = serde_json::from_str(r#"{"tracks":10,"format":"FLAC","bitrate_kbps":900}"#).unwrap();
         assert_eq!((d.tracks, d.duration_secs), (10, None));
     }
-
 
     #[test]
     fn values_read_as_text_and_lists() {

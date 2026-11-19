@@ -123,7 +123,7 @@ pub use insights::InsightsService;
 pub use library::{FreshIds, Library, SourceTab};
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateLook, CrateOrder, CratePage, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, OpsAnswer, PlayResult, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats};
-pub use playon::{Command as PlayOnCommand, FollowTarget, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, Report as PlayerReport, whose as whose_players};
+pub use playon::{Command as PlayOnCommand, FollowTarget, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, QueueTracks, Report as PlayerReport, whose as whose_players};
 pub use plays::{PlayEvent, Plays};
 pub use sync::TargetChoice;
 pub use events::connect as events;

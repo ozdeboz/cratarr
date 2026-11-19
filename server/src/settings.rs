@@ -620,7 +620,6 @@ mod tests {
         assert_eq!(Quality::Cd.limit(), Some(crate::convert::CD));
     }
 
-
     fn jf(id: &str, url: &str, key: Option<&str>) -> SourceConfig {
         let mut values = Values::new();
         values.insert("url".into(), url.into());
