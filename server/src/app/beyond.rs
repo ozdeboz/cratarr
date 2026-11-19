@@ -307,6 +307,12 @@ pub fn albums(mb: &[FoundAlbum], discogs: &[FoundMaster], known: &Known, marks: 
             request: request_of(marks, record, None, &d.artist, &d.title),
         });
     }
+    // F16.1: a row a record holds shows the record's cover; one no record holds, its source's picture.
+    for (row, record) in rows.iter_mut().zip(&records) {
+        if let Some(r) = record {
+            row.cover = Some(super::cover_cache::record_address(*r));
+        }
+    }
     rows
 }
 

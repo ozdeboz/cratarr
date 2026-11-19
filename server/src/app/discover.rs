@@ -1841,12 +1841,12 @@ pub struct Missing {
 }
 
 impl Missing {
-    /// A record not had as the lists show it: its cover its own, else its release group's.
+    /// A record not had as the lists show it: its cover the record's own address (F16.1), which tries each of its pictures.
     pub fn of(q: crate::catalogue::records::Requested) -> Self {
         let group = q.groups.first().cloned();
         Missing {
             record: crate::serve::ids::record(q.row.id),
-            cover: q.row.cover.clone().or_else(|| group.as_ref().map(|g| format!("/api/covers/release-group/{g}"))).unwrap_or_default(),
+            cover: super::cover_cache::record_address(q.row.id),
             title: q.row.title,
             artist: q.row.artist,
             year: q.row.year,
@@ -3684,6 +3684,46 @@ mod missing_tests {
         let asked = ASKED.lock().unwrap().clone();
         assert_eq!(asked.iter().filter(|a| a.ends_with("The\u{f6}ry")).cloned().collect::<Vec<_>>(), ["musicbrainz Kite The\u{f6}ry"], "MusicBrainz asked for the name once, nothing else read under it: {asked:?}");
         assert!(asked.iter().filter(|a| a.as_str() == "musicbrainz Kite Theory").count() <= 1, "the holder's list read once at most: {asked:?}");
+    }
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+    use crate::catalogue::Catalogue;
+    use crate::catalogue::records::{Listing, Ref};
+
+    const GROUP: &str = "00000000-0000-4000-8000-000000000f19";
+
+    /// F16.1: every list names a record's cover by the record, `/api/albums/cratarr/al-<n>/cover`, merges followed: the artist's
+    /// missing list, the record's page, Beyond's rows with a record (a row no record holds keeps its source's picture). The label
+    /// page's and the requests' rows: their own modules' tests. Never a list naming another address for a record than its page does.
+    #[tokio::test]
+    async fn every_list_names_a_records_cover_by_the_record() {
+        let _state = crate::app::references::TestState::set().await;
+        let cat = Arc::new(Catalogue::open(None, Vec::new()).unwrap());
+        let artist = cat.artist_for("Kite Theory").unwrap();
+        let row = |title: &str, refs: Vec<Ref>| Listing { title: title.into(), artist: "Kite Theory".into(), kind: Some("album".into()), refs, ..Listing::default() };
+        let refs = vec![Ref::new("musicbrainz", "release-group", GROUP), Ref::new("discogs", "master", "5000040"), Ref::new("bandcamp", "album", "https://kitetheory.bandcamp.com/album/night-walks")];
+        let record = cat.keep_listing(Some(artist), &[row("Night Walks", refs)], "link").unwrap()[0];
+        let own = super::super::cover_cache::record_address(record);
+        let missing: Vec<String> = cat.missing_of(artist).unwrap().into_iter().map(|q| Missing::of(q).cover).collect();
+        assert_eq!(missing, [own.clone()], "the missing list");
+        let none = |_: Ref| std::future::ready(Ok::<Option<super::super::references::Read>, anyhow::Error>(None));
+        let t = super::super::moment::now_secs();
+        let Some(crate::app::playing::RecordPage::NotHad(view)) = crate::app::playing::page_at(&cat, record, t, none).await.unwrap() else { panic!("a page") };
+        assert_eq!(view.more.cover.as_deref(), Some(own.as_str()), "the record's page");
+        let found = |group: &str| FoundAlbum { release_group: group.into(), title: "Night Walks".into(), artist: "Kite Theory".into(), year: Some(2020), kind: Some("Album".into()), cover: format!("/api/covers/release-group/{group}"), have: false };
+        let elsewhere = "00000000-0000-4000-8000-000000000f20";
+        let albums = [found(GROUP), found(elsewhere)];
+        let known = super::super::beyond::known(&cat, &albums, &[], &[]).unwrap();
+        let rows = super::super::beyond::albums(&albums, &[], &known, None);
+        assert_eq!(rows.iter().map(|r| r.cover.clone()).collect::<Vec<_>>(), [Some(own.clone()), Some(format!("/api/covers/release-group/{elsewhere}"))], "Beyond's rows");
+        // Merged since: a list asked by the old record names the record it is now.
+        let older = cat.keep_listing(Some(artist), &[row("Night Walks (Live)", vec![Ref::new("discogs", "release", "3600060")])], "link").unwrap()[0];
+        cat.merge_records(older, record).unwrap();
+        let q = cat.requested(&[older]).unwrap().remove(&older).unwrap();
+        assert_eq!(Missing::of(q).cover, own, "merges followed");
     }
 }
 

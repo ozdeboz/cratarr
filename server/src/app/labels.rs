@@ -236,10 +236,8 @@ impl LabelEntry {
     fn of_record(q: &Requested) -> Self {
         let group = q.groups.first().cloned();
         let discogs = |kind: &str| q.refs.iter().find(|(s, k, _)| s == "discogs" && k == kind).and_then(|(.., v)| v.parse::<u64>().ok());
-        let cover = match q.holder {
-            Some(holder) => Some(format!("/api/albums/{}/{}/cover", crate::source::cratarr::KIND.id, ids::record(holder))),
-            None => super::cover_cache::addresses_of(q.row.cover.as_deref(), group.as_deref(), q.bandcamp.as_deref()).into_iter().next(),
-        };
+        // F16.1: the record's own address (had: the record that holds it), which tries each of its pictures.
+        let cover = Some(super::cover_cache::record_address(q.holder.unwrap_or(q.row.id)));
         LabelEntry {
             title: q.row.title.clone(),
             artist: q.row.artist.clone(),
@@ -971,7 +969,8 @@ mod tests {
             "the rest"
         );
         assert_eq!(shown.not_had[0].release_group.as_deref(), Some(GROUP_1), "the source's row and the record are one row");
-        assert_eq!(shown.not_had[1].cover, Some(format!("/api/covers/release-group/{GROUP_2}")));
+        assert_eq!(shown.not_had[0].cover, Some(super::super::cover_cache::record_address(wanted)), "F16.1: a record's row, its record's address");
+        assert_eq!(shown.not_had[1].cover, Some(format!("/api/covers/release-group/{GROUP_2}")), "a row no record holds: its source's");
         assert_eq!(shown.had[0].cover, Some(format!("/api/albums/cratarr/{}/cover", ids::record(had))));
         assert_eq!((shown.id, shown.name.as_str(), shown.looking, shown.more), (ids::label(label), "Low Tide Records", false, More::default()));
         assert!(page(cat.clone(), label + 1, None, &[]).await.unwrap().is_none(), "no such label");

@@ -328,7 +328,9 @@ fn open_request(serve: &Serve, account: &str, key: &str) -> Result<Option<Reques
 /// the way onto a request row (`asked_of`) and on every view of one (`shown`, Y5).
 pub(crate) fn cover_kept(cover: &str) -> bool {
     if cover.starts_with('/') {
-        return super::cover_cache::Of::of_address(cover).is_some();
+        // A record's own address (F16.3), exactly: `al-` and its digits.
+        let record = cover.strip_prefix(&format!("/api/albums/{}/al-", crate::source::cratarr::KIND.id)).and_then(|r| r.strip_suffix("/cover"));
+        return super::cover_cache::Of::of_address(cover).is_some() || record.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
     }
     let Ok(u) = reqwest::Url::parse(cover) else { return false };
     let host = u.host_str().unwrap_or_default().to_ascii_lowercase();
@@ -2151,7 +2153,8 @@ fn shown(mut r: Request, of: Option<&RecordOf>) -> Request {
         r.album = o.title.clone();
         r.artist = o.artist.clone();
         r.year = o.year.or(r.year);
-        r.cover = o.cover.clone().filter(|c| cover_kept(c)).or(r.cover);
+        // F16.3 (F3): its record's own address, which tries each of the record's pictures; the stored row as it was.
+        r.cover = Some(super::cover_cache::record_address(o.record));
         let own = r.release_group.take();
         r.release_group = own.clone().filter(|g| o.groups.iter().any(|x| x.eq_ignore_ascii_case(g))).or_else(|| o.groups.first().cloned()).or(own);
         r.record = Some(o.record);
@@ -2651,10 +2654,32 @@ pub(crate) mod tests {
         cat.db_for_tests().execute("UPDATE records SET cover = 'https://example.org/two-rooms.jpg' WHERE id = ?1", [record]).unwrap();
         assert_eq!(asked_of(cat, record, None, None).unwrap().cover, None, "never onto the row");
         let row = Request { cover: Some("https://example.org/old.jpg".into()), ..asked_for(record) };
-        assert_eq!(views(&serve, None, vec![row.clone()]).await[0].request.cover, None, "neither the record's nor the row's");
+        assert_eq!(views(&serve, None, vec![row.clone()]).await[0].request.cover, Some(super::super::cover_cache::record_address(record)), "F16.3: the record's own address; neither its outside picture nor the row's");
         let kept = "/api/covers/release-group/00000000-0000-4000-8000-000000000116";
         cat.db_for_tests().execute("UPDATE records SET cover = ?2 WHERE id = ?1", rusqlite::params![record, kept]).unwrap();
-        assert_eq!(views(&serve, None, vec![row]).await[0].request.cover.as_deref(), Some(kept), "a kept one shows");
+        assert_eq!(views(&serve, None, vec![row]).await[0].request.cover, Some(super::super::cover_cache::record_address(record)), "F16.3: the record's own address");
+    }
+
+    /// F16.3 (F3): a request's row shows its record's cover: one whose row kept no cover and one whose row kept a Cover Art Archive
+    /// address both show `/api/albums/cratarr/al-<n>/cover`; one with no record shows its row's as before; `cover_kept` takes exactly
+    /// that shape (`al-` and digits); the stored rows as they were. Never O3's refused shapes (`/api/albums/cratarr/1/cover`, `..`).
+    #[tokio::test]
+    async fn a_requests_cover_is_its_records() {
+        let serve = served();
+        let cat = serve.catalogue();
+        let (bare, with) = (cat.record_for_tests("Two Rooms", 0), cat.record_for_tests("Undertow", 0));
+        let caa = "https://coverartarchive.org/release-group/00000000-0000-4000-8000-000000000f21/front";
+        let mut stored = Request { cover: Some(caa.into()), ..asked_for(with) };
+        stored.id = serve.userdata.add_request(&stored).unwrap();
+        let rows = vec![Request { cover: None, ..asked_for(bare) }, stored.clone(), Request { cover: Some(caa.into()), record: None, ..asked_for(0) }];
+        let covers: Vec<Option<String>> = views(&serve, None, rows).await.into_iter().map(|v| v.request.cover).collect();
+        let address = super::super::cover_cache::record_address;
+        assert_eq!(covers, [Some(address(bare)), Some(address(with)), Some(caa.to_string())]);
+        assert_eq!(serve.userdata.request(stored.id).unwrap().unwrap().cover.as_deref(), Some(caa), "the stored row as it was");
+        assert!(cover_kept(&address(bare)));
+        for left in ["/api/albums/cratarr/al-/cover", "/api/albums/cratarr/al-12x/cover", "/api/albums/cratarr/al-1/cover/../x", "/api/albums/jellyfin/al-1/cover", "/api/albums/cratarr/1/cover", "/api/albums/cratarr/al-1/../cover"] {
+            assert!(!cover_kept(left), "{left}");
+        }
     }
 
     /// W6 (H): an account other than an administrator reads each request's state, never the fetchers' own words (Lidarr's errors

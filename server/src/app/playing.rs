@@ -363,7 +363,8 @@ fn record_page(cat: &crate::catalogue::Catalogue, record: i64, at: i64) -> Resul
     let (looking, no_list) = (list.is_none() && referenced, (list.is_none() && !referenced).then(Vec::new));
     let labels = labels_of(cat, q.row.id)?;
     let sources = sources_of(&q.refs, list.map(|(s, _)| s));
-    let cover = super::cover_cache::addresses_of(q.row.cover.as_deref(), q.groups.first().map(String::as_str), q.bandcamp.as_deref()).into_iter().next();
+    // F16.1: its own address, which tries each of its pictures.
+    let cover = Some(super::cover_cache::record_address(q.row.id));
     let id = q.row.id;
     let row = q.row;
     Ok(Some(RecordPage::NotHad(Box::new(AlbumView {
@@ -1344,7 +1345,7 @@ mod tests {
         assert_eq!(rows, [(Some("Lamplight"), Some(1), Some(200.0)), (Some("Morning"), Some(2), Some(200.0))], "its counting list's");
         assert!(v.rows.iter().all(|r| r.id.is_none() && r.missing), "none of them plays");
         assert!(v.more.not_had && !v.more.looking);
-        assert_eq!(v.more.cover, Some(format!("/api/covers/release-group/{group}")));
+        assert_eq!(v.more.cover, Some(crate::app::cover_cache::record_address(record)), "F16.1 (changed by design): its own address");
         assert_eq!(serde_json::to_value(&v.more.labels).unwrap(), serde_json::json!([{ "id": ids::label(label), "name": "Low Tide Records", "catno": "LTR-012" }]));
         assert_eq!((v.more.record.clone(), v.more.release_group.as_deref()), (Some(ids::record(record)), Some(group)), "what a Want sends");
         // No list kept, a Bandcamp page alone: no rows yet, its list asked for; the page's cover, and its preview.
@@ -1353,7 +1354,7 @@ mod tests {
         assert!(cat.set_reference(&ids::record(bare), &Ref::new("bandcamp", "album", at), "link").unwrap());
         let v = page(&cat, bare);
         assert!(v.rows.is_empty() && v.more.looking);
-        assert_eq!(v.more.cover, Some(format!("/api/cover/bandcamp/{}", crate::bandcamp::track_id(at, 0))));
+        assert_eq!(v.more.cover, Some(crate::app::cover_cache::record_address(bare)), "F16.1 (changed by design): its own address, which tries its page's");
         crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, false);
         let hidden = page(&cat, bare).more.bandcamp;
         crate::app::switches::set_for_tests(crate::app::switches::BANDCAMP, was);
