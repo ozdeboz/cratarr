@@ -2834,7 +2834,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows, null, false)}{/each}</ol>
       {/snippet}
     {:else if waitSign.loader}
-      <Asking now />
+      <!-- The panel's list as a whole: its mark in the middle of the room under the header (F42). -->
+      <Asking now room="page" />
     {:else if rows && !rows.length}
       {#if nothing}
         <NothingPopover anchor={nothing.anchor} said={nothing.said} chips={nothing.chips} onclearall={nothing.clearAll} more={nothing.more} />

@@ -30,20 +30,30 @@
 </script>
 
 {#if room === 'page'}<PageLoading held={false} shown={now || due} />{:else}<svelte:element this={room === 'inline' ? 'span' : 'div'} class={room === 'inline' ? 'inline' : 'asking'} class:given={room === 'given'} aria-busy="true" bind:this={el}>
-  {#if now || due}<MarkLoader size={Math.min(size, most)} />{#if line}{#if room === 'inline'}<span>{line}</span>{:else}<p class="for">{line}</p>{/if}{/if}{/if}
+  {#if room === 'inline'}{#if now || due}<MarkLoader size={Math.min(size, most)} />{#if line}<span>{line}</span>{/if}{/if}{:else}<span class="mark"
+      >{#if now || due}<MarkLoader size={Math.min(size, most)} />{#if line}<p class="for">{line}</p>{/if}{/if}</span
+    >{/if}
 </svelte:element>{/if}
 
 <style>
+  /* Its room holds the mark and, under it, the line of what it waits for, from the start: the line coming moves nothing (the
+     owner, 2026-11-19: a crate's panel's mark "changes position when its row appears"). */
   .asking {
     display: grid;
     place-items: center;
     min-height: 96px;
-    padding-top: 24px;
+    padding-block: 24px 44px;
+  }
+
+  .mark {
+    position: relative;
+    display: grid;
+    place-items: center;
   }
 
   .asking.given {
     min-height: 0;
-    padding-top: 0;
+    padding-block: 0 44px;
   }
 
   .inline {
@@ -54,7 +64,13 @@
 
   /* What it waits for (lib/waiting), as a page's loader says it under its mark (lib/PageLoading). */
   .for {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    width: max-content;
+    max-width: calc(100vw - 32px);
     margin: 12px 0 0;
+    transform: translateX(-50%);
     color: var(--muted);
     text-align: center;
   }
