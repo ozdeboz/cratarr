@@ -704,6 +704,13 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   nothing to keep, the loader comes after the same 300 ms, in room kept for it. "None found" never comes before the
   answer. A page or a panel going to something else keeps nothing of the last (`lib/Hold`; the owner, 2026-10-27: never
   old content on navigation): its own background, the same sign after the same 300 ms, then the new content whole.
+  **Where the mark sits** (the owner, 2026-11-19): in the middle of its own room, from its top (or what can be seen's)
+  to the bottom of what can be seen, as much room above it as below, measured again when what is above it settles.
+  The line of what it waits for hangs under the mark without moving it: its room holds both from the start. A list
+  that is a page's or a panel's whole content waits as a page does (`lib/Asking` `room="page"`). A section that is
+  always one horizontal row has the small mark at its start and its words to the right (`lib/PageLoading` `row`).
+  Every loader says what it waits for: where the wait is its own, in its own words ("Reading more tracks: 120 of
+  340"). A part of a page that waits (a section, a record's track list) never holds the whole page.
 - **Empty:** say why and what to do ("Nothing incoming." / "No Music library is set. Choose one in Settings →
   Libraries.").
 

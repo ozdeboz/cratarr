@@ -1,13 +1,14 @@
 # What's new in 0.17
 
-Since 0.16.2. This is 0.17's first preview: what testing 0.16 found, and the rest of decision
+Since 0.16.3. What testing 0.16 found, and the rest of decision
 [0100](decisions/0100-cratarrs-own-records-artists-labels.md): records you do not have, and artists and labels with pages
 of their own. From [0101](decisions/0101-own-music-one-track-id-library-on-the-device.md) come copies into someone's own
 music, each user's room and the disk's floor. Both decisions say what changed in their amendments of 2026-11-18.
-Uploads come in the second preview.
+Then what testing 0.17's previews found (below). Uploads, and the domain core of decision
+[0104](decisions/0104-the-domain-core.md), come in 0.18.
 
 **At the first start** 0.17's step moves what 0.16 knew of each record's references into the catalogue, once (below).
-Keep a copy of the data folder from before the upgrade: going back to 0.16.2 means restoring it.
+Keep a copy of the data folder from before the upgrade: going back to 0.16.3 means restoring it.
 
 ## Records you do not have
 
@@ -34,8 +35,9 @@ Keep a copy of the data folder from before the upgrade: going back to 0.16.2 mea
 
 ## Copies
 
-- **Copy to:** an administrator's move of a record into or out of someone's own music is a copy, and the original
-  stays where it is. One Undo takes the copy away. On btrfs the copy shares its blocks with the original.
+- **Save to:** an administrator saves a record into someone's own music as a copy, and the original stays where it
+  is. One Undo takes the copy away. On btrfs the copy shares its blocks with the original. The history says "Saved to".
+- **Move to** takes a record only into a main library.
 - **A Want of a record the house has copies it into your music,** with no download: from a main library first, else
   your own music, else someone else's. Only a whole copy. The request says "Copied into your music".
 - **Replace in Music from someone's own music:** an administrator replaces Music's copy with a better one from someone's
@@ -136,3 +138,31 @@ Keep a copy of the data folder from before the upgrade: going back to 0.16.2 mea
 - **Play On finds a playlist by its name again,** whatever its capitals.
 - **The desktop app** no longer opens blank for minutes when Cratarr's address is silent: after 3 s it uses its own
   copy of the page.
+
+## From testing 0.17's previews
+
+- **One record, its copies and its editions:** two copies of one album are one record. Editions with another tracklist
+  stay records of their own, shown as one card that counts them on artist, search and label pages. An EP and an album of
+  one name join only when their types agree. A record's type set by hand wins.
+- **No source ranks above another:** a busy source is passed over and asked again later, never taken as an answer.
+- **Bandcamp is reached only through MusicBrainz's link** to an artist's or a record's page, never by searching a name.
+- **An artist's Discogs list keeps their own records:** their albums and EPs, not every compilation they appear on.
+- **Who an artist is:** the one whose id their files carry. Namesakes on Discogs and MusicBrainz stay apart, and nothing
+  is merged or moved by a name.
+- **A label is shown once,** its catalogue numbers together ("Schema · SCEP 317, SCNP 317").
+- **Only a present copy is had:** a copy that went or sits in the trash no longer counts.
+- **One cover rule:** a record's cover has one address, which tries each of its pictures in turn.
+- **A record you do not have** counts the tracks it lists, shows no media provider, and offers Want in its menu too.
+- **About's sources:** one chip per source, opening the album's page there, the edition on the same chip. "Tracklist"
+  marks a source whose list is shown.
+- **Back keeps your place** in every panel, as pages do.
+- **The files line** says what it would write ("Not in its files yet: release type album · Write"), and its sheet
+  writes it with one Undo. A record's Health line opens its sheet in place.
+- **Menus name the record's type:** View EP, Delete compilation, and, on tracks in lists, the queue and Health, Go to EP.
+  Save to and Move to as above; Other versions has an icon of its own.
+- **Artist chips:** one per credited artist, each with their photo and opening their own page.
+- **Loaders:** the mark stays put while its words come and go, sits in the middle of its room, and in a one-row section
+  has its words beside it. Where more of a crate is coming: "Reading more tracks: 120 of 340".
+- **Search answers quickly:** the lists of missing albums and crates' tracks are no longer made again inside a search.
+- **A page that asks the same thing over and over** is held back before the server, and says so in the console.
+- **A label page's header** counts the records you have.

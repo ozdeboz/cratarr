@@ -129,9 +129,21 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
       pending change.
     - Later still: downloads wholly the device's own, so another
       server's behave as Cratarr's.
-- **0.18: Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)): a friend's Cratarr as a read-only
-  library of your own, its catalogue mirrored with its analysis through 0.16's index and feed, its streams relayed.
-  Then playlists, offline, a bounded cache and a record shown once (0.19); iroh's tickets after a trial.
+  - **0.17 ends at its first preview and that preview's fixes** (the owner, 2026-11-19). What it was still to hold moves to
+    0.18 ([whats-new-0.17](whats-new-0.17.md) says what 0.17 is).
+- **0.18: the crate split, then the domain core** (the owner, 2026-11-19):
+  - the server crate split first ([0106](decisions/0106-the-server-crate-split.md)), for a small edit-and-test loop;
+  - the domain core ([0104](decisions/0104-the-domain-core.md)) in three runs:
+    1. records and the one record sheet, with live updates;
+    2. requests and Soulseek;
+    3. artists and labels, with pictures and their picker ([0107](decisions/0107-pictures-are-facts-with-one-picker.md));
+  - versions, none chosen ([0105](decisions/0105-no-source-ranks-above-another.md)), Health's issues as sheets, and filters
+    per object kind on the core;
+  - what 0.17 did not hold: uploads, and the rest of 0.17's list above.
+  - **Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)), the order to be set after the core's runs: a
+    friend's Cratarr as a read-only library of your own, its catalogue mirrored with its analysis through 0.16's index
+    and feed, its streams relayed. Then playlists, offline, a bounded cache and a record shown once; iroh's tickets after
+    a trial.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Genre aliases from MusicBrainz** (the owner, 2026-11-07): its whole genre list and each genre's aliases, asked again
@@ -643,6 +655,8 @@ In 0.17, with the references work: MusicBrainz, Discogs, Bandcamp and AcoustID b
 Today only MusicBrainz's turn goes through one, and the services are mostly called one by one.
 
 ## Parked
+
+- **Deezer for artists' pictures** (the owner, 2026-11-19): an option much further down the line, noted only.
 
 Liked, not taken up:
 
