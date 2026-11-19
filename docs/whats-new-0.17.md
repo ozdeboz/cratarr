@@ -172,3 +172,9 @@ Keep a copy of the data folder from before the upgrade: going back to 0.16.3 mea
 - **A cover that failed** is asked again later. Only a real "no cover" is kept.
 - **A record's artist chips** open each artist by their id, so two artists of one name never mix.
 - **A crate with a Sounds like** asks for itself once, where it asked again and again.
+- **Namesakes on MusicBrainz too:** an artist is never matched by name where MusicBrainz has another of the same name.
+- **A busy MusicBrainz no longer stops Discogs:** an artist's Discogs entry is still looked for, by name where
+  Discogs itself names no namesake, and MusicBrainz's link is asked again later.
+- **A cover the server could not read** answers as an error, not as "no cover", so the page asks again.
+- **The intake card's Reference** says what it compared ("Compared with MusicBrainz's editions: …") and which
+  track's length differs.
