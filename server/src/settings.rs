@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::source::{self, FieldKind, Values};
+use crate::source::{self, Values};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceConfig {
@@ -274,7 +274,7 @@ pub fn colour_among<'a>(used: impl Iterator<Item = (&'a str, LibraryKind)>, libr
 }
 
 /// The most a library's name holds.
-const NAME_MOST: usize = 80;
+pub const NAME_MOST: usize = 80;
 
 /// "#rrggbb", lower case.
 pub fn valid_colour(c: &str) -> bool {
@@ -566,147 +566,6 @@ pub enum ChangeError {
     Invalid(String),
 }
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 32 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
-/// Check a list from the page, keep only fields the plugin declares (with the right shape), and fill blank secrets
-/// from the saved source with the same id, unless a field the secret is bound to has changed.
-pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<SourceConfig>, ChangeError> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::with_capacity(draft.len());
-    for mut d in draft {
-        if !valid_id(&d.id) {
-            return Err(ChangeError::Invalid(format!("{:?} is not a usable source id (a–z, 0–9 and -, at most 32)", d.id)));
-        }
-        if !seen.insert(d.id.clone()) {
-            return Err(ChangeError::Invalid(format!("two sources are called {:?}", d.id)));
-        }
-        let Some(kind) = source::kind(&d.kind) else {
-            return Err(ChangeError::Invalid(format!("{}: unknown kind of source {:?}", d.id, d.kind)));
-        };
-        let fields = (kind.fields)();
-        // Cratarr's own folders (decision 0044) are its values though no field of its form shows them (they are chosen in
-        // the folder browser): kept, or every save dropped them and the source then had no library (2026-11-02, found
-        // on the development instance: "a Music library is no longer on the server" for any change).
-        let own_folders = d.kind == crate::source::CRATARR;
-        d.values.retain(|k, v| {
-            (own_folders && k == "folders" && v.is_array())
-                || (own_folders && k == OWN_MUSIC && v.is_string())
-                || (own_folders && k == OWN_MUSIC_OFF && v.is_array())
-                || fields.iter().any(|f| {
-                    f.key == k
-                        && match f.kind {
-                            FieldKind::MultiChoice => v.is_array() || v.is_string(),
-                            _ => v.is_string(),
-                        }
-                })
-        });
-        // The own-music folder holds a subfolder per account: never inside a library's folder, nor around one (two libraries
-        // over the same files).
-        if let Some(own) = d.own_music() {
-            if !own.is_absolute() {
-                return Err(ChangeError::Invalid(format!("{}: the own-music folder must be a whole path", d.id)));
-            }
-            if source::list(&d.values, "folders").iter().any(|c| own.starts_with(c) || Path::new(c).starts_with(&own)) {
-                return Err(ChangeError::Invalid(format!("{}: the own-music folder can't lie in a library's folder or hold one", d.id)));
-            }
-        }
-        let prev = saved.iter().find(|s| s.id == d.id && s.kind == d.kind);
-        // The libraries in use, in order (0101 point 1): each once, one kind each; own music is no setting (its folder's,
-        // 0101 point 9).
-        d.libraries.0.retain(|l| !l.id.trim().is_empty());
-        let mut listed = std::collections::HashSet::new();
-        for l in &d.libraries.0 {
-            if !listed.insert(l.id.as_str()) {
-                return Err(ChangeError::Invalid(format!("{}: {} is listed twice: a library has one kind", d.id, l.id)));
-            }
-            if l.kind == LibraryKind::Own {
-                return Err(ChangeError::Invalid(format!("{}: {} is own music, which comes from the own-music folder, not the list", d.id, l.id)));
-            }
-        }
-        let mains: Vec<String> = d.libraries.of(LibraryKind::Main).map(str::to_string).collect();
-        let mut fetched_by: Vec<String> = Vec::new();
-        for l in d.libraries.0.iter_mut() {
-            let lib = l.id.clone();
-            if let Some(c) = &l.colour {
-                if !valid_colour(c) {
-                    return Err(ChangeError::Invalid(format!("{}: {lib}'s colour {c:?} is not #rrggbb", d.id)));
-                }
-                l.colour = Some(c.to_ascii_lowercase());
-            }
-            // A name kept trimmed; blank is none (the folder's name again).
-            l.name = l.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
-            if let Some(n) = &l.name
-                && (n.chars().count() > NAME_MOST || n.chars().any(char::is_control))
-            {
-                return Err(ChangeError::Invalid(format!("{}: {lib}'s name is longer than {NAME_MOST} characters or holds control characters", d.id)));
-            }
-            // Its fetcher (decision 0099's amendment: Lidarr and Soulseek siblings): one of them, an Incoming library's, one
-            // library each.
-            l.fetcher = l.fetcher.as_deref().map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
-            if let Some(f) = l.fetcher.as_deref() {
-                if !FETCHERS.contains(&f) {
-                    return Err(ChangeError::Invalid(format!("{}: {lib}'s fetcher {f:?} is not one of {}", d.id, FETCHERS.join(", "))));
-                }
-                if l.kind != LibraryKind::Incoming {
-                    return Err(ChangeError::Invalid(format!("{}: {lib} is not an Incoming library: only an Incoming library is fetched into", d.id)));
-                }
-                if fetched_by.iter().any(|x| x == f) {
-                    return Err(ChangeError::Invalid(format!("{}: {f} fetches into one Incoming library only", d.id)));
-                }
-                fetched_by.push(f.to_string());
-            }
-            // Where its records are kept by default (0101 point 2): one of the server's main libraries, an Incoming
-            // library's only.
-            l.keep_to = l.keep_to.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(str::to_string);
-            if let Some(k) = l.keep_to.as_deref() {
-                if l.kind != LibraryKind::Incoming {
-                    return Err(ChangeError::Invalid(format!("{}: {lib} is not an Incoming library: only an Incoming library's records are kept", d.id)));
-                }
-                if !mains.iter().any(|m| m == k) {
-                    return Err(ChangeError::Invalid(format!("{}: {lib} keeps into {k}, which is not one of its main libraries", d.id)));
-                }
-            }
-        }
-        for secret in fields.iter().filter(|f| f.kind == FieldKind::Secret) {
-            if source::text(&d.values, secret.key).is_some() {
-                continue;
-            }
-            d.values.remove(secret.key);
-            let Some(prev) = prev else { continue };
-            let Some(old) = source::text(&prev.values, secret.key) else { continue };
-            if let Some(changed) = secret.bound_to.iter().find(|b| source::text(&prev.values, b) != source::text(&d.values, b)) {
-                let field = fields.iter().find(|f| f.key == *changed).map_or(*changed, |f| f.label);
-                return Err(ChangeError::SecretNeeded {
-                    name: d.id.clone(),
-                    field: field.to_lowercase(),
-                    secret: secret.label.to_lowercase(),
-                });
-            }
-            d.values.insert(secret.key.into(), old.into());
-        }
-        out.push(d);
-    }
-    Ok(out)
-}
-
-/// The values the page may see: secrets left out, plus which secrets are set.
-pub fn redact(cfg: &SourceConfig) -> (Values, Vec<String>) {
-    let secrets: Vec<&str> = source::kind(&cfg.kind)
-        .map(|k| (k.fields)().into_iter().filter(|f| f.kind == FieldKind::Secret).map(|f| f.key).collect())
-        .unwrap_or_default();
-    let mut values = cfg.values.clone();
-    let mut set = Vec::new();
-    for s in secrets {
-        if source::text(&values, s).is_some() {
-            set.push(s.to_string());
-        }
-        values.remove(s);
-    }
-    (values, set)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,78 +620,6 @@ mod tests {
         assert_eq!(Quality::Cd.limit(), Some(crate::convert::CD));
     }
 
-    #[test]
-    fn cratarrs_own_folders_are_kept_through_a_save() {
-        let own = |folders: serde_json::Value| SourceConfig {
-            id: "cratarr".into(),
-            kind: crate::source::CRATARR.into(),
-            enabled: true,
-            libraries: list(&[("/music", LibraryKind::Main), ("/incoming", LibraryKind::Incoming)]),
-            values: [("folders".to_string(), folders)].into_iter().collect(),
-        };
-        let out = merge(&[], vec![own(serde_json::json!(["/music", "/incoming"]))]).unwrap();
-        assert_eq!(out[0].values.get("folders"), Some(&serde_json::json!(["/music", "/incoming"])));
-        // Only as a list, and only Cratarr's own: another kind's undeclared values still go.
-        let out = merge(&[], vec![own(serde_json::json!("/music"))]).unwrap();
-        assert!(out[0].values.get("folders").is_none());
-    }
-
-    #[test]
-    fn the_own_music_folder_is_kept_and_checked() {
-        let own = |folder: &str| SourceConfig {
-            id: "cratarr".into(),
-            kind: crate::source::CRATARR.into(),
-            enabled: true,
-            libraries: Libraries::default(),
-            values: [("folders".to_string(), serde_json::json!(["/music", "/media/x"])), (OWN_MUSIC.to_string(), serde_json::json!(folder))].into_iter().collect(),
-        };
-        let out = merge(&[], vec![own("/own")]).unwrap();
-        assert_eq!(out[0].own_music(), Some(std::path::PathBuf::from("/own")));
-        assert_eq!(merge(&[], vec![own(" ")]).unwrap()[0].own_music(), None, "blank: none");
-        assert!(merge(&[], vec![own("own")]).is_err(), "a whole path");
-        assert!(merge(&[], vec![own("/music/own")]).is_err(), "not inside a library");
-        assert!(merge(&[], vec![own("/media")]).is_err(), "not around one");
-        let mut other = jf("jf", "http://a", Some("k"));
-        other.values.insert(OWN_MUSIC.into(), "/own".into());
-        assert_eq!(merge(&[], vec![other]).unwrap()[0].own_music(), None, "Cratarr's own source's only");
-        // 0.17: switched off for some accounts, kept as saved.
-        let mut off = own("/own");
-        off.values.insert(OWN_MUSIC_OFF.into(), serde_json::json!(["bo"]));
-        let kept = merge(&[], vec![off]).unwrap();
-        assert!(kept[0].own_music_on("ann"));
-        assert!(!kept[0].own_music_on("bo"));
-    }
-
-    #[test]
-    fn library_settings_are_checked() {
-        let with = |entries: Vec<LibrarySetting>| {
-            let mut s = jf("jf", "http://a", Some("k"));
-            s.libraries = Libraries(entries);
-            merge(&[], vec![s])
-        };
-        let main = |id: &str| LibrarySetting::new(id, LibraryKind::Main);
-        let incoming = |id: &str| LibrarySetting::new(id, LibraryKind::Incoming);
-        // A colour as #rrggbb, kept in lower case.
-        assert!(with(vec![LibrarySetting { colour: Some("red".into()), ..main("m") }]).is_err());
-        let out = with(vec![LibrarySetting { colour: Some("#AABBCC".into()), ..main("m") }]).unwrap();
-        assert_eq!(out[0].libraries.0[0].colour.as_deref(), Some("#aabbcc"));
-        // A name of its own, kept trimmed; blank is none again.
-        let out = with(vec![LibrarySetting { name: Some("  Vinyl rips ".into()), ..incoming("i") }, LibrarySetting { name: Some("   ".into()), ..incoming("j") }]).unwrap();
-        assert_eq!(out[0].libraries.name_of("i").as_deref(), Some("Vinyl rips"));
-        assert_eq!(out[0].libraries.name_of("j"), None);
-        assert!(with(vec![LibrarySetting { name: Some("x".repeat(81)), ..main("m") }]).is_err());
-        // A fetcher: only one of the siblings, only an Incoming library's, one library each.
-        let out = with(vec![main("m"), LibrarySetting { fetcher: Some("soulseek".into()), ..incoming("i") }, incoming("k")]).unwrap();
-        assert_eq!(out[0].libraries.fetched_by("soulseek"), Some("i"));
-        assert!(with(vec![LibrarySetting { fetcher: Some("soulseek".into()), ..incoming("i") }, LibrarySetting { fetcher: Some("soulseek".into()), ..incoming("k") }]).is_err());
-        assert!(with(vec![LibrarySetting { fetcher: Some("usenet".into()), ..incoming("i") }]).is_err());
-        assert!(with(vec![LibrarySetting { fetcher: Some("lidarr".into()), ..main("m") }]).is_err());
-        // Keep's default: one of the server's main libraries, an Incoming library's only.
-        let out = with(vec![main("m"), main("n"), LibrarySetting { keep_to: Some("n".into()), ..incoming("i") }]).unwrap();
-        assert_eq!(out[0].libraries.get("i").and_then(|l| l.keep_to.as_deref()), Some("n"));
-        assert!(with(vec![main("m"), LibrarySetting { keep_to: Some("elsewhere".into()), ..incoming("i") }]).is_err());
-        assert!(with(vec![main("m"), LibrarySetting { keep_to: Some("m".into()), ..main("n") }]).is_err());
-    }
 
     fn jf(id: &str, url: &str, key: Option<&str>) -> SourceConfig {
         let mut values = Values::new();
@@ -853,59 +640,6 @@ mod tests {
         assert_eq!(source::text(&s[0].values, "player"), Some("Finamp"));
         assert_eq!(source::text(&s[0].values, "user"), None, "JELLYFIN_USER_ID is no longer read");
         assert!(from_env(&env_of(&[])).is_empty());
-    }
-
-    #[test]
-    fn a_blank_secret_keeps_the_saved_one_while_the_address_stays() {
-        let saved = vec![jf("jellyfin", "http://jf:8096", Some("secret"))];
-        let out = merge(&saved, vec![jf("jellyfin", "http://jf:8096", None)]).unwrap();
-        assert_eq!(source::text(&out[0].values, "api_key"), Some("secret"));
-        let out = merge(&saved, vec![jf("jellyfin", "http://jf:8096", Some("  "))]).unwrap();
-        assert_eq!(source::text(&out[0].values, "api_key"), Some("secret"));
-    }
-
-    #[test]
-    fn a_new_address_needs_the_secret_again() {
-        let saved = vec![jf("jellyfin", "http://jf:8096", Some("secret"))];
-        let e = merge(&saved, vec![jf("jellyfin", "http://evil:8096", None)]).unwrap_err();
-        assert!(matches!(e, ChangeError::SecretNeeded { .. }), "{e}");
-        assert!(e.to_string().contains("address"), "{e}");
-        let out = merge(&saved, vec![jf("jellyfin", "http://new:8096", Some("k2"))]).unwrap();
-        assert_eq!(source::text(&out[0].values, "api_key"), Some("k2"));
-    }
-
-    #[test]
-    fn a_secret_never_moves_to_another_source() {
-        let saved = vec![jf("jellyfin", "http://jf:8096", Some("secret"))];
-        let out = merge(&saved, vec![jf("other", "http://jf:8096", None)]).unwrap();
-        assert_eq!(source::text(&out[0].values, "api_key"), None);
-    }
-
-    #[test]
-    fn ids_and_kinds_are_checked_and_unknown_fields_dropped() {
-        assert!(merge(&[], vec![jf("Bad Id", "http://x", Some("k"))]).is_err());
-        assert!(merge(&[], vec![jf("a", "http://x", Some("k")), jf("a", "http://y", Some("k"))]).is_err());
-        let mut odd = jf("a", "http://x", Some("k"));
-        odd.kind = "winamp".into();
-        assert!(merge(&[], vec![odd]).is_err());
-        let mut extra = jf("a", "http://x", Some("k"));
-        extra.values.insert("smuggled".into(), "x".into());
-        extra.values.insert("player".into(), serde_json::json!(["not", "a", "string"]));
-        let out = merge(&[], vec![extra]).unwrap();
-        assert!(!out[0].values.contains_key("smuggled"));
-        assert!(!out[0].values.contains_key("player"), "wrong shape is dropped");
-    }
-
-    #[test]
-    fn a_library_is_listed_once_with_one_kind() {
-        let mut s = jf("a", "http://x", Some("k"));
-        s.libraries = list(&[("l1", LibraryKind::Main), (" ", LibraryKind::Main), ("l2", LibraryKind::Incoming)]);
-        let out = merge(&[], vec![s.clone()]).unwrap();
-        assert_eq!(out[0].libraries, list(&[("l1", LibraryKind::Main), ("l2", LibraryKind::Incoming)]), "a blank one goes");
-        s.libraries.0.push(LibrarySetting::new("l1", LibraryKind::Incoming));
-        assert!(merge(&[], vec![s.clone()]).is_err(), "one library, one kind");
-        s.libraries = list(&[("/own/ann", LibraryKind::Own)]);
-        assert!(merge(&[], vec![s]).is_err(), "own music comes from its folder");
     }
 
     /// Settings' word stands: a Lidarr removed there stays removed at every start, however the environment reads, and one saved
@@ -941,15 +675,6 @@ mod tests {
         let env = env_of(&[("LIDARR_URL", "http://lidarr:8686"), ("LIDARR_API_KEY", "k")]);
         assert_eq!(lidarr_from_env(&env), Some(saved));
         assert_eq!(lidarr_from_env(&env_of(&[("LIDARR_URL", "http://lidarr:8686")])), None);
-    }
-
-    #[test]
-    fn the_page_never_sees_secrets() {
-        let (values, set) = redact(&jf("jellyfin", "http://jf:8096", Some("secret")));
-        assert!(!values.contains_key("api_key"));
-        assert_eq!(set, vec!["api_key"]);
-        let (_, set) = redact(&jf("jellyfin", "http://jf:8096", None));
-        assert!(set.is_empty());
     }
 
     fn dir() -> std::path::PathBuf {
