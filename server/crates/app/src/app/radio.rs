@@ -31,9 +31,6 @@ use crate::similarity::{Signal, Track, Weights, unique};
 
 pub use cratarr_rules::radio::{Ask, Index, MAX_COUNT, Mode, RadioBy, Song, choose};
 
-#[cfg(test)]
-mod proof;
-
 /// The lane of Radio's inserts (`QueueTrack::lane`): right after the own track they are like (and its hand-added run).
 pub const LANE_RADIO: &str = "radio";
 /// The lane of Autoplay's tracks: after everything, when the queue runs out.
@@ -171,7 +168,7 @@ pub enum Within {
 
 impl Within {
     /// As a play names it (app::play), to read its tracks as a play does.
-    fn collection(&self) -> super::play::Collection {
+    pub fn collection(&self) -> super::play::Collection {
         use super::play::Collection;
         match self.clone() {
             Within::Crate { id, without } => {
@@ -252,7 +249,7 @@ pub(crate) use crate::serve::index_rows::ALBUM_ARTIST_HEARD;
 
 /// A request as its listener's settings make it: their Similar by, and the libraries they let Radio and Autoplay choose
 /// from (0.9.5: their folders). With the account it is for, and whether Bandcamp joins.
-fn as_asked(mut req: NextRequest) -> Result<(NextRequest, Option<String>, bool), ToggleError> {
+pub fn as_asked(mut req: NextRequest) -> Result<(NextRequest, Option<String>, bool), ToggleError> {
     if req.ask.similar_by.is_none() {
         req.ask.similar_by = similar_by_of_listener();
     }
@@ -399,7 +396,7 @@ async fn with_elsewhere(index: &Index, req: &Ask, picks: &[usize], mut tracks: V
 
 /// The index with the account's taste on its songs (decision 0094): how each fits it (for Your taste only), and how
 /// like each is to what the account skips (none while its skipped source is off: `PlaylistService::skipped_fits`).
-async fn with_taste(app: &dyn PlayingHost, index: Arc<Index>, account: Option<&str>, taste: bool) -> Result<Arc<Index>, ToggleError> {
+pub async fn with_taste(app: &dyn PlayingHost, index: Arc<Index>, account: Option<&str>, taste: bool) -> Result<Arc<Index>, ToggleError> {
     let Some(user) = account else { return Ok(index) };
     let fits = if taste { app.playlists().taste_fits(user, &[]).await? } else { HashMap::new() };
     let skipped = app.playlists().skipped_fits(user, &[]).await?;
@@ -720,7 +717,7 @@ pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, 
 
 /// The index with the listener's favourites and exclusions marked, and their recent plays, for a choice made here: the
 /// running request's account's, whose player asks (decision 0051).
-async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
+pub async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let dir = served.data_dir.clone().ok_or_else(|| ToggleError::Refused("Radio needs Cratarr's data folder.".into()))?;
     let index = index(&served, &dir).await?;

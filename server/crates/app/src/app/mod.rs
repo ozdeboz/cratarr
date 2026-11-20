@@ -102,6 +102,9 @@ pub mod retention;
 pub mod queue_requests;
 pub mod spotify;
 pub mod radio;
+// The proof that moving the rules changes no answer (decision 0101 point 27), above every area it reads.
+#[cfg(test)]
+mod radio_proof;
 pub mod similar;
 pub mod taste;
 pub mod tempo;
