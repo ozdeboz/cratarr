@@ -348,7 +348,7 @@ async fn run_on(app: std::sync::Arc<dyn super::incoming_host::IncomingHost>, alb
 }
 
 /// A picture as a run: one file of the run a copy, each said as it stands now. Blocking.
-pub(super) fn proposal(served: &crate::serve::Serve, album: &str, data: &[u8], from: &str) -> Result<super::file_runs::Proposal> {
+pub fn proposal(served: &crate::serve::Serve, album: &str, data: &[u8], from: &str) -> Result<super::file_runs::Proposal> {
     let (_, artist, title) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
     let (kept, said) = prepare(served, &copies(served, album, None)?, data)?;
     let files = kept

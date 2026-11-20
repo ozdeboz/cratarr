@@ -414,7 +414,7 @@ impl IncomingService {
     }
 
     /// Work through the queue, one job at a time, for as long as Cratarr runs.
-    pub(in crate::app) fn work(self: &std::sync::Arc<Self>) {
+    pub fn work(self: &std::sync::Arc<Self>) {
         let me = std::sync::Arc::downgrade(self);
         crate::run::spawn(async move {
             loop {

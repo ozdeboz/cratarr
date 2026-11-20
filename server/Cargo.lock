@@ -460,25 +460,19 @@ name = "cratarr-app"
 version = "0.17.0"
 dependencies = [
  "anyhow",
- "axum",
- "cratarr-playing",
- "cratarr-requests",
+ "cratarr-incoming",
  "cratarr-rules",
  "flate2",
  "image",
  "ipnet",
  "libc",
  "lofty",
- "realfft",
- "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
  "tokio",
  "tower",
  "tracing",
- "tracing-subscriber",
- "tract-onnx",
  "ts-rs",
  "zip",
 ]
@@ -558,6 +552,27 @@ dependencies = [
  "lofty",
  "sha2",
  "tracing",
+]
+
+[[package]]
+name = "cratarr-incoming"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "cratarr-playing",
+ "cratarr-requests",
+ "image",
+ "lofty",
+ "realfft",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tract-onnx",
 ]
 
 [[package]]
@@ -716,6 +731,7 @@ dependencies = [
  "cratarr-clients",
  "cratarr-core",
  "cratarr-gate",
+ "cratarr-incoming",
  "cratarr-listening",
  "cratarr-media",
  "cratarr-playing",

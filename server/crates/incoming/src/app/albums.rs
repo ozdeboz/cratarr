@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-pub(crate) use super::albums_base::WantCopy;
+pub use super::albums_base::WantCopy;
 use super::incoming_host::IncomingHost;
 use super::{JobView, KeepPreview, KeepResult, ToggleError};
 use super::library::{Active, epoch_now};
@@ -699,7 +699,7 @@ impl Albums<'_> {
     /// Albums view); into their own music, made now where it is not in use yet. The copy it is made of is never moved or changed.
     /// `sharing` (below the floor, AL03.1): made only where a copy from that copy's library into their own music shares its blocks
     /// (`Files::shares`, C38's probe), taking no new space; else none is made, nor their own music (`WantCopy::NoSpace`).
-    pub(super) async fn copy_for(&self, account: &str, record: i64, sharing: bool) -> WantCopy {
+    pub async fn copy_for(&self, account: &str, record: i64, sharing: bool) -> WantCopy {
         let source = crate::source::cratarr::KIND.id;
         let Some(served) = self.served.clone() else { return WantCopy::Failed("Cratarr's own library is not open".into()) };
         let (own, used, asker, off) = {
@@ -1022,7 +1022,7 @@ mod tests {
     #[test]
     fn a_bulk_approve_reads_one_listing_per_want() {
         let source = include_str!("albums.rs").replace("\r\n", "\n");
-        let at = source.find("pub(super) async fn copy_for").unwrap();
+        let at = source.find("pub async fn copy_for").unwrap();
         let body = &source[at..at + source[at..].find("\n    }\n").unwrap()];
         assert!(!body.contains("self.albums(") && !body.contains("listed_album(") && !body.contains("named_copy("), "{body}");
         assert!(body.contains("albums_by_id") && body.contains("judged_copies") && body.contains("copy_listed"), "{body}");

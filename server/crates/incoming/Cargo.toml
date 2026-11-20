@@ -1,0 +1,37 @@
+[package]
+name = "cratarr-incoming"
+description = "Cratarr's incoming: new music and its runs, the album actions, fixes, covers, the analysis pass"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A library never ran doctests as the binary did not: the counts stay the same.
+[lib]
+doctest = false
+
+[features]
+# Test helpers and hooks, for the tests of the crates above: only dev-dependencies turn it on (SPLIT-PLAN 5.4).
+test-support = ["cratarr-requests/test-support", "cratarr-playing/test-support"]
+
+[dependencies]
+cratarr-requests.workspace = true
+cratarr-playing.workspace = true
+anyhow.workspace = true
+image.workspace = true
+lofty.workspace = true
+realfft.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tract-onnx.workspace = true
+
+[dev-dependencies]
+cratarr-requests = { workspace = true, features = ["test-support"] }
+cratarr-playing = { workspace = true, features = ["test-support"] }
+axum.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber.workspace = true

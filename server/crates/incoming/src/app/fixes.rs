@@ -196,7 +196,7 @@ pub fn ruled_albums(served: &crate::serve::Serve) -> Result<Vec<String>> {
 
 /// An album's rule fix: its tracks' genres and artists as the rules name them, where any differs (each value split as
 /// the rules split it, aliased, written joined by "; "); certain, the rules being the administrator's own.
-pub(super) fn rule_fix(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
+pub fn rule_fix(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
     let rules = served.rules();
     if rules.genre_aliases.is_empty() && rules.artist_aliases.is_empty() {
         return Ok(None);

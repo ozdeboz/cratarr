@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(read, [short.clone()], "the row that no longer fits is read by nothing; the one that fits as today");
         let due: Vec<String> = due_albums(&serve, t + 60).unwrap().into_iter().map(|(a, _)| a).collect();
         assert_eq!(due, [whole.clone()], "the album whose row no longer fits taken at once; the other waits its 60 days");
-        for (file, src) in [("health.rs", include_str!("health.rs")), ("track_fetch.rs", include_str!("../../../requests/src/app/track_fetch.rs"))] {
+        for (file, src) in [("health.rs", include_str!("../../../app/src/app/health.rs")), ("track_fetch.rs", include_str!("../../../requests/src/app/track_fetch.rs"))] {
             assert!(src.contains("super::incomplete_base::still_short(") && !src.contains("albums_incomplete()"), "{file} reads the rows that fit alone");
         }
         std::fs::remove_dir_all(&root).ok();

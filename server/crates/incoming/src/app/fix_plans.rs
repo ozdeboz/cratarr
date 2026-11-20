@@ -76,7 +76,7 @@ async fn fixes_of(app: &dyn IncomingHost, kind: &str, at: Option<(i64, String)>)
 
 /// What a plan's sheet shows of its fields besides old → new: how sure each is, and a genre's choices.
 #[derive(Debug, Default)]
-pub(super) struct Notes {
+pub struct Notes {
     /// (album, tag) → certain or likely.
     certainty: HashMap<(String, String), &'static str>,
     /// album → a genre's choices.
@@ -85,7 +85,7 @@ pub(super) struct Notes {
 
 /// The fixes as a proposal: each track's tags now (read again from its file) → what its fixes give, said where from.
 /// Blocking.
-pub(super) fn proposal(served: &crate::serve::Serve, kind: &str, fixes: &[Fix], at: Option<&(i64, String)>) -> Result<(Proposal, Notes)> {
+pub fn proposal(served: &crate::serve::Serve, kind: &str, fixes: &[Fix], at: Option<&(i64, String)>) -> Result<(Proposal, Notes)> {
     let mut p = Proposal { kind: kind.to_string(), title: title_of(kind), ..Proposal::default() };
     let mut notes = Notes::default();
     let mut by_album: Vec<(String, Vec<&Fix>)> = Vec::new();

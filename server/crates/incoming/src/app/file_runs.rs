@@ -37,6 +37,17 @@ pub use crate::source::{FileFact, FilesState};
 pub const RUN: char = 'r';
 /// An album action's (its journal event's id).
 pub const MOVE: char = 'm';
+/// The one path's own steps (0092), which only it calls in production (`pub(super)`): `pub` under test-support alone, for
+/// the top crate's tests moved up from here (`app::incoming_tests_top`, SP2-MOVE-NIGHT §4.7).
+#[cfg(not(any(test, feature = "test-support")))]
+macro_rules! step {
+    ($(#[$m:meta])* pub(super) $($item:tt)*) => { $(#[$m])* pub(super) $($item)* };
+}
+#[cfg(any(test, feature = "test-support"))]
+macro_rules! step {
+    ($(#[$m:meta])* pub(super) $($item:tt)*) => { $(#[$m])* pub $($item)* };
+}
+
 /// How long a Keep or a move waits for its library to read the record before it says done anyway.
 const ADDING_MOST: std::time::Duration = std::time::Duration::from_secs(600);
 /// A run not kept yet (waiting or writing).
@@ -45,8 +56,10 @@ const LIVE: char = 'l';
 const PACE: std::time::Duration = std::time::Duration::from_millis(50);
 /// How long a record says "written".
 const WRITTEN_SECS: i64 = 24 * 3600;
+step! {
 /// What a run's entry says of a record it has not finished with: what the page has to say of a run cut off.
 pub(super) const CUT: &str = "Cratarr stopped before this was done";
+}
 /// How often a run's entry is written again as it goes. It goes in whole, so at every album a long run's cost would grow
 /// with its square; and a stop misses only which records were reached, as every file's before is in from the start.
 const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
@@ -111,9 +124,11 @@ pub fn fields_of(path: &Path, names: &[&str]) -> Result<HashMap<String, Vec<Stri
     Ok(out)
 }
 
+step! {
 /// Whether a file's fields hold `want` (each field's values as compared, `flat`).
 pub(super) fn holds(now: &HashMap<String, Vec<String>>, want: &[(String, Vec<String>)]) -> bool {
     want.iter().all(|(n, v)| flat(now.get(n).map(Vec::as_slice).unwrap_or_default()) == flat(v))
+}
 }
 
 /// Fields written by their name, lofty having no key for them (`retag::rewrite_named`): a style.
@@ -183,6 +198,7 @@ fn write(path: &Path, fields: &[(String, Vec<String>)]) -> Result<()> {
     )
 }
 
+step! {
 /// One file: read again first; set aside where it no longer holds `from`; else `to` written.
 pub(super) fn apply_one(path: &Path, from: &[(String, Vec<String>)], to: &[(String, Vec<String>)], moved: &str) -> Result<()> {
     let names: Vec<&str> = from.iter().chain(to).map(|(n, _)| n.as_str()).collect();
@@ -190,6 +206,7 @@ pub(super) fn apply_one(path: &Path, from: &[(String, Vec<String>)], to: &[(Stri
         bail!("{moved}");
     }
     write(path, to)
+}
 }
 
 /// A file's print: its size and its first and last MiB (a whole file's change touches its header or its end), to tell
@@ -209,6 +226,7 @@ pub fn print(path: &Path) -> Result<String> {
     Ok(format!("{len}:{:016x}", crate::journal::fingerprint(&text)))
 }
 
+step! {
 /// A file written whole (a length's fix): set aside where it is no longer as planned; else its original copied into
 /// `keep` first and the change made, beside the file: where that fails the file is as it was, and its copy not needed. Its
 /// copy and its print as written kept. `noted` has it with all its Undo needs, before the file changes: what stops this
@@ -240,7 +258,9 @@ pub(super) fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize, noted: impl 
     }
     changed
 }
+}
 
+step! {
 /// A file written whole put back: as planned already, nothing (false); as written, its copy back (true); else set aside.
 pub(super) fn restore_whole(path: &Path, w: &crate::journal::Whole) -> Result<bool> {
     if w.op == "cover" {
@@ -267,6 +287,7 @@ pub(super) fn restore_whole(path: &Path, w: &crate::journal::Whole) -> Result<bo
     })?;
     Ok(true)
 }
+}
 
 /// Where a run keeps the originals of files it writes whole: beside the journal, under Cratarr's data folder.
 fn kept_dir(run: &str) -> Result<PathBuf> {
@@ -291,6 +312,7 @@ fn restore_one(path: &Path, after: &[(String, Vec<String>)], before: &[(String, 
     write(path, before).map(|()| true)
 }
 
+step! {
 /// A run's entry in the journal while it writes. In before the first file, with every file's before and after, so whatever
 /// stops the run nothing is lost: the files then say what was reached, and it is held to that (`settle`). A file written
 /// whole comes in on its way, with all its Undo needs and before it changes (`whole_file`):
@@ -298,14 +320,22 @@ fn restore_one(path: &Path, after: &[(String, Vec<String>)], before: &[(String, 
 /// out of its tracks.
 pub(super) struct RunEntry {
     journal: Arc<Journal>,
+    #[cfg(not(any(test, feature = "test-support")))]
     pub(super) id: Option<EventId>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub id: Option<EventId>,
+    #[cfg(not(any(test, feature = "test-support")))]
     pub(super) run: FileRun,
+    #[cfg(any(test, feature = "test-support"))]
+    pub run: FileRun,
     /// The records not finished with, as the entry says them.
     cut: Vec<RunFailed>,
     saved: std::time::Instant,
 }
+}
 
 impl RunEntry {
+    step! {
     /// `keep`: as `Journal::record_run`. Nothing to write and nothing set aside: no entry.
     pub(super) fn begin(journal: Arc<Journal>, p: &Proposal, at: i64, account: Option<&str>, keep: i64) -> Self {
         let cut: Vec<RunFailed> = albums_of(&p.files)
@@ -329,14 +359,18 @@ impl RunEntry {
         });
         Self { journal, id, run, cut, saved: std::time::Instant::now() }
     }
+    }
 
+    step! {
     /// A file written whole, about to change: saved at once, at every file and not by `SAVE_EVERY`, as its Undo is in nothing
     /// else. Its own copy costs far more than this.
     pub(super) fn whole_file(&mut self, f: &FileWrite) {
         self.run.files.push(f.clone());
         self.save();
     }
+    }
 
+    step! {
     /// An album finished: what it wrote takes the place of what it planned, and `failed` is all the run set aside so far.
     pub(super) fn album_done(&mut self, album: &str, wrote: Vec<FileWrite>, failed: &[RunFailed]) {
         self.cut.retain(|c| c.album != album);
@@ -347,6 +381,7 @@ impl RunEntry {
         if self.saved.elapsed() >= SAVE_EVERY {
             self.save();
         }
+    }
     }
 
     fn save(&mut self) {
@@ -372,6 +407,7 @@ impl RunEntry {
     }
 }
 
+step! {
 /// The one lock, and under it, before anything writes, every run a stop cut off held to what it wrote.
 pub(super) async fn turn(journal: &Arc<Journal>) -> tokio::sync::MutexGuard<'static, ()> {
     let turn = LOCK.lock().await;
@@ -380,6 +416,7 @@ pub(super) async fn turn(journal: &Arc<Journal>) -> tokio::sync::MutexGuard<'sta
         tracing::warn!(target: "library", reason = %format!("{e:#}"), "a run cut off not read");
     }
     turn
+}
 }
 
 /// The runs a stop cut off, at start: `turn` alone would leave them for the next run, and what writes outside the one lock
@@ -676,6 +713,7 @@ fn kept_id(token: &str) -> Result<i64> {
     token.strip_prefix(RUN).and_then(|n| n.parse().ok()).context("Not a kept run")
 }
 
+step! {
 /// Whether a file of a run cut off holds what the run was to write: its entry cannot say, a file it never reached being in
 /// it too. A file written whole is in it on its way, so one the stop caught before it took the file's place is still as
 /// planned; a cover is in it from before its first change, and its Undo is right however far it got. An error says neither.
@@ -686,6 +724,7 @@ pub(super) fn reached(f: &FileWrite) -> Result<bool> {
     let names: Vec<&str> = f.after.iter().chain(&f.before).map(|(n, _)| n.as_str()).collect();
     let now = fields_of(&f.path, &names)?;
     Ok(holds(&now, &f.after) && !holds(&now, &f.before))
+}
 }
 
 /// A kept run, its records as written; an album action, its folder before and after.
@@ -880,15 +919,17 @@ async fn reread(paths: &[PathBuf]) {
 }
 
 /// Test helpers, for this module's tests and those moved up to the top (`app::incoming_tests_top`).
-#[cfg(test)]
-pub(super) mod testing {
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
+    // Shared with the tests of the crates above (test-support): idle where no test calls it.
+    #![cfg_attr(not(test), allow(dead_code, unused_imports))]
     use super::*;
 
-    pub(in crate::app) fn s(v: &[&str]) -> Vec<String> {
+    pub fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
     }
 
-    pub(in crate::app) fn tag_write(album: &str, path: &Path, after: &[&str]) -> FileWrite {
+    pub fn tag_write(album: &str, path: &Path, after: &[&str]) -> FileWrite {
         FileWrite {
             album: album.into(),
             path: path.into(),
@@ -901,18 +942,18 @@ pub(super) mod testing {
         }
     }
 
-    pub(in crate::app) fn proposal(files: Vec<FileWrite>) -> Proposal {
+    pub fn proposal(files: Vec<FileWrite>) -> Proposal {
         let records = ["a", "b"].map(|a| RunRecord { album: a.into(), title: a.to_uppercase(), artist: "X".into() }).to_vec();
         Proposal { kind: "types".into(), title: "Types".into(), records, files, failed: Vec::new() }
     }
 
-    pub(in crate::app) fn entry(p: &Proposal) -> (Arc<Journal>, RunEntry) {
+    pub fn entry(p: &Proposal) -> (Arc<Journal>, RunEntry) {
         let j = Arc::new(Journal::open(None).unwrap());
         (j.clone(), RunEntry::begin(j, p, 100, None, 1000))
     }
 
     /// `a`'s file written, `b`'s not, then a stop inside the second before the next save: as a restart finds it.
-    pub(in crate::app) fn cut_after_the_first(j: &Arc<Journal>, p: &Proposal) -> i64 {
+    pub fn cut_after_the_first(j: &Arc<Journal>, p: &Proposal) -> i64 {
         let mut e = RunEntry::begin(j.clone(), p, super::super::moment::now_secs(), None, 1000);
         let first = p.files[0].clone();
         apply_one(&first.path, &first.before, &first.after, "moved").unwrap();

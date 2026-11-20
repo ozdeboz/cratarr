@@ -420,7 +420,7 @@ pub struct IncomingService {
 }
 
 impl IncomingService {
-    pub(super) fn new(
+    pub fn new(
         lib: Arc<Library>,
         files: Arc<dyn Files>,
         journal: Arc<Journal>,
@@ -468,7 +468,7 @@ impl IncomingService {
     }
 
     /// The saved Lidarr connection and its client.
-    pub(super) fn lidarr_state(&self) -> LidarrPair {
+    pub fn lidarr_state(&self) -> LidarrPair {
         self.lidarr.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
@@ -489,7 +489,7 @@ impl IncomingService {
     }
 
     /// Servers and libraries may have changed: the lists are read again on the next look (or the next sync pass).
-    pub(super) async fn forget_lists(&self) {
+    pub async fn forget_lists(&self) {
         self.cache.lock().await.clear();
         *self.owned.lock().await = None;
     }
@@ -1385,7 +1385,7 @@ impl IncomingService {
 
     /// What a server calls its used library in catalogue folder `folder`, for what Keep, Move and Replace say; else
     /// "that library".
-    pub(crate) fn library_name(&self, source_id: &str, folder: i64) -> String {
+    pub fn library_name(&self, source_id: &str, folder: i64) -> String {
         let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
         let named = live.iter().find(|a| a.cfg.id == source_id).and_then(|a| {
             let id = library_in(a, folders.get(folder)?)?;
@@ -2056,7 +2056,7 @@ impl IncomingService {
 
     /// Finish or forget interrupted actions, then handle what the journal shows as not done (a restart, Lidarr down),
     /// back as far as the trash keeps things.
-    pub(super) async fn catch_up(&self) {
+    pub async fn catch_up(&self) {
         self.reconcile().await;
         let since = epoch_now() - i64::from(self.trash_days()) * 86_400;
         let mut entries = Vec::new();
@@ -2074,7 +2074,7 @@ impl IncomingService {
     }
 
     /// Hear of new journal events and react to them, for as long as Cratarr runs.
-    pub(super) fn listen(self: &Arc<Self>) {
+    pub fn listen(self: &Arc<Self>) {
         let (me, mut rx) = (Arc::downgrade(self), self.journal.subscribe());
         crate::run::spawn(async move {
             loop {
@@ -2094,7 +2094,7 @@ impl IncomingService {
     }
 
     /// Empty Incoming trash older than the trash days set in Settings.
-    pub(super) async fn purge_trash(&self) {
+    pub async fn purge_trash(&self) {
         let folders = self.lib.catalogue().folders();
         let (now, keep, files) = (epoch_now(), self.trash_days(), self.files.clone());
         let gone = crate::run::spawn_blocking(move || {

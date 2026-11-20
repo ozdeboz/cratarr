@@ -14,7 +14,7 @@ pub(super) use super::renumber_base::file_name;
 pub use super::renumber_base::ReleaseFacts;
 pub(super) use super::renumber_base::{Medium, Release, discogs_release};
 pub use super::renumber_base::Track;
-pub(super) use super::renumber_base::{files_in, same_title, tracks_of};
+pub use super::renumber_base::{files_in, same_title, tracks_of};
 
 /// A track matches a release's when their lengths are this close (s).
 const LENGTH_SLACK: i64 = 5;
@@ -350,7 +350,7 @@ fn planned(preview: &serde_json::Value) -> (Vec<(String, Vec<(String, u32)>)>, S
 
 /// The proposal of a finished look: each track's numbers now → as the release has them, only where they differ.
 /// Blocking.
-pub(super) fn proposal(served: &crate::serve::Serve, album: &str, preview: &serde_json::Value) -> Result<super::file_runs::Proposal> {
+pub fn proposal(served: &crate::serve::Serve, album: &str, preview: &serde_json::Value) -> Result<super::file_runs::Proposal> {
     let (_, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
     let tracks = files_in(served, album, None)?;
     let (numbers, title) = planned(preview);
