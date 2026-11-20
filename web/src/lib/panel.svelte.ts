@@ -1,6 +1,6 @@
 // The panel's subject (decisions 0023, 0025): the player, or what is viewed lying under it: a selection of one or more
 // playlists in tabs (Tracks, Export, Repair, Sync; Info is a step of their menu since 2026-11-02), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
-// or an album (`album:<server>/<id>`).
+// an album (`album:<server>/<id>`), or a label (`label:la-<n>`, lib/labelPage).
 // It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (a reload brings
 // it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
 // The panel keeps its own history (its trail, below; the owner, 2026-11-02): beside the page, changing what it shows
@@ -10,6 +10,7 @@
 import { leaveOnArrival } from './navStep.svelte';
 import { addressOf, HOME, hrefOf, ownWordsHere, pageHere, wordsIn, type PageId } from './addresses';
 import { prefs } from './prefs.svelte';
+import { LABEL } from './labelPage';
 
 export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
@@ -30,8 +31,9 @@ export function albumOf(viewed: string | null): { source: string; id: string } |
   return at > 0 && at < rest.length - 1 ? { source: rest.slice(0, at), id: rest.slice(at + 1) } : null;
 }
 
-/** An artist in the address (`artist:<server>/<name>`, decided 2026-10-16), by name as the albums credit them; and all
- *  their tracks, most played first (`artist-tracks:`, their Top recommendations' ›). */
+/** An artist in the address (`artist:<server>/<name>`, decided 2026-10-16), Cratarr's own by their id for life
+ *  (`artist:cratarr/ar-<n>`, W10), else by name as the albums credit them; and all their tracks, most played first
+ *  (`artist-tracks:`, their Top recommendations' ›). */
 const ARTIST = 'artist:';
 const ARTIST_TRACKS = 'artist-tracks:';
 export const artistSubject = (source: string, name: string, tracks = false) => `${tracks ? ARTIST_TRACKS : ARTIST}${source}/${name}`;
@@ -117,7 +119,7 @@ export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
   (viewed.startsWith(INSIGHTS) ||
     viewed.startsWith(REQUESTS) ||
-    viewed.startsWith(DOWNLOADS) || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
+    viewed.startsWith(DOWNLOADS) || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || viewed.startsWith(LABEL) || artistOf(viewed) !== null);
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */
@@ -154,8 +156,46 @@ function address(names: string[], tab: Tab) {
 
 /** A level of the panel's own history: what it shows, on which tab, and how it was reached (`tab`: another tab over its
  *  tracks; `thing`: a step deeper, a thing's own page; else a view, a page's or the panel's own). */
-type Step = { names: string[]; tab: Tab; how: 'view' | 'tab' | 'thing' };
+type Step = { names: string[]; tab: Tab; how: 'view' | 'tab' | 'thing'; place?: Place };
 let trail: Step[] = [];
+/** Where a step's list was left (F25): its scroll, and the row open in it where it has one. It rides with its step, into the page's
+ *  history too where a guard stands for the trail (F25.5). */
+export type Place = { scroll: number; open?: string | null };
+/** How the step shown was reached: by back (its place comes back) or forward (it starts at its top). */
+let reached: 'back' | 'forward' = 'forward';
+/** The shown list's place written as its step is left (`keepsPlace`), so its last scroll counts. */
+let leaving: (() => void) | null = null;
+function leave() {
+  const f = leaving;
+  leaving = null;
+  f?.();
+}
+/** How the step shown was reached (F25.1). */
+export const reachedBy = () => reached;
+/** The place the step shown was left at, where it was reached by back; none on a forward step (F25.1, F25.3). */
+export const placeOf = (): Place | null => (reached === 'back' ? (trail.at(-1)?.place ?? null) : null);
+function keepOn(t: Step, p: Place) {
+  t.place = p;
+  if (history.state?.panelGuard) history.replaceState({ ...history.state, trail }, '');
+}
+/** The step shown's place kept. */
+export function keepPlace(p: Place) {
+  const t = trail.at(-1);
+  if (t) keepOn(t, p);
+}
+/** The step shown, for its list (lib/keepsPlace): its place where it was reached by back, keeping its place, and the place written
+ *  once more as it is left. */
+export function placeHere() {
+  const t = trail.at(-1) ?? null;
+  return {
+    place: reached === 'back' ? (t?.place ?? null) : null,
+    keep: (p: Place) => void (t && keepOn(t, p)),
+    leaving: (f: () => void) => {
+      leaving = f;
+      return () => void (leaving === f && (leaving = null));
+    },
+  };
+}
 /** The trail as the panels read it: how many levels, and how the one shown was reached. */
 const steps = $state({ n: 0, how: 'view' as Step['how'] });
 /** How many levels the panel's history has: Back goes to the one before where there is more than one. */
@@ -256,8 +296,9 @@ function onAddress() {
     const names = q.getAll('view');
     const tab = isTab(q.get('tab')) ? (q.get('tab') as Tab) : 'tracks';
     const t = trail.at(-1);
+    if (!names.length || !t || names.join('\n') !== t.names.join('\n') || tab !== t.tab) leave();
     if (!names.length) trail = [];
-    else if (!t || names.join('\n') !== t.names.join('\n') || tab !== t.tab) trail = [...trail, { names, tab, how: 'view' }];
+    else if (!t || names.join('\n') !== t.names.join('\n') || tab !== t.tab) (trail = [...trail, { names, tab, how: 'view' }]), (reached = 'forward');
     show();
     return;
   }
@@ -270,12 +311,15 @@ function onAddress() {
     return;
   }
   if (!history.state.panelGuard && !layout.beside && trail.length) {
-    // Back over the guard: the panel's own Back.
+    // Back over the guard: the panel's own Back, to the step before at its place (F25.5 (b)).
+    leave();
     trail = trail.slice(0, -1);
+    reached = 'back';
     show();
     return;
   }
-  if (history.state.panelGuard && !layout.beside && !trail.length && Array.isArray(history.state.trail)) trail = history.state.trail;
+  // Back to the guard from a page gone to over the panel: the trail comes back, its places with it (F25.5 (c)).
+  if (history.state.panelGuard && !layout.beside && !trail.length && Array.isArray(history.state.trail)) (trail = history.state.trail), (reached = 'back');
   for (const f of alongside) f();
   show();
 }
@@ -288,12 +332,16 @@ show();
 
 /** A level onto the trail. */
 function step(names: string[], tab: Tab, how: Step['how'] = 'view') {
+  leave();
   trail = [...trail, { names, tab, how }];
+  reached = 'forward';
   show();
 }
 /** The trail's last level in its place (none: the first). */
 function swap(names: string[], tab: Tab, how: Step['how'] = 'view') {
+  leave();
   trail = [...trail.slice(0, -1), { names, tab, how }];
+  reached = 'forward';
   show();
 }
 
@@ -387,7 +435,9 @@ export function viewSibling(name: string) {
  *  panel's breadcrumbs, the levels Back walks through): the step before, or the panel closed where it is the first. */
 export function backOne() {
   if (trail.length < 2) return closePlaylist();
+  leave();
   trail = trail.slice(0, -1);
+  reached = 'back';
   show();
 }
 /** What shows was opened a step deeper (openStep): the level above it is the step before. */
@@ -396,7 +446,9 @@ export const isStep = () => steps.how === 'thing' && steps.n > 1;
 /** Closes the panel, its whole history with it; `then` once the page's history is settled. */
 export function closePlaylist(then?: () => void) {
   panel.playerTop = false;
+  leave();
   trail = [];
+  reached = 'forward';
   show();
   settled(then);
 }
@@ -430,6 +482,15 @@ export function albumMoved(source: string, from: string, to: string) {
   if (panel.viewed !== albumSubject(source, from)) return;
   const [was, now] = [albumSubject(source, from), albumSubject(source, to)];
   trail = trail.map((t) => ({ ...t, names: t.names.map((x) => (x === was ? now : x)) }));
+  show();
+}
+
+/** An artist opened by name whom the server named (W10, lib/artistIds `movedTo`): their page and their tracks' stay viewed as
+ *  them, by their id, in every level of the panel's history, so a namesake added later never takes their place. */
+export function artistMoved(source: string, from: string, to: string) {
+  const moved = new Map([false, true].map((tracks) => [artistSubject(source, from, tracks), artistSubject(source, to, tracks)]));
+  if (!panel.viewed || !moved.has(panel.viewed)) return;
+  trail = trail.map((t) => ({ ...t, names: t.names.map((x) => moved.get(x) ?? x) }));
   show();
 }
 

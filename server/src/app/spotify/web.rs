@@ -28,7 +28,7 @@ const BACK_OFF: Duration = Duration::from_secs(5);
 const LONGEST_WAIT: Duration = Duration::from_secs(120);
 
 pub fn http() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION"))).build()?)
+    Ok(crate::app::reach::client(crate::app::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?)
 }
 
 /// A sign-in on its way: for whom, its PKCE verifier, the address Spotify comes back to, and whether it began in the
@@ -153,7 +153,7 @@ impl std::fmt::Display for Refusal {
     }
 }
 
-/// Every item of a paged list, from its first page on (`next` followed); `at` picks the page out of the answer.
+/// Every item of a paged list, from its first page on (`next` followed, `next_page`); `at` picks the page out of the answer.
 async fn all(http: &reqwest::Client, access: &str, first: &str, at: impl Fn(&Value) -> &Value) -> Result<Vec<Value>> {
     let mut out = Vec::new();
     let mut next = Some(first.to_string());
@@ -161,9 +161,20 @@ async fn all(http: &reqwest::Client, access: &str, first: &str, at: impl Fn(&Val
         let v = get(http, access, &url).await?;
         let page = at(&v);
         out.extend(page["items"].as_array().cloned().unwrap_or_default());
-        next = page["next"].as_str().map(str::to_string);
+        next = next_page(page["next"].as_str());
     }
     Ok(out)
+}
+
+/// A page's `next` address, followed only where it is Spotify's API itself (Y11): https on `api.spotify.com`, at its own port, as the
+/// account's token goes with it. Any other is said in the log and not followed.
+fn next_page(next: Option<&str>) -> Option<String> {
+    let next = next?;
+    let ok = reqwest::Url::parse(next).is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("api.spotify.com") && u.port().is_none());
+    if !ok {
+        tracing::warn!(target: "spotify", "a page's next address is not Spotify's API: not followed");
+    }
+    ok.then(|| next.to_string())
 }
 
 /// The signed-in Spotify user: id and name.
@@ -180,8 +191,8 @@ pub async fn read(http: &reqwest::Client, access: &str, me: &str) -> Result<List
     for saved in all(http, access, &format!("{API}/me/albums?limit=50"), |v| v).await? {
         let mut album = album_of(&saved["album"], added(&saved));
         // An album of more than 50 tracks: the rest of its list.
-        if let Some(more) = saved["album"]["tracks"]["next"].as_str() {
-            for t in all(http, access, more, |v| v).await? {
+        if let Some(more) = next_page(saved["album"]["tracks"]["next"].as_str()) {
+            for t in all(http, access, &more, |v| v).await? {
                 album.tracks.push(album_track(&t));
             }
         }
@@ -279,6 +290,26 @@ fn track_of(t: &Value, added_at: Option<i64>) -> Option<Track> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Y11: a list's next page is followed with the account's token only on Spotify's API: https, `api.spotify.com`, its own port.
+    #[test]
+    fn a_spotify_next_page_off_api_spotify_com_is_not_followed() {
+        let on = "https://api.spotify.com/v1/me/albums?offset=50&limit=50";
+        assert_eq!(next_page(Some(on)).as_deref(), Some(on));
+        let off = [
+            "http://api.spotify.com/v1/me/albums?offset=50",
+            "https://api.spotify.com.evil.example/v1/me/albums",
+            "https://evil.example/v1/me/albums?next=api.spotify.com",
+            "https://192.168.1.20/v1/me/albums",
+            "https://api.spotify.com:8443/v1/me/albums",
+            "https://accounts.spotify.com/v1/me/albums",
+            "not an address",
+        ];
+        for next in off {
+            assert_eq!(next_page(Some(next)), None, "{next}");
+        }
+        assert_eq!(next_page(None), None);
+    }
 
     #[test]
     fn a_playlist_entry_is_read_in_2026s_shape_and_the_one_before() {

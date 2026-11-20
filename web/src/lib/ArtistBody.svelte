@@ -3,26 +3,28 @@
   // description, from the server's artist store; a tap opens all of it; their photo is the page's header, not here too), their albums, the albums they
   // appear on (others', credited on a track), both newest first as covers, and their most played tracks (the panel's
   // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2); last
-  // their albums not in the library (0.9.5).
+  // their albums not in the library (0.9.5). The sections read in the background show the section's loader while they are
+  // read, fill by themselves, and say why they have none (F8).
   import ProblemSheet from './ProblemSheet.svelte';
   import type { Snippet } from 'svelte';
-  import { tick } from 'svelte';
-  import { getArtistAbout, getArtistDiscogs, getArtistMissing, getDiscoverArtist, type ArtistDiscogs, type ListedAlbum, type MissingAlbum, type PhotoCredit } from './api';
-  import { cameFrom, DISCOVER } from './discoverArtist';
+  import { setContext, tick } from 'svelte';
+  import { getArtistAbout, getArtistDiscogs, getArtistMissing, type ArtistDiscogs, type ListedAlbum, type ListRead, type MissingAlbum, type PhotoCredit } from './api';
+  import { HOLD } from './holdPlace.svelte';
+  import PageLoading from './PageLoading.svelte';
+  import { lookAgainAfter, sectionPlace } from './recordNotHad';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import RelatedArtists from './RelatedArtists.svelte';
-  import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import { bandcampOf, bandcampPlay, playOnBandcamp, bandcampFailed } from './bandcampFound.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { recordsTitle } from './recordTypeRules';
+  import { nothingBy, recordsTitle } from './recordTypeRules';
   import { matchesSearch, searchNone } from './pageView.svelte';
 
   let {
     source,
-    albumSource = source,
     name,
+    id = null,
     mbid = null,
     albums,
     appearsOn,
@@ -33,9 +35,9 @@
     searching = false,
   }: {
     source: string;
-    /** Where the albums open (an artist from Discover: Bandcamp's). */
-    albumSource?: string;
     name: string;
+    /** Cratarr's own artist's id for life (W10): what their About, related artists and missing albums are asked by. */
+    id?: string | null;
     /** Their MusicBrainz id, where known: Discogs is found by it. */
     mbid?: string | null;
     albums: ListedAlbum[];
@@ -50,6 +52,9 @@
     searching?: boolean;
   } = $props();
   const hit = (...texts: (string | null | undefined)[]) => !searching || matchesSearch(...texts);
+  // Its sections' reads never hold the panel (lib/holdPlace: what is asked later follows): the page shows at once, each
+  // section's loader in its place until its read ends (F8).
+  setContext(HOLD, undefined);
   const albumsShown = $derived(albums.filter((a) => hit(a.title, a.artist)));
   const appearsShown = $derived(appearsOn.filter((a) => hit(a.title, a.artist)));
   // The page's words leave none of what they have (the owner, 2026-11-02: the panel said its own "Nothing of …
@@ -60,18 +65,12 @@
   let about = $state<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null } | null>(null);
   let whole = $state(false);
   $effect(() => {
-    const [s, n] = [source, name];
+    const [s, n, ask] = [source, name, id ?? name];
     let gone = false;
     about = null;
     whole = false;
-    // An artist from Discover (lib/discoverArtist): their words as New to you has them.
-    if (s === DISCOVER)
-      getDiscoverArtist(n).then(
-        (a) => !gone && (about = { id: null, bio: a.bio, photo: a.photo, photo_credit: a.photo_credit }),
-        () => {},
-      );
     if (s === 'cratarr')
-      getArtistAbout(n).then(
+      getArtistAbout(ask).then(
         async (a) => {
           if (gone) return;
           about = a;
@@ -89,36 +88,34 @@
   });
   // Not in your library (the owner, 2026-10-25; the server's lookup since 0.9.3): the artist's albums MusicBrainz lists
   // that the library lacks, asked when the page opens; while the server is still reading their discography (`looking`)
-  // asked again a little later. A tap opens one on Bandcamp, else its menu (Want; lib/ElsewhereAlbum). Cratarr's own
-  // library's artists, and an artist from Discover (the owner, 2026-10-26: whatever Discover suggests today), found by
-  // the Bandcamp album the page was opened from where its release group is known.
-  let missing = $state<MissingAlbum[]>([]);
+  // asked again as a record not had is (F8, lib/recordNotHad), until it has read it. A tap opens its record's page (W9: a
+  // record not had, Want in its header). Cratarr's own artists, by their id (W10).
+  let missing = $state<({ albums: MissingAlbum[] } & ListRead) | null>(null);
   $effect(() => {
-    const [s, n] = [source, name];
-    missing = [];
-    if (s !== 'cratarr' && s !== DISCOVER) return;
-    const hint = s === DISCOVER && cameFrom.name?.toLowerCase() === n.toLowerCase() ? { release_group: cameFrom.album?.release_group ?? null } : {};
+    const [s, who] = [source, id ?? name];
+    missing = null;
+    if (s !== 'cratarr') return;
     let gone = false;
     let t = 0;
-    const ask = (left: number) =>
-      getArtistMissing(n, hint).then(
+    const ask = (n: number) =>
+      getArtistMissing(who).then(
         (r) => {
           if (gone) return;
-          missing = r.albums;
-          if (r.looking && left > 0) t = window.setTimeout(() => ask(left - 1), 4000);
+          missing = r;
+          if (r.looking) t = window.setTimeout(() => ask(n + 1), lookAgainAfter(n));
         },
         () => {},
       );
-    void ask(5);
+    void ask(0);
     return () => {
       gone = true;
       clearTimeout(t);
     };
   });
-  const missingShown = $derived(missing.filter((a) => hit(a.title)));
-  let elsewhere = $state<ElsewhereAlbum>();
-  let finding = $state<string | null>(null);
-  let asked = $state<string[]>([]);
+  const missingShown = $derived((missing?.albums ?? []).filter((a) => hit(a.title)));
+  /** What the section shows (F8): its records; while read, the loader naming what it reads; once read, why it has none. While
+   *  the panel's search is on, its hits alone. */
+  const missingPlace = $derived(searching ? (missingShown.length ? 'rows' : null) : missing && sectionPlace(missing, missingShown.length));
   let aboutEl = $state<HTMLElement>();
 
   // Discogs (0.9.8, the owner: "Yes to all"): their profile where TheAudioDB has none, and who they are there: their
@@ -162,7 +159,7 @@
 
 {#snippet grid(list: ListedAlbum[])}
   <ul class="grid">
-    {#each list as a (a.id)}<li><AlbumCard source={albumSource} album={a} /></li>{/each}
+    {#each list as a (a.id)}<li><AlbumCard {source} album={a} /></li>{/each}
   </ul>
 {/snippet}
 
@@ -216,40 +213,37 @@
   </section>
 {/if}
 <!-- Related artists to explore (0.9.2): Cratarr's own library only (the server knows its artists' MusicBrainz ids). -->
-{#if !searching && (source === 'cratarr' || source === DISCOVER)}<RelatedArtists {name} />{/if}
-<!-- Their albums the library lacks, last on the page (the owner, 2026-10-25: "at the very bottom"). -->
-{#if missingShown.length}
+{#if !searching && source === 'cratarr'}<RelatedArtists ask={id ?? name} />{/if}
+<!-- Their albums the library lacks, last on the page (the owner, 2026-10-25: "at the very bottom"); the section's loader while
+     they are read, why there are none where the read failed (F8). -->
+{#if missingPlace}
   <section aria-label="Not in your library">
     <SectionHead title="Not in your library" />
+    {#if missingPlace === 'rows'}
     <ul class="grid">
-      {#each missingShown as m (m.release_group)}
-        {@const page = bandcampOf(m.release_group, m.bandcamp)}
+      {#each missingShown as m (m.record)}
+        {@const key = m.record}
+        {@const page = m.bandcamp ?? (m.release_group ? bandcampOf(m.release_group) : null)}
         <li class="missing">
-          <AlbumCard
-            source="musicbrainz"
-            album={{ id: m.release_group, title: m.title, year: m.year }}
-            cover={m.cover}
-            busy={finding === m.release_group}
-            request={m.request ?? (asked.includes(m.release_group) ? { state: 'wanted' } : null)}
-            onopen={() => elsewhere?.open({ release_group: m.release_group, title: m.title, artist: m.artist, year: m.year, cover: m.cover, bandcamp: page })}
-          />
+          <!-- Its record's page (W9): a record not had, Want in its header. -->
+          <AlbumCard source="cratarr" album={{ id: m.record, title: m.title, year: m.year, artist: m.artist }} cover={m.cover} request={m.request ?? null} notHad />
           <!-- On Bandcamp: Play on its cover, as Discover's cards have it (beside the card's button, over its cover). -->
           {#if page}<CoverPlay bandcamp
               label={m.title}
-              busy={bandcampPlay.key === m.release_group}
-              problem={bandcampFailed[m.release_group] ?? null}
-              onplay={() => playOnBandcamp(m.release_group, page, m.title)}
-              onproblem={() => (playProblem = { title: `${m.title} did not play`, text: bandcampFailed[m.release_group], retry: () => playOnBandcamp(m.release_group, page, m.title) })}
+              busy={bandcampPlay.key === key}
+              problem={bandcampFailed[key] ?? null}
+              onplay={() => playOnBandcamp(key, page, m.title)}
+              onproblem={() => (playProblem = { title: `${m.title} did not play`, text: bandcampFailed[key], retry: () => playOnBandcamp(key, page, m.title) })}
             />{/if}
         </li>
       {/each}
     </ul>
+    {:else if 'reading' in missingPlace}<PageLoading held={false}><p class="opening">{missingPlace.reading}</p></PageLoading>{:else}<p class="empty">{missingPlace.line}</p>{/if}
   </section>
 {/if}
-<ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
 {#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}
 {#if searching}<!-- what the words leave none of: the pill says it (searchNone) -->
-{:else if !albums.length && !appearsOn.length && !top}
+{:else if nothingBy({ had: albums.length, appears: appearsOn.length, top: !!top, missing, rows: missingShown.length })}
   <p class="empty">Nothing by {name} on this server.</p>
 {/if}
 
@@ -378,6 +372,12 @@
 
   .empty {
     padding: 24px 16px;
+    color: var(--muted);
+  }
+
+  /* What a section's loader waits for, under its mark (lib/PageLoading's own line). */
+  .opening {
+    margin: 0;
     color: var(--muted);
   }
 </style>

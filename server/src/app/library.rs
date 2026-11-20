@@ -128,7 +128,8 @@ impl Active {
             used.extend(self.placement.libraries.iter().filter(|l| std::path::Path::new(&l.id).parent() == Some(own.as_path())).map(|l| Used {
                 id: l.id.clone(),
                 kind: LibraryKind::Own,
-                owner: std::path::Path::new(&l.id).file_name().map(|n| n.to_string_lossy().into_owned()),
+                // An account own music is switched off for owns none (0.17): no Your music anywhere.
+                owner: std::path::Path::new(&l.id).file_name().map(|n| n.to_string_lossy().into_owned()).filter(|a| self.cfg.own_music_on(a)),
             }));
         }
         used
@@ -151,7 +152,7 @@ impl Active {
 
     /// Where `account`'s own music lies, made or not, as a library's id; none without an own-music folder.
     pub(super) fn own_of(&self, account: &str) -> Option<String> {
-        self.cfg.own_music().map(|own| own.join(account).display().to_string())
+        self.cfg.own_music().filter(|_| self.cfg.own_music_on(account)).map(|own| own.join(account).display().to_string())
     }
 
     /// The libraries whose records are kept: the main ones and everyone's own music, out of a fetcher's reach.
@@ -243,14 +244,20 @@ fn ids_state(remembered: Option<&str>, generation: &str) -> Ids {
     }
 }
 
-/// The highest record or artist id for life the JSON stores in the data folder name: crates, everyone's, the players'
-/// queues and the jobs waiting. A store that cannot be read names nothing.
-fn top_in_stores(data: &Path) -> i64 {
+/// The JSON stores in the data folder that name records and artists by their ids for life: crates, everyone's (their seeds,
+/// conditions and what goes by a Sounds like's id), the players' queues and the jobs waiting. One may not be there.
+pub(super) fn id_stores(data: &Path) -> Vec<PathBuf> {
     let mut stores: Vec<PathBuf> = ["crates.json", "queues.json", "convert-queue.json", "track-intake.json"].into_iter().map(|f| data.join(f)).collect();
     if let Ok(users) = std::fs::read_dir(data.join("users")) {
-        stores.extend(users.flatten().map(|u| u.path().join("crates.json")));
+        stores.extend(users.flatten().map(|u| u.path()).filter(|account| account.is_dir()).map(|account| account.join("crates.json")));
     }
-    stores.iter().filter_map(|f| std::fs::read_to_string(f).ok()).map(|text| crate::serve::ids::highest_named(&text)).max().unwrap_or(0)
+    stores
+}
+
+/// The highest record or artist id for life the JSON stores in the data folder name (`id_stores`). A store that cannot be
+/// read names nothing.
+fn top_in_stores(data: &Path) -> i64 {
+    id_stores(data).iter().filter_map(|f| std::fs::read_to_string(f).ok()).map(|text| crate::serve::ids::highest_named(&text)).max().unwrap_or(0)
 }
 
 /// A fresh start of lost track ids: where the new ids begin, and what still names an old track (rows per table).
@@ -402,8 +409,16 @@ impl Library {
         }
         // Here, as nothing has read a store yet, and no list has been built: `playlists::import` below reads what it leaves.
         let kinds = kinds_of(&folders, &catalogue.folders());
-        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds, rules: tag_rules.clone() };
+        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds: kinds.clone(), rules: tag_rules.clone() };
         start.run().await.context("the first start of 0.16 did not finish")?;
+        // 0.17's step, once (`step_017`): what 0.16 knew of each record's references, into the catalogue's tables, before
+        // anything reads them. With the ids lost it waits, as the first start does. Failed, it stops the start as the first
+        // start does: what it has not carried would be read as never known. The parts it did are done; the next start goes on
+        // from the one that failed. Its credits part makes the albums as the library's builds will (the kinds, the tag rules).
+        if !catalogue.ids_lost() {
+            let (cat, ud, rules) = (catalogue.clone(), playlists_db.clone(), tag_rules.clone());
+            tokio::task::spawn_blocking(move || super::step_017::run(&cat, &ud, &kinds, &rules)).await.context("0.17's step stopped")?.context("0.17's step did not finish")?;
+        }
         follow_paths(&catalogue, &playlists_db).context("following the libraries' paths")?;
         if !catalogue.ids_lost() {
             playlists_db.set_meta(TOP_KEY, &catalogue.top_id().to_string())?;
@@ -600,7 +615,9 @@ impl Library {
         self.catalogue.folders().iter().filter(|(_, p)| main.contains(&p.as_path())).map(|(id, _)| id).collect()
     }
 
-    /// Whether the catalogue's folder `folder` is a main library's: Keep's target, Replace's, out of Lidarr's reach.
+    /// Whether the catalogue's folder `folder` is a main library's: Keep's target, Replace's, out of Lidarr's reach. What
+    /// decides that reads `main_folders`; only the tests ask it of one folder.
+    #[cfg(test)]
     pub(super) fn is_main(&self, folder: i64) -> bool {
         self.main_folders().contains(&folder)
     }
@@ -640,6 +657,9 @@ impl Library {
         let live = self.live();
         let Some(at) = live.iter().position(|a| a.cfg.own_music().is_some()) else { return Ok(None) };
         let a = &live[at];
+        if !a.cfg.own_music_on(account) {
+            return Ok(None);
+        }
         let own = a.cfg.own_music().unwrap_or_default();
         anyhow::ensure!(placement::safe_relative(account) && !account.contains(['/', '\\']) && !account.starts_with('.'), "{account:?} can't name a folder");
         let folder = own.join(account);
@@ -658,7 +678,7 @@ impl Library {
         if let Some(serve) = crate::serve::instance() {
             let others: Vec<String> = serve.users.names().into_iter().filter(|n| n != account).collect();
             let db = self.playlists_db.clone();
-            tokio::task::spawn_blocking(move || db.switch_library_off(&others, &key)).await??;
+            tokio::task::spawn_blocking(move || db.switch_library_off(&others, std::slice::from_ref(&key))).await??;
         }
         Ok(Some(id))
     }
@@ -816,7 +836,8 @@ mod switched_off_tests {
     }
 
     /// A catalogue lost after the first start and started afresh is the user data's, though it gave no record then: taken for one
-    /// from before the first start, it would stop every start from then on.
+    /// from before the first start, it would stop every start from then on. P3.6 (W3): while its ids are lost the step waits, its
+    /// credits part too (no mark); started afresh, it runs.
     #[tokio::test]
     async fn a_lost_catalogue_started_afresh_after_the_first_start_still_starts() {
         let (d, db) = data_folder("afresh");
@@ -825,9 +846,13 @@ mod switched_off_tests {
         lost(&d);
         let lib = started(&d, &db).await.unwrap();
         assert!(lib.catalogue().ids_lost());
+        assert!(lib.catalogue().meta("017:credits").is_none(), "the ids lost: the credits part waits");
         lib.fresh_track_ids().unwrap();
         drop(lib);
-        assert!(!started(&d, &db).await.expect("it starts").catalogue().ids_lost());
+        let lib = started(&d, &db).await.expect("it starts");
+        assert!(!lib.catalogue().ids_lost());
+        assert!(lib.catalogue().meta("017:credits").is_some(), "started afresh: the step and its credits part ran");
+        drop(lib);
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -872,6 +897,70 @@ mod switched_off_tests {
         assert!(db.first_start_done().unwrap());
     }
 
+    /// FX01's data folder (0.16.2's), and its user data.
+    fn data_0_16(name: &str) -> (PathBuf, Arc<crate::userdata::UserData>) {
+        let d = std::env::temp_dir().join(format!("cratarr-library-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        crate::fixtures::data_0_16(&d).unwrap();
+        let db = Arc::new(crate::userdata::UserData::open(Some(&d.join("userdata.sqlite"))).unwrap());
+        (d, db)
+    }
+
+    /// The parts of 0.17's step marked done in a data folder's catalogue.
+    fn marks_017(d: &Path) -> Vec<String> {
+        let db = rusqlite::Connection::open(d.join("catalogue.sqlite")).unwrap();
+        let mut st = db.prepare("SELECT key FROM meta WHERE key GLOB '017:*' ORDER BY key").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// R5: a start runs 0.17's step on a data folder 0.16.2 left: every part marked, the report there; a second start leaves
+    /// both as they were.
+    #[tokio::test]
+    async fn a_start_runs_the_step_and_leaves_its_marks() {
+        let (d, db) = data_0_16("step-runs");
+        drop(started(&d, &db).await.unwrap());
+        let marks = marks_017(&d);
+        assert_eq!(marks.len(), crate::catalogue::records::PARTS_017.len() + 3, "and the band waves', the credits' and the fold's: {marks:?}");
+        let report = db.migration_report().unwrap()[crate::app::step_017::PART].clone();
+        drop(started(&d, &db).await.unwrap());
+        assert_eq!((marks_017(&d), db.migration_report().unwrap()[crate::app::step_017::PART].clone()), (marks, report));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// R5: with the catalogue's ids lost, the step waits, as the first start does: nothing marked, no report, no reference.
+    #[tokio::test]
+    async fn the_step_waits_while_the_ids_are_lost() {
+        let (d, db) = data_0_16("step-waits");
+        db.set_meta(CATALOGUE_KEY, "another catalogue").unwrap();
+        let lib = started(&d, &db).await.unwrap();
+        assert!(lib.catalogue().ids_lost());
+        assert!(marks_017(&d).is_empty());
+        assert!(!db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
+        assert_eq!(rusqlite::Connection::open(d.join("catalogue.sqlite")).unwrap().query_row("SELECT count(*) FROM \"references\"", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        drop(lib);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// R2: 0.17's step failing stops the start, as 0.16's first start does, the parts before the one that failed done; once
+    /// what stood in its way is gone, the next start finishes it.
+    #[tokio::test]
+    async fn a_step_that_fails_stops_the_start() {
+        let (d, db) = data_0_16("step-fails");
+        let catalogue = || rusqlite::Connection::open(d.join("catalogue.sqlite")).unwrap();
+        catalogue().execute_batch("CREATE TRIGGER no_pages BEFORE INSERT ON meta WHEN NEW.key = '017:pages' BEGIN SELECT RAISE(ABORT, 'no room for the pages'); END;").unwrap();
+        let marks = || marks_017(&d);
+        let err = started(&d, &db).await.err().expect("the start stops");
+        assert!(format!("{err:#}").contains("0.17's step did not finish"), "{err:#}");
+        assert_eq!(marks(), ["017:certain", "017:discography", "017:discogs", "017:files", "017:hand", "017:likely", "017:links"], "the parts before the pages done");
+        assert!(!db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
+
+        catalogue().execute_batch("DROP TRIGGER no_pages").unwrap();
+        drop(started(&d, &db).await.expect("it starts"));
+        assert_eq!(marks().len(), crate::catalogue::records::PARTS_017.len() + 3, "and the band waves', the credits' and the fold's");
+        assert!(db.migration_report().unwrap().contains_key(crate::app::step_017::PART));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// CR3: crates, queues and waiting jobs name albums too, in a store no table scan sees.
     #[test]
     fn the_stores_in_the_data_folder_are_read_for_ids_in_use() {
@@ -901,6 +990,21 @@ mod switched_off_tests {
         assert_eq!(a.kept(), ["/music", "/own/ann"]);
         assert_eq!(a.quality_of("/own/ann"), Quality::Cd, "as a main library, without a setting of its own");
         assert_eq!(a.colour_of("/own/ann").as_deref(), Some(crate::settings::PALETTE[2]), "after Incoming's and the main libraries'");
+    }
+
+    /// 0.17, the owner: own music per account, on or off. Off, the account owns none: no Your music, nothing to add to.
+    #[test]
+    fn own_music_switched_off_for_an_account_is_none_of_theirs() {
+        let placed = |id: &str| crate::placement::PlacedLibrary { id: id.into(), name: id.into(), folders: vec![id.into()], paths: Vec::new(), read_only: false };
+        let values = [(crate::settings::OWN_MUSIC.to_string(), serde_json::json!("/own")), (crate::settings::OWN_MUSIC_OFF.to_string(), serde_json::json!(["bo"]))].into_iter().collect();
+        let cfg = SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: Libraries(vec![LibrarySetting::new("/music", LibraryKind::Main)]), values };
+        let placement = Placement { roots: Vec::new(), libraries: vec![placed("/music"), placed("/own/ann"), placed("/own/bo")] };
+        let a = Active { cfg, source: None, placement, error: None };
+        let own: Vec<(String, Option<String>)> = a.libraries().into_iter().filter(|u| u.kind == LibraryKind::Own).map(|u| (u.id, u.owner)).collect();
+        assert_eq!(own, [("/own/ann".to_string(), Some("ann".to_string())), ("/own/bo".to_string(), None)], "the folder stays, no one's");
+        assert_eq!(a.own_of("ann").as_deref(), Some("/own/ann"));
+        assert_eq!(a.own_of("bo"), None, "nothing to add to");
+        assert_eq!(a.own_of("cy").as_deref(), Some("/own/cy"), "on for everyone not named");
     }
 
     /// A second main library's track was on no list of folders here, so it could not be added to a playlist, one by one or among

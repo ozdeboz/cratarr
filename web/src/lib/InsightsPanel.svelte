@@ -15,8 +15,10 @@
   import ContentControls from './ContentControls.svelte';
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
   import { insights, mapFull } from './insights.svelte';
+  import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import { backOne, INSIGHTS, isStep, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
+  import { keepsPlace } from './keepsPlace';
   import Crumbs, { type Level, type Siblings } from './Crumbs.svelte';
   import { groupsOf, landingOf, remembered } from './groupCrumb';
   import { prefs } from './prefs.svelte';
@@ -109,7 +111,7 @@
       {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>
   {/if}
-  <div class="scroll" class:away={handed && everywhere()}>
+  <div class="scroll" class:away={handed && everywhere()} {@attach keepsPlace()}>
     {#if view === 'discover-missing' || view === 'discover-excluded'}
       <DiscoveryList kind={view === 'discover-missing' ? 'missing' : 'excluded'} />
     {:else if view === 'history'}
@@ -119,7 +121,7 @@
     {:else if view === 'map'}
       <InsightsMap />
     {:else if insights.error}
-      <p class="error" role="alert">{insights.error}</p>
+      <Notice text={insights.error} away="Insights need Cratarr." />
     {:else if !insights.data}
       <PageLoading />
     {:else}
@@ -166,10 +168,6 @@
     min-height: 0;
     overflow-y: auto;
     padding: 16px clamp(12px, 2vw, 24px) calc(var(--mini-h, 0px) + 16px);
-  }
-
-  .error {
-    color: var(--danger-ink);
   }
 
   /* Its glass handed to App's row on a phone (lib/glass): the view starts under it, its first heading where the page's

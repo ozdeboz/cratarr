@@ -19,7 +19,6 @@ use super::reach::Sent as _;
 pub const KEY: &str = "discogs:key";
 pub const SECRET: &str = "discogs:secret";
 const API: &str = "https://api.discogs.com";
-const UA: &str = concat!("Cratarr/", env!("CARGO_PKG_VERSION"), " +https://github.com/ozdeboz/cratarr");
 /// Discogs' limits a minute, until a reply says.
 const ANONYMOUS_PER_MINUTE: u32 = 25;
 const KEYED_PER_MINUTE: u32 = 60;
@@ -68,7 +67,7 @@ fn client() -> Result<&'static reqwest::Client> {
     if let Some(c) = C.get() {
         return Ok(c);
     }
-    let c = reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent(UA).build()?;
+    let c = super::reach::client(super::reach::Purpose::Metadata).timeout(Duration::from_secs(30)).build()?;
     Ok(C.get_or_init(|| c))
 }
 
@@ -95,6 +94,35 @@ async fn pace(keyed: bool) {
     }
     let limit = per_minute().unwrap_or(if keyed { KEYED_PER_MINUTE } else { ANONYMOUS_PER_MINUTE });
     *next = Instant::now() + gap(limit);
+}
+
+/// Discogs said "too many" (429): every caller held `TOO_MANY_WAIT` (O6).
+fn too_many() {
+    HOLD_UNTIL.fetch_max(now_ms() + TOO_MANY_WAIT.as_millis() as u64, Ordering::Relaxed);
+}
+
+/// Whether `get` asks once more after an answer of `status`: after its first 429 only (`again`). Every 429 holds every caller first, a
+/// second in a row too, and one while a hold is on pushes it out (O6, Y8).
+fn again_after(status: reqwest::StatusCode, again: &mut bool) -> bool {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return false;
+    }
+    too_many();
+    std::mem::take(again)
+}
+
+/// Whether a release group's kept cover answer is a fresh "none" (O6): no cover anywhere, so the Cover Art Archive is not asked for
+/// it either while it is kept. Pure.
+pub fn none_kept(kept: Option<(i64, Option<String>)>, now: i64) -> bool {
+    matches!(kept, Some((at, None)) if now - at <= COVER_NONE_SECS)
+}
+
+/// `none_kept` for a release group, as the user data keeps its answer.
+pub async fn kept_without_cover(rg: &str) -> bool {
+    let Some(served) = crate::serve::instance() else { return false };
+    let (ud, key) = (served.userdata.clone(), rg.to_string());
+    let kept = tokio::task::spawn_blocking(move || ud.rg_cover(&key)).await.ok().and_then(Result::ok).flatten();
+    none_kept(kept, super::moment::now_secs())
 }
 
 /// What a reply says of the limits: the limit a minute, and a hold of a minute when few calls are left.
@@ -174,11 +202,11 @@ async fn get(path: &str) -> Result<Option<Value>> {
         }
         let r = req.sent().await?;
         note_limits(r.headers());
+        // Everyone held, not only this caller (O6): `pace` waits it out.
+        if again_after(r.status(), &mut again) {
+            continue;
+        }
         match r.status() {
-            reqwest::StatusCode::TOO_MANY_REQUESTS if std::mem::take(&mut again) => {
-                tokio::time::sleep(TOO_MANY_WAIT).await;
-                continue;
-            }
             reqwest::StatusCode::NOT_FOUND => return Ok(None),
             _ => return Ok(Some(r.error_for_status()?.json().await?)),
         }
@@ -237,14 +265,13 @@ pub fn id_in(urls: &[String], kind: &str) -> Option<u64> {
     urls.iter().find_map(|u| u.split(&mark).nth(1)?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok())
 }
 
-/// A MusicBrainz entity's links (`release-group`, `artist`), MusicBrainz asked at its pace.
+/// A MusicBrainz entity's links (`release-group`, `artist`, `label`), MusicBrainz asked at its pace.
 async fn mb_links(entity: &str, id: &str) -> Result<Vec<String>> {
     if !is_mbid(id) {
         return Ok(Vec::new());
     }
     let http = super::discover::http()?;
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/{entity}/{id}?inc=url-rels&fmt=json")).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(v["relations"].as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect())
 }
 
@@ -426,6 +453,11 @@ pub fn start() {
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_secs(600)).await;
         loop {
+            // The background reading paused (O5): looked at again in a while.
+            if super::switches::background_paused() {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                continue;
+            }
             if let Err(e) = genres_pass().await {
                 tracing::info!("discogs: genres not asked now: {e:#}");
             }
@@ -439,6 +471,18 @@ pub fn start() {
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
         }
     });
+}
+
+/// A background pass's albums in turn while background reading is not paused (Y7): looked at before each, so a pass paused meanwhile
+/// stops at its next album, what it found so far kept by its caller.
+pub(super) fn until_paused<T>(albums: Vec<T>, pass: &'static str) -> impl Iterator<Item = T> {
+    albums.into_iter().take_while(move |_| {
+        let paused = super::switches::background_paused();
+        if paused {
+            tracing::info!("{pass}: background reading paused; stopped at its next album");
+        }
+        !paused
+    })
 }
 
 /// Albums whose type MusicBrainz did not give (0.9.6): the format descriptions ("EP", "Single", "LP", "Compilation")
@@ -465,7 +509,7 @@ async fn types_pass() -> Result<()> {
     }
     let http = super::discover::http()?;
     let mut found = Vec::new();
-    for (album, release, artist, title, tracks, duration_ms) in due {
+    for (album, release, artist, title, tracks, duration_ms) in until_paused(due, "discogs: release types") {
         let rg = match is_mbid(&release) {
             true => release_group_of(&http, &release).await.unwrap_or_default(),
             false => None,
@@ -502,7 +546,7 @@ async fn genres_pass() -> Result<()> {
     .await??;
     let http = super::discover::http()?;
     let mut found: Vec<(String, Vec<String>)> = Vec::new();
-    for (album, release, artist, title) in due {
+    for (album, release, artist, title) in until_paused(due, "discogs: genres") {
         let rg = match is_mbid(&release) {
             true => release_group_of(&http, &release).await.unwrap_or_default(),
             false => None,
@@ -529,13 +573,294 @@ async fn genres_pass() -> Result<()> {
 /// A MusicBrainz release's release group.
 pub(super) async fn release_group_of(http: &reqwest::Client, release: &str) -> Result<Option<String>> {
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json")).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(v["release-group"]["id"].as_str().map(str::to_string))
+}
+
+/// A label as a MusicBrainz release names it (F9): its name, its MBID, and the release's catalogue number there.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MbLabel {
+    pub name: String,
+    pub mbid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catno: Option<String>,
+}
+
+/// A MusicBrainz release's release group and its labels (F9): `release_group_of`'s one question, its labels with it (`+labels`).
+pub(super) async fn release_group_and_labels(http: &reqwest::Client, release: &str) -> Result<(Option<String>, Vec<MbLabel>)> {
+    let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups+labels&fmt=json")).asked().await?.error_for_status()?.json().await?;
+    Ok((v["release-group"]["id"].as_str().map(str::to_string), mb_labels_of(&v)))
+}
+
+/// A MusicBrainz release's labels (`label-info`, F9): each with its MBID as MusicBrainz writes it, its name and its catalogue number
+/// ("[none]" none), each once; one with no label or no id, and MusicBrainz's "[no label]", none. Pure.
+fn mb_labels_of(v: &Value) -> Vec<MbLabel> {
+    let mut out: Vec<MbLabel> = Vec::new();
+    for info in v["label-info"].as_array().into_iter().flatten() {
+        let (Some(id), Some(name)) = (info["label"]["id"].as_str(), info["label"]["name"].as_str()) else { continue };
+        let (mbid, name) = (id.trim().to_ascii_lowercase(), name.trim().to_string());
+        if !is_mbid(&mbid) || name.is_empty() || name.eq_ignore_ascii_case("[no label]") {
+            continue;
+        }
+        let catno = info["catalog-number"].as_str().map(str::trim).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("[none]")).map(str::to_string);
+        let label = MbLabel { name, mbid, catno };
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out
+}
+
+// ---- An artist's and a label's lists (0100, S11)
+
+/// A row of an artist's or a label's list at Discogs (S11): a master, or a release Discogs gives no master of (G5: a row of
+/// its own, typed once read); its title and artist as credited (Discogs' "(2)" and the "*" of a name's variation taken off),
+/// its year (none for Discogs' 0), its picture, and what a release's row says besides: its format and, on a label's list, its
+/// catalogue number. A master's main release, whose list is the master's.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Listed {
+    pub id: u64,
+    pub master: bool,
+    pub main_release: Option<u64>,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub thumb: Option<String>,
+    pub format: Option<String>,
+    pub catno: Option<String>,
+}
+
+/// Whether Discogs' format words say a record of the artist's own (A1.1, as MusicBrainz's list keeps albums and EPs of their own): an
+/// album ("Album", "LP") or an EP, and no compilation ("Comp", "Smplr", "Compilation"), DJ mix ("Mixed"), mixtape or single. None:
+/// no record of their own, or words that say no type ("12\""). Pure.
+pub fn own_record(format: &str) -> bool {
+    let words: Vec<String> = format.split(',').map(|w| w.trim().trim_matches('"').to_ascii_lowercase()).collect();
+    let has = |w: &str| words.iter().any(|x| x == w);
+    if ["comp", "smplr", "compilation", "mixed", "mixtape", "single"].iter().any(|w| has(w)) {
+        return false;
+    }
+    has("album") || has("lp") || has("ep")
+}
+
+/// A master's main release's format words (A1.1.2: what types a master row), from Discogs' release answer: each format's name and
+/// descriptions, comma-joined; none where Discogs has no such master or main release.
+pub async fn master_format(master: u64) -> Result<Option<String>> {
+    let Some(main) = self::master(master).await?.and_then(|m| m.main_release) else { return Ok(None) };
+    let Some(v) = release_raw(main).await? else { return Ok(None) };
+    let words: Vec<String> = v["formats"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|f| f["name"].as_str().map(str::to_string).into_iter().chain(f["descriptions"].as_array().into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string))))
+        .collect();
+    Ok(Some(words.join(", ")))
+}
+
+/// One page of an artist's (`/artists/{id}/releases`) or a label's (`/labels/{id}/releases`) list, read: its rows, each once
+/// (a label's lists a release once for each time it names the label), and of an artist's only those they made themselves,
+/// role Main: their remixes, appearances and productions are other artists' records. Pure.
+fn listed_of(v: &Value) -> Vec<Listed> {
+    let mut out: Vec<Listed> = Vec::new();
+    for r in v["releases"].as_array().into_iter().flatten() {
+        if r["role"].as_str().is_some_and(|role| role != "Main") {
+            continue;
+        }
+        let (Some(id), Some(title)) = (r["id"].as_u64(), r["title"].as_str()) else { continue };
+        let master = r["type"].as_str() == Some("master");
+        if out.iter().any(|l| l.id == id && l.master == master) {
+            continue;
+        }
+        let text = |k: &str| r[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        out.push(Listed {
+            id,
+            master,
+            main_release: r["main_release"].as_u64().filter(|_| master),
+            title: title.trim().to_string(),
+            artist: r["artist"].as_str().unwrap_or_default().trim().trim_end_matches('*').trim().to_string(),
+            year: r["year"].as_i64().filter(|y| *y > 0).map(|y| y as i32),
+            thumb: text("thumb"),
+            format: text("format"),
+            catno: text("catno"),
+        });
+    }
+    out
+}
+
+/// How many pages a list has, as its page says (one where it does not).
+fn pages_of(v: &Value) -> u32 {
+    v["pagination"]["pages"].as_u64().map_or(1, |p| p.max(1) as u32)
+}
+
+/// How many pages of 100 an artist's list is read to: nearly every artist's is shorter, and the few with thousands of rows are
+/// mostly others' records they appear on.
+const ARTIST_PAGES: u32 = 10;
+
+/// An artist's own records at Discogs (S11, role Main): every page of their list up to `ARTIST_PAGES`, oldest first, at
+/// Discogs' pace. Empty where Discogs has no such artist or is switched off.
+pub async fn artist_masters(artist: u64) -> Result<Vec<Listed>> {
+    let mut out: Vec<Listed> = Vec::new();
+    let mut page = 1;
+    loop {
+        let Some(v) = get(&format!("/artists/{artist}/releases?sort=year&sort_order=asc&per_page=100&page={page}")).await? else { break };
+        for l in listed_of(&v) {
+            if !out.iter().any(|o| o.id == l.id && o.master == l.master) {
+                out.push(l);
+            }
+        }
+        if page >= pages_of(&v).min(ARTIST_PAGES) {
+            break;
+        }
+        page += 1;
+    }
+    Ok(out)
+}
+
+/// A label as Discogs knows it (S11): its name, its profile in plain words, its page, its own links, and the label it belongs
+/// to.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct LabelFacts {
+    pub id: u64,
+    pub name: String,
+    pub profile: String,
+    pub url: String,
+    pub urls: Vec<String>,
+    pub parent: Option<(u64, String)>,
+}
+
+/// A label's own answer (`/labels/{id}`), read. Pure.
+fn label_of(v: &Value) -> Option<LabelFacts> {
+    let id = v["id"].as_u64()?;
+    Some(LabelFacts {
+        id,
+        name: clean_name(v["name"].as_str()?),
+        profile: plain_text(v["profile"].as_str().unwrap_or_default()),
+        url: v["uri"].as_str().map_or_else(|| format!("https://www.discogs.com/label/{id}"), str::to_string),
+        urls: strings(&v["urls"]),
+        parent: v["parent_label"]["id"].as_u64().zip(v["parent_label"]["name"].as_str().map(clean_name)),
+    })
+}
+
+/// A label at Discogs (S11); none where Discogs has no such label or is switched off.
+#[allow(dead_code)] // a label's page (C56)
+pub async fn label(id: u64) -> Result<Option<LabelFacts>> {
+    Ok(get(&format!("/labels/{id}")).await?.as_ref().and_then(label_of))
+}
+
+/// One page of a label's list at Discogs (S11), newest first, as its page lists it (C56): a label's runs to thousands (OQ10), so
+/// it is read a page of 100 at a time, the next when it is asked for, further back. Its rows and how many pages there are; none
+/// where Discogs has no such label.
+pub async fn label_releases(id: u64, page: u32) -> Result<Option<(Vec<Listed>, u32)>> {
+    let Some(v) = get(&format!("/labels/{id}/releases?sort=year&sort_order=desc&per_page=100&page={}", page.max(1))).await? else { return Ok(None) };
+    Ok(Some((listed_of(&v), pages_of(&v))))
+}
+
+/// A label's Discogs id by MusicBrainz's link to it from its MusicBrainz id (C56: never a search by name); none where
+/// MusicBrainz links none.
+pub async fn label_linked(mbid: &str) -> Result<Option<u64>> {
+    Ok(id_in(&mb_links("label", mbid).await?, "label"))
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::*;
+
+    fn fixture(name: &str) -> Value {
+        let text = match name {
+            "artist" => include_str!("../../tests/fixtures/listings/discogs-artist-releases.json"),
+            "label releases" => include_str!("../../tests/fixtures/listings/discogs-label-releases.json"),
+            _ => include_str!("../../tests/fixtures/listings/discogs-label.json"),
+        };
+        serde_json::from_str(text).unwrap()
+    }
+
+    /// S11: an artist's list (a page of Discogs' own answer, trimmed): their masters and the release they have no master of,
+    /// role Main alone; how many pages it has.
+    #[test]
+    fn an_artists_list_is_their_own_records() {
+        let v = fixture("artist");
+        let listed = listed_of(&v);
+        let rows: Vec<(u64, bool, Option<u64>, &str, &str, Option<i32>)> = listed.iter().map(|l| (l.id, l.master, l.main_release, l.title.as_str(), l.artist.as_str(), l.year)).collect();
+        assert_eq!(
+            rows,
+            [
+                (406662, true, Some(15288), "Twoism", "Boards Of Canada", Some(1995)),
+                (2059417, true, Some(690476), "A Few Old Tunes", "Boards Of Canada", Some(1996)),
+                (14936, false, None, "Aquarius", "Boards Of Canada", Some(1998)),
+            ],
+            "no remix, appearance or production of theirs"
+        );
+        assert_eq!((listed[0].thumb.as_deref(), listed[2].format.as_deref()), (None, Some("7\", Ltd")));
+        assert_eq!(pages_of(&v), 6);
+    }
+
+    /// S11: a label's list: each release once, its catalogue number and format, the "*" of a name's variation taken off, no
+    /// year for Discogs' 0; and the label itself, its profile in plain words.
+    #[test]
+    fn a_labels_list_and_the_label() {
+        let v = fixture("label releases");
+        let listed = listed_of(&v);
+        assert_eq!(listed.iter().map(|l| l.id).collect::<Vec<_>>(), [136, 137, 1384, 2801], "each once");
+        assert_eq!(
+            (listed[0].artist.as_str(), listed[0].catno.as_deref(), listed[0].format.as_deref(), listed[0].year, listed[0].master),
+            ("Glass Harbour", Some("WAP 67"), Some("12\", EP, Mono, Ltd"), Some(1995), false)
+        );
+        assert!(listed[0].thumb.is_some() && listed[1].thumb.is_none());
+        assert_eq!(listed[2].year, None, "Discogs' 0: no year");
+        assert_eq!(pages_of(&v), 86);
+        let label = label_of(&fixture("label")).unwrap();
+        assert_eq!(
+            label,
+            LabelFacts {
+                id: 23528,
+                name: "Warp Records".into(),
+                profile: "British electronic label. Since 1989.".into(),
+                url: "https://www.discogs.com/label/23528-Warp-Records".into(),
+                urls: vec!["http://warp.net".into(), "http://warppublishing.net".into(), "http://warprecords.bandcamp.com/music".into()],
+                parent: Some((264514, "Warp Records Limited".into())),
+            }
+        );
+        assert_eq!(pages_of(&serde_json::json!({})), 1);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Y8: every 429 holds every caller, a second in a row too (which is not asked again); any other answer holds no one.
+    #[test]
+    fn every_discogs_429_holds_everyone() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let was = HOLD_UNTIL.load(Ordering::Relaxed);
+        let busy = reqwest::StatusCode::TOO_MANY_REQUESTS;
+        let mut again = true;
+        HOLD_UNTIL.store(0, Ordering::Relaxed);
+        let first = again_after(busy, &mut again);
+        HOLD_UNTIL.store(0, Ordering::Relaxed);
+        let second = again_after(busy, &mut again);
+        let held = HOLD_UNTIL.swap(0, Ordering::Relaxed);
+        let other = again_after(reqwest::StatusCode::OK, &mut true);
+        let after_other = HOLD_UNTIL.load(Ordering::Relaxed);
+        HOLD_UNTIL.store(was, Ordering::Relaxed);
+        assert!(first && !second, "the first asked once more, the second not");
+        assert!(held >= now_ms() + 59_000, "the second holds every caller all the same");
+        assert!(!other && after_other == 0, "any other answer holds no one");
+    }
+
+    /// O6: Discogs' "too many" holds every caller, not only the one it answered; a release group kept as having no cover anywhere
+    /// is not asked of the Cover Art Archive again while that is kept.
+    #[test]
+    fn a_discogs_429_holds_everyone_and_a_kept_none_asks_nothing() {
+        let _one = crate::app::switches::TEST_STATE.blocking_lock();
+        let was = HOLD_UNTIL.load(Ordering::Relaxed);
+        too_many();
+        let held = HOLD_UNTIL.load(Ordering::Relaxed);
+        HOLD_UNTIL.store(was, Ordering::Relaxed);
+        assert!(held >= now_ms() + 59_000, "held a minute for every caller");
+        let now = 1_800_000_000;
+        assert!(none_kept(Some((now - 60, None)), now));
+        assert!(!none_kept(Some((now - COVER_NONE_SECS - 1, None)), now), "an old none is asked again");
+        assert!(!none_kept(Some((now, Some("https://coverartarchive.org/release-group/x/front-250".into()))), now) && !none_kept(None, now));
+    }
 
     #[test]
     fn discogs_ids_are_read_from_musicbrainz_links() {
@@ -632,6 +957,9 @@ pub struct AlbumFacts {
     pub credits: Vec<Credit>,
     /// Its page on Discogs (the master's, else the release's).
     pub url: Option<String>,
+    /// Its main release's list, as read: kept as Discogs' list of the record (`reference_tracks`), not with these facts.
+    #[serde(skip)]
+    pub tracks: Vec<crate::catalogue::identity::RefTrack>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -639,6 +967,12 @@ pub struct Label {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catno: Option<String>,
+    /// Discogs' own id for it (C46: what a label's reference is). Facts kept before it was read have none until read again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    /// Whether Discogs marks its name as one another label shares ("Source (2)", A1.8.4): it never joins a label by its name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub namesake: bool,
 }
 
 /// Who did what on a release (`role`: "Producer", "Mastered By"…), on which tracks where not all ("A1 to A3").
@@ -723,12 +1057,18 @@ fn credits_of(v: &Value) -> Vec<Credit> {
     out
 }
 
+/// `labels_of` for the tests of other modules.
+#[cfg(test)]
+pub fn labels_of_for_tests(v: &Value) -> Vec<Label> {
+    labels_of(v)
+}
+
 fn labels_of(v: &Value) -> Vec<Label> {
     let mut out: Vec<Label> = Vec::new();
     for l in v["labels"].as_array().into_iter().flatten() {
         let Some(name) = l["name"].as_str() else { continue };
         let catno = l["catno"].as_str().map(str::trim).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("none")).map(str::to_string);
-        let label = Label { name: clean_name(name), catno };
+        let label = Label { name: clean_name(name), catno, id: l["id"].as_u64(), namesake: clean_name(name) != name.trim() };
         if !out.contains(&label) {
             out.push(label);
         }
@@ -755,6 +1095,7 @@ pub async fn album_facts(release_group: Option<&str>, artist: &str, title: &str)
     {
         facts.labels = labels_of(&r);
         facts.credits = credits_of(&r);
+        facts.tracks = super::references::list_of_discogs(&r);
         if facts.year.is_none() {
             facts.year = r["year"].as_u64().filter(|y| *y > 0).map(|y| y as u32);
         }
@@ -771,24 +1112,99 @@ pub async fn release_group_facts(release_group: &str) -> Result<Option<AlbumFact
     Ok(master(id).await?.map(|m| AlbumFacts { master: Some(id), release: m.main_release, genres: m.genres, styles: m.styles, ..AlbumFacts::default() }))
 }
 
-/// An artist's facts: by MusicBrainz's link from their id, else Discogs' search by name (the key's; an exact name
-/// only).
-pub async fn artist_facts(mbid: Option<&str>, name: &str) -> Result<Option<ArtistFacts>> {
-    let mut id = match mbid {
-        Some(m) => id_in(&mb_links("artist", m).await?, "artist"),
-        None => None,
-    };
-    if id.is_none() && !name.trim().is_empty() && saved().await.is_some() {
-        let mut q = reqwest::Url::parse("https://x/database/search")?;
-        q.query_pairs_mut().append_pair("type", "artist").append_pair("q", name).append_pair("per_page", "5");
-        if let Some(v) = get(&format!("/database/search?{}", q.query().unwrap_or_default())).await? {
-            let want = super::import::loose(name);
-            id = v["results"].as_array().into_iter().flatten().find(|r| r["title"].as_str().is_some_and(|t| super::import::loose(&clean_name(t)) == want)).and_then(|r| r["id"].as_u64());
+/// The one rule for a Discogs id by a name (A1.8, X8), an artist's or a label's: the one result of Discogs' search (`results`)
+/// whose name is the name (case and quotes folded as `loose` folds them), where no result of that name carries Discogs'
+/// namesake mark "(n)": Discogs itself says such a name is shared, so it names none. Two results of the name, none. Pure.
+pub fn name_match(results: &Value, name: &str) -> Option<u64> {
+    let want = super::import::loose(name.trim());
+    if want.is_empty() {
+        return None;
+    }
+    let mut found = None;
+    for r in results.as_array().into_iter().flatten() {
+        let Some(title) = r["title"].as_str() else { continue };
+        if super::import::loose(&clean_name(title)) != want {
+            continue;
+        }
+        if clean_name(title) != title.trim() {
+            return None;
+        }
+        match (found, r["id"].as_u64()) {
+            (None, Some(id)) => found = Some(id),
+            (Some(was), Some(id)) if was != id => return None,
+            _ => {}
         }
     }
-    let Some(id) = id else { return Ok(None) };
-    let Some(v) = get(&format!("/artists/{id}")).await? else { return Ok(None) };
-    Ok(Some(artist_of(id, &v)))
+    found
+}
+
+/// An artist's Discogs id and how it was found (A1.8.3): MusicBrainz's link among their MusicBrainz links (`links`), kept `link`;
+/// else Discogs' search for their name (`search`, its answer), by the one rule (`name_match`), kept `search`. Pure.
+pub fn artist_id_of(links: &[String], search: Option<&Value>, name: &str) -> Option<(u64, &'static str)> {
+    if let Some(id) = id_in(links, "artist") {
+        return Some((id, "link"));
+    }
+    name_match(&search?["results"], name).map(|id| (id, "search"))
+}
+
+/// Discogs' search answer for an artist's name, where a key is saved (Discogs' search needs it); none without.
+async fn artist_search(name: &str) -> Result<Option<Value>> {
+    if name.trim().is_empty() || saved().await.is_none() {
+        return Ok(None);
+    }
+    let mut q = reqwest::Url::parse("https://x/database/search")?;
+    q.query_pairs_mut().append_pair("type", "artist").append_pair("q", name).append_pair("per_page", "5");
+    get(&format!("/database/search?{}", q.query().unwrap_or_default())).await
+}
+
+/// An artist's Discogs id as `artist_found` found it: the id and how (`artist_id_of`), none where no way names one; and whether
+/// MusicBrainz's links of them could not be had this time (F47: busy, failed), so the link is to be asked again later.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ArtistFound {
+    pub id: Option<(u64, &'static str)>,
+    pub link_unread: bool,
+}
+
+/// An artist's Discogs id and how it was found (`artist_id_of`): by MusicBrainz's link from their id, else Discogs' search by their
+/// name, asked only where MusicBrainz links none. A busy MusicBrainz never stops it (F47): its search by the name stands in, and the
+/// link is to be asked again later (`link_unread`).
+pub async fn artist_found(mbid: Option<&str>, name: &str) -> Result<ArtistFound> {
+    artist_found_with(mbid, name, |m| async move { mb_links("artist", &m).await }, |n| async move { artist_search(&n).await }).await
+}
+
+/// `artist_found` with its two questions: MusicBrainz's links of an id (`links`), Discogs' search for a name (`search`). MusicBrainz
+/// switched off is not asked. Its question failing (busy, a 503) is no answer of Discogs': the search by the name stands in, by the
+/// one rule (A1.8 strict), and `link_unread` says to ask for the link again later (F47).
+async fn artist_found_with<L, LF, S, SF>(mbid: Option<&str>, name: &str, links: L, search: S) -> Result<ArtistFound>
+where
+    L: FnOnce(String) -> LF,
+    LF: std::future::Future<Output = Result<Vec<String>>>,
+    S: FnOnce(String) -> SF,
+    SF: std::future::Future<Output = Result<Option<Value>>>,
+{
+    let (links, link_unread) = match mbid.filter(|_| super::switches::is_on(super::switches::MUSICBRAINZ)) {
+        Some(m) => match links(m.to_string()).await {
+            Ok(links) => (links, false),
+            Err(e) => {
+                tracing::info!(target: "discover", "an artist's MusicBrainz links not read, Discogs searched by their name: {e:#}");
+                (Vec::new(), true)
+            }
+        },
+        None => (Vec::new(), false),
+    };
+    if let Some(found) = artist_id_of(&links, None, name) {
+        return Ok(ArtistFound { id: Some(found), link_unread });
+    }
+    Ok(ArtistFound { id: artist_id_of(&links, search(name.to_string()).await?.as_ref(), name), link_unread })
+}
+
+/// An artist's facts: by MusicBrainz's link from their id, else Discogs' search by name, by the one rule (`name_match`); and whether
+/// MusicBrainz's link could not be had this time (F47), so they are asked again soon.
+pub async fn artist_facts(mbid: Option<&str>, name: &str) -> Result<(Option<ArtistFacts>, bool)> {
+    let found = artist_found(mbid, name).await?;
+    let Some((id, _)) = found.id else { return Ok((None, found.link_unread)) };
+    let Some(v) = get(&format!("/artists/{id}")).await? else { return Ok((None, found.link_unread)) };
+    Ok((Some(artist_of(id, &v)), found.link_unread))
 }
 
 /// Discogs' genres and styles of a release or master MusicBrainz links (0.10, `app::works`: `release:<id>`,
@@ -833,6 +1249,54 @@ fn artist_of(id: u64, v: &Value) -> ArtistFacts {
 mod facts_tests {
     use super::*;
 
+    /// A1.8.1, A1.8.2 (OQ-A1.8 (a), strict): Discogs' search answers "Coma (2)" (11) before "Coma" (12). Today's match takes the first
+    /// whose name with its "(n)" cleaned is the name: 11, a namesake's, whose whole list would then be the library artist's. The one
+    /// rule: where any result of the name carries Discogs' namesake mark, none; one unmarked result of the name, that one (case and
+    /// quotes folded); another name, none.
+    #[test]
+    fn a_discogs_namesake_is_never_matched_by_name() {
+        let results = |rows: &[(&str, u64)]| serde_json::Value::Array(rows.iter().map(|(t, id)| serde_json::json!({ "title": t, "id": id })).collect());
+        assert_eq!(name_match(&results(&[("Coma (2)", 11), ("Coma", 12)]), "Coma"), None, "a namesake answered first: never its id");
+        assert_eq!(name_match(&results(&[("Coma", 12)]), "Coma"), Some(12));
+        assert_eq!(name_match(&results(&[("Coma", 12), ("Coma (2)", 11)]), "Coma"), None, "Discogs says the name is shared");
+        assert_eq!(name_match(&results(&[("Coma (2)", 11)]), "Coma"), None);
+        assert_eq!(name_match(&results(&[("COMA", 12)]), "Coma"), Some(12), "case folded as loose folds it");
+        assert_eq!(name_match(&results(&[("Coma\u{2019}s", 13)]), "Coma's"), Some(13), "quotes folded");
+        assert_eq!(name_match(&results(&[("Coma Band", 14)]), "Coma"), None, "another name");
+        assert_eq!(name_match(&results(&[("Coma", 12), ("Coma", 15)]), "Coma"), None, "two of the name: none");
+        // How it was found (A1.8.3's half here): MusicBrainz's link first, else the search by the one rule.
+        let linked = ["https://www.discogs.com/artist/700001-Coma".to_string()];
+        assert_eq!(artist_id_of(&linked, Some(&serde_json::json!({ "results": [{ "title": "Coma", "id": 12 }] })), "Coma"), Some((700001, "link")));
+        assert_eq!(artist_id_of(&[], Some(&serde_json::json!({ "results": [{ "title": "Coma", "id": 12 }] })), "Coma"), Some((12, "search")));
+        assert_eq!(artist_id_of(&[], Some(&serde_json::json!({ "results": [{ "title": "Coma (2)", "id": 11 }, { "title": "Coma", "id": 12 }] })), "Coma"), None);
+        assert_eq!(artist_id_of(&[], None, "Coma"), None, "no search, no link: none");
+    }
+
+    /// F47 (the owner, 2026-11-19): an artist holding a MusicBrainz id, MusicBrainz busy (a 503) for their links. Discogs is never
+    /// stopped by it: its own search by the name stands in, by the one rule (A1.8 strict: a namesake-marked answer stays none), and the
+    /// link is to be asked again later (`link_unread`). MusicBrainz answering with a link: that one, `link`, and no search asked.
+    #[tokio::test]
+    async fn a_busy_musicbrainz_never_stops_discogs_finding_an_artist() {
+        let _state = crate::app::references::TestState::set().await;
+        let m = "00000000-0000-4000-8000-000000000f47";
+        let busy = |_: String| std::future::ready(Err::<Vec<String>, _>(anyhow::anyhow!("MusicBrainz answered 503")));
+        let answer = |v: serde_json::Value| move |_: String| std::future::ready(Ok::<_, anyhow::Error>(Some(v)));
+        let one = serde_json::json!({ "results": [{ "title": "Kite Theory", "id": 12 }] });
+        let found = artist_found_with(Some(m), "Kite Theory", busy, answer(one.clone())).await.expect("never stopped by MusicBrainz");
+        assert_eq!(found, ArtistFound { id: Some((12, "search")), link_unread: true });
+        let marked = serde_json::json!({ "results": [{ "title": "Kite Theory (2)", "id": 11 }, { "title": "Kite Theory", "id": 12 }] });
+        let found = artist_found_with(Some(m), "Kite Theory", busy, answer(marked)).await.expect("never stopped by MusicBrainz");
+        assert_eq!(found, ArtistFound { id: None, link_unread: true }, "A1.8 strict, as ever");
+        let searched = std::sync::atomic::AtomicUsize::new(0);
+        let linked = |_: String| std::future::ready(Ok::<_, anyhow::Error>(vec!["https://www.discogs.com/artist/700001-Kite-Theory".to_string()]));
+        let counted = |_: String| {
+            searched.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(Ok::<_, anyhow::Error>(Some(one.clone())))
+        };
+        assert_eq!(artist_found_with(Some(m), "Kite Theory", linked, counted).await.unwrap(), ArtistFound { id: Some((700001, "link")), link_unread: false });
+        assert_eq!(searched.load(std::sync::atomic::Ordering::SeqCst), 0, "no search where MusicBrainz links one");
+    }
+
     #[test]
     fn discogs_markup_and_names_are_made_plain() {
         assert_eq!(clean_name("Jon Hopkins (2)"), "Jon Hopkins");
@@ -843,6 +1307,40 @@ mod facts_tests {
         );
     }
 
+    /// C46: a label is kept with Discogs' id for it, what its reference will be; facts kept before have none, and read as before.
+    #[test]
+    fn labels_of_keeps_the_id() {
+        let v = serde_json::json!({ "labels": [{ "name": "Low Tide Records", "catno": "LTR-012", "id": 23528 }, { "name": "Bleep (2)", "catno": "none", "id": 9 }] });
+        assert_eq!(labels_of(&v), [Label { name: "Low Tide Records".into(), catno: Some("LTR-012".into()), id: Some(23528), namesake: false }, Label { name: "Bleep".into(), catno: None, id: Some(9), namesake: true }]);
+        let kept: Label = serde_json::from_str(r#"{"name":"Low Tide Records","catno":"LTR-012"}"#).unwrap();
+        assert_eq!(kept.id, None);
+        assert_eq!(id_in(&["https://www.discogs.com/label/23528-Low-Tide-Records".to_string()], "label"), Some(23528), "a label's page names its id");
+    }
+
+    /// F9.1 (e): a MusicBrainz release names its labels with their MBIDs (`+labels` on the question its release group is asked by):
+    /// each with its catalogue number ("[none]" none), each once, as MusicBrainz writes its ids; one with no label or no id, and
+    /// MusicBrainz's "[no label]", none.
+    #[test]
+    fn a_musicbrainz_release_names_its_labels_by_their_mbids() {
+        let (anthem, nonesuch) = ("00000000-0000-4000-8000-000000000901", "00000000-0000-4000-8000-000000000902");
+        let v = serde_json::json!({ "release-group": { "id": "00000000-0000-4000-8000-000000000900" }, "label-info": [
+            { "catalog-number": "IARC0041", "label": { "id": anthem.to_uppercase(), "name": "International Anthem Recording Company" } },
+            { "catalog-number": "[none]", "label": { "id": nonesuch, "name": "Nonesuch" } },
+            { "catalog-number": "X-1", "label": null },
+            { "catalog-number": "IARC0041", "label": { "id": anthem, "name": "International Anthem Recording Company" } },
+            { "catalog-number": null, "label": { "id": "157afde4-4bf5-4039-8ad2-5a15acc85176", "name": "[no label]" } },
+            { "catalog-number": "Y-1", "label": { "name": "No Id" } }
+        ] });
+        assert_eq!(
+            mb_labels_of(&v),
+            [
+                MbLabel { name: "International Anthem Recording Company".into(), mbid: anthem.into(), catno: Some("IARC0041".into()) },
+                MbLabel { name: "Nonesuch".into(), mbid: nonesuch.into(), catno: None },
+            ]
+        );
+        assert!(mb_labels_of(&serde_json::json!({})).is_empty());
+    }
+
     #[test]
     fn a_release_gives_its_labels_and_credits() {
         let v = serde_json::json!({
@@ -850,7 +1348,7 @@ mod facts_tests {
             "extraartists": [{ "name": "Axel Boman", "anv": "", "role": "Producer", "tracks": "" }, { "name": "Mandy Parnell (2)", "role": "Mastered By" }],
             "tracklist": [{ "position": "A2", "extraartists": [{ "name": "Kornél Kovács", "anv": "Kornél", "role": "Vocals" }] }]
         });
-        assert_eq!(labels_of(&v), [Label { name: "Studio Barnhus".into(), catno: Some("BARN 042".into()) }, Label { name: "Self Released".into(), catno: None }]);
+        assert_eq!(labels_of(&v), [Label { name: "Studio Barnhus".into(), catno: Some("BARN 042".into()), id: None, namesake: false }, Label { name: "Self Released".into(), catno: None, id: None, namesake: false }]);
         let c = credits_of(&v);
         assert_eq!(c[0], Credit { name: "Axel Boman".into(), role: "Producer".into(), tracks: None });
         assert_eq!(c[1].name, "Mandy Parnell");
@@ -869,5 +1367,26 @@ mod facts_tests {
         assert_eq!((a.name.as_str(), a.real_name.as_deref(), a.profile.as_str()), ("Studio", None, "Swedish duo of Dan Lissvik and Rasmus Hägg."));
         assert_eq!(a.aliases, ["Studio Barnhus"]);
         assert_eq!(a.members[1], Member { name: "Rasmus Hägg".into(), active: false });
+    }
+
+    /// Y7: a Discogs pass looks at the pause before each album: paused meanwhile, it stops at its next one, what it found kept.
+    /// Unpaused, it goes through.
+    #[test]
+    fn a_discogs_pass_stops_at_its_next_album_when_paused() {
+        use super::super::switches::{BACKGROUND, TEST_STATE, set_for_tests};
+        let _one = TEST_STATE.blocking_lock();
+        let was = set_for_tests(BACKGROUND, true);
+        let mut asked = Vec::new();
+        for n in until_paused(vec![1, 2, 3], "test") {
+            asked.push(n);
+            if n == 1 {
+                set_for_tests(BACKGROUND, false);
+            }
+        }
+        set_for_tests(BACKGROUND, true);
+        let all = until_paused(vec![1, 2, 3], "test").collect::<Vec<_>>();
+        set_for_tests(BACKGROUND, was);
+        assert_eq!(asked, [1]);
+        assert_eq!(all, [1, 2, 3]);
     }
 }

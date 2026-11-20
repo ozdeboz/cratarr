@@ -778,6 +778,11 @@ pub struct CrateCounts {
 /// relative), `file` its file name; the rest is what the catalogue knows, `None` where it does not.
 #[derive(Debug, Default, Serialize, PartialEq)]
 pub struct PlaylistRow {
+    /// Its record's type, as the Library list serves it (GOTO.S1): a track's Go to names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     pub entry: String,
     /// Its entry id (0.12, decision 0087): what the playlist's operations name it by (`entry` stays the line). Absent
     /// (a crate's row, or ids not kept): no operations for it.
@@ -1187,6 +1192,7 @@ mod undo_tests {
         assert!(said(s.crate_save(None, "Years", years.clone()).await.err()).contains("Year"));
         assert!(said(s.crate_page(&years, None, 0, 50, &CrateLook::default()).await.err()).contains("Year"));
         assert!(said(s.crate_lines_in_order(&years, None, &CrateLook::default()).await.err()).contains("Year"), "what Play plays");
+        assert!(said(s.crate_profile(&years, None, &[]).await.err()).contains("Year"), "its profile, asked while it is made");
         let curve = s.like_curve(&["tr-1".to_string()], &[], crates::LikeMode::Either, None, &[], false, None, &years).await;
         assert!(said(curve.err()).contains("Year"));
         let jazz_funk = vec![crates::Condition::new("genre", false, crates::Value::AllOf { values: vec!["Jazz".into(), "Funk".into()] })];
@@ -2393,6 +2399,8 @@ impl PlaylistService {
                 .zip(at)
                 .zip(facts)
                 .map(|((entry, at), f)| PlaylistRow {
+                    album_type: None,
+                    album_secondary: Vec::new(),
                     entry_id: None,
                     album_id: f.track_id.as_ref().and_then(|t| albums.get(t).cloned()),
                     album_tracks: f.track_id.as_ref().and_then(|t| albums.get(t)).and_then(|a| album_tracks.get(a).copied()),
@@ -2419,6 +2427,15 @@ impl PlaylistService {
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))??;
+        // Each track with its record's type (GOTO.S1).
+        let Some(serve) = self.served() else { return Ok(rows) };
+        let rows = tokio::task::spawn_blocking(move || {
+            let mut rows = rows;
+            serve.with_types(&mut rows);
+            rows
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(rows)
     }
 
@@ -2951,6 +2968,16 @@ impl PlaylistService {
     pub(super) async fn crate_lines_of(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<(String, Vec<String>), ToggleError> {
         let (lib, lines) = self.crate_selection(conditions, want, without).await?;
         Ok((lib.source, lines))
+    }
+
+    /// The profile of what these conditions select from the libraries not in `without` (0.17, the owner: a crate being made or
+    /// changed shows its profile only when asked, folded until its pill opens it), as a saved crate's is counted (`filter`).
+    pub async fn crate_profile(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<crates::Profile, ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want, without).await?;
+        let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
+        let mine: Vec<&crates::Facts> = lib.files().filter(|f| chosen.contains(f.rel.as_str())).collect();
+        let library: Vec<&crates::Facts> = lib.files().collect();
+        Ok(crates::profile(&mine, &library))
     }
 
     /// The library a crate is worked out from, and its lines.
@@ -3512,7 +3539,9 @@ impl PlaylistService {
             };
             let alike = lib.alike();
             let song = |line: &str| Some(crate::serve::ids::song(lib.files[alike.place_of_line(line)?].track?));
-            Arc::new(by_fit(lines, |l| fit.get(&song(l)?).copied(), look.down))
+            let fit = |l: &str| fit.get(&song(l)?).copied();
+            // A Sounds like's crate: Most alike, its closeness first and the taste among those as alike (0.17).
+            if crates::ranks_alike(conditions) { Arc::new(crates::most_alike(lines, &lib.resolved(conditions), fit, look.down)) } else { Arc::new(by_fit(lines, fit, look.down)) }
         } else {
             let mut rows = self.rows_of(lines, &lib.source).await?;
             self.with_plays_and_added(&mut rows, lib).await;
@@ -4315,7 +4344,8 @@ impl PlaylistService {
     /// An artist's Top recommendations (the owner, 2026-10-23: "a list of tracks which follows taste", in place of
     /// their most played): their tracks of the libraries switched on, those that fit the asking account's taste best
     /// first (`taste_in`, `Alike::fit`: as Best match), at most `count`, as song ids.
-    pub async fn artist_picks(&self, name: &str, without: &[String], count: usize) -> Result<Vec<String>, ToggleError> {
+    /// `only`: their tracks by song id where the page knows the artist by id (G6), so a namesake's tracks are not theirs; else by name.
+    pub async fn artist_picks(&self, name: &str, without: &[String], count: usize, only: Option<std::collections::HashSet<String>>) -> Result<Vec<String>, ToggleError> {
         let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::Refused("Recommendations are an account's own: sign in.".into()))?;
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let lib = self.crate_library(None, false, false, without).await?;
@@ -4328,8 +4358,10 @@ impl PlaylistService {
                 .files
                 .iter()
                 .enumerate()
-                .filter(|(i, f)| lib.on(*i) && f.artists.iter().any(|a| a.eq_ignore_ascii_case(&name)))
-                .filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), alike.fit(&taste, i, lib.by())?)))
+                .filter(|(i, f)| lib.on(*i) && (only.is_some() || f.artists.iter().any(|a| a.eq_ignore_ascii_case(&name))))
+                .filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), i)))
+                .filter(|(song, _)| only.as_ref().is_none_or(|o| o.contains(song)))
+                .filter_map(|(song, i)| Some((song, alike.fit(&taste, i, lib.by())?)))
                 .collect();
             fit.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             Ok(fit.into_iter().take(count).map(|(id, _)| id).collect())

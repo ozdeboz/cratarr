@@ -261,13 +261,23 @@ fn heard_checks(heard: Option<&Heard>, tracks: &[Track], matched: Option<&super:
 }
 
 /// The reference's check: MusicBrainz's release as matched; else what Discogs knows; waiting while it is looked for.
-fn reference_check(matched: Option<&super::matching::Match>, looking: bool, discogs: Option<&super::discogs::AlbumFacts>, n: usize) -> Check {
+/// The card's Reference line (the owner, 2026-11-19: "unreadable"; what was compared, so MusicBrainz never reads as the authority:
+/// judging by every source equally comes with 0.18's matcher). A certain match: "Matches a MusicBrainz edition: <title>, all N
+/// tracks". A likely one: "Compared with MusicBrainz's editions: probably <edition>; track 18's length differs (2:00 against
+/// 10:38)", by the card's own tracks, so a match kept before reads so too; several editions fitting within a few seconds say so.
+/// Only Discogs: "Only Discogs knows it (1999)". None: "No source knows it". Pure.
+fn reference_check(matched: Option<&super::matching::Match>, looking: bool, discogs: Option<&super::discogs::AlbumFacts>, tracks: &[Track]) -> Check {
+    let n = tracks.len();
     match (matched, discogs) {
-        (Some(m), _) if m.certain => Check { key: "reference", state: "green", said: format!("MusicBrainz agrees: {}, all {n} tracks", m.title) },
-        (Some(m), _) => Check { key: "reference", state: "amber", said: format!("MusicBrainz likely: {}", m.why) },
+        (Some(m), _) if m.certain => Check { key: "reference", state: "green", said: super::matching::agrees_words(&m.title, n) },
+        (Some(m), _) => {
+            let theirs = |t: &Track| m.tracks.iter().position(|(f, ..)| *f == t.file).and_then(|i| m.lengths.get(i).copied().flatten());
+            let differ = super::matching::differing(tracks.iter().enumerate().map(|(i, t)| (t.no.map_or(i + 1, |no| no as usize), (t.ms + 500) / 1000, theirs(t))));
+            Check { key: "reference", state: "amber", said: super::matching::likely_words(&m.title, m.year, &m.format, &differ, m.fits > 1) }
+        }
         (None, _) if looking => Check { key: "reference", state: "waiting", said: "Being looked for on MusicBrainz".into() },
         (None, Some(d)) => Check { key: "reference", state: "amber", said: format!("Only Discogs knows it{}", d.year.map(|y| format!(" ({y})")).unwrap_or_default()) },
-        (None, None) => Check { key: "reference", state: "red", said: "No reference knows it".into() },
+        (None, None) => Check { key: "reference", state: "red", said: "No source knows it".into() },
     }
 }
 
@@ -334,10 +344,42 @@ async fn soulseek_user(files: &[String]) -> Option<String> {
     best.map(|(_, u)| u)
 }
 
+/// How a record's copy waiting stands in the library (C37a, OQ1; RF2): against the copy that plays the record for most, else another
+/// record's copy in a main library its tracks pair with one for one (`Serve::stands_of`), whether it is better, that copy's catalogue
+/// folder and why; else the folder of a main library holding another edition of it by its names. Blocking.
+fn stands_of(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>, mains: &[i64]) -> Result<(Option<(bool, i64, String)>, Option<i64>)> {
+    use crate::serve::copies::why;
+    let copies = served.library.copies_of(album)?;
+    let kept = match at.and_then(|(f, d)| copies.iter().find(|c| c.folder == *f && &c.dir == d)) {
+        Some(c) => served.stands_of(&[(album.to_string(), c.clone())], mains)?.pop().flatten().map(|(better, kept)| (better, kept.folder, why(c, &kept))),
+        None => None,
+    };
+    if kept.is_some() {
+        return Ok((kept, None));
+    }
+    let edition = match crate::serve::ids::record_number(album) {
+        Some(record) => served.catalogue().other_edition_in(record, mains)?,
+        None => None,
+    };
+    Ok((None, edition))
+}
+
+/// The card's line on the library (C37a; OQ1, the owner: two records, say so): kept elsewhere, better than the copy that plays it
+/// for most or not, that copy named by its library; else another edition a main library has by name, with no action; else not in
+/// the library yet. Pure.
+fn in_library(kept: Option<(bool, String, &str)>, edition: Option<String>) -> Check {
+    let (state, said) = match (kept, edition) {
+        (Some((true, library, why)), _) => ("amber", format!("Better than the copy in {library}: {why}")),
+        (Some((false, library, why)), _) => ("red", format!("Already in {library}: {why}")),
+        (None, Some(library)) => ("amber", format!("{library} has another edition")),
+        (None, None) => ("green", "Not in your library yet".to_string()),
+    };
+    Check { key: "in_library", state, said }
+}
+
 /// A record's card. `album`: Cratarr's own album id; `at`: its copy waiting, as (catalogue folder, folder in it), which is what
-/// the card reads and hears, whichever copy plays; `library`, `verdict`: Incoming's for it. The hearing is started where it
-/// was never done.
-pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>, library: Option<String>, verdict: Option<&super::incoming::VerdictView>) -> Result<Card> {
+/// the card reads and hears, whichever copy plays; `library`: Incoming's for it. The hearing is started where it was never done.
+pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>, library: Option<String>) -> Result<Card> {
     let served = app.served.clone().context("Cratarr's own library is not open")?;
     let a = album.to_string();
     let (s, a2, at2) = (served.clone(), a.clone(), at.clone());
@@ -356,12 +398,12 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
     let matched = super::matching::kept_or_find(&served, vec![a.clone()]).await?.into_iter().next().map(|(_, m)| m);
     let looking = matched.is_none() && super::tasks::tasks().of(&served.current_user().unwrap_or_default()).iter().any(|t| t.kind == super::matching::KIND && t.finished.is_none());
     if heard.is_none() {
-        hear(app, &a, at);
+        hear(app, &a, at.clone());
     }
     let files: Vec<String> = tracks.iter().map(|t| t.file.clone()).collect();
     let folder = tracks.first().and_then(|t| t.path.parent()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let from = from_of(app, &files, &folder, &tags).await;
-    let mut checks = vec![reference_check(matched.as_ref(), looking, discogs.as_ref(), tracks.len())];
+    let mut checks = vec![reference_check(matched.as_ref(), looking, discogs.as_ref(), &tracks)];
     let (sound, acoustid) = heard_checks(heard.as_ref(), &tracks, matched.as_ref());
     checks.push(acoustid);
     checks.push(sound);
@@ -369,12 +411,13 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
     if from.kind == "soulseek" {
         checks.push(Check { key: "one_user", state: "green", said: format!("From one Soulseek user's folder: {}", from.user.clone().unwrap_or_default()) });
     }
-    checks.push(match verdict {
-        None => Check { key: "in_library", state: "green", said: "Not in your library yet".into() },
-        Some(v) if v.kind == "upgrade" => Check { key: "in_library", state: "amber", said: format!("Better than the copy in {}: {}", v.library, v.why) },
-        Some(v) => Check { key: "in_library", state: "red", said: format!("Already in {}: {}", v.library, v.why) },
-    });
-    let all_green = checks.iter().all(|c| c.state == "green");
+    let (kept, edition) = {
+        let (s, a, at, mains) = (served.clone(), album.to_string(), at.clone(), app.library.main_folders());
+        tokio::task::spawn_blocking(move || stands_of(&s, &a, at.as_ref(), &mains)).await??
+    };
+    let name = |folder: i64| app.incoming.library_name(crate::source::cratarr::KIND.id, folder);
+    checks.push(in_library(kept.as_ref().map(|(better, folder, why)| (*better, name(*folder), why.as_str())), edition.map(name)));
+    let suggested = suggested(&checks);
     let year = tags.iter().find_map(|t| t.items.iter().find(|(_, n, _)| *n == Some("date")).and_then(|(_, _, v)| v.get(..4)?.parse().ok()));
     let card_tracks = tracks
         .iter()
@@ -401,8 +444,13 @@ pub async fn card(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>,
         format: format_of(&tags),
         checks,
         tracks: card_tracks,
-        suggested: all_green.then_some("keep"),
+        suggested,
     })
+}
+
+/// What Cratarr suggests for a record by its checks: Keep where every one is green; else nothing, the checks saying why.
+fn suggested(checks: &[Check]) -> Option<&'static str> {
+    checks.iter().all(|c| c.state == "green").then_some("keep")
 }
 
 /// A record waiting, as the list of them says it (its card opens on its own: `card`).
@@ -422,21 +470,48 @@ pub struct Waiting {
 /// Every record waiting in an Incoming library of Cratarr's own, as Incoming lists them: no card worked out (a card is
 /// asked for one record; 0.14's preview.2: working out the cards of every Incoming library's records, 800 in one,
 /// took minutes).
-pub async fn waiting(app: &Arc<super::App>) -> Vec<Waiting> {
+pub async fn waiting(app: &super::App) -> Vec<Waiting> {
     let view = app.incoming.list(None).await;
     let mut out = Vec::new();
+    let mut places = Vec::new();
     for s in view.sources.iter().filter(|s| s.id == crate::source::cratarr::KIND.id) {
         if let Some(e) = &s.error {
             tracing::warn!(target: "library", reason = %e, "records waiting not listed");
         }
-        out.extend(s.albums.iter().map(|a| Waiting {
-            source: s.id.clone(),
-            album: a.id.clone(),
-            title: a.title.clone(),
-            artist: a.artist.clone().unwrap_or_default(),
-            library: a.library.clone(),
-            verdict: s.verdicts.get(&a.id).map(|v| v.kind),
-        }));
+        for a in &s.albums {
+            places.push((a.id.clone(), a.copies.first().map(|c| (c.folder, c.dir.clone()))));
+            out.push(Waiting { source: s.id.clone(), album: a.id.clone(), title: a.title.clone(), artist: a.artist.clone().unwrap_or_default(), library: a.library.clone(), verdict: None });
+        }
+    }
+    // Each one's stand against a copy kept elsewhere (C37a; RF2: another record's, paired track for track): an upgrade where Replace
+    // would take it, else in two libraries.
+    if let Some(served) = app.served.clone() {
+        use crate::serve::copies::replaces;
+        let mains = app.library.main_folders();
+        let stands = tokio::task::spawn_blocking(move || {
+            let found: Vec<Option<(String, crate::serve::copies::Copy)>> = places
+                .iter()
+                .map(|(id, at)| {
+                    let c = served.library.copies_of(id).ok()?.into_iter().find(|c| at.as_ref().is_some_and(|(f, d)| c.folder == *f && &c.dir == d))?;
+                    Some((id.clone(), c))
+                })
+                .collect();
+            let asked: Vec<(String, crate::serve::copies::Copy)> = found.iter().flatten().cloned().collect();
+            let mut stood = served.stands_of(&asked, &mains).unwrap_or_else(|e| {
+                tracing::warn!(target: "library", reason = %format!("{e:#}"), "how records waiting stand not read");
+                vec![None; asked.len()]
+            });
+            stood.reverse();
+            found
+                .iter()
+                .map(|f| f.as_ref().and_then(|_| stood.pop().flatten()).map(|(better, kept)| if replaces(better, kept.kind) { "upgrade" } else { "duplicate" }))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        for (w, v) in out.iter_mut().zip(stands) {
+            w.verdict = v;
+        }
     }
     out
 }
@@ -491,6 +566,61 @@ pub fn hear(app: &Arc<super::App>, album: &str, at: Option<(i64, String)>) {
 mod tests {
     use super::*;
 
+    /// The owner (2026-11-19): the Reference line says what was compared, never MusicBrainz as the authority. A likely match names its
+    /// edition and the tracks whose lengths differ, by the card's own track numbers, the file's length against the edition's; several
+    /// editions fitting within a few seconds say so; a certain one says all its tracks match; only Discogs, and none, as said. No
+    /// "likely", no "ref", no tolerance in seconds. A match kept before (no format, no count of editions) reads so too.
+    #[test]
+    fn the_reference_line_says_what_was_compared_and_which_tracks_differ() {
+        let track = |no: u32, ms: i64| Track { id: format!("tr-{no}"), path: PathBuf::from(format!("{no:02}.flac")), place: (0, format!("A/{no:02}.flac")), file: format!("{no:02}.flac"), title: format!("Track {no}"), ms, disc: Some(1), no: Some(no) };
+        let tracks: Vec<Track> = (1..=18).map(|no| track(no, if no == 18 { 120_000 } else { 200_000 })).collect();
+        let m = super::super::matching::Match {
+            release: "r1".into(),
+            release_group: None,
+            title: "Down the Stairs".into(),
+            artist: "Kite Theory".into(),
+            artist_id: None,
+            year: Some(2002),
+            certain: false,
+            why: "Down the Stairs, 2002, CD · 17 of 18 tracks within 5 s".into(),
+            tracks: tracks.iter().map(|t| (t.file.clone(), String::new(), None)).collect(),
+            lengths: (1..=18).map(|no| Some(if no == 18 { 638 } else { 200 })).collect(),
+            format: "CD".into(),
+            fits: 0,
+        };
+        let line = |c: Check| (c.state, c.said);
+        let probably = "Compared with MusicBrainz's editions: probably Down the Stairs (2002 CD); track 18's length differs (2:00 against 10:38)";
+        assert_eq!(line(reference_check(Some(&m), false, None, &tracks)), ("amber", probably.to_string()));
+        let kept_before = super::super::matching::Match { format: String::new(), ..m.clone() };
+        assert_eq!(line(reference_check(Some(&kept_before), false, None, &tracks)).1, "Compared with MusicBrainz's editions: probably Down the Stairs (2002); track 18's length differs (2:00 against 10:38)");
+        let near: Vec<Track> = (1..=18).map(|no| track(no, if no == 18 { 636_000 } else { 200_000 })).collect();
+        let several = super::super::matching::Match { fits: 3, ..m.clone() };
+        assert_eq!(line(reference_check(Some(&several), false, None, &near)).1, "Compared with MusicBrainz's editions: several fit within a few seconds; none exactly");
+        let certain = super::super::matching::Match { certain: true, ..m.clone() };
+        assert_eq!(line(reference_check(Some(&certain), false, None, &tracks)), ("green", "Matches a MusicBrainz edition: Down the Stairs, all 18 tracks".to_string()));
+        let discogs = super::super::discogs::AlbumFacts { year: Some(1999), ..Default::default() };
+        assert_eq!(line(reference_check(None, false, Some(&discogs), &tracks)), ("amber", "Only Discogs knows it (1999)".to_string()));
+        assert_eq!(line(reference_check(None, false, None, &tracks)), ("red", "No source knows it".to_string()));
+        for c in [reference_check(Some(&m), false, None, &tracks), reference_check(Some(&certain), false, None, &tracks)] {
+            for word in ["likely", "within 5", "ref"] {
+                assert!(!c.said.contains(word), "{}", c.said);
+            }
+        }
+    }
+
+    /// C37a, OQ1: the card's line on the library: a copy kept elsewhere it is better than (named by its library) or not; else another
+    /// edition a main library has by name, no action; else nothing yet.
+    #[test]
+    fn the_card_says_how_the_record_stands_in_the_library() {
+        let line = |c: Check| (c.state, c.said);
+        let better = in_library(Some((true, "Music".into(), "lossless, yours is 320 kbps")), None);
+        assert_eq!(line(better), ("amber", "Better than the copy in Music: lossless, yours is 320 kbps".to_string()));
+        let twice = in_library(Some((false, "Music".into(), "320 kbps, same as yours")), Some("Music".into()));
+        assert_eq!(line(twice), ("red", "Already in Music: 320 kbps, same as yours".to_string()));
+        assert_eq!(line(in_library(None, Some("Music".into()))), ("amber", "Music has another edition".to_string()));
+        assert_eq!(line(in_library(None, None)), ("green", "Not in your library yet".to_string()));
+    }
+
     /// A copy that does not play has no rows in `songs`: all there is of it is its files, and a card about it must list those,
     /// in the order their own tags give.
     #[test]
@@ -541,5 +671,35 @@ mod tests {
         assert_eq!(c[0].state, "amber");
         assert!(c[0].said.contains("2 album names"));
         assert_eq!(c[1].state, "amber");
+    }
+
+    /// SK5.3 (the owner, 2026-11-19): what Soulseek's check let through as notes shows on its arrival's card, amber, in the gate's
+    /// own words, as its hearing keeps them (`hear`: `Findings::why`): no red for notes alone, never green, and no Keep suggested
+    /// while a check is not green. Keep, Replace and Delete stay in the album's menu, as for any arrival.
+    #[test]
+    fn the_notes_show_amber_on_the_arrivals_card() {
+        use crate::analysis::flaws::Findings;
+        let track = |no: u32, title: &str| {
+            let file = format!("{no:02} {title}.flac");
+            Track { id: format!("tr-{no}"), path: PathBuf::from(&file), place: (0, format!("Tide Tables/{file}")), file, title: title.into(), ms: 240_000, disc: Some(1), no: Some(no) }
+        };
+        let tracks = [track(1, "Slack Water"), track(2, "Neap"), track(3, "Spring Tide")];
+        let heard = |no: u32, flaws: Findings| {
+            let t = &tracks[no as usize - 1];
+            HeardTrack { file: t.file.clone(), flaw: flaws.why(), recordings: vec![format!("rec-{no}")], ..HeardTrack::default() }
+        };
+        let h = Heard {
+            tracks: vec![
+                heard(1, Findings::default()),
+                heard(2, Findings { clips: 5, first_clip: Some(106.0), ..Findings::default() }),
+                heard(3, Findings { clicks: vec![130.0], pop_at_end: true, ..Findings::default() }),
+            ],
+            no_acoustid: false,
+        };
+        let (sound, acoustid) = heard_checks(Some(&h), &tracks, None);
+        assert_eq!(sound, Check { key: "sound", state: "amber", said: "Track 2: Clipped at 1:46; Track 3: A click at 2:10; a pop at the very end".into() });
+        assert_eq!(acoustid.state, "green", "AcoustID knows each");
+        assert_eq!(suggested(&[acoustid.clone(), sound]), None, "not every check green: Keep not suggested");
+        assert_eq!(suggested(&[acoustid]), Some("keep"));
     }
 }

@@ -11,7 +11,7 @@
 //! Nothing is written by itself (the owner: always asked): the switch only decides whether Health lists the records
 //! whose files differ; the review sheet offers them (`proposal`), a run on the one path (`file_runs`) writes the ticked.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -51,8 +51,24 @@ pub struct Held {
     pub classical: bool,
 }
 
-/// The records whose files differ, as last counted, and the library build they were counted for.
-static DIFFER: Mutex<Option<(i64, HashSet<String>)>> = Mutex::new(None);
+/// The records whose files differ, each with the fields its files lack (F27), as last counted, and the library build they were
+/// counted for.
+static DIFFER: Mutex<Option<(i64, HashMap<String, Vec<super::file_runs::FileFact>>)>> = Mutex::new(None);
+
+/// What each record's files lack (F27): every field its plan writes, with what it gets, in the order the plan first names them; a
+/// field once. The record's state line names them, as its plan's rows do. Pure.
+pub fn facts_of(files: &[FileWrite]) -> HashMap<String, Vec<super::file_runs::FileFact>> {
+    let mut out: HashMap<String, Vec<super::file_runs::FileFact>> = HashMap::new();
+    for f in files {
+        let facts = out.entry(f.album.clone()).or_default();
+        for (field, values) in &f.after {
+            if !facts.iter().any(|x| &x.field == field) {
+                facts.push(super::file_runs::FileFact { field: field.clone(), values: values.clone() });
+            }
+        }
+    }
+    out
+}
 
 /// On unless switched off: type and year write by default (decision 0097, the Catalogue sheet's Write).
 pub fn is_on(serve: &crate::serve::Serve) -> bool {
@@ -112,10 +128,10 @@ pub fn track_plan(r: &Held, has: &HashMap<String, Vec<String>>) -> (Vec<(String,
 fn types_from(type_from: Option<&str>, why: Option<&str>) -> String {
     match (type_from, why) {
         (Some("set"), _) => "set by hand".into(),
-        (_, Some(_)) => "the type rule".into(),
+        (_, Some(_)) => "the release type rule".into(),
         (Some("musicbrainz"), None) => "MusicBrainz".into(),
         (Some("discogs"), None) => "Discogs".into(),
-        _ => "the type rule".into(),
+        _ => "the release type rule".into(),
     }
 }
 
@@ -180,8 +196,7 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
         }
     }
     if albums.is_none() {
-        let differ = p.records.iter().map(|r| r.album.clone()).collect();
-        *DIFFER.lock().unwrap_or_else(|e| e.into_inner()) = Some((serve.built_at(), differ));
+        *DIFFER.lock().unwrap_or_else(|e| e.into_inner()) = Some((serve.built_at(), facts_of(&p.files)));
     }
     Ok(p)
 }
@@ -209,7 +224,7 @@ pub async fn plan(albums: Option<Vec<String>>) -> Result<file_runs::PlanView> {
 pub async fn apply(app: &Arc<super::App>, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs::Status> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
-    anyhow::ensure!(!file_runs::busy(KIND), "Already writing");
+    anyhow::ensure!(!file_runs::busy(&app.journal, KIND), "Already writing");
     let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
         anyhow::ensure!(is_on(&served), "Writing into files is switched off");
         Ok(file_runs::ticked(proposal(&served, Some(&albums))?, &albums, stamps.as_ref()))
@@ -243,7 +258,10 @@ pub fn tell(source: &str, albums: &mut [crate::source::Album]) {
     }
     for a in albums {
         a.release.files_state = file_runs::state_of(&a.id, now)
-            .or_else(|| differ.as_ref().filter(|(_, d)| d.contains(&a.id)).map(|_| FilesState { state: "differs".into(), done: None, of: None, run: None, at: None }));
+            .or_else(|| {
+                let facts = differ.as_ref().and_then(|(_, d)| d.get(&a.id)).cloned()?;
+                Some(FilesState { state: "differs".into(), done: None, of: None, run: None, at: None, facts: Some(facts) })
+            });
     }
 }
 
@@ -258,7 +276,7 @@ mod tests {
         pairs.iter().map(|(k, v)| (k.to_string(), s(v))).collect()
     }
     fn held(types: &[&str], year: Option<u32>, year_set: bool, classical: bool) -> Held {
-        Held { id: "al-1".into(), types: s(types), types_from: "the type rule".into(), year, year_set, classical, ..Held::default() }
+        Held { id: "al-1".into(), types: s(types), types_from: "the release type rule".into(), year, year_set, classical, ..Held::default() }
     }
 
     #[test]
@@ -266,7 +284,7 @@ mod tests {
         // MusicBrainz's word in the file, Cratarr's two layers: written, said where from.
         let (b, a, f) = track_plan(&held(&["album", "compilation"], None, false, false), &has(&[("releasetype", &["album"])]));
         assert_eq!((b, a), (vec![("releasetype".into(), s(&["album"]))], vec![("releasetype".into(), s(&["album", "compilation"]))]));
-        assert_eq!(f, vec![("releasetype".to_string(), "the type rule".to_string())]);
+        assert_eq!(f, vec![("releasetype".to_string(), "the release type rule".to_string())]);
         // The same, whatever the case or separator: nothing.
         let (_, a, _) = track_plan(&held(&["album", "compilation"], None, false, false), &has(&[("releasetype", &["Compilation\0Album"])]));
         assert!(a.is_empty());
@@ -318,9 +336,33 @@ mod tests {
 
     #[test]
     fn where_a_type_comes_from() {
+        // F27.2 (changed by design): the rule named as the sheet names it, "the release type rule".
         assert_eq!(types_from(Some("set"), None), "set by hand");
-        assert_eq!(types_from(Some("musicbrainz"), Some("tracks")), "the type rule");
+        assert_eq!(types_from(Some("musicbrainz"), Some("tracks")), "the release type rule");
         assert_eq!(types_from(Some("musicbrainz"), None), "MusicBrainz");
-        assert_eq!(types_from(None, None), "the type rule");
+        assert_eq!(types_from(None, None), "the release type rule");
+    }
+
+    /// F27.1, F27.4: a record whose files differ says which fields they lack, with what each gets: the same fields and values its
+    /// plan's rows name, a field once though every track gets it; another record's its own.
+    #[test]
+    fn a_differing_records_state_names_what_its_files_lack() {
+        let write = |album: &str, after: &[(&str, &[&str])]| FileWrite {
+            album: album.into(),
+            path: std::path::PathBuf::from(format!("/music/{album}/1.flac")),
+            track: None,
+            before: Vec::new(),
+            after: after.iter().map(|(f, v)| (f.to_string(), s(v))).collect(),
+            from: Vec::new(),
+            undone: false,
+            whole: None,
+        };
+        let files = [write("al-42", &[("releasetype", &["album"])]), write("al-42", &[("releasetype", &["album"]), ("date", &["2019"])]), write("al-7", &[("date", &["2001"])])];
+        let facts = facts_of(&files);
+        let fact = |field: &str, values: &[&str]| super::super::file_runs::FileFact { field: field.into(), values: s(values) };
+        assert_eq!(facts["al-42"], [fact("releasetype", &["album"]), fact("date", &["2019"])]);
+        assert_eq!(facts["al-7"], [fact("date", &["2001"])]);
+        let shown = serde_json::to_value(FilesState { state: "differs".into(), done: None, of: None, run: None, at: None, facts: Some(facts["al-7"].clone()) }).unwrap();
+        assert_eq!(shown, serde_json::json!({ "state": "differs", "facts": [{ "field": "date", "values": ["2001"] }] }));
     }
 }

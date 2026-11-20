@@ -501,6 +501,15 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Every artist a song or an album credits, by their number for life: a track's credit is held here, not in the catalogue
+    /// (RT01b: never forgotten while credited). Blocking.
+    pub fn artists_credited(&self) -> Result<std::collections::BTreeSet<i64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT artist_id FROM song_artists UNION SELECT artist_id FROM album_artists")?;
+        let credited: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(credited.iter().filter_map(|id| crate::serve::ids::artist_number(id)).collect())
+    }
+
     /// An artist with their albums, newest release last.
     pub fn artist(&self, id: &str) -> Result<Option<Artist>> {
         let db = self.db();
@@ -858,6 +867,29 @@ impl Library {
         Ok(out)
     }
 
+    /// These albums' kept types (GOTO.S4: the build's own, never worked out again): `release_type` and `secondary`, by id; an album
+    /// not in the library left out.
+    pub fn kept_types(&self, ids: &[String]) -> Result<HashMap<String, (Option<String>, Vec<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT release_type, secondary FROM albums WHERE id = ?1")?;
+        let mut out = HashMap::new();
+        for id in ids {
+            let row = st.query_map([id], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)))?.next().transpose()?;
+            if let Some((kind, secondary)) = row {
+                out.insert(id.clone(), (kind, secondary.split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect()));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every album's tracks in the library now, by album id (A3.4: whether a row of its missing tracks still fits it).
+    pub fn song_counts(&self) -> Result<HashMap<String, usize>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album_id, count(*) FROM songs GROUP BY album_id")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as usize)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// A song's file and album (0.9.14, Health's fixes): its folder, its path in it, its album's id and its title.
     pub fn song_file(&self, id: &str) -> Result<Option<(i64, String, String, String)>> {
         let db = self.db();
@@ -912,6 +944,15 @@ impl Library {
             (c.kind, c.order) = self.kind_of(c.folder);
         }
         Ok(copies)
+    }
+
+    /// Each record's album as the last build typed it (RF1): its record and its release type, set by hand or an incomplete album's
+    /// whole release among what typed it (`release_type_of`), for the had rule to class it by (`Catalogue::keep_types`). Blocking.
+    pub fn record_types(&self) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT record, release_type FROM albums WHERE release_type IS NOT NULL ORDER BY record")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The copy that plays for most people: `copy_for` with no viewer. What acts on a record as a whole and has no one's

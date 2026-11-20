@@ -6,13 +6,12 @@
   // lib/CrateEditor) shows this one list.
   import { onDestroy, untrack, type Snippet } from 'svelte';
   import { coverUrl, previewCrate, type Condition, type CrateName, type PlaylistRow } from './api';
-  import { crateViewOf, holdsLine, orderRecords, recordKey, recordOrderOf, recordOrders, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, ranksAlike, recordKey, recordOrderOf, recordOrders, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
   import Asking from './Asking.svelte';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
   import ListHead from './ListHead.svelte';
   import { hiddenLibraries } from './listFilter.svelte';
-  import MarkLoader from './MarkLoader.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
   import { clockText } from './remote.svelte';
@@ -41,6 +40,7 @@
     views = 'quick',
     actions,
     onnames,
+    pick = null,
   }: {
     conditions: readonly Condition[];
     /** Its name, for what plays. */
@@ -53,6 +53,8 @@
     actions?: Snippet;
     /** The server's names for the ids the conditions hold (decision 0088), as each answer brings them. */
     onnames?: (names: Record<string, CrateName>) => void;
+    /** Words typed and not read yet (lib/quickCrate crateActions): one button, Pick, reads them, in place of Shuffle and Play. */
+    pick?: (() => void) | null;
   } = $props();
 
   // Its count and its tracks a page at a time, asked 300 ms after a change (none without a condition: that would be the
@@ -135,9 +137,31 @@
   // 2026-11-02): a record's its tracks of the crate and Go to album, a track's its own.
   let recordMenu = $state<string | null>(null);
   let trackMenu = $state.raw<MenuTrack | null>(null);
-  const menuTrackOf = (r: PlaylistRow): MenuTrack => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, has_versions: r.has_versions });
+  const menuTrackOf = (r: PlaylistRow): MenuTrack => ({
+    source: preview?.source ?? 'cratarr',
+    id: r.id!,
+    name: r.name ?? r.file,
+    artist: r.artist,
+    album: r.album,
+    album_id: r.album_id ?? null,
+    has_versions: r.has_versions,
+    album_type: r.album_type ?? null,
+    album_secondary: r.album_secondary ?? [],
+  });
   const localOf = (rows: PlaylistRow[]): LocalTrack[] =>
-    rows.filter((r) => r.id && !r.missing).map((r) => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
+    rows
+      .filter((r) => r.id && !r.missing)
+      .map((r) => ({
+        source: preview?.source ?? 'cratarr',
+        id: r.id!,
+        name: r.name ?? r.file,
+        artist: r.artist,
+        album: r.album,
+        album_id: r.album_id ?? null,
+        album_type: r.album_type ?? null,
+        album_secondary: r.album_secondary ?? [],
+        duration_secs: r.duration_secs,
+      }));
   const openTrackMenu = (r: PlaylistRow) => r.id && !r.missing && (trackMenu = menuTrackOf(r));
   const openRecord = $derived(view === 'records' && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
   $effect(() => {
@@ -169,8 +193,12 @@
 <div class="sum">
   <b>{preview ? `${preview.total.toLocaleString()} ${preview.total === 1 ? 'track' : 'tracks'}` : ''}</b>
   {@render actions?.()}
-  <button class="icon" aria-label="Shuffle" title="Shuffle" disabled={none || !!starting} onclick={() => play('shuffle')}><Icon name="shuffle" size={22} /></button>
-  <button class="icon play" aria-label="Play" title="Play" disabled={none || !!starting} onclick={() => play('play')}><Icon name="play" size={22} /></button>
+  {#if pick}
+    <button class="pick" onclick={pick}>Pick</button>
+  {:else}
+    <button class="icon" aria-label="Shuffle" title="Shuffle" disabled={none || !!starting} onclick={() => play('shuffle')}><Icon name="shuffle" size={22} /></button>
+    <button class="icon play" aria-label="Play" title="Play" disabled={none || !!starting} onclick={() => play('play')}><Icon name="play" size={22} /></button>
+  {/if}
 </div>
 {#if previewError}
   <p class="error" role="alert">{previewError}</p>
@@ -179,7 +207,7 @@
   <div class="views"><Seg label="Show the crate as" options={VIEWS} bind:value={() => view, setView} /></div>
   {#if view === 'records'}
     <ListHead
-      fields={recordOrders(null)}
+      fields={recordOrders(null, ranksAlike(null, conditions))}
       bind:value={() => recordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: recordSort.down })}
       bind:down={() => recordSort.down, (d) => (prefs.crateRecordSort = { key: recordSort.key, down: d })}
       count={plural(records.length, 'record')}
@@ -220,12 +248,14 @@
         chips={[rec.artist ?? '', holdsLine(rec.at.length, rec.of)].filter(Boolean)}
         tracks={localOf(rows)}
         album={albumId ? viewOver.bind(null, albumSubject(src, albumId)) : null}
+        albumType={rows.find((r) => r.album_type)?.album_type ?? null}
+        albumSecondary={rows.find((r) => r.album_type)?.album_secondary ?? []}
         onclose={() => (recordMenu = null)}
       />
     {/if}
   {/if}
   {#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
-  {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
+  {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><Asking size={40} now room="given" said={`Reading more tracks: ${preview.rows.length.toLocaleString()} of ${preview.total.toLocaleString()}`} /></div>{/if}
 {:else if conditions.length}
   <!-- Its first answer on its way: the one loading rule's spinner (the owner, 2026-10-31: a grabbed crate showed
        nothing, no spinner either). A later change keeps the list shown until its answer. -->
@@ -262,6 +292,19 @@
   .sum :global(.icon.play) {
     background: var(--accent);
     color: var(--accent-text);
+  }
+
+  /* Pick, in Play's place and its colours (the accent), a word as it is no symbol's. */
+  .pick {
+    height: 44px;
+    padding: 0 20px;
+    border: 0;
+    border-radius: 22px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .sum :global(.icon:disabled) {

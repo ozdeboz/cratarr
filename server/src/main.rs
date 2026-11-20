@@ -106,83 +106,128 @@ fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -
 #[cfg(test)]
 mod whole_router;
 
+/// What the arguments ask (W4): with none, the server; a known flag, its own work; anything else, nothing at all. So a flag
+/// mistyped, or one this version lacks (`--version` before 0.17), never starts a second server on a live data folder.
+#[derive(Debug, PartialEq, Eq)]
+enum Mode {
+    /// No argument: the server, on the data folder.
+    Server,
+    /// `--version` alone: the version printed, nothing opened.
+    Version,
+    Healthcheck,
+    NewApiKey,
+    MakeFixtures,
+    MakeLayout,
+    MakeGateCases,
+    Analyse,
+    Signals,
+    Beats,
+    /// Anything else, as given.
+    Unknown(String),
+}
+
+/// The known flags, as the answer to an unknown argument lists them.
+const KNOWN: &str = "--version | --healthcheck | --new-api-key <name> --out <file> | --make-fixtures <folder> | --make-layout <folder> | --make-gate-cases <folder> | --analyse <music folder> --out <file> [--threads N] | --signals <file>... | --beats <file>... | none: the server";
+
+/// The arguments after the program's name, read once (W4).
+fn mode(args: &[String]) -> Mode {
+    let Some(first) = args.first() else { return Mode::Server };
+    match first.as_str() {
+        "--version" if args.len() == 1 => Mode::Version,
+        "--healthcheck" => Mode::Healthcheck,
+        "--new-api-key" => Mode::NewApiKey,
+        "--make-fixtures" => Mode::MakeFixtures,
+        "--make-layout" => Mode::MakeLayout,
+        "--make-gate-cases" => Mode::MakeGateCases,
+        "--analyse" => Mode::Analyse,
+        "--signals" => Mode::Signals,
+        "--beats" => Mode::Beats,
+        _ => Mode::Unknown(args.join(" ")),
+    }
+}
+
+/// The fixture library (decision 0093): `--make-fixtures <folder>`, made anew there; `--make-layout <folder>`, every kind of
+/// library. The end-to-end suite is a program of its own: this is its way to them.
+fn make_and_leave(flag: &str, make: fn(&std::path::Path) -> Result<Vec<std::path::PathBuf>>, dir: Option<&String>) -> ! {
+    let Some(dir) = dir else {
+        eprintln!("{flag} <folder>");
+        std::process::exit(2);
+    };
+    std::process::exit(match make(std::path::Path::new(dir)) {
+        Ok(albums) => {
+            println!("{} albums in {dir}", albums.len());
+            0
+        }
+        Err(e) => {
+            eprintln!("{e:#}");
+            1
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
-        std::process::exit(healthcheck());
-    }
-    if std::env::args().nth(1).as_deref() == Some("--new-api-key") {
-        let args: Vec<String> = std::env::args().skip(2).collect();
-        std::process::exit(match serve::access::mint(&args) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match mode(&args) {
+        Mode::Server => {}
+        // Before anything is opened or logged: nothing of the data folder is read, so it is safe in a live container.
+        Mode::Version => {
+            println!("cratarr-server {}", env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
+        Mode::Unknown(given) => {
+            eprintln!("cratarr-server: unknown argument: {given}\nknown: {KNOWN}");
+            std::process::exit(2);
+        }
+        Mode::Healthcheck => std::process::exit(healthcheck()),
+        Mode::NewApiKey => std::process::exit(match serve::access::mint(&args[1..]) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("{e:#}");
                 1
             }
-        });
-    }
-    // The fixture library (decision 0093): `--make-fixtures <folder>`, made anew there; `--make-layout <folder>`, every kind
-    // of library. The end-to-end suite is a program of its own: this is its way to them.
-    type Make = fn(&std::path::Path) -> Result<Vec<std::path::PathBuf>>;
-    for (flag, make) in [("--make-fixtures", fixtures::make as Make), ("--make-layout", fixtures::make_layout)] {
-        if std::env::args().nth(1).as_deref() != Some(flag) {
-            continue;
-        }
-        let Some(dir) = std::env::args().nth(2) else {
-            eprintln!("{flag} <folder>");
-            std::process::exit(2);
-        };
-        std::process::exit(match make(std::path::Path::new(&dir)) {
-            Ok(albums) => {
-                println!("{} albums in {dir}", albums.len());
-                0
-            }
-            Err(e) => {
-                eprintln!("{e:#}");
-                1
-            }
-        });
-    }
-    if std::env::args().nth(1).as_deref() == Some("--analyse") {
-        let args: Vec<String> = std::env::args().skip(2).collect();
-        std::process::exit(match analysis::batch::run(&args) {
+        }),
+        Mode::MakeFixtures => make_and_leave("--make-fixtures", fixtures::make, args.get(1)),
+        Mode::MakeLayout => make_and_leave("--make-layout", fixtures::make_layout, args.get(1)),
+        Mode::MakeGateCases => make_and_leave("--make-gate-cases", fixtures::gate_cases, args.get(1)),
+        Mode::Analyse => std::process::exit(match analysis::batch::run(&args[1..]) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("{e:#}");
                 2
             }
-        });
-    }
-    // The visuals' signals of files, for measuring what they cost (decision 0046, amended): each file's length, the time
-    // its one decode took, and the bytes kept, by section.
-    if std::env::args().nth(1).as_deref() == Some("--signals") {
-        for path in std::env::args().skip(2) {
-            let started = std::time::Instant::now();
-            match analysis::analyse_with_signals(std::path::Path::new(&path), &[], None) {
-                Ok((a, s)) => {
-                    let sections = s.read().map(|m| m.keys().map(u8::to_string).collect::<Vec<_>>().join(",")).unwrap_or_default();
-                    println!("{path}: {:.0} s of sound, {:.2} s, {} bytes ({:.1} KB a minute), sections {sections}", a.duration_secs, started.elapsed().as_secs_f64(), s.0.len(), s.0.len() as f64 / 1024.0 / (a.duration_secs / 60.0).max(1e-9));
+        }),
+        // The visuals' signals of files, for measuring what they cost (decision 0046, amended): each file's length, the time
+        // its one decode took, and the bytes kept, by section.
+        Mode::Signals => {
+            for path in &args[1..] {
+                let started = std::time::Instant::now();
+                match analysis::analyse_with_signals(std::path::Path::new(path), &[], None) {
+                    Ok((a, s)) => {
+                        let sections = s.read().map(|m| m.keys().map(u8::to_string).collect::<Vec<_>>().join(",")).unwrap_or_default();
+                        println!("{path}: {:.0} s of sound, {:.2} s, {} bytes ({:.1} KB a minute), sections {sections}", a.duration_secs, started.elapsed().as_secs_f64(), s.0.len(), s.0.len() as f64 / 1024.0 / (a.duration_secs / 60.0).max(1e-9));
+                    }
+                    Err(e) => println!("{path}: {e:#}"),
                 }
-                Err(e) => println!("{path}: {e:#}"),
             }
+            return Ok(());
         }
-        return Ok(());
-    }
-    // Beat this! as the NAS hears new music (decision 0049, amended), for checking it against the PC's: a JSON line a
-    // file, its beats and downbeats in milliseconds and the seconds it took.
-    if std::env::args().nth(1).as_deref() == Some("--beats") {
-        for path in std::env::args().skip(2) {
-            let started = std::time::Instant::now();
-            let line = match app::beat_this::hear_timed(std::path::Path::new(&path)) {
-                Ok((h, spect, model)) => {
-                    let ms = |v: &[f64]| v.iter().map(|t| (t * 1000.0).round() as u32).collect::<Vec<u32>>();
-                    serde_json::json!({ "file": path, "beats": ms(&h.beats), "downbeats": ms(&h.downbeats), "secs": started.elapsed().as_secs_f64(), "spectrogram_secs": spect, "model_secs": model })
-                }
-                Err(e) => serde_json::json!({ "file": path, "error": format!("{e:#}") }),
-            };
-            println!("{line}");
+        // Beat this! as the NAS hears new music (decision 0049, amended), for checking it against the PC's: a JSON line a
+        // file, its beats and downbeats in milliseconds and the seconds it took.
+        Mode::Beats => {
+            for path in &args[1..] {
+                let started = std::time::Instant::now();
+                let line = match app::beat_this::hear_timed(std::path::Path::new(path)) {
+                    Ok((h, spect, model)) => {
+                        let ms = |v: &[f64]| v.iter().map(|t| (t * 1000.0).round() as u32).collect::<Vec<u32>>();
+                        serde_json::json!({ "file": path, "beats": ms(&h.beats), "downbeats": ms(&h.downbeats), "secs": started.elapsed().as_secs_f64(), "spectrogram_secs": spect, "model_secs": model })
+                    }
+                    Err(e) => serde_json::json!({ "file": path, "error": format!("{e:#}") }),
+                };
+                println!("{line}");
+            }
+            return Ok(());
         }
-        return Ok(());
     }
     // What is logged (RUST_LOG, else info) governs both what is printed and the diagnostics log, and can change while
     // Cratarr runs (decision 0045); the log itself opens once the data folder is known, keeping what came before.
@@ -249,6 +294,8 @@ async fn main() -> Result<()> {
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
     serve::set_instance(served.clone());
+    // Bandcamp's day after its bot check, kept across a restart (Y8).
+    bandcamp::hold_kept(&served.userdata);
     // The environment's server settings, with what Settings saved over them (0.9.8).
     let runtime = app::runtime::start(app::runtime::Seed::from_env(&env), Some(&served.userdata), &cfg.bind);
     let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), runtime.snapcast_host.clone());
@@ -294,7 +341,7 @@ async fn main() -> Result<()> {
     let linker = app.clone();
     tokio::spawn(catalogue::run(app.library.catalogue(), move || linker.library.connected_sources()));
 
-    // Decision 0035: the NAS keeps the analysis up to date (after the ThinkBook's first pass, or all of it).
+    // Decision 0035: the NAS keeps the analysis up to date (after a PC's first pass, or all of it).
     memwatch::start();
     app::analysis_pass::run(app.library.catalogue());
     // The visuals' signals for the next tracks in each queue, before they play (decision 0046, amended).
@@ -332,6 +379,11 @@ async fn main() -> Result<()> {
     app::scrobble::run(served.clone());
     // Soulseek in Cratarr (0.15): Lidarr's Wanted searched, records fetched on a tick, once a library takes them.
     app::soulseek::start(&app);
+    // Records not had that nothing keeps and nobody saw for six months, forgotten once a day (RT01), with their kept lists and
+    // the artists left with nothing (RT01b): after Soulseek's list is read, whose items keep theirs (read sooner, an empty list
+    // would be begun and written over the kept one), and the catalogue attached.
+    app::retention::start(served.clone());
+    app::requests::start(&app);
     // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).
     let importer = app.clone();
     served.import.connect(std::sync::Arc::new(move || importer.library.connected_sources()));
@@ -385,5 +437,36 @@ async fn stop_signal() {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
         () = RESTART.notified() => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P4.3 (W4): each known flag is its mode, no argument the server, anything else unknown, as given; the image starts the
+    /// binary with no argument and checks its health with `--healthcheck`.
+    #[test]
+    fn the_known_flags_are_the_known_flags() {
+        let of = |args: &[&str]| mode(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        assert_eq!(of(&[]), Mode::Server);
+        assert_eq!(of(&["--version"]), Mode::Version);
+        assert_eq!(of(&["--healthcheck"]), Mode::Healthcheck);
+        assert_eq!(of(&["--new-api-key", "phone", "--out", "/tmp/key"]), Mode::NewApiKey);
+        assert_eq!(of(&["--make-fixtures", "/tmp/fixtures"]), Mode::MakeFixtures);
+        assert_eq!(of(&["--make-fixtures"]), Mode::MakeFixtures, "its own usage line, as before");
+        assert_eq!(of(&["--make-layout", "/tmp/layout"]), Mode::MakeLayout);
+        assert_eq!(of(&["--analyse", "/music", "--out", "/tmp/analysis"]), Mode::Analyse);
+        assert_eq!(of(&["--signals", "a.flac", "b.flac"]), Mode::Signals);
+        assert_eq!(of(&["--beats", "a.flac"]), Mode::Beats);
+        for unknown in [&["--versoin"][..], &["-v"], &["version"], &["--version", "extra"], &["--version extra"], &["--help"], &[""], &["/data"]] {
+            assert_eq!(of(unknown), Mode::Unknown(unknown.join(" ")), "{unknown:?}");
+        }
+        for flag in ["--version", "--healthcheck", "--new-api-key", "--make-fixtures", "--make-layout", "--analyse", "--signals", "--beats"] {
+            assert!(KNOWN.contains(flag), "{flag} among the known: {KNOWN}");
+        }
+        let image = include_str!("../../Dockerfile");
+        assert!(image.contains(r#"ENTRYPOINT ["/cratarr-server"]"#), "the image starts the server with no argument");
+        assert!(image.contains(r#"CMD ["/cratarr-server", "--healthcheck"]"#), "and checks it with --healthcheck");
     }
 }

@@ -60,7 +60,11 @@ pub fn start() {
     tokio::spawn(async {
         tokio::time::sleep(START_AFTER).await;
         loop {
-            if let Err(e) = round().await {
+            // Its questions to MusicBrainz behind any page's, as the background asker's (R7): no one waits for a round.
+            // None while the background reading is paused (O5).
+            if !super::switches::background_paused()
+                && let Err(e) = super::musicbrainz::behind(round()).await
+            {
                 tracing::info!("harvest: a round stopped: {e:#}");
             }
             tokio::time::sleep(ROUND).await;
@@ -150,7 +154,6 @@ async fn keep(served: &std::sync::Arc<crate::serve::Serve>, subject: &str, sourc
 /// group or an artist (`what`: `release-group/<id>`, `artist/<id>`), each weighed by its votes against the most.
 async fn mb_words(http: &reqwest::Client, what: &str) -> Result<Vec<RawWord>> {
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/{what}?inc=genres+tags&fmt=json")).asked().await?.error_for_status()?.json().await?;
-    tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(mb_parse(&v))
 }
 

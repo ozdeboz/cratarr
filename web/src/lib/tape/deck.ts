@@ -1,5 +1,5 @@
 // The tape deck's machine as the page sees it (decision 0102, amended 2026-11-04, the owner: "I want a pure tape
-// engine"): the rules crate's `deck::next` (server/rules/src/deck.rs, a5's; its table in docs/tape-machine.md), in
+// engine"): the rules crate's `deck::next` (server/rules/src/deck.rs; its table in docs/tape-machine.md), in
 // tape.wasm, called here ([machine]) and only carried out. The page keeps no flag of its own about the deck: the deck
 // lives in the engine under its handle, and where the head is heard goes in with every event.
 

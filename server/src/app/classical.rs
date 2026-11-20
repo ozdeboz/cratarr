@@ -1545,6 +1545,7 @@ mod tests {
             library: None,
             copies: Vec::new(),
             artists: Vec::new(),
+            editions: None,
             release: Default::default(),
         };
         decorate(&ix, &mut a);

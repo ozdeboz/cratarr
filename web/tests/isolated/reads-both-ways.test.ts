@@ -54,12 +54,6 @@ const albums = () => ({
         { id: INCOMING, name: 'Incoming', kind: 'incoming', fetcher: null, owner: null, mine: false, colour: '#22aa33', quality: 'none', seen: true },
         { id: OWN, name: 'Your music', kind: 'own', fetcher: null, owner: 'ann', mine: true, colour: '#3322aa', quality: 'none', seen: true },
       ],
-      verdicts: {},
-      lacks: {},
-      waiting: {},
-      deletable: [],
-      keepable: [],
-      keep_to: {},
       albums: [
         {
           id: 'al-10',

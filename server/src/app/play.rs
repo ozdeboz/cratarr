@@ -57,6 +57,9 @@ pub enum Collection {
     Artist {
         source: String,
         name: String,
+        /// Their id (`ar-<n>`, G6) where the page knows it: the artist of that name it shows, not the first of the name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         /// The libraries switched off: their albums and tracks left out, as the artist showed (the owner, 2026-11-02).
         #[serde(default)]
         without: Vec<String>,
@@ -257,7 +260,14 @@ pub async fn by_name(app: &Arc<App>, said: &str, shuffled: bool, limit: usize, w
 /// A song of Cratarr's own library as players hold it.
 pub(super) fn own_track(s: crate::serve::api::Song) -> QueueTrack {
     let named = |s: String| Some(s).filter(|s| !s.is_empty());
+    // Its record's type (GOTO.S1), read as the track is described.
+    let (album_type, album_secondary) = crate::serve::instance()
+        .zip(named(s.album_id.clone()))
+        .and_then(|(serve, a)| serve.record_types(std::slice::from_ref(&a)).remove(&a))
+        .unwrap_or_default();
     QueueTrack {
+        album_type,
+        album_secondary,
         source: source::cratarr::KIND.id.to_string(),
         id: s.id,
         name: s.title,
@@ -364,8 +374,8 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             let ids = named.iter().map(|t| t.id.clone()).collect();
             Ok(Candidates { named: Some(named), ..Candidates::of(v.source, ids, Some(v.title)) })
         }
-        Collection::Artist { source, name, without } => {
-            let v = app.playing.artist_view(source, name, without).await?;
+        Collection::Artist { source, name, id, without } => {
+            let v = app.playing.artist_view(source, name, id.as_deref(), without).await?;
             let named: Vec<QueueTrack> = v
                 .rows
                 .into_iter()
@@ -560,5 +570,8 @@ mod tests {
             let r: Request = serde_json::from_value(serde_json::json!({ "what": what, "how": "play" })).unwrap();
             assert_eq!((r.on, r.from), (None, None));
         }
+        // G6: an artist by their id where the page knows it.
+        let r: Request = serde_json::from_value(serde_json::json!({ "what": { "kind": "artist", "source": "cratarr", "name": "Rone", "id": "ar-2" }, "how": "play" })).unwrap();
+        assert_eq!(r.what, Collection::Artist { source: "cratarr".into(), name: "Rone".into(), id: Some("ar-2".into()), without: Vec::new() });
     }
 }

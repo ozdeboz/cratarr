@@ -5,6 +5,10 @@
  */
 export type QueueTrack = { 
 /**
+ * Its record's type, as the Library list serves it (GOTO.S1): a queue row's Go to names it.
+ */
+album_type?: string, album_secondary?: Array<string>, 
+/**
  * Its entry in the queue (decision 0033): an id of its own, never reused, apart from the track's.
  */
 entry?: string, 

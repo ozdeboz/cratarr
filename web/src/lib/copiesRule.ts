@@ -4,8 +4,9 @@
 //
 // A list says `copies`, or until the server folds its records (and for a server of another kind) the one `library`, or
 // neither: a list with no libraries (the device's, a server's in its mode, Discover).
-import type { AlbumCopy, AlbumsSource, LibraryInfo, ListedAlbum } from './api';
+import type { AlbumCopy, AlbumsSource, KeepPreview, LibraryInfo, ListedAlbum, MoveSheet, ReplacePreview, ReplaceSheet } from './api';
 import { size } from './exportChoices';
+import { ENTRY_WORDS } from './menuTable';
 
 /** Whether a format loses nothing: here so a copy's line can say it, and the list's order by quality too (lib/pageView). */
 const LOSSLESS = new Set(['FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV', 'WAVPACK', 'DSF', 'DFF']);
@@ -62,7 +63,7 @@ export type AlbumOffer = {
   name: string;
   /** The libraries it can move into. */
   targets: LibraryInfo[];
-  /** The main libraries it can Replace a copy in (decision 0101 point 2). */
+  /** The main libraries it can Replace a copy in (decision 0101 point 2; from someone's own music, RY01). */
   replaceInto: LibraryInfo[];
   deletable: boolean;
   job: number | null;
@@ -72,41 +73,73 @@ export type AlbumOffer = {
  *  is added to it ("Add to Your music", "Add to Music"); one between main libraries moves. */
 export const adds = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind === 'incoming' || to.kind === 'own';
 
-type Offered = Pick<AlbumsSource, 'library_info' | 'verdicts' | 'deletable' | 'keepable' | 'keep_to'>;
-type Listed = Pick<ListedAlbum, 'id' | 'library' | 'copies'>;
-type Rights = Pick<AlbumCopy, 'deletable' | 'keepable' | 'keep_to'> & { library?: string };
+/** Whether its move into `to` is a copy (C40, the owner 2026-11-04): a kept record into or out of someone's own music stays where
+ *  it is, and a copy of it goes ("Copy to Your music"). Out of Incoming it is added, between main libraries moved. A departed
+ *  user's music (its owner gone: `owner` null) goes into a main library whole, as the server moves it (T3). */
+export const copies = (from: LibraryInfo | null, to: LibraryInfo) =>
+  from?.kind !== 'incoming' && (from?.kind === 'own' || to.kind === 'own') && !(from?.kind === 'own' && from.owner === null && to.kind === 'main');
 
-/** Each library's copy of a record, once: of two folders of one library `from` names the first. Another server's album
- *  says what may be done with it in its list, by id, and lies in its one library. */
-function copiesIn(s: Offered, a: Listed): Rights[] {
-  if (!a.copies) return [{ library: a.library, deletable: s.deletable.includes(a.id), keepable: s.keepable.includes(a.id), keep_to: s.keep_to[a.id] ?? null }];
+/** A move's words (C40, T3): a copy's, an add's, a move's. One place for the record's menu and Several albums. */
+export const moveWords = (copying: boolean, adding: boolean) =>
+  copying
+    ? { verb: 'Save', none: 'saved to', past: 'Saved', not: 'Not saved', act: 'save' }
+    : adding
+      ? { verb: 'Add', none: 'added to', past: 'Added', not: 'Not added', act: 'add' }
+      : { verb: 'Move', none: 'moved to', past: 'Moved', not: 'Not moved', act: 'move' };
+
+/** The record menu's sentences for a move of `title` from `from` into `to`, as its preview says it (T3: `copy` is the server's
+ *  word, so what the server moves says Move): the question (`lead`, the folder, `tail`; `ask` whole), its button, the toast,
+ *  and the Undo's toast. A copy leaves the album where it is, and its Undo takes the copy away. */
+export function moveSentences(p: { title: string; from: string; to: string; folder: string; files: number; copy: boolean; adding: boolean }) {
+  const w = moveWords(p.copy, p.adding);
+  const lead = `${w.verb} ${p.title} ${p.copy || p.adding ? 'to' : 'into'} ${p.to} as `;
+  const tail = ` (${p.files} ${p.files === 1 ? 'file' : 'files'})?${p.copy ? ` The album stays in ${p.from}.` : ''}`;
+  return {
+    lead,
+    tail,
+    ask: `${lead}${p.folder}${tail}`,
+    button: `${w.verb} to ${p.to}`,
+    done: `${w.past} ${p.title} to ${p.to}.`,
+    undone: p.copy ? `${p.title} is no longer in ${p.to}.` : `${p.title} is back in ${p.from}.`,
+  };
+}
+
+type Offered = Pick<AlbumsSource, 'library_info'>;
+type Listed = Pick<ListedAlbum, 'id' | 'library' | 'copies'>;
+type Rights = Pick<AlbumCopy, 'deletable' | 'keepable' | 'keep_to' | 'against' | 'replace_into'> & { library?: string };
+
+/** Each library's copy of a record, once: of two folders of one library `from` names the first. Another server's album comes
+ *  with its one copy (C36). A list with no libraries (the device's, Discover's) names no copy and allows nothing. */
+function copiesIn(a: Listed): Rights[] {
+  if (!a.copies) return [{ library: a.library, deletable: false, keepable: false, keep_to: null }];
   return a.copies.filter((c, i) => a.copies!.findIndex((x) => x.library === c.library) === i);
 }
 
 /** One offer per copy, in the list's order. A library already holding a copy is no target: that is Replace, not Move.
  *  An Incoming copy's Add to goes first where it goes by default (`keep_to`: the requester's own music, else the first
- *  main library), the others after it in the list's order. An upgrade's Replace takes the place of its other copy, so
- *  of any copy in a main library. `jobOf`: the conversion at work on a library's copy. */
+ *  main library), the others after it in the list's order. A better copy's Replace (C37a: its `against` says it replaces,
+ *  better than the record's copy in a main library) takes the place of the record's copy in any main library holding one.
+ *  Someone's own copy is copied into a main library's place where the server says it beats that library's copy (RY01's
+ *  `replace_into`, one per library: OQ-N), by an administrator alone, whoever's it is and whether or not it is theirs to delete
+ *  (RY02). `jobOf`: the conversion at work on a library's copy. */
 export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?: string) => number | null): AlbumOffer[] {
   const info = (id?: string) => s.library_info.find((l) => l.id === id) ?? null;
-  const verdict = s.verdicts[a.id];
-  const into = verdict?.replaceable_into ?? [];
   const held = librariesOf(a);
-  const mains = held.filter((id) => info(id)?.kind === 'main');
-  const replacing = verdict?.kind === 'upgrade' ? [...new Set([...into, ...mains])].flatMap((id) => info(id) ?? []) : [];
-  const others = s.library_info.filter((l) => !held.includes(l.id) && !into.includes(l.id));
-  return copiesIn(s, a).map((c) => {
+  const mains = held.flatMap((id) => (info(id)?.kind === 'main' ? [info(id)!] : []));
+  const others = s.library_info.filter((l) => !held.includes(l.id));
+  return copiesIn(a).map((c) => {
     const from = info(c.library);
     const keepTo = c.keep_to;
     // An Incoming copy is added where it goes by default; by an administrator also to a main library or their own music
-    // (decision 0101 point 2). A kept one moves between an administrator's libraries, never into or out of own music:
-    // that would be a copy (the owner, 2026-11-04), which comes with records and copies.
+    // (decision 0101 point 2). A kept one goes between an administrator's libraries: into or out of own music as a copy (C40,
+    // `copies`), never out of it into Incoming; between the others moved.
     const targets = !c.deletable
       ? []
       : from?.kind === 'incoming'
         ? others.filter((l) => c.keepable && (l.id === keepTo || (admin && (l.kind === 'main' || l.mine))))
-        : admin && from?.kind !== 'own'
-          ? others.filter((l) => l.kind !== 'own')
+        : admin
+          ? // F34 (the owner, 2026-11-19): an Incoming library is filled by its fetcher alone, never a kept copy's target.
+            others.filter((l) => l.kind !== 'incoming')
           : [];
     const kept = from?.kind === 'main' || from?.kind === 'own';
     return {
@@ -114,28 +147,78 @@ export function offersOf(s: Offered, a: Listed, admin: boolean, jobOf: (library?
       from,
       name: from?.name ?? c.library ?? 'Incoming',
       targets: [...targets.filter((l) => l.id === keepTo), ...targets.filter((l) => l.id !== keepTo)],
-      replaceInto: c.deletable && !kept ? replacing : [],
+      replaceInto:
+        c.deletable && !kept && c.against?.replaces
+          ? mains
+          : admin && from?.kind === 'own'
+            ? mains.filter((l) => c.replace_into?.some((s) => s.library === l.id && s.better && s.replaces))
+            : [],
       deletable: c.deletable,
       job: jobOf(c.library),
     };
   });
 }
 
-/** An entry of a record's menu that takes a copy somewhere. */
-export type CopyEntry = { key: string; offer: AlbumOffer; to: LibraryInfo; label: string };
+/** An entry of a record's menu that takes a copy somewhere: saved (a copy), added, or moved (F33), its icon by that. */
+export type CopyEntry = { key: string; offer: AlbumOffer; to: LibraryInfo; label: string; verb: 'save' | 'add' | 'move' };
 
 /** A record of several copies names the copy each entry acts on (the owner, testing 0.16.0: on Drift, Music's MP3 and Your music's
  *  FLAC, "Move to lidarr-music" moved Music's copy where the FLAC was meant): every one of them, not only where two would read the
  *  same. Of one copy there is nothing to tell apart. */
 const named = (offers: AlbumOffer[], entries: CopyEntry[]) => (offers.length > 1 ? entries.map((e) => ({ ...e, label: `${e.label} from ${e.offer.name}` })) : entries);
 const free = (offers: AlbumOffer[]) => offers.filter((o) => o.job === null);
-const entry = (offer: AlbumOffer, to: LibraryInfo, label: string): CopyEntry => ({ key: `${offer.library}>${to.id}`, offer, to, label });
+const entry = (offer: AlbumOffer, to: LibraryInfo, label: string, verb: CopyEntry['verb'] = 'move'): CopyEntry => ({ key: `${offer.library}>${to.id}`, offer, to, label, verb });
 
-/** Add to and Move to, each copy's targets in turn. */
-export const moveEntries = (offers: AlbumOffer[]) => named(offers, free(offers).flatMap((o) => o.targets.map((to) => entry(o, to, `${adds(o.from, to) ? 'Add' : 'Move'} to ${to.name}`))));
+/** A move's verb into `to` (F33): a copy is saved, an Incoming one or one into own music added, between main libraries moved. */
+export const verbOf = (from: LibraryInfo | null, to: LibraryInfo): CopyEntry['verb'] => (copies(from, to) ? 'save' : adds(from, to) ? 'add' : 'move');
+const VERB_WORD = { save: ENTRY_WORDS.saveTo, add: ENTRY_WORDS.addTo, move: ENTRY_WORDS.moveTo } as const;
+/** A move's entry as the menus say it: "Save to OWN", "Add to Music", "Move to MORE", from the table. */
+export const moveLabel = (verb: CopyEntry['verb'], to: string) => `${VERB_WORD[verb]} ${to}`;
 
-/** Replace in, one per main library it can take a copy's place in. */
+/** Save to, Add to and Move to, each copy's targets in turn. */
+export const moveEntries = (offers: AlbumOffer[]) =>
+  named(
+    offers,
+    free(offers).flatMap((o) =>
+      o.targets.map((to) => {
+        const verb = verbOf(o.from, to);
+        return entry(o, to, moveLabel(verb, to.name), verb);
+      }),
+    ),
+  );
+
+/** Replace in, one per main library it can take a copy's place in. From someone's own music the record has that library's copy
+ *  too, so the line names whose copy it is (the owner, 2026-11-17): "Replace in Music from Your music", "… from <name>'s music". */
 export const replaceEntries = (offers: AlbumOffer[]) => named(offers, free(offers).flatMap((o) => o.replaceInto.map((to) => entry(o, to, `Replace in ${to.name}`))));
+
+/** Replace's sheet for a copy from a library of `kind` (OQ-A, the owner 2026-11-17: "No, copy as it is"). From Incoming as ever:
+ *  a cover to choose (`cover`), what Cratarr knew carried over if wanted (`carry`), and Lidarr named where it may fetch the album
+ *  again as it leaves Incoming (`lidarr`). From someone's own music (RY01) the copy goes in as it is and stays where it is: none of
+ *  these, and the tap says what the sheet showed (`shown`, OQ-G). */
+/** What a move's or Copy to's tap carries of its sheet (RF10, the owner's "writes nothing the sheet doesn't show"): the folder where
+ *  the copy goes, how many files, and the copy's own folder, as its preview showed them; none without a preview that names both. */
+export function moveSheet(p: Pick<KeepPreview, 'folder' | 'files' | 'from_dir'> | null | undefined): MoveSheet | undefined {
+  return p?.folder && p.from_dir ? { folder: p.folder, files: p.files, from_dir: p.from_dir } : undefined;
+}
+
+/** What a Replace from someone's own music carries of its sheet (RY01, OQ-G; RF10): its folder, tracks, added and files, and the own
+ *  copy's folder, so the tap takes the copy shown; none without a preview that names its folder. */
+export function replaceShown(p: Pick<ReplacePreview, 'folder' | 'tracks' | 'added' | 'files' | 'from_dir'> | null | undefined): ReplaceSheet | undefined {
+  if (!p?.folder) return undefined;
+  return { folder: p.folder, tracks: p.tracks, added: p.added, files: p.files, ...(p.from_dir ? { from_dir: p.from_dir } : {}) };
+}
+
+export function replaceSheet(kind: LibraryInfo['kind'] | undefined) {
+  const own = kind === 'own';
+  return { cover: !own, carry: !own, lidarr: !own, shown: own };
+}
+
+/** A Replace's toast and its Undo's (RY02.4): of `title` into `to` (a library's name) from `fromName`. From Incoming the copy took
+ *  the other's place, and its Undo puts it back in Incoming; from someone's own music it was copied and stays, and its Undo brings
+ *  back what `to` had. */
+export function replacedWords(title: string, to: string, fromName: string, kind: LibraryInfo['kind'] | undefined) {
+  return { done: `Replaced ${title} in ${to}.`, undone: kind === 'own' ? `${to}'s copy of ${title} is back.` : `${title} is back in ${fromName}.` };
+}
 
 /** Delete: a record of several copies names the one that goes, even where the viewer may delete only one of them, as
  *  "Delete EP" would read as the whole record. */
@@ -160,15 +243,15 @@ export function deleteGroups<T extends Ticked>(items: T[]) {
 /** Each library they can move into, by its name (whichever server's), with what would go. A record goes once: the first
  *  of its copies that can, in the order they would play, as one entry cannot say which. */
 export function moveGroups<T extends Ticked>(items: T[]) {
-  const by = new Map<string, { item: T; offer: AlbumOffer; to: LibraryInfo; add: boolean }[]>();
+  const by = new Map<string, { item: T; offer: AlbumOffer; to: LibraryInfo; add: boolean; copy: boolean }[]>();
   for (const item of items)
     for (const offer of free(item.offers))
       for (const to of offer.targets) {
         const them = by.get(to.name) ?? [];
-        if (!them.some((x) => x.item === item)) by.set(to.name, [...them, { item, offer, to, add: adds(offer.from, to) }]);
+        if (!them.some((x) => x.item === item)) by.set(to.name, [...them, { item, offer, to, add: adds(offer.from, to), copy: copies(offer.from, to) }]);
       }
-  // Added where every one of them is (`adds`), else moved.
-  return [...by].map(([name, them]) => ({ name, them, adding: them.every((x) => x.add) }));
+  // Copied where every one of them is (`copies`), else added where every one is (`adds`), else moved.
+  return [...by].map(([name, them]) => ({ name, them, adding: them.every((x) => x.add), copying: them.every((x) => x.copy) }));
 }
 
 type Copied = Pick<ListedAlbum, 'library' | 'copies' | 'format' | 'bitrate_kbps'>;
@@ -186,6 +269,20 @@ export function withoutCopy<A extends Copied>(a: A, library?: string): A | null 
   const at = a.copies.findIndex((c) => c.library === library);
   const rest = a.copies.filter((_, i) => i !== at);
   return rest.length ? led(a, rest) : null;
+}
+
+/** A record once a Replace from its copy in `from` (a library of `kind`) took the place of a main library's copy (RY02.4): from
+ *  Incoming that copy went into it, so it leaves; from someone's own music it was copied (RY01), and every copy stays. The main
+ *  library's copy is listed still either way, what it is now coming with the next read. */
+export function afterReplace<A extends Copied>(a: A, from: string | undefined, kind: LibraryInfo['kind'] | undefined): A | null {
+  return kind === 'own' ? a : withoutCopy(a, from);
+}
+
+/** A record once its copy in `from` was copied into `to` (C40, T3): every copy stays as it was, and the new one is added, not
+ *  playing. An album of a list naming no copies is as it was. */
+export function withCopyAdded<A extends Copied>(a: A, from: string | undefined, to: string): A {
+  const c = a.copies?.find((x) => x.library === from);
+  return c ? { ...a, copies: [...a.copies!, { ...c, library: to, plays: false }] } : a;
 }
 
 /** A record once its copy in `from` moved into `to`: nothing leaves, the copy lies elsewhere. */

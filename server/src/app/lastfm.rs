@@ -29,8 +29,22 @@ use super::reach::Sent as _;
 const API: &str = "https://ws.audioscrobbler.com/2.0/";
 /// Last.fm's largest page of recent tracks (and of loved ones).
 const PAGE: usize = 200;
-/// Between pages: Last.fm asks for no more than about five calls a second.
-const PAUSE: Duration = Duration::from_millis(250);
+/// Last.fm's one pacer (O6): every question, Discover's (`discover::fm`), the import's and scrobbling's alike, at most four a second;
+/// Last.fm asks for no more than about five.
+pub static FM: super::reach::Pacer = super::reach::Pacer::new(Duration::from_millis(250));
+/// Last.fm's error for its rate limit: no question for a minute after it (O6).
+const RATE_LIMITED: i64 = 29;
+
+/// Whether Last.fm's answer is its rate limit (error 29).
+pub fn said_limit(body: &serde_json::Value) -> bool {
+    body["error"].as_i64() == Some(RATE_LIMITED)
+}
+
+/// Last.fm said its rate limit: no question for a minute, whoever asks (O6).
+pub async fn limited() {
+    FM.hold(Duration::from_secs(60)).await;
+    tracing::warn!(target: "lastfm", "Last.fm said its rate limit: no question for a minute");
+}
 /// Of the loved tracks with no album from the scrobbles and not in the library, at most this many are asked of
 /// Last.fm's track info (one a quarter second).
 const TRACK_LOOKUPS: usize = 500;
@@ -182,7 +196,8 @@ async fn read(
     progress: &Progress,
     mut spool: Option<&mut super::resume::Spool<Scrobble>>,
 ) -> Result<Vec<Scrobble>> {
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+    // Cratarr's metadata client (O6): its User-Agent, its guard (O1).
+    let http = super::discover::http()?;
     let mut out = Vec::new();
     let mut page = 1usize;
     loop {
@@ -209,6 +224,7 @@ async fn read(
         let mut tries = 0u32;
         let (ok, body) = loop {
             tries += 1;
+            FM.turn().await;
             let sent = http.get(API).query(&q).sent().await;
             let busy = match &sent {
                 Err(_) => true,
@@ -221,7 +237,11 @@ async fn read(
             let res = sent.context("Last.fm did not answer")?;
             let ok = res.status().is_success();
             let body = res.text().await?;
-            let again = serde_json::from_str::<Refused>(&body).ok().and_then(|r| r.error).is_some_and(|e| TRY_AGAIN.contains(&e));
+            let refused = serde_json::from_str::<Refused>(&body).ok().and_then(|r| r.error);
+            if refused == Some(RATE_LIMITED) {
+                limited().await;
+            }
+            let again = refused.is_some_and(|e| TRY_AGAIN.contains(&e));
             if again && tries < TRIES {
                 tokio::time::sleep(Duration::from_secs(2u64.pow(tries))).await;
                 continue;
@@ -255,7 +275,6 @@ async fn read(
             return Ok(out);
         }
         page += 1;
-        tokio::time::sleep(PAUSE).await;
     }
 }
 
@@ -464,13 +483,14 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
         Ok((songs, loved, scrobbles, asks))
     })
     .await??;
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+    // Cratarr's metadata client (O6): its User-Agent, its guard (O1).
+    let http = super::discover::http()?;
     for (n, &i) in asks.iter().enumerate() {
         progress("Finding the loved tracks' albums", n as u64, Some(asks.len() as u64));
+        FM.turn().await;
         if let Ok(Some(album)) = track_album(&http, auth, &loved[i].artist, &loved[i].title).await {
             loved[i].album = Some(album);
         }
-        tokio::time::sleep(PAUSE).await;
     }
     progress("Matching", 0, None);
     let (serve, account, user) = (serve.clone(), account.to_string(), user.to_string());
@@ -540,6 +560,13 @@ pub fn undo(serve: &crate::serve::Serve, account: &str, user: &str) -> Result<Un
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// O6: Last.fm's rate limit is its error 29; it holds every question a minute (`limited`, through the one pacer).
+    #[test]
+    fn last_fms_rate_limit_is_its_error_29() {
+        assert!(said_limit(&serde_json::json!({ "error": 29, "message": "Rate Limit Exceeded" })));
+        assert!(!said_limit(&serde_json::json!({ "error": 6, "message": "User not found" })) && !said_limit(&serde_json::json!({ "recenttracks": {} })));
+    }
 
     #[test]
     fn a_loved_track_not_in_the_library_is_listed_once_with_the_album_it_was_scrobbled_from() {

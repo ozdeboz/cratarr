@@ -22,6 +22,9 @@
 //!   step of each other) in any channel, more than [`CLIPS_AT_MOST`] times. A loud master's odd full-scale sample, a
 //!   rounded crest near it, or a lossy decode's overshoot past it (never flat), passes.
 //!
+//! Highs at a lossy wall are a fault, which every gate refuses; clicks, a pop at the very end and clipping are notes (SK5,
+//! the owner 2026-11-19), which Soulseek's check lets through for its arrival's card to show, and the others refuse.
+//!
 //! One pass over the sound; per hop four numbers are kept (about 2.8 KB a second at 44.1 kHz), the clicks judged at
 //! the end.
 
@@ -129,40 +132,81 @@ pub struct Findings {
     pub first_clip: Option<f64>,
 }
 
+/// The gate's words for what it hears, in one place (SK5, the owner 2026-11-19): what [`Findings::fault`] and
+/// [`Findings::notes`] say, and what [`only_notes`] reads back.
+const NOT_LOSSLESS: &str = "Not lossless: it stops at ";
+const REENCODED: &str = "Re-encoded from a lower bitrate: it stops at ";
+const A_CLICK: &str = "a click at ";
+const CLICKS: &str = " clicks at ";
+const A_POP: &str = "a pop at the very end";
+const CLIPPED: &str = "clipped at ";
+/// After the times listed, when there were more.
+const MORE: &str = ", …";
+
 impl Findings {
-    /// Why the gate refuses the file, when it does: its highs first, then clicks, a pop at the end and clipping.
+    /// Why single-track fetch's gate and the bulk queue's refuse the file, when they do, and what the intake card shows: its
+    /// fault, else its notes.
     pub fn why(&self) -> Option<String> {
-        if let Some(hz) = self.cutoff_hz {
-            let khz = hz / 1000.0;
-            match self.sold {
-                Sold::Lossless => return Some(format!("Not lossless: it stops at {}", khz_text(khz))),
-                Sold::Mp3 { kbps } if khz < lame_low_pass(kbps) - REENCODED_KHZ => {
-                    return Some(format!("Re-encoded from a lower bitrate: it stops at {}", khz_text(khz)));
-                }
-                _ => {}
-            }
+        self.fault().or_else(|| self.notes())
+    }
+
+    /// A fault, which every gate refuses a file for: highs that stop at a lossy encoder's wall, in a file sold as lossless or in an
+    /// MP3 made from a lower bitrate than its own.
+    pub fn fault(&self) -> Option<String> {
+        let khz = self.cutoff_hz? / 1000.0;
+        match self.sold {
+            Sold::Lossless => Some(format!("{NOT_LOSSLESS}{}", khz_text(khz))),
+            Sold::Mp3 { kbps } if khz < lame_low_pass(kbps) - REENCODED_KHZ => Some(format!("{REENCODED}{}", khz_text(khz))),
+            _ => None,
         }
+    }
+
+    /// Notes (SK5): clicks, a pop at the very end and clipping, with when. Soulseek's check passes a file with them, its arrival's
+    /// card in Incoming showing them; the other gates refuse it.
+    pub fn notes(&self) -> Option<String> {
         let mut parts = Vec::new();
         match self.clicks.len() {
             0 => {}
-            1 => parts.push(format!("a click at {}", clock(self.clicks[0]))),
+            1 => parts.push(format!("{A_CLICK}{}", clock(self.clicks[0]))),
             n => {
                 let times = self.clicks.iter().take(LISTED).map(|&t| clock(t)).collect::<Vec<_>>().join(", ");
-                parts.push(format!("{n} clicks at {times}{}", if n > LISTED { ", …" } else { "" }));
+                parts.push(format!("{n}{CLICKS}{times}{}", if n > LISTED { MORE } else { "" }));
             }
         }
         if self.pop_at_end {
-            parts.push("a pop at the very end".to_string());
+            parts.push(A_POP.to_string());
         }
         if self.clips > CLIPS_AT_MOST
             && let Some(t) = self.first_clip
         {
-            parts.push(format!("clipped at {}", clock(t)));
+            parts.push(format!("{CLIPPED}{}", clock(t)));
         }
         let text = parts.join("; ");
         let mut chars = text.chars();
         chars.next().map(|c| c.to_uppercase().chain(chars).collect())
     }
+}
+
+/// Whether a file's why is made of the gate's notes alone ([`Findings::notes`]' words, as a set-aside keeps them): each of its
+/// parts (joined by "; ") a click or clicks with their times, a pop at the very end, or clipping with when. For the set-asides
+/// 0.16.3 kept, read at the upgrade (SK5.6).
+pub fn only_notes(why: &str) -> bool {
+    let mut chars = why.chars();
+    let Some(first) = chars.next() else { return false };
+    let why: String = first.to_lowercase().chain(chars).collect();
+    why.split("; ").all(|part| {
+        part == A_POP
+            || part.strip_prefix(A_CLICK).is_some_and(is_clock)
+            || part.strip_prefix(CLIPPED).is_some_and(is_clock)
+            || part.split_once(CLICKS).is_some_and(|(n, times)| {
+                n.parse::<usize>().is_ok_and(|n| n > 1) && times.strip_suffix(MORE).unwrap_or(times).split(", ").all(is_clock)
+            })
+    })
+}
+
+/// Whether `s` is a time as [`clock`] writes it (m:ss).
+fn is_clock(s: &str) -> bool {
+    s.split_once(':').is_some_and(|(m, ss)| !m.is_empty() && m.bytes().all(|b| b.is_ascii_digit()) && ss.len() == 2 && ss.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// kHz to the nearest half: "16 kHz", "17.5 kHz".
@@ -458,5 +502,57 @@ mod tests {
         let few = Findings { clips: CLIPS_AT_MOST, first_clip: Some(161.5), ..Default::default() };
         assert_eq!(few.why(), None, "a few clips pass");
         assert_eq!(Findings { sold: Sold::Lossless, ..Default::default() }.why(), None);
+    }
+
+    /// SK5 (the owner, 2026-11-19): highs that stop at a lossy wall are a fault; clicks, a pop at the very end and clipping are
+    /// notes, told in the words they always had. `why` is still the fault first, else the notes: the card's and the other gates'.
+    #[test]
+    fn the_highs_are_a_fault_and_clicks_a_pop_and_clipping_are_notes() {
+        let notes = Findings { clicks: vec![130.0], pop_at_end: true, clips: 5, first_clip: Some(106.0), ..Default::default() };
+        assert_eq!(notes.fault(), None);
+        assert_eq!(notes.notes().as_deref(), Some("A click at 2:10; a pop at the very end; clipped at 1:46"));
+        assert_eq!(notes.why(), notes.notes(), "the card's words as before");
+        let walled = Findings { sold: Sold::Lossless, cutoff_hz: Some(16_000.0), ..notes.clone() };
+        assert_eq!(walled.fault().as_deref(), Some("Not lossless: it stops at 16 kHz"));
+        assert_eq!(walled.notes(), notes.notes(), "its notes beside it, never in its fault's words");
+        assert_eq!(walled.why(), walled.fault(), "a fault's why is never a note's");
+        let mp3 = Findings { sold: Sold::Mp3 { kbps: 320 }, cutoff_hz: Some(16_000.0), clips: 5, first_clip: Some(106.0), ..Default::default() };
+        assert_eq!(mp3.fault().as_deref(), Some("Re-encoded from a lower bitrate: it stops at 16 kHz"));
+        assert_eq!(mp3.notes().as_deref(), Some("Clipped at 1:46"));
+        let near = Findings { cutoff_hz: Some(19_000.0), ..mp3.clone() };
+        assert_eq!((near.fault(), near.notes().as_deref()), (None, Some("Clipped at 1:46")), "a 192's low pass in a 320 is no fault");
+        let few = Findings { clips: CLIPS_AT_MOST, first_clip: Some(106.0), ..Default::default() };
+        assert_eq!((few.fault(), few.notes()), (None, None), "a few clips are nothing");
+    }
+
+    /// A why made of the notes' own words alone is known as one (the set-asides 0.16.3 kept, read at the upgrade: SK5.6); a fault's,
+    /// or any other words beside them, are not.
+    #[test]
+    fn a_why_of_notes_alone_is_known_by_the_gates_own_words() {
+        let told = [
+            Findings { clicks: vec![83.2], ..Default::default() },
+            Findings { clicks: vec![83.2, 185.9], ..Default::default() },
+            Findings { clicks: vec![83.2, 185.9, 200.0, 250.0], pop_at_end: true, clips: 4, first_clip: Some(161.5), ..Default::default() },
+            Findings { pop_at_end: true, ..Default::default() },
+            Findings { clips: 5, first_clip: Some(3_725.0), ..Default::default() },
+        ];
+        for f in &told {
+            let why = f.notes().expect("notes told");
+            assert!(only_notes(&why), "{why}");
+        }
+        for why in [
+            "Not lossless: it stops at 16 kHz",
+            "Re-encoded from a lower bitrate: it stops at 16 kHz",
+            "AcoustID does not know this file as that recording",
+            "It is 30 s longer than the recording",
+            "2 frames would not decode",
+            "It is not in slskd's folder",
+            "Clipped at 1:46; 2 frames would not decode",
+            "1 clicks at 1:23",
+            "Clipped at",
+            "",
+        ] {
+            assert!(!only_notes(why), "{why}");
+        }
     }
 }

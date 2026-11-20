@@ -68,6 +68,42 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         converted: Vec<Converted>,
     },
+    /// Copy to (C40): an album copied into another library, someone's own music above all, its original staying where it is: one
+    /// album, two copies on the same tracks (`Catalogue::copy_rows`). An album action like Keep (the owner, 2026-11-17: "Like
+    /// Keep"), on its own path: the copied files are all it writes, nothing into or beside them or the original (files.md CP2). Its
+    /// Undo takes the copy into its library's trash.
+    AlbumCopied {
+        source: String,
+        album_id: String,
+        title: String,
+        /// The original's folder and the copy's: (catalogue folder, relative path).
+        from_dir: (i64, String),
+        to_dir: (i64, String),
+        /// Every file, audio and others, from the original to the copy.
+        copies: Vec<TrackMove>,
+    },
+    /// Replace in a main library from someone's own music (RY01; OQ2, the owner: "Copy in, admins"): the own copy copied into the
+    /// place of the main library's, as Copy to copies (shared blocks, byte for byte, OQ-B), the own copy staying as it was; the
+    /// main library's old files into its own trash. One album, its copy there made anew on the same tracks. An album action like
+    /// Keep (the owner, 2026-11-17: "Like Keep"): the copies are all it writes, nothing into or beside either copy, Lidarr not
+    /// told. Its Undo takes the copies, file by file, into that library's trash and its old files back.
+    AlbumReplacedFromCopy {
+        source: String,
+        album_id: String,
+        title: String,
+        /// The own copy's folder and the main library's new one: (catalogue folder, relative path).
+        from_dir: (i64, String),
+        to_dir: (i64, String),
+        /// Every file of the own copy, audio and others, copied into the main library; `track` the one it is on, its old file's.
+        copies: Vec<TrackMove>,
+        /// Each own file's size and time in milliseconds as the intent was written, in `copies`' order: what a copy of it is told by
+        /// (RF6), whatever the own copy has become since (deleted, retagged).
+        stamps: Vec<Option<(u64, i64)>>,
+        /// The main library's old files, into its trash; `track` the one each let go of.
+        replaced: Vec<TrackMove>,
+        /// Where the old files lie in that trash.
+        token: String,
+    },
 }
 
 impl Event {
@@ -77,6 +113,7 @@ impl Event {
             Event::AlbumRejected { title, release_group, .. }
             | Event::AlbumAdopted { title, release_group, .. }
             | Event::AlbumReplaced { title, release_group, .. } => (title, release_group.as_deref()),
+            Event::AlbumCopied { title, .. } | Event::AlbumReplacedFromCopy { title, .. } => (title, None),
         }
     }
 }
@@ -278,8 +315,68 @@ pub struct Journal {
     tell: tokio::sync::broadcast::Sender<EventId>,
     /// Events just undone, for handlers that put their work back (`subscribe_undone`).
     tell_undone: tokio::sync::broadcast::Sender<EventId>,
-    /// Runs still writing, by id (`run_writing`).
+    /// Runs still writing, by id (`record_run_writing`): added and read only inside a hold of `db` (never the other way
+    /// round), so the list sees a run kept and writing at once.
     writing: Mutex<Vec<EventId>>,
+    /// Which journal this is in the process (`key`).
+    key: u64,
+}
+
+/// The next journal's key: one a journal opened, never twice in a process.
+static NEXT_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(test)]
+thread_local! {
+    // A test's step (`between`), on its own thread alone.
+    static BETWEEN: std::cell::RefCell<Option<Box<dyn FnMut()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What another thread could do between the journal's own steps, done on this one (tests): `step` comes each time before
+/// the journal takes its database and each time once it lets it go, until set to `None`. What the step itself asks of the
+/// journal lets nothing in.
+#[cfg(test)]
+pub(crate) fn between(step: Option<Box<dyn FnMut()>>) {
+    BETWEEN.with(|b| *b.borrow_mut() = step);
+}
+
+/// The step a test set (`between`), if any.
+#[cfg(test)]
+fn let_in() {
+    let Some(mut step) = BETWEEN.with(|b| b.borrow_mut().take()) else { return };
+    step();
+    BETWEEN.with(|b| {
+        let mut b = b.borrow_mut();
+        if b.is_none() {
+            *b = Some(step);
+        }
+    });
+}
+
+/// The journal's database while a step holds it (tests): `between`'s step comes once it is let go.
+#[cfg(test)]
+struct Held<'a>(Option<std::sync::MutexGuard<'a, Connection>>);
+
+#[cfg(test)]
+impl std::ops::Deref for Held<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.0.as_deref().expect("held until let go")
+    }
+}
+
+#[cfg(test)]
+impl std::ops::DerefMut for Held<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.0.as_deref_mut().expect("held until let go")
+    }
+}
+
+#[cfg(test)]
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        drop(self.0.take());
+        let_in();
+    }
 }
 
 impl Journal {
@@ -297,11 +394,26 @@ impl Journal {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
             }
         }
-        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default() })
+        let key = NEXT_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default(), key })
     }
 
+    /// Which journal this is among those open in the process: what keeps one journal's runs from another's where both
+    /// number them from 1 (`file_runs`' live runs). A server opens one; its tests open many.
+    pub fn key(&self) -> u64 {
+        self.key
+    }
+
+    #[cfg(not(test))]
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// As above, with the step a test set (`between`) before the database is taken and once it is let go.
+    #[cfg(test)]
+    fn db(&self) -> Held<'_> {
+        let_in();
+        Held(Some(self.db.lock().unwrap_or_else(|p| p.into_inner())))
     }
 
     /// Write-ahead: write what is about to be done, before doing it. Nobody hears of it until `applied`; a crash in
@@ -356,6 +468,12 @@ impl Journal {
         self.tell.subscribe()
     }
 
+    /// Who did an event (decision 0051: the journal says who changed the library): its account; none for Cratarr itself, or an
+    /// event not known.
+    pub fn account(&self, id: EventId) -> Result<Option<String>> {
+        Ok(self.db().query_row("SELECT account FROM events WHERE id = ?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+
     pub fn get(&self, id: EventId) -> Result<Option<Entry>> {
         let row = self
             .db()
@@ -385,6 +503,28 @@ impl Journal {
             .query_row("SELECT result FROM handled WHERE event = ?1 AND handler = ?2", params![id, handler], |r| r.get(0))
             .optional()?;
         Ok(text.map(|t| serde_json::from_str(&t)).transpose()?)
+    }
+
+    /// Events that happened and were not undone that `handler` has a result for, oldest first: an Undo begun (its mark written
+    /// before its files move, RF9) and not finished.
+    pub fn begun(&self, handler: &str) -> Result<Vec<Entry>> {
+        let db = self.db();
+        let mut st = db.prepare(
+            "SELECT id, at, event FROM events e WHERE applied = 1 AND undone_at IS NULL
+             AND EXISTS (SELECT 1 FROM handled h WHERE h.event = e.id AND h.handler = ?1) ORDER BY id",
+        )?;
+        let rows = st.query_map([handler], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        rows.map(|r| {
+            let (id, at, event) = r?;
+            Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: false, applied: true })
+        })
+        .collect()
+    }
+
+    /// What `handler` returned for an event, forgotten: it never happened after all (an Undo put back whole, RF9).
+    pub fn forget_result(&self, id: EventId, handler: &str) -> Result<()> {
+        self.db().execute("DELETE FROM handled WHERE event = ?1 AND handler = ?2", params![id, handler])?;
+        Ok(())
     }
 
     /// Events since `since` (epoch seconds) that happened, that `handler` has not handled and that were not undone,
@@ -425,7 +565,7 @@ impl Journal {
         let db = self.db();
         let event: Option<String> = db
             .query_row(
-                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL
+                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL AND json_extract(event, '$.kind') NOT IN ('album_copied', 'album_replaced_from_copy')
                  AND json_extract(event, '$.source') = ?1 AND json_extract(event, '$.album_id') = ?2 ORDER BY id DESC LIMIT 1",
                 params![source, album_id],
                 |r| r.get(0),
@@ -525,7 +665,22 @@ impl Journal {
     /// Keep a run of changes to the library's files (decision 0092) of `account`'s; runs older than `keep` seconds (the
     /// trash's days) are forgotten on the way.
     pub fn record_run(&self, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
+        Self::keep_run(&self.db(), at, run, account, keep)
+    }
+
+    /// A run kept before it writes, and writing from that moment, both in one hold of the journal: a reading of the list
+    /// (`file_runs_since`) never finds it kept and not writing, which says it done before it wrote anything (F5: the cover
+    /// run listed done, its cover not written yet). Left out of the list until `run_ended`. In memory: after a restart
+    /// nothing is writing, and a run cut off is listed.
+    pub fn record_run_writing(&self, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
         let db = self.db();
+        let id = Self::keep_run(&db, at, run, account, keep)?;
+        self.writing.lock().unwrap_or_else(|p| p.into_inner()).push(id);
+        Ok(id)
+    }
+
+    /// A run into the journal, those older than `keep` seconds out.
+    fn keep_run(db: &Connection, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
         db.execute("DELETE FROM file_runs WHERE at < ?1", [at - keep])?;
         db.execute("INSERT INTO file_runs (at, run, account) VALUES (?1, ?2, ?3)", params![at, serde_json::to_string(run)?, account])?;
         Ok(db.last_insert_rowid())
@@ -548,12 +703,6 @@ impl Journal {
         Ok(())
     }
 
-    /// A run kept before it wrote, and writing now: told as it goes, so `file_runs_since` leaves it out until `run_ended`.
-    /// In memory: after a restart nothing is writing, and a run cut off is listed.
-    pub fn run_writing(&self, id: EventId) {
-        self.writing.lock().unwrap_or_else(|p| p.into_inner()).push(id);
-    }
-
     /// A run writing no more.
     pub fn run_ended(&self, id: EventId) {
         self.writing.lock().unwrap_or_else(|p| p.into_inner()).retain(|w| *w != id);
@@ -568,8 +717,9 @@ impl Journal {
     /// The runs kept since `since` (epoch seconds), newest first, those writing left out: id, when, the run, whether all of
     /// it was undone.
     pub fn file_runs_since(&self, since: i64) -> Result<Vec<(EventId, i64, FileRun, bool)>> {
-        let writing = self.writing.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        // Both in one hold of the journal, as a run is kept and set writing in one (`record_run_writing`).
         let db = self.db();
+        let writing = self.writing.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let mut st = db.prepare_cached("SELECT id, at, run, undone_at FROM file_runs WHERE at >= ?1 ORDER BY id DESC")?;
         let rows = st.query_map([since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<i64>>(3)?)))?;
         let mut out = Vec::new();

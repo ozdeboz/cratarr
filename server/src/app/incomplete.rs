@@ -53,6 +53,31 @@ pub struct Incomplete {
     pub longest_ms: Option<u64>,
 }
 
+impl Incomplete {
+    /// Whether this row still fits its album (A3.4): its `has` is the album's tracks in the library now. One that no longer does (a
+    /// Replace, tracks added or gone since its look) is read by nothing, and the pass looks at its album again at once.
+    pub fn fits(&self, present: usize) -> bool {
+        self.has == present
+    }
+}
+
+/// The albums found missing tracks whose rows still fit them (A3.4), each with its row: what Health's records missing tracks, a
+/// record's own health rows (and their "Ask for the full album") and the missing tracks' release read. Blocking.
+pub fn still_short(served: &crate::serve::Serve) -> Result<Vec<(String, Incomplete)>> {
+    let counts = served.library.song_counts()?;
+    Ok(fitting(served.userdata.albums_incomplete()?, &counts))
+}
+
+/// `still_short`'s rule: the rows that read and fit their album's tracks now (`counts`, by album).
+fn fitting(rows: Vec<(String, String)>, counts: &HashMap<String, usize>) -> Vec<(String, Incomplete)> {
+    rows.into_iter()
+        .filter_map(|(album, json)| {
+            let i = serde_json::from_str::<Incomplete>(&json).ok()?;
+            i.fits(counts.get(&album).copied().unwrap_or(0)).then_some((album, i))
+        })
+        .collect()
+}
+
 /// The album's tracks (title, length s) against the release group's releases: the smallest holding every track, and
 /// what it has beyond them; none where the album is whole or no release holds it.
 pub(super) fn check(files: &[(String, i64)], releases: &[super::renumber::Release]) -> Option<Incomplete> {
@@ -111,28 +136,7 @@ fn beyond(files: &[(String, i64)], r: &super::renumber::Release, used: &HashSet<
 /// looked at first, then those looked at longest ago.
 pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::Client) -> Result<()> {
     let (s, now) = (served.clone(), super::moment::now_secs());
-    let due: Vec<(String, String)> = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
-        // Those looked at by an older rule count as never looked at (0.13: their discs are kept now).
-        let checked = s.userdata.album_complete_now()?;
-        let mut albums: Vec<(i64, String, String)> = Vec::new();
-        for l in s.library.lacking()? {
-            let at = checked.get(&l.id).copied();
-            if at.is_some_and(|at| now - at < AGAIN) || failed(|f| f.get(&l.id).is_some_and(|t| now - t < FAILED_WAIT)) {
-                continue;
-            }
-            let own = s.library.album_names(&l.id)?.and_then(|p| p.0).filter(|m| super::discogs::is_mbid(m));
-            let release = match own {
-                Some(r) => Some(r),
-                None => s.userdata.album_matches(std::slice::from_ref(&l.id))?.remove(&l.id).and_then(|(_, j)| j).and_then(|j| serde_json::from_str::<super::matching::Match>(&j).ok()).map(|m| m.release),
-            };
-            if let Some(r) = release {
-                albums.push((at.unwrap_or(i64::MIN), l.id, r));
-            }
-        }
-        albums.sort_by_key(|a| a.0);
-        Ok(albums.into_iter().take(BATCH).map(|(_, a, r)| (a, r)).collect())
-    })
-    .await??;
+    let due: Vec<(String, String)> = tokio::task::spawn_blocking(move || due_albums(&s, now)).await??;
     for (album, release) in due {
         // One album failing is set aside (`FAILED_WAIT`), never the end of the pass.
         if let Err(e) = look(served, http, &album, &release).await {
@@ -141,6 +145,38 @@ pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::
         }
     }
     Ok(())
+}
+
+/// A round's batch at `now` (`pass`): never looked at first, then those looked at longest ago; one whose row no longer fits it (A3.4:
+/// its tracks changed since its look) at once, as one never looked at, before its 60 days. Blocking.
+fn due_albums(s: &crate::serve::Serve, now: i64) -> Result<Vec<(String, String)>> {
+    // Those looked at by an older rule count as never looked at (0.13: their discs are kept now).
+    let checked = s.userdata.album_complete_now()?;
+    let counts = s.library.song_counts()?;
+    let stale: HashSet<String> = s
+        .userdata
+        .albums_incomplete()?
+        .into_iter()
+        .filter(|(album, json)| serde_json::from_str::<Incomplete>(json).is_ok_and(|i| !i.fits(counts.get(album).copied().unwrap_or(0))))
+        .map(|(album, _)| album)
+        .collect();
+    let mut albums: Vec<(i64, String, String)> = Vec::new();
+    for l in s.library.lacking()? {
+        let at = checked.get(&l.id).copied().filter(|_| !stale.contains(&l.id));
+        if at.is_some_and(|at| now - at < AGAIN) || failed(|f| f.get(&l.id).is_some_and(|t| now - t < FAILED_WAIT)) {
+            continue;
+        }
+        let own = s.library.album_names(&l.id)?.and_then(|p| p.0).filter(|m| super::discogs::is_mbid(m));
+        let release = match own {
+            Some(r) => Some(r),
+            None => s.userdata.album_matches(std::slice::from_ref(&l.id))?.remove(&l.id).and_then(|(_, j)| j).and_then(|j| serde_json::from_str::<super::matching::Match>(&j).ok()).map(|m| m.release),
+        };
+        if let Some(r) = release {
+            albums.push((at.unwrap_or(i64::MIN), l.id, r));
+        }
+    }
+    albums.sort_by_key(|a| a.0);
+    Ok(albums.into_iter().take(BATCH).map(|(_, a, r)| (a, r)).collect())
 }
 
 /// One album held against its release group's releases, what it misses and the discs its tracks are on kept.
@@ -185,5 +221,63 @@ mod tests {
         assert!(check(&whole, &[standard.clone()]).is_none(), "whole");
         let other = vec![("Euphoria".to_string(), 300), ("Elsewhere".to_string(), 200)];
         assert!(check(&other, &[standard]).is_none(), "no release holds a track it does not have");
+    }
+
+    /// A3.4.1, A3.4.2: a row "of 12, has 10" beside its album now holding 12 tracks (a Replace landed since its look) is read by nothing
+    /// (`still_short`: Health's records missing tracks, a record's own health rows and their "Ask for the full album", the missing tracks'
+    /// release), and the pass takes that album at once, before its 60 days; an album whose row still fits (10 tracks) is read as today
+    /// and waits its 60 days. Never "2 tracks missing" beside a whole album.
+    #[test]
+    fn a_missing_tracks_row_that_no_longer_fits_is_not_read() {
+        use crate::serve::copies::Kind;
+        let root = std::env::temp_dir().join(format!("cratarr-incomplete-fits-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let cat = std::sync::Arc::new(crate::catalogue::Catalogue::open(None, vec![root.clone()]).unwrap());
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.library.set_kinds(vec![(0, Kind::Main)]);
+        serve.attach_catalogue(cat.clone());
+        let albums = [("Whole Now", 12, "00000000-0000-4000-8000-0000000034a1"), ("Still Short", 10, "00000000-0000-4000-8000-0000000034a2")];
+        let mut files = Vec::new();
+        for (dir, n, release) in albums {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            for t in 1..=n {
+                let rel = format!("{dir}/{t:02} Track {t}.flac");
+                std::fs::write(root.join(&rel), &rel).unwrap();
+                files.push((rel, dir, t, release));
+            }
+        }
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        for (rel, dir, t, release) in &files {
+            let (title, number) = (format!("Track {t}"), t.to_string());
+            cat.tag_for_tests(0, rel, &[("album", *dir), ("albumartist", "Kite Theory"), ("title", title.as_str()), ("tracknumber", number.as_str()), ("musicbrainz_albumid", *release)]);
+        }
+        cat.identify().unwrap();
+        serve.refresh().unwrap();
+        let in_library = |dir: &str| serve.library.album_in(0, dir).unwrap().expect("built");
+        let (whole, short) = (in_library("Whole Now"), in_library("Still Short"));
+        let row = Incomplete {
+            of: 12,
+            has: 10,
+            release: "Night Walks, 2020, CD".into(),
+            release_group: None,
+            release_id: Some("00000000-0000-4000-8000-0000000034b1".into()),
+            missing: vec![(1, 11, "Track 11".into()), (1, 12, "Track 12".into())],
+            length_ms: None,
+            longest_ms: None,
+        };
+        let t = super::super::moment::now_secs();
+        for album in [&whole, &short] {
+            serve.userdata.set_album_complete(album, Some(&serde_json::to_string(&row).unwrap()), Some(1), t).unwrap();
+        }
+        let read: Vec<String> = still_short(&serve).unwrap().into_iter().map(|(a, _)| a).collect();
+        assert_eq!(read, [short.clone()], "the row that no longer fits is read by nothing; the one that fits as today");
+        let due: Vec<String> = due_albums(&serve, t + 60).unwrap().into_iter().map(|(a, _)| a).collect();
+        assert_eq!(due, [whole.clone()], "the album whose row no longer fits taken at once; the other waits its 60 days");
+        for (file, src) in [("health.rs", include_str!("health.rs")), ("track_fetch.rs", include_str!("track_fetch.rs"))] {
+            assert!(src.contains("super::incomplete::still_short(") && !src.contains("albums_incomplete()"), "{file} reads the rows that fit alone");
+        }
+        std::fs::remove_dir_all(&root).ok();
     }
 }

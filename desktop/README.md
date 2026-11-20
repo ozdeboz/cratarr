@@ -10,9 +10,10 @@ installer can be built the same way (`npm run dist:win`) but has not been built 
 - Shows Cratarr's page on the server's address; the page plays, as in a browser. The server's address is asked once;
   **Change server…** (in the window's menu, shown with Alt, and in the tray) asks again.
 - Carries its own copy of the page (decision 0085, step 1, as the Android app does): it answers on the server's address
-  in place of the server's page files, so the window opens at once, and with the server out of reach too, never
-  blank. Which copy, by the two builds (`build.json`; the server's from its health check, every ten minutes and on
-  waking): the server's release newer, or the same release built again, the server's; otherwise the app's. The API,
+  in place of the server's page files, so the window opens at once, and with the server out of reach (silent too: it
+  gets 3 s to begin an answer) never blank. Which copy, by the two builds (`build.json`; the server's from its health
+  check, every ten minutes and on waking): the server's release newer, or the same release built again, the server's;
+  otherwise the app's. The API,
   the streams and the sign-in always go to the server, and so do the backdrops' and skies' pictures (kept by the
   page's service worker once seen).
 - Keeps what the page stores on the computer (its last copies, its downloads, the library's index) for good: a browser
@@ -48,7 +49,7 @@ fetches it). The page the app carries is the web app's build of the same release
 cd desktop
 npm ci
 npm start           # runs it; the web app's icons and page are copied in first
-npm test            # which page answers, and how (page.js)
+npm test            # which page answers, and how (page.js); the after-install's look at a running copy
 npm run dist        # on Linux: dist/cratarr-desktop_<version>_amd64.deb
 npm run dist:win    # on Windows: dist/Cratarr-Setup-<version>.exe
 npm run check       # the check each build runs first: no private IP address or home-network host name in the app

@@ -3,9 +3,9 @@
   // for what is not, no playing on Spotify): its albums, tracks, playlists or followed artists, as the view menu says,
   // each saying whether it is here, partly, missing or asked for; the Filter leaves out what it is told, the search
   // narrows them. What is here is the library's own: an album's cover plays it and a tap opens it (lib/AlbumCard), a
-  // track plays from it, an artist opens their page. What is not: an album as every missing one (lib/ElsewhereAlbum:
-  // on Bandcamp in the panel, else its menu with Want), Play on its cover its Bandcamp preview where one is found; a
-  // track its album so; an artist their page from Discover. A playlist opens its tracks here (`?spotify=` in the
+  // track plays from it, an artist opens their page. What is not: an album its record's page (W9, lib/openRecord: made one
+  // by its release group, Want in its header; with none known, its Bandcamp album), Play on its cover its Bandcamp preview
+  // where one is found; a track its album so; an artist their page, by their id where Cratarr has them (W10). A playlist opens its tracks here (`?spotify=` in the
   // address, so back returns).
   import { untrack } from 'svelte';
   import { hereWith, wordHere } from './addresses';
@@ -22,13 +22,12 @@
     type SpotifyTrack,
   } from './api';
   import AlbumCard from './AlbumCard.svelte';
-  import { goToArtist } from './albums.svelte';
+  import { goToArtist, openNotHad } from './albums.svelte';
+  import type { Openable } from './openRecord';
   import { bandcampFailed, bandcampPlay, playOnBandcamp } from './bandcampFound.svelte';
   import { previewPage } from './bandcampPreview';
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
-  import { DISCOVER } from './discoverArtist';
-  import ElsewhereAlbum, { elsewhereKey, type Elsewhere } from './ElsewhereAlbum.svelte';
   import type { SpotifyView } from './discoverModes';
   import type { LocalTrack } from './localPlayer.svelte';
   import { playPlaylistFrom } from './output.svelte';
@@ -123,27 +122,36 @@
     return () => watch.disconnect();
   }
 
-  // Not here: opened as every missing album, asked for once, its Bandcamp preview on its cover.
-  let elsewhere = $state<ElsewhereAlbum>();
+  // Not here: its record's page, by the record the server names (G2), else made one by its release group as it opens (W9); its
+  // Bandcamp preview on its cover.
   let finding = $state<string | null>(null);
-  let asked = $state<string[]>([]);
-  const missingOf = (a: { title: string; artist: string; year?: number | null; cover?: string | null; release_group: string | null; preview?: SpotifyAlbum['preview'] }): Elsewhere => ({
+  const missingOf = (a: { title: string; artist: string; year?: number | null; release_group: string | null; record?: string | null; preview?: SpotifyAlbum['preview'] }): Openable => ({
+    record: a.record ?? null,
     release_group: a.release_group,
     title: a.title,
     artist: a.artist,
     year: a.year ?? null,
-    cover: a.cover ?? null,
     bandcamp: a.preview ? previewPage(a.preview.id) : null,
   });
+  async function openMissing(key: string, x: Openable) {
+    if (finding) return;
+    finding = key;
+    try {
+      await openNotHad(x);
+    } catch (e) {
+      toast.fail(e, "It couldn't be opened");
+    } finally {
+      finding = null;
+    }
+  }
   let playProblem = $state<{ title: string; text: string; retry: () => void } | null>(null);
-  const markFor = (x: { request: SpotifyAlbum['request']; release_group: string | null; title: string; artist: string }) =>
-    markOf(x.request) ?? (asked.includes(elsewhereKey(x)) ? { state: 'wanted' as const } : null);
+  const markFor = (x: { request: SpotifyAlbum['request'] }) => markOf(x.request);
 
   /** A track's state in its row: what it is here. */
   const trackState = (t: SpotifyTrack) => (t.status === 'requested' ? 'Requested' : t.status === 'missing' ? 'Not here' : null);
   /** A covered track plays from it, with the covered ones of the list around it; a missing one opens its album. */
   async function tapTrack(t: SpotifyTrack, list: SpotifyTrack[]) {
-    if (!t.track) return elsewhere?.open(missingOf({ title: t.album, artist: t.artist, release_group: t.release_group }));
+    if (!t.track) return openMissing(t.id, missingOf({ title: t.album, artist: t.artist, release_group: t.release_group }));
     const source = t.track.source;
     const here = list.filter((x) => x.track?.source === source);
     const queue: LocalTrack[] = here.map((x) => ({
@@ -189,7 +197,7 @@
           <AlbumCard source={a.album.source} album={{ id: a.album.id, title: a.title, year: a.year, artist: a.artist }} lines={[a.artist, ...(a.status === 'partly' ? [haveLine(a.have, a.of, a.status)] : [])]} />
         {:else}
           {@const m = missingOf(a)}
-          <AlbumCard source="spotify" album={{ id: a.id, title: a.title, year: a.year }} cover={a.cover} busy={finding === elsewhereKey(m)} request={markFor(a)} lines={[a.artist]} onopen={() => elsewhere?.open(m)} />
+          <AlbumCard source="spotify" album={{ id: a.id, title: a.title, year: a.year }} cover={a.cover} busy={finding === a.id} request={markFor(a)} lines={[a.artist]} onopen={() => openMissing(a.id, m)} />
           <!-- On Bandcamp: Play on its cover, as every missing album's (lib/ArtistBody). -->
           {#if m.bandcamp}
             {@const page = m.bandcamp}
@@ -239,7 +247,7 @@
           title={a.name}
           sub={a.status === 'missing' ? 'Not here' : `${a.have} ${a.have === 1 ? 'album' : 'albums'} here`}
           off={!a.artist}
-          onclick={() => goToArtist(a.artist ? 'cratarr' : DISCOVER, a.name)}
+          onclick={() => goToArtist('cratarr', a.artist?.id ?? a.name)}
         >
           {#snippet lead()}<span class="face"><Cover src={a.photo} /></span>{/snippet}
         </Row>
@@ -250,7 +258,6 @@
   {#if !artistsShown.length && !searchLeft}<p class="empty">No artists.</p>{/if}
 {/if}
 
-<ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
 {#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}
 
 <style>

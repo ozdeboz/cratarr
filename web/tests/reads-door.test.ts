@@ -36,12 +36,14 @@ function uses(text: string) {
 /** What may read it, how often, and what for. Not one of these chooses what a page reads. */
 const ALLOWED: Record<string, [number, string]> = {
   'App.svelte': [2, 'which page the app opens on away from home; the quick crate card offered'],
-  'Home.svelte': [2, 'Radio offered, and the moment offered with nothing of it here'],
-  'Playlists.svelte': [2, 'New playlist offered, and the word that it needs Cratarr'],
+  'Home.svelte': [4, 'Radio offered, and the moment offered with nothing of it here; a section the device cannot answer said in one line'],
+  'Playlists.svelte': [1, 'New playlist offered'],
+  'lib/Notice.svelte': [1, 'a failure out of reach said in its one line (lib/noticeAway), not with Try again'],
   'lib/DownloadsPanel.svelte': [2, 'Retry offered, and its word'],
   'lib/MenuSheet.svelte': [2, 'which of a menu\'s entries are offered'],
   'lib/MenuTable.svelte': [2, 'which of a menu\'s entries are offered, and the word for the rest'],
   'lib/PlaylistView.svelte': [4, 'which edits can wait in the outbox'],
+  'lib/RequestsPanel.svelte': [1, "one's room line: none out of reach, where the last copy may say less than is used by now (AL04.5)"],
   'lib/away.svelte.ts': [1, 'what plays goes by the first failed request, as a hold does: the marks go by the door'],
   'lib/capabilities.svelte.ts': [2, 'a poller: asked again on the way back'],
   'lib/changes.svelte.ts': [1, 'a poller: not asked while away'],
@@ -54,6 +56,7 @@ const ALLOWED: Record<string, [number, string]> = {
   'lib/outputNow.svelte.ts': [1, 'where music plays: here while Cratarr is away with another player chosen (0.16.1, the owner: "Play here instead")'],
   'lib/play.svelte.ts': [1, 'what plays: picked from what is on the device'],
   'lib/queueHistory.svelte.ts': [1, 'whose list a queue is in'],
+  'lib/settings/LibrariesPart.svelte': [2, "the disk floor's row and its refusal: none out of reach (AL04.5)"],
   'lib/shelfStore.svelte.ts': [1, 'a poller: not asked while away'],
   'lib/snippetPlayer.svelte.ts': [1, 'Snippets offered'],
 };

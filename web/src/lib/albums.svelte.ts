@@ -13,21 +13,26 @@ import {
   setAlbumRating,
   type AlbumsView,
   type AlbumUse,
+  type LibraryInfo,
   type ListedAlbum,
   albumsTracks,
   ApiError,
+  openRecord,
+  openArtist,
+  notAnswered,
 } from './api';
 import type { DownloadedTrack } from './app.svelte';
 import { player } from './live.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { playAlbumHere, playPlaylistFrom } from './output.svelte';
 import { choosePlayer, port } from './player/port.svelte';
-import { artistSubject, viewOver } from './panel.svelte';
-import { BANDCAMP } from './bandcampPreview';
-import { cameFrom, DISCOVER } from './discoverArtist';
-import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
+import { albumSubject, artistSubject, viewOver } from './panel.svelte';
+import { albumIdOf, BANDCAMP } from './bandcampPreview';
+import { howToOpen, type Openable } from './openRecord';
+import { wantFailed } from './wantPath';
+import { artistSource, type ArtistOpen } from './artistIds';
 import { prefs } from './prefs.svelte';
-import { dotsOf, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
+import { afterReplace, dotsOf, withCopyAdded, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
 import { shownIn } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { can } from './capabilities.svelte';
@@ -117,6 +122,17 @@ function changeListed(changes: { source: string; id: string }[], change: (a: Lis
 export function copiesGone<G extends { source: string; id: string; from?: string }>(gone: G[]): G[] {
   changeListed(gone, (a, i) => withoutCopy(a, gone[i].from));
   return gone.filter((g) => !listedAlbum(g.source, g.id));
+}
+
+/** Copies that took a main library's copy's place (Replace): from Incoming each left it, from someone's own music each stays
+ *  (RY02.4, `afterReplace`). */
+export function copiesReplaced(replaced: { source: string; id: string; from?: string; kind?: LibraryInfo['kind'] }[]) {
+  changeListed(replaced, (a, i) => afterReplace(a, replaced[i].from, replaced[i].kind));
+}
+
+/** Copies made (Copy to, T3): their records stay as they were, each with its new copy. */
+export function copiesAdded(added: { source: string; id: string; from?: string; to: string }[]) {
+  changeListed(added, (a, i) => withCopyAdded(a, added[i].from, added[i].to));
 }
 
 /** Copies moved: their records stay, each copy in its new library. */
@@ -210,23 +226,43 @@ export const artistCredits = (artist: string | null) =>
 export const mainArtist = (artist: string | null | undefined) => artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() || null;
 
 /** Go to artist: the artist's panel (decided 2026-10-16, as Symfonium's), over what the panel views (back returns to
- *  it). From the full-screen player, which closes, or it would cover the panel. */
-export function goToArtist(source: string, name: string, from: { id: string; title: string; year?: number | null } | null = null) {
+ *  it). From the full-screen player, which closes, or it would cover the panel. By their id where it is known, else by
+ *  name, and the server says who that is (W10, lib/artistIds): something on Bandcamp or from Discover opens Cratarr's page. */
+export function goToArtist(source: string, nameOrId: string) {
   // The player over the page closes once the artist shows (lib/navStep), or it would cover them.
   if (player.full) leavePlayer();
-  // From a Bandcamp album (`from`): kept for their page from Discover (lib/discoverArtist cameFrom).
-  if (from) Object.assign(cameFrom, { name, album: { id: from.id, title: from.title, year: from.year ?? null, release_group: releaseGroupOfBandcamp(from.id) } });
-  // From something on Bandcamp (an album, a preview's track): no server of that name (the owner, 2026-10-25: it said
-  // "server is not connected"), so the library's page where it has the artist, else theirs from Discover.
-  if (source === BANDCAMP) source = hasArtist(name) ? 'cratarr' : DISCOVER;
-  viewOver(artistSubject(source, name));
+  viewOver(artistSubject(artistSource(source), nameOrId));
 }
 
-/** Whether Cratarr's own library has albums by the artist (as far as the library is read). */
-function hasArtist(name: string): boolean {
-  const n = name.toLowerCase();
-  return (library.view?.sources ?? []).some((s) => s.id === 'cratarr' && s.albums.some((a) => a.artist?.toLowerCase() === n));
+/** A Want that failed, said (lib/wantPath): out of reach it needs Cratarr, as a record not had does; else the server's words. */
+export const sayWantFailed = (e: unknown) => toast.show({ text: wantFailed(e instanceof ApiError && !e.generic ? e.message : null, notAnswered(e)), tone: 'error' });
+
+/** A related or Beyond artist opened (W10): their page by id; one Cratarr has no artist for yet opened by their MusicBrainz id
+ *  first (`POST /api/artists/open`); refused that (Z8, 403: not one Beyond listed, for one who is no administrator), by name. */
+export async function openArtistPage(x: ArtistOpen): Promise<void> {
+  if ('id' in x) return goToArtist('cratarr', x.id);
+  if ('mbid' in x) {
+    try {
+      const { artist } = await openArtist(x.mbid, x.name);
+      return goToArtist('cratarr', artist);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 403)) throw e;
+    }
+  }
+  goToArtist('cratarr', x.name);
 }
+
+/** An album not in the library opened (W9, lib/openRecord): its record's page, made one first where no record holds it yet,
+ *  over what the panel views; else its Bandcamp album. A row the server can't make a record of throws, for its opener to say. */
+export async function openNotHad(x: Openable, label?: string | null): Promise<void> {
+  const how = howToOpen(x, label);
+  if (!how) return;
+  if ('record' in how) return viewOver(albumSubject('cratarr', how.record));
+  if ('bandcamp' in how) return viewOver(albumSubject(BANDCAMP, albumIdOf(how.bandcamp)));
+  const { record } = await openRecord(how.open);
+  viewOver(albumSubject('cratarr', record));
+}
+
 
 // How the owner used the albums (decided 2026-10-16): plays, last played and rating, per server, for the Library's
 // orders (Plays, Last played, Rating); the filter's switches are the server's (lib/listFilter). Read when one is chosen,

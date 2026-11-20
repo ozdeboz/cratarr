@@ -1,5 +1,5 @@
 // A track's file opened for the tape head's chunks (decision 0102, as amended): any stretch of it decoded on request,
-// 16-bit stereo interleaved, by the same decoder as the app's (a5's server/tape-decode, symphonia; the page's as
+// 16-bit stereo interleaved, by the same decoder as the app's (server/tape-decode, symphonia; the page's as
 // decode.wasm: no imports, the file's bytes copied into its memory, read on without seeking where it goes on). A plain
 // WAV file opens here too where the decoder cannot take a file.
 
@@ -15,7 +15,7 @@ export type TapeDecoder = {
   close(): void;
 };
 
-/** decode.wasm's own calls (a5's). */
+/** decode.wasm's own calls. */
 type DecodeWasm = {
   memory: WebAssembly.Memory;
   alloc(len: number): number;

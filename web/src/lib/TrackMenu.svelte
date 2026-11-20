@@ -1,7 +1,19 @@
 <script lang="ts" module>
   /** A track the menu is for, when it is not the playing one (a queue row, a playlist row; decision 0023). */
   /** `has_versions`: the library holds other recordings of its work (0.10); absent where the list does not say. */
-  export type MenuTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null; has_versions?: boolean; duration_secs?: number | null };
+  export type MenuTrack = {
+    source: string;
+    id: string;
+    name: string;
+    artist: string | null;
+    album: string | null;
+    album_id: string | null;
+    has_versions?: boolean;
+    duration_secs?: number | null;
+    /** Its record's type, as the answer it was built from sends it (GOTO.2): its Go to names it. */
+    album_type?: string | null;
+    album_secondary?: string[];
+  };
   /** Where a queue row's track is: `upcoming` (what comes next, 0 = the next) or `previous` (this device's played ones). */
   export type QueuePlace = { list: 'upcoming' | 'previous'; at: number };
 </script>
@@ -52,7 +64,7 @@
   import { excludedGloballyOf, loadExcludedIds, setExcludedGlobally } from './exclusions.svelte';
   import DownloadStep from './DownloadStep.svelte';
   import MenuTable from './MenuTable.svelte';
-  import { inOrder, type EntryId } from './menuTable';
+  import { goToName, ICON_OF, inOrder, type EntryId } from './menuTable';
   import MenuEntry from './MenuEntry.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
   import { endSnippet, fromLabel, heardShare, snippetable, snippetOn, startOf, toggleSnippet, type SnippetTrack } from './snippetPlayer.svelte';
@@ -454,22 +466,23 @@
     <!-- Nothing to show. -->
   {:else if e === 'goAlbum'}
     {#if albumId && !(fromPanel && panel.viewed === albumSubject(t.source, albumId))}
-      <MenuEntry icon="squareArrowOutUpRight" label="Go to album" onclick={viewAlbum} />
+      <MenuEntry icon={ICON_OF.album} label={goToName(t.album_type, t.album_secondary)} onclick={viewAlbum} />
     {/if}
   {:else if e === 'goArtist'}
     {#if artistName && !(fromPanel && viewedArtist?.source === t.source && viewedArtist?.name === artistName)}
-      <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
+      <MenuEntry icon={ICON_OF.artist} label="Go to {artistName}" onclick={goToArtist} />
     {/if}
   {:else if e === 'goGenre'}
     {#each genres.filter((g) => !(fromPanel && g === viewedGenre)) as g (g)}
-      <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
+      <MenuEntry icon={ICON_OF.genre} label="Go to {g}" onclick={() => goToGenre(g)} />
     {/each}
   {:else if e === 'soundsLike'}
-    {#if t.source === 'cratarr'}<MenuEntry icon="music" label="Sounds like this" onclick={goToLike} />{/if}
+    {#if t.source === 'cratarr'}<MenuEntry icon={ICON_OF.soundsLike} label="Sounds like this" onclick={goToLike} />{/if}
   {:else if e === 'otherVersions'}
-    {#if versions}<MenuEntry icon="music" label="Other versions" onclick={() => (step = 'versions')} />{/if}
+    {#if versions}<MenuEntry icon={ICON_OF.versions} label="Other versions" onclick={() => (step = 'versions')} />{/if}
   {:else if e === 'discover'}
-    {#if !onServer}<DiscoverEntries page={bandcampPage} artist={t.artist} album={t.album} {onclose} />{/if}
+    <!-- A preview's Want is its album's, by the album's own artist as its page says it (W12): never the track's. -->
+    {#if !onServer}<DiscoverEntries page={bandcampPage} {onclose} />{/if}
   {:else if e === 'favourite'}
     {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
   {:else if e === 'excludeEverywhere'}

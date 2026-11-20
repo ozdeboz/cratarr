@@ -166,14 +166,54 @@ pub struct Index {
     pub like: Arc<Library>,
 }
 
+/// The catalogue's facts into each song (`Index::with_facts`), and each song's sound, in the songs' order.
+fn take_facts(songs: &mut [Song], facts: &[Facts]) -> Vec<Option<Arc<[f32]>>> {
+    let by_track: HashMap<i64, &Facts> = facts.iter().filter_map(|f| Some((f.track?, f))).collect();
+    let mut names: [HashMap<String, u32>; 5] = Default::default();
+    let mut intern = |kind: usize, name: &str| {
+        let key = name.trim().to_lowercase();
+        let next = names[kind].len() as u32;
+        *names[kind].entry(key).or_insert(next)
+    };
+    let mut sounds = Vec::with_capacity(songs.len());
+    for s in songs.iter_mut() {
+        let f = track_of(&s.id).and_then(|t| by_track.get(&t).copied());
+        match f {
+            Some(f) => {
+                let mut t = f.like(&mut intern);
+                t.playlists = std::mem::take(&mut s.like.playlists);
+                t.artists = std::mem::take(&mut s.like.artists);
+                s.like = t;
+                if !f.folders.is_empty() {
+                    s.folders = f.folders.clone();
+                }
+            }
+            None => s.like.genres.clear(),
+        }
+        sounds.push(f.and_then(|f| f.sound.clone()));
+    }
+    sounds
+}
+
 impl Index {
     pub fn new(songs: Vec<Song>) -> Self {
+        let like = Arc::new(Library::new(songs.iter().map(|s| &s.like), Vec::new()));
+        Self::made(songs, like)
+    }
+
+    /// `new` and then `with_facts`, its library made once (0.17: a device's first pick made it twice, a fifth of the wait).
+    pub fn of_facts(mut songs: Vec<Song>, facts: &[Facts]) -> Self {
+        let sounds = take_facts(&mut songs, facts);
+        let like = Arc::new(Library::new(songs.iter().map(|s| &s.like), sounds));
+        Self::made(songs, like)
+    }
+
+    fn made(songs: Vec<Song>, like: Arc<Library>) -> Self {
         let by_id = songs.iter().enumerate().map(|(i, s)| (s.id.clone(), i)).collect();
         let mut albums: HashMap<u32, Vec<usize>> = HashMap::new();
         for (i, s) in songs.iter().enumerate() {
             albums.entry(s.album_n).or_default().push(i);
         }
-        let like = Arc::new(Library::new(songs.iter().map(|s| &s.like), Vec::new()));
         Self { songs, by_id, albums, artist_ids: Vec::new(), genre_ids: Vec::new(), like }
     }
 
@@ -183,30 +223,7 @@ impl Index {
     /// household's album tags among them). A song the catalogue has no facts of keeps its year, tempo and album tags and
     /// loses its genres (their numbers are the facts' now).
     pub fn with_facts(mut self, facts: &[Facts]) -> Self {
-        let by_track: HashMap<i64, &Facts> = facts.iter().filter_map(|f| Some((f.track?, f))).collect();
-        let mut names: [HashMap<String, u32>; 5] = Default::default();
-        let mut intern = |kind: usize, name: &str| {
-            let key = name.trim().to_lowercase();
-            let next = names[kind].len() as u32;
-            *names[kind].entry(key).or_insert(next)
-        };
-        let mut sounds = Vec::with_capacity(self.songs.len());
-        for s in &mut self.songs {
-            let f = track_of(&s.id).and_then(|t| by_track.get(&t).copied());
-            match f {
-                Some(f) => {
-                    let mut t = f.like(&mut intern);
-                    t.playlists = std::mem::take(&mut s.like.playlists);
-                    t.artists = std::mem::take(&mut s.like.artists);
-                    s.like = t;
-                    if !f.folders.is_empty() {
-                        s.folders = f.folders.clone();
-                    }
-                }
-                None => s.like.genres.clear(),
-            }
-            sounds.push(f.and_then(|f| f.sound.clone()));
-        }
+        let sounds = take_facts(&mut self.songs, facts);
         self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
         self
     }

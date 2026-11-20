@@ -33,6 +33,10 @@ fn yes() -> bool {
 /// account in it.
 pub const OWN_MUSIC: &str = "own_music";
 
+/// Cratarr's own source's value for the accounts own music is switched off for (0.17, the owner: "own music per account, on or
+/// off"), by name: none of it is theirs, so no Your music and nothing added to it. Absent: on for everyone.
+pub const OWN_MUSIC_OFF: &str = "own_music_off";
+
 /// The viewer's own music, as it is named (the owner, 2026-11-04); anyone else's is "<account>'s music".
 pub const YOUR_MUSIC: &str = "Your music";
 
@@ -40,6 +44,11 @@ impl SourceConfig {
     /// The own-music folder: Cratarr's own source's, where one is set.
     pub fn own_music(&self) -> Option<std::path::PathBuf> {
         (self.kind == crate::source::cratarr::KIND.id).then(|| source::text(&self.values, OWN_MUSIC).map(std::path::PathBuf::from)).flatten()
+    }
+
+    /// Whether `account` has own music: an own-music folder set, and not switched off for it (`OWN_MUSIC_OFF`).
+    pub fn own_music_on(&self, account: &str) -> bool {
+        self.own_music().is_some() && !source::list(&self.values, OWN_MUSIC_OFF).iter().any(|a| a == account)
     }
 }
 
@@ -581,6 +590,7 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
         d.values.retain(|k, v| {
             (own_folders && k == "folders" && v.is_array())
                 || (own_folders && k == OWN_MUSIC && v.is_string())
+                || (own_folders && k == OWN_MUSIC_OFF && v.is_array())
                 || fields.iter().any(|f| {
                     f.key == k
                         && match f.kind {
@@ -782,6 +792,12 @@ mod tests {
         let mut other = jf("jf", "http://a", Some("k"));
         other.values.insert(OWN_MUSIC.into(), "/own".into());
         assert_eq!(merge(&[], vec![other]).unwrap()[0].own_music(), None, "Cratarr's own source's only");
+        // 0.17: switched off for some accounts, kept as saved.
+        let mut off = own("/own");
+        off.values.insert(OWN_MUSIC_OFF.into(), serde_json::json!(["bo"]));
+        let kept = merge(&[], vec![off]).unwrap();
+        assert!(kept[0].own_music_on("ann"));
+        assert!(!kept[0].own_music_on("bo"));
     }
 
     #[test]

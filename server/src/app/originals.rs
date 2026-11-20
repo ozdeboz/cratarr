@@ -12,7 +12,8 @@ use super::musicbrainz::Asked as _;
 
 /// Releases asked about in one pass, kept together at its end: each keeping builds the library again.
 const BATCH: usize = 500;
-/// Between two questions: half Discover's pace, so the two together stay within MusicBrainz's one a second.
+/// Between two questions: the turn keeps MusicBrainz's one a second (`musicbrainz::Asked`), and a background pass takes no
+/// more than every other one of it, so a page asking meanwhile waits little.
 const PAUSE: Duration = Duration::from_secs(super::musicbrainz::PACE_SECS);
 /// A release MusicBrainz knew no date for is asked about again after this.
 const AGAIN_SECS: i64 = 90 * 86_400;
@@ -27,24 +28,37 @@ pub fn start() {
         tokio::time::sleep(Duration::from_secs(300)).await;
         loop {
             // Switched off (0.9.6): looked at again later.
-            if !super::switches::is_on(super::switches::MUSICBRAINZ) {
+            // Or the background reading paused (O5).
+            if !super::switches::is_on(super::switches::MUSICBRAINZ) || super::switches::background_paused() {
                 super::musicbrainz::PASS_NEXT.store(0, std::sync::atomic::Ordering::Relaxed);
                 tokio::time::sleep(IDLE).await;
                 continue;
             }
             super::musicbrainz::PASS_RUNNING.store(true, std::sync::atomic::Ordering::Relaxed);
-            let asked = pass().await.unwrap_or_else(|e| {
-                tracing::info!("original years: MusicBrainz could not be asked now: {e:#}");
-                0
-            });
-            // Nothing left of these: the works (0.10, `works`), in turn with them, so the two keep one pace.
-            let asked = match asked {
-                0 => super::works::pass().await.unwrap_or_else(|e| {
-                    tracing::info!("works: MusicBrainz could not be asked now: {e:#}");
+            // Its questions behind any page's (`musicbrainz::behind`): no one waits for these.
+            let asked = super::musicbrainz::behind(async {
+                // The lists 0.17's step left (`references::lists_pass`) first: their records wait off Health's item.
+                let asked = super::references::lists_pass().await.unwrap_or_else(|e| {
+                    tracing::info!("the lists 0.17's step left: MusicBrainz could not be asked now: {e:#}");
                     0
-                }),
-                n => n,
-            };
+                });
+                if asked > 0 {
+                    return asked;
+                }
+                let asked = pass().await.unwrap_or_else(|e| {
+                    tracing::info!("original years: MusicBrainz could not be asked now: {e:#}");
+                    0
+                });
+                // Nothing left of these: the works (0.10, `works`), in turn with them, so the two keep one pace.
+                match asked {
+                    0 => super::works::pass().await.unwrap_or_else(|e| {
+                        tracing::info!("works: MusicBrainz could not be asked now: {e:#}");
+                        0
+                    }),
+                    n => n,
+                }
+            })
+            .await;
             super::musicbrainz::PASS_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
             // Settings shows when it asks next (0.9.6).
             let wait = if asked == 0 { IDLE } else { Duration::ZERO };

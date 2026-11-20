@@ -1,14 +1,14 @@
 // Soulseek in Cratarr (decision 0099 and its amendment), the page's rules, pure: what a record's row says where it
 // stands, which can be ticked, how the list groups, and what Fetch sends. The server searches the requests approved in
-// Cratarr by their release, finds folders that hold every track, and fetches only what is ticked.
+// Cratarr by their record's list, finds folders that hold every track, and fetches only what is ticked.
 
 export type SoulseekState = 'waiting' | 'searching' | 'found' | 'approved' | 'fetching' | 'checking' | 'placed' | 'stuck';
-export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number };
+export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number; unchecked?: string | null };
 export type SoulseekItem = {
   id: string;
-  record: { artist: string; album: string; release_group: string; year?: number | null };
-  /** The approved Request it fetches (every one is one: decision 0099's amendment). */
-  request: number;
+  /** The catalogue's record it fetches (`record`: its number, 0 for an item 0.16 kept), named as the record is, and the approved
+   *  Request it fetches (every one is one: decision 0099's amendment), as the server keeps them. */
+  record: { record: number; artist: string; album: string; year?: number | null; request: number };
   state: SoulseekState;
   folders: SoulseekFolder[];
   /** The folder to be fetched (its place in `folders`). */
@@ -25,13 +25,18 @@ export type SoulseekItem = {
   placed?: string | null;
   /** Folders set aside, each file's why. */
   set_aside: { user: string; path: string; why: Record<string, string> }[];
+  /** slskd's batch asked for or downloading. */
+  batch?: string | null;
+  /** Picked by Cratarr itself, its folder certain (round 1.3): it reads as any picked record. */
+  auto?: boolean;
 };
 export type SoulseekView = { items: SoulseekItem[]; library?: string | null };
 
-/** A folder as a line: its format, how soon (a free slot, else its queue), its extra files, whose. */
+/** A folder as a line: what could not be checked (found by titles alone, R33), its format, how soon (a free slot, else its
+ * queue), its extra files, whose. */
 export function folderLine(f: SoulseekFolder): string {
   const mb = f.speed > 0 ? `${(f.speed / 1_000_000).toFixed(1)} MB/s` : null;
-  return [f.format.toUpperCase(), f.free_slot ? 'free slot' : `queue ${f.queue}`, mb, f.extra ? `${f.extra} extra file${f.extra === 1 ? '' : 's'}` : null, f.user]
+  return [f.unchecked, f.format.toUpperCase(), f.free_slot ? 'free slot' : `queue ${f.queue}`, mb, f.extra ? `${f.extra} extra file${f.extra === 1 ? '' : 's'}` : null, f.user]
     .filter(Boolean)
     .join(' · ');
 }
@@ -49,8 +54,21 @@ export function againIn(due: number, now: number): string | null {
 /** Held on its way: slskd or AcoustID could not be asked, and it is tried again at `due` (the server's `hold`). */
 const held = (i: SoulseekItem, now: number) => !!i.why && i.due > now && (i.state === 'approved' || i.state === 'fetching' || i.state === 'checking');
 
-/** Its row's line: the artist and year, then where it stands. */
-export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): string {
+/** What a user's picked record held by the disk floor says (the server's `SHORT_OF_SPACE`). */
+const SHORT_OF_SPACE = 'The server is short of space';
+
+/** The words a found record waiting for its asker's room or for space keeps (the Want's own, `requests::WAITS_FOR_*`). */
+const WAITS = ['Waits for room', 'Waits for space'];
+
+/** The user whose other record holds a picked one's turn (never two of one user at once), worked out from the list. */
+function waitingFor(i: SoulseekItem, items: readonly SoulseekItem[]): string | null {
+  const user = i.folders[i.chosen ?? 0]?.user;
+  const busy = (o: SoulseekItem) => o.id !== i.id && (o.state === 'fetching' || (o.state === 'approved' && !!o.batch)) && o.folders[o.chosen ?? 0]?.user === user;
+  return user && !i.batch && items.some(busy) ? user : null;
+}
+
+/** Its row's line: the artist and year, then where it stands; `items`, the list it is in. */
+export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000), items: readonly SoulseekItem[] = []): string {
   const head = [i.record.artist, i.record.year ? String(i.record.year) : null];
   const best = i.folders[i.chosen ?? 0];
   const where = ((): (string | null)[] => {
@@ -61,9 +79,13 @@ export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): 
       case 'searching':
         return ['Looking for it'];
       case 'found':
-        return [best ? folderLine(best) : 'Found'];
-      case 'approved':
-        return ['To be fetched'];
+        return [best ? folderLine(best) : 'Found', i.why && WAITS.includes(i.why) ? i.why : null];
+      case 'approved': {
+        // Held by the disk floor (AL03.2): its own words, as its request reads them (`word_in`), never its user's other record.
+        if (i.why === SHORT_OF_SPACE) return [i.why];
+        const user = waitingFor(i, items);
+        return [user ? `Waiting for ${user}'s other record` : 'To be fetched'];
+      }
       case 'fetching':
         return [`Fetching · ${Math.round(i.percent)}%`];
       case 'checking':
@@ -77,6 +99,10 @@ export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): 
   const aside = i.set_aside.length ? `${i.set_aside.length} folder${i.set_aside.length === 1 ? '' : 's'} set aside` : null;
   return [...head, ...where, aside].filter(Boolean).join(' · ');
 }
+
+/** The record an item fetches, as lists serve it (`al-<n>`, W12): its row's cover and its page. None for an item 0.16 kept,
+ *  which named its release group instead. */
+export const recordOf = (i: Pick<SoulseekItem, 'record'>): string | null => (i.record.record > 0 ? `al-${i.record.record}` : null);
 
 /** Only a found record with a folder can be ticked; nothing is fetched without a tick. */
 export const tickable = (i: SoulseekItem) => i.state === 'found' && i.folders.length > 0;

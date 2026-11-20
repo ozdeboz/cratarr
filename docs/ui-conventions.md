@@ -144,8 +144,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   a cover opens that album, the heading's › goes to the artist), then About: genres and year as chips, last played and
   date added (date and time), and the media providers (the server, and a chip per library holding the record, each with its dot); after Year its
   rating as five stars, the same as its menu's (a tap rates). Anything not known is left out. The album's artist chip opens the artist too.
-  **An artist** (decided 2026-10-16, as Symfonium's; `?view=artist:<server>/<name>`, by name as the albums credit
-  them) is a subject of the panel like an album: their newest album's cover (no artist photos yet), the action bar
+  **An artist** (decided 2026-10-16, as Symfonium's) is a subject of the panel like an album. Cratarr's own artist is one
+  page by id (0.17, `artist:cratarr/ar-<n>`, `lib/artistIds`), for anyone, with albums here or none, their About, related
+  artists and missing albums asked by id. Opened by a name (a track, a credit, the player), the page moves to the id the
+  server says once its rows are in. Its title is the name, plain; "Rone (2)" shows only in a list that holds two artists
+  of one name. Another server's artist and the device's own music stay by name (`artist:<server>/<name>`). The page:
+  their newest album's cover (no artist photos yet), the action bar
   (Play, Shuffle, Play next, Add to queue: all their tracks, album by album, newest first; Start radio on Cratarr's own
   player; the heart), the name and "8 albums • 124 tracks • 7:06:37". Then Albums (theirs, newest first) and Appears
   on (others' albums they are credited on a track of), both as covers three across on a phone, and Top tracks: their
@@ -158,6 +162,19 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken
   as… is in the playlist's menu); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
+- **A record you do not have** (0.17, decision 0100; `lib/recordNotHad`) opens as an album does, `album:cratarr/al-<n>`,
+  with nothing of a copy's: no heart, no Resume, no rating, no health lines. Its header has Want, or Requested while its
+  request is open, with where it stands under the title (a tap opens Requests). Its Bandcamp preview plays from the
+  header where it has one. Had through another record, it says "In your library" and opens that one. A retired record
+  says "Was in Music until 3 March 2026". Its rows are its list's, dimmed, playing nothing, never "Missing file". Its menu
+  is View, Go to the artist, Share, Web search and Genius search. Every album not in the library opens its record
+  (`lib/openRecord`): a missing album, a label's row, Beyond's, Spotify's. One no record holds yet is made one by its
+  reference as it opens, with the busy cover meanwhile; a name alone opens nothing.
+- **A label** (0.17, `label:la-<n>`, `lib/labelPage`, `LabelBody`) is a subject of the panel as an artist is, with no
+  tracks, heart or menu: its name, its first records' covers, how many records, then its records by year, newest first,
+  as Find's rows (artist, year, catalogue number, the type where it is not an album; "in your library"; a request's mark
+  on the cover). A tap opens the record. The next hundred are read as the list's end comes into view. Rows from Discogs
+  say "Data from Discogs". A record's labels in its About are chips ("Warp · WARP123") that open the label.
 - **New playlist, New crate** are the panel's edit mode with nothing made yet (decided 2026-10-16: "creating a playlist
   should look like editing one, with regard to everything"), from the + at the end of the page's pill
   (`lib/ContentControls.svelte`, `pageView.usePageAction`): the name editable where it shows ("New playlist", "New crate" until
@@ -182,8 +199,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   entries that work with Cratarr out of reach (going to what the service worker keeps, the outbox's writes, what is
   on the device, other sites); every other entry, and any new one until it is listed, is left out, and the menu ends
   with one line, "The rest needs Cratarr." Large actions the same (`ACTIONS_NEED_SERVER`). Pages say it in one line
-  where a whole thing steps aside ("Grabbing a crate needs Cratarr.", "New playlists need Cratarr."); never a refusal
-  after a tap.
+  where a whole thing steps aside ("Grabbing a crate needs Cratarr.", "Discover needs Cratarr.", "This record needs
+  Cratarr.", `lib/noticeAway`): a muted line with no Try again, and a part whose page says it already says nothing.
+  What is simply not offered away (New playlist) says nothing. Never a refusal after a tap. Reached, a failure keeps its
+  Notice and Try again.
 - **The moment, away** (decision 0101, point 18; `lib/momentHere`): with Cratarr out of reach Home's moment keeps the albums it
   last gave, under a name and a sky worked out here: from Open-Meteo's weather where This device's "Weather for the moment crate" is
   on and the internet is there, else from the time and day, with "Time and day only" under the name. That switch, in its group
@@ -214,12 +233,19 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   - **Delete:** a record of one copy says "Delete EP"; of several, an entry per copy the viewer may delete, "Delete from
     Music", "Delete from Your music", even if that is only one of them, as "Delete EP" would read as the whole record.
     The question names the copy too, and one in a main library is asked about once more.
-  - **Add to and Move to:** each copy's targets in turn. An Incoming copy is added: where it goes by default, that entry
-    first, and by an administrator also to a main library or their own music. A kept copy moves between an
-    administrator's libraries, never into or out of own music. A library already holding a copy is no target. Two copies
-    that would say the same each add where from ("Move to Vinyl from Music"), only then.
-  - **Replace in:** an administrator's, for an Incoming copy that is an upgrade: an entry per main library it can take a
-    copy's place in.
+  - **Add to, Move to and Copy to:** each copy's targets in turn. An Incoming copy is added: where it goes by default,
+    that entry first, and by an administrator also to a main library or their own music. A kept copy moves between an
+    administrator's main libraries. Into or out of someone's own music it is copied (0.17): "Copy to Ann's music", the
+    original staying; a departed user's music into a main library still moves. A library already holding a copy is no
+    target. Two copies that would say the same each add where from ("Move to Vinyl from Music"), only then.
+  - **The question is the preview's** (`moveSentences`, one place for this menu and Several albums): "Copy Two Rooms to
+    Ann's music as … (12 files)? The album stays in Music.", then "Copied …", and the record gains the new copy. The tap
+    sends what its sheet showed (the folder, the files, the copy), and the server refuses one that changed since.
+  - **Replace in:** an administrator's, for a copy whose stand says it replaces (better than the record's copy in a main
+    library): an entry per main library holding that copy. An Incoming copy's sheet offers the cover and carrying over.
+    A better copy in someone's own music says whose (0.17): "Replace in Music from Your music" for the administrator's
+    own, "Replace in Music from Bob's music" for another's, offered even though it is not theirs to delete. Its sheet has
+    no cover choice and nothing carried over, and after it the own copy stays on the record.
   - **Cancel conversion:** an administrator's. A copy with a conversion at work is not moved, replaced or deleted; the
     record's other copies offer what they did.
   - **Play from:** an entry per other copy in a library switched on, "Play from Incoming", leading the menu's Library card.
@@ -306,7 +332,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   weight underlined (a "like" term in the accent), the words between them muted ("from the 1990s", "that sounds
   like", "on", "by"), "or" within a kind; typing goes on after "and…". A term's tap opens its sheet (Sounds like / By,
   their own tracks, other readings, Another word for this, Remove); Backspace in the empty field opens the last.
-  Under it the closeness curve (a "like" term), the count, Save, Shuffle and Play, ⋮ (Edit, Start over), and the first
+  Under it the closeness curve (a "like" term), the count, Save, Shuffle and Play (while typed words wait to be read,
+  one button, Pick, which reads them as Enter does), ⋮ (Edit, Start over), and the first
   tracks. Unsaved crates matching the words show under the line once typing starts. Reached also from global
   search (its crate card, when the words read as two kinds or more; else the Grab a crate row), "Sounds like this" in
   a track's, album's or artist's menu, and "Grab a crate" in a genre's or label's.
@@ -397,12 +424,15 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     - Account (who is signed in, the app password, devices and sign-ins);
     - Display (theme, progress bar);
     - then the server's:
-      - Connections (servers: address, key, status; Lidarr the same way, shown only when an Incoming library is set);
+      - Connections (servers: address, key, status; Lidarr the same way, shown only when an Incoming library is set;
+        under Discovery and metadata, an administrator's Bandcamp row, "Off" or "Held until 14:05", opening its "Use
+        Bandcamp" switch, and "Pause background reading" last);
       - Libraries (one row per server library: its use, Main library, Incoming or Not used, and the folder Cratarr sees its
-        files in, or a warning when it can't; then the names, the trash, the catalogue status and tag splitting);
+        files in, or a warning when it can't; then the names, the trash, the catalogue status and tag splitting; Own
+        music with a switch per account, on until switched off; Disk space, the floor in GB, with the free space);
       - Players;
       - Users (every account, decision 0051, amended 2026-10-19: Cratarr's own, added here with "+ Add user", and a
-        directory's, read-only; each with its own page);
+        directory's, read-only; each with its own page; a user's Room row, "40 of 100 GB", opening its GB);
       - Authentication (decided 2026-10-16, not "Subsonic": the sign-in requirement and the directory; API keys are
         with what uses them, Home Assistant's under Connections, 2026-10-24);
       - Import (plays, favourites, ratings and added dates from a server);
@@ -589,6 +619,14 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   - *missing track*: a playlist line whose file is gone.
   - *player*: an app on a device, written "Finamp on Lenovo Tab".
   - *server*: Jellyfin and the like (not "source").
+- **Where a request stands** is the server's `state`, said in one set of words everywhere (0.17, `lib/requestState`):
+  the Requests page's rows, Discover's cards, a cover's mark and a record you do not have. Waiting, "Waits for room ·
+  101 of 100 GB", "Waits: the server is short of space", Being fetched, Found on Soulseek, Arrived, "Partly there (3 of
+  10)", In the library, "Delivered · <when>", Declined, Taken back, Rejected. A card never says a fetcher's own words.
+  Requested on a Want comes from the server, by record, never by names. Out of reach a Want says "Wanting needs
+  Cratarr." A user takes back her own Wants, waiting ones too; those who answer requests take back anyone's.
+- **An Incoming copy's badge** says how it stands against the kept copy (0.17): "Upgrade" where it is better, else
+  "In Music", naming the kept copy's library, with why ("lossless, yours is 320 kbps").
 - **Counts say what they count:** "in 3 playlists", "12 tracks", "92 missing tracks".
 - **Buttons are verbs** saying what happens: "Fix 92 missing tracks", "Delete playlist", not "OK" or "Submit".
 - **Help text** is one short line under the thing it explains, only where the label is not enough; more goes behind
@@ -617,7 +655,9 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 - **Undo is in the toast right after the action, and only there** (decision 0026, `lib/undo.svelte.ts`): every change
   to playlists, crates or Incoming says what it did with Undo (`withUndo`); Undo says "Undone." with Redo; Redo says
   the action's words again, with Undo. A refused undo says why ("It changed since; nothing was undone."). What one tap
-  undoes by tapping again (a track into a playlist, a heart, a pin) has no Undo.
+  undoes by tapping again (a track into a playlist, a heart, a pin) has no Undo. A move that waits for its files'
+  conversion is told when it ends, with its Undo, to the account whose page asked for it (0.17, `lib/jobsTold`); an
+  administrator is told of every one. Another's Undo is refused in the server's words ("That isn't yours to undo.").
 - **A page's own state stays in place** (`lib/Notice.svelte`): the page could not load *and has nothing to show*, a
   field's question (the Keep year), empty and loading states. Nothing temporary sits in the page: a reload or update
   that fails while the page shows its content is a toast (once, gone when the server answers again), and so is the
@@ -658,10 +698,19 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   every list and place. While what replaces its content is on its way, what it showed stays as it was, not blanked and
   not dimmed, for 300 ms. A quicker answer just takes its place; a slower one finds the loader there, the mark in motion
   (`lib/MarkLoader`, through `lib/Asking` for a list or a sheet's step and `lib/PageLoading` for a whole page or panel),
-  large on a page, small in a panel or a sheet. Words typed on keep what was shown and start the 300 ms again. With
+  large on a page, small in a panel or a sheet, and only those two hold a mark of their own. Under the mark one line
+  says what it waits for (`lib/waiting`): the library on this device opening, or a busy Cratarr that answers its health
+  and not yet what was asked ("Waiting for Cratarr"). Words typed on keep what was shown and start the 300 ms again. With
   nothing to keep, the loader comes after the same 300 ms, in room kept for it. "None found" never comes before the
   answer. A page or a panel going to something else keeps nothing of the last (`lib/Hold`; the owner, 2026-10-27: never
   old content on navigation): its own background, the same sign after the same 300 ms, then the new content whole.
+  **Where the mark sits** (the owner, 2026-11-19): in the middle of its own room, from its top (or what can be seen's)
+  to the bottom of what can be seen, as much room above it as below, measured again when what is above it settles.
+  The line of what it waits for hangs under the mark without moving it: its room holds both from the start. A list
+  that is a page's or a panel's whole content waits as a page does (`lib/Asking` `room="page"`). A section that is
+  always one horizontal row has the small mark at its start and its words to the right (`lib/PageLoading` `row`).
+  Every loader says what it waits for: where the wait is its own, in its own words ("Reading more tracks: 120 of
+  340"). A part of a page that waits (a section, a record's track list) never holds the whole page.
 - **Empty:** say why and what to do ("Nothing incoming." / "No Music library is set. Choose one in Settings →
   Libraries.").
 

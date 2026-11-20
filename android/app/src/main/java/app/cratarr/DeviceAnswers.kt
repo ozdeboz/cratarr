@@ -41,8 +41,18 @@ object DeviceAnswers {
             null
         } ?: return null
         held = Held(who, stands, device)
+        warm(device)
         return device
     }
+
+    /** What the first ask of each kind would make (the similarity, Radio's index: half a second on a tablet), made at open, beside the
+     *  ask that opened it: the next Sounds like or pick is answered at once. An ask meanwhile waits for it, as it would have made it. */
+    private fun warm(device: RulesDevice) {
+        Thread({ runCatching { device.ask(WARM) }.onFailure { Log.w(TAG, "not made ready: $it") } }, "cratarr-device-warm").start()
+    }
+
+    /** The rules crate's ask that makes what the asks read (`index::device`'s `warm`). */
+    private const val WARM = "{\"ask\":\"warm\"}"
 
     /** Lets it go: its memory goes with it. Told at every answer from Cratarr, so with nothing held it costs nothing. */
     fun release() {

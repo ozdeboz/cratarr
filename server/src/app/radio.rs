@@ -154,10 +154,13 @@ pub enum Within {
     },
     Playlist { id: String },
     Album { source: String, id: String },
-    /// `without`: the libraries switched off, as the artist showed.
+    /// `id`: theirs (`ar-<n>`, G6) where the page knows it; `without`: the libraries switched off, as the artist showed.
     Artist {
         source: String,
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(test, ts(optional))]
+        id: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         #[cfg_attr(test, ts(as = "Option<_>", optional))]
         without: Vec<String>,
@@ -175,7 +178,7 @@ impl Within {
             }
             Within::Playlist { id } => Collection::Playlist { id },
             Within::Album { source, id } => Collection::Album { source, id },
-            Within::Artist { source, name, without } => Collection::Artist { source, name, without },
+            Within::Artist { source, name, id, without } => Collection::Artist { source, name, id, without },
             Within::Tracks { source, ids } => Collection::Tracks { source, ids },
         }
     }
@@ -369,7 +372,7 @@ async fn with_elsewhere(index: &Index, req: &Ask, picks: &[usize], mut tracks: V
                 continue;
             }
         };
-        let streams: Vec<&crate::bandcamp::Track> = album.tracks.iter().filter(|t| t.stream.is_some()).collect();
+        let streams: Vec<&crate::bandcamp::Track> = album.tracks.iter().filter(|t| t.plays()).collect();
         if streams.is_empty() {
             continue;
         }
@@ -871,7 +874,9 @@ mod tests {
         assert_eq!(within(serde_json::json!({ "kind": "crate", "id": "genre:Jazz" })), Some(crate_), "a crate as saved");
         assert_eq!(within(serde_json::json!({ "kind": "playlist", "id": "Road" })), Some(Collection::Playlist { id: "Road".into() }));
         assert_eq!(within(serde_json::json!({ "kind": "album", "source": "cratarr", "id": "al-1" })), Some(Collection::Album { source: "cratarr".into(), id: "al-1".into() }));
-        assert_eq!(within(serde_json::json!({ "kind": "artist", "source": "cratarr", "name": "Ana" })), Some(Collection::Artist { source: "cratarr".into(), name: "Ana".into(), without: Vec::new() }));
+        assert_eq!(within(serde_json::json!({ "kind": "artist", "source": "cratarr", "name": "Ana" })), Some(Collection::Artist { source: "cratarr".into(), name: "Ana".into(), id: None, without: Vec::new() }));
+        let by_id = within(serde_json::json!({ "kind": "artist", "source": "cratarr", "name": "Rone", "id": "ar-2" }));
+        assert_eq!(by_id, Some(Collection::Artist { source: "cratarr".into(), name: "Rone".into(), id: Some("ar-2".into()), without: Vec::new() }), "G6: by their id");
         let tracks = within(serde_json::json!({ "kind": "tracks", "source": "cratarr", "ids": ["tr-1", "tr-2"] }));
         assert_eq!(tracks, Some(Collection::Tracks { source: "cratarr".into(), ids: vec!["tr-1".into(), "tr-2".into()] }));
         assert_eq!(within(serde_json::Value::Null), None, "null: beyond it");

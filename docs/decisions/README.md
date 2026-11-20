@@ -295,16 +295,22 @@ by a later record that says so in its header. A new decision takes the next numb
   a tick, the next folder when a user fails, every file gated and a folder that fails set aside whole; into its own
   Incoming library (the fetcher "soulseek"), kept on disk.
   Amended 2026-11-03: Lidarr and Soulseek siblings; Soulseek takes only Cratarr's approved Requests.
+  Amended 2026-11-19: automatic when certain; nothing uncertain is fetched without a tick.
 - [0100: Cratarr's own records, artists and labels](0100-cratarrs-own-records-artists-labels.md): accepted, for 0.16;
   a master record, artist and label, owned or not, each mapped to MusicBrainz, Discogs and Bandcamp, none required;
   the reference that fits counts; artist pages for anyone, label pages with the whole catalogue, search's "beyond"
   opening Cratarr's own pages; Soulseek judged by any reference, never a MusicBrainz id required.
+  Amended 2026-11-18: built in 0.17's first preview; merging by `same_listing`, records not had forgotten after six
+  quiet months, label pages from MusicBrainz and Discogs, one artist page by id.
 - [0101: 0.16 — each user's own music, one track id, and the library on the device](0101-own-music-one-track-id-library-on-the-device.md):
   accepted, for 0.16; libraries in list order, requests through Incoming into one's own music, the catalogue's track id
   served once switched, downloads with a holder per account and caches hidden at sign-out, the whole index with vectors
   and fits offline, Radio's picker in the rules crate; one migration at first start, rehearsed; two previews. Where it
   met 0084, 0085 and 0091, settled by the owner 2026-11-04.
   Amended 2026-11-03: 0102's tape engine joins 0.16 and the rules crate's move.
+  Amended 2026-11-18: what 0.17's first preview built: no approval per request, room counted from arrivals, the disk's
+  floor, copies (Copy to, a Want's copy, Replace from someone's own music), the backup's list; uploads in its second
+  preview.
 - [0102: The tape engine on the device](0102-the-tape-engine-on-the-device.md): accepted, for 0.16; every wind's sound
   made where it is heard, from the track decoded in memory (the playing track only), the engine's arithmetic in the
   rules crate (0101); a streamed track's file fetched whole as it starts; the app and the page together; the server's
@@ -313,3 +319,18 @@ by a later record that says so in its header. A new decision takes the next numb
   server through a peer account and its key, its catalogue mirrored with its analysis, its streams relayed; read-only,
   dimmed while away, your plays and favourites kept by your own ids. Reverses "modes only" for Cratarr peers; Jellyfin
   and Navidrome stay modes. Then playlists, offline, a bounded cache and a record shown once; iroh after a trial.
+- [0104: The domain core](0104-the-domain-core.md): accepted, for 0.18. One home per object; the request, the Soulseek
+  item and the arrival each move by one pure `next()`; facts keep their sources; one `can()` on the server; one view per
+  object with its actions and a version; one sheet per object kind, its state deciding the sections and the opening
+  place adding only its context; one command path with one Undo; one identity matcher; live updates per object.
+- [0105: No source ranks above another](0105-no-source-ranks-above-another.md): accepted, 0.17 in part. The counting
+  order only says who is asked first; a busy source is passed over, never an answer; disagreeing sources are versions,
+  none chosen; the hand, then the files, then the services as equals; Bandcamp only through MusicBrainz's link.
+- [0106: The server crate split](0106-the-server-crate-split.md): accepted, 0.18's first change. Nine crates in a graph
+  with no cycles, moves only, each step green with the same test counts; `app` cut by area with the domain core.
+- [0107: Pictures are facts, with one picker](0107-pictures-are-facts-with-one-picker.md): accepted, for 0.18. Covers,
+  artists' photos and lists' pictures keep every source's candidate; the hand's pick wins, kept by the object's id, with
+  one Undo; one picker for every kind.
+- [0108: A request loop never reaches the server](0108-a-request-loop-never-reaches-the-server.md): accepted, 0.17.
+  One guard holds back a GET sent over 60 times in 10 s, for as long as a loop keeps asking; a page test fails a new
+  effect that reads and writes one state; a failure is never read as "nothing".

@@ -309,11 +309,8 @@ async fn fetch(url: &str) -> Result<Vec<u8>> {
     if r.content_length().is_some_and(|n| n as usize > MOST_BYTES) {
         bail!("That image is too large");
     }
-    let data = r.bytes().await?.to_vec();
-    if data.is_empty() || data.len() > MOST_BYTES {
-        bail!("That image could not be read");
-    }
-    Ok(data)
+    // An image, read in pieces and cut at the cap (O1, Y11): a longer one is refused, never held whole.
+    super::reach::read_image(r, MOST_BYTES).await.context("That image could not be read")
 }
 
 /// An administrator's own picture (0.9.6, the owner: Upload cover, for everyone), kept as it was sent (JPEG, PNG or

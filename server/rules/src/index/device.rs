@@ -154,6 +154,13 @@ pub enum Asked {
         draw: u64,
         now: i64,
     },
+    /// What the first ask of each kind would make, made now (0.17): the similarity and Radio's index, half a second on a tablet. The
+    /// app and the page ask it as the device opens, so the first Sounds like or pick after it is answered at once.
+    Warm,
+    /// The account's playlists, as `/api/state` lists them (0.17: the Playlists page with Cratarr out of reach).
+    Playlists,
+    /// A playlist's rows, as `/api/playlists/{id}/rows` gives them: its tracks this device holds, in its order.
+    PlaylistRows { id: String },
 }
 
 /// A crate's row, in the names a page's lists give it (the server's `PlaylistRow`).
@@ -312,6 +319,14 @@ impl Device {
             Asked::Rows { id, look, offset, limit, now } => self.rows(&id, &look, offset, limit, now),
             Asked::Tempo { id, look, now } => self.tempo(&id, &look, now),
             Asked::Pick { what, within, here, draw, now } => Some(self.pick(what, within.as_ref(), here.as_deref(), draw, now)),
+            Asked::Warm => {
+                self.alike();
+                self.radio();
+                Some(json!({}))
+            }
+            // Nothing of the account held, as for its crates: no list is a wrong answer then.
+            Asked::Playlists => (!self.own.crates.is_empty()).then(|| self.playlists()),
+            Asked::PlaylistRows { id } => self.playlist_rows(&id),
         };
         answer.map(|a| a.to_string())
     }
@@ -495,8 +510,9 @@ impl Device {
         })
     }
 
-    /// A crate's lines in the order its list shows, the server's `crate_in_order`.
-    fn ordered(&self, mut lines: Vec<String>, look: &Look) -> Vec<String> {
+    /// A crate's lines in the order its list shows, the server's `crate_in_order`. `resolved`: its conditions worked out, as Best
+    /// match reads a Sounds like's closeness (`crates::most_alike`).
+    fn ordered(&self, mut lines: Vec<String>, look: &Look, resolved: &[Condition]) -> Vec<String> {
         match look.order {
             Order::Own => {
                 if look.down {
@@ -506,7 +522,7 @@ impl Device {
             }
             Order::BestMatch => {
                 let fit = |l: &str| self.fits.get(&self.facts[*self.lines.get(l)?].track?).copied();
-                crates::by_fit(lines, fit, look.down)
+                crates::most_alike(lines, resolved, fit, look.down)
             }
             order => {
                 let rows: Vec<Row> = lines.iter().map(|l| self.row(l)).collect();
@@ -524,7 +540,8 @@ impl Device {
         let by = self.by();
         let view = View { files: &self.facts, switched_off: &off, world: self.world(fits.as_ref(), now), by: &by, alike: || self.alike() };
         let mine: Vec<String> = without.iter().filter(|k| k.starts_with(&format!("{SOURCE}/"))).cloned().collect();
-        let (lines, reasons, all_back, _) = view.select_saying(&shown, &causes, &mine, false);
+        let resolved = view.resolved(&shown, false);
+        let (lines, reasons, all_back, _) = view.select_saying_in(&resolved, &shown, &causes, &mine, false);
         let genres = if offset == 0 {
             let chosen: FxHashSet<&str> = lines.iter().map(String::as_str).collect();
             crates::top_genres(self.facts.iter().filter(|f| crates::on_for(&f.folders, &off) && chosen.contains(f.rel.as_str())).map(|f| f.genres.as_slice()), GENRES_SHOWN)
@@ -532,7 +549,7 @@ impl Device {
             Vec::new()
         };
         let total = lines.len();
-        let lines = self.ordered(lines, look);
+        let lines = self.ordered(lines, look, &resolved);
         let rows: Vec<Row> = lines.iter().skip(offset).take(limit).map(|l| self.row(l)).collect();
         Some(json!({ "source": SOURCE, "total": total, "limit": limit, "rows": rows, "genres": genres, "reasons": reasons, "all_back": all_back }))
     }
@@ -620,6 +637,29 @@ impl Device {
 
     /// The Crates page's list. A Sounds like costs a pass over the library for each answer, so its sizes for the other two settings of
     /// the toggle are left unknown; the list says so as it does of favourites not read.
+    /// The account's playlists in the shape `/api/state` gives them: each its own, its count the tracks this device holds of it (one
+    /// it does not hold, of a library it cannot see, it cannot say is missing, so none is said to be).
+    fn playlists(&self) -> Json {
+        let lists: Vec<Json> = self
+            .own
+            .lists
+            .iter()
+            .map(|l| {
+                let count = l.tracks.iter().filter(|t| self.place.contains_key(t)).count();
+                json!({ "id": l.id, "name": l.name, "member": false, "count": count, "dead": 0, "links": [], "spoken": [], "mine": true })
+            })
+            .collect();
+        Json::Array(lists)
+    }
+
+    /// A playlist's rows as `/api/playlists/{id}/rows` gives them, its tracks this device holds in its order; none for one it does not
+    /// hold.
+    fn playlist_rows(&self, id: &str) -> Option<Json> {
+        let list = self.own.lists.iter().find(|l| l.id == id)?;
+        let rows: Vec<Row> = list.tracks.iter().filter_map(|t| self.place.get(t)).map(|&at| self.row(&self.facts[at].rel)).collect();
+        Some(json!({ "source": SOURCE, "rows": rows }))
+    }
+
     fn crates(&self, without: &[String], now: i64) -> Json {
         let (by, artists) = (self.by(), self.own.artists_out.iter().cloned().collect::<HashSet<String>>());
         let excluded: Vec<String> = self.own.excluded.iter().map(|t| ids::song(*t)).collect();
@@ -690,7 +730,8 @@ impl Device {
         let fits = if crates::needs_fits(&shown) { self.fitting(&off) } else { None };
         let by = self.by();
         let view = View { files: &self.facts, switched_off: &off, world: self.world(fits.as_ref(), now), by: &by, alike: || self.alike() };
-        let lines = self.ordered(view.select(&shown, false), look);
+        let resolved = view.resolved(&shown, false);
+        let lines = self.ordered(view.select_in(&resolved, false), look, &resolved);
         lines.iter().filter_map(|l| self.facts[*self.lines.get(l)?].song()).collect()
     }
 

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { crateViewOf, holdsLine, orderRecords, ownOrderOf, recordCell, recordOrderOf, recordOrders, recordsOf, tracksForRecords } = await import('../src/lib/crateRecords.ts');
+const { crateViewOf, holdsLine, orderRecords, ownOrderOf, ranksAlike, recordCell, recordOrderOf, recordOrders, recordsOf, tracksForRecords } = await import('../src/lib/crateRecords.ts');
 
 const row = (album_id: string | undefined, album: string, artist: string, year?: number, added?: number) => ({ album_id, album, artist, year, added });
 const rows = [
@@ -77,12 +77,26 @@ test('as a table: ordered by how many of its tracks the crate holds and by their
 
 test('every crate opens on Best match; its own order is named by what it is, and only where it has one (decision 0094)', () => {
   assert.equal(ownOrderOf('home:new'), 'As on Home');
-  assert.equal(ownOrderOf('like:now'), 'Closest first');
-  for (const id of ['7', 'genre:jazz', 'home:graves', null]) assert.equal(ownOrderOf(id), null, String(id));
+  for (const id of ['7', 'genre:jazz', 'home:graves', 'like:now', null]) assert.equal(ownOrderOf(id), null, String(id));
   assert.deepEqual(recordOrders('7').map((f) => f.label).slice(0, 2), ['Best match', 'Artist'], 'no "Crate order"');
   assert.deepEqual(recordOrders('home:new').map((f) => f.label).slice(0, 2), ['Best match', 'As on Home']);
   assert.deepEqual(recordOrderOf('7', { key: 'own', down: true }), { key: 'bestMatch', down: false }, 'its own where it has none: Best match');
   assert.deepEqual(recordOrderOf('home:new', { key: 'own', down: true }), { key: 'own', down: true });
   assert.equal(tracksForRecords('year'), 'bestMatch', 'records by a field: their tracks in Best match, equals so');
   assert.equal(tracksForRecords('own'), 'own');
+});
+
+test('a crate with a Sounds like opens on Most alike, its records and its tracks; without one, Best match', () => {
+  const like = { axis: 'like', not: false, value: { kind: 'like', of: ['ar-b'], count: 1000, min: 60 } } as const;
+  const jazz = { axis: 'genre', not: false, value: { kind: 'any_of', values: ['Jazz'] } } as const;
+  assert.equal(ranksAlike('7', [jazz, like]), true);
+  assert.equal(ranksAlike('7', [jazz]), false);
+  assert.equal(ranksAlike('7', [{ ...like, enabled: false }]), false, 'switched off, it ranks nothing');
+  assert.equal(ranksAlike('7', [{ ...like, not: true }]), false, 'left out, neither');
+  assert.equal(ranksAlike('like:tr-1@10'), true, 'a Sounds like crate by its id');
+  assert.equal(recordOrders('7', true)[0].label, 'Most alike');
+  assert.equal(recordOrders('7')[0].label, 'Best match');
+  assert.equal(recordOrders('like:tr-1@10')[0].label, 'Most alike');
+  assert.deepEqual(recordOrders('like:tr-1@10').map((f) => f.label).slice(0, 2), ['Most alike', 'Artist'], 'Most alike its one order, no "Closest first"');
+  assert.deepEqual(recordOrderOf('like:tr-1@10', { key: 'own', down: true }), { key: 'bestMatch', down: false }, 'a kept own order falls back to it');
 });

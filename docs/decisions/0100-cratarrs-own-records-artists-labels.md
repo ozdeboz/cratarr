@@ -56,3 +56,37 @@ counts. Nothing holds a record one does not have yet, nor an artist or a label.
 - One missing list from three discographies; artist pages for anyone; label pages; Soulseek without MusicBrainz.
 - Records, artists and labels kept on the server (the store grows with what one looks at, not the whole catalogues).
 - 0.15 ships Soulseek as built (MusicBrainz records only), said in What's new; this is 0.16.
+
+## Amended 2026-11-18: built in 0.17's first preview
+
+0.16 built the records you have. The rest of this decision came in 0.17's first preview. How it is built is in
+[records-and-copies.md](../records-and-copies.md); what the build settled is here. The open points took the recommended
+answer unless the owner chose otherwise, as noted.
+
+- **Merging (point 4)** is `same_listing`. A link from either side decides, both ways. A release or a Bandcamp album
+  names one record; two release groups or masters that differ are two, and the same one says nothing, as a deluxe
+  edition shares its group. Without a link: the artist, the title and the tracklist. A list with no track lengths never
+  merges; it may count where every title agrees.
+- **Two records found to be one:** the one with copies keeps its id, else the older. The other's id answers by it.
+- **Records you do not have are kept while something uses them** (the owner, 2026-11-16). One that no list showed and
+  nobody opened for six months is forgotten, and a tombstone keeps its id. A request, a choice by hand, a merge, a
+  Soulseek item or a retired record keeps it. Kept tracklists go after thirty days unopened; an artist left with nothing
+  is forgotten too. The library's artists' lists are read again once a month, spread over the month.
+- **Kept at open:** a label's page and search's "beyond" keep their sources' rows as a cache, not as records. A record
+  is made only when someone opens, wants or links an album, and an artist only when opened, never by a name.
+- **Labels (point 3):** a label's page lists its records from MusicBrainz's and Discogs' lists, and the records tied to
+  it. Bandcamp's label pages are not read: Bandcamp answers them with a browser check, and Cratarr does not work around
+  it (the owner, 2026-11-17). The first hundred of each list are read at open; "More" reads on.
+- **Bandcamp in the missing list:** an artist's albums come from Bandcamp's search on the artist's own address, not from
+  their `/music` page. Bandcamp has an administrator's switch, and after a browser check Cratarr stops asking it for a
+  day.
+- **Artists:** one page by id for every artist, with many albums here, one or none. Offline is the exception: a device
+  holds only what the library has (the owner, 2026-11-16). Each artist of a name has a number for life, in the order
+  they were made; a bare name from outside opens the first. An artist the files credit is not split in two by references
+  yet.
+- **A retired record** is a record you do not have, with Want and "Was in Music until <date>". A record you do not have
+  keeps its Bandcamp preview.
+- **Soulseek (point 5)** judges by the record's counting list, whichever source gives it. A record with no list anywhere
+  is Stuck, and says why. A file with no MusicBrainz recording is judged by its sound, title and length, and AcoustID is
+  not asked.
+- **A request names its record,** found by its id, group, Bandcamp page or names, never by a title alone.

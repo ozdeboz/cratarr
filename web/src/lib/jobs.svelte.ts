@@ -2,12 +2,15 @@
 // limit to be converted, to FLAC, before Keep or Replace.
 // Followed app-wide: the Incoming tab shows how many wait, Incoming's rows show their progress, and a finished job
 // says so in a toast on whatever page is open. Only jobs this page saw unfinished are told, so a reload never replays
-// old ones. The live channel brings every change (`jobs`); only while it is down does this poll.
+// old ones. The live channel brings every change (`jobs`) to every account; only while it is down does an administrator's
+// page poll (the list is theirs to ask for). A user is told only of what their own page queued, with its Undo (W13,
+// lib/jobsTold).
 import { untrack } from 'svelte';
 import { getJobs, type Job } from './api';
 import { on, stream } from './events.svelte';
 import { toast } from './toast.svelte';
 import { withUndo } from './undo.svelte';
+import { queuedHere, toldOf, type Queued } from './jobsTold';
 
 const ACTIVE_MS = 3_000;
 const IDLE_MS = 30_000;
@@ -22,6 +25,15 @@ class Jobs {
   #seen = new Set<number>();
   #timer: ReturnType<typeof setTimeout> | undefined;
   #running = false;
+  /** Whether this page's account administers: it is told of every job, and polls the list while the live channel is down. */
+  #admin = true;
+  /** What this page queued and has not been told of yet (a user's own conversions). */
+  #mine: Queued[] = [];
+
+  /** A move this page asked for waits for its conversion: its end is told here, a user's too. */
+  queued(q: Queued) {
+    this.#mine = [...this.#mine, q];
+  }
 
   /** Waiting or converting. */
   get open(): Job[] {
@@ -50,7 +62,9 @@ class Jobs {
     for (const j of this.list.filter(open)) this.#seen.add(j.id);
     if (ended.length) {
       this.finished++;
-      tell(ended);
+      const told = toldOf(ended, this.#admin, this.#mine);
+      this.#mine = this.#mine.filter((m) => !told.some((j) => queuedHere([m], j)));
+      if (told.length) tell(told);
     }
   }
 
@@ -59,15 +73,17 @@ class Jobs {
     if (this.#running) this.#timer = setTimeout(() => this.#tick(), this.open.length ? ACTIVE_MS : IDLE_MS);
   }
 
-  /** Ask now (after queueing an album, or with the live channel down), then keep following. */
+  /** Ask now (after queueing an album, or with the live channel down), then keep following; a user's page hears it on the
+   *  live channel. */
   async poke() {
-    await this.#refresh();
+    if (this.#admin) await this.#refresh();
     this.#schedule();
   }
 
-  /** Follow the queue; returns the stop. Untracked, as live.svelte.ts's poll: started in an effect, its first look at
-   *  the live channel must not make the channel's opening re-run it. */
-  start(): () => void {
+  /** Follow the queue (`admin`: this page's account administers); returns the stop. Untracked, as live.svelte.ts's poll:
+   *  started in an effect, its first look at the live channel must not make the channel's opening re-run it. */
+  start(admin = true): () => void {
+    this.#admin = admin;
     this.#running = true;
     const off = on<Job[]>('jobs', (list) => this.apply(list));
     untrack(() => this.#tick());
@@ -78,9 +94,9 @@ class Jobs {
     };
   }
 
-  /** Poll only while the live channel is down. */
+  /** Poll only while the live channel is down, and only an administrator's page: the list is theirs to ask for. */
   async #tick() {
-    if (!stream.connected) await this.#refresh();
+    if (!stream.connected && this.#admin) await this.#refresh();
     clearTimeout(this.#timer);
     if (this.#running) this.#timer = setTimeout(() => this.#tick(), this.open.length ? ACTIVE_MS : IDLE_MS);
   }

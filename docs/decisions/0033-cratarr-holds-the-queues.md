@@ -302,7 +302,7 @@ order before back (decision 0059 holds the rule). For the queues Cratarr holds (
 ## Amendment (2026-10-23): one screen, one place
 
 A device with Cratarr open is a Play On target under its name, whatever its screen drives. Before, a page that drove
-another player hid from the list (its ThinkBook page drove the Salon tablet, so ThinkBook never showed up), while the
+another player hid from the list (its PC's page drove the Salon tablet, so the PC never showed up), while the
 app stayed listed and could start playing behind a screen that showed and controlled another player. The owner, asked
 whether that is how it should be: "Duh."
 
@@ -314,7 +314,7 @@ whether that is how it should be: "Duh."
   nothing (`lib/playOnTarget`). **The app** turns its screen here as its own player starts playing, from Cratarr's
   reports of it (`lib/playOn` `hereAgain`).
 - **Tabs keep their names apart without renaming the browser.** A second tab finds the browser's name held by the first
-  and takes the next free one ("ThinkBook 2") for itself only (the tab's session storage), numbered after the
+  and takes the next free one ("PC 2") for itself only (the tab's session storage), numbered after the
   browser's name, never after its own. Before, it saved the new name for the whole browser, so the first tab then
   moved too, and each round added a number: 41 players, "Edge on Windows 3 2 2 2 …".
 
@@ -336,8 +336,8 @@ started play, and the server passed that copy on.
 
 ## Amendment (2026-10-30): the screen follows the music, and what goes with it
 
-The owner: "the screen follows the music"; "every screen showing that player". The ThinkPad was playing; on the tablet
-the owner picked "this device". The music and the amp moved, but the ThinkPad's screen stayed on its own empty player:
+The owner: "the screen follows the music"; "every screen showing that player". The laptop was playing; on the tablet
+the owner picked "this device". The music and the amp moved, but the laptop's screen stayed on its own empty player:
 the handover's stop to it was a plain stop, so neither it nor a screen driving it could tell a handover from a stop.
 
 - **The handover's stop names where the music went:** `{"command": "stop", "moved_to": "<player>"}`. Every other stop

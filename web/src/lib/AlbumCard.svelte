@@ -1,8 +1,8 @@
 <script lang="ts">
   // An album in a panel's page (an album's More from, an artist's Albums and Appears on; as Symfonium's): its cover,
   // title and year (or the `lines` given: Home's artist and when it came). A tap views it over the page (back returns); a long-press or a right-click opens its menu (decision
-  // 0058). Not in the library (an artist's missing albums, 0.9.5): its `cover` and its own `onopen` (Bandcamp, else
-  // its menu), no menu of the library's. A library album's cover has Play in its upper right corner, which alone plays,
+  // 0058). Not in the library (an artist's missing albums, a record not had, W9): its `cover`, and its record's page, or its
+  // own `onopen`; no Play, its menu what needs no copy (`notHad`). A library album's cover has Play in its upper right corner, which alone plays,
   // and dims with the ring while it opens, when that takes long (lib/CoverPlay, lib/CoverWait; the owner, 2026-10-27).
   import { albumCoverUrl, type ListedAlbum, type RequestMark } from './api';
   import CoverBusy from './CoverBusy.svelte';
@@ -18,6 +18,7 @@
   import { albumAway } from './away.svelte';
   import { DEVICE } from './deviceMusic.svelte';
   import CoverWait from './CoverWait.svelte';
+  import { editionsMark } from './editions';
 
   let {
     source,
@@ -27,6 +28,7 @@
     onopen = null,
     busy = false,
     request = undefined,
+    notHad = false,
   }: {
     source: string;
     album: Pick<ListedAlbum, 'id' | 'title' | 'year'> & Partial<ListedAlbum>;
@@ -39,6 +41,8 @@
     busy?: boolean;
     /** Not in the library, asked for: where it stands, on its cover (lib/CoverStatus); else the album's own. */
     request?: RequestMark | null;
+    /** A record not had (W9): it opens its own page, and its menu holds only what needs no copy of it. */
+    notHad?: boolean;
   } = $props();
   let menu = $state(false);
   // Its libraries, as dots before its title (0.9.3): as the Library's lists show them.
@@ -50,7 +54,7 @@
 </script>
 
 {#if menu && source === BANDCAMP}<BandcampAlbumMenu album={{ id: album.id, title: album.title, artist: album.artist ?? null }} onclose={() => (menu = false)} />
-{:else if menu}<AlbumMenu {source} album={{ ...album, artist: album.artist ?? null }} onclose={() => (menu = false)} />{/if}
+{:else if menu}<AlbumMenu {source} album={{ ...album, artist: album.artist ?? null }} {notHad} onclose={() => (menu = false)} />{/if}
 <div class="card-box">
 <button
   class="card"
@@ -65,7 +69,8 @@
     /></span
   >
   <span class="title">{#each dots as dot (dot.id)}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/each}{album.title}</span>
-  {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else if album.year}<span class="year">{album.year}</span>{/if}
+  <!-- Its year; a card standing for several editions of one album says how many (F12). -->
+  {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else}{#if album.year}<span class="year">{album.year}</span>{/if}{#if editionsMark(album.editions)}<span class="year">{editionsMark(album.editions)}</span>{/if}{/if}
 </button>
 {#if own && !gone}<CoverPlay label={album.title} album={album.id} busy={albumPlay.starting === album.id} disabled={albumPlay.starting !== null} onplay={() => playListedAlbum(source, album)} />{/if}
 </div>

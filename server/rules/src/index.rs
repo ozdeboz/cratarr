@@ -1500,9 +1500,9 @@ impl Index {
                 }
             })
             .collect();
-        let mut index = radio::Index::new(songs);
+        let mut index = radio::Index::of_facts(songs, facts);
         index.artist_ids = artist_ids;
-        index.with_facts(facts)
+        index
     }
 }
 

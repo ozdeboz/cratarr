@@ -7,6 +7,7 @@
 //! a weight per kind (Meilisearch's federated search).
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,38 @@ const MISSING_KEEP: Duration = Duration::from_secs(60);
 /// How long an account's crates, with their tracks, are kept for search: a query is asked again as it is typed, and
 /// making every crate is the Crates page's work.
 const CRATES_KEEP: Duration = Duration::from_secs(60);
+/// Past this age, where the last making behind failed, a kept list is made again inline (M6): a refresh that keeps failing never
+/// serves the old list for good, while an idle while's first search is still served at once.
+const KEPT_MOST: Duration = Duration::from_secs(10 * 60);
+
+/// What a search does with a kept list (M6): serves it; serves it and makes it again behind; makes it again inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeptUse {
+    Serve,
+    Behind,
+    Inline,
+}
+
+/// `KeptUse` of a list `age` old, kept `keep`, whose last making behind failed or not.
+fn kept_use(age: Duration, keep: Duration, last_failed: bool) -> KeptUse {
+    if age >= KEPT_MOST && last_failed {
+        KeptUse::Inline
+    } else if age >= keep {
+        KeptUse::Behind
+    } else {
+        KeptUse::Serve
+    }
+}
+
+/// Runs its closure when dropped, however a making ends, a panic too (M6): a making's mark is never left set, so its list is made
+/// again; `std::thread::panicking` says a panic ended it.
+struct OnDrop<F: FnMut()>(F);
+
+impl<F: FnMut()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        (self.0)()
+    }
+}
 
 type Members = Arc<Vec<(String, String, Vec<String>)>>;
 
@@ -124,6 +157,12 @@ pub struct Item {
     /// An artist's library id (`ar-…`; 0.11, quick crates: what a Sounds like is seeded with from a search hit).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// An artist's number for their name (C55, G5): the page shows "Name (n)" where a list holds two of a name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<i64>,
+    /// How many editions of one album a record's item stands for, its own among them (F12.1, `app::editions`); none: one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editions: Option<u32>,
     pub score: f32,
     pub matched: Vec<Matched>,
 }
@@ -266,8 +305,8 @@ fn artist_line(albums: u32) -> String {
     }
 }
 
-/// The missing albums the words name (`subject` `missing:<release group>`), the best first, the newest among equals.
-fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: Option<&HashMap<String, super::requests::Mark>>) -> Vec<Item> {
+/// The missing records the words name, each by its record (`album:cratarr/al-<n>`, C53b), the best first, the newest among equals.
+fn missing_items(list: &[crate::app::discover::Missing], w: &[String], marks: Option<&super::requests::Marks>) -> Vec<Item> {
     let n = list.len();
     let mut out: Vec<Item> = list
         .iter()
@@ -275,11 +314,13 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: 
         .filter_map(|(i, m)| {
             let (close, matched) = album_match(&m.title, &m.artist, w)?;
             Some(Item {
+                editions: None,
+                number: None,
                 kind: "missing",
                 album: None,
                 album_id: None,
                 duration_secs: None,
-                subject: format!("missing:{}", m.release_group),
+                subject: format!("album:{}/{}", crate::source::cratarr::KIND.id, m.record),
                 known: vec![format!("Missing from {}", m.artist)],
                 composers: Vec::new(),
                 id: None,
@@ -289,7 +330,7 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: 
                 track: None,
                 artist: Some(m.artist.clone()),
                 bandcamp: m.bandcamp.clone(),
-                request: marks.and_then(|k| super::requests::mark_of(k, Some(&m.release_group), &m.artist, &m.title)),
+                request: marks.and_then(|k| crate::serve::ids::record_number(&m.record).and_then(|r| k.of_record(r))),
                 score: matched_rank(close, &matched, w, i, n),
                 matched,
             })
@@ -316,6 +357,8 @@ fn excluded_items(
         .filter_map(|(i, x)| {
             let (close, matched) = album_match(&x.album, &x.artist, w)?;
             Some(Item {
+                editions: None,
+                number: None,
                 kind: "excluded",
                 album: None,
                 album_id: None,
@@ -336,6 +379,8 @@ fn excluded_items(
             })
         })
         .chain(artists.iter().enumerate().filter(|(_, a)| crate::search::matches(&a.artist, w)).map(|(i, a)| Item {
+            editions: None,
+            number: None,
             kind: "excluded",
             album: None,
             album_id: None,
@@ -355,6 +400,8 @@ fn excluded_items(
             matched: matched_name(&a.artist),
         }))
         .chain(everywhere.iter().enumerate().filter(|(_, a)| crate::search::matches(&a.name, w)).map(|(i, a)| Item {
+            editions: None,
+            number: None,
             kind: "excluded",
             album: None,
             album_id: None,
@@ -382,6 +429,8 @@ fn excluded_items(
 fn known_item(kind: &'static str, id: String, title: &str, artist: &str, year: Option<i32>, cover: Option<String>, why: &str, w: &[String], at: usize, of: usize) -> Option<Item> {
     let (close, matched) = album_match(title, artist, w)?;
     Some(Item {
+        editions: None,
+        number: None,
         kind,
         album: None,
         album_id: None,
@@ -402,9 +451,50 @@ fn known_item(kind: &'static str, id: String, title: &str, artist: &str, year: O
     })
 }
 
-/// What one album is, across the known-elsewhere lists: its release group where one is known, else its names.
+/// One album once outside the library (0076): in the first known-elsewhere kind that has it, the reasons of every kind naming it
+/// gathered there; a record by its id (`album_key`, C53b), so a missing record that is requested too is one row.
+fn once_known(groups: &mut BTreeMap<&'static str, Vec<Item>>) {
+    let mut first: HashMap<String, (&'static str, usize)> = HashMap::new();
+    for kind in KNOWN {
+        let Some(items) = groups.remove(kind) else { continue };
+        let mut kept: Vec<Item> = Vec::new();
+        for item in items {
+            let key = album_key(&item);
+            if let Some((k, at)) = first.get(&key).copied() {
+                let into = if k == kind { kept.get_mut(at) } else { groups.get_mut(k).and_then(|g| g.get_mut(at)) };
+                if let Some(into) = into {
+                    for why in item.known {
+                        if !into.known.contains(&why) {
+                            into.known.push(why);
+                        }
+                    }
+                }
+                continue;
+            }
+            first.insert(key, (kind, kept.len()));
+            kept.push(item);
+        }
+        groups.insert(kind, kept);
+    }
+}
+
+/// A request found, as the known-elsewhere lists show it: by its record where it names one (`album:cratarr/al-<n>`, C53b: a
+/// missing record it asks for is one row), else by its release group, else its id.
+fn requested_item(r: &crate::userdata::Request, w: &[String], at: usize, of: usize) -> Option<Item> {
+    let mut item = known_item("requested", r.release_group.clone().unwrap_or_else(|| r.id.to_string()), &r.album, &r.artist, r.year, r.cover.clone(), "Requested", w, at, of)?;
+    if let Some(record) = r.record {
+        item.subject = format!("album:{}/{}", crate::source::cratarr::KIND.id, crate::serve::ids::record(record));
+    }
+    Some(item)
+}
+
+/// What one album is, across the known-elsewhere lists: its record where the item names one (`album:cratarr/al-<n>`, C53b), else
+/// its release group where one is known, else its names.
 fn album_key(i: &Item) -> String {
     let id = i.subject.split_once(':').map_or("", |(_, id)| id);
+    if i.subject.starts_with("album:") {
+        return id.to_string();
+    }
     let uuid = id.len() == 36 && id.chars().filter(|c| *c == '-').count() == 4;
     if uuid { id.to_string() } else { format!("{}|{}", crate::app::import::key(i.artist.as_deref().unwrap_or_default()), crate::app::import::key(&i.title)) }
 }
@@ -424,6 +514,8 @@ fn by_composer(c: &super::classical::Index, w: &[String], have: &std::collection
                 continue;
             }
             out.push(Item {
+                editions: None,
+                number: None,
                 kind: "album",
                 album: None,
                 album_id: None,
@@ -479,6 +571,8 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
                 r => format!("{r} recordings"),
             };
             Some(Item {
+                editions: None,
+                number: None,
                 kind: "work",
                 album: None,
                 album_id: None,
@@ -506,40 +600,164 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
     out
 }
 
-/// Every missing album of the library's artists, kept a minute (`MISSING_KEEP`): the same for every account.
-async fn all_missing(app: &super::App, served: &Arc<crate::serve::Serve>) -> anyhow::Result<Arc<Vec<crate::app::discover::MissingOf>>> {
-    type Kept = Option<(Instant, Arc<Vec<crate::app::discover::MissingOf>>)>;
+/// Every missing album of the library's artists: the same for every account. Made once; then the last answer comes at once and,
+/// older than `MISSING_KEEP`, is made again behind it, one making at a time (the owner, 2026-11-19, F45: a search waited 8.7 s
+/// while this list of every missing record was made again inside it).
+async fn all_missing(app: &super::App) -> anyhow::Result<Arc<Vec<crate::app::discover::Missing>>> {
+    type Kept = Option<(Instant, Arc<Vec<crate::app::discover::Missing>>)>;
     static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
+    static MAKING: AtomicBool = AtomicBool::new(false);
+    static FAILED: AtomicBool = AtomicBool::new(false);
     let kept = KEPT.get_or_init(Default::default);
-    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone()
-        && at.elapsed() < MISSING_KEEP
-    {
-        return Ok(m);
+    let old = kept.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    if let Some((at, m)) = &old {
+        match kept_use(at.elapsed(), MISSING_KEEP, FAILED.load(Ordering::Acquire)) {
+            KeptUse::Serve => return Ok(m.clone()),
+            KeptUse::Behind => {
+                if !MAKING.swap(true, Ordering::AcqRel) {
+                    let cat = app.library.catalogue();
+                    tokio::spawn(async move {
+                        // M6: the mark let go of however the making ends; a panic is a failure.
+                        let _making = OnDrop(|| {
+                            if std::thread::panicking() {
+                                FAILED.store(true, Ordering::Release);
+                            }
+                            MAKING.store(false, Ordering::Release);
+                        });
+                        match crate::app::discover::all_missing(cat).await {
+                            Ok((m, _)) => {
+                                *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), Arc::new(m)));
+                                FAILED.store(false, Ordering::Release);
+                            }
+                            Err(e) => {
+                                FAILED.store(true, Ordering::Release);
+                                tracing::warn!(target: "search", "the missing albums not made again: {e:#}");
+                            }
+                        }
+                    });
+                }
+                return Ok(m.clone());
+            }
+            KeptUse::Inline => {}
+        }
     }
-    let m = Arc::new(crate::app::discover::all_missing(served, app.library.catalogue()).await?.0);
-    *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
-    Ok(m)
+    match crate::app::discover::all_missing(app.library.catalogue()).await {
+        Ok((m, _)) => {
+            let m = Arc::new(m);
+            *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
+            FAILED.store(false, Ordering::Release);
+            Ok(m)
+        }
+        // Made again inline and failing: the old list rather than no search.
+        Err(e) => match old {
+            Some((_, m)) => {
+                tracing::warn!(target: "search", "the missing albums not made again: {e:#}");
+                Ok(m)
+            }
+            None => Err(e),
+        },
+    }
 }
 
-/// The asking account's crates with their tracks, kept a minute (`CRATES_KEEP`).
+/// The asking account's crates with their tracks. Made once per account and libraries switched off; then the last answer comes at
+/// once and, older than `CRATES_KEEP`, is made again behind it as that account, one making at a time (F45: making every crate
+/// inside a search is not cheap).
 async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<Members> {
-    static KEPT: OnceLock<Mutex<HashMap<(Option<String>, Vec<String>), (Instant, Members)>>> = OnceLock::new();
+    type Key = (Option<String>, Vec<String>);
+    static KEPT: OnceLock<Mutex<HashMap<Key, (Instant, Members)>>> = OnceLock::new();
+    static MAKING: OnceLock<Mutex<std::collections::HashSet<Key>>> = OnceLock::new();
+    static FAILED: OnceLock<Mutex<std::collections::HashSet<Key>>> = OnceLock::new();
     let account = (app.playlists.asking_account(), without.to_vec());
     let kept = KEPT.get_or_init(Default::default);
-    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned()
-        && at.elapsed() < CRATES_KEEP
-    {
-        return Ok(m);
+    let failed = FAILED.get_or_init(Default::default);
+    let old = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned();
+    if let Some((at, m)) = &old {
+        let last_failed = failed.lock().unwrap_or_else(|p| p.into_inner()).contains(&account);
+        match kept_use(at.elapsed(), CRATES_KEEP, last_failed) {
+            KeptUse::Serve => return Ok(m.clone()),
+            KeptUse::Behind => {
+                let making = MAKING.get_or_init(Default::default);
+                if making.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone()) {
+                    let (playlists, key) = (app.playlists.clone(), account.clone());
+                    tokio::spawn(crate::serve::who::carried(async move {
+                        // M6: the mark let go of however the making ends; a panic is a failure.
+                        let gone = key.clone();
+                        let _making = OnDrop(move || {
+                            if std::thread::panicking() {
+                                failed.lock().unwrap_or_else(|p| p.into_inner()).insert(gone.clone());
+                            }
+                            making.lock().unwrap_or_else(|p| p.into_inner()).remove(&gone);
+                        });
+                        match playlists.crate_members(&key.1).await {
+                            Ok(m) => {
+                                kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), (Instant::now(), Arc::new(m)));
+                                failed.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
+                            }
+                            Err(e) => {
+                                failed.lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone());
+                                tracing::warn!(target: "search", "the crates not made again: {e}");
+                            }
+                        }
+                    }));
+                }
+                return Ok(m.clone());
+            }
+            KeptUse::Inline => {}
+        }
     }
-    let m: Members = Arc::new(app.playlists.crate_members(without).await?);
-    kept.lock().unwrap_or_else(|p| p.into_inner()).insert(account, (Instant::now(), m.clone()));
-    Ok(m)
+    match app.playlists.crate_members(without).await {
+        Ok(m) => {
+            let m: Members = Arc::new(m);
+            kept.lock().unwrap_or_else(|p| p.into_inner()).insert(account.clone(), (Instant::now(), m.clone()));
+            failed.lock().unwrap_or_else(|p| p.into_inner()).remove(&account);
+            Ok(m)
+        }
+        // Made again inline and failing: the old list rather than no search.
+        Err(e) => match old {
+            Some((_, m)) => {
+                tracing::warn!(target: "search", "the crates not made again: {e}");
+                Ok(m)
+            }
+            None => Err(e.into()),
+        },
+    }
+}
+
+/// Each stage of a search and how long it took (F45): one line in the log when the whole took more than `SLOW_SEARCH`, so a slow
+/// search says where its time went (the words' count only: what was searched is the account's own).
+const SLOW_SEARCH: Duration = Duration::from_secs(1);
+struct Laps {
+    start: Instant,
+    last: Instant,
+    laps: Vec<(&'static str, u128)>,
+}
+
+impl Laps {
+    fn new() -> Self {
+        let now = Instant::now();
+        Laps { start: now, last: now, laps: Vec::new() }
+    }
+
+    fn lap(&mut self, stage: &'static str) {
+        let now = Instant::now();
+        self.laps.push((stage, now.duration_since(self.last).as_millis()));
+        self.last = now;
+    }
+
+    fn said(&self, q: &str) {
+        let total = self.start.elapsed();
+        if total >= SLOW_SEARCH {
+            let stages = self.laps.iter().map(|(s, ms)| format!("{s} {ms} ms")).collect::<Vec<_>>().join(", ");
+            tracing::warn!(words = q.split_whitespace().count(), ms = total.as_millis() as u64, %stages, "slow search");
+        }
+    }
 }
 
 /// Answers a query for the asking account (its playlists and crates): every kind asked for (`kinds`, all when empty).
 /// `without`: the libraries switched off (`source/library` keys): a word's albums and a crate's tracks are counted, and
 /// found, in those switched on, as what they open shows them (the owner, 2026-11-02).
 pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
+    let mut laps = Laps::new();
     let w = words(q);
     let mut answer = Answer { q: q.to_string(), ..Answer::default() };
     if w.is_empty() {
@@ -563,6 +781,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         }
         _ => None,
     };
+    laps.lap("classical");
     if wants("work")
         && let Some(c) = &classical
     {
@@ -582,6 +801,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             .iter()
             .enumerate()
             .map(|(i, (a, h))| Item {
+                editions: None,
+                number: None,
                 kind: "album",
                 album: None,
                 album_id: None,
@@ -608,6 +829,11 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             }
             albums.extend(by);
         }
+        // F12.1 (the owner: "One card, 2 editions"): Cratarr's editions of one album, one item.
+        let folded = super::editions::fold_items(&app.library, &mut albums, &app.library.folders_off(without)).await;
+        if let Some(t) = totals.get_mut("album") {
+            *t = t.saturating_sub(folded);
+        }
         groups.insert("album", albums);
         let n = found.artists.len();
         groups.insert(
@@ -617,6 +843,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .iter()
                 .enumerate()
                 .map(|(i, (a, h))| Item {
+                    editions: None,
+                    number: None,
                     kind: "artist",
                     album: None,
                     album_id: None,
@@ -645,6 +873,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .iter()
                 .enumerate()
                 .map(|(i, t)| Item {
+                    editions: None,
+                    number: None,
                     kind: "track",
                     album: (!t.album.is_empty()).then(|| t.album.clone()),
                     album_id: Some(t.album_id.clone()),
@@ -673,6 +903,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .iter()
                 .enumerate()
                 .map(|(i, (g, count))| Item {
+                    editions: None,
+                    number: None,
                     kind: "genre",
                     album: None,
                     album_id: None,
@@ -698,6 +930,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .collect(),
         );
     }
+    laps.lap("library");
     // The library's words (0.9.7, `app::words`): a group per kind, each word opening its crate (`crate:<kind>:<word>`),
     // by how many albums carry it among equals. In place of the library's genres where they can be read.
     // The labels the same way (0.11, quick crates), each opening its crate (`crate:label:<label>`).
@@ -715,6 +948,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                         kind,
                         hits.into_iter()
                             .map(|((_, word, albums), score)| Item {
+                                editions: None,
+                                number: None,
                                 kind,
                                 album: None,
                                 album_id: None,
@@ -743,8 +978,10 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             Err(e) => tracing::debug!("search: the library's words not read: {e:#}"),
         }
     }
+    laps.lap("words");
     // Playlists and crates by their names, and by the tracks in them (a track's title, artist or album).
     let deep = if wants("playlist") || wants("crate") { found_lines(app.served.clone(), &w).await? } else { HashMap::new() };
+    laps.lap("tracks in lists");
     if wants("playlist") {
         let lines: HashMap<String, Vec<String>> =
             if deep.is_empty() { HashMap::new() } else { app.playlists.visible_lines().await?.into_iter().map(|(id, _, l)| (id, l)).collect() };
@@ -758,6 +995,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 continue;
             };
             lists.push(Item {
+                editions: None,
+                number: None,
                 kind: "playlist",
                 album: None,
                 album_id: None,
@@ -783,6 +1022,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         lists.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("playlist", lists);
     }
+    laps.lap("playlists");
     if wants("crate") {
         // By name from the names alone; by tracks only where a track was found (making every crate is not cheap).
         let members = if deep.is_empty() { None } else { Some(crate_members(app, without).await?) };
@@ -799,16 +1039,17 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             } else {
                 continue;
             };
-            found.push(Item { kind: "crate", album: None, album_id: None, duration_secs: None, subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
+            found.push(Item { editions: None, number: None, kind: "crate", album: None, album_id: None, duration_secs: None, subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);
     }
+    laps.lap("crates");
     // What is not in the library (point 7): only from Cratarr's own library; the exclusions an account's own.
     if let Some(served) = app.served.clone() {
         if wants("missing") {
             let marks = super::requests::marks(app, &served).await.inspect_err(|e| tracing::debug!("search: the requests' marks not read: {e:#}")).ok();
-            groups.insert("missing", missing_items(&all_missing(app, &served).await?, &w, marks.as_deref()));
+            groups.insert("missing", missing_items(&all_missing(app).await?, &w, marks.as_deref()));
         }
         if wants("excluded")
             && let Some(account) = served.current_user()
@@ -839,7 +1080,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 let items = open
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, r)| known_item("requested", r.release_group.clone().unwrap_or_else(|| r.id.to_string()), &r.album, &r.artist, r.year, r.cover.clone(), "Requested", &w, i, n))
+                    .filter_map(|(i, r)| requested_item(r, &w, i, n))
                     .collect();
                 groups.insert("requested", items);
             }
@@ -878,28 +1119,19 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             }
         }
     }
-    // One album once outside the library, in the first known-elsewhere kind that has it, its reasons gathered there.
-    let mut first: HashMap<String, (&'static str, usize)> = HashMap::new();
-    for kind in KNOWN {
-        let Some(items) = groups.remove(kind) else { continue };
-        let mut kept: Vec<Item> = Vec::new();
-        for item in items {
-            let key = album_key(&item);
-            if let Some((k, at)) = first.get(&key).copied() {
-                let into = if k == kind { kept.get_mut(at) } else { groups.get_mut(k).and_then(|g| g.get_mut(at)) };
-                if let Some(into) = into {
-                    for why in item.known {
-                        if !into.known.contains(&why) {
-                            into.known.push(why);
-                        }
-                    }
-                }
-                continue;
+    laps.lap("missing, requests, Spotify, suggested");
+    once_known(&mut groups);
+    // An artist's number for their name (G5), read once for the artists found: the page shows "Name (n)" where it lists two.
+    if let Some(artists) = groups.get_mut("artist") {
+        let ids: Vec<i64> = artists.iter().filter_map(|i| i.id.as_deref().and_then(crate::serve::ids::artist_number)).collect();
+        let cat = app.library.catalogue();
+        if !ids.is_empty()
+            && let Ok(Ok(numbers)) = tokio::task::spawn_blocking(move || cat.artist_numbers(&ids)).await
+        {
+            for i in artists.iter_mut() {
+                i.number = i.id.as_deref().and_then(crate::serve::ids::artist_number).and_then(|a| numbers.get(&a).copied());
             }
-            first.insert(key, (kind, kept.len()));
-            kept.push(item);
         }
-        groups.insert(kind, kept);
     }
     // Each group as asked for; `top` the best of all, weighed by kind.
     let mut top: Vec<Item> = Vec::new();
@@ -919,12 +1151,42 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     top.sort_by(|a, b| b.score.total_cmp(&a.score));
     top.truncate(TOP);
     answer.top = top;
+    laps.lap("the rest");
+    laps.said(q);
     Ok(answer)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M6 (the review of 1.2): a kept list is served while fresh, served and made again behind once older, and made again inline
+    /// past ten minutes only where the last making behind failed (an idle while's first search still served at once); a making that
+    /// panics lets go of its mark and counts as failed.
+    #[test]
+    fn a_search_list_that_keeps_failing_is_made_again_never_served_stale_for_good() {
+        let (keep, min) = (Duration::from_secs(60), Duration::from_secs(60));
+        assert_eq!(kept_use(Duration::from_secs(10), keep, false), KeptUse::Serve);
+        assert_eq!(kept_use(Duration::from_secs(10), keep, true), KeptUse::Serve);
+        assert_eq!(kept_use(2 * min, keep, false), KeptUse::Behind);
+        assert_eq!(kept_use(2 * min, keep, true), KeptUse::Behind);
+        assert_eq!(kept_use(11 * min, keep, false), KeptUse::Behind, "idle, not failing: served at once");
+        assert_eq!(kept_use(11 * min, keep, true), KeptUse::Inline, "failing past ten minutes: made inline");
+        static MAKING: AtomicBool = AtomicBool::new(true);
+        static FAILED: AtomicBool = AtomicBool::new(false);
+        let ended = std::panic::catch_unwind(|| {
+            let _making = OnDrop(|| {
+                if std::thread::panicking() {
+                    FAILED.store(true, Ordering::Release);
+                }
+                MAKING.store(false, Ordering::Release);
+            });
+            panic!("a making that panics");
+        });
+        assert!(ended.is_err());
+        assert!(!MAKING.load(Ordering::Acquire), "the mark let go of");
+        assert!(FAILED.load(Ordering::Acquire), "a panic is a failure");
+    }
 
     /// An artist found by a word with tracks and no album of their own (the owner, testing 0.16.0: "C Cat Trance" said "0
     /// albums") says no count.
@@ -1075,14 +1337,61 @@ mod tests {
         assert!(score("Airbag", &w, 0, 10) > score("Airbag", &w, 5, 10));
     }
 
+    /// A record of an artist's the library has none of, as Discover's list holds it.
+    fn missing(record: i64, title: &str, artist: &str, year: Option<i32>) -> crate::app::discover::Missing {
+        crate::app::discover::Missing {
+            record: crate::serve::ids::record(record),
+            title: title.into(),
+            artist: artist.into(),
+            year,
+            kind: None,
+            cover: "c".into(),
+            release_group: None,
+            bandcamp: None,
+            request: None,
+            was_until: None,
+        }
+    }
+
+    /// C53b: a missing record is listed once, by its record (`album:cratarr/al-<n>`), though it is requested too under other names:
+    /// the reasons of both on the one row.
+    #[test]
+    fn search_lists_a_missing_record_once() {
+        let w = words("somersault");
+        let mut groups: BTreeMap<&'static str, Vec<Item>> = BTreeMap::new();
+        groups.insert("missing", missing_items(&[missing(7, "Somersault", "Jacco Gardner", Some(2023))], &w, None));
+        let asked = crate::userdata::Request {
+            id: 3,
+            user: "bob".into(),
+            album_key: "k".into(),
+            artist_key: "a".into(),
+            release_group: None,
+            album: "Somersault (Deluxe Edition)".into(),
+            artist: "Jacco Gardner & Friends".into(),
+            year: None,
+            cover: None,
+            at: 1,
+            status: "approved".into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+            record: Some(7),
+        };
+        groups.insert("requested", requested_item(&asked, &w, 0, 1).into_iter().collect());
+        once_known(&mut groups);
+        let rows: Vec<&Item> = groups.values().flatten().collect();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!((rows[0].subject.as_str(), rows[0].known.len()), ("album:cratarr/al-7", 2));
+    }
+
     #[test]
     fn albums_not_in_the_library_are_found_by_their_name_or_artist_with_the_artist_apart() {
-        use crate::app::discover::{Excluded, LeftOutArtist, MissingOf};
-        let m = |t: &str, a: &str, y| MissingOf { release_group: format!("rg-{t}"), title: t.into(), artist: a.into(), year: y, kind: None, cover: "c".into(), bandcamp: None, request: None };
-        let list = [m("Somersault", "Jacco Gardner", Some(2023)), m("Hypnophobia", "Jacco Gardner", Some(2015)), m("Moon Safari", "Air", Some(1998))];
+        use crate::app::discover::{Excluded, LeftOutArtist};
+        let list = [missing(1, "Somersault", "Jacco Gardner", Some(2023)), missing(2, "Hypnophobia", "Jacco Gardner", Some(2015)), missing(3, "Moon Safari", "Air", Some(1998))];
         let found = missing_items(&list, &words("gardner"), None);
         assert_eq!(found.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["Somersault", "Hypnophobia"]);
-        assert_eq!((found[0].subject.as_str(), found[0].sub.as_str(), found[0].artist.as_deref()), ("missing:rg-Somersault", "Jacco Gardner · 2023", Some("Jacco Gardner")));
+        assert_eq!((found[0].subject.as_str(), found[0].sub.as_str(), found[0].artist.as_deref()), ("album:cratarr/al-1", "Jacco Gardner · 2023", Some("Jacco Gardner")));
         assert_eq!(found[0].matched, vec![Matched { on: "artist", text: "Jacco Gardner".into(), count: None }]);
         let found = missing_items(&list, &words("hypno gardner"), None);
         assert_eq!((found.len(), found[0].matched[0].on), (1, "name"));

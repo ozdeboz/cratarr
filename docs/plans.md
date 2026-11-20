@@ -96,14 +96,58 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   - **Audiobooks' first part** (the owner, later on 2026-11-04): Cratarr's own players keep each book's place, every
     so often and on pause, with a Continue listening row on Home; a speed per book and ±30 s skips; books kept out of
     music's shuffle, Radio, sounds-like, crates, statistics and scrobbling.
-- **0.18: Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)): a friend's Cratarr as a read-only
-  library of your own, its catalogue mirrored with its analysis through 0.16's index and feed, its streams relayed.
-  Then playlists, offline, a bounded cache and a record shown once (0.19); iroh's tickets after a trial.
+  - **Carried over from 0.16** (the owner, 2026-11-06 and 2026-11-08: "finish what's in flight", the rest after): the rest
+    of 0100 (references, artists and labels, requests on the record, one missing list, the pages), the verdicts, Copy to,
+    uploads and the allocation. With them: `android/` under AGPL-3.0-or-later before any public APK, the Kotlin moves into
+    the rules crate, the References door, a library's fixed identity in Settings, crates subscribing to their own
+    libraries, the Basic/Advanced toggle, and the "no mobile data" setting.
+  - **From testing 0.16** (the owner, 2026-11-08):
+    - **One offline mode and one way of waiting** ("we should have a unified way of showing progress and a unified way
+      of handling offline mode"): one loader with one line saying what it waits for, wherever something waits, as
+      PageLoading's line under the mark does; with Cratarr out of reach every page answers from the device where it can
+      and says so in one line where it cannot. Home's and playlists' "Cannot reach" rows go.
+    - **Creating a crate:** while the typed words differ from those last searched, the action row shows one button,
+      **Pick** (as Enter), in place of Shuffle and Play. The crate's profile while creating or editing is **optional**,
+      folded until opened, never shown by default.
+    - **Most alike:** a crate with a Sounds like word sorts its records closest to that sound first, taste only breaking
+      ties; without one, Best match as now.
+    - **Replace from Your music:** a better copy in someone's own music can take a main copy's place.
+    - **The Like curve takes a count cut** (as `like:…@n`), so its handle can stop inside a run of equal closeness.
+    - **Own music per account, on or off** (Settings › Libraries): off, no Your music anywhere and no "Add to Your
+      music".
+    - **Home Assistant names the playlist** in its voice answer, from `/api/state`'s `name`.
+    - **A device's first answer of a kind is quick:** the similarity and Radio's index are built at the first ask after
+      the device copy opens (about 0.5 s on a tablet); make them cheaper, build them at open, or keep them.
+    - **Offline search finds an exact record title:** "Indiamore" on the device brings up neither the record nor its
+      tracks, only near matches (the server finds both, the record's tracks on top). With it, one tie-break for search on
+      the server and the device. The cause, found 2026-11-08: the device does find the record, but ranks a track by its
+      own title alone (`index::find`'s `found()`), so a track found only through its record's exact title comes below a
+      near spelling in another track's title. Rank a track by its best direct match across its other names, below a direct
+      hit on its own name and above a near spelling: one function in the rules crate.
+    - **A heart set offline stays shown:** set while the page already knows it is away, it shows off again within a
+      second, though the outbox keeps it and sends it once back; the last copy of favourite albums likely overrides the
+      pending change.
+    - Later still: downloads wholly the device's own, so another
+      server's behave as Cratarr's.
+  - **0.17 ends at its first preview and that preview's fixes** (the owner, 2026-11-19). What it was still to hold moves to
+    0.18 ([whats-new-0.17](whats-new-0.17.md) says what 0.17 is).
+- **0.18: the crate split, then the domain core** (the owner, 2026-11-19):
+  - the server crate split first ([0106](decisions/0106-the-server-crate-split.md)), for a small edit-and-test loop;
+  - the domain core ([0104](decisions/0104-the-domain-core.md)) in three runs:
+    1. records and the one record sheet, with live updates;
+    2. requests and Soulseek;
+    3. artists and labels, with pictures and their picker ([0107](decisions/0107-pictures-are-facts-with-one-picker.md));
+  - versions, none chosen ([0105](decisions/0105-no-source-ranks-above-another.md)), Health's issues as sheets, and filters
+    per object kind on the core;
+  - what 0.17 did not hold: uploads, and the rest of 0.17's list above.
+  - **Cratarr peers, step 1** ([0103](decisions/0103-cratarr-peers.md)), the order to be set after the core's runs: a
+    friend's Cratarr as a read-only library of your own, its catalogue mirrored with its analysis through 0.16's index
+    and feed, its streams relayed. Then playlists, offline, a bounded cache and a record shown once; iroh's tickets after
+    a trial.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
-- **Genre aliases from MusicBrainz** (the owner, 2026-11-07): its whole genre list and each genre's aliases, asked again
-  every 90 days and joined to the hand-kept list in search's matching. Built once on a branch of 2026-10-30, never
-  merged: done again on the code as it stands.
+- **Genre aliases from MusicBrainz** (the owner, 2026-11-07): dropped on 2026-11-17. MusicBrainz's web service gives
+  genres no aliases, and its website is not read. The hand-kept list of aliases stays.
 - **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
   own pages (0.11, done); Downloads an offline shelf, and nothing done offline lost, playlist edits included (0.12,
   done); the whole library's index on the device, and crates and the queue on the device (0.16).
@@ -176,12 +220,12 @@ needs no MusicBrainz; judging what was found does: a reference says which tracks
   (it knows a sound, not a track list), at most an amber hint where AcoustID knows nothing: a track that sounds
   unlike its album, a "Classical" that sounds like house. Never red, never blocking; only if AcoustID turns out to
   miss too much. AudioMuse runs after import, so in Health, not on the intake card.
-- Mockups of the intake card first (632), then the server's checks and references (a5).
+- Mockups of the intake card first, then the server's checks and references.
 - *All of it in 0.14* (the owner, 2026-11-02): Discogs' and Bandcamp's track lists and lengths as references, not only
   MusicBrainz's; a record checked by hand its own reference for its type and year; references that disagree side by
   side, and one found by guessing confirmed once; where a record came from for Lidarr and Bandcamp too.
 
-**From SoulSync and DroppedNeedle (reviewed 2026-11-02, the HomeAssistant session, placed by 632).** The owner's rule:
+**From SoulSync and DroppedNeedle (reviewed 2026-11-02).** The owner's rule:
 0.14 stays light, only truly helpful bug fixes; the rest into 0.15 or 0.16, 0.17 only for a very good reason. Never
 anything in without the owner's tick (0080); never a chat room.
 
@@ -610,6 +654,8 @@ In 0.17, with the references work: MusicBrainz, Discogs, Bandcamp and AcoustID b
 Today only MusicBrainz's turn goes through one, and the services are mostly called one by one.
 
 ## Parked
+
+- **Deezer for artists' pictures** (the owner, 2026-11-19): an option much further down the line, noted only.
 
 Liked, not taken up:
 

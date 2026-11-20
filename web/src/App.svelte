@@ -85,6 +85,7 @@
   import { inSidebar, live, panelShowsPlayer, player, sidePanel } from './lib/live.svelte';
   import { longpress } from './lib/longpress';
   import { followAddress, setBeside } from './lib/panel.svelte';
+  import { placeBack } from './lib/placeBack';
   import RadioSheet from './lib/RadioSheet.svelte';
   import ReviewSheet from './lib/ReviewSheet.svelte';
   import { radioSheet } from './lib/radioAsk.svelte';
@@ -520,15 +521,13 @@
     popped = false;
     const y = back ? Number(history.state?.scroll ?? 0) : 0;
     if (!y) return void window.scrollTo(0, 0);
-    // Its content comes in a moment: tried again until it is long enough (four seconds at most: Home's sections load).
-    let n = 0;
-    let t = 0;
-    const go = () => {
-      window.scrollTo(0, y);
-      if (Math.abs(scrollY - y) > 2 && n++ < 40) t = window.setTimeout(go, 100);
-    };
-    requestAnimationFrame(go);
-    return () => clearTimeout(t);
+    // Its content comes in a moment: tried again until it is long enough (four seconds at most: Home's sections load), by the
+    // one function every panel's place uses too (lib/placeBack, F25.4); the hand stops it.
+    let cancel = () => {};
+    const f = requestAnimationFrame(
+      () => (cancel = placeBack({ scrollTo: (to) => window.scrollTo(0, to), at: () => scrollY, long: () => document.documentElement.scrollHeight, target: window }, y)),
+    );
+    return () => (cancelAnimationFrame(f), cancel());
   });
   // What the panel opened beside the page, by a link or from a list of the page's own, is brought into sight in the
   // page's list, which marks it (lib/reveal; the owner, 2026-10-30); in sight already, nothing moves.
@@ -827,9 +826,9 @@
   loadMe();
   loadMine().then((c) => c && !inApp && startWith(c));
 
-  // The conversion queue, followed on every page (an administrator's): its count on the Incoming tab, a toast when an
-  // album is done.
-  $effect(() => (me.admin ? jobs.start() : undefined));
+  // The conversion queue, followed on every page: its count on the Incoming tab, a toast when an album is done (an
+  // administrator's of every one; a user's of their own, W13).
+  $effect(() => (me.known ? jobs.start(me.admin) : undefined));
   // Of the libraries switched on only (the owner, 2026-11-02: "Only what's switched on"); a job from before says none.
   const waiting = $derived(jobs.open.filter((j) => !j.library || prefs.hiddenLibraries.indexOf(j.library) < 0).length);
 

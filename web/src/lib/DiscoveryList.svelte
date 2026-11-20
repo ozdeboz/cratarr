@@ -2,23 +2,10 @@
   // Insights › Collection › Discovery's two lists, one level deeper (the owner, 2026-10-25): the albums missing from the
   // library's artists (their discographies as MusicBrainz lists them, read so far), and what Discover leaves out (Not
   // interested, Hide, artists left out). Rows as every list's (lib/Row); the panel's search narrows them (lib/search).
-  // A missing album opens from Bandcamp where it is there (looked for when opened), else its menu: Want, MusicBrainz;
-  // an exclusion's menu takes it back.
-  import {
-    findOnBandcamp,
-    getDiscoverExcluded,
-    getDiscoverMissing,
-    takeBackExcluded,
-    wantAlbum,
-    type DiscoverExcluded,
-    type MissingAlbum,
-  } from './api';
-  import { albumIdOf, BANDCAMP } from './bandcampPreview';
-  import { hrefOf } from './addresses';
+  // A missing album opens its record's page (W9: a record not had, Want in its header); an exclusion's menu takes it back.
+  import { getDiscoverExcluded, getDiscoverMissing, takeBackExcluded, type DiscoverExcluded, type MissingAlbum } from './api';
   import Cover from './Cover.svelte';
   import CoverStatus from './CoverStatus.svelte';
-  import CoverBusy from './CoverBusy.svelte';
-  import LinkSheet from './LinkSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -60,33 +47,8 @@
   );
   const when = (secs: number) => new Date(secs * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
-  // A missing album opened: from Bandcamp where it is there, else its menu.
-  let finding = $state<string | null>(null);
-  let menuFor = $state<MissingAlbum | null>(null);
-  async function open(a: MissingAlbum) {
-    finding = a.release_group;
-    try {
-      const { page } = await findOnBandcamp(a.artist, a.title, a.release_group);
-      if (page) viewOver(albumSubject(BANDCAMP, albumIdOf(page)));
-      else menuFor = a;
-    } catch {
-      menuFor = a;
-    } finally {
-      finding = null;
-    }
-  }
-  let asked = $state<string[]>([]);
-  async function want(a: MissingAlbum) {
-    menuFor = null;
-    try {
-      const { request } = await wantAlbum({ release_group: a.release_group, artist: a.artist, album: a.title, year: a.year, cover: a.cover });
-      asked = [...asked, a.release_group];
-      if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
-    } catch (e) {
-      toast.fail(e, 'Could not ask for it');
-    }
-  }
-  let link = $state<{ url: string; name: string } | null>(null);
+  // A missing album opened: its record's page (C54).
+  const open = (a: MissingAlbum) => viewOver(albumSubject('cratarr', a.record));
 
   // An exclusion's menu: Take back (the album suggested again; an artist's every "no" gone), with Undo's word.
   let excludedMenu = $state<{ title: string; sub: string; what: { key: string } | { artist: string } } | null>(null);
@@ -110,13 +72,13 @@
   {:else if !missing.albums.length}
     <p class="note">Nothing missing from the {missing.artists} artists read so far.</p>
   {:else}
-    <p class="note">From the discographies of {missing.artists} of your artists, as MusicBrainz lists them.</p>
+    <p class="note">From the lists of {missing.artists} of your artists at MusicBrainz, Discogs and Bandcamp.</p>
     <ul class="rows">
-      {#each shownMissing as a (a.release_group)}
+      {#each shownMissing as a (a.record)}
         <li>
           <Row size="large" title={a.title} label={`Open ${a.title}`} onclick={() => open(a)}>
-            {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(a.release_group) ? { state: 'wanted' } : null)} small />{#if finding === a.release_group}<CoverBusy small />{/if}</span>{/snippet}
-            {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''}{a.kind && a.kind !== 'Album' ? ` · ${a.kind}` : ''}{#if asked.includes(a.release_group)}<span class="asked"> · asked for</span>{/if}{/snippet}
+            {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? null} small /></span>{/snippet}
+            {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''}{a.kind && a.kind !== 'Album' ? ` · ${a.kind}` : ''}{/snippet}
           </Row>
         </li>
       {/each}
@@ -154,24 +116,6 @@
   {/if}
 {/if}
 
-{#if menuFor}
-  {@const a = menuFor}
-  <MenuSheet label={a.title} title={a.title} images={a.cover ? [a.cover] : []} chips={[a.artist, ...(a.year ? [String(a.year)] : [])]} copy={`${a.artist} – ${a.title}`} onclose={() => (menuFor = null)}>
-    <MenuCards>
-      <MenuGroup label="Discover">
-        {#if asked.includes(a.release_group)}
-          <MenuEntry icon="inbox" label="Requested" onclick={() => ((menuFor = null), (location.hash = hrefOf('requests')))} />
-        {:else}
-          <MenuEntry icon="circlePlus" label="Want" onclick={() => want(a)} />
-        {/if}
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="externalLink" label="MusicBrainz" onclick={() => ((link = { url: `https://musicbrainz.org/release-group/${a.release_group}`, name: 'MusicBrainz' }), (menuFor = null))} />
-        <MenuEntry icon="search" label="Search YouTube" onclick={() => ((link = { url: `https://www.youtube.com/results?search_query=${encodeURIComponent(`${a.artist} ${a.title}`)}`, name: 'YouTube' }), (menuFor = null))} />
-      </MenuGroup>
-    </MenuCards>
-  </MenuSheet>
-{/if}
 {#if excludedMenu}
   {@const x = excludedMenu}
   <MenuSheet label={x.title} title={x.title} chips={[x.sub]} onclose={() => (excludedMenu = null)}>
@@ -182,7 +126,6 @@
     </MenuCards>
   </MenuSheet>
 {/if}
-{#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
 
 <style>
   .note {
@@ -204,9 +147,5 @@
     height: 48px;
     overflow: hidden;
     border-radius: 6px;
-  }
-
-  .asked {
-    color: var(--accent-ink);
   }
 </style>

@@ -223,7 +223,7 @@
     <button class="filter" class:on={filtered} aria-label="Filter" title="Filter" onclick={() => (filtering = true)}><Icon name="filter" size={18} /></button>
   {/snippet}
   {#if error}<Item lead="bad" name={error} />{/if}
-  {#if logError}<Notice text={logError} onretry={() => load()} />{/if}
+  {#if logError}<Notice text={logError} onretry={() => load()} away="The log needs Cratarr." />{/if}
   {#each rows as r (r.id)}
     <div class="entry {r.level}">
       <span class="msg">{r.what}{#if r.count > 1}<span class="count"> ×{r.count}, last {time(r.last)}</span>{/if}</span>

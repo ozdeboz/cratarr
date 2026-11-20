@@ -32,7 +32,7 @@
 </script>
 
 {#if words.error && !words.value}
-  <Notice text={words.error} onretry={readWords} />
+  <Notice text={words.error} onretry={readWords} away="Words need Cratarr." />
 {:else if !words.value}
   <PageLoading />
 {:else if !kind}

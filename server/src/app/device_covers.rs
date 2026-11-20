@@ -68,18 +68,15 @@ pub const SIZES: std::ops::RangeInclusive<u32> = 32..=2048;
 
 /// A record's cover for a list or a grid (finding 86; the player and a panel keep the whole one): its small cover here where that
 /// is as large as asked, made already, else made at that size once, through the disk cache (`Serve::sized_cover`). None where it
-/// has no cover.
-pub async fn for_list(serve: &Arc<Serve>, album: &str, size: u32) -> Option<(String, Vec<u8>)> {
+/// has no cover; an error where it could not be read now (M4: the route asks again, never "no cover").
+pub async fn for_list(serve: &Arc<Serve>, album: &str, size: u32) -> anyhow::Result<Option<(String, Vec<u8>)>> {
     let size = size.clamp(*SIZES.start(), *SIZES.end());
     if size <= SIDE
         && let Some(small) = small_made(serve, album)
     {
-        return Some(("image/jpeg".to_string(), small));
+        return Ok(Some(("image/jpeg".to_string(), small)));
     }
-    serve.sized_cover(album, size).await.unwrap_or_else(|e| {
-        tracing::warn!(target: "library", album = %album, size, reason = %format!("{e:#}"), "no cover at that size");
-        None
-    })
+    serve.sized_cover(album, size).await
 }
 
 /// A record's small cover as made already: none where it is not made yet, or its picture could not be read. Nothing here makes
@@ -405,7 +402,7 @@ mod tests {
     async fn a_list_gets_its_cover_no_larger_than_it_asks_and_the_whole_one_stays_whole() {
         let (s, data) = with_cover("list", &picture([200, 30, 30], 1000));
         let album = album_of(&s);
-        let (ct, small) = for_list(&s.serve, &album, 320).await.unwrap();
+        let (ct, small) = for_list(&s.serve, &album, 320).await.unwrap().unwrap();
         assert_eq!(ct, "image/jpeg");
         let shown = image::load_from_memory(&small).unwrap();
         assert_eq!((shown.width(), shown.height()), (320, 320));
@@ -419,10 +416,10 @@ mod tests {
     async fn a_size_made_once_comes_again_with_its_picture_gone() {
         let (s, data) = with_cover("cached", &picture([200, 30, 30], 1000));
         let album = album_of(&s);
-        let first = for_list(&s.serve, &album, 320).await.unwrap().1;
+        let first = for_list(&s.serve, &album, 320).await.unwrap().unwrap().1;
         std::fs::remove_file(s.roots[0].join("A/cover.jpg")).unwrap();
-        assert_eq!(for_list(&s.serve, &album, 320).await.unwrap().1, first);
-        assert_eq!(for_list(&s.serve, &album, 640).await, None, "another size is another making, and there is nothing to make it of");
+        assert_eq!(for_list(&s.serve, &album, 320).await.unwrap().unwrap().1, first);
+        assert_eq!(for_list(&s.serve, &album, 640).await.unwrap(), None, "another size is another making, and there is nothing to make it of: none, no failure");
         std::fs::remove_dir_all(&data).ok();
     }
 
@@ -430,13 +427,13 @@ mod tests {
     #[tokio::test]
     async fn a_cover_changed_is_made_again_at_its_size() {
         let (s, data) = with_cover("changed", &picture([200, 30, 30], 400));
-        for_list(&s.serve, &album_of(&s), 200).await.unwrap();
+        for_list(&s.serve, &album_of(&s), 200).await.unwrap().unwrap();
         std::thread::sleep(Duration::from_millis(1100));
         std::fs::write(s.roots[0].join("A/cover.jpg"), picture([30, 200, 30], 400)).unwrap();
         s.cat.walk_all();
         s.built();
         s.serve.covers_read_again_for_tests();
-        let green = image::load_from_memory(&for_list(&s.serve, &album_of(&s), 200).await.unwrap().1).unwrap().to_rgb8();
+        let green = image::load_from_memory(&for_list(&s.serve, &album_of(&s), 200).await.unwrap().unwrap().1).unwrap().to_rgb8();
         assert!(green.get_pixel(5, 5)[1] > 150, "{:?}", green.get_pixel(5, 5));
         std::fs::remove_dir_all(&data).ok();
     }
@@ -449,9 +446,9 @@ mod tests {
         make(&s.serve).await.unwrap();
         let made = std::fs::read_dir(data.join(FOLDER)).unwrap().next().unwrap().unwrap().path();
         std::fs::write(&made, b"made here").unwrap();
-        assert_eq!(for_list(&s.serve, &album, 96).await.unwrap().1, b"made here");
-        assert_eq!(for_list(&s.serve, &album, SIDE).await.unwrap().1, b"made here");
-        assert_ne!(for_list(&s.serve, &album, SIDE + 1).await.unwrap().1, b"made here", "larger than they are, made at its size");
+        assert_eq!(for_list(&s.serve, &album, 96).await.unwrap().unwrap().1, b"made here");
+        assert_eq!(for_list(&s.serve, &album, SIDE).await.unwrap().unwrap().1, b"made here");
+        assert_ne!(for_list(&s.serve, &album, SIDE + 1).await.unwrap().unwrap().1, b"made here", "larger than they are, made at its size");
         std::fs::remove_dir_all(&data).ok();
     }
 
@@ -460,7 +457,7 @@ mod tests {
     async fn a_small_cover_that_could_not_be_made_is_no_answer() {
         let (s, data) = with_cover("unmade", b"no picture at all");
         make(&s.serve).await.unwrap();
-        assert_eq!(for_list(&s.serve, &album_of(&s), 96).await.unwrap().1, b"no picture at all");
+        assert_eq!(for_list(&s.serve, &album_of(&s), 96).await.unwrap().unwrap().1, b"no picture at all");
         std::fs::remove_dir_all(&data).ok();
     }
 
@@ -468,7 +465,7 @@ mod tests {
     #[tokio::test]
     async fn a_small_size_not_made_yet_is_made_at_once() {
         let (s, data) = with_cover("not-yet", &picture([200, 30, 30], 1000));
-        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album_of(&s), 96).await.unwrap().1).unwrap().width(), 96);
+        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album_of(&s), 96).await.unwrap().unwrap().1).unwrap().width(), 96);
         std::fs::remove_dir_all(&data).ok();
     }
 
@@ -476,7 +473,7 @@ mod tests {
     async fn a_cover_smaller_than_asked_comes_as_it_is() {
         let original = picture([200, 30, 30], 300);
         let (s, data) = with_cover("as-is", &original);
-        assert_eq!(for_list(&s.serve, &album_of(&s), 640).await.unwrap().1, original);
+        assert_eq!(for_list(&s.serve, &album_of(&s), 640).await.unwrap().unwrap().1, original);
         std::fs::remove_dir_all(&data).ok();
     }
 
@@ -484,8 +481,8 @@ mod tests {
     async fn a_size_out_of_reason_is_held_to_the_sizes_made() {
         let (s, data) = with_cover("bounds", &picture([200, 30, 30], 2100));
         let album = album_of(&s);
-        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album, 1).await.unwrap().1).unwrap().width(), *SIZES.start());
-        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album, 100_000).await.unwrap().1).unwrap().width(), *SIZES.end());
+        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album, 1).await.unwrap().unwrap().1).unwrap().width(), *SIZES.start());
+        assert_eq!(image::load_from_memory(&for_list(&s.serve, &album, 100_000).await.unwrap().unwrap().1).unwrap().width(), *SIZES.end());
         std::fs::remove_dir_all(&data).ok();
     }
 
@@ -497,7 +494,7 @@ mod tests {
         s.add(0, &[("A/01.flac", &[("album", "Record"), ("albumartist", "Someone"), ("title", "One")])]);
         s.built();
         let album = s.serve.library.album_ids().unwrap().into_iter().next().unwrap();
-        assert_eq!(for_list(&s.serve, &album, 320).await, None);
+        assert_eq!(for_list(&s.serve, &album, 320).await.unwrap(), None);
         std::fs::remove_dir_all(&data).ok();
     }
 
@@ -536,7 +533,7 @@ mod tests {
         let body = axum::body::to_bytes(sent.into_body(), usize::MAX).await.unwrap();
         assert_eq!(image::load_from_memory(&body).unwrap().width(), 300);
         std::fs::remove_file(s.roots[0].join("A/cover.jpg")).unwrap();
-        assert_eq!(for_list(&s.serve, &album, 300).await.unwrap().1, body.to_vec(), "one cache for both");
+        assert_eq!(for_list(&s.serve, &album, 300).await.unwrap().unwrap().1, body.to_vec(), "one cache for both");
         std::fs::remove_dir_all(&data).ok();
     }
 
@@ -593,7 +590,7 @@ mod tests {
                     let (serve, gate) = (s.serve.clone(), gate.clone());
                     asks.spawn(async move {
                         let _turn = gate.acquire_owned().await.unwrap();
-                        let got = if sized { for_list(&serve, &album, 320).await } else { serve.cover_bytes(&album).await.unwrap() };
+                        let got = if sized { for_list(&serve, &album, 320).await.unwrap() } else { serve.cover_bytes(&album).await.unwrap() };
                         got.map_or(0, |(_, bytes)| bytes.len())
                     });
                 }

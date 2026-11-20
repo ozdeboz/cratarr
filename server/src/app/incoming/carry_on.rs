@@ -133,7 +133,9 @@ pub(super) fn carry_on(lib: Arc<Library>, p: Playing, event: &Event) {
         Event::AlbumReplaced { title, moves, replaced, .. } => {
             (title.clone(), replaced.iter().chain(moves).map(|m| (m.from.clone(), m.to.clone())).collect())
         }
-        Event::AlbumRejected { .. } => (String::new(), Vec::new()),
+        // From someone's own music (RY01): the main library's old folder alone goes; the own copy stays where it was.
+        Event::AlbumReplacedFromCopy { title, .. } => (title.clone(), super::replace::moved_pairs(event, false)),
+        Event::AlbumRejected { .. } | Event::AlbumCopied { .. } => (String::new(), Vec::new()),
     };
     tokio::spawn(async move {
         follow(&lib, &p).await;

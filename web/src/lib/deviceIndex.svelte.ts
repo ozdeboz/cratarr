@@ -145,11 +145,11 @@ export async function deviceSearch(q: string, kinds: SearchKind[], limit: number
   return rows && foundView(rows, q, offset);
 }
 
-/** An artist's panel from the index; null where nobody there goes by the name. */
-export async function deviceArtist(source: string, name: string, without: string[] = []): Promise<ArtistView | null> {
+/** An artist's panel from the index, by their id (`ar-<n>`, W10) or a name; null where nobody there has it. */
+export async function deviceArtist(source: string, nameOrId: string, without: string[] = []): Promise<ArtistView | null> {
   if (source !== OWN) return null;
-  const rows = (await opened())?.engine.artist(name, without);
-  return rows ? artistPanel(rows, name) : null;
+  const rows = (await opened())?.engine.artist(nameOrId, without);
+  return rows ? artistPanel(rows, nameOrId) : null;
 }
 
 /** A record's view from the index; null where it does not hold it. */

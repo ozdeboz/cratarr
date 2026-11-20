@@ -58,6 +58,25 @@ pub fn artist(id: i64) -> String {
     format!("{ARTIST}{id}")
 }
 
+/// The artist a served id names, where it is one of the catalogue's (`ar-<digits>`).
+pub fn artist_number(id: &str) -> Option<i64> {
+    id.strip_prefix(ARTIST).filter(|_| for_life(id)).and_then(|n| n.parse().ok())
+}
+
+/// What a label's id starts with (0100): a number for life, as an artist's. Only the server knows labels yet, so the prefix
+/// is its own, not the rules crate's.
+pub const LABEL: &str = "la-";
+
+/// A label's id as it is served: its number in the catalogue, for life.
+pub fn label(id: i64) -> String {
+    format!("{LABEL}{id}")
+}
+
+/// The label a served id names (C56), where it is one of the catalogue's (`la-<digits>`).
+pub fn label_number(id: &str) -> Option<i64> {
+    id.strip_prefix(LABEL).filter(|n| (1..=15).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
+}
+
 /// What makes two names one artist: the same name, ignoring case and typographic quotes.
 pub fn artist_key(name: &str) -> String {
     clear(&name.to_lowercase())
@@ -104,27 +123,44 @@ pub fn record(record: i64) -> String {
     format!("{ALBUM}{record}")
 }
 
-/// The highest number named in `text` as a record's or an artist's id for life, `al-<digits>` or `ar-<digits>`, 0 for
+/// The record a served id names, where it is one of the catalogue's (`al-<digits>`); a hash from before 0.16 is none.
+pub fn record_number(id: &str) -> Option<i64> {
+    id.strip_prefix(ALBUM).filter(|_| for_life(id)).and_then(|n| n.parse().ok())
+}
+
+/// The highest number named in `text` as a record's, an artist's or a label's id for life, `al-`, `ar-` or `la-<digits>`, 0 for
 /// none: in a column, a key (`like:al-12`, `album:cratarr/al-12`) or a whole JSON store. A hash is no number: it runs on
 /// in letters, and 22 digits of one, if it ever came to that, are no id anyone was given.
 pub fn highest_named(text: &str) -> i64 {
+    [ALBUM, ARTIST, LABEL].into_iter().flat_map(|prefix| numbers_named(text, prefix)).max().unwrap_or(0)
+}
+
+/// The artists `text` names by their ids for life (`ar-<digits>`), read as `highest_named` reads an id (RT01b: what names an
+/// artist keeps them).
+pub fn artists_named(text: &str) -> impl Iterator<Item = i64> + '_ {
+    numbers_named(text, ARTIST)
+}
+
+/// The records `text` names by their ids for life (`al-<digits>`), read as `highest_named` reads an id (Z5: what names a record
+/// not had keeps it).
+pub fn records_named(text: &str) -> impl Iterator<Item = i64> + '_ {
+    numbers_named(text, ALBUM)
+}
+
+/// The numbers `text` names as ids for life of `prefix`, wherever they are written: not a word that only ends in it, nor one
+/// that runs on, nor a hash.
+fn numbers_named<'t>(text: &'t str, prefix: &'static str) -> impl Iterator<Item = i64> + 't {
     let word = |c: u8| c.is_ascii_alphanumeric();
     let bytes = text.as_bytes();
-    let mut top = 0;
-    for prefix in [ALBUM, ARTIST] {
-        for (at, _) in text.match_indices(prefix) {
-            if at > 0 && word(bytes[at - 1]) {
-                continue;
-            }
-            let start = at + prefix.len();
-            let digits = bytes[start..].iter().take_while(|b| b.is_ascii_digit()).count();
-            let cut_short = bytes.get(start + digits).is_some_and(|b| word(*b));
-            if (1..=15).contains(&digits) && !cut_short {
-                top = top.max(text[start..start + digits].parse().unwrap_or(0));
-            }
+    text.match_indices(prefix).filter_map(move |(at, _)| {
+        if at > 0 && word(bytes[at - 1]) {
+            return None;
         }
-    }
-    top
+        let start = at + prefix.len();
+        let digits = bytes[start..].iter().take_while(|b| b.is_ascii_digit()).count();
+        let cut_short = bytes.get(start + digits).is_some_and(|b| word(*b));
+        if (1..=15).contains(&digits) && !cut_short { text[start..start + digits].parse().ok() } else { None }
+    })
 }
 
 /// What gathers one folder's files of an album, never an id: the hash of its persistent id. `album_artist` is the album
@@ -277,6 +313,7 @@ mod tests {
         assert_eq!(highest_named("al-5vcUvYmuWJAgyxLXEUmaPz"), 0, "a hash");
         assert_eq!(highest_named("al-0000000000000000000012"), 0, "a hash of digits alone");
         assert_eq!(highest_named("tr-99 normal-12 al-"), 0, "no record's");
+        assert_eq!(artists_named(r#"{"of":"al-4","seeds":["ar-9","ar-12x","like:ar-30@20"],"star":"bar-7"}"#).collect::<Vec<_>>(), [9, 30], "an artist's, as an id is read");
     }
 
     #[test]

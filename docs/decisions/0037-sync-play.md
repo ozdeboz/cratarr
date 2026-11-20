@@ -203,7 +203,7 @@ afford (Points, Steps, Resolution, FPS) and how bright its screen should be stay
 
 ## Amended (2026-10-23): a page in a browser follows
 
-The owner wanted the ThinkBook's page in the Salon tablet's group. A page now follows a group the way a Kodi does,
+The owner wanted the PC's page in the Salon tablet's group. A page now follows a group the way a Kodi does,
 and never leads one: its sound cannot be sent on.
 
 - **Its sound:** on a `group` command naming another leader, its own music stops and it reads the group's sound as

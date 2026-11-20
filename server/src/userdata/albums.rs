@@ -228,6 +228,23 @@ impl UserData {
         tx.commit()?;
         Ok(report)
     }
+
+    /// Records merged since (0.17's fold, F2.11; two copies joined, F11.1): what names each that went by its id, (that one, the one it
+    /// went into), follows the one it went into, as the first start moved albums' ids (`walk`, each table's own rule where two rows
+    /// meet): hearts and ratings, what was added and imported, the found facts and words, a copy's review and what was heard of it, what
+    /// was said by hand. One transaction. What moved. Blocking.
+    pub fn follow_records(&self, merged: &[(String, String)]) -> Result<Report> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut report = Report::default();
+        if !merged.is_empty() {
+            for place in BY_ID.iter().chain(&BY_BASE).chain([&REVIEWS, &HEARD]) {
+                walk(&tx, place, merged, &mut report)?;
+            }
+        }
+        tx.commit()?;
+        Ok(report)
+    }
 }
 
 #[cfg(test)]

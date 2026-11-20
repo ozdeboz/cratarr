@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Which page the app serves (decision 0085, step 1: 632's rule, 2026-10-30). */
+/** Which page the app serves (decision 0085, step 1, 2026-10-30). */
 class BundledPageTest {
     private val mine = BundledPage.Build("0.11.0", "abc")
 

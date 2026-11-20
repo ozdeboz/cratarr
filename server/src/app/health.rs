@@ -24,7 +24,8 @@ pub enum Level {
     Info,
 }
 
-/// Where a finding is dealt with: a page, and the switch to turn on there (the Library's `upgrades`).
+/// Where a finding is dealt with: a page, and the switch to turn on there (the Library's `upgrades`). `connections`: Settings'
+/// Connections list itself, where the switches of every service are (G9: background reading).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Open {
     pub page: &'static str,
@@ -77,6 +78,11 @@ pub struct Item {
     /// An album it opens: (server, album id); its cover shows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album: Option<(String, String)>,
+    /// That record's type, as the Library list serves it (GOTO.S1): its Go to names it (F31.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_type: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub album_secondary: Vec<String>,
     /// A playlist it opens (on its Repair tab).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist: Option<String>,
@@ -180,6 +186,21 @@ pub struct RecordHealth {
     pub findings: Vec<RecordFinding>,
 }
 
+/// The albums of Cratarr's own these items are about, each once (GOTO.S1).
+fn own_albums<'a>(items: impl Iterator<Item = &'a Item>) -> Vec<String> {
+    let mut ids: Vec<String> = items.filter_map(|i| i.album.as_ref().filter(|(s, _)| s == crate::source::cratarr::KIND.id).map(|(_, a)| a.clone())).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// An item with its record's type, where it is about one of Cratarr's own (GOTO.S1).
+fn typed(i: &mut Item, types: &HashMap<String, (Option<String>, Vec<String>)>) {
+    if let Some((kind, secondary)) = i.album.as_ref().filter(|(s, _)| s == crate::source::cratarr::KIND.id).and_then(|(_, a)| types.get(a)) {
+        (i.album_type, i.album_secondary) = (kind.clone(), secondary.clone());
+    }
+}
+
 /// A finding as one record has it: its kind (the report's key), its short name and row, how much it asks, and the
 /// record's items in it (its tracks', where it is about files).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -259,6 +280,8 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "incoming:upgrades" => ("Replacements", "better"),
         "incoming:duplicates" => ("Duplicates", "found"),
         "incoming:failed" => ("Conversions", "failed"),
+        "incoming:arrived" => ("Records", "arrived"),
+        "requests:fetcher-down" => ("Fetchers", "down"),
         "playlists:missing" => ("Playlist tracks", "missing"),
         "analysis:audiomuse" => ("Analysis", "to do"),
         "sign-in:refused" => ("Sign-ins", "refused"),
@@ -266,9 +289,12 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "server:runaway" => ("Clients", "running away"),
         "server:slow" => ("Responses", "slow"),
         "server:settings-file" => ("Settings file", "unreadable"),
+        "server:short-of-space" => ("Disk space", "short"),
         "servers:lidarr" => ("Lidarr", "unreachable"),
         "library:ids-lost" => ("Track ids", "lost"),
         "requests:waiting" => ("Requests", "waiting"),
+        "requests:soulseek-set-aside" => ("Soulseek queue", "set aside"),
+        "requests:soulseek-frozen" => ("Soulseek queue", "not kept"),
         "words:genre" => ("Genres", "differ in the files"),
         "words:style" => ("Styles", "differ in the files"),
         "words:mood" => ("Moods", "differ in the files"),
@@ -307,6 +333,8 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "incoming:upgrades" => "Quality replacements",
         "incoming:duplicates" => "Duplicates",
         "incoming:failed" => "Failed conversions",
+        "incoming:arrived" => "Arrived",
+        "requests:fetcher-down" => "Fetchers out of reach",
         "playlists:missing" => "Missing tracks",
         // No tool names in the names (the owner, 2026-10-26).
         "analysis:audiomuse" => "Analysis",
@@ -316,7 +344,9 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "server:runaway" => "Runaway client",
         "server:slow" => "Slow responses",
         "server:settings-file" => "Settings",
+        "server:short-of-space" => "Short of space",
         "requests:waiting" => "Requests",
+        "requests:soulseek-set-aside" | "requests:soulseek-frozen" => "Soulseek queue",
         "words:genre" => "Genres in the files",
         "words:style" => "Styles in the files",
         "words:mood" => "Moods in the files",
@@ -450,6 +480,24 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
     out
 }
 
+/// Records arrived in Incoming and waiting to be added (W4; 0.14's "Records waiting for you", `intake_card::waiting`): an item each,
+/// its intake card opened from it ("Before adding" in it). Those a verdict names (an upgrade, a duplicate) are on that verdict's
+/// item. None waiting, no finding. Pure.
+pub fn arrived(waiting: &[super::intake_card::Waiting]) -> Option<Finding> {
+    let items: Vec<Item> = waiting
+        .iter()
+        .filter(|w| w.verdict.is_none())
+        .map(|w| Item { title: w.title.clone(), line: Some(w.artist.clone()).filter(|a| !a.is_empty()), album: Some((w.source.clone(), w.album.clone())), ..Item::default() })
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    let count = items.len() as u64;
+    let mut f = finding("incoming", "incoming:arrived", Level::Info, count, n(count, "record arrived, waiting to be added", "records arrived, waiting to be added"));
+    f.items = items;
+    Some(f)
+}
+
 /// Incoming's albums as they stand to the other libraries (decision 0034): better copies of Music's (Replace), the rest
 /// in two libraries at once (an upgrade of another Incoming library's copy among them: Replace is Music's alone); and
 /// the conversions that failed. Dealt with on their items' own pages (the comparison, the album's menu), not the
@@ -499,22 +547,40 @@ fn agreed_total(totals: &[u32]) -> u32 {
     by.iter().rev().find(|(_, n)| **n >= 2).map_or(0, |(t, _)| *t)
 }
 
-/// A better copy Replace can take: an upgrade of a main library's album (`incoming`'s upgrades; any other verdict is an
-/// album in two libraries at once).
-fn replaces(v: &super::incoming::VerdictView) -> bool {
-    v.kind == "upgrade" && v.main_folder.is_some()
+/// Where an Incoming copy's kept copy is, for an item's line: its library as named.
+fn paired_in<'a>(v: &crate::source::Against, libraries: &'a [super::albums::LibraryView]) -> &'a str {
+    libraries.iter().find(|l| l.id == v.library).map_or("another library", |l| l.name.as_str())
 }
 
-/// Where a verdict's other copy is, for an item's line: Music, else its library as named.
-fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums::LibraryView]) -> &'a str {
-    v.library_id.as_ref().and_then(|id| libraries.iter().find(|l| &l.id == id)).map_or("another library", |l| l.name.as_str())
+/// Incoming's copies of records kept elsewhere, as Health's two items list them (C37a): the better copies Replace can take, and
+/// the records in two libraries at once, by their stand against the copy that plays the record for most (`AlbumCopy.against`).
+/// Each item opens the record, its line naming the kept copy's library and folder, and why; by title. Pure.
+fn standing<'a>(sources: impl Iterator<Item = (&'a str, &'a [super::albums::LibraryView], &'a [crate::source::Album])>) -> (Vec<Item>, Vec<Item>) {
+    let (mut better, mut twice) = (Vec::new(), Vec::new());
+    for (source, libraries, albums) in sources {
+        for a in albums {
+            for v in a.copies.iter().filter_map(|c| c.against.as_ref()) {
+                let line = [a.artist.clone(), Some(format!("in {} as {}", paired_in(v, libraries), v.dir)), Some(v.why.clone()).filter(|w| !w.is_empty())]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let item = Item { title: a.title.clone(), line: Some(line), album: Some((source.to_string(), a.id.clone())), ..Item::default() };
+                if v.replaces { better.push(item) } else { twice.push(item) }
+            }
+        }
+    }
+    for items in [&mut better, &mut twice] {
+        items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    }
+    (better, twice)
 }
 
 /// The connections failing (0.9.6, the owner: each one's signal): a service Cratarr calls out to that failed a few
 /// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. Each a warning:
 /// it retries by itself (the owner, 2026-11-04, "broken or blind"; MusicBrainz was critical until then, as the
 /// background pass and Find more music stop while it fails).
-fn check_connections(at: i64) -> Vec<Finding> {
+pub(crate) fn check_connections(at: i64) -> Vec<Finding> {
     let tz = super::moment::tz(super::moment::told(at).as_ref());
     let clock = |t: i64| {
         let s = (t + tz).rem_euclid(86_400);
@@ -526,9 +592,30 @@ fn check_connections(at: i64) -> Vec<Finding> {
         "lastfm" => !super::switches::is_on(super::switches::LASTFM),
         _ => false,
     };
+    // Bandcamp's bot check (O4): Cratarr stopped asking it for a day.
+    let day = |t: i64| (t + tz).div_euclid(86_400);
+    let held = crate::bandcamp::held_until(at).filter(|_| super::switches::is_on(super::switches::BANDCAMP)).map(|until| {
+        let when = if day(until) > day(at) { format!("tomorrow {}", clock(until)) } else { clock(until) };
+        let mut f = finding("connections", "connections:bandcamp-check", Level::Warning, 1, format!("Bandcamp asked for a browser check; Cratarr stopped asking until {when}"));
+        f.name = "Bandcamp".to_string();
+        (f.thing, f.state) = (Some(f.name.clone()), Some("paused".into()));
+        // Bandcamp's own page in Settings › Connections, its switch there (G9).
+        f.open = Some(Open { page: "settings", switch: None, thing: Some("bandcamp") });
+        f
+    });
+    let bandcamp_held = held.is_some();
+    // The background reading paused by an administrator (O5).
+    let paused = super::switches::background_paused().then(|| {
+        let mut f = finding("connections", "connections:background-paused", Level::Info, 1, "Background reading is paused: Cratarr asks no service anything on its own".to_string());
+        f.name = "Background reading".to_string();
+        (f.thing, f.state) = (Some(f.name.clone()), Some("paused".into()));
+        // Its switch is on Settings' Connections list itself (G9).
+        f.open = Some(Open { page: "connections", switch: None, thing: None });
+        f
+    });
     super::reach::failing(at)
         .into_iter()
-        .filter(|(name, _)| !switched_off(name))
+        .filter(|(name, _)| !switched_off(name) && !(*name == "bandcamp" && bandcamp_held))
         .map(|(name, s)| {
             let mut f = finding("connections", format!("connections:{name}"), Level::Warning, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
             f.name = super::reach::label(name).to_string();
@@ -537,6 +624,8 @@ fn check_connections(at: i64) -> Vec<Finding> {
             f.open = matches!(name, "musicbrainz" | "discogs" | "lastfm").then_some(Open { page: "settings", switch: None, thing: Some(name_static(name)) });
             f
         })
+        .chain(held)
+        .chain(paused)
         .collect()
 }
 
@@ -596,18 +685,104 @@ pub fn track_ids(lost: bool) -> Option<Finding> {
     Some(f)
 }
 
-/// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
-fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
-    let Some(serve) = served else { return Ok(Vec::new()) };
-    let waiting = serve.userdata.requests(None, Some(super::requests::PENDING), ITEMS)?;
-    if waiting.is_empty() {
-        return Ok(Vec::new());
+/// The fetchers out of reach for over an hour (X1: a dead fetcher raises an alert), each named with since when. None, no finding.
+/// Pure.
+pub fn fetchers_down(down: &[(&'static str, i64)], now: i64) -> Option<Finding> {
+    if down.is_empty() {
+        return None;
     }
-    let count = super::requests::waiting(&serve)? as u64;
+    let name = |f: &str| if f == "lidarr" { "Lidarr" } else { "Soulseek (slskd)" };
+    let count = down.len() as u64;
+    let mut f = finding("requests", "requests:fetcher-down", Level::Warning, count, n(count, "fetcher can't be reached", "fetchers can't be reached"));
+    f.items = down.iter().map(|(fetcher, since)| Item { title: name(fetcher).to_string(), line: Some(match (now - since) / 60 {
+                m if m < 120 => format!("for {m} min"),
+                m => format!("for {} hours", m / 60),
+            }), ..Item::default() }).collect();
+    Some(f)
+}
+
+/// Soulseek's records held a day for its own disk's trouble (Y9): slskd could not store their files three times in a row (its disk
+/// full or read-only, its folder not writable or gone: U1), so their users are not asked again every five minutes. `held` as `soulseek::cant_store`
+/// gives them, the latest held first: its why is the detail. None held, no finding. Pure.
+pub fn soulseek_cant_store(held: &[(String, String)]) -> Option<Finding> {
+    soulseek_held("requests:soulseek-store", "can't store files", held)
+}
+
+/// Soulseek's records held a day because their placing failed three times in a row (Y12): the Incoming library gone or not writable,
+/// a name it cannot take, every folder another record's. `held` as `soulseek::cant_place` gives them, the latest held first: its
+/// why is the detail. None held, no finding. Pure.
+pub fn soulseek_cant_place(held: &[(String, String)]) -> Option<Finding> {
+    soulseek_held("requests:soulseek-place", "can't place albums", held)
+}
+
+/// Soulseek's records held a day for one trouble (Y9, Y12): "Soulseek {state}", a warning, as it tries again by itself; the latest
+/// held record's why as its detail, and each held record listed. None held, no finding. Pure.
+fn soulseek_held(key: &str, state: &str, held: &[(String, String)]) -> Option<Finding> {
+    let (_, why) = held.first()?;
+    let count = held.len() as u64;
+    let mut f = finding("requests", key, Level::Warning, count, format!("Soulseek {state}"));
+    f.name = "Soulseek".to_string();
+    (f.thing, f.state) = (Some(f.name.clone()), Some(state.into()));
+    f.detail = Some(why.clone());
+    f.items = held.iter().map(|(record, _)| Item { title: record.clone(), line: Some("held a day".into()), ..Item::default() }).collect();
+    Some(f)
+}
+
+/// Soulseek's queue as the starts left it (P7, W7; said in the log alone before): one that could not be read and was set aside,
+/// read from the data folder (`soulseek::queues_set_aside`), so it is said after a restart too, until the file set aside is put back or
+/// removed: a warning, its detail how to put it back. And one that could be neither read nor set aside at this start (`frozen`),
+/// to which nothing is written: critical. Blocking.
+pub fn soulseek_queue(data: &std::path::Path, frozen: bool) -> Vec<Finding> {
+    let mut out = Vec::new();
+    if frozen {
+        // No count: it is kept or not ("Soulseek queue · not kept").
+        let mut f = finding("requests", "requests:soulseek-frozen", Level::Critical, 0, "Soulseek's queue can't be kept");
+        f.detail = Some(
+            "soulseek.json in the data folder could not be read nor set aside, so Cratarr writes nothing to it, and the queue is not \
+             kept over a restart. Make the data folder writable, or move the file out of it, and start Cratarr again."
+                .into(),
+        );
+        out.push(f);
+    }
+    let aside = super::soulseek::queues_set_aside(data);
+    if let Some((latest, _)) = aside.first() {
+        let count = aside.len() as u64;
+        let mut f = finding("requests", "requests:soulseek-set-aside", Level::Warning, count, "Soulseek's queue was set aside");
+        f.detail = Some(format!(
+            "It could not be read at a start, so Cratarr set it aside as {latest} and began an empty queue. To put it back: stop \
+             Cratarr, rename {latest} in the data folder to soulseek.json, and start Cratarr. Or remove {latest}."
+        ));
+        f.items = aside.iter().map(|(name, at)| Item { title: name.clone(), line: Some("set aside".into()), since: *at, ..Item::default() }).collect();
+        out.push(f);
+    }
+    out
+}
+
+/// Requests waiting for an answer (decision 0070), each named, opening the Requests page; the fetchers out of reach (X1);
+/// Soulseek's records held for its own disk's trouble (Y9), or for their placing failing (Y12); and Soulseek's queue set aside or
+/// not kept (P7).
+pub(super) fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
+    let now = super::moment::now_secs();
+    let queue = served.and_then(|s| s.data_dir.as_deref()).map(|d| soulseek_queue(d, super::soulseek::frozen())).unwrap_or_default();
+    let down: Vec<Finding> = fetchers_down(&super::requests::fetchers_down(now), now)
+        .into_iter()
+        .chain(soulseek_cant_store(&super::soulseek::cant_store(now)))
+        .chain(soulseek_cant_place(&super::soulseek::cant_place(now)))
+        .chain(queue)
+        .collect();
+    let Some(serve) = served else { return Ok(down.into_iter().collect()) };
+    // Those whose state says they wait for an answer (W5): one whose album the library has meanwhile waits for no one. Each by its
+    // record's names (C49b): a label's "Artist - Title" is the artist's title.
+    let mut waiting = super::requests::waiting(serve)?;
+    if waiting.is_empty() {
+        return Ok(down.into_iter().collect());
+    }
+    let count = waiting.len() as u64;
+    waiting.truncate(ITEMS);
     let mut f = finding("requests", "requests:waiting", Level::Info, count, format!("{} waiting", n(count, "request", "requests")));
     f.open = Some(Open { page: "requests", switch: None, thing: None });
     f.items = waiting.into_iter().map(|r| Item { title: r.album, line: Some(format!("{} · asked by {}", r.artist, r.user)), ..Item::default() }).collect();
-    Ok(vec![f])
+    Ok(std::iter::once(f).chain(down).collect())
 }
 
 /// A record's files' own problems, of every copy, each by its kind: a file wrong in one copy is that record's, whichever
@@ -658,12 +833,20 @@ impl App {
         findings.extend(self.check_players());
         checked.insert("players", at);
         findings.extend(or_failed("library", self.check_missing().await));
-        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
+        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at, self.served.as_deref())), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
         }
         for f in &mut findings {
             f.items.truncate(ITEMS);
+        }
+        // Each item about a record of Cratarr's own with its type (GOTO.S1, F31.1: its Go to names it), one read for them all.
+        if let Some(served) = self.served.clone() {
+            let ids = own_albums(findings.iter().flat_map(|f| &f.items));
+            let types = tokio::task::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
+            for i in findings.iter_mut().flat_map(|f| &mut f.items) {
+                typed(i, &types);
+            }
         }
         Report { findings: ordered(findings, at), checked }
     }
@@ -680,7 +863,16 @@ impl App {
             let id = album.to_string();
             wrong = tokio::task::spawn_blocking(move || files_wrong(&served, &id)).await??;
         }
-        Ok(record(&found, &(source.to_string(), album.to_string()), &wrong))
+        let mut health = record(&found, &(source.to_string(), album.to_string()), &wrong);
+        // Its items with their record's type (GOTO.S1, F31.1).
+        if let Some(served) = self.served.clone() {
+            let ids = own_albums(health.findings.iter().flat_map(|f| &f.items));
+            let types = tokio::task::spawn_blocking(move || served.record_types(&ids)).await.unwrap_or_default();
+            for i in health.findings.iter_mut().flat_map(|f| &mut f.items) {
+                typed(i, &types);
+            }
+        }
+        Ok(health)
     }
 
     /// Health's Missing list, the report's alone: a record's own page has no use for it (`record_health`).
@@ -816,8 +1008,8 @@ impl App {
         let s = served.clone();
         let (found, gaps) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let mut found: Vec<(String, String, String, super::incomplete::Incomplete)> = Vec::new();
-            for (album, json) in s.userdata.albums_incomplete()? {
-                let Ok(i) = serde_json::from_str::<super::incomplete::Incomplete>(&json) else { continue };
+            // A row that no longer fits its album (A3.4: tracks replaced or added since its look) is not read: the pass looks again.
+            for (album, i) in super::incomplete::still_short(&s)? {
                 // One the library no longer has is left out.
                 let Some((_, artist, name)) = s.library.album_names(&album)? else { continue };
                 found.push((album, name, artist, i));
@@ -914,47 +1106,24 @@ impl App {
 
     async fn check_incoming(&self) -> anyhow::Result<Vec<Finding>> {
         let view = self.albums(None).await;
-        let verdicts = view.sources.iter().flat_map(|s| s.verdicts.values());
-        let (mut upgrades, mut duplicates) = (0, 0);
-        for v in verdicts {
-            if replaces(v) {
-                upgrades += 1;
-            } else {
-                duplicates += 1;
-            }
-        }
+        let (mut better, mut twice) = standing(view.sources.iter().map(|s| (s.id.as_str(), s.library_info.as_slice(), s.albums.as_slice())));
         let jobs: Vec<_> = self.incoming.jobs().into_iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).collect();
-        let mut out = incoming(upgrades, duplicates, jobs.len() as u64);
-        // Each album waiting, with the album it upgrades or duplicates; each conversion failed, with why.
+        let mut out = incoming(better.len() as u64, twice.len() as u64, jobs.len() as u64);
+        // Each copy waiting, with the copy it stands against; each conversion failed, with why.
         for f in &mut out {
-            let better = match f.key.as_str() {
-                "incoming:upgrades" => true,
-                "incoming:duplicates" => false,
+            match f.key.as_str() {
+                "incoming:upgrades" => f.items = std::mem::take(&mut better),
+                "incoming:duplicates" => f.items = std::mem::take(&mut twice),
                 "incoming:failed" => {
                     f.items = jobs
                         .iter()
                         .map(|j| Item { title: j.title.clone(), line: j.why.clone(), album: Some((j.source.clone(), j.album_id.clone())), ..Item::default() })
                         .collect();
-                    continue;
                 }
-                _ => continue,
-            };
-            for s in &view.sources {
-                for (id, v) in s.verdicts.iter().filter(|(_, v)| replaces(v) == better) {
-                    let a = s.albums.iter().find(|a| &a.id == id);
-                    let title = a.map_or_else(|| id.clone(), |a| a.title.clone());
-                    let by = a.and_then(|a| a.artist.clone());
-                    // Both places: the other copy, in its library as the verdict names it (this one opens Incoming's).
-                    let line = [by, Some(format!("in {} as {}", paired_in(v, &s.library_info), v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                    f.items.push(Item { title, line: Some(line), album: Some((s.id.clone(), id.clone())), ..Item::default() });
-                }
+                _ => {}
             }
-            f.items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
         }
+        out.extend(arrived(&super::intake_card::waiting(self).await));
         Ok(out)
     }
 
@@ -1129,11 +1298,11 @@ fn check_sign_in(at: i64) -> anyhow::Result<Vec<Finding>> {
     Ok(out)
 }
 
-/// The server's own: slow answers and runaway clients (decision 0045, amended 2026-10-23).
-fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
+/// The server's own: slow answers and runaway clients (decision 0045, amended 2026-10-23), and the disk floor (AL03): short of space.
+fn check_server(at: i64, served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let slow = last_hour("server", "slow response", at)?;
     let runaway = last_hour("server", "client requests too often", at)?;
-    let mut out = Vec::new();
+    let mut out: Vec<Finding> = served.and_then(|s| short_of_space(s, &super::room::TheDisks)).into_iter().collect();
     if slow > 0 {
         let mut f = finding("server", "server:slow", Level::Info, slow, format!("{} in the last hour", n(slow, "slow answer", "slow answers")));
         f.detail = Some("Answers that took longer than a second, by page: how often, the slowest, and who asked.".into());
@@ -1148,9 +1317,186 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
     Ok(out)
 }
 
+/// The disk floor (AL03; Q6, OQ-F5): the server short of space, one warning for the whole server, never one per user: its detail the
+/// free space where users' music lands, the floor, and what the trash there holds, as emptying it frees that; opening Settings. None
+/// while it is not short. What cratarr-ha reads is `/api/health`'s flag; Cratarr calls no one. Blocking.
+pub(crate) fn short_of_space(served: &crate::serve::Serve, disks: &dyn super::room::Disks) -> Option<Finding> {
+    use super::room::{MARGIN, size_text};
+    let space = super::room::space_on(served, disks);
+    if !space.short {
+        return None;
+    }
+    // No count: it is short or not ("Disk space · short").
+    let mut f = finding("server", "server:short-of-space", Level::Warning, 0, "The server is short of space");
+    let mut detail = format!(
+        "{} free, below the floor of {}. Users' new Wants wait until {} is free.",
+        size_text(space.free.unwrap_or(0)),
+        size_text(space.floor),
+        size_text(space.floor.saturating_add(MARGIN))
+    );
+    let trash = super::room::in_the_trash(served).unwrap_or_else(|e| {
+        tracing::warn!(target: "room", reason = %format!("{e:#}"), "what the trash holds was not read");
+        0
+    });
+    if trash > 0 {
+        detail.push_str(&format!(" The trash holds {}: emptying it frees that.", size_text(trash)));
+    }
+    f.detail = Some(detail);
+    f.open = Some(Open { page: "settings", switch: None, thing: None });
+    Some(f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A data folder of the test's own.
+    fn data_folder(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-health-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The queue's files set aside in a data folder, by name.
+    fn set_aside_in(d: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> =
+            std::fs::read_dir(d).unwrap().flatten().filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|n| n.starts_with("soulseek.json.unreadable-")).collect();
+        names.sort();
+        names
+    }
+
+    /// P7.1, P7.3 (W7): a queue cut short is set aside at a start, a new empty one begun in its place, and Health's report says so:
+    /// one warning of the requests by a key of its own, naming the file and its time, its detail saying the queue began empty and
+    /// how to put the old one back. After a restart it is said still, as it reads the data folder; once the file is removed, no
+    /// more. No queue, an empty one and 0.16's (copied aside) say nothing.
+    #[test]
+    fn a_queue_set_aside_is_on_health_until_it_is_dealt_with() {
+        use super::super::soulseek::load_for_tests;
+        let d = data_folder("set-aside");
+        let serve = crate::serve::Serve::open(Some(&d), crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(std::sync::Arc::new(crate::catalogue::Catalogue::open(None, Vec::new()).unwrap()));
+        let said = || -> Vec<Finding> {
+            check_requests(Some(serve.as_ref())).unwrap().into_iter().filter(|f| ["requests:soulseek-set-aside", "requests:soulseek-frozen"].contains(&f.key.as_str())).collect()
+        };
+        let p = d.join("soulseek.json");
+        let cut = br#"{"next": 3, "items": ["#;
+        std::fs::write(&p, cut).unwrap();
+
+        // The start.
+        assert_eq!(load_for_tests(&p), (0, false), "a new empty queue, not frozen");
+        let aside = set_aside_in(&d);
+        assert_eq!(aside.len(), 1, "set aside");
+        assert_eq!(std::fs::read(d.join(&aside[0])).unwrap(), cut, "whole");
+        let at: i64 = aside[0].strip_prefix("soulseek.json.unreadable-").unwrap().parse().unwrap();
+        // The new queue written in its place, as the start's first write leaves it.
+        std::fs::write(&p, br#"{"next":0,"items":[],"dropped_records":[]}"#).unwrap();
+
+        let found = said();
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!((f.domain, f.key.as_str(), f.level), ("requests", "requests:soulseek-set-aside", Level::Warning));
+        assert_eq!(f.items.iter().map(|i| (i.title.as_str(), i.since)).collect::<Vec<_>>(), [(aside[0].as_str(), Some(at))], "the file and its time");
+        let detail = f.detail.as_deref().unwrap_or_default();
+        let rename = format!("rename {} in the data folder to soulseek.json", aside[0]);
+        for words in ["began an empty queue", "stop Cratarr", rename.as_str(), "and start Cratarr"] {
+            assert!(detail.contains(words), "{words:?} in {detail:?}");
+        }
+
+        // A restart: the queue begun in its place is read; the finding is said still, from the data folder.
+        assert_eq!(load_for_tests(&p), (0, false));
+        assert_eq!(set_aside_in(&d), aside, "nothing more set aside");
+        assert_eq!(said(), found, "said after a restart while the file is there");
+
+        // Dealt with: the file removed by hand.
+        std::fs::remove_file(d.join(&aside[0])).unwrap();
+        assert!(said().is_empty(), "gone with the file");
+        drop(serve);
+        std::fs::remove_dir_all(&d).ok();
+
+        // P7.3: nothing to say.
+        let of_016 = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
+        for (name, queue) in [("none", None), ("empty", Some(r#"{"next":0,"items":[]}"#)), ("of-016", Some(of_016))] {
+            let d = data_folder(name);
+            let p = d.join("soulseek.json");
+            if let Some(q) = queue {
+                std::fs::write(&p, q).unwrap();
+            }
+            assert!(!load_for_tests(&p).1, "{name}");
+            assert_eq!(d.join("soulseek.json.016").exists(), name == "of-016", "{name}");
+            assert_eq!(soulseek_queue(&d, false), Vec::new(), "{name}");
+            std::fs::remove_dir_all(&d).ok();
+        }
+    }
+
+    /// P7.2 (W7): a queue that can be neither read nor set aside, its data folder refusing the rename, is frozen as before, nothing
+    /// written over it, and Health says so as critical. The tests run as root in the container, whom no mode refuses: the start's
+    /// load runs on a thread of its own as another account (`setresuid` by the system call, that thread alone, as moves.rs's test).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_queue_neither_read_nor_set_aside_is_critical() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = data_folder("frozen");
+        let p = d.join("soulseek.json");
+        let cut = br#"{"next": 3, "items": ["#;
+        std::fs::write(&p, cut).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let q = p.clone();
+        let loaded = std::thread::spawn(move || {
+            // SAFETY: plain numbers to a system call that changes the calling thread's account alone; the thread ends with the load.
+            if unsafe { libc::geteuid() } == 0 {
+                let nobody: libc::uid_t = 65_534;
+                let done = unsafe { libc::syscall(libc::SYS_setresuid, nobody, nobody, nobody) };
+                assert_eq!(done, 0, "another account: {}", std::io::Error::last_os_error());
+            }
+            super::super::soulseek::load_for_tests(&q)
+        })
+        .join()
+        .unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(loaded, (0, true), "frozen, as before");
+        assert_eq!(std::fs::read(&p).unwrap(), cut, "nothing written over it");
+        assert!(set_aside_in(&d).is_empty(), "nothing set aside");
+        let found = soulseek_queue(&d, loaded.1);
+        assert_eq!(
+            found.iter().map(|f| (f.domain, f.key.as_str(), f.level, f.title.as_str())).collect::<Vec<_>>(),
+            [("requests", "requests:soulseek-frozen", Level::Critical, "Soulseek's queue can't be kept")]
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// O5: the background reading paused by an administrator is said on Health.
+    #[test]
+    fn background_reading_paused_shows_on_health() {
+        let _one = super::super::switches::TEST_STATE.blocking_lock();
+        let shown = || check_connections(super::super::moment::now_secs()).into_iter().find(|f| f.key == "connections:background-paused");
+        let was = super::super::switches::set_for_tests(super::super::switches::BACKGROUND, false);
+        let paused = shown();
+        super::super::switches::set_for_tests(super::super::switches::BACKGROUND, true);
+        let on = shown();
+        super::super::switches::set_for_tests(super::super::switches::BACKGROUND, was);
+        assert!(on.is_none());
+        assert_eq!(paused.expect("shown").open, Some(Open { page: "connections", switch: None, thing: None }), "G9: opens Settings' Connections list");
+    }
+
+    /// W4 (E1): records arrived in Incoming and waiting to be added are one Health item, each opening its intake card ("Before
+    /// adding" in it); those an upgrade's or a duplicate's verdict names stay on those items.
+    #[test]
+    fn health_lists_arrivals_waiting_to_be_added() {
+        let w = |album: &str, verdict: Option<&'static str>| super::super::intake_card::Waiting {
+            source: "cratarr".into(),
+            album: album.into(),
+            title: format!("Title {album}"),
+            artist: "Glass Harbour".into(),
+            library: Some("incoming".into()),
+            verdict,
+        };
+        let f = arrived(&[w("al-1", None), w("al-2", Some("duplicate")), w("al-3", None)]).unwrap();
+        assert_eq!((f.key.as_str(), f.count), ("incoming:arrived", 2));
+        assert_eq!(f.items.iter().filter_map(|i| i.album.clone()).map(|(_, id)| id).collect::<Vec<_>>(), ["al-1", "al-3"]);
+        assert!(arrived(&[w("al-2", Some("upgrade"))]).is_none(), "none waiting but those");
+    }
 
     #[test]
     fn lidarr_adding_outside_its_incoming_is_said_with_the_root_folder_to_choose() {
@@ -1324,16 +1670,16 @@ mod tests {
         assert!(gaps_in(&[(None, None), (None, None)], &[6, 6]).is_empty(), "numbered nowhere");
     }
 
+    /// C37a: an Incoming copy of a kept record is a better copy Replace can take, or the record in two libraries at once, by its
+    /// stand against the copy that plays the record for most; each item names that copy's library and folder, and why.
     #[test]
     fn an_incoming_album_says_which_library_its_other_copy_is_in() {
-        use crate::app::incoming::VerdictView;
-        let v = |kind: &'static str, library_id: Option<&str>, replaceable: bool| VerdictView {
-            kind,
-            library: "Arp/Zebra".into(),
-            why: String::new(),
-            library_id: library_id.map(Into::into),
-            main_folder: replaceable.then_some(0),
-            replaceable_into: if replaceable { library_id.map(Into::into).into_iter().collect() } else { Vec::new() },
+        let v = |library: &str, better: bool, replaces: bool| crate::source::Against {
+            better,
+            replaces,
+            library: library.into(),
+            dir: "Arp/Zebra".into(),
+            why: "lossless, yours is 320 kbps".into(),
         };
         let library = |id: &str, name: &str, kind: &'static str| crate::app::albums::LibraryView {
             id: id.into(),
@@ -1349,12 +1695,29 @@ mod tests {
             naming: None,
         };
         // Libraries are equal (0101 point 1): a main library is named by its own name, as any other.
-        let libraries = [library("music", "Music", "main"), library("new", "New music", "incoming")];
-        assert!(replaces(&v("upgrade", Some("music"), true)));
-        assert!(!replaces(&v("upgrade", Some("new"), false)), "a better copy of another Incoming library's: in two libraries at once");
-        assert!(!replaces(&v("duplicate", Some("music"), true)));
-        assert_eq!(paired_in(&v("duplicate", Some("music"), true), &libraries), "Music");
-        assert_eq!(paired_in(&v("upgrade", Some("new"), false), &libraries), "New music");
-        assert_eq!(paired_in(&v("upgrade", None, false), &libraries), "another library");
+        let libraries = [library("music", "Music", "main"), library("new", "New music", "incoming"), library("own", "Your music", "own")];
+        let album = |id: &str, title: &str, against: Option<crate::source::Against>| crate::source::Album {
+            id: id.into(),
+            title: title.into(),
+            artist: Some("Glass Harbour".into()),
+            copies: vec![
+                crate::source::AlbumCopy { library: "music".into(), ..Default::default() },
+                crate::source::AlbumCopy { library: "new".into(), against, ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let albums = [
+            album("al-1", "Zebra", Some(v("music", true, true))),
+            album("al-2", "Arp", Some(v("own", true, false))),
+            album("al-3", "Mist", Some(v("music", false, false))),
+            album("al-4", "Kept once", None),
+        ];
+        let (better, twice) = standing([("cratarr", libraries.as_slice(), albums.as_slice())].into_iter());
+        let ids = |items: &[Item]| items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
+        assert_eq!(ids(&better), ["al-1"], "better than Music's copy: Replace's");
+        assert_eq!(ids(&twice), ["al-2", "al-3"], "better than someone's own, or no better: in two libraries at once");
+        assert_eq!(better[0].line.as_deref(), Some("Glass Harbour · in Music as Arp/Zebra · lossless, yours is 320 kbps"));
+        assert_eq!(twice[0].line.as_deref(), Some("Glass Harbour · in Your music as Arp/Zebra · lossless, yours is 320 kbps"));
+        assert_eq!(paired_in(&v("gone", false, false), &libraries), "another library");
     }
 }

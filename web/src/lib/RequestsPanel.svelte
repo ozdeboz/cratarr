@@ -4,8 +4,9 @@
   // phone. Its bar: where it is (Requests › Your requests). Waiting for an answer (those who answer requests): each
   // answered from its row's menu, or many at once in the select mode every list has (the bar's icon starts it). Your
   // requests: each with where it stands, a waiting one taken back from its menu, or many at once in Select (the owner,
-  // 2026-10-27: what one has, several have). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
-  // fetches now (how far), then what it watches for and has not found yet.
+  // 2026-10-27: what one has, several have), over them one's room (AL01: a user's, none for an administrator or out of
+  // reach). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it fetches now (how far),
+  // then what it watches for and has not found yet.
   import ChoiceMark from './ChoiceMark.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { rowRoot } from './glassRow.svelte';
@@ -15,9 +16,11 @@
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
-  import { cancelRequest, type AlbumRequest, type WatchedAlbum } from './api';
+  import { albumCoverUrl, approveSoulseek, cancelRequest, getRequestStory, soulseekNow, type AlbumRequest, type RequestStory, type WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
-  import { me } from './me.svelte';
+  import { me, readRoom } from './me.svelte';
+  import { reach } from './reach.svelte';
+  import { lineOfRoom } from './room';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Notice from './Notice.svelte';
@@ -25,12 +28,15 @@
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch, searchNone } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
-  import { backOne, REQUESTS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
+  import { albumSubject, backOne, REQUESTS, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
+  import { keepsPlace } from './keepsPlace';
   import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, listsShown, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import { clearPlaced, dropSoulseek, fetchFound, loadSoulseek, searchSoulseekNow, soulseek } from './soulseek.svelte';
-  import { approvePayload, folderLine, GROUPS, itemLine, itemTone, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
+  import { approvePayload, folderLine, GROUPS, itemLine, itemTone, recordOf, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
+  import { fillOf, mayTakeBack, standing, standingTone } from './requestState';
+  import { requestStory, storyAgainIn, tickOf } from './requestStory';
   import SelectBar from './SelectBar.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import Group from './settings/Group.svelte';
@@ -50,6 +56,11 @@
   });
 
   const view = $derived(requests.view);
+  // One's room over one's requests, read again as they show (it fills as music arrives).
+  $effect(() => {
+    if (list === 'mine') void readRoom();
+  });
+  const roomSaid = $derived(lineOfRoom(me.room, reach.away));
 
   // Soulseek (decision 0099): read while it shows, every few seconds while a search or a fetch is under way, else every
   // half minute (Lidarr's Wanted is read every six hours, a search may find something any time). Found records ticked
@@ -89,35 +100,16 @@
   }
   const answers = $derived(answersRequests());
 
-  const STATUS = { pending: 'Waiting', approved: 'Approved', declined: 'Declined', cancelled: 'Taken back' } as const;
-  /** What a row says: the artist, then where it stands (and who asked, among everyone's). */
+  /** What a row says: the artist, then where it stands, as the server's state says (W5, lib/requestState), and who asked, among
+   *  everyone's. */
   function line(r: AlbumRequest, who: boolean): string {
     const parts = [r.artist];
     if (who) parts.push(`asked by ${r.user}`);
-    parts.push(standing(r));
+    parts.push(standing(r, when));
     return parts.join(' · ');
   }
-  function standing(r: AlbumRequest): string {
-    const a = r.album_state;
-    if (a?.state === 'in_library') return 'In the library';
-    if (r.status === 'declined') return r.reason ? `Declined: ${r.reason}` : 'Declined';
-    if (r.status !== 'approved') return `${STATUS[r.status]} · ${when(r.at)}`;
-    if (r.fetched?.startsWith('Not handed over')) return r.fetched;
-    switch (a?.state) {
-      case 'fetching':
-        return `Being fetched · ${Math.round(a.done * 100)}%`;
-      case 'in_incoming':
-        return 'In Incoming';
-      case 'partly_there':
-        return `Partly there · ${a.tracks} of ${a.of}`;
-      case 'looking':
-        return 'Lidarr is looking for it';
-      default:
-        return r.fetched ?? 'Approved';
-    }
-  }
-  const tone = (r: AlbumRequest) => (r.status === 'declined' || r.fetched?.startsWith('Not handed over') ? 'bad' : null);
-  const fill = (r: AlbumRequest) => (r.album_state?.state === 'fetching' ? r.album_state.done : null);
+  const tone = (r: AlbumRequest) => standingTone(r);
+  const fill = (r: AlbumRequest) => fillOf(r.state);
   /** A release group's cover, as Discover's (the Cover Art Archive). */
   const coverOf = (w: WatchedAlbum) => (w.release_group ? `https://coverartarchive.org/release-group/${w.release_group}/front-250` : null);
   const watchLine = (w: WatchedAlbum) =>
@@ -127,7 +119,59 @@
 
   // --- A row's menu ---
   let opened = $state<AlbumRequest | null>(null);
-  const canTakeBack = (r: AlbumRequest) => (r.status === 'pending' && (r.user === me.name || answers)) || (r.status === 'approved' && answers);
+  const canTakeBack = (r: AlbumRequest) => mayTakeBack(r, me.name, answers);
+  // Its story (RQ01, lib/requestStory): read when its sheet opens, again while it shows (storyAgainIn: every 3 s while Soulseek's
+  // part is under way, else every 30 s), and no more once it closes. Its asker's and the administrators', as the server answers
+  // it: someone who answers requests opening another's waiting one keeps the row's own line and its answers.
+  let story = $state<RequestStory | null>(null);
+  let storyError = $state<string | null>(null);
+  let storyNow = $state(0);
+  let storyPick = $state<number | null>(null);
+  let storyGen = 0;
+  let storyTimer: ReturnType<typeof setTimeout> | undefined;
+  const readsStory = (r: AlbumRequest) => me.admin || r.user === me.name;
+  function readStory(id: number, gen: number) {
+    clearTimeout(storyTimer);
+    getRequestStory(id).then(
+      (s) => {
+        if (gen !== storyGen) return;
+        story = s;
+        storyError = null;
+        storyNow = Math.floor(Date.now() / 1000);
+        storyTimer = setTimeout(() => readStory(id, gen), storyAgainIn(s, storyNow));
+      },
+      (e) => gen === storyGen && (storyError = e instanceof Error ? e.message : String(e)),
+    );
+  }
+  $effect(() => {
+    const r = opened;
+    const gen = ++storyGen;
+    story = null;
+    storyError = null;
+    storyPick = null;
+    if (r && readsStory(r)) readStory(r.id, gen);
+    return () => (storyGen++, clearTimeout(storyTimer));
+  });
+  /** An administrator's call on a story's Soulseek item, then the story read again (a refusal, such as a source gone since, in
+   *  the server's words). */
+  async function onSoulseek(s: RequestStory, act: () => Promise<unknown>, failed: string) {
+    try {
+      await act();
+    } catch (e) {
+      toast.fail(e, failed);
+    }
+    if (opened?.id === s.id) readStory(s.id, storyGen);
+  }
+  /** Its found record fetched from the source picked, named by its user and folder (RQ01.8 (b): one gone since is refused). */
+  function fetchStory(s: RequestStory) {
+    const tick = s.soulseek && tickOf(s.soulseek, storyPick);
+    if (tick) void onSoulseek(s, () => approveSoulseek([tick]), "It wasn't fetched");
+  }
+  /** Its record searched for now, whatever its wait. */
+  function searchStory(s: RequestStory) {
+    const id = s.soulseek?.id;
+    if (id) void onSoulseek(s, () => soulseekNow(id), "It isn't being searched");
+  }
   let declining = $state<number[] | null>(null);
   // Many approved at once ask first (lib/many; declining many asks already, for why).
   function answer(ids: number[], approve: boolean, reason: string | null = null) {
@@ -228,9 +272,9 @@
       {@render glassExtra()}
     </div>
   {/if}
-  <div class="scroll" class:away={handed && everywhere()}>
+  <div class="scroll" class:away={handed && everywhere()} {@attach keepsPlace()}>
     {#if requests.error && !view}
-      <Notice text={requests.error} onretry={loadRequests} />
+      <Notice text={requests.error} onretry={loadRequests} away="Requests need Cratarr." />
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
@@ -240,7 +284,7 @@
       </Group>
     {:else if list === 'soulseek'}
       {#if soulseek.error && !soulseek.view}
-        <Notice text={soulseek.error} onretry={loadSoulseek} />
+        <Notice text={soulseek.error} onretry={loadSoulseek} away="Soulseek needs Cratarr." />
       {:else if !soulseek.view}
         <PageLoading />
       {:else}
@@ -266,7 +310,7 @@
             <Group title={g.title}>
               {#snippet tail()}{#if g.states.includes('placed')}<button class="tailact" onclick={() => void clearPlaced()}>Clear</button>{/if}{/snippet}
               {#each these as i (i.id)}
-                <ReleaseRow cover={null} title={i.record.album} line={itemLine(i)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
+                <ReleaseRow cover={recordOf(i) ? albumCoverUrl('cratarr', recordOf(i)!) : null} title={i.record.album} line={itemLine(i, undefined, slskItems)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
                   {#if tickable(i)}
                     {@const on = slskTicks.has(i.id)}
                     <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.record.album}`} onclick={() => slskTick(i.id)}
@@ -283,13 +327,14 @@
         {#if !slskItems.length}<Group><Item name="Nothing asked for" line="Requests you approve come here" /></Group>{/if}
       {/if}
     {:else if list === 'mine'}
+      {#if roomSaid}<Group><Item name="Room" value={roomSaid} /></Group>{/if}
       <Group>
         {#each mine as r (r.id)}{@render row(r, false, canTakeBack(r))}{:else}
           {#if !view.mine.length}<Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = hrefOf('discover'))} />{/if}
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetchers.includes('lidarr')}<PageLoading />{:else}<p class="note">Lidarr is not connected: {#if me.admin}<a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>{:else}an administrator can connect it{/if}.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} away="Lidarr is asked through Cratarr." />{:else if view.fetchers.includes('lidarr')}<PageLoading />{:else}<p class="note">Lidarr is not connected: {#if me.admin}<a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>{:else}an administrator can connect it{/if}.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}
@@ -324,6 +369,7 @@
 
 {#if opened}
   {@const r = opened}
+  {@const st = story?.id === r.id ? requestStory(story, me.admin, storyNow) : null}
   <MenuSheet
     label={r.album}
     title={r.album}
@@ -332,18 +378,49 @@
     copy={`${r.artist} – ${r.album}`}
     onclose={() => (opened = null)}
   >
+    <!-- Its story (RQ01, lib/requestStory): where it stands, each fetcher's part, what was set aside, when it was asked and
+         delivered and where; until it is read, or with Cratarr out of reach, the row's own line. Only administrators act. -->
+    <Group><Item name={st?.head ?? standing(r, when)} lead={st?.tone ?? standingTone(r)} /></Group>
+    {#if st}
+      {#each st.groups as g (g.title)}
+        <Group title={g.title}>
+          {#each g.rows as x, n (n)}
+            {#if 'choice' in x}
+              <ChoiceList label={x.choice.label} options={x.choice.options} value={storyPick === null ? x.choice.chosen : String(storyPick)} onchange={(v) => (storyPick = Number(v))} />
+            {:else}
+              <Item name={x.name} line={x.line} value={x.value} tone={x.tone} lead={x.lead ?? null} progress={x.progress ?? null} wrap={x.wrap} />
+            {/if}
+          {/each}
+        </Group>
+      {/each}
+    {:else if storyError}
+      <Notice text={storyError} onretry={() => readStory(r.id, storyGen)} away="Requests need Cratarr." />
+    {/if}
     <div role="menu">
-      {#if answers && (r.status === 'pending' || (r.status === 'approved' && r.fetched?.startsWith('Not handed over')))}
-        <MenuEntry icon="check" label={r.status === 'pending' ? 'Approve' : 'Hand over again'} onclick={() => (answer([r.id], true), (opened = null))} />
-      {/if}
+      <!-- Approve or decline one waiting (those who answer requests), from its row as before. -->
       {#if answers && r.status === 'pending'}
+        <MenuEntry icon="check" label="Approve" onclick={() => (answer([r.id], true), (opened = null))} />
         <MenuEntry icon="ban" label="Decline…" onclick={() => ((declining = [r.id]), (opened = null))} />
       {/if}
-      {#if canTakeBack(r)}
+      {#if st && story}
+        {@const s = story}
+        {#each st.actions as a (a)}
+          {#if a === 'fetch'}
+            <MenuEntry icon="download" label="Fetch" onclick={() => fetchStory(s)} />
+          {:else if a === 'searchNow'}
+            <MenuEntry icon="search" label="Search now" onclick={() => searchStory(s)} />
+          {:else if a === 'handOverAgain'}
+            <!-- Where the server says no fetcher has spoken of it (W5, G2). -->
+            <MenuEntry icon="check" label="Hand over again" onclick={() => (answer([r.id], true), (opened = null))} />
+          {:else if a === 'view'}
+            <!-- Its record's page (W12), merges followed. -->
+            <MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => ((opened = null), viewOver(albumSubject('cratarr', s.opens ?? '')))} />
+          {:else}
+            <MenuEntry icon="undo" label="Take back" danger onclick={() => (takeBack(r), (opened = null))} />
+          {/if}
+        {/each}
+      {:else if !readsStory(r) && canTakeBack(r)}
         <MenuEntry icon="undo" label="Take back" danger onclick={() => (takeBack(r), (opened = null))} />
-      {/if}
-      {#if !answers && !canTakeBack(r)}
-        <MenuEntry icon="compass" label="Discover" onclick={() => ((opened = null), (location.hash = hrefOf('discover')))} />
       {/if}
     </div>
   </MenuSheet>
@@ -355,7 +432,7 @@
        now, out of the list. -->
   <MenuSheet label={i.record.album} title={i.record.album} chips={[i.record.artist, ...(i.record.year ? [String(i.record.year)] : [])]} onclose={() => (slskOpen = null)}>
     {#if tickable(i)}
-      <Group title="Folders" more="Each holds every track of the record, by title and length. The ticked record is fetched from the one chosen.">
+      <Group title="Folders" more="Each holds every track of the record, by title and length where its list has lengths. The ticked record is fetched from the one chosen.">
         <ChoiceList
           label="Folder"
           options={i.folders.map((f, n) => ({ value: String(n), label: f.dir.split(/[\\/]/).pop() || f.dir, line: folderLine(f) }))}
@@ -372,6 +449,8 @@
       </Group>
     {/if}
     <div role="menu">
+      <!-- Its record's page (W12): the album it fetches, had or not. -->
+      {#if recordOf(i)}{@const rec = recordOf(i)!}<MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => ((slskOpen = null), viewOver(albumSubject('cratarr', rec)))} />{/if}
       {#if searchable(i)}<MenuEntry icon="search" label="Search now" onclick={() => (void searchSoulseekNow(i.id), (slskOpen = null))} />{/if}
       <MenuEntry icon="trash" label="Out of the list" danger onclick={() => (void dropSoulseek(i.id), (slskOpen = null))} />
     </div>

@@ -25,7 +25,8 @@
   import PageLoading from './PageLoading.svelte';
   import PanelPlace from './PanelPlace.svelte';
   import { askDevice, askDownloads, inApp } from './app.svelte';
-  import { backFromThing, backOne, panel, SETTINGS, settingsThing, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
+  import { backFromThing, backOne, panel, reachedBy, SETTINGS, settingsThing, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
+  import { keepsPlace } from './keepsPlace';
   import type { Level, Siblings } from './Crumbs.svelte';
   import { groupsOf, landingOf, remembered } from './groupCrumb';
   import { prefs } from './prefs.svelte';
@@ -108,11 +109,11 @@
     return !x?.admin || me.admin || !!x.everyone;
   });
 
-  // Another page (a part, a thing, back) starts at its top.
+  // Another page (a part, a thing) starts at its top; back brings its place back (F25.2: the one rule for back, lib/keepsPlace).
   let scrollEl = $state<HTMLElement>();
   $effect(() => {
     void panel.viewed;
-    if (scrollEl) scrollEl.scrollTop = 0;
+    if (scrollEl && untrack(reachedBy) !== 'back') scrollEl.scrollTop = 0;
   });
 
   // The server's settings saved as they are changed (the owner, 2026-11-02: "I thought we used to have instantly saving
@@ -192,7 +193,7 @@
     </span>
   </div>
   {/if}
-  <div class="scroll" class:away={handed && everywhere()} bind:this={scrollEl}>
+  <div class="scroll" class:away={handed && everywhere()} bind:this={scrollEl} {@attach keepsPlace()}>
     {#if ed.loadError && me.admin}<Notice text={ed.loadError} />{/if}
     {#if me.admin && ed.s && !ed.s.settings_file && (section === 'connections' || section === 'libraries')}<Notice tone="warn" text="Cratarr can't write its settings file, so changes here are not kept." />{/if}
     {#if !allowed}

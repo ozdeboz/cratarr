@@ -6,12 +6,53 @@
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{Catalogue, now};
 use crate::serve::ids;
 
-/// The artist a key names. A split leaves two rows of one key, and the first is the one the name went on meaning.
+pub(super) const SCHEMA: &str = "
+-- C55 (the owner, 2026-11-16): each artist's number among the artists of their name (`key`), given once in the order they were
+-- made, the first 1, and kept for life: a forgotten artist's row stays (RT01b), so their number is never given again. A view
+-- that shows two artists of one name shows it: \"Rone (1)\", \"Rone (2)\".
+CREATE TABLE IF NOT EXISTS artist_numbers (artist INTEGER PRIMARY KEY, key TEXT NOT NULL, number INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS artist_numbers_once ON artist_numbers (key, number);
+";
+
+/// An artist given their number (C55): the next of their key, never one given before.
+fn number(db: &Connection, artist: i64, key: &str) -> Result<()> {
+    db.prepare_cached("INSERT INTO artist_numbers (artist, key, number) VALUES (?1, ?2, (SELECT COALESCE(max(number), 0) + 1 FROM artist_numbers WHERE key = ?2))")?
+        .execute(params![artist, key])?;
+    Ok(())
+}
+
+/// Every artist with no number given theirs (C55), in the order they were made: as the catalogue opens, so those from before the
+/// numbers have them and a key's first is 1. How many. Blocking.
+pub(super) fn number_all(db: &Connection) -> Result<usize> {
+    let tx = db.unchecked_transaction()?;
+    let left: Vec<(i64, String)> = {
+        let mut st = tx.prepare("SELECT id, key FROM artists WHERE id NOT IN (SELECT artist FROM artist_numbers) ORDER BY id")?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    for (artist, key) in &left {
+        number(&tx, *artist, key)?;
+    }
+    tx.commit()?;
+    Ok(left.len())
+}
+
+/// An artist as their page names them (C55): their name, their number among the artists of their name, and whether another
+/// artist has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    pub id: i64,
+    pub name: String,
+    pub number: Option<i64>,
+    pub namesakes: bool,
+}
+
+/// The artist a key names. A split leaves two rows of one key, and the first is the one the name went on meaning: the lowest
+/// number of those not forgotten (C55: a bare name from outside opens the first).
 fn artist_by_key(db: &Connection, key: &str) -> Result<Option<i64>> {
     Ok(db.prepare_cached("SELECT min(id) FROM artists WHERE key = ?1")?.query_row([key], |r| r.get(0))?)
 }
@@ -22,9 +63,12 @@ fn every_artist(db: &Connection) -> Result<HashMap<String, i64>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-fn give_artist(db: &Connection, key: &str, name: &str, born: i64) -> Result<i64> {
+/// A new artist of a name, with their number (C55).
+pub(super) fn give_artist(db: &Connection, key: &str, name: &str, born: i64) -> Result<i64> {
     db.prepare_cached("INSERT INTO artists (born, name, key) VALUES (?1, ?2, ?3)")?.execute(params![born, name, key])?;
-    Ok(db.last_insert_rowid())
+    let artist = db.last_insert_rowid();
+    number(db, artist, key)?;
+    Ok(artist)
 }
 
 /// Every artist's id by key, these names' among them, in the caller's transaction: at first start the migration's.
@@ -53,7 +97,58 @@ pub(super) fn note_artists_moved(tx: &Connection) -> Result<usize> {
     Ok(noted)
 }
 
+/// Who an open of a source's id is before anything is asked (RF13, the review of runs 11 and 12, RB6): the artist who holds the id;
+/// else the one live artist of the name holding no id at that source, whom the id goes to only where it is the source's first sure
+/// match for the name: the one case its answer decides; else a new artist, whatever it would answer (no live artist of the name, two
+/// or more, or one holding another id there).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opening {
+    Held(i64),
+    Decides(i64),
+    New,
+}
+
+/// `Opening` as `db` reads it (a forgotten artist's row goes, RT01b, its tombstone kept).
+pub(super) fn opening_in(db: &Connection, r: &super::records::Ref, name: &str) -> Result<Opening> {
+    let held: Vec<String> = db
+        .prepare_cached("SELECT subject FROM \"references\" WHERE source = ?1 AND kind = ?2 AND value = ?3 ORDER BY subject")?
+        .query_map(params![r.source, r.kind, r.value], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if let Some(artist) = held.iter().find_map(|s| ids::artist_number(s)) {
+        return Ok(Opening::Held(artist));
+    }
+    let named: Vec<(i64, bool)> = db
+        .prepare_cached(
+            "SELECT a.id, EXISTS (SELECT 1 FROM \"references\" f WHERE f.subject = 'ar-' || a.id AND f.source = ?2 AND f.kind = ?3)
+             FROM artists a WHERE a.key = ?1 AND NOT EXISTS (SELECT 1 FROM forgotten g WHERE g.subject = 'ar-' || a.id) ORDER BY a.id",
+        )?
+        .query_map(params![ids::artist_key(name), r.source, r.kind], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(match named.as_slice() {
+        [(only, false)] => Opening::Decides(*only),
+        _ => Opening::New,
+    })
+}
+
+/// `Catalogue::artist_by_reference` in the caller's transaction: the artist who holds `r`; else, where `sure`, the one live artist of
+/// the name holding none of that source's ids; else one made (the name's next number); the one found or made given it, `how`.
+pub(super) fn by_reference_in(tx: &Connection, r: &super::records::Ref, name: &str, how: &str, sure: bool, at: i64) -> Result<i64> {
+    let artist = match opening_in(tx, r, name)? {
+        Opening::Held(artist) => return Ok(artist),
+        Opening::Decides(only) if sure => only,
+        _ => give_artist(tx, &ids::artist_key(name), name, at)?,
+    };
+    super::records::put_reference(tx, &ids::artist(artist), r, how, at, false)?;
+    Ok(artist)
+}
+
 impl Catalogue {
+    /// Who an open of a source's id and a name is, as the catalogue stands (`Opening`, RF13): what an open asks the source of, and
+    /// when not at all. Blocking.
+    pub fn opening_of(&self, r: &super::records::Ref, name: &str) -> Result<Opening> {
+        opening_in(&self.db(), r, name)
+    }
+
     /// The artist a name is, given an id if it has none: for a name that must have one, a heart on someone no file credits
     /// yet. Blocking.
     pub fn artist_for(&self, name: &str) -> Result<i64> {
@@ -62,6 +157,66 @@ impl Catalogue {
         match artist_by_key(&db, &key)? {
             Some(id) => Ok(id),
             None => give_artist(&db, &key, name, now()),
+        }
+    }
+
+    /// An artist of their own, though another has the name (C55): a new id, and the next number of the name. A split, and
+    /// Beyond's artists (C57, `artist_by_reference`), which no name merges. Blocking.
+    #[cfg_attr(not(test), allow(dead_code))] // a split
+    pub fn artist_apart(&self, name: &str) -> Result<i64> {
+        give_artist(&self.db(), &ids::artist_key(name), name, now())
+    }
+
+    /// Whether two artists are of one name (one key, C55: "Coma" and "Coma (2)"): namesakes, never one page (M2). Blocking.
+    pub fn of_one_name(&self, a: i64, b: i64) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM artists x JOIN artists y ON y.key = x.key WHERE x.id = ?1 AND y.id = ?2")?.exists(params![a, b])?)
+    }
+
+    /// The artist a source's id names (C57: an artist of Beyond's opened, OQ12 (a)): the one who holds it; else, where the id is the
+    /// source's first sure match for the name (`sure`, U6), the one live artist of the name who holds no id at that source (Z2), as
+    /// the monthly read finds a library artist by their name (`discover::mb_artist_by_name`); else one of their own made now, as
+    /// `artist_apart` makes them (the name's next number where another has it). Two or more of the name, one holding another id,
+    /// or an id not the name's sure match (a namesake opened on purpose) say nothing of which: a new artist. The one found or made
+    /// holds the id, found `how`. In one transaction, so two opens at once make one artist. Blocking.
+    pub fn artist_by_reference(&self, r: &super::records::Ref, name: &str, how: &str, sure: bool) -> Result<i64> {
+        let mut db = self.db();
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let artist = by_reference_in(&tx, r, name, how, sure, now())?;
+        tx.commit()?;
+        Ok(artist)
+    }
+
+    /// Each of these artists' number for their name (C55, G5), where they have one, in one query: what a list shows as "Name (n)"
+    /// where it holds two of a name. On a reader. Blocking.
+    pub fn artist_numbers(&self, artists: &[i64]) -> Result<HashMap<i64, i64>> {
+        if artists.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let read = |db: &Connection| -> Result<HashMap<i64, i64>> {
+            let ids = artists.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+            let mut st = db.prepare(&format!("SELECT artist, number FROM artist_numbers WHERE artist IN ({ids})"))?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
+        }
+    }
+
+    /// An artist as their page names them (C55): their name, number, and whether another artist has the name. None: no such
+    /// artist, or one forgotten. On a reader. Blocking.
+    pub fn artist_named(&self, artist: i64) -> Result<Option<Named>> {
+        let read = |db: &Connection| -> Result<Option<Named>> {
+            let mut st = db.prepare_cached(
+                "SELECT a.name, n.number, EXISTS (SELECT 1 FROM artists b WHERE b.key = a.key AND b.id <> a.id)
+                 FROM artists a LEFT JOIN artist_numbers n ON n.artist = a.id WHERE a.id = ?1",
+            )?;
+            Ok(st.query_row([artist], |r| Ok(Named { id: artist, name: r.get(0)?, number: r.get(1)?, namesakes: r.get(2)? })).optional()?)
+        };
+        match self.reader() {
+            Some(c) => read(&c),
+            None => read(&self.db()),
         }
     }
 
@@ -174,5 +329,46 @@ mod tests {
         assert_eq!((cat.artist_for("Air").unwrap(), cat.artist_of("Air").unwrap()), (first, Some(first)));
         assert_eq!(cat.artist_ids().unwrap()["air"], first);
         assert_eq!(cat.artists_for(&names(&["Air"])).unwrap()["air"], first);
+    }
+
+    /// C55 (the owner, 2026-11-16): each artist of a name gets a number once, in the order they were made, the first 1: those from
+    /// before the numbers as the catalogue opens, those made since as they are made. A forgotten artist keeps theirs (RT01b), so
+    /// it is never given again.
+    #[test]
+    fn same_name_artists_are_numbered_once_for_life() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        for name in ["Air", "Rone", "AIR"] {
+            cat.db().execute("INSERT INTO artists (born, name, key) VALUES (1, ?1, ?2)", params![name, ids::artist_key(name)]).unwrap();
+        }
+        assert_eq!(number_all(&cat.db()).unwrap(), 3, "those from before");
+        assert_eq!(number_all(&cat.db()).unwrap(), 0, "once");
+        let number = |artist: i64| cat.db().query_row("SELECT number FROM artist_numbers WHERE artist = ?1", [artist], |r| r.get::<_, i64>(0)).optional().unwrap();
+        assert_eq!([1, 2, 3].map(number), [Some(1), Some(1), Some(2)], "in the order they were made, a name's own count");
+        let rone = cat.artist_apart("Rone").unwrap();
+        assert_eq!(cat.artist_named(rone).unwrap().map(|n| (n.name, n.number, n.namesakes)), Some(("Rone".to_string(), Some(2), true)));
+        assert_eq!(cat.artist_named(3).unwrap().map(|n| n.namesakes), Some(true), "AIR shares Air's name");
+        let older: BTreeSet<i64> = [1, 2, 3].into();
+        assert_eq!(cat.forget_quiet_artists(now() + 2 * 86_400, &older).unwrap(), [rone]);
+        assert_eq!(cat.artist_named(rone).unwrap(), None, "forgotten");
+        assert_eq!(number(rone), Some(2), "their number stays theirs");
+        let next = cat.artist_apart("rone").unwrap();
+        assert_eq!(number(next), Some(3), "and is not given again");
+        assert_eq!(cat.artist_named(2).unwrap().map(|n| (n.number, n.namesakes)), Some((Some(1), true)));
+    }
+
+    /// C55: a bare name from outside (Home Assistant, an old address) opens the first artist of it, the lowest number of those not
+    /// forgotten, as it always meant the first id; one made since of the name is no answer to it.
+    #[test]
+    fn a_bare_name_opens_the_first() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        let first = cat.artist_for("Rone").unwrap();
+        let second = cat.artist_apart("RONE").unwrap();
+        assert_ne!(first, second);
+        assert_eq!((cat.artist_of("rone").unwrap(), cat.artist_for("Rone").unwrap()), (Some(first), first));
+        assert_eq!(cat.artist_ids().unwrap()["rone"], first);
+        assert_eq!([first, second].map(|a| cat.artist_named(a).unwrap().and_then(|n| n.number)), [Some(1), Some(2)]);
+        let kept: BTreeSet<i64> = [second].into();
+        assert_eq!(cat.forget_quiet_artists(now() + 2 * 86_400, &kept).unwrap(), [first]);
+        assert_eq!(cat.artist_of("Rone").unwrap(), Some(second), "the first left: the lowest number now");
     }
 }

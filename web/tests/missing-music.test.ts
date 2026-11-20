@@ -7,9 +7,13 @@ import { readFileSync } from 'node:fs';
 const source = (file: string) => readFileSync(new URL(`../src/lib/${file}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('a track of Missing music opens to its reconnecting, and nothing else on Health does', () => {
-  const panel = source('HealthPanel.svelte');
-  assert.ok(panel.includes("{#if problem === 'library:missing' && x.track}<div class=\"tool\"><HealthReconnect track={x.track} title={x.title} ongone={gone} /></div>{/if}"));
-  assert.equal(panel.match(/<HealthReconnect /g)?.length, 1);
+  // F28.2: what can be done for an item is one piece (lib/HealthItemTools) by one when-table (lib/healthTools), Health's row and a
+  // record's sheet alike; Health keeps no tools of its own.
+  const tools = source('HealthItemTools.svelte');
+  assert.ok(tools.includes("{#if has('reconnect')}<div class=\"tool\"><HealthReconnect track={x.track!} title={x.title} ongone={ongone} /></div>{/if}"));
+  assert.equal(tools.match(/<HealthReconnect /g)?.length, 1);
+  assert.ok(source('healthTools.ts').includes("['reconnect', (p, x) => p === 'library:missing' && !!x.track],"));
+  assert.equal(source('HealthPanel.svelte').match(/<HealthReconnect /g), null);
 });
 
 test('a row says since when, as the finding does', () => {

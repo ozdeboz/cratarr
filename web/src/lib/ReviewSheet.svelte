@@ -5,16 +5,9 @@
   import FileChanges from './FileChanges.svelte';
   import { review } from './fileRuns.svelte';
   import MenuSheet from './MenuSheet.svelte';
+  import { planSheetTitle } from './fileChangeRules';
 
-  const title = $derived(
-    review.thing?.startsWith('run:')
-      ? 'Written to files'
-      : review.thing?.startsWith('intake:')
-        ? 'Before adding'
-        : review.thing?.startsWith('renumber:')
-          ? 'Renumber'
-          : 'Review the fixes',
-  );
+  const title = $derived(planSheetTitle(review.thing));
 </script>
 
 {#if review.thing}

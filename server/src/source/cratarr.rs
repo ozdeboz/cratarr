@@ -214,9 +214,59 @@ pub fn card(a: crate::serve::api::Album) -> Album {
         library: None,
         copies: Vec::new(),
         artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
+        editions: None,
         release: a.release,
         id: a.id,
     }
+}
+
+/// An artist's works by their id for life (`ar-<n>`; C55: an artist page asks by id, so one of two artists of a name is that
+/// one): the albums crediting them, those they appear on, and the songs crediting them, with `account`'s plays and heart. One
+/// with no albums here has none.
+pub async fn artist_works_of(s: &Serve, account: &str, id: &str) -> Result<super::ArtistWorks> {
+    let (lib, aid) = (s.library.clone(), id.to_string());
+    let (own, on, songs) = blocking(move || lib.artist_works(&aid)).await?;
+    let ids: Vec<String> = songs.iter().map(|t| t.id.clone()).collect();
+    let seen = s.userdata.get(account, Item::Song, &ids)?;
+    let favorite = artist_favorite_of(s, account, id)?;
+    let tracks = songs
+        .into_iter()
+        .map(|t| {
+            let a = seen.get(&t.id);
+            super::ArtistTrack {
+                plays: a.map_or(0, |a| a.play_count),
+                played: a.and_then(|a| a.play_date),
+                album_id: t.album_id.clone(),
+                track: AlbumTrack {
+                    id: t.id,
+                    title: t.title,
+                    artist: Some(t.artist).filter(|a| !a.is_empty()),
+                    album: Some(t.album),
+                    album_artist: Some(t.display_album_artist).filter(|a| !a.is_empty()),
+                    year: t.year,
+                    path: Some(t.path),
+                    duration_secs: Some(t.duration as f64),
+                },
+            }
+        })
+        .collect();
+    Ok(super::ArtistWorks { albums: own.into_iter().map(card).collect(), appears_on: on.into_iter().map(card).collect(), tracks, favorite: Some(favorite) })
+}
+
+/// Whether an artist is `account`'s favourite, by their id for life (C55). Blocking.
+pub fn artist_favorite_of(s: &Serve, account: &str, id: &str) -> Result<bool> {
+    Ok(s.userdata.get(account, Item::Artist, &[id.to_string()])?.get(id).is_some_and(|a| a.starred_at.is_some()))
+}
+
+/// An artist made `account`'s favourite or not by their id for life (C55): one the catalogue knows, though another has the name.
+/// Blocking.
+pub fn set_artist_favorite_of(s: &Serve, account: &str, id: &str, on: bool) -> Result<bool> {
+    let artist = crate::serve::ids::artist_number(id).context("That is not an artist")?;
+    if s.catalogue().artist_named(artist)?.is_none() {
+        bail!("This artist is no longer known");
+    }
+    s.userdata.set_starred(account, Item::Artist, &[id.to_string()], on)?;
+    Ok(on)
 }
 
 /// A catalogue folder's path, as the library was last built.
@@ -519,6 +569,7 @@ impl Source for CratarrSource {
                             library: None,
                             copies: vec![copy],
                             artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
+                            editions: None,
                             release: a.release,
                             id: a.id,
                         },
@@ -562,38 +613,7 @@ impl Source for CratarrSource {
             let s = server()?;
             let o = owner(&s)?;
             let id = s.artist_id(name)?.unwrap_or_default();
-            let (lib, aid) = (s.library.clone(), id.clone());
-            let (own, on, songs) = blocking(move || lib.artist_works(&aid)).await?;
-            let ids: Vec<String> = songs.iter().map(|t| t.id.clone()).collect();
-            let seen = s.userdata.get(&o, Item::Song, &ids)?;
-            let favorite = s.userdata.get(&o, Item::Artist, std::slice::from_ref(&id))?.get(&id).is_some_and(|a| a.starred_at.is_some());
-            let tracks = songs
-                .into_iter()
-                .map(|t| {
-                    let a = seen.get(&t.id);
-                    super::ArtistTrack {
-                        plays: a.map_or(0, |a| a.play_count),
-                        played: a.and_then(|a| a.play_date),
-                        album_id: t.album_id.clone(),
-                        track: AlbumTrack {
-                            id: t.id,
-                            title: t.title,
-                            artist: Some(t.artist).filter(|a| !a.is_empty()),
-                            album: Some(t.album),
-                            album_artist: Some(t.display_album_artist).filter(|a| !a.is_empty()),
-                            year: t.year,
-                            path: Some(t.path),
-                            duration_secs: Some(t.duration as f64),
-                        },
-                    }
-                })
-                .collect();
-            Ok(Some(super::ArtistWorks {
-                albums: own.into_iter().map(card).collect(),
-                appears_on: on.into_iter().map(card).collect(),
-                tracks,
-                favorite: Some(favorite),
-            }))
+            Ok(Some(artist_works_of(&s, &o, &id).await?))
         })
     }
 
@@ -614,7 +634,7 @@ impl Source for CratarrSource {
             let o = owner(&s)?;
             // As artist_works reads it: the same name, the same id.
             let Some(id) = s.artist_id(name)? else { return Ok(Some(false)) };
-            Ok(Some(s.userdata.get(&o, Item::Artist, std::slice::from_ref(&id))?.get(&id).is_some_and(|a| a.starred_at.is_some())))
+            Ok(Some(artist_favorite_of(&s, &o, &id)?))
         })
     }
 

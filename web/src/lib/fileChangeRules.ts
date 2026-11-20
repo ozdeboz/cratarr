@@ -6,8 +6,29 @@ import type { FileField, FileRun, FilesState, LibraryInfo } from './api';
 const PLANS: Record<string, string> = { types: 'Types and years' };
 export const planTitle = (kind: string) => PLANS[kind] ?? 'Changes to review';
 
-/** A field as the review sheet names it. */
-const FIELDS: Record<string, string> = { releasetype: 'Type', date: 'Date', genre: 'Genre' };
+/** A field as the review sheet and the record's state line name it (F27). */
+const FIELDS: Record<string, string> = { releasetype: 'Release type', date: 'Date', genre: 'Genre' };
+
+/** The review sheet's title, by the plan it shows (F27.2): types and years' "Write into the files"; a run's, an intake's, a
+ *  renumbering's and the fixes' as before. */
+export function planSheetTitle(thing: string | null | undefined): string {
+  if (thing?.startsWith('types:')) return 'Write into the files';
+  if (thing?.startsWith('run:')) return 'Written to files';
+  if (thing?.startsWith('intake:')) return 'Before adding';
+  if (thing?.startsWith('renumber:')) return 'Renumber';
+  return 'Review the fixes';
+}
+
+/** Where a field's new value comes from, as its row says it (F27.2): "(by the release type rule)", "(set by hand)". */
+export const fromWords = (from: string) => (from.startsWith('set by') ? `(${from})` : `(by ${from})`);
+
+/** What a record's files lack, as its state line names it (F27.1): one field with its values ("release type album"), several by
+ *  their names ("release type, date"); the names its plan's rows use (`fieldLabel`), lowercased. */
+export function lackWords(facts: readonly { field: string; values: string[] }[] | undefined): string {
+  if (!facts?.length) return '';
+  if (facts.length === 1) return `${fieldLabel(facts[0].field).toLowerCase()} ${facts[0].values.join(', ')}`.trim();
+  return facts.map((f) => fieldLabel(f.field).toLowerCase()).join(', ');
+}
 export const fieldLabel = (field: string) => FIELDS[field] ?? field.charAt(0).toUpperCase() + field.slice(1);
 
 /** A row of a record's changes as the sheet names it: its track, else its field. Where a track's copies, or a cover's,
@@ -36,7 +57,7 @@ const undoing = (run: string | null | undefined) => !!run?.startsWith('r');
 export function runLine(r: FileRun): string {
   if (r.state === 'waiting') return undoing(r.id) ? 'Waiting to undo' : 'Waiting';
   if (r.state === 'writing') return `${undoing(r.id) ? 'Undoing' : 'Writing'} ${r.done.toLocaleString()} of ${r.of.toLocaleString()}`;
-  // A Keep's or a move's files moved, its library reading the record (a5, 2026-11-02): where to, as its title says it.
+  // A Keep's or a move's files moved, its library reading the record (2026-11-02): where to, as its title says it.
   if (r.state === 'adding') return `Adding to ${r.title.match(/ into (.+?):/)?.[1] ?? 'its library'}…`;
   const when = r.at ? time(r.at) : '';
   if (r.undone) return ['Undone', when].filter(Boolean).join(' · ');
@@ -98,20 +119,25 @@ export function withRun(runs: readonly FileRun[], s: FileRun): FileRun[] {
   return [s, ...list];
 }
 
-/** The record's state line (its panel, under its title): its words, and what a tap does there. */
-export function stateLine(s: FilesState | null | undefined): { text: string; tone: 'warn' | null; act: 'review' | 'undo' | null; progress: number | null } | null {
+/** The record's state line (its panel, under its title): its words, what a tap does there, and the word that says it (`say`,
+ *  F27: Write, Review, Undo). */
+export function stateLine(
+  s: FilesState | null | undefined,
+): { text: string; tone: 'warn' | null; act: 'review' | 'undo' | null; say: 'Write' | 'Review' | 'Undo' | null; progress: number | null } | null {
   if (!s) return null;
   switch (s.state) {
-    case 'differs':
-      return { text: 'Its files differ from Cratarr', tone: null, act: 'review', progress: null };
+    case 'differs': {
+      const lack = lackWords(s.facts);
+      return { text: lack ? `Not in its files yet: ${lack}` : 'Not in its files yet', tone: null, act: 'review', say: 'Write', progress: null };
+    }
     case 'waiting':
-      return { text: undoing(s.run) ? 'Waiting to undo its files' : 'Waiting to write its files', tone: null, act: null, progress: null };
+      return { text: undoing(s.run) ? 'Waiting to undo its files' : 'Waiting to write its files', tone: null, act: null, say: null, progress: null };
     case 'writing':
-      return { text: `${undoing(s.run) ? 'Undoing' : 'Writing'} its files${s.of ? `, ${s.done ?? 0} of ${s.of}` : ''}`, tone: null, act: null, progress: s.of ? (s.done ?? 0) / s.of : 0 };
+      return { text: `${undoing(s.run) ? 'Undoing' : 'Writing'} its files${s.of ? `, ${s.done ?? 0} of ${s.of}` : ''}`, tone: null, act: null, say: null, progress: s.of ? (s.done ?? 0) / s.of : 0 };
     case 'written':
-      return { text: 'Its files written', tone: null, act: s.run ? 'undo' : null, progress: null };
+      return { text: 'Its files written', tone: null, act: s.run ? 'undo' : null, say: s.run ? 'Undo' : null, progress: null };
     case 'changed':
-      return { text: 'A file changed since it was planned', tone: 'warn', act: 'review', progress: null };
+      return { text: 'A file changed since it was planned', tone: 'warn', act: 'review', say: 'Review', progress: null };
   }
   return null;
 }

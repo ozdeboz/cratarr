@@ -45,7 +45,7 @@ Design choices made here:
 - **The capability `works`** (0085): the server lists it once it serves the endpoints below. Without it the composer's
   page is its records alone and albums are plain lists, as in 0.11; nothing is offered that the server cannot answer.
 
-## The API (a5's, written 2026-10-30)
+## The API (written 2026-10-30)
 
 - `GET /api/classical/composers/{key}/works` → `[{work, title, key?, catalogue?, parts, recordings}]`, beside 0.10's
   composer routes: the composer's top-level works (`work` its MusicBrainz id; `key` its musical key; `catalogue` its

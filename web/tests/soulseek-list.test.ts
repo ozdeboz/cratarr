@@ -3,14 +3,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { approvePayload, folderLine, itemLine, itemTone, searchable, tickable, underWay } = await import('../src/lib/soulseekRules.ts');
+const { approvePayload, folderLine, itemLine, itemTone, recordOf, searchable, tickable, underWay } = await import('../src/lib/soulseekRules.ts');
 
 const folder = (user: string, lossless = true) => ({ user, dir: `Music\\${user}\\Late Set`, format: lossless ? 'flac' : 'mp3', lossless, free_slot: true, queue: 0, speed: 2_500_000, extra: 0 });
 const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
   ({
     id,
-    record: { artist: 'M. Rivers', album: 'Late Set', release_group: 'rg', year: 1998 },
-    request: 7,
+    record: { record: 1, artist: 'M. Rivers', album: 'Late Set', year: 1998, request: 7 },
     state,
     folders: state === 'found' ? [folder('ann'), folder('bo', false)] : [],
     chosen: state === 'found' ? 0 : null,
@@ -22,8 +21,14 @@ const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
     ...extra,
   }) as Parameters<typeof itemLine>[0];
 
+test('a Soulseek row names its record as lists serve it; an item 0.16 kept names none', () => {
+  assert.equal(recordOf(item('a', 'found')), 'al-1');
+  assert.equal(recordOf(item('b', 'waiting', { record: { record: 0, artist: 'M. Rivers', album: 'Late Set', request: 7 } })), null);
+});
+
 test("a record's row says where it stands", () => {
   assert.equal(folderLine(folder('ann')), 'FLAC · free slot · 2.5 MB/s · ann');
+  assert.equal(folderLine({ ...folder('bob'), unchecked: 'No track lengths to check' }), 'No track lengths to check · FLAC · free slot · 2.5 MB/s · bob');
   assert.equal(itemLine(item('1', 'found')), 'M. Rivers · 1998 · FLAC · free slot · 2.5 MB/s · ann');
   assert.equal(itemLine(item('1', 'waiting')), 'M. Rivers · 1998 · Waiting to be searched');
   assert.equal(itemLine(item('1', 'waiting', { misses: 3, due: 1_000 + 86_400 }), 1_000), 'M. Rivers · 1998 · Not found · 3 times · again tomorrow');
@@ -65,4 +70,25 @@ test("the fetchers' lists show where each is connected; Soulseek's to administra
   assert.deepEqual(ids(true, true, ['soulseek']), ['waiting', 'mine', 'soulseek'], 'Soulseek without Lidarr');
   assert.deepEqual(ids(false, false, ['lidarr', 'soulseek']), ['mine', 'lidarr']);
   assert.deepEqual(ids(true, true, []), ['waiting', 'mine']);
+});
+
+test('a found record waiting for room or space says so; one picked by Cratarr reads as any picked one', () => {
+  const f = { user: 'peer-a', dir: 'Music\peer-a\Tide Tables', format: 'flac', lossless: true, free_slot: true, queue: 0, speed: 1_500_000, extra: 0 };
+  const glass = { record: 11, artist: 'Glass Harbour', album: 'Tide Tables', year: 2012, request: 7 };
+  assert.equal(itemLine(item('1', 'found', { record: glass, why: 'Waits for space', folders: [f], chosen: null })), 'Glass Harbour · 2012 · FLAC · free slot · 1.5 MB/s · peer-a · Waits for space');
+  assert.equal(itemLine(item('1', 'found', { record: glass, why: 'Waits for room', folders: [f], chosen: null })), 'Glass Harbour · 2012 · FLAC · free slot · 1.5 MB/s · peer-a · Waits for room');
+  assert.ok(tickable(item('1', 'found', { why: 'Waits for room', folders: [f] })), 'an administrator may still pick it');
+  // Picked by Cratarr (`auto`): the words of any picked record; waiting for its user's other record, said from the list.
+  const picked = item('2', 'approved', { record: glass, folders: [f], chosen: 0, auto: true });
+  const other = item('3', 'fetching', { folders: [f], chosen: 0, percent: 42 });
+  assert.equal(itemLine(picked), 'Glass Harbour · 2012 · To be fetched');
+  assert.equal(itemLine(picked, 0, [picked, other]), "Glass Harbour · 2012 · Waiting for peer-a's other record");
+  assert.equal(itemLine(item('4', 'fetching', { record: glass, folders: [f], chosen: 0, percent: 42, auto: true })), 'Glass Harbour · 2012 · Fetching · 42%');
+});
+
+test("a picked record held by the floor says so, never its user's other record (as its request reads it)", () => {
+  const f = { user: 'peer-a', dir: 'Music\peer-a\Tide Tables', format: 'flac', lossless: true, free_slot: true, queue: 0, speed: 1_500_000, extra: 0 };
+  const held = item('5', 'approved', { folders: [f], chosen: 0, why: 'The server is short of space', due: 0 });
+  const other = item('6', 'fetching', { folders: [f], chosen: 0, percent: 10 });
+  assert.equal(itemLine(held, 1_000, [held, other]), 'M. Rivers · 1998 · The server is short of space');
 });

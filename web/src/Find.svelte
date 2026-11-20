@@ -2,21 +2,22 @@
   // Find more music (the owner, 2026-10-25: where a search finds nothing anywhere in Cratarr, "Find More Music" closes
   // the search and loads a MusicBrainz query or fetch page): the words looked up beyond Cratarr (decision 0076: Beyond's
   // Show all; MusicBrainz and Discogs together, merged, each album's sources marked, Discogs' with its attribution; its
-  // albums and artists, the surest first, what the library has marked), more as it scrolls; each album to hear from
-  // Bandcamp where it is there (looked for when opened), else its menu to Want it. The words ride in the address
+  // albums and artists, the surest first, what the library has marked), more as it scrolls; each album opens its record's
+  // page (W9: a record not had, made one at open where none holds it yet; Want in its header). The words ride in the address
   // (`#/find?q=`); the pill's search asks again.
   import { searchBeyond, type BeyondFound } from './lib/api';
   import { wordHere } from './lib/addresses';
   import Cover from './lib/Cover.svelte';
   import CoverStatus from './lib/CoverStatus.svelte';
   import CoverBusy from './lib/CoverBusy.svelte';
-  import ElsewhereAlbum, { elsewhereKey } from './lib/ElsewhereAlbum.svelte';
-  import LinkSheet from './lib/LinkSheet.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import Row from './lib/Row.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import { pageView } from './lib/pageView.svelte';
-  import { goToArtist } from './lib/albums.svelte';
+  import { openArtistPage, openNotHad } from './lib/albums.svelte';
+  import { artistLabel, artistOpen } from './lib/artistIds';
+  import { beyondKey } from './lib/beyondRows';
+  import { toast } from './lib/toast.svelte';
 
   /** The words: the pill's while it searches, else the address's. */
   const fromAddress = () => wordHere('q') ?? '';
@@ -49,8 +50,8 @@
     };
   });
   type Album = BeyondFound['albums'][number];
-  // As lib/ElsewhereAlbum knows one while it is looked for and once asked for.
-  const keyOf = (a: Album) => elsewhereKey({ release_group: a.release_group ?? null, artist: a.artist, title: a.title });
+  /** A row's key: its record, else what its source knows it by (two of one name are two rows, C57; lib/beyondRows). */
+  const keyOf = (a: Album) => beyondKey(a);
   const SOURCE = { musicbrainz: 'MusicBrainz', discogs: 'Discogs' } as const;
   /** The next page, as the end of the list comes into sight (a server before 0.9.13 has one). */
   let more = false;
@@ -76,13 +77,22 @@
     return () => io.disconnect();
   }
 
-  // Opened: on Bandcamp in the panel, else its menu (lib/ElsewhereAlbum, as the global search's missing albums).
-  let elsewhere = $state<ElsewhereAlbum>();
+  // Opened: its record's page (W9, lib/openRecord), made one first where no record holds it yet.
   let finding = $state<string | null>(null);
-  let asked = $state<string[]>([]);
-  const open = (a: Album) =>
-    elsewhere?.open({ release_group: a.release_group ?? null, title: a.title, artist: a.artist, year: a.year, cover: a.cover, have: a.have, bandcamp: a.bandcamp ?? null, discogs_url: a.discogs_url ?? null });
-  let link = $state<{ url: string; name: string } | null>(null);
+  async function open(a: Album) {
+    if (finding) return;
+    finding = keyOf(a);
+    try {
+      await openNotHad({ record: a.record, release_group: a.release_group, discogs_master: a.discogs, title: a.title, artist: a.artist, year: a.year, bandcamp: a.bandcamp });
+    } catch (e) {
+      toast.fail(e, "It couldn't be opened");
+    } finally {
+      finding = null;
+    }
+  }
+  /** An artist opened (W10): their page, by their id where Cratarr has them, else opened by their MusicBrainz id. */
+  const openArtist = (x: BeyondFound['artists'][number]) =>
+    openArtistPage(artistOpen({ id: x.artist, mbid: x.mbid, name: x.name })).catch((e) => toast.fail(e, "Their page couldn't be opened"));
 </script>
 
 <main>
@@ -103,9 +113,9 @@
           <li>
             <Row
               size="large"
-              title={x.name}
+              title={artistLabel(x.name, x.number, found.r.artists.map((a) => a.name))}
               label={`Open ${x.name}`}
-              onclick={() => (x.have ? goToArtist('cratarr', x.name) : (link = { url: `https://musicbrainz.org/artist/${x.mbid}`, name: 'MusicBrainz' }))}
+              onclick={() => openArtist(x)}
             >
               {#snippet sub()}{x.disambiguation ?? ''}{#if x.have}<span class="have">{x.disambiguation ? ' · ' : ''}in your library</span>{/if}{/snippet}
             </Row>
@@ -119,8 +129,8 @@
         {#each found.r.albums as a (keyOf(a))}
           <li>
             <Row size="large" title={a.title} label={`Open ${a.title}`} onclick={() => open(a)}>
-              {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(keyOf(a)) ? { state: 'wanted' } : null)} small />{#if finding === keyOf(a)}<CoverBusy small />{/if}</span>{/snippet}
-              {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''} · {a.sources.map((x) => SOURCE[x]).join(' · ')}{#if a.have}<span class="have"> · in your library</span>{:else if asked.includes(keyOf(a))}<span class="have"> · asked for</span>{/if}{/snippet}
+              {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? null} small />{#if finding === keyOf(a)}<CoverBusy small />{/if}</span>{/snippet}
+              {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''} · {a.sources.map((x) => SOURCE[x]).join(' · ')}{#if a.have}<span class="have"> · in your library</span>{/if}{/snippet}
             </Row>
           </li>
         {/each}
@@ -132,8 +142,6 @@
   {/if}
 </main>
 
-<ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
-{#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
 
 <style>
   main {

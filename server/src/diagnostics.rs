@@ -752,6 +752,46 @@ pub(crate) struct TestLogging {
     _beside: tracing::Dispatch,
 }
 
+/// The events `f` logs on this thread at info and above, in order, each a line "<target>: <message>" and its fields as
+/// " <name>=<value>": what a test reads of the log (through `log_here`).
+#[cfg(test)]
+pub(crate) fn logged_lines(f: impl FnOnce()) -> Vec<String> {
+    use tracing_subscriber::layer::SubscriberExt;
+    struct Line(String, String);
+    impl Visit for Line {
+        fn record_str(&mut self, f: &Field, v: &str) {
+            match f.name() {
+                "message" => self.0 = v.to_string(),
+                name => self.1.push_str(&format!(" {name}={v}")),
+            }
+        }
+        fn record_debug(&mut self, f: &Field, v: &dyn std::fmt::Debug) {
+            match f.name() {
+                "message" => self.0 = format!("{v:?}"),
+                name => self.1.push_str(&format!(" {name}={v:?}")),
+            }
+        }
+    }
+    struct Lines(Arc<Mutex<Vec<String>>>);
+    impl<S: Subscriber> Layer<S> for Lines {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            if *event.metadata().level() > Level::INFO {
+                return;
+            }
+            let mut line = Line(String::new(), String::new());
+            event.record(&mut line);
+            self.0.lock().unwrap().push(format!("{}: {}{}", event.metadata().target(), line.0, line.1));
+        }
+    }
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    {
+        let _logging = log_here(tracing_subscriber::registry().with(Lines(lines.clone())));
+        f();
+    }
+    let said = lines.lock().unwrap().clone();
+    said
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -131,7 +131,7 @@ export function accountLearnt(name: string | null) {
 }
 
 /** Signing out here: nobody's from now on, so what is made before the next /api/me answers is no one's, never the one
- *  signed out's (632's review, 2026-11-02). */
+ *  signed out's (a review, 2026-11-02). */
 export function accountForgotten() {
   learnt = false;
   set(null);
