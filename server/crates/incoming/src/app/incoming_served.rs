@@ -17,6 +17,10 @@ impl Incoming for IncomingService {
         IncomingService::folders_off(self, without)
     }
 
+    fn folder_rules(&self) -> crate::catalogue::FolderRules {
+        IncomingService::folder_rules(self)
+    }
+
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
         self
     }

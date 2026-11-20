@@ -78,13 +78,25 @@ pub struct LibrarySetting {
     /// Its quality limit on the way in (decision 0096's amendment); none: its kind's (`LibraryKind::quality`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<Quality>,
+    /// How its files write several values in one tag (GEN-DESIGN §4, OQ-GEN-22: its tag rules, its own since 0.18). Every
+    /// library in a saved file holds one: the upgrade gave each a copy of the install's (`load`), and a save gives a new
+    /// library the default as it stands then (`fill_tag_rules`). None only on the way in, from a page or a 0.17 file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_rules: Option<crate::catalogue::Encoding>,
 }
 
 impl LibrarySetting {
     /// A library of `kind` with nothing of its own set.
     pub fn new(id: impl Into<String>, kind: LibraryKind) -> Self {
-        Self { id: id.into(), kind, fetcher: None, keep_to: None, name: None, colour: None, quality: None }
+        Self { id: id.into(), kind, fetcher: None, keep_to: None, name: None, colour: None, quality: None, tag_rules: None }
     }
+}
+
+/// Each library of `sources` without tag rules of its own gets them (OQ-GEN-22): the same library's in `saved` (a page
+/// that sent none kept them), else a copy of `default` as it stands now, so a later change of the default leaves it as it
+/// was (GEN.63).
+pub fn fill_tag_rules(sources: &mut [SourceConfig], saved: &[SourceConfig], default: &crate::catalogue::Encoding) {
+    let _ = (sources, saved, default);
 }
 
 /// What a library is (0101 point 1). The settings' list holds main and Incoming libraries; each account's own music
@@ -295,8 +307,9 @@ fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D:
     })
 }
 
-/// The file as written since 0.16 (version 4). Version 2 files may still hold a `folders` list (before decision 0009),
-/// which is ignored; before version 4 a source's libraries are their roles (`Libraries`).
+/// The file as written since 0.18 (version 5: each library its own tag rules, OQ-GEN-22), 0.16's (version 4) before. Version
+/// 2 files may still hold a `folders` list (before decision 0009), which is ignored; before version 4 a source's libraries
+/// are their roles (`Libraries`).
 #[derive(Serialize, Deserialize)]
 struct File {
     version: u32,
@@ -419,6 +432,8 @@ pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<
     let json: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
     if json.get("version").is_some() {
         let f: File = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
+        // 0.18's step (GEN.62): each library a copy of the install's one set, which stays the default, the aliases with it.
+        // Nothing reads differently by it; read again, there is nothing left to copy.
         return Ok(Some(Saved {
             sources: f.sources,
             music_folder: f.music_folder,
@@ -475,6 +490,31 @@ pub fn libraries_migration(path: &Path) -> Result<Option<serde_json::Value>> {
     })))
 }
 
+/// The file's version as written now (`File`).
+pub const VERSION: u32 = 5;
+
+/// A file from before 0.18 (version 4 and older), its libraries each given a copy of the install's tag rules (OQ-GEN-22,
+/// GEN.62): the migration report's "tag rules" part, how many libraries got one, and the encoding they and the default hold.
+/// None when the file holds them already (version 5), or no list (the flat format).
+pub fn tag_rules_migration(path: &Path) -> Result<Option<serde_json::Value>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+    };
+    let json: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
+    if json.get("version").and_then(serde_json::Value::as_u64).is_none_or(|v| v >= u64::from(VERSION)) {
+        return Ok(None);
+    }
+    let f: File = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
+    let libraries: usize = f.sources.iter().map(|s| s.libraries.0.iter().filter(|l| l.tag_rules.is_none()).count()).sum();
+    Ok(Some(serde_json::json!({
+        "tables": [{ "name": "settings: libraries with tag rules of their own", "before": 0, "after": libraries }],
+        "unmatched": [],
+        "copied": f.tag_rules.encoding,
+    })))
+}
+
 /// Write atomically (temporary file, then rename), readable by the owner only: it holds secrets.
 pub fn save(path: &Path, saved: &Saved) -> Result<()> {
     use std::io::Write;
@@ -488,7 +528,7 @@ pub fn save(path: &Path, saved: &Saved) -> Result<()> {
     }
     let mut f = opts.open(&tmp).with_context(|| format!("cannot write {}", tmp.display()))?;
     let body = File {
-        version: 4,
+        version: VERSION,
         sources: saved.sources.clone(),
         music_folder: saved.music_folder.clone(),
         tag_rules: saved.tag_rules.clone(),
@@ -578,6 +618,11 @@ mod tests {
 
     fn list(entries: &[(&str, LibraryKind)]) -> Libraries {
         Libraries(entries.iter().map(|(id, k)| LibrarySetting::new(*id, *k)).collect())
+    }
+
+    /// As a file read holds them: each library with tag rules of its own (here the default's, as the step copies them).
+    fn read_list(entries: &[(&str, LibraryKind)]) -> Libraries {
+        Libraries(list(entries).0.into_iter().map(|l| LibrarySetting { tag_rules: Some(Default::default()), ..l }).collect())
     }
 
     #[test]
@@ -692,7 +737,7 @@ mod tests {
         assert_eq!(load(&path, &none).unwrap(), None);
         let s = vec![jf("jellyfin", "http://jf:8096", Some("k"))];
         let mut s = s;
-        s[0].libraries = list(&[("m", LibraryKind::Main), ("i1", LibraryKind::Incoming), ("i2", LibraryKind::Incoming)]);
+        s[0].libraries = read_list(&[("m", LibraryKind::Main), ("i1", LibraryKind::Incoming), ("i2", LibraryKind::Incoming)]);
         let lidarr = Some(LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into(), enabled: true, ..Default::default() });
         let saved = Saved {
             sources: s,
@@ -725,14 +770,15 @@ mod tests {
         .unwrap();
         let report = libraries_migration(&path).unwrap().expect("a file before 0.16");
         let s = load(&path, &env_of(&[])).unwrap().unwrap();
-        let main = |id: &str| LibrarySetting::new(id, LibraryKind::Main);
+        // Each with the install's tag rules too, read as 0.18's step copies them (GEN.62).
+        let main = |id: &str| LibrarySetting { tag_rules: Some(Default::default()), ..LibrarySetting::new(id, LibraryKind::Main) };
         assert_eq!(
             s.sources[0].libraries.0,
             [
                 main("/b"),
                 // In both: Music's, and a fetcher only an Incoming library's.
                 LibrarySetting { name: Some("Vinyl".into()), ..main("/a") },
-                LibrarySetting { fetcher: Some("lidarr".into()), colour: Some("#112233".into()), quality: Some(Quality::Cd), ..LibrarySetting::new("/in", LibraryKind::Incoming) },
+                LibrarySetting { kind: LibraryKind::Incoming, fetcher: Some("lidarr".into()), colour: Some("#112233".into()), quality: Some(Quality::Cd), ..main("/in") },
             ],
             "Music's first in their order, then Incoming's"
         );
@@ -750,7 +796,7 @@ mod tests {
         )
         .unwrap();
         let s = load(&path, &env_of(&[])).unwrap().unwrap();
-        assert_eq!(s.sources[0].libraries, list(&[("a", LibraryKind::Main), ("b", LibraryKind::Incoming)]));
+        assert_eq!(s.sources[0].libraries, read_list(&[("a", LibraryKind::Main), ("b", LibraryKind::Incoming)]));
         assert_eq!(s.sources[1].libraries, Libraries::default());
         assert_eq!(s.music_folder, None);
         std::fs::remove_dir_all(&d).ok();

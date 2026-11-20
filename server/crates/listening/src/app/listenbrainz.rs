@@ -202,7 +202,7 @@ fn listens_in(t: &Result<Tally>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalogue::{Catalogue, Rules, ServedRow};
+    use crate::catalogue::{Catalogue, FolderRules, Rules, ServedRow};
     use crate::serve::library::FolderRows;
     use crate::userdata::Heard;
 
@@ -221,7 +221,7 @@ mod tests {
         serve.attach_catalogue(cat);
         let tags = [("title", "Hunter"), ("artist", "Björk"), ("albumartist", "Björk"), ("album", "Homogenic"), ("date", "1997"), ("tracknumber", "1")];
         let row = ServedRow { rel: file.into(), track: Some(track), size: 1, mtime: 1, tags: tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..ServedRow::default() };
-        serve.library.refresh(&[FolderRows { folder: 0, root: d.display().to_string(), rows: vec![row] }], &Rules::default()).unwrap();
+        serve.library.refresh(&[FolderRows { folder: 0, root: d.display().to_string(), rows: vec![row] }], &FolderRules::default()).unwrap();
         let song = crate::serve::ids::song(track);
         let mut songs = Matcher::default();
         songs.add(&song, "Hunter", Some("Björk"), "Homogenic", None, Some(250.0));

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::catalogue::{Catalogue, Rules};
+use crate::catalogue::{Catalogue, FolderRules};
 use crate::journal::Journal;
 use crate::moved::Report;
 use crate::serve::copies::Kind;
@@ -28,7 +28,8 @@ pub(super) struct FirstStart {
     pub data: Option<PathBuf>,
     /// Each catalogue folder's library, in the libraries' order.
     pub kinds: Vec<(i64, Kind)>,
-    pub rules: Rules,
+    /// Each catalogue folder's tag rules (OQ-GEN-22), as the library's builds read them.
+    pub rules: FolderRules,
 }
 
 impl FirstStart {
@@ -164,7 +165,7 @@ mod tests {
                 userdata: Arc::new(UserData::open(Some(&self.data.join("userdata.sqlite"))).unwrap()),
                 data: Some(self.data.clone()),
                 kinds: vec![(0, Kind::Main), (1, Kind::Incoming), (2, Kind::Incoming)],
-                rules: Rules::default(),
+                rules: FolderRules::default(),
             }
         }
 
@@ -639,7 +640,7 @@ mod tests {
             userdata: Arc::new(UserData::open(Some(&d.join("userdata.sqlite"))).unwrap()),
             data: Some(d.clone()),
             kinds: vec![(0, Kind::Main)],
-            rules: Rules::default(),
+            rules: FolderRules::default(),
         };
         start.steps(&|_| Ok(())).unwrap();
         assert!(start.userdata.first_start_done().unwrap());

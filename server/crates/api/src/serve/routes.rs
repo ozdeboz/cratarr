@@ -821,7 +821,7 @@ fn annotate_artists(serve: &Serve, user: &str, artists: &mut [Artist]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalogue::{Catalogue, Rules, ServedRow};
+    use crate::catalogue::{Catalogue, FolderRules, Rules, ServedRow};
     use crate::userdata::AppQueue;
     use crate::serve::library::FolderRows;
 
@@ -855,7 +855,7 @@ mod tests {
                 ("genre", "Electronic"),
             ])
         };
-        serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![t(1, "Hunter"), t(2, "Jóga")] }], &Rules::default()).unwrap();
+        serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![t(1, "Hunter"), t(2, "Jóga")] }], &FolderRules::default()).unwrap();
         serve.users.set("me", "pw").unwrap();
         serve.sessions.set_required(false).unwrap();
         let me = serve.users.check(Some("me"), None, None, Some("pw")).unwrap();

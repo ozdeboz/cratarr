@@ -594,7 +594,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::catalogue::{Catalogue, Rules, ServedRow};
+    use crate::catalogue::{Catalogue, FolderRules, Rules, ServedRow};
     use crate::serve::library::FolderRows;
     use crate::source::{ArtistRef, Choice, FavoriteGroups, Library, Playing, PlaylistEvent, Status, Track, TrackDataPage};
     use crate::userdata::Annotation;
@@ -759,7 +759,7 @@ mod tests {
             ..ServedRow::default()
         };
         let rows = vec![tagged(0, "Björk", "Homogenic", "1997"), tagged(1, "Björk", "Homogenic", "1997"), tagged(2, "The Orb", "Adventures", "1991")];
-        serve.library.refresh(&[FolderRows { folder: 0, root: d.display().to_string(), rows }], &Rules::default()).unwrap();
+        serve.library.refresh(&[FolderRows { folder: 0, root: d.display().to_string(), rows }], &FolderRules::default()).unwrap();
         serve.users.set("me", "pw").unwrap();
         serve.sessions.set_required(false).unwrap();
         (d, serve, tracks.map(ids::song))

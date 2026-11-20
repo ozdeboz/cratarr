@@ -33,7 +33,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 pub use first::{First, FirstAlbums};
-pub use normalise::Rules;
+pub use normalise::{Encoding, FolderRules, Rules};
 
 use crate::source::Source;
 
@@ -666,6 +666,8 @@ const ADDED_COLUMNS: [(&str, &str); 46] = [
 struct KeptFacts {
     written: u64,
     folders: InUse,
+    /// The folders' tag rules they were split by: other rules read them again at once.
+    rules: FolderRules,
     built: i64,
     words: i64,
     /// The classical marks as read (0.10): a mark reads them again at once.
@@ -861,6 +863,8 @@ pub struct AlbumFact {
 /// One file as Insights counts it (see `Catalogue::track_rows`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrackRow {
+    /// Its catalogue folder: whose tag rules its tags are read by (OQ-GEN-22).
+    pub folder: i64,
     /// Relative to its folder; for the Music folder, the same text as a playlist line.
     pub rel: String,
     /// Upper case: "FLAC", "MP3".
@@ -882,17 +886,22 @@ impl TrackRow {
         self.tags.iter().filter(move |(n, _)| n == name).map(|(_, v)| v.as_str())
     }
 
-    /// The artists of `field` (`artist` or `albumartist`), split per `rules`: from its list tag (`artists`,
+    /// The artists of `field` (`artist` or `albumartist`), split per its folder's `rules`: from its list tag (`artists`,
     /// `albumartists`) when the file has one, since that names each artist apart while the text tag holds the credit
     /// as written ("King Tubby meets Lee 'Scratch' Perry", decision 0016); else from the text tag.
-    pub fn artists(&self, rules: &Rules, field: &str) -> Vec<String> {
+    pub fn artists(&self, rules: &FolderRules, field: &str) -> Vec<String> {
         let list = match field {
             "albumartist" => "albumartists",
             "artist" => "artists",
             other => other,
         };
         let from = if self.tag(list).next().is_some() { list } else { field };
-        rules.values(from, &self.tag(from).map(str::to_string).collect::<Vec<_>>())
+        self.values(rules, from)
+    }
+
+    /// The values of one of its tags, as its folder's `rules` read them.
+    pub fn values(&self, rules: &FolderRules, field: &str) -> Vec<String> {
+        rules.values(self.folder, field, &self.tag(field).map(str::to_string).collect::<Vec<_>>())
     }
 }
 
@@ -1070,6 +1079,9 @@ pub struct Catalogue {
     worked: std::sync::atomic::AtomicU64,
     /// The crates' facts, as of what was written to them and the folders in use (see `crate_facts`).
     facts: Mutex<Option<KeptFacts>>,
+    /// Each folder's tag rules (OQ-GEN-22), as the library last set them (`set_folder_rules`): how the crates' facts split a
+    /// file's words fields, by its library's encoding.
+    folder_rules: RwLock<FolderRules>,
     /// Rows written to what the crates' facts are read from (`count_facts_writes`).
     facts_written: Arc<AtomicU64>,
     /// Its track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while the user
@@ -1165,6 +1177,7 @@ impl Catalogue {
             told: Default::default(),
             worked: Default::default(),
             facts: Mutex::default(),
+            folder_rules: RwLock::default(),
             facts_written,
             ids_lost: Default::default(),
             moving: Default::default(),
@@ -1255,6 +1268,17 @@ impl Catalogue {
 
     pub fn folders(&self) -> InUse {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// Each folder's tag rules (OQ-GEN-22), as last set: the crates' facts split each file's words fields by its own.
+    pub fn folder_rules(&self) -> FolderRules {
+        self.folder_rules.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// Each folder's tag rules from now on (the library sets them at a start and the served library at each check, so a
+    /// library's rules saved in Settings reach the crates' facts at their next read).
+    pub fn set_folder_rules(&self, rules: FolderRules) {
+        *self.folder_rules.write().unwrap_or_else(|p| p.into_inner()) = rules;
     }
 
     /// How many tracks each folder in use holds (decision 0044: a folder's row), with its path.
@@ -1787,11 +1811,13 @@ impl Catalogue {
         // Read again when the library is built again too: its albums' release types (0.9.6) come from there.
         let served = crate::serve::view::get();
         let (written, folders, built) = (self.facts_written.load(Ordering::Relaxed), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
+        let rules = self.folder_rules();
         let words = served.as_ref().map_or(0, |s| said_stamp(s));
         let marks = served.as_ref().map_or(0, |s| s.userdata().marks_stamp().unwrap_or(0));
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(k) = kept.as_ref()
             && k.folders == folders
+            && k.rules == rules
             && k.built == built
             && k.marks == marks
             // A write to what they are read from or a word harvested reads them again only every so often (0.9.7: a
@@ -1822,8 +1848,8 @@ impl Catalogue {
             }
         }
         let mut facts = match &reader {
-            Some(c) => Self::read_crate_facts(c, &folders, &several)?,
-            None => Self::read_crate_facts(&self.db(), &folders, &several)?,
+            Some(c) => Self::read_crate_facts(c, &folders, &rules, &several)?,
+            None => Self::read_crate_facts(&self.db(), &folders, &rules, &several)?,
         };
         drop(reader);
         if let Some(s) = &served
@@ -1868,14 +1894,14 @@ impl Catalogue {
         }
         let facts = Arc::new(facts);
         drop(was);
-        *kept = Some(KeptFacts { written, folders, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
+        *kept = Some(KeptFacts { written, folders, rules, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
         Ok(facts)
     }
 
     /// One `Facts` a track: `several` holds each track with more than one file present, by the place its row copy has in the
     /// library (none: the first by folder). The other files lend their lines and folders and are read no further, so a
     /// second copy costs no memory here: this read is what the 768 MB limit is tightest on.
-    fn read_crate_facts(db: &Connection, folders: &InUse, several: &HashMap<i64, Option<Place>>) -> Result<Vec<crate::crates::Facts>> {
+    fn read_crate_facts(db: &Connection, folders: &InUse, rules: &FolderRules, several: &HashMap<i64, Option<Place>>) -> Result<Vec<crate::crates::Facts>> {
         // Every file present, newest first, with its track (the one similarity finds a file by it, heard or not), its
         // length and its format and bitrate (the crates' Length and Quality).
         type File = (i64, String, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<i64>);
@@ -1991,8 +2017,9 @@ impl Catalogue {
                 let (mut genres, mut artists): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
                 // The tags' own artists list (ARTISTS), where the file has one: credited, not shown (decision 0083).
                 let mut listed: Vec<String> = Vec::new();
-                // The file's own moods, styles and grouping (0.9.7, the library's words), each value split where it
-                // holds several ("Chill; Dreamy").
+                // The file's genres, moods, styles and grouping (0.9.7, the library's words), each value split by the one
+                // split, by its library's encoding (GEN.5: the four fields alike, the owner's exceptions first).
+                let _ = rules;
                 let (mut file_moods, mut file_styles, mut file_tags): (Vec<String>, Vec<String>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
                 for (n, v) in &tags {
                     let (into, parts): (&mut Vec<String>, Vec<&str>) = match n.as_str() {
@@ -2349,6 +2376,7 @@ impl Catalogue {
         let mut st = db.prepare(&format!("SELECT rel, format, bitrate, duration_ms, size FROM files WHERE folder = ?1 AND {PRESENT}"))?;
         let files = st.query_map(params![folder], |r| {
             Ok(TrackRow {
+                folder,
                 rel: r.get(0)?,
                 format: r.get::<_, Option<String>>(1)?.map(|f| f.to_uppercase()),
                 kbps: r.get::<_, Option<i64>>(2)?.filter(|k| *k > 0).map(|k| k as u32),
@@ -2711,9 +2739,10 @@ impl Catalogue {
     /// The artist tags of each file a live track keeps out of sight (RF16, the review of run 13, SA1): in a trash, in a parked
     /// library, or gone a while, each file's `artist`, `artists`, `albumartist` and `albumartists` values in their order. What retention
     /// keeps an artist by beside the library's credits, which leave those files out, so an Undo or a library brought back finds its
-    /// guests as themselves. On a reader where there is one. Blocking.
-    pub fn artist_tags_set_aside(&self) -> Result<Vec<Vec<(String, String)>>> {
-        let read = |db: &Connection| -> Result<Vec<Vec<(String, String)>>> {
+    /// guests as themselves. Each with its folder, whose library's tag rules read it (OQ-GEN-22). On a reader where there is
+    /// one. Blocking.
+    pub fn artist_tags_set_aside(&self) -> Result<Vec<(i64, Vec<(String, String)>)>> {
+        let read = |db: &Connection| -> Result<Vec<(i64, Vec<(String, String)>)>> {
             let mut st = db.prepare(
                 "SELECT t.folder, t.rel, t.name, t.value FROM files f JOIN tracks k ON k.id = f.track AND k.retired_at IS NULL
                  JOIN tags t ON t.folder = f.folder AND t.rel = f.rel
@@ -2721,15 +2750,15 @@ impl Catalogue {
                  ORDER BY t.folder, t.rel, t.n",
             )?;
             let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
-            let mut out: Vec<Vec<(String, String)>> = Vec::new();
+            let mut out: Vec<(i64, Vec<(String, String)>)> = Vec::new();
             let mut at: Option<(i64, String)> = None;
             for row in rows {
                 let (folder, rel, name, value) = row?;
                 if at.as_ref() != Some(&(folder, rel.clone())) {
-                    out.push(Vec::new());
+                    out.push((folder, Vec::new()));
                     at = Some((folder, rel));
                 }
-                if let Some(file) = out.last_mut() {
+                if let Some((_, file)) = out.last_mut() {
                     file.push((name, value));
                 }
             }
@@ -7861,6 +7890,62 @@ mod tests {
         (root, cat)
     }
 
+    /// GEN.5: a file's four words fields (GENRE, STYLE, MOOD, Grouping) split alike, by the one split, by the rules of the
+    /// library that holds it (OQ-GEN-22: its folder's, through the folder rules): MUSIC with GEN.3's rules ("/", ";", ",";
+    /// the canon-tags keep list), ARCHIVE with ";" alone.
+    #[test]
+    fn a_files_four_fields_split_by_its_librarys_rules() {
+        let root = music();
+        let (m, archive) = (root.join("Music"), root.join("Archive"));
+        for dir in [&m, &archive] {
+            std::fs::create_dir_all(dir.join("A")).unwrap();
+            std::fs::write(dir.join("A/01.flac"), "a").unwrap();
+        }
+        let cat = Catalogue::open(None, vec![m, archive]).unwrap();
+        cat.walk_all();
+        for (folder, track) in [(0, 51), (1, 52)] {
+            cat.db().execute("INSERT INTO tracks (id, born) VALUES (?1, 5)", params![track]).unwrap();
+            cat.give_track_for_tests(folder, "A/01.flac", track);
+            cat.tag_for_tests(folder, "A/01.flac", &[("genre", "Electronic/Deep House"), ("style", "Cut-up/DJ; Abstract"), ("mood", "Techno, & melancholic"), ("grouping", "RnB/Swing")]);
+        }
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        let music_rules = Encoding { genre_keep: s(&["Folk, World, & Country", "Funk / Soul"]), ..Encoding::default() };
+        let archive_rules = Encoding { genre_separators: s(&[";"]), genre_keep: s(&["RnB/Swing"]), ..Encoding::default() };
+        cat.set_folder_rules(FolderRules::new(Rules::default(), BTreeMap::from([(0, music_rules), (1, archive_rules)])));
+        let facts = cat.crate_facts().unwrap();
+        let of = |track: i64| facts.iter().find(|f| f.track == Some(track)).unwrap();
+        // (genres, styles, moods, grouping) as each file's library reads them, before the sort.
+        let fields = |track: i64| {
+            let f = of(track);
+            let (styles, moods) = f.file_words.as_deref().cloned().unwrap_or_default();
+            (f.genres.clone(), styles, moods, f.tags.clone())
+        };
+        let (music_words, archive_words) = (fields(51), fields(52));
+        assert_eq!(
+            music_words,
+            (s(&["Electronic", "Deep House"]), s(&["Turntablism", "Abstract"]), s(&["Techno", "melancholic"]), s(&["R&B", "New Jack Swing"])),
+            "MUSIC's file: its four fields by its rules, the \",\" split dropping the \"&\""
+        );
+        assert_eq!(
+            archive_words,
+            (s(&["Electronic/Deep House"]), s(&["Turntablism", "Abstract"]), s(&["Techno, & melancholic"]), s(&["R&B", "New Jack Swing"])),
+            "ARCHIVE's file: \";\" alone, the owner's exceptions first all the same"
+        );
+        // Never: "DJ", "Swing" or a leading "&" made in either; a file read by another library's rules.
+        for (name, (genres, styles, moods, grouping)) in [("MUSIC", &music_words), ("ARCHIVE", &archive_words)] {
+            for w in genres.iter().chain(styles).chain(moods).chain(grouping) {
+                assert!(!["DJ", "Swing", "Cut-up", "RnB"].contains(&w.as_str()) && !w.starts_with('&'), "{name}: {w:?}");
+            }
+        }
+        assert!(!archive_words.0.iter().any(|g| g == "Electronic" || g == "Deep House"), "never MUSIC's rules on ARCHIVE's file");
+        assert!(!music_words.0.iter().any(|g| g == "Electronic/Deep House"), "never ARCHIVE's rules on MUSIC's file");
+        // A change of a library's rules reads its files again at once (GEN.7): ARCHIVE's now "/" too.
+        let archive_slash = Encoding { genre_separators: s(&[";", "/"]), ..Encoding::default() };
+        cat.set_folder_rules(FolderRules::new(Rules::default(), BTreeMap::from([(0, Encoding::default()), (1, archive_slash)])));
+        assert_eq!(cat.crate_facts().unwrap().iter().find(|f| f.track == Some(52)).unwrap().genres, ["Electronic", "Deep House"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn a_track_in_two_folders_is_one_fact() {
         let (root, cat) = one_track_twice();
@@ -7872,15 +7957,15 @@ mod tests {
         assert_eq!((f.track, f.genres.as_slice(), f.energy), (Some(77), ["Dub".to_string()].as_slice(), Some(50.0)), "the facts of the one it is read from");
         // With a library, the row copy's, wherever that lies.
         let row = HashMap::from([(77, Some((1, "A/01.mp3".to_string())))]);
-        let read = Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &row).unwrap();
+        let read = Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &cat.folder_rules(), &row).unwrap();
         assert_eq!((read.len(), read[0].rel.as_str(), read[0].lines.as_slice(), read[0].folders.as_slice()), (1, "../own/A/01.mp3", ["A/01.mp3".to_string()].as_slice(), [1, 0].as_slice()));
         assert_eq!(read[0].genres, ["Jazz"]);
         // A row the catalogue no longer has: the first by folder, never nothing.
         let gone = HashMap::from([(77, Some((1, "Gone/01.mp3".to_string())))]);
-        assert_eq!(Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &gone).unwrap()[0].rel, "A/01.mp3");
+        assert_eq!(Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &cat.folder_rules(), &gone).unwrap()[0].rel, "A/01.mp3");
         // Two files of no track are two.
         cat.db().execute("UPDATE files SET track = NULL", []).unwrap();
-        assert_eq!(Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &HashMap::new()).unwrap().len(), 2);
+        assert_eq!(Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &cat.folder_rules(), &HashMap::new()).unwrap().len(), 2);
         std::fs::remove_dir_all(&root).ok();
     }
 

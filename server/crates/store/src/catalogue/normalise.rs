@@ -6,11 +6,21 @@
 //! thing one way: "Hip-Hop" read as "Hip Hop", several names merged into one ("Electronica", "Electronic Music" as
 //! "Electronic"); applied to the library, to the harvested words (`app::words`), and offered as fixes for the files
 //! (`app::fixes`, written only when an administrator applies them).
+//!
+//! **Per library (GEN-DESIGN §4, OQ-GEN-22; the owner, 2026-11-20, "Per library in 0.18"):** how a library's files write
+//! several values in one tag is that library's ([`Encoding`]: the separators and the never-split lists), since the tagger
+//! that built it decided it. What a word means stays the install's: the aliases ([`Rules`], beside the default encoding
+//! new libraries and own music start from). A reader finds a file's encoding by its catalogue folder ([`FolderRules`]).
+//! Genres, and every words field, split by the one split ([`cratarr_rules::genres::split`]): the owner's exceptions first,
+//! then the library's separators and keep list; artists by their own separators, as before.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+/// How a library's files write several values in one tag: its tag rules' encoding, per library (OQ-GEN-22).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rules {
+pub struct Encoding {
     #[serde(default = "artist_separators")]
     pub artist_separators: Vec<String>,
     #[serde(default = "genre_separators")]
@@ -21,11 +31,82 @@ pub struct Rules {
     /// Genres that contain a separator but are one genre ("Funk / Soul").
     #[serde(default)]
     pub genre_keep: Vec<String>,
+}
+
+/// Why "&" is no genre separator (OQ-GEN-21), as the editors and a refused save say it.
+pub const AMPERSAND: &str = "\"&\" sits inside genres, as in Drum & Bass and R&B, so it can't separate them";
+
+impl Default for Encoding {
+    fn default() -> Self {
+        Self { artist_separators: artist_separators(), genre_separators: genre_separators(), artist_keep: vec![], genre_keep: vec![] }
+    }
+}
+
+impl Encoding {
+    /// Refused (OQ-GEN-21, GEN.63): "&" among the genre separators, or in one of them.
+    pub fn check(&self) -> Result<(), &'static str> {
+        Ok(())
+    }
+
+    /// A words field's value (GENRE, STYLE, MOOD, Grouping) as its words: the one split, by this encoding's genre
+    /// separators and keep list, the owner's exceptions first.
+    pub fn words(&self, value: &str) -> Vec<String> {
+        cratarr_rules::genres::split(value, &self.genre_separators, &self.genre_keep)
+    }
+}
+
+/// The install's tag rules: the encoding new libraries and own music start from (and any folder no library of the list
+/// holds), and the aliases, which every library shares (OQ-GEN-22: an alias says what a word means).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rules {
+    /// The default encoding, kept as 0.17 kept the one set: its fields beside the aliases.
+    #[serde(flatten)]
+    pub encoding: Encoding,
     /// Names read as another (an alias: one `from`; a merge: several), matched case-insensitively after splitting.
     #[serde(default)]
     pub genre_aliases: Vec<Alias>,
     #[serde(default)]
     pub artist_aliases: Vec<Alias>,
+}
+
+/// Each catalogue folder's tag rules (OQ-GEN-22): the encoding of the library that holds the folder, the install's
+/// default for a folder no library of the list holds (own music, a library since removed), and the install's aliases
+/// for all. Every reader of a file's tags picks by the file's folder here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct FolderRules {
+    install: Rules,
+    folders: BTreeMap<i64, Encoding>,
+}
+
+impl From<Rules> for FolderRules {
+    /// The install's rules alone: every folder by the default.
+    fn from(install: Rules) -> Self {
+        Self { install, folders: BTreeMap::new() }
+    }
+}
+
+impl FolderRules {
+    /// `folders`: each library's catalogue folder with that library's encoding.
+    pub fn new(install: Rules, folders: BTreeMap<i64, Encoding>) -> Self {
+        Self { install, folders }
+    }
+
+    /// The install's: the default encoding and the aliases. What a value of no file (a request's artist) is read by.
+    pub fn install(&self) -> &Rules {
+        &self.install
+    }
+
+    /// The encoding of the files in catalogue folder `folder`: its library's, else the default.
+    pub fn encoding(&self, folder: i64) -> &Encoding {
+        let _ = folder;
+        &self.install.encoding
+    }
+
+    /// The values of one field of a file in `folder`, split and cleaned by its library's encoding and the install's
+    /// aliases (`Rules::values`).
+    pub fn values(&self, folder: i64, field: &str, raw: &[String]) -> Vec<String> {
+        self.install.values_in(self.encoding(folder), field, raw)
+    }
 }
 
 /// One name for others (0.9.7).
@@ -49,32 +130,25 @@ fn genre_separators() -> Vec<String> {
     vec!["/".into(), ";".into(), ",".into()]
 }
 
-impl Default for Rules {
-    fn default() -> Self {
-        Self {
-            artist_separators: artist_separators(),
-            genre_separators: genre_separators(),
-            artist_keep: vec![],
-            genre_keep: vec![],
-            genre_aliases: vec![],
-            artist_aliases: vec![],
-        }
-    }
-}
-
 /// Fields read as artist lists.
 pub const ARTIST_FIELDS: [&str; 5] = ["artist", "albumartist", "artists", "albumartists", "performer"];
 
 impl Rules {
-    /// The values of one field, split and cleaned per these rules. Other fields only lose surrounding space and
-    /// empty values.
+    /// The values of one field, split and cleaned per these rules, by the default encoding. Other fields only lose
+    /// surrounding space and empty values.
     pub fn values(&self, field: &str, raw: &[String]) -> Vec<String> {
+        self.values_in(&self.encoding, field, raw)
+    }
+
+    /// The values of one field written by `encoding` (a library's), named by these rules' aliases: artists split on
+    /// their separators, genres by the one split (the owner's exceptions first), then their ID3v1 numbers named.
+    pub fn values_in(&self, encoding: &Encoding, field: &str, raw: &[String]) -> Vec<String> {
         let parts: Vec<String> = if ARTIST_FIELDS.contains(&field) {
-            let seps = artist_separators_as_used(&self.artist_separators);
-            raw.iter().flat_map(|v| split(v, &seps, &self.artist_keep)).map(|a| aliased(&a, &self.artist_aliases)).collect()
+            let seps = artist_separators_as_used(&encoding.artist_separators);
+            raw.iter().flat_map(|v| split(v, &seps, &encoding.artist_keep)).map(|a| aliased(&a, &self.artist_aliases)).collect()
         } else if field == "genre" {
             raw.iter()
-                .flat_map(|v| split(v, &self.genre_separators, &self.genre_keep))
+                .flat_map(|v| encoding.words(v))
                 .map(|g| id3v1_genre(&g).map(str::to_string).unwrap_or(g))
                 .map(|g| aliased(&g, &self.genre_aliases))
                 .collect()
@@ -186,8 +260,11 @@ mod tests {
     /// The rules this install uses (canon-tags.py, nas-infra 526c441).
     fn reference() -> Rules {
         Rules {
-            artist_keep: s(&["Cos/Mes", "30/70", "The/Das", "AC/DC", "FC/Kahuna"]),
-            genre_keep: s(&["Folk, World, & Country", "Funk / Soul"]),
+            encoding: Encoding {
+                artist_keep: s(&["Cos/Mes", "30/70", "The/Das", "AC/DC", "FC/Kahuna"]),
+                genre_keep: s(&["Folk, World, & Country", "Funk / Soul"]),
+                ..Encoding::default()
+            },
             ..Rules::default()
         }
     }

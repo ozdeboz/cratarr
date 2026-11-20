@@ -667,6 +667,11 @@ impl IncomingService {
         self.lib.folder_kinds()
     }
 
+    /// Each catalogue folder's tag rules (`Library::folder_rules`).
+    pub fn folder_rules(&self) -> crate::catalogue::FolderRules {
+        self.lib.folder_rules()
+    }
+
     /// The catalogue folders in use that are no Incoming library's: the kept ones, where an original holds its copies' bytes (RF5,
     /// as the backup's list keeps them).
     fn not_incoming(&self) -> Vec<i64> {

@@ -118,7 +118,7 @@ pub fn off(serve: &crate::serve::Serve) -> HashMap<Kind, HashSet<Source>> {
 
 /// Each kind's aliases: the word, and the spellings that are it (genre's the tag rules').
 pub fn aliases(serve: &crate::serve::Serve) -> HashMap<Kind, Vec<(String, Vec<String>)>> {
-    let mut out = HashMap::from([(Kind::Genre, serve.rules().genre_aliases.iter().map(|a| (a.to.clone(), a.from.clone())).collect::<Vec<_>>())]);
+    let mut out = HashMap::from([(Kind::Genre, serve.rules().install().genre_aliases.iter().map(|a| (a.to.clone(), a.from.clone())).collect::<Vec<_>>())]);
     for k in [Kind::Style, Kind::Mood, Kind::Tag] {
         out.insert(k, kept_aliases(serve, k.name()).into_iter().map(|a| (a.word, a.aliases)).collect());
     }
@@ -131,7 +131,7 @@ fn kept_aliases(serve: &crate::serve::Serve, kind: &str) -> Vec<AliasRow> {
 
 fn alias_rows(serve: &crate::serve::Serve, kind: Kind) -> Vec<AliasRow> {
     match kind {
-        Kind::Genre => serve.rules().genre_aliases.iter().map(|a| AliasRow { word: a.to.clone(), aliases: a.from.clone() }).collect(),
+        Kind::Genre => serve.rules().install().genre_aliases.iter().map(|a| AliasRow { word: a.to.clone(), aliases: a.from.clone() }).collect(),
         k => kept_aliases(serve, k.name()),
     }
 }

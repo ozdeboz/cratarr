@@ -27,6 +27,9 @@ pub trait Incoming: Send + Sync {
     fn folder_kinds(&self) -> Vec<(i64, crate::settings::LibraryKind)>;
     /// The catalogue folders of the libraries switched off, all but `without` (`IncomingService::folders_off`).
     fn folders_off(&self, without: &[String]) -> Vec<i64>;
+    /// Each catalogue folder's tag rules (OQ-GEN-22): its library's encoding, else the install's default, and the install's
+    /// aliases (`Library::folder_rules`).
+    fn folder_rules(&self) -> crate::catalogue::FolderRules;
     /// The service as its own type, for code above that knows it.
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }

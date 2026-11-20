@@ -202,6 +202,12 @@ async fn main() -> Result<()> {
         Some(d) => settings::libraries_migration(&std::path::Path::new(d).join("settings.json"))?,
         None => None,
     };
+    // A file from before 0.18: each library gets a copy of the install's tag rules (OQ-GEN-22, GEN.62), and is written so once
+    // the migration report keeps it.
+    let tag_rules_report = match &cfg.data_dir {
+        Some(d) => settings::tag_rules_migration(&std::path::Path::new(d).join("settings.json"))?,
+        None => None,
+    };
     // Sources saved from the page, or on first run one made from the JELLYFIN_* variables; see decision 0005.
     let saved = match &cfg.data_dir {
         Some(d) => settings::load(&std::path::Path::new(d).join("settings.json"), &env)?,
@@ -221,12 +227,12 @@ async fn main() -> Result<()> {
         s.values.insert("folders".into(), serde_json::Value::Array(found));
         carried = true;
     }
-    if carried && libraries_report.is_none() && matches!(origin, settings::Origin::File)
+    if carried && libraries_report.is_none() && tag_rules_report.is_none() && matches!(origin, settings::Origin::File)
         && let Some(d) = &cfg.data_dir
     {
         settings::save(&std::path::Path::new(d).join("settings.json"), &saved)?;
     }
-    let as_read = libraries_report.as_ref().map(|_| saved.clone());
+    let as_read = (libraries_report.is_some() || tag_rules_report.is_some()).then(|| saved.clone());
     saved.lidarr = settings::lidarr_at_start(&saved, &env);
     if saved.sources.is_empty() {
         tracing::warn!("no music source is set up yet: add one on the Settings page (or set JELLYFIN_URL)");
@@ -250,16 +256,23 @@ async fn main() -> Result<()> {
     let app = app::App::new(cfg, saved, origin, Some(served.clone())).await.context("cannot open the catalogue")?;
     // Before the first build and the first request: which copy plays turns on them.
     served.library.set_kinds(app.library.folder_kinds());
-    // The libraries' part of the migration report, then the file as 0.16's (decision 0101): what the roles held, and
-    // what the servers, answering now, do not list.
-    if let (Some(mut report), Some(file), Some(d)) = (libraries_report, as_read, data_dir.as_deref()) {
-        let unlisted = app.library.unlisted_libraries();
-        if let Some(u) = report.get_mut("unmatched").and_then(serde_json::Value::as_array_mut) {
-            u.push(serde_json::json!({ "what": "libraries no server lists", "count": unlisted.len(), "sample": unlisted.iter().take(10).collect::<Vec<_>>() }));
+    served.set_rules(app.library.folder_rules());
+    // The libraries' part of the migration report (decision 0101): what the roles held, and what the servers, answering now,
+    // do not list. The tag rules' part (OQ-GEN-22). Then the file as 0.18's.
+    if let (Some(file), Some(d)) = (as_read, data_dir.as_deref()) {
+        if let Some(mut report) = libraries_report {
+            let unlisted = app.library.unlisted_libraries();
+            if let Some(u) = report.get_mut("unmatched").and_then(serde_json::Value::as_array_mut) {
+                u.push(serde_json::json!({ "what": "libraries no server lists", "count": unlisted.len(), "sample": unlisted.iter().take(10).collect::<Vec<_>>() }));
+            }
+            served.userdata.set_migration_part("libraries", &report).context("cannot keep the migration report")?;
+            tracing::info!("settings: the libraries' roles are 0.16's list now (decision 0101)");
         }
-        served.userdata.set_migration_part("libraries", &report).context("cannot keep the migration report")?;
+        if let Some(report) = tag_rules_report {
+            served.userdata.set_migration_part("tag_rules", &report).context("cannot keep the migration report")?;
+            tracing::info!("settings: each library has tag rules of its own now, a copy of the install's (OQ-GEN-22)");
+        }
         settings::save(&std::path::Path::new(d).join("settings.json"), &file)?;
-        tracing::info!("settings: the libraries' roles are 0.16's list now (decision 0101)");
     }
     served.set_play_on(app.play_on.clone());
     app.play_on.set_lan_base(lan_base);

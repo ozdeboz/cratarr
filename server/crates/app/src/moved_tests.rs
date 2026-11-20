@@ -83,7 +83,7 @@ mod bandcamp {
 mod library {
     use std::collections::BTreeSet;
 
-    use crate::catalogue::{Rules, ServedRow};
+    use crate::catalogue::{FolderRules, ServedRow};
     use crate::serve::copies::Kind;
     use crate::serve::ids;
     use crate::serve::library::*;
@@ -184,7 +184,7 @@ mod library {
     #[test]
     fn a_song_is_listed_by_any_folder_it_has_a_file_in() {
         let lib = Library::open(None).unwrap();
-        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.refresh(&sample(), &FolderRules::default()).unwrap();
         lib.db()
             .execute_batch(
                 "INSERT INTO copy_files SELECT 1, 'Elsewhere/' || rel, 'Elsewhere', song, album, src, size, suffix, kbps, duration_ms, bpm,
@@ -255,7 +255,7 @@ mod library {
                 t(5, "B/Mix (2005)/02 t.flac", "A", "B", "Mix", "2005"),
             ],
         }];
-        lib.refresh(&folders, &Rules::default()).unwrap();
+        lib.refresh(&folders, &FolderRules::default()).unwrap();
         let (own, on, songs) = lib.artist_works(&ids::artist(artist_number_in_tests("a"))).unwrap();
         let names = |l: &[crate::serve::api::Album]| l.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&own), ["New", "Old"]);

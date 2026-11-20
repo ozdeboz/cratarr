@@ -306,7 +306,7 @@ mod tests {
     fn words_follow_the_record() {
         let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         let folder = FolderRows { folder: 0, root: "/music".to_string(), rows: vec![track(1, 7, "Said"), track(2, 8, "Set")] };
-        serve.library.refresh(&[folder], &crate::catalogue::Rules::default()).unwrap();
+        serve.library.refresh(&[folder], &crate::catalogue::FolderRules::default()).unwrap();
         let said = |subject: &str, word: &str| serve.userdata.set_words(subject, "discogs", &[RawWord { word: word.to_string(), kind: "genre".to_string(), weight: 1.0 }], true, 1).unwrap();
         said("album:al-7", "Electronic");
         said(&format!("album:{OLD}"), "Rock");
